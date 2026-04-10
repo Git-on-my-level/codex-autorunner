@@ -1,22 +1,36 @@
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+from tests.conftest import write_test_config
 
 import codex_autorunner.core.scm_polling_watches as scm_polling_watches
 import codex_autorunner.integrations.github.polling as github_polling
+from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.pr_binding_runtime import upsert_pr_binding
 from codex_autorunner.core.pr_bindings import PrBindingStore
+from codex_autorunner.core.publish_executor import PublishOperationProcessor
+from codex_autorunner.core.publish_journal import PublishJournalStore
+from codex_autorunner.core.publish_operation_executors import (
+    build_enqueue_managed_turn_executor,
+    build_notify_chat_executor,
+)
+from codex_autorunner.core.scm_automation_service import ScmAutomationService
 from codex_autorunner.core.scm_events import ScmEventStore
 from codex_autorunner.core.scm_polling_watches import ScmPollingWatchStore
+from codex_autorunner.integrations.discord.state import DiscordStateStore
 from codex_autorunner.integrations.github.polling import (
     GitHubPollingConfig,
     GitHubScmPollingService,
+)
+from codex_autorunner.integrations.github.publisher import (
+    build_react_pr_review_comment_executor,
 )
 from codex_autorunner.integrations.github.service import GitHubError, RepoInfo
 
@@ -902,6 +916,214 @@ def test_process_due_watches_emits_new_pr_comment_and_inline_review_comment(
         "issue_comment",
         "pull_request_review_comment",
     }
+
+
+def test_process_due_watches_reacts_then_wakes_thread_and_notifies_bound_chat(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hub_root = tmp_path / "hub"
+    workspace_root = hub_root / "repo"
+    workspace_root.mkdir(parents=True)
+    write_test_config(
+        hub_root / CONFIG_FILENAME,
+        DEFAULT_HUB_CONFIG,
+    )
+    _write_manifest(hub_root, repo_rel="repo")
+
+    async def _bind_discord() -> None:
+        store = DiscordStateStore(
+            hub_root / ".codex-autorunner" / "discord_state.sqlite3"
+        )
+        try:
+            await store.initialize()
+            await store.upsert_binding(
+                channel_id="repo-discord",
+                guild_id=None,
+                workspace_path=str(workspace_root),
+                repo_id="repo-1",
+            )
+        finally:
+            await store.close()
+
+    asyncio.run(_bind_discord())
+    thread = PmaThreadStore(hub_root).create_thread(
+        "codex",
+        workspace_root,
+        repo_id="repo-1",
+        metadata={"head_branch": "feature/scm-polling"},
+    )
+    binding = PrBindingStore(hub_root).upsert_binding(
+        provider="github",
+        repo_slug="acme/widgets",
+        repo_id="repo-1",
+        pr_number=17,
+        pr_state="open",
+        head_branch="feature/scm-polling",
+        base_branch="main",
+        thread_target_id=str(thread["managed_thread_id"]),
+    )
+    watch_store = ScmPollingWatchStore(hub_root)
+    watch_store.upsert_watch(
+        provider="github",
+        binding_id=binding.binding_id,
+        repo_slug=binding.repo_slug,
+        repo_id=binding.repo_id,
+        pr_number=binding.pr_number,
+        workspace_root=str(workspace_root.resolve()),
+        thread_target_id=str(thread["managed_thread_id"]),
+        poll_interval_seconds=90,
+        next_poll_at="2026-03-30T00:00:00Z",
+        expires_at="2099-03-30T01:00:00Z",
+        reaction_config={"enabled": True},
+        snapshot={
+            "head_sha": "oldsha",
+            "pr_state": "open",
+            "review_thread_comments": {},
+        },
+    )
+
+    def _factory(repo_root: Path, raw_config=None) -> _GitHubServiceStub:
+        return _GitHubServiceStub(
+            repo_root,
+            raw_config,
+            pr_view_payload={
+                "state": "OPEN",
+                "isDraft": False,
+                "headRefOid": "newsha",
+                "author": {"login": "pr-author"},
+            },
+            reviews_payload=[],
+            checks_payload=[],
+            issue_comments_payload=[],
+            review_threads_payload=[
+                {
+                    "thread_id": "thread-1",
+                    "isResolved": False,
+                    "comments": [
+                        {
+                            "comment_id": "2844",
+                            "body": "Please cover the inline review wakeup path too.",
+                            "author_login": "reviewer",
+                            "author_type": "User",
+                            "path": "src/codex_autorunner/integrations/github/polling.py",
+                            "line": 196,
+                            "updated_at": "2026-03-30T00:04:00Z",
+                        }
+                    ],
+                }
+            ],
+        )
+
+    automation_config = _polling_config()
+    automation_config["github"]["automation"]["policy"] = {
+        "react_pr_review_comment": "allow"
+    }
+    reaction_calls: list[tuple[str, str, str, int, str]] = []
+
+    class _ReactionGitHubService:
+        def __init__(self, repo_root: Path, raw_config=None) -> None:
+            _ = raw_config
+            self.repo_root = repo_root
+
+        def create_pull_request_review_comment_reaction(
+            self,
+            *,
+            owner: str,
+            repo: str,
+            comment_id: int,
+            content: str,
+            cwd=None,
+        ) -> dict[str, object]:
+            reaction_calls.append((owner, repo, str(cwd), comment_id, content))
+            return {
+                "id": 88,
+                "content": content,
+                "url": "https://api.github.com/reactions/88",
+            }
+
+    journal = PublishJournalStore(hub_root)
+    processor = PublishOperationProcessor(
+        journal,
+        executors={
+            "react_pr_review_comment": build_react_pr_review_comment_executor(
+                repo_root=hub_root,
+                raw_config=automation_config,
+                github_service_factory=_ReactionGitHubService,
+            ),
+            "enqueue_managed_turn": build_enqueue_managed_turn_executor(
+                hub_root=hub_root
+            ),
+            "notify_chat": build_notify_chat_executor(hub_root=hub_root),
+        },
+    )
+    processed_operations = []
+    automation = ScmAutomationService(
+        hub_root,
+        reaction_config=automation_config,
+        publish_processor=processor,
+    )
+
+    class _AutomationWrapper:
+        def ingest_event(self, event) -> None:
+            automation.ingest_event(event)
+
+        def process_now(self, limit: int = 10):
+            result = automation.process_now(limit=limit)
+            processed_operations.extend(result)
+            return result
+
+    monkeypatch.setattr(
+        GitHubScmPollingService,
+        "_build_automation_service",
+        lambda self, reaction_config=None: _AutomationWrapper(),  # type: ignore[misc]
+    )
+
+    service = GitHubScmPollingService(
+        hub_root,
+        raw_config=automation_config,
+        github_service_factory=_factory,
+        watch_store=watch_store,
+        event_store=ScmEventStore(hub_root),
+    )
+
+    result = service.process_due_watches(limit=10)
+
+    assert result["events_emitted"] == 1
+    assert [operation.operation_kind for operation in processed_operations] == [
+        "react_pr_review_comment",
+        "enqueue_managed_turn",
+        "notify_chat",
+    ]
+    notify_result = processed_operations[2]
+    assert notify_result.state == "succeeded"
+    assert notify_result.response["delivery"] == "bound"
+    assert notify_result.response["repo_id"] == "repo-1"
+    assert notify_result.response["route"] == "bound"
+    assert notify_result.response["targets"] == 1
+    assert notify_result.response["published"] == 1
+    assert reaction_calls == [("acme", "widgets", str(hub_root), 2844, "eyes")]
+
+    turns = PmaThreadStore(hub_root).list_turns(thread["managed_thread_id"], limit=10)
+    assert len(turns) == 1
+
+    async def _load_outbox() -> list[object]:
+        store = DiscordStateStore(
+            hub_root / ".codex-autorunner" / "discord_state.sqlite3"
+        )
+        try:
+            return await store.list_outbox()
+        finally:
+            await store.close()
+
+    outbox = asyncio.run(_load_outbox())
+    assert any(
+        record.channel_id == "repo-discord"
+        and "taking a look" in str(record.payload_json.get("content", "")).lower()
+        and "inline review wakeup path"
+        in str(record.payload_json.get("content", "")).lower()
+        for record in outbox
+    )
 
 
 def test_process_due_watches_does_not_reemit_when_thread_is_reopened_without_new_comments(

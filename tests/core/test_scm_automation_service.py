@@ -797,31 +797,34 @@ def test_ingest_event_tracks_review_comment_operations_in_separate_state_namespa
     result = service.ingest_event(event.event_id)
 
     assert [operation.operation_kind for operation in result.publish_operations] == [
-        "enqueue_managed_turn",
         "react_pr_review_comment",
+        "enqueue_managed_turn",
+        "notify_chat",
     ]
     assert state_store.should_calls == [
-        (
-            "binding-1",
-            "review_comment:enqueue_managed_turn",
-            "review_comment:github:event-inline-comment:enqueue_managed_turn",
-        ),
         (
             "binding-1",
             "review_comment:react_pr_review_comment",
             "review_comment:github:event-inline-comment:react_pr_review_comment",
         ),
+        (
+            "binding-1",
+            "review_comment:enqueue_managed_turn",
+            "review_comment:github:event-inline-comment:enqueue_managed_turn",
+        ),
     ]
     tracking_payloads = [
-        operation.payload["scm_reaction"] for operation in result.publish_operations
+        operation.payload["scm_reaction"]
+        for operation in result.publish_operations
+        if "scm_reaction" in operation.payload
     ]
     assert [payload["reaction_kind"] for payload in tracking_payloads] == [
         "review_comment",
         "review_comment",
     ]
     assert [payload["reaction_state_kind"] for payload in tracking_payloads] == [
-        "review_comment:enqueue_managed_turn",
         "review_comment:react_pr_review_comment",
+        "review_comment:enqueue_managed_turn",
     ]
 
 

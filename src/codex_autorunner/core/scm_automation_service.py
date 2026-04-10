@@ -32,7 +32,11 @@ from .scm_observability import (
 )
 from .scm_reaction_router import route_scm_reactions
 from .scm_reaction_state import ScmReactionStateStore
-from .scm_reaction_types import ReactionIntent, ScmReactionConfig
+from .scm_reaction_types import (
+    ReactionIntent,
+    ScmReactionConfig,
+    stable_reaction_operation_key,
+)
 from .text_utils import _normalize_text
 
 _LOGGER = logging.getLogger(__name__)
@@ -225,6 +229,84 @@ def _stable_escalation_operation_key(
     return f"scm-reaction-escalation:{reason}:{digest}"
 
 
+def _intent_priority(intent: ReactionIntent) -> tuple[int, str]:
+    priorities = {
+        "react_pr_review_comment": 0,
+        "enqueue_managed_turn": 1,
+        "notify_chat": 2,
+    }
+    return (
+        priorities.get(intent.operation_kind, 50),
+        intent.operation_key,
+    )
+
+
+def _publish_notice_payload(
+    *,
+    thread_target_id: str,
+    message: str,
+) -> dict[str, Any]:
+    return {
+        "delivery": "bound",
+        "thread_target_id": thread_target_id,
+        "message": message,
+    }
+
+
+def _event_payload(event: ScmEvent) -> Mapping[str, Any]:
+    payload = event.payload
+    return payload if isinstance(payload, Mapping) else {}
+
+
+def _collapse_whitespace(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    text = " ".join(value.split())
+    return text or None
+
+
+def _trimmed_summary(value: Any, *, limit: int = 120) -> Optional[str]:
+    text = _collapse_whitespace(value)
+    if text is None:
+        return None
+    if len(text) <= limit:
+        return text
+    return f"{text[: limit - 3].rstrip()}..."
+
+
+def _review_comment_location(payload: Mapping[str, Any]) -> Optional[str]:
+    path = _collapse_whitespace(payload.get("path"))
+    line = payload.get("line")
+    if path is None:
+        return None
+    if isinstance(line, int):
+        return f"{path}:{line}"
+    return path
+
+
+def _review_comment_wakeup_message(
+    *,
+    event: ScmEvent,
+    binding: PrBinding,
+) -> str:
+    payload = _event_payload(event)
+    subject = f"{binding.repo_slug}#{binding.pr_number}"
+    commenter_login = _collapse_whitespace(payload.get("author_login"))
+    location = _review_comment_location(payload)
+    comment_summary = _trimmed_summary(payload.get("body"))
+
+    summary = f"Received PR review feedback on {subject}"
+    if commenter_login is not None:
+        summary = f"{summary} from {commenter_login}"
+    if location is not None:
+        summary = f"{summary} at {location}"
+    if comment_summary is not None:
+        summary = f"{summary}: {comment_summary}"
+    if not summary.endswith((".", "!", "?")):
+        summary = f"{summary}."
+    return f"{summary} The bound agent thread is taking a look."
+
+
 def _reaction_subject(tracking: Mapping[str, Any]) -> str:
     repo_slug = _normalize_text(tracking.get("repo_slug"))
     pr_number = tracking.get("pr_number")
@@ -399,6 +481,69 @@ class ScmAutomationService:
             raise LookupError(f"SCM event '{event_id}' was not found")
         return event
 
+    def _review_comment_notice_key(
+        self,
+        *,
+        event: ScmEvent,
+        binding: PrBinding,
+    ) -> str:
+        return stable_reaction_operation_key(
+            provider=event.provider,
+            event_id=event.event_id,
+            reaction_kind="review_comment",
+            operation_kind="notify_chat",
+            repo_slug=binding.repo_slug,
+            repo_id=binding.repo_id or event.repo_id,
+            pr_number=binding.pr_number,
+            binding_id=binding.binding_id,
+            thread_target_id=binding.thread_target_id,
+        )
+
+    def _create_review_comment_notice_operation(
+        self,
+        *,
+        event: ScmEvent,
+        binding: PrBinding,
+        correlation_id: str,
+        seen_operation_keys: set[str],
+        publish_operations: list[PublishOperation],
+    ) -> None:
+        thread_target_id = _normalize_text(binding.thread_target_id)
+        if thread_target_id is None:
+            return
+        operation_key = self._review_comment_notice_key(event=event, binding=binding)
+        if operation_key in seen_operation_keys:
+            return
+        seen_operation_keys.add(operation_key)
+        payload = with_correlation_id(
+            _publish_notice_payload(
+                thread_target_id=thread_target_id,
+                message=_review_comment_wakeup_message(
+                    event=event,
+                    binding=binding,
+                ),
+            ),
+            correlation_id=correlation_id,
+        )
+        operation, deduped = self._journal.create_operation(
+            operation_key=operation_key,
+            operation_kind="notify_chat",
+            payload=payload,
+        )
+        self._audit_recorder.record(
+            action_type=SCM_AUDIT_PUBLISH_CREATED,
+            correlation_id=correlation_id,
+            event=event,
+            binding=binding,
+            operation=operation,
+            payload={
+                "deduped": deduped,
+                "auxiliary": True,
+                "wake_notice": True,
+            },
+        )
+        publish_operations.append(operation)
+
     def ingest_event(
         self,
         event_or_id: ScmEvent | str,
@@ -416,10 +561,13 @@ class ScmAutomationService:
             payload={"binding_found": binding is not None},
         )
         reaction_intents = tuple(
-            self._reaction_router(
-                event,
-                binding=binding,
-                config=self._reaction_config,
+            sorted(
+                self._reaction_router(
+                    event,
+                    binding=binding,
+                    config=self._reaction_config,
+                ),
+                key=_intent_priority,
             )
         )
 
@@ -558,6 +706,18 @@ class ScmAutomationService:
                     metadata=tracking,
                 )
             publish_operations.append(operation)
+            if (
+                binding is not None
+                and intent.reaction_kind == "review_comment"
+                and intent.operation_kind == "enqueue_managed_turn"
+            ):
+                self._create_review_comment_notice_operation(
+                    event=event,
+                    binding=binding,
+                    correlation_id=correlation_id,
+                    seen_operation_keys=seen_operation_keys,
+                    publish_operations=publish_operations,
+                )
 
         return ScmAutomationIngestResult(
             event=event,

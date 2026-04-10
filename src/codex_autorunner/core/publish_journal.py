@@ -177,6 +177,12 @@ class PublishJournalStore:
                  WHERE state = 'pending'
                    AND COALESCE(next_attempt_at, created_at) <= ?
                  ORDER BY COALESCE(next_attempt_at, created_at) ASC,
+                          CASE operation_kind
+                              WHEN 'react_pr_review_comment' THEN 0
+                              WHEN 'enqueue_managed_turn' THEN 1
+                              WHEN 'notify_chat' THEN 2
+                              ELSE 50
+                          END ASC,
                           created_at ASC,
                           operation_id ASC
                  LIMIT ?
