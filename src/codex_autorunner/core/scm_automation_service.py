@@ -253,6 +253,11 @@ def _publish_notice_payload(
     }
 
 
+def _auxiliary_correlation_id(*, correlation_id: str, operation_key: str) -> str:
+    digest = hashlib.sha256(operation_key.encode("utf-8")).hexdigest()[:12]
+    return f"{correlation_id}:aux:{digest}"
+
+
 def _event_payload(event: ScmEvent) -> Mapping[str, Any]:
     payload = event.payload
     return payload if isinstance(payload, Mapping) else {}
@@ -515,6 +520,10 @@ class ScmAutomationService:
         if operation_key in seen_operation_keys:
             return
         seen_operation_keys.add(operation_key)
+        notice_correlation_id = _auxiliary_correlation_id(
+            correlation_id=correlation_id,
+            operation_key=operation_key,
+        )
         payload = with_correlation_id(
             _publish_notice_payload(
                 thread_target_id=thread_target_id,
@@ -523,7 +532,7 @@ class ScmAutomationService:
                     binding=binding,
                 ),
             ),
-            correlation_id=correlation_id,
+            correlation_id=notice_correlation_id,
         )
         operation, deduped = self._journal.create_operation(
             operation_key=operation_key,
