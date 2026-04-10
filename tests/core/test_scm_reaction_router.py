@@ -384,6 +384,54 @@ def test_route_scm_reactions_routes_pull_request_review_comment() -> None:
     }
 
 
+def test_route_scm_reactions_parses_review_comment_id_from_discussion_url() -> None:
+    event = _event(
+        "pull_request_review_comment",
+        event_id="github:event-inline-comment-url-id",
+        payload={
+            "action": "created",
+            "comment_id": "PRRC_kwDOAcmeNodeId",
+            "html_url": "https://github.com/acme/widgets/pull/42#discussion_r99331",
+            "author_login": "reviewer",
+            "author_type": "User",
+            "issue_author_login": "pr-author",
+            "body": "Please preserve inline reaction support.",
+        },
+    )
+
+    intents = route_scm_reactions(
+        event, binding=_binding(thread_target_id="thread-inline")
+    )
+
+    assert len(intents) == 2
+    assert intents[1].operation_kind == "react_pr_review_comment"
+    assert intents[1].payload["comment_id"] == "99331"
+
+
+def test_route_scm_reactions_parses_review_comment_id_from_api_url() -> None:
+    event = _event(
+        "pull_request_review_comment",
+        event_id="github:event-inline-comment-api-url-id",
+        payload={
+            "action": "created",
+            "comment_id": "PRRC_kwDOAcmeNodeId",
+            "url": "https://api.github.com/repos/acme/widgets/pulls/comments/77123",
+            "author_login": "reviewer",
+            "author_type": "User",
+            "issue_author_login": "pr-author",
+            "body": "Please preserve inline reaction support.",
+        },
+    )
+
+    intents = route_scm_reactions(
+        event, binding=_binding(thread_target_id="thread-inline")
+    )
+
+    assert len(intents) == 2
+    assert intents[1].operation_kind == "react_pr_review_comment"
+    assert intents[1].payload["comment_id"] == "77123"
+
+
 def test_route_scm_reactions_routes_bot_pull_request_review_comment() -> None:
     event = _event(
         "pull_request_review_comment",

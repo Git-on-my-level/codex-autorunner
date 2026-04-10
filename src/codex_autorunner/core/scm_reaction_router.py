@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from typing import Any, Optional
 
@@ -19,6 +20,7 @@ from .text_utils import _mapping, _normalize_text
 _FAILED_CHECK_CONCLUSIONS = frozenset(
     {"action_required", "cancelled", "failure", "startup_failure", "stale", "timed_out"}
 )
+_REVIEW_COMMENT_ID_IN_URL = re.compile(r"(?:#discussion_r|/pulls/comments/)(\d+)")
 
 
 def _normalize_lower_text(value: Any) -> Optional[str]:
@@ -135,7 +137,7 @@ def _build_review_comment_reaction_payload(
     binding: Optional[PrBinding],
 ) -> Optional[dict[str, Any]]:
     payload = _event_payload(event)
-    comment_id = _normalize_text(payload.get("comment_id"))
+    comment_id = _resolve_review_comment_id(payload)
     repo_slug = _resolved_repo_slug(event, binding)
     if comment_id is None or repo_slug is None:
         return None
@@ -156,6 +158,27 @@ def _build_review_comment_reaction_payload(
     if binding is not None:
         reaction_payload["binding_id"] = binding.binding_id
     return reaction_payload
+
+
+def _review_comment_id_from_url(value: Any) -> Optional[str]:
+    url = _normalize_text(value)
+    if url is None:
+        return None
+    match = _REVIEW_COMMENT_ID_IN_URL.search(url)
+    if match is None:
+        return None
+    return match.group(1)
+
+
+def _resolve_review_comment_id(payload: Mapping[str, Any]) -> Optional[str]:
+    raw_comment_id = _normalize_text(payload.get("comment_id"))
+    if raw_comment_id is not None and raw_comment_id.isdigit():
+        return str(int(raw_comment_id))
+    for key in ("html_url", "url"):
+        resolved = _review_comment_id_from_url(payload.get(key))
+        if resolved is not None:
+            return resolved
+    return None
 
 
 def _match_reaction_kind(

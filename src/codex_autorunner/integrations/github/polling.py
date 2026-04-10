@@ -34,6 +34,9 @@ _HOT_THREAD_WINDOW_MINUTES = 60
 _RECENT_THREAD_WINDOW_MINUTES = 24 * 60
 _WARM_INTERVAL_SECONDS_FLOOR = 15 * 60
 _COLD_INTERVAL_SECONDS_FLOOR = 60 * 60
+_DEFAULT_POST_OPEN_BOOST_MINUTES = 20
+_DEFAULT_POST_OPEN_BOOST_INTERVAL_SECONDS = 30
+_POST_OPEN_BOOST_UNTIL_SNAPSHOT_KEY = "post_open_boost_until"
 _RATE_LIMIT_MIN_REMAINING = 100
 _RATE_LIMIT_RATIO_FLOOR = 0.02
 _RATE_LIMIT_BACKOFF_SECONDS = 15 * 60
@@ -313,6 +316,8 @@ class GitHubPollingConfig:
     enabled: bool = False
     watch_window_minutes: int = 30
     interval_seconds: int = 90
+    post_open_boost_minutes: int = _DEFAULT_POST_OPEN_BOOST_MINUTES
+    post_open_boost_interval_seconds: int = _DEFAULT_POST_OPEN_BOOST_INTERVAL_SECONDS
     discovery_interval_seconds: int = 6 * 60
     discovery_workspace_limit: int = 1
 
@@ -324,6 +329,10 @@ class GitHubPollingConfig:
         enabled = polling.get("enabled")
         watch_window_minutes = polling.get("watch_window_minutes")
         interval_seconds = polling.get("interval_seconds")
+        post_open_boost_minutes = polling.get("post_open_boost_minutes")
+        post_open_boost_interval_seconds = polling.get(
+            "post_open_boost_interval_seconds"
+        )
         discovery_interval_seconds = polling.get("discovery_interval_seconds")
         discovery_workspace_limit = polling.get("discovery_workspace_limit")
         return cls(
@@ -337,6 +346,22 @@ class GitHubPollingConfig:
                 int(interval_seconds)
                 if isinstance(interval_seconds, int) and interval_seconds > 0
                 else 90
+            ),
+            post_open_boost_minutes=(
+                int(post_open_boost_minutes)
+                if (
+                    isinstance(post_open_boost_minutes, int)
+                    and post_open_boost_minutes >= 0
+                )
+                else _DEFAULT_POST_OPEN_BOOST_MINUTES
+            ),
+            post_open_boost_interval_seconds=(
+                int(post_open_boost_interval_seconds)
+                if (
+                    isinstance(post_open_boost_interval_seconds, int)
+                    and post_open_boost_interval_seconds >= 0
+                )
+                else _DEFAULT_POST_OPEN_BOOST_INTERVAL_SECONDS
             ),
             discovery_interval_seconds=(
                 int(discovery_interval_seconds)
@@ -359,6 +384,47 @@ class GitHubPollingConfig:
     @property
     def comment_backfill_window_seconds(self) -> int:
         return self.watch_window_minutes * 60
+
+
+def _initial_post_open_boost_until(
+    *,
+    binding: PrBinding,
+    snapshot: Mapping[str, Any],
+    polling_config: GitHubPollingConfig,
+) -> Optional[str]:
+    boost_minutes = polling_config.post_open_boost_minutes
+    if boost_minutes <= 0:
+        return None
+    now = _utc_now()
+    pr_created_at = _parse_optional_iso(snapshot.get("pr_created_at"))
+    if pr_created_at is not None:
+        expires_at = pr_created_at + timedelta(minutes=boost_minutes)
+        if expires_at > now:
+            return expires_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+        return None
+    binding_created_at = _parse_optional_iso(binding.created_at)
+    if binding_created_at is not None:
+        expires_at = binding_created_at + timedelta(minutes=boost_minutes)
+        if expires_at > now:
+            return expires_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+        return None
+    return _iso_after_seconds(boost_minutes * 60)
+
+
+def _snapshot_with_polling_metadata(
+    *,
+    snapshot: Mapping[str, Any],
+    previous_snapshot: Mapping[str, Any] | None = None,
+    post_open_boost_until: Optional[str] = None,
+) -> dict[str, Any]:
+    merged = dict(snapshot)
+    inherited_boost = _normalize_text(
+        _mapping(previous_snapshot or {}).get(_POST_OPEN_BOOST_UNTIL_SNAPSHOT_KEY)
+    )
+    resolved_boost = post_open_boost_until or inherited_boost
+    if resolved_boost is not None:
+        merged[_POST_OPEN_BOOST_UNTIL_SNAPSHOT_KEY] = resolved_boost
+    return merged
 
 
 def _reaction_state_from_pr(pr: Mapping[str, Any]) -> str:
@@ -716,6 +782,28 @@ class GitHubScmPollingService:
                     if _is_rate_limit_error(exc)
                     else now_timestamp
                 )
+        post_open_boost_until = _initial_post_open_boost_until(
+            binding=binding,
+            snapshot=snapshot,
+            polling_config=polling_config,
+        )
+        snapshot = _snapshot_with_polling_metadata(
+            snapshot=snapshot,
+            post_open_boost_until=post_open_boost_until,
+        )
+        boost_interval_seconds = polling_config.post_open_boost_interval_seconds
+        if (
+            post_open_boost_until is not None
+            and boost_interval_seconds > 0
+            and _parse_iso(post_open_boost_until) > _utc_now()
+        ):
+            boosted_next_poll_at = _iso_after_seconds(boost_interval_seconds)
+            current_next_poll_at = _parse_optional_iso(scheduled_next_poll_at)
+            if (
+                current_next_poll_at is None
+                or _parse_iso(boosted_next_poll_at) < current_next_poll_at
+            ):
+                scheduled_next_poll_at = boosted_next_poll_at
 
         watch = self._watch_store.upsert_watch(
             provider="github",
@@ -1040,14 +1128,29 @@ class GitHubScmPollingService:
                     previous_snapshot=previous_snapshot,
                     snapshot=snapshot,
                 )
+            post_open_boost_until = _normalize_text(
+                _mapping(previous_snapshot).get(_POST_OPEN_BOOST_UNTIL_SNAPSHOT_KEY)
+            )
+            if post_open_boost_until is None:
+                post_open_boost_until = _initial_post_open_boost_until(
+                    binding=binding,
+                    snapshot=snapshot,
+                    polling_config=polling_config,
+                )
+            snapshot = _snapshot_with_polling_metadata(
+                snapshot=snapshot,
+                previous_snapshot=previous_snapshot,
+                post_open_boost_until=post_open_boost_until,
+            )
 
             self._watch_store.refresh_watch(
                 watch_id=watch.watch_id,
                 snapshot=snapshot,
                 next_poll_at=_iso_after_seconds(
-                    self._poll_interval_for_tier(
+                    self._poll_interval_for_watch(
                         activity_tier=activity_tier,
                         polling_config=polling_config,
+                        snapshot=snapshot,
                     )
                 ),
                 last_polled_at=now_iso(),
@@ -1225,6 +1328,41 @@ class GitHubScmPollingService:
             polling_config.interval_seconds * 10,
             _WARM_INTERVAL_SECONDS_FLOOR,
         )
+
+    def _post_open_boost_interval_for_snapshot(
+        self,
+        *,
+        snapshot: Mapping[str, Any],
+        polling_config: GitHubPollingConfig,
+    ) -> Optional[int]:
+        boost_interval_seconds = polling_config.post_open_boost_interval_seconds
+        if boost_interval_seconds <= 0:
+            return None
+        boost_until = _parse_optional_iso(
+            _mapping(snapshot).get(_POST_OPEN_BOOST_UNTIL_SNAPSHOT_KEY)
+        )
+        if boost_until is None or boost_until <= _utc_now():
+            return None
+        return boost_interval_seconds
+
+    def _poll_interval_for_watch(
+        self,
+        *,
+        activity_tier: str,
+        polling_config: GitHubPollingConfig,
+        snapshot: Mapping[str, Any],
+    ) -> int:
+        tier_interval = self._poll_interval_for_tier(
+            activity_tier=activity_tier,
+            polling_config=polling_config,
+        )
+        boost_interval = self._post_open_boost_interval_for_snapshot(
+            snapshot=snapshot,
+            polling_config=polling_config,
+        )
+        if boost_interval is None:
+            return tier_interval
+        return min(tier_interval, boost_interval)
 
     def _quota_state_for_workspace(
         self,
