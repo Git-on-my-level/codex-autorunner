@@ -21,8 +21,8 @@ importers:
         specifier: ^17.4.0
         version: 17.4.0
       html-validate:
-        specifier: ^10.11.2
-        version: 10.11.2
+        specifier: ^10.11.3
+        version: 10.11.3
       jsdom:
         specifier: ^29.0.2
         version: 29.0.2
@@ -134,8 +134,8 @@ packages:
       '@noble/hashes':
         optional: true
 
-  '@html-validate/stylish@5.0.0':
-    resolution: {integrity: sha512-xjhRV9k1mWfgsOcpYlwsjUOFy3w3EnCDrqUrEw+DWdvOStMK59ts2H7GLKWZtmLI5m6Npp3qMSNReafQy9K2sA==}
+  '@html-validate/stylish@5.1.0':
+    resolution: {integrity: sha512-Tyx/ZbHBpVZjvSleNplNMUhqT4UY1HwAMC97GSmasJXggWuvjNFLBS2scqnEb+ZG1szLq4zgjOioj7cVWV9WuQ==}
     engines: {node: ^20.11 || >= 22.16}
 
   '@humanfs/core@0.19.1':
@@ -388,8 +388,8 @@ packages:
     resolution: {integrity: sha512-CV9TW3Y3f8/wT0BRFc1/KAVQ3TUHiXmaAb6VW9vtiMFf7SLoMd1PdAc4W3KFOFETBJUb90KatHqlsZMWV+R9Gg==}
     engines: {node: ^20.19.0 || ^22.12.0 || >=24.0.0}
 
-  html-validate@10.11.2:
-    resolution: {integrity: sha512-ZT4812sBvF77WrfTNWcaaml7xSOMDsGvw3plP4zrgcPw5RWESsRgprsVVYnaQD2lSNfD0WObZ0Ur22+xXj0TXA==}
+  html-validate@10.11.3:
+    resolution: {integrity: sha512-wKUq9iR6bukMgiHhs/ORThZzEbQoFiiPNN7aZfQ8dlmhttPb2sM2Ji2p+Fy5Xj1aH7QHJ1biT2SUDw7A01P2oA==}
     engines: {node: ^20.19.0 || >= 22.16.0}
     hasBin: true
     peerDependencies:
@@ -741,7 +741,7 @@ snapshots:
 
   '@exodus/bytes@1.15.0': {}
 
-  '@html-validate/stylish@5.0.0':
+  '@html-validate/stylish@5.1.0':
     dependencies:
       kleur: 4.1.5
 
@@ -1032,9 +1032,9 @@ snapshots:
     transitivePeerDependencies:
       - '@noble/hashes'
 
-  html-validate@10.11.2:
+  html-validate@10.11.3:
     dependencies:
-      '@html-validate/stylish': 5.0.0
+      '@html-validate/stylish': 5.1.0
       '@sidvind/better-ajv-errors': 4.0.1(ajv@8.18.0)
       ajv: 8.18.0
       glob: 13.0.6
