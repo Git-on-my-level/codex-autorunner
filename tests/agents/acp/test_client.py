@@ -176,7 +176,22 @@ async def test_client_supports_official_acp_session_and_prompt_flow(
 
 
 @pytest.mark.asyncio
-async def test_client_rejects_official_load_session_empty_result(
+async def test_client_accepts_official_load_session_empty_object_result(
+    tmp_path: Path,
+) -> None:
+    client = ACPClient(fixture_command("official_empty_load_result"), cwd=tmp_path)
+    try:
+        created = await client.create_session(cwd=str(tmp_path))
+        loaded = await client.load_session(created.session_id)
+
+        assert loaded.session_id == created.session_id
+        assert loaded.raw == {}
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_client_rejects_official_load_session_null_result(
     tmp_path: Path,
 ) -> None:
     client = ACPClient(fixture_command("official_missing_load_result"), cwd=tmp_path)

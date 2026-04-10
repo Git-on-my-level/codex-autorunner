@@ -310,6 +310,9 @@ class FakeACPServer:
             if session is None:
                 self._send_error(request_id, -32004, "session not found")
                 return
+            if self._scenario == "official_empty_load_result":
+                self._send_result(request_id, {})
+                return
             self._send_result(request_id, {"session": session})
             return
         if method == "session/list":

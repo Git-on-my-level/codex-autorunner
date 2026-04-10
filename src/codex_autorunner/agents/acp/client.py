@@ -452,13 +452,20 @@ class ACPClient:
                     "sessionId": session_id,
                 },
             )
-            if not _coerce_mapping(result):
+            if result is None:
                 raise ACPResponseError(
                     method="session/load",
                     code=-32004,
                     message=f"session not found: {session_id}",
                 )
-            return ACPSessionDescriptor.from_result(result)
+            payload = _coerce_mapping(result)
+            try:
+                return ACPSessionDescriptor.from_result(payload)
+            except ValueError:
+                return ACPSessionDescriptor(
+                    session_id=session_id,
+                    raw=payload,
+                )
         result = await self.request("session/load", {"sessionId": session_id})
         return ACPSessionDescriptor.from_result(result)
 
