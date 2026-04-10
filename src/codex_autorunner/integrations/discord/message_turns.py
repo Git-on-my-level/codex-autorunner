@@ -115,6 +115,7 @@ class DiscordTurnStartupFailure(RuntimeError):
 class DiscordMessageTurnResult:
     final_message: str
     preview_message_id: Optional[str] = None
+    execution_id: Optional[str] = None
     intermediate_message: Optional[str] = None
     token_usage: Optional[dict[str, Any]] = None
     elapsed_seconds: Optional[float] = None
@@ -678,6 +679,7 @@ async def _submit_discord_thread_message(
         pma_enabled=request.pma_enabled,
     )
     thread_target_id: Optional[str] = None
+    execution_id: Optional[str] = None
 
     async def _cleanup_background_failure(exc: Exception) -> None:
         public_error, timeout_error, interrupted_error = (
@@ -696,6 +698,9 @@ async def _submit_discord_thread_message(
             channel_id=dispatch.channel_id,
             conversation_id=dispatch.context.conversation_id,
             workspace_root=str(dispatch.workspace_root),
+            preview_message_id=progress_message_id,
+            execution_id=execution_id,
+            background_task_owner="discord.turn.background_delivery",
             agent=dispatch.agent,
             exc=exc,
         )
@@ -782,6 +787,7 @@ async def _submit_discord_thread_message(
         return thread_target_id or None
 
     async def _run_in_background() -> None:
+        nonlocal execution_id
         try:
             turn_result = await _execute_discord_thread_message(
                 request,
@@ -789,6 +795,8 @@ async def _submit_discord_thread_message(
                 initial_progress_message_id=progress_message_id,
                 managed_thread_surface_key=managed_thread_surface_key,
             )
+            if isinstance(turn_result, DiscordMessageTurnResult):
+                execution_id = turn_result.execution_id
             await _deliver_discord_turn_result(
                 dispatch,
                 workspace_root=request.workspace_root,
@@ -1098,6 +1106,7 @@ async def _deliver_discord_turn_result(
             return
         response_text = turn_result.final_message
         preview_message_id = turn_result.preview_message_id
+        execution_id = turn_result.execution_id
         send_final_message = turn_result.send_final_message
         intermediate_text = (
             turn_result.intermediate_message.strip()
@@ -1115,6 +1124,7 @@ async def _deliver_discord_turn_result(
     else:
         response_text = str(turn_result or "")
         preview_message_id = None
+        execution_id = None
         send_final_message = True
 
     log_event(
@@ -1124,14 +1134,17 @@ async def _deliver_discord_turn_result(
         channel_id=dispatch.channel_id,
         session_key=dispatch.session_key,
         preview_message_id=preview_message_id,
+        execution_id=execution_id,
+        background_task_owner="discord.turn.delivery",
         send_final_message=send_final_message,
         response_chars=len(response_text or ""),
         workspace_root=str(workspace_root),
         agent=dispatch.agent,
     )
 
+    preview_message_deleted = False
     if isinstance(preview_message_id, str) and preview_message_id:
-        await dispatch.service._delete_channel_message_safe(
+        preview_message_deleted = await dispatch.service._delete_channel_message_safe(
             channel_id=dispatch.channel_id,
             message_id=preview_message_id,
             record_id=(
@@ -1164,6 +1177,9 @@ async def _deliver_discord_turn_result(
             "discord.turn.delivery_cleanup_failed",
             channel_id=dispatch.channel_id,
             session_key=dispatch.session_key,
+            preview_message_id=preview_message_id,
+            execution_id=execution_id,
+            background_task_owner="discord.turn.delivery",
             workspace_root=str(workspace_root),
             send_final_message=send_final_message,
             agent=dispatch.agent,
@@ -1175,8 +1191,10 @@ async def _deliver_discord_turn_result(
         "discord.turn.delivery_finished",
         channel_id=dispatch.channel_id,
         session_key=dispatch.session_key,
-        preview_message_deleted=isinstance(preview_message_id, str)
-        and bool(preview_message_id),
+        preview_message_id=preview_message_id,
+        execution_id=execution_id,
+        background_task_owner="discord.turn.delivery",
+        preview_message_deleted=preview_message_deleted,
         send_final_message=send_final_message,
         response_chars=len(response_text or ""),
         flushed_outbox_files=send_final_message,
@@ -1960,7 +1978,8 @@ async def _run_discord_orchestrated_turn_for_message(
             )
         ensure_queue_worker()
         return DiscordMessageTurnResult(
-            final_message="Queued (waiting for available worker...)"
+            final_message="Queued (waiting for available worker...)",
+            execution_id=progress_execution_id,
         )
     log_event(
         service._logger,
@@ -2016,9 +2035,11 @@ async def _run_discord_orchestrated_turn_for_message(
         "discord.turn.managed_thread_finalized",
         channel_id=channel_id,
         managed_thread_id=managed_thread_id,
+        execution_id=progress_execution_id,
         status=finalized.status,
         backend_thread_id=finalized.backend_thread_id,
         preview_message_id=progress_message_id,
+        background_task_owner="discord.turn.background_delivery",
         assistant_chars=len(str(finalized.assistant_text or "")),
         token_usage_present=isinstance(finalized.token_usage, dict),
         elapsed_ms=max(int((time.monotonic() - tracker.started_at) * 1000), 0),
@@ -2058,6 +2079,7 @@ async def _run_discord_orchestrated_turn_for_message(
                     final_message=sanitize_discord_outbound_text(
                         reuse_request.acknowledgement
                     ),
+                    execution_id=progress_execution_id,
                     send_final_message=not acknowledgement_delivered,
                 )
         raise RuntimeError(str(finalized.error or public_execution_error))
@@ -2080,6 +2102,7 @@ async def _run_discord_orchestrated_turn_for_message(
     return DiscordMessageTurnResult(
         final_message=finalized.assistant_text,
         preview_message_id=progress_message_id,
+        execution_id=progress_execution_id,
         intermediate_message=intermediate_message,
         token_usage=finalized.token_usage,
         elapsed_seconds=max(0.0, time.monotonic() - tracker.started_at),

@@ -90,6 +90,8 @@ class RuntimeThreadRunEventState:
     assistant_message_text: str = ""
     token_usage: Optional[dict[str, Any]] = None
     last_error_message: Optional[str] = None
+    last_runtime_method: Optional[str] = None
+    last_progress_at: Optional[str] = None
     completed_seen: bool = False
     message_roles: dict[str, str] = field(default_factory=dict)
     pending_stream_by_message: dict[str, str] = field(default_factory=dict)
@@ -114,6 +116,17 @@ class RuntimeThreadRunEventState:
         if self.assistant_message_text.strip():
             return self.assistant_message_text
         return self.assistant_stream_text
+
+    def note_runtime_progress(
+        self,
+        method: Optional[str],
+        *,
+        timestamp: Optional[str] = None,
+    ) -> None:
+        normalized_method = str(method or "").strip()
+        if normalized_method:
+            self.last_runtime_method = normalized_method
+        self.last_progress_at = timestamp or now_iso()
 
     def note_message_role(
         self,
@@ -367,6 +380,7 @@ def normalize_runtime_thread_message(
     method_lower = method.lower()
     if not method:
         return []
+    state.note_runtime_progress(method, timestamp=event_timestamp)
 
     if method == "item/reasoning/summaryTextDelta":
         delta = params.get("delta")

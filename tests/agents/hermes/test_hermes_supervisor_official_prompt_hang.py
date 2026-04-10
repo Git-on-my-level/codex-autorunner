@@ -41,6 +41,8 @@ async def test_hermes_supervisor_waits_for_official_prompt_result_before_complet
         assert "hermes.turn.wait_timeout" in caplog.text
         assert f'"session_id":"{session.session_id}"' in caplog.text
         assert f'"turn_id":"{turn_id}"' in caplog.text
+        assert '"last_runtime_method":"session/update"' in caplog.text
+        assert '"last_progress_at":"' in caplog.text
         assert '"last_session_update_kind":"' in caplog.text
         assert (
             '"last_session_update_kind":"agent_thought_chunk"' in caplog.text

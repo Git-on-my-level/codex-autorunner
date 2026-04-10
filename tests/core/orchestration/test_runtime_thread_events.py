@@ -100,6 +100,8 @@ async def test_normalize_runtime_thread_raw_event_handles_codex_app_server_updat
     assert isinstance(output[0], OutputDelta)
     assert output[0].content == "partial reply"
     assert state.best_assistant_text() == "partial reply"
+    assert state.last_runtime_method == "item/agentMessage/delta"
+    assert isinstance(state.last_progress_at, str)
 
 
 async def test_normalize_runtime_thread_raw_event_surfaces_generic_error_notifications() -> (
@@ -123,6 +125,8 @@ async def test_normalize_runtime_thread_raw_event_surfaces_generic_error_notific
     assert isinstance(output[0], Failed)
     assert output[0].error_message == "Auth required"
     assert state.last_error_message == "Auth required"
+    assert state.last_runtime_method == "error"
+    assert isinstance(state.last_progress_at, str)
 
 
 async def test_normalize_runtime_thread_raw_event_marks_only_successful_turn_completed() -> (
@@ -174,6 +178,8 @@ async def test_normalize_runtime_thread_raw_event_emits_progress_for_session_sta
     assert working[0].kind == "progress"
     assert working[0].message == "agent running"
     assert working_state.completed_seen is False
+    assert working_state.last_runtime_method == "session.status"
+    assert isinstance(working_state.last_progress_at, str)
 
     idle_like_state = RuntimeThreadRunEventState()
     idle_like = await normalize_runtime_thread_raw_event(

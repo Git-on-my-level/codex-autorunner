@@ -107,6 +107,8 @@ class _PromptState:
     replay_task: Optional[asyncio.Task[None]] = None
     request_task: Optional[asyncio.Task[Any]] = None
     request_started_at: Optional[float] = None
+    next_terminal_completion_source: Optional[str] = None
+    last_runtime_method: Optional[str] = None
     last_session_update_kind: Optional[str] = None
     last_session_update_excerpt: Optional[str] = None
     last_session_update_content_kind: Optional[str] = None
@@ -897,9 +899,21 @@ class ACPClient:
     ) -> None:
         if state.closed:
             return
+        completion_source = state.next_terminal_completion_source or "terminal_event"
+        state.next_terminal_completion_source = None
         state.closed = True
         if self._session_active_turns.get(state.session_id) == state.turn_id:
             self._session_active_turns.pop(state.session_id, None)
+        self._log_trace_event(
+            "acp.prompt.terminal_recorded",
+            session_id=state.session_id,
+            turn_id=state.turn_id,
+            status=event.status,
+            completion_source=completion_source,
+            error_message=event.error_message,
+            elapsed_ms=self._elapsed_ms(state.request_started_at),
+            **self._prompt_trace_fields(state),
+        )
         if not state.future.done():
             final_output = event.final_output or state.final_output
             state.future.set_result(
@@ -1054,6 +1068,7 @@ class ACPClient:
             elapsed_ms=self._elapsed_ms(state.request_started_at),
             **self._prompt_trace_fields(state),
         )
+        state.next_terminal_completion_source = "prompt_return"
         await self._record_prompt_event(
             state,
             normalize_notification(
@@ -1146,6 +1161,7 @@ class ACPClient:
 
     def _prompt_trace_fields(self, state: _PromptState) -> dict[str, Any]:
         return {
+            "last_runtime_method": state.last_runtime_method,
             "last_session_update_kind": state.last_session_update_kind,
             "last_session_update_excerpt": state.last_session_update_excerpt,
             "last_session_update_content_kind": state.last_session_update_content_kind,
@@ -1157,6 +1173,7 @@ class ACPClient:
         }
 
     def _note_prompt_trace_event(self, state: _PromptState, event: ACPEvent) -> None:
+        state.last_runtime_method = _normalize_optional_text(event.method)
         if event.method != "session/update":
             return
         update = _coerce_mapping(event.payload.get("update"))

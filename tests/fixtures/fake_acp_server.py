@@ -31,6 +31,7 @@ class FakeACPServer:
         self._running = True
         self._next_session = 1
         self._next_turn = 1
+        self._next_official_turn = 1
         self._next_permission = 1
         self._sessions: dict[str, dict[str, Any]] = {}
         self._cancel_events: dict[str, threading.Event] = {}
@@ -246,6 +247,7 @@ class FakeACPServer:
         *,
         request_id: Any,
         session_id: str,
+        turn_id: str,
         prompt: str,
     ) -> None:
         cancel_event = self._session_cancel_events[session_id]
@@ -365,6 +367,38 @@ class FakeACPServer:
         )
         if self._scenario == "official_prompt_hang":
             return
+        if self._scenario == "official_terminal_before_return":
+            self.send(
+                {
+                    "method": "prompt/completed",
+                    "params": {
+                        "sessionId": session_id,
+                        "turnId": turn_id,
+                        "status": "completed",
+                        "finalOutput": "fixture reply",
+                    },
+                }
+            )
+            time.sleep(0.05)
+            cancel_event.clear()
+            self._send_result(request_id, {"stopReason": "end_turn"})
+            return
+        if self._scenario == "official_request_return_after_terminal":
+            self.send(
+                {
+                    "method": "prompt/completed",
+                    "params": {
+                        "sessionId": session_id,
+                        "turnId": turn_id,
+                        "status": "completed",
+                        "finalOutput": "fixture reply",
+                    },
+                }
+            )
+            time.sleep(0.2)
+            cancel_event.clear()
+            self._send_result(request_id, {"stopReason": "end_turn"})
+            return
         cancel_event.clear()
         self._send_result(request_id, {"stopReason": "end_turn"})
 
@@ -466,6 +500,8 @@ class FakeACPServer:
             if session_id not in self._sessions:
                 self._send_error(request_id, -32004, "session not found")
                 return
+            turn_id = f"turn-{self._next_official_turn}"
+            self._next_official_turn += 1
             prompt_items = params.get("prompt")
             prompt_text = ""
             if isinstance(prompt_items, list):
@@ -479,6 +515,7 @@ class FakeACPServer:
                 kwargs={
                     "request_id": request_id,
                     "session_id": session_id,
+                    "turn_id": turn_id,
                     "prompt": prompt_text,
                 },
                 daemon=True,

@@ -30,6 +30,9 @@ async def test_discord_hermes_pma_times_out_for_official_prompt_hang(
     try:
         rest = await harness.run_message("echo hello world")
 
+        assert rest.execution_status == "error"
+        assert rest.preview_deleted is True
+        assert rest.terminal_progress_label == "failed"
         assert any(
             op["op"] == "edit"
             and "failed" in str(op["payload"].get("content", "")).lower()
@@ -59,6 +62,8 @@ async def test_telegram_hermes_pma_times_out_for_official_prompt_hang(
     try:
         bot = await harness.run_message("echo hello world")
 
+        assert bot.execution_status == "error"
+        assert bot.placeholder_deleted is True
         assert bot.messages[0]["text"] == "Working..."
         assert "telegram pma turn timed out" in bot.messages[1]["text"].lower()
         assert bot.deleted_messages == [

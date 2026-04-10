@@ -12,6 +12,7 @@ from ...core.config import HubConfig, RepoConfig
 from ...core.logging_utils import log_event
 from ...core.orchestration.turn_event_buffer import TurnEventBuffer
 from ...core.text_utils import _normalize_optional_text
+from ...core.time_utils import now_iso
 from ...core.utils import resolve_executable
 from ...workspace import canonical_workspace_root
 from ..acp import (
@@ -57,6 +58,7 @@ class _HermesTurnState:
     event_buffer: TurnEventBuffer = field(default_factory=TurnEventBuffer)
     last_event_method: Optional[str] = None
     last_session_update_kind: Optional[str] = None
+    last_progress_at: Optional[str] = None
 
 
 class HermesSupervisor:
@@ -247,7 +249,9 @@ class HermesSupervisor:
                 timeout_seconds=timeout,
                 elapsed_ms=_elapsed_ms(started_at),
                 last_event_method=state.last_event_method,
+                last_runtime_method=state.last_event_method,
                 last_session_update_kind=state.last_session_update_kind,
+                last_progress_at=state.last_progress_at,
             )
             raise
         await self._sync_prompt_snapshot_into_event_buffer(workspace_root, state)
@@ -265,7 +269,9 @@ class HermesSupervisor:
             elapsed_ms=_elapsed_ms(started_at),
             raw_event_count=len(raw_events),
             last_event_method=state.last_event_method,
+            last_runtime_method=state.last_event_method,
             last_session_update_kind=state.last_session_update_kind,
+            last_progress_at=state.last_progress_at,
             error_message=result.error_message,
         )
         return TerminalTurnResult(
@@ -410,6 +416,7 @@ class HermesSupervisor:
         terminal: bool = False,
     ) -> None:
         state.last_event_method = str(payload.get("method") or "").strip() or None
+        state.last_progress_at = now_iso()
         params = payload.get("params")
         if (
             isinstance(params, dict)

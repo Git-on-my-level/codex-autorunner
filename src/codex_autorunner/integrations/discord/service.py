@@ -3186,12 +3186,12 @@ class DiscordBotService:
         message_id: str,
         *,
         record_id: Optional[str] = None,
-    ) -> None:
+    ) -> bool:
         if not isinstance(message_id, str) or not message_id:
-            return
+            return False
         try:
             await self._delete_channel_message(channel_id, message_id)
-            return
+            return True
         except (DiscordAPIError, OSError, RuntimeError) as exc:
             outbox_record_id = (
                 record_id or f"retry:delete:{channel_id}:{uuid.uuid4().hex[:12]}"
@@ -3225,6 +3225,7 @@ class DiscordBotService:
                     record_id=outbox_record_id,
                     exc=enqueue_exc,
                 )
+        return False
 
     def _spawn_task(
         self, coro: Awaitable[None], *, await_on_shutdown: bool = False
