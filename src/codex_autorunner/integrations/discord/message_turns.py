@@ -147,6 +147,80 @@ class _DiscordOrchestrationState:
     thread_queue_tasks: dict[str, asyncio.Task[Any]]
 
 
+@dataclass
+class _DiscordTurnExecutionSupervision:
+    service: Any
+    channel_id: str
+    task_context: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self._set_text_field("channel_id", self.channel_id)
+
+    def _set_text_field(self, key: str, value: Optional[str]) -> None:
+        normalized = str(value or "").strip()
+        if normalized:
+            self.task_context[key] = normalized
+            return
+        self.task_context.pop(key, None)
+
+    def _set_bool_field(self, key: str, value: bool) -> None:
+        if value:
+            self.task_context[key] = True
+            return
+        self.task_context.pop(key, None)
+
+    def bind_task(self, task: asyncio.Task[Any]) -> asyncio.Task[Any]:
+        cast(Any, task)._discord_progress_task_context = self.task_context
+        return task
+
+    def set_managed_thread_id(self, managed_thread_id: Optional[str]) -> None:
+        self._set_text_field("managed_thread_id", managed_thread_id)
+
+    def set_execution_id(self, execution_id: Optional[str]) -> None:
+        self._set_text_field("execution_id", execution_id)
+
+    def set_lease_id(self, lease_id: Optional[str]) -> None:
+        self._set_text_field("lease_id", lease_id)
+
+    def set_message_id(self, message_id: Optional[str]) -> None:
+        self._set_text_field("message_id", message_id)
+
+    def set_failure_note(self, failure_note: Optional[str]) -> None:
+        self._set_text_field("failure_note", failure_note)
+
+    def set_shutdown_note(self, shutdown_note: Optional[str]) -> None:
+        self._set_text_field("shutdown_note", shutdown_note)
+
+    def set_orphaned(self, orphaned: bool) -> None:
+        self._set_bool_field("orphaned", orphaned)
+
+    def clear_progress_tracking(self, *, keep_execution_id: bool = True) -> None:
+        self.task_context.pop("lease_id", None)
+        self.task_context.pop("message_id", None)
+        if not keep_execution_id:
+            self.task_context.pop("execution_id", None)
+
+    async def reconcile_failure(
+        self,
+        *,
+        failure_note: Optional[str] = None,
+        allow_channel_fallback: bool = True,
+    ) -> int:
+        context = dict(self.task_context)
+        if isinstance(failure_note, str) and failure_note.strip():
+            context["failure_note"] = failure_note.strip()
+        reconciler = getattr(self.service, "_reconcile_background_task_failure", None)
+        if not callable(reconciler):
+            return 0
+        return int(
+            await reconciler(
+                context,
+                allow_channel_fallback=allow_channel_fallback,
+            )
+            or 0
+        )
+
+
 @dataclass(frozen=True)
 class _DiscordMessageTurnDispatch:
     service: Any
@@ -340,6 +414,7 @@ def _progress_task_context(
     channel_id: Optional[str] = None,
     message_id: Optional[str] = None,
     failure_note: Optional[str] = None,
+    shutdown_note: Optional[str] = None,
     orphaned: bool = False,
 ) -> dict[str, Any]:
     context: dict[str, Any] = {}
@@ -355,6 +430,8 @@ def _progress_task_context(
         context["message_id"] = message_id.strip()
     if isinstance(failure_note, str) and failure_note.strip():
         context["failure_note"] = failure_note.strip()
+    if isinstance(shutdown_note, str) and shutdown_note.strip():
+        context["shutdown_note"] = shutdown_note.strip()
     if orphaned:
         context["orphaned"] = True
     return context
@@ -369,6 +446,7 @@ def bind_discord_progress_task_context(
     channel_id: Optional[str] = None,
     message_id: Optional[str] = None,
     failure_note: Optional[str] = None,
+    shutdown_note: Optional[str] = None,
     orphaned: bool = False,
 ) -> asyncio.Task[Any]:
     context = _progress_task_context(
@@ -378,6 +456,7 @@ def bind_discord_progress_task_context(
         channel_id=channel_id,
         message_id=message_id,
         failure_note=failure_note,
+        shutdown_note=shutdown_note,
         orphaned=orphaned,
     )
     if context:
@@ -532,6 +611,13 @@ def _orphaned_progress_note(*, startup: bool) -> str:
     return (
         "Status: this progress message lost its Discord worker and is no longer live. "
         "Please retry if needed."
+    )
+
+
+def _shutdown_progress_note() -> str:
+    return (
+        "Status: this progress message was interrupted during Discord shutdown and "
+        "is no longer live. Please retry if needed."
     )
 
 
@@ -1093,8 +1179,21 @@ async def _submit_discord_thread_message(
     )
     thread_target_id: Optional[str] = None
     execution_id: Optional[str] = None
+    supervision = _DiscordTurnExecutionSupervision(
+        service=dispatch.service,
+        channel_id=dispatch.channel_id,
+    )
+    supervision.set_orphaned(True)
+    supervision.set_failure_note(
+        "Turn failed: background task terminated unexpectedly."
+    )
+    supervision.set_shutdown_note(_shutdown_progress_note())
 
-    async def _cleanup_background_failure(exc: Exception) -> None:
+    async def _cleanup_background_failure(
+        exc: Exception,
+        *,
+        during_delivery: bool = False,
+    ) -> None:
         public_error, timeout_error, interrupted_error = (
             _discord_surface_error_messages(pma_enabled=dispatch.effective_pma_enabled)
         )
@@ -1111,9 +1210,10 @@ async def _submit_discord_thread_message(
             channel_id=dispatch.channel_id,
             conversation_id=dispatch.context.conversation_id,
             workspace_root=str(dispatch.workspace_root),
-            preview_message_id=progress_message_id,
-            execution_id=execution_id,
+            preview_message_id=_execution_field(supervision.task_context, "message_id"),
+            execution_id=_execution_field(supervision.task_context, "execution_id"),
             background_task_owner="discord.turn.background_delivery",
+            delivery_failed=during_delivery,
             agent=dispatch.agent,
             exc=exc,
         )
@@ -1122,18 +1222,20 @@ async def _submit_discord_thread_message(
                 dispatch.service,
                 thread_target_id=thread_target_id,
             )
-        reconciled = 0
-        if thread_target_id or progress_message_id:
-            reconciled = await reconcile_discord_turn_progress_leases(
-                dispatch.service,
-                managed_thread_id=thread_target_id,
-                execution_id=execution_id,
-                channel_id=dispatch.channel_id,
-                message_id=progress_message_id,
-                failure_note=f"Turn failed: {failure_message}",
-                orphaned=True,
-            )
+        reconciliation_note = (
+            "Status: this turn finished, but Discord failed before the final "
+            "reply was delivered. Please retry if needed."
+            if during_delivery
+            else f"Turn failed: {failure_message}"
+        )
+        reconciled = await supervision.reconcile_failure(
+            failure_note=reconciliation_note,
+            allow_channel_fallback=False,
+        )
         if reconciled == 0:
+            progress_message_id = _execution_field(
+                supervision.task_context, "message_id"
+            )
             if progress_message_id:
                 await dispatch.service._delete_channel_message_safe(
                     channel_id=dispatch.channel_id,
@@ -1143,9 +1245,14 @@ async def _submit_discord_thread_message(
                         f"{dispatch.session_key}:{uuid.uuid4().hex[:8]}"
                     ),
                 )
+            fallback_text = (
+                "Turn finished, but final reply delivery failed. Please retry."
+                if during_delivery
+                else f"Turn failed: {failure_message}"
+            )
             await dispatch.service._send_channel_message_safe(
                 dispatch.channel_id,
-                {"content": f"Turn failed: {failure_message}"},
+                {"content": fallback_text},
                 record_id=(
                     f"turn:background_failure:{dispatch.session_key}:"
                     f"{uuid.uuid4().hex[:8]}"
@@ -1219,20 +1326,30 @@ async def _submit_discord_thread_message(
                 dispatch=dispatch,
                 initial_progress_message_id=progress_message_id,
                 managed_thread_surface_key=managed_thread_surface_key,
+                supervision=supervision,
             )
             if isinstance(turn_result, DiscordMessageTurnResult):
                 execution_id = turn_result.execution_id
-            await _deliver_discord_turn_result(
-                dispatch,
-                workspace_root=request.workspace_root,
-                turn_result=turn_result,
-            )
+                supervision.set_execution_id(execution_id)
+                if turn_result.deferred_delivery:
+                    return
+            try:
+                await _deliver_discord_turn_result(
+                    dispatch,
+                    workspace_root=request.workspace_root,
+                    turn_result=turn_result,
+                    supervision=supervision,
+                )
+            except Exception as exc:
+                await _cleanup_background_failure(exc, during_delivery=True)
+                return
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # intentional: background task must clean up visibly
             await _cleanup_background_failure(exc)
 
     progress_message_id = await _send_initial_progress_placeholder()
+    supervision.set_message_id(progress_message_id)
     try:
         if (
             progress_message_id is not None
@@ -1240,6 +1357,7 @@ async def _submit_discord_thread_message(
             and dispatch.event.message.message_id
         ):
             thread_target_id = await _resolve_managed_thread_id()
+            supervision.set_managed_thread_id(thread_target_id)
             if thread_target_id:
                 _stash_discord_reusable_progress_message(
                     dispatch.service,
@@ -1253,14 +1371,7 @@ async def _submit_discord_thread_message(
             _run_in_background(),
             await_on_shutdown=True,
         )
-        bind_discord_progress_task_context(
-            background_task,
-            managed_thread_id=thread_target_id,
-            channel_id=dispatch.channel_id,
-            message_id=progress_message_id,
-            failure_note="Turn failed: background task terminated unexpectedly.",
-            orphaned=True,
-        )
+        supervision.bind_task(background_task)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -1278,6 +1389,7 @@ async def _execute_discord_thread_message(
     dispatch: _DiscordMessageTurnDispatch,
     initial_progress_message_id: Optional[str] = None,
     managed_thread_surface_key: Optional[str] = None,
+    supervision: Optional[_DiscordTurnExecutionSupervision] = None,
 ) -> DiscordMessageTurnResult:
     request_workspace_root = request.workspace_root
     prompt_text = dispatch.turn_text
@@ -1441,13 +1553,24 @@ async def _execute_discord_thread_message(
         run_turn_kwargs["managed_thread_surface_key"] = (
             resolved_managed_thread_surface_key
         )
+    if supervision is not None:
+        run_turn_kwargs["supervision"] = supervision
     if turn_input_items:
         run_turn_kwargs["input_items"] = turn_input_items
     try:
-        return cast(
-            DiscordMessageTurnResult,
-            await dispatch.service._run_agent_turn_for_message(**run_turn_kwargs),
-        )
+        try:
+            return cast(
+                DiscordMessageTurnResult,
+                await dispatch.service._run_agent_turn_for_message(**run_turn_kwargs),
+            )
+        except TypeError as exc:
+            if "supervision" not in str(exc):
+                raise
+            run_turn_kwargs.pop("supervision", None)
+            return cast(
+                DiscordMessageTurnResult,
+                await dispatch.service._run_agent_turn_for_message(**run_turn_kwargs),
+            )
     except DiscordTurnStartupFailure as exc:
         dispatch.log_event_fn(
             dispatch.service._logger,
@@ -1533,6 +1656,7 @@ async def _deliver_discord_turn_result(
     *,
     workspace_root: Path,
     turn_result: Any,
+    supervision: Optional[_DiscordTurnExecutionSupervision] = None,
 ) -> None:
     if isinstance(turn_result, DiscordMessageTurnResult):
         if turn_result.deferred_delivery:
@@ -1559,6 +1683,15 @@ async def _deliver_discord_turn_result(
         preview_message_id = None
         execution_id = None
         send_final_message = True
+
+    if supervision is not None:
+        supervision.set_message_id(preview_message_id)
+        supervision.set_execution_id(execution_id)
+        if send_final_message:
+            supervision.set_failure_note(
+                "Status: this turn finished, but Discord failed before the final "
+                "reply was delivered. Please retry if needed."
+            )
 
     log_event(
         dispatch.service._logger,
@@ -1596,6 +1729,8 @@ async def _deliver_discord_turn_result(
                         dispatch.service,
                         lease_id=current_lease_id,
                     )
+            if supervision is not None:
+                supervision.clear_progress_tracking()
     elif isinstance(execution_id, str) and execution_id:
         for lease in await _list_discord_progress_leases(
             dispatch.service,
@@ -1607,6 +1742,8 @@ async def _deliver_discord_turn_result(
                     dispatch.service,
                     lease_id=current_lease_id,
                 )
+        if supervision is not None:
+            supervision.set_lease_id(None)
     if send_final_message:
         await _send_discord_turn_section(
             dispatch.service,
@@ -2118,6 +2255,7 @@ async def _run_discord_orchestrated_turn_for_message(
     max_actions: int,
     min_edit_interval_seconds: float,
     heartbeat_interval_seconds: float,
+    supervision: Optional[_DiscordTurnExecutionSupervision] = None,
 ) -> DiscordMessageTurnResult:
     _ = session_key
     channel_id = (
@@ -2159,6 +2297,8 @@ async def _run_discord_orchestrated_turn_for_message(
     )
     max_progress_len = max(int(service._config.max_message_length), 32)
     managed_thread_id = thread.thread_target_id
+    if supervision is not None:
+        supervision.set_managed_thread_id(managed_thread_id)
     coordinator = _build_discord_managed_thread_coordinator(
         service=service,
         orchestration_service=orchestration_service,
@@ -2215,6 +2355,10 @@ async def _run_discord_orchestrated_turn_for_message(
             state=state,
             progress_label=tracker.label,
         )
+        if supervision is not None:
+            supervision.set_lease_id(progress_lease_id)
+            supervision.set_message_id(progress_message_id)
+            supervision.set_execution_id(execution_id)
 
     async def _set_progress_lease_state(
         *,
@@ -2231,6 +2375,8 @@ async def _run_discord_orchestrated_turn_for_message(
 
     async def _delete_progress_lease() -> None:
         await _delete_discord_progress_lease(service, lease_id=progress_lease_id)
+        if supervision is not None:
+            supervision.set_lease_id(None)
 
     async def _edit_progress(
         *,
@@ -2333,6 +2479,8 @@ async def _run_discord_orchestrated_turn_for_message(
     try:
         if reusable_progress_message_id:
             progress_message_id = reusable_progress_message_id
+            if supervision is not None:
+                supervision.set_message_id(progress_message_id)
             await _register_progress_lease(state="pending")
             await _edit_progress(force=True)
             progress_heartbeat_task = bind_discord_progress_task_context(
@@ -2368,6 +2516,8 @@ async def _run_discord_orchestrated_turn_for_message(
             message_id = response.get("id")
             if isinstance(message_id, str) and message_id:
                 progress_message_id = message_id
+                if supervision is not None:
+                    supervision.set_message_id(progress_message_id)
                 progress_rendered = initial_content
                 progress_last_updated = time.monotonic()
                 await _register_progress_lease(state="pending")
@@ -2424,6 +2574,8 @@ async def _run_discord_orchestrated_turn_for_message(
             str(getattr(started_execution.execution, "backend_id", "") or "").strip()
             or None
         )
+        if supervision is not None:
+            supervision.set_execution_id(progress_execution_id)
         await _set_progress_lease_state(
             execution_id=progress_execution_id,
             state="active",
@@ -2483,6 +2635,8 @@ async def _run_discord_orchestrated_turn_for_message(
                     ),
                 )
                 await _delete_progress_lease()
+                if supervision is not None:
+                    supervision.set_message_id(None)
             raise exc
         raise exc
 
@@ -2725,6 +2879,7 @@ async def run_managed_thread_turn_for_message(
     session_key: str,
     orchestrator_channel_key: str,
     managed_thread_surface_key: Optional[str] = None,
+    supervision: Optional[_DiscordTurnExecutionSupervision] = None,
 ) -> DiscordMessageTurnResult:
     execution_prompt = (
         f"{format_pma_discoverability_preamble(hub_root=service._config.root)}"
@@ -2761,4 +2916,5 @@ async def run_managed_thread_turn_for_message(
         max_actions=DISCORD_PMA_PROGRESS_MAX_ACTIONS,
         min_edit_interval_seconds=DISCORD_PMA_PROGRESS_MIN_EDIT_INTERVAL_SECONDS,
         heartbeat_interval_seconds=DISCORD_PMA_PROGRESS_HEARTBEAT_INTERVAL_SECONDS,
+        supervision=supervision,
     )

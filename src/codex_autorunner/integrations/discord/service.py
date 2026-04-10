@@ -2673,6 +2673,7 @@ class DiscordBotService:
         session_key: str,
         orchestrator_channel_key: str,
         managed_thread_surface_key: Optional[str] = None,
+        supervision: Optional[Any] = None,
     ) -> DiscordMessageTurnResult:
         async def _run_turn() -> DiscordMessageTurnResult:
             if orchestrator_channel_key.startswith("pma:"):
@@ -2688,6 +2689,7 @@ class DiscordBotService:
                     session_key=session_key,
                     orchestrator_channel_key=orchestrator_channel_key,
                     managed_thread_surface_key=managed_thread_surface_key,
+                    supervision=supervision,
                 )
             return await run_agent_turn_for_message(
                 self,
@@ -3025,6 +3027,27 @@ class DiscordBotService:
             if pending:
                 break
         if pending_shutdown_tasks:
+            shutdown_reconcile_contexts: list[dict[str, Any]] = []
+            for task in pending_shutdown_tasks:
+                task_context = getattr(task, "_discord_progress_task_context", None)
+                if not isinstance(task_context, dict) or not task_context:
+                    continue
+                shutdown_context = dict(task_context)
+                shutdown_note = shutdown_context.get("shutdown_note")
+                if isinstance(shutdown_note, str) and shutdown_note.strip():
+                    shutdown_context["failure_note"] = shutdown_note.strip()
+                shutdown_reconcile_contexts.append(shutdown_context)
+            if shutdown_reconcile_contexts:
+                await asyncio.gather(
+                    *(
+                        self._reconcile_background_task_failure(
+                            task_context,
+                            allow_channel_fallback=False,
+                        )
+                        for task_context in shutdown_reconcile_contexts
+                    ),
+                    return_exceptions=True,
+                )
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -3264,8 +3287,11 @@ class DiscordBotService:
             )
 
     async def _reconcile_background_task_failure(
-        self, task_context: dict[str, Any]
-    ) -> None:
+        self,
+        task_context: dict[str, Any],
+        *,
+        allow_channel_fallback: bool = True,
+    ) -> int:
         failure_note = task_context.get("failure_note")
         if not isinstance(failure_note, str) or not failure_note.strip():
             failure_note = "Status: this progress message lost its worker."
@@ -3300,7 +3326,9 @@ class DiscordBotService:
             orphaned=bool(task_context.get("orphaned")),
         )
         if reconciled:
-            return
+            return int(reconciled)
+        if not allow_channel_fallback:
+            return 0
         fallback_channel_id = (
             task_context.get("channel_id")
             if isinstance(task_context.get("channel_id"), str)
@@ -3311,6 +3339,7 @@ class DiscordBotService:
                 fallback_channel_id,
                 {"content": failure_note},
             )
+        return 0
 
     def _on_background_task_done(self, task: asyncio.Task[Any]) -> None:
         self._background_tasks.discard(task)
@@ -3330,9 +3359,11 @@ class DiscordBotService:
                 exc=exc,
             )
             if isinstance(task_context, dict) and task_context:
-                reconcile_task = self._spawn_task(
-                    self._reconcile_background_task_failure(task_context)
-                )
+
+                async def _reconcile_failure() -> None:
+                    await self._reconcile_background_task_failure(task_context)
+
+                reconcile_task = self._spawn_task(_reconcile_failure())
                 bind_discord_progress_task_context(reconcile_task)
 
     async def _on_dispatch(self, event_type: str, payload: dict[str, Any]) -> None:
