@@ -445,8 +445,14 @@ class CommandRunner:
                 deferred=ctx.deferred,
                 text="Command timed out. Please try again later.",
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.runner.timeout_followup_failed",
+                interaction_id=ctx.interaction_id,
+                exc=exc,
+            )
 
     async def _send_error_followup(self, ctx: IngressContext) -> None:
         try:
@@ -456,8 +462,14 @@ class CommandRunner:
                 deferred=ctx.deferred,
                 text="An unexpected error occurred. Please try again later.",
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.runner.error_followup_failed",
+                interaction_id=ctx.interaction_id,
+                exc=exc,
+            )
 
     def _log_cancelled_task_failure(
         self, task: asyncio.Task[None], ctx: IngressContext

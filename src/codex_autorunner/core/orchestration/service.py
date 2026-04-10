@@ -879,6 +879,40 @@ class _ThreadExecutionLifecycle:
                     )
                     conversation_id = None
                     continue
+        except asyncio.CancelledError as exc:
+            detail = (
+                str(request.metadata.get("execution_error_message") or "").strip()
+                or CLAIMED_EXECUTION_START_CANCELLED_ERROR
+            )
+            log_event(
+                logger,
+                logging.WARNING,
+                "orchestration.thread.start_failed",
+                thread_target_id=thread.thread_target_id,
+                execution_id=execution.execution_id,
+                backend_thread_id=conversation_id,
+                request_kind=request.kind,
+                fresh_conversation_retry_attempted=fresh_conversation_retry_attempted,
+                reported_error=detail,
+                error_type=type(exc).__name__,
+            )
+            try:
+                self.thread_store.record_execution_result(
+                    thread.thread_target_id,
+                    execution.execution_id,
+                    status="error",
+                    assistant_text="",
+                    error=detail,
+                    backend_turn_id=None,
+                    transcript_turn_id=None,
+                )
+            except KeyError:
+                refreshed = self.get_execution(
+                    thread.thread_target_id, execution.execution_id
+                )
+                if refreshed is None:
+                    raise
+            raise
         except (
             Exception
         ) as exc:  # intentional: top-level execution boundary records all harness failures

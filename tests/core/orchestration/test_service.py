@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
@@ -1425,6 +1426,71 @@ async def test_send_message_records_failed_execution_when_runtime_setup_fails(
     assert failure_event["error"] == "codex"
     assert failure_event["error_type"] == "FileNotFoundError"
     assert failure_event["reported_error"] == "Managed thread execution failed"
+
+
+async def test_send_message_records_failed_execution_when_start_is_cancelled(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+    captured_execution_id: Optional[str] = None
+
+    async def _slow_start_turn(
+        workspace_root_arg: Path,
+        conversation_id: str,
+        prompt: str,
+        model: Optional[str],
+        reasoning: Optional[str],
+        *,
+        approval_mode: Optional[str],
+        sandbox_policy: Optional[Any],
+        input_items: Optional[list[dict[str, Any]]] = None,
+    ) -> _FakeTurn:
+        _ = (
+            workspace_root_arg,
+            conversation_id,
+            prompt,
+            model,
+            reasoning,
+            approval_mode,
+            sandbox_policy,
+            input_items,
+        )
+        nonlocal captured_execution_id
+        running = service.get_running_execution(thread.thread_target_id)
+        assert running is not None
+        captured_execution_id = running.execution_id
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            raise
+
+    harness.start_turn = _slow_start_turn  # type: ignore[assignment]
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(
+            service.send_message(
+                MessageRequest(
+                    target_id=thread.thread_target_id,
+                    target_kind="thread",
+                    message_text="Need an answer",
+                    metadata={
+                        "execution_error_message": "Managed thread execution failed"
+                    },
+                )
+            ),
+            timeout=0.01,
+        )
+
+    assert captured_execution_id is not None
+    persisted = service.get_execution(thread.thread_target_id, captured_execution_id)
+    assert persisted is not None
+    assert persisted.status == "error"
+    assert persisted.error == "Managed thread execution failed"
+    assert service.get_running_execution(thread.thread_target_id) is None
 
 
 async def test_interrupt_thread_rejects_when_harness_lacks_interrupt_capability(

@@ -619,6 +619,78 @@ async def test_stall_warning_fires_for_slow_handler() -> None:
 
 
 @pytest.mark.anyio
+async def test_timeout_followup_failure_is_logged() -> None:
+    service = _FakeService()
+    service._send_or_respond_ephemeral.side_effect = RuntimeError("followup failed")
+    runner = CommandRunner(
+        service,
+        config=RunnerConfig(timeout_seconds=0.01, stalled_warning_seconds=None),
+        logger=service._logger,
+    )
+
+    async def forever_handler(*args: Any, **kwargs: Any) -> None:
+        await asyncio.sleep(300)
+
+    service._handle_car_command.side_effect = forever_handler
+
+    followup_events: list[dict[str, Any]] = []
+    original_log = service._logger.log
+
+    def capture_log(level: int, msg: str, *args_log: Any, **kwargs_log: Any) -> None:
+        try:
+            parsed = json.loads(msg)
+            if parsed.get("event") == "discord.runner.timeout_followup_failed":
+                followup_events.append(parsed)
+        except (json.JSONDecodeError, TypeError):
+            pass
+        original_log(level, msg, *args_log, **kwargs_log)
+
+    service._logger.log = capture_log  # type: ignore[assignment]
+
+    ctx, payload = _make_ctx_with_timing()
+    runner.submit(ctx, payload)
+    await asyncio.sleep(0.05)
+
+    assert followup_events
+    assert followup_events[0]["interaction_id"] == "inter-timed"
+
+    await runner.shutdown(grace_seconds=1.0)
+
+
+@pytest.mark.anyio
+async def test_error_followup_failure_is_logged() -> None:
+    service = _FakeService()
+    service._send_or_respond_ephemeral.side_effect = RuntimeError("followup failed")
+    runner = CommandRunner(
+        service,
+        config=RunnerConfig(timeout_seconds=5.0, stalled_warning_seconds=None),
+        logger=service._logger,
+    )
+
+    followup_events: list[dict[str, Any]] = []
+    original_log = service._logger.log
+
+    def capture_log(level: int, msg: str, *args_log: Any, **kwargs_log: Any) -> None:
+        try:
+            parsed = json.loads(msg)
+            if parsed.get("event") == "discord.runner.error_followup_failed":
+                followup_events.append(parsed)
+        except (json.JSONDecodeError, TypeError):
+            pass
+        original_log(level, msg, *args_log, **kwargs_log)
+
+    service._logger.log = capture_log  # type: ignore[assignment]
+
+    ctx, payload = _make_ctx_with_timing()
+    await runner._send_error_followup(ctx)
+
+    assert followup_events
+    assert followup_events[0]["interaction_id"] == "inter-timed"
+
+    await runner.shutdown(grace_seconds=1.0)
+
+
+@pytest.mark.anyio
 async def test_runner_telemetry_emits_lifecycle_metrics() -> None:
     """The execute.done event must include total_lifecycle_ms and
     gateway_to_completion_ms when timing data is available."""
