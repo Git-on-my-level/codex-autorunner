@@ -12,37 +12,42 @@ from .harness import (
 pytestmark = pytest.mark.integration
 
 
-@pytest.mark.parametrize(
-    "scenario",
-    (
-        "terminal_missing_turn_id",
-        "session_status_idle_completion_gap",
-        "session_status_idle_then_prompt_completed",
-    ),
-)
 @pytest.mark.anyio
-async def test_discord_hermes_pma_completes_for_hermes_terminal_completion_signals(
+async def test_discord_hermes_pma_uses_official_placeholder_lifecycle(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
-    scenario: str,
 ) -> None:
-    runtime = HermesFixtureRuntime(scenario)
+    runtime = HermesFixtureRuntime("official")
     patch_hermes_runtime(monkeypatch, runtime)
     harness = DiscordSurfaceHarness(tmp_path / "discord")
     await harness.setup(agent="hermes")
     try:
         rest = await harness.run_message("echo hello world")
-        progress_send = next(
+
+        assert rest.message_ops[0]["op"] == "send"
+        assert (
+            rest.message_ops[0]["payload"]["content"] == "Received. Preparing turn..."
+        )
+
+        progress_message_id = str(rest.message_ops[0]["message_id"])
+        working_edits = [
             op
             for op in rest.message_ops
-            if op["op"] == "send"
+            if op["op"] == "edit"
+            and str(op["message_id"]) == progress_message_id
             and "working" in str(op["payload"].get("content", "")).lower()
-        )
-        progress_message_id = str(progress_send["message_id"])
-        assert any(
-            op["op"] == "edit" and str(op["message_id"]) == progress_message_id
+        ]
+        assert working_edits
+
+        done_edit = next(
+            op
             for op in rest.message_ops
+            if op["op"] == "edit"
+            and str(op["message_id"]) == progress_message_id
+            and "done" in str(op["payload"].get("content", "")).lower()
         )
+        assert done_edit["payload"]["components"] == []
+
         delete_index = next(
             index
             for index, op in enumerate(rest.message_ops)
@@ -52,44 +57,31 @@ async def test_discord_hermes_pma_completes_for_hermes_terminal_completion_signa
             index
             for index, op in enumerate(rest.message_ops)
             if op["op"] == "send"
-            and (
-                "fixture reply" in str(op["payload"].get("content", ""))
-                or "final canonical output" in str(op["payload"].get("content", ""))
-            )
+            and str(op["message_id"]) != progress_message_id
+            and "fixture reply" in str(op["payload"].get("content", ""))
         )
+
         assert delete_index < reply_index
     finally:
         await harness.close()
         await runtime.close()
 
 
-@pytest.mark.parametrize(
-    "scenario",
-    (
-        "terminal_missing_turn_id",
-        "session_status_idle_completion_gap",
-        "session_status_idle_then_prompt_completed",
-    ),
-)
 @pytest.mark.anyio
-async def test_telegram_hermes_pma_completes_for_hermes_terminal_completion_signals(
+async def test_telegram_hermes_pma_uses_official_turn_delivery_flow(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
-    scenario: str,
 ) -> None:
-    runtime = HermesFixtureRuntime(scenario)
+    runtime = HermesFixtureRuntime("official")
     patch_hermes_runtime(monkeypatch, runtime)
     harness = TelegramSurfaceHarness(tmp_path / "telegram")
     await harness.setup(agent="hermes")
     try:
         bot = await harness.run_message("echo hello world")
         sent_texts = [str(item["text"]) for item in bot.messages]
-        edited_texts = [str(item["text"]) for item in bot.edited_messages]
-        assert any("working" in text.lower() for text in sent_texts + edited_texts)
-        assert any(
-            "fixture reply" in text or "final canonical output" in text
-            for text in sent_texts + edited_texts
-        )
+        assert sent_texts[0] == "Working..."
+        assert any("fixture reply" in text for text in sent_texts[1:])
+        assert bot.edited_messages == []
     finally:
         await harness.close()
         await runtime.close()

@@ -5,10 +5,7 @@ import asyncio
 import anyio
 import pytest
 from tests.chat_surface_harness.discord import build_discord_pma_environment
-from tests.chat_surface_harness.hermes import (
-    SESSION_STATUS_IDLE_COMPLETION_GAP,
-    patch_hermes_registry,
-)
+from tests.chat_surface_harness.hermes import patch_hermes_registry
 from tests.chat_surface_harness.telegram import (
     build_telegram_pma_environment,
     drain_spawned_tasks,
@@ -25,13 +22,13 @@ from codex_autorunner.integrations.telegram.handlers.commands import (
 
 
 @pytest.mark.anyio
-async def test_discord_pma_turn_completes_when_hermes_only_emits_idle_status(
+async def test_discord_pma_turn_completes_for_official_hermes_prompt(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime = patch_hermes_registry(
         monkeypatch,
-        scenario=SESSION_STATUS_IDLE_COMPLETION_GAP,
+        scenario="official",
         targets=[discord_message_turns_module],
     )
     env = await build_discord_pma_environment(
@@ -47,11 +44,14 @@ async def test_discord_pma_turn_completes_when_hermes_only_emits_idle_status(
             ):
                 await anyio.sleep(0.05)
 
-        assert env.rest.deleted_channel_messages
+        assert env.rest.channel_messages[0]["payload"]["content"] == (
+            "Received. Preparing turn..."
+        )
         assert any(
             "working" in edit["payload"].get("content", "")
             for edit in env.rest.edited_channel_messages
         )
+        assert env.rest.deleted_channel_messages
         assert any(
             "fixture reply" in message["payload"].get("content", "")
             for message in env.rest.channel_messages
@@ -62,13 +62,13 @@ async def test_discord_pma_turn_completes_when_hermes_only_emits_idle_status(
 
 
 @pytest.mark.anyio
-async def test_telegram_pma_turn_completes_when_hermes_only_emits_idle_status(
+async def test_telegram_pma_turn_completes_for_official_hermes_prompt(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime = patch_hermes_registry(
         monkeypatch,
-        scenario=SESSION_STATUS_IDLE_COMPLETION_GAP,
+        scenario="official",
         targets=[telegram_execution_module, telegram_shared_module],
     )
     env = await build_telegram_pma_environment(tmp_path)
@@ -77,6 +77,7 @@ async def test_telegram_pma_turn_completes_when_hermes_only_emits_idle_status(
         await asyncio.wait_for(env.service._handle_message_inner(message), timeout=3)
         await asyncio.wait_for(drain_spawned_tasks(env.service), timeout=3)
 
+        assert str(env.bot.messages[0].get("text") or "") == "Working..."
         assert any(
             "fixture reply" in str(sent.get("text") or "") for sent in env.bot.messages
         )
