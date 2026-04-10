@@ -14,6 +14,7 @@ from .errors import (
     ACPError,
     ACPInitializationError,
     ACPMethodNotFoundError,
+    ACPMissingSessionError,
     ACPProcessCrashedError,
     ACPProtocolError,
     ACPResponseError,
@@ -421,7 +422,7 @@ class ACPClient:
             },
         )
         if result is None:
-            raise ACPResponseError(
+            raise ACPMissingSessionError(
                 method="session/load",
                 code=-32004,
                 message=f"session not found: {session_id}",
@@ -989,6 +990,13 @@ class ACPClient:
         data = _coerce_mapping(payload.get("data")) or None
         if code_int == -32601:
             return ACPMethodNotFoundError(
+                method=method,
+                code=code_int,
+                message=message,
+                data=data,
+            )
+        if method == "session/load" and code_int == -32004:
+            return ACPMissingSessionError(
                 method=method,
                 code=code_int,
                 message=message,

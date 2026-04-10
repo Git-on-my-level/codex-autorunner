@@ -9,12 +9,12 @@ import pytest
 from codex_autorunner.agents.acp import (
     ACPClient,
     ACPInitializationError,
+    ACPMissingSessionError,
     ACPPermissionRequestEvent,
 )
 from codex_autorunner.agents.acp.errors import (
     ACPProcessCrashedError,
     ACPProtocolError,
-    ACPResponseError,
 )
 
 FIXTURE_PATH = Path(__file__).resolve().parents[2] / "fixtures" / "fake_acp_server.py"
@@ -137,7 +137,7 @@ async def test_client_rejects_official_load_session_null_result(
     try:
         await client.start()
         with pytest.raises(
-            ACPResponseError, match="session not found: missing-session"
+            ACPMissingSessionError, match="session not found: missing-session"
         ):
             await client.load_session("missing-session")
     finally:

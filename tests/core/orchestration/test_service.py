@@ -3,12 +3,15 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
 import pytest
 
+from codex_autorunner.agents.hermes.harness import HermesHarness
+from codex_autorunner.agents.hermes.supervisor import HermesSupervisor
 from codex_autorunner.agents.registry import AgentDescriptor
 from codex_autorunner.agents.types import TerminalTurnResult
 from codex_autorunner.core.orchestration import (
@@ -33,6 +36,8 @@ from codex_autorunner.core.orchestration.service import (
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.orchestration.transcript_mirror import TranscriptMirrorStore
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
+
+FIXTURE_PATH = Path(__file__).resolve().parents[2] / "fixtures" / "fake_acp_server.py"
 
 
 @dataclass
@@ -225,6 +230,10 @@ def _thread_runtime_binding(
     service: HarnessBackedOrchestrationService, thread_target_id: str
 ):
     return service.thread_store.get_thread_runtime_binding(thread_target_id)
+
+
+def _fake_acp_command(scenario: str) -> list[str]:
+    return [sys.executable, "-u", str(FIXTURE_PATH), "--scenario", scenario]
 
 
 def test_service_exposes_thread_runtime_binding_lookup(tmp_path: Path) -> None:
@@ -736,6 +745,52 @@ async def test_send_review_retries_with_fresh_conversation_when_existing_binding
         and payload.get("status_code") == 400
         for payload in payloads
     )
+
+
+async def test_send_message_recovers_missing_hermes_session_load_end_to_end(
+    tmp_path: Path,
+) -> None:
+    supervisor = HermesSupervisor(_fake_acp_command("official_missing_load_result"))
+    harness = HermesHarness(supervisor)
+    descriptor = AgentDescriptor(
+        id="hermes",
+        name="Hermes",
+        capabilities=harness.capabilities,
+        make_harness=lambda _ctx: harness,
+    )
+    catalog = MappingAgentDefinitionCatalog({"hermes": descriptor})
+    store = PmaThreadExecutionStore(PmaThreadStore(tmp_path / "hub"))
+    service = HarnessBackedOrchestrationService(
+        definition_catalog=catalog,
+        thread_store=store,
+        harness_factory=lambda _agent_id: harness,
+    )
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target(
+        "hermes",
+        workspace_root,
+        backend_thread_id="missing-session",
+    )
+
+    try:
+        execution = await service.send_message(
+            MessageRequest(
+                target_id=thread.thread_target_id,
+                target_kind="thread",
+                message_text="hello again",
+            )
+        )
+    finally:
+        await supervisor.close_all()
+
+    binding = _thread_runtime_binding(service, thread.thread_target_id)
+
+    assert execution.status == "running"
+    assert execution.error is None
+    assert execution.backend_id == "turn-1"
+    assert binding is not None
+    assert binding.backend_thread_id == "session-1"
 
 
 async def test_send_message_rehydrates_from_transcripts_after_runtime_binding_restart(

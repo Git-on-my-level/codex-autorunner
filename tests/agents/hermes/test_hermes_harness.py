@@ -5,10 +5,12 @@ from typing import Any, Optional
 
 import pytest
 
+from codex_autorunner.agents.acp import ACPMissingSessionError
 from codex_autorunner.agents.base import UnsupportedAgentCapabilityError
 from codex_autorunner.agents.hermes.harness import HermesHarness
 from codex_autorunner.agents.registry import get_registered_agents
 from codex_autorunner.agents.types import TerminalTurnResult
+from codex_autorunner.core.orchestration import FreshConversationRequiredError
 
 
 class _StubSupervisor:
@@ -21,6 +23,7 @@ class _StubSupervisor:
         self.streamed: list[tuple[Path, str, str]] = []
         self.ready_workspace: Path | None = None
         self.snapshot_turn_ids: list[str] = []
+        self.resume_error: Exception | None = None
 
     async def ensure_ready(self, workspace_root: Path) -> None:
         self.ready_workspace = workspace_root
@@ -38,6 +41,8 @@ class _StubSupervisor:
 
     async def resume_session(self, workspace_root: Path, session_id: str):
         self.resumed.append((workspace_root, session_id))
+        if self.resume_error is not None:
+            raise self.resume_error
         return type("Session", (), {"session_id": session_id})()
 
     async def list_sessions(self, workspace_root: Path):
@@ -211,3 +216,24 @@ async def test_hermes_harness_wait_for_turn_requires_turn_id() -> None:
 
     with pytest.raises(ValueError, match="requires a turn id"):
         await harness.wait_for_turn(Path("."), "hermes-session-1", None)
+
+
+@pytest.mark.asyncio
+async def test_hermes_harness_maps_missing_session_resume_to_fresh_binding_error() -> (
+    None
+):
+    supervisor = _StubSupervisor()
+    supervisor.resume_error = ACPMissingSessionError(
+        method="session/load",
+        code=-32004,
+        message="session not found: hermes-session-1",
+    )
+    harness = HermesHarness(supervisor)
+
+    with pytest.raises(FreshConversationRequiredError) as exc_info:
+        await harness.resume_conversation(Path("."), "hermes-session-1")
+
+    exc = exc_info.value
+    assert exc.conversation_id == "hermes-session-1"
+    assert exc.operation == "resume_conversation"
+    assert exc.status_code == -32004
