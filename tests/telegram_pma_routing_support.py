@@ -1728,25 +1728,60 @@ async def test_managed_thread_queue_worker_wraps_execution_with_typing_indicator
         return {"status": "ok", "assistant_text": "queued telegram reply"}
 
     monkeypatch.setattr(
-        execution_commands_module,
-        "begin_next_queued_runtime_thread_execution",
-        _fake_begin_next,
-    )
-    monkeypatch.setattr(
         execution_commands_module.ManagedThreadTurnCoordinator,
         "run_started_execution",
         _fake_run_started_execution,
     )
 
     handler = _Handler()
-    execution_commands_module._ensure_telegram_managed_thread_queue_worker(
+    coordinator = execution_commands_module._build_telegram_managed_thread_coordinator(
         handler,
         orchestration_service=_OrchestrationServiceStub(),
-        managed_thread_id="managed-thread-1",
         surface_key="telegram:-1001:101",
-        record=TelegramTopicRecord(workspace_path=str(tmp_path), pma_enabled=True),
         chat_id=-1001,
         thread_id=101,
+        public_execution_error=(
+            execution_commands_module.TELEGRAM_PMA_PUBLIC_EXECUTION_ERROR
+        ),
+        timeout_error=execution_commands_module.TELEGRAM_PMA_TIMEOUT_ERROR,
+        interrupted_error=execution_commands_module.TELEGRAM_PMA_INTERRUPTED_ERROR,
+    )
+
+    async def _run_with_telegram_typing_indicator(work: Any) -> None:
+        await handler._begin_typing_indicator(-1001, 101)
+        try:
+            await work()
+        finally:
+            await handler._end_typing_indicator(-1001, 101)
+
+    async def _deliver_result(
+        finalized: execution_commands_module.ManagedThreadFinalizationResult,
+    ) -> None:
+        await handler._send_message(
+            -1001,
+            finalized.assistant_text,
+            thread_id=101,
+            reply_to=None,
+        )
+        await handler._flush_outbox_files(
+            TelegramTopicRecord(workspace_path=str(tmp_path), pma_enabled=True),
+            chat_id=-1001,
+            thread_id=101,
+            reply_to=None,
+        )
+
+    coordinator.ensure_queue_worker(
+        task_map={},
+        managed_thread_id="managed-thread-1",
+        spawn_task=lambda coro: execution_commands_module._spawn_telegram_background_task(
+            handler,
+            coro,
+        ),
+        hooks=execution_commands_module.ManagedThreadCoordinatorHooks(
+            deliver_result=_deliver_result,
+            run_with_indicator=_run_with_telegram_typing_indicator,
+        ),
+        begin_next_execution=_fake_begin_next,
     )
 
     spawned = list(handler._spawned_tasks)
@@ -5942,12 +5977,6 @@ async def test_repo_managed_thread_turn_matches_pending_compact_seed_by_managed_
         "_build_telegram_managed_thread_coordinator",
         lambda *_args, **_kwargs: _Coordinator(),
     )
-    monkeypatch.setattr(
-        execution_commands_module,
-        "_ensure_telegram_managed_thread_queue_worker",
-        lambda *_args, **_kwargs: None,
-    )
-
     handler = _Handler()
     record = TelegramTopicRecord(
         workspace_path="/tmp/workspace",
