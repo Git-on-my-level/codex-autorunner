@@ -857,7 +857,10 @@ async def test_runner_telemetry_emits_lifecycle_metrics() -> None:
     ctx, payload = _make_ctx_with_timing(interaction_created_at=created_at)
 
     runner.submit(ctx, payload)
-    await asyncio.sleep(0.05)
+    for _ in range(100):
+        if done_events:
+            break
+        await asyncio.sleep(0.01)
 
     assert len(done_events) >= 1
     event = done_events[0]
@@ -866,6 +869,7 @@ async def test_runner_telemetry_emits_lifecycle_metrics() -> None:
     assert event["total_lifecycle_ms"] > 0
     assert "gateway_to_completion_ms" in event
     assert event["gateway_to_completion_ms"] is not None
+    await runner.shutdown(grace_seconds=1.0)
 
 
 @pytest.mark.anyio
@@ -1134,6 +1138,11 @@ async def test_deferred_interaction_recovers_after_simulated_restart(
             record_ack=record_ack,
             record_delivery=record_delivery,
         )
+        redeferred = await restarted.defer(
+            interaction_id="restart-1",
+            interaction_token="token-restart",
+            ephemeral=True,
+        )
         await restarted.send_or_respond(
             interaction_id="restart-1",
             interaction_token="token-restart",
@@ -1143,6 +1152,7 @@ async def test_deferred_interaction_recovers_after_simulated_restart(
         )
 
         assert deferred is True
+        assert redeferred is True
         assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"] == {
             "type": 5,
@@ -1159,6 +1169,86 @@ async def test_deferred_interaction_recovers_after_simulated_restart(
         assert record.ack_mode == "defer_ephemeral"
         assert record.final_delivery_status == "followup_sent"
         assert record.original_response_message_id == "followup-1"
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_send_or_respond_persists_initial_response_state(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    rest = _FakeRest()
+    logger = logging.getLogger("test.reliability.send_or_respond")
+    config = SimpleNamespace(application_id="app-1", max_message_length=2000)
+    try:
+        await store.initialize()
+        await store.register_interaction(
+            interaction_id="persist-1",
+            interaction_token="token-persist",
+            interaction_kind="slash_command",
+            channel_id="chan-1",
+            guild_id="guild-1",
+            user_id="user-1",
+            metadata_json={"command_path": ["car", "status"]},
+        )
+
+        async def load_ack_mode(interaction_id: str) -> Optional[str]:
+            record = await store.get_interaction(interaction_id)
+            return record.ack_mode if record is not None else None
+
+        async def record_ack(
+            interaction_id: str,
+            interaction_token: str,
+            ack_mode: str,
+            original_response_message_id: Optional[str],
+        ) -> None:
+            await store.mark_interaction_acknowledged(
+                interaction_id,
+                ack_mode=ack_mode,
+                original_response_message_id=original_response_message_id,
+            )
+
+        async def record_delivery(
+            interaction_id: str,
+            delivery_status: str,
+            delivery_error: Optional[str],
+            original_response_message_id: Optional[str],
+        ) -> None:
+            await store.record_interaction_delivery(
+                interaction_id,
+                delivery_status=delivery_status,
+                delivery_error=delivery_error,
+                original_response_message_id=original_response_message_id,
+            )
+
+        responder = DiscordResponder(
+            rest=rest,
+            config=config,
+            logger=logger,
+            hydrate_ack_mode=load_ack_mode,
+            record_ack=record_ack,
+            record_delivery=record_delivery,
+        )
+
+        await responder.send_or_respond(
+            interaction_id="persist-1",
+            interaction_token="token-persist",
+            deferred=False,
+            text="Immediate reply.",
+            ephemeral=True,
+        )
+
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"] == {
+            "type": 4,
+            "data": {"content": "Immediate reply.", "flags": 64},
+        }
+        record = await store.get_interaction("persist-1")
+        assert record is not None
+        assert record.ack_mode == "immediate_message"
+        assert record.final_delivery_status == "initial_response_sent"
+        assert record.original_response_message_id is None
     finally:
         await store.close()
 

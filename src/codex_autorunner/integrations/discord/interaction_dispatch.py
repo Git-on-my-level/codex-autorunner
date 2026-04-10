@@ -409,6 +409,7 @@ async def handle_autocomplete_interaction(
             delivery_status=exc.delivery_status,
             exc=exc,
         )
+        await _respond_empty_autocomplete(service, ctx)
     except Exception as exc:  # intentional: top-level autocomplete error handler
         log_event(
             service._logger,

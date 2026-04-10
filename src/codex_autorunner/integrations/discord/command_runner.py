@@ -124,8 +124,7 @@ class CommandRunner:
             self._run_scheduled_interaction(item),
             name=f"discord-runner-{ctx.interaction_id}",
         )
-        self._interaction_tasks.add(task)
-        task.add_done_callback(self._interaction_task_done)
+        self._track_interaction_task(task)
 
     def submit_event(self, event: Any) -> None:
         self._ensure_started()
@@ -161,11 +160,13 @@ class CommandRunner:
 
     async def shutdown(self, *, grace_seconds: float = 5.0) -> None:
         idle_conversations: set[str] = set()
+        deadline = time.monotonic() + grace_seconds
         if self._drain_task is not None and not self._drain_task.done():
             await self._queue.put(_DRAIN_SENTINEL)
             try:
                 await asyncio.wait_for(
-                    asyncio.shield(self._drain_task), timeout=grace_seconds
+                    asyncio.shield(self._drain_task),
+                    timeout=max(0.0, deadline - time.monotonic()),
                 )
             except asyncio.TimeoutError:
                 self._drain_task.cancel()
@@ -181,15 +182,7 @@ class CommandRunner:
                 for item in self._pending_interactions
                 if item.schedule.conversation_id
             )
-            tasks = list(self._interaction_tasks)
-            done, pending = await asyncio.wait(
-                tasks, timeout=grace_seconds, return_when=asyncio.ALL_COMPLETED
-            )
-            for task in pending:
-                task.cancel()
-            if pending:
-                await asyncio.gather(*pending, return_exceptions=True)
-            self._interaction_tasks.clear()
+            await self._drain_interaction_tasks(deadline=deadline)
         async with self._scheduler_lock:
             self._pending_interactions.clear()
             self._active_resource_keys.clear()
@@ -403,6 +396,25 @@ class CommandRunner:
                 exc=exc,
             )
 
+    def _track_interaction_task(self, task: asyncio.Task[None]) -> None:
+        self._interaction_tasks.add(task)
+        task.add_done_callback(self._interaction_task_done)
+
+    async def _drain_interaction_tasks(self, *, deadline: float) -> None:
+        while self._interaction_tasks:
+            tasks = list(self._interaction_tasks)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                continue
+            await asyncio.wait(
+                tasks,
+                timeout=remaining,
+                return_when=asyncio.ALL_COMPLETED,
+            )
+
     async def _run_with_lifecycle(
         self,
         ctx: IngressContext,
@@ -561,7 +573,11 @@ class CommandRunner:
         handler_task.add_done_callback(
             lambda t: self._log_cancelled_task_failure(t, ctx)
         )
-        asyncio.create_task(self._send_timeout_followup(ctx))
+        timeout_task = asyncio.create_task(
+            self._send_timeout_followup(ctx),
+            name=f"discord-runner-timeout-followup-{ctx.interaction_id}",
+        )
+        self._track_interaction_task(timeout_task)
 
     async def _warn_on_stall(
         self,

@@ -206,6 +206,44 @@ async def test_timeout_sends_user_message() -> None:
 
 
 @pytest.mark.anyio
+async def test_shutdown_waits_for_timeout_followup_tasks() -> None:
+    service = _FakeService()
+    followup_started = asyncio.Event()
+    followup_cancelled = asyncio.Event()
+
+    async def slow_handler(*args: Any, **kwargs: Any) -> None:
+        await asyncio.sleep(60)
+
+    async def blocked_followup(**kwargs: Any) -> None:
+        followup_started.set()
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            followup_cancelled.set()
+            raise
+
+    service._handle_car_command.side_effect = slow_handler
+    service._send_or_respond_ephemeral.side_effect = blocked_followup
+
+    runner = CommandRunner(
+        service,
+        config=RunnerConfig(timeout_seconds=0.05, stalled_warning_seconds=None),
+        logger=service._logger,
+    )
+    ctx = _make_ctx()
+    payload = _slash_payload()
+
+    runner.submit(ctx, payload)
+    shutdown_task = asyncio.create_task(runner.shutdown(grace_seconds=0.2))
+
+    await asyncio.wait_for(followup_started.wait(), timeout=1.0)
+    await shutdown_task
+
+    assert followup_cancelled.is_set()
+    assert runner.active_task_count == 0
+
+
+@pytest.mark.anyio
 async def test_none_timeout_allows_long_running_handler() -> None:
     service = _FakeService()
     finished = asyncio.Event()

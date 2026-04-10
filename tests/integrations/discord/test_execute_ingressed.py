@@ -185,6 +185,31 @@ async def test_autocomplete_transient_error_returns_empty_choices() -> None:
 
 
 @pytest.mark.anyio
+async def test_autocomplete_delivery_error_returns_empty_choices() -> None:
+    service = _FakeService()
+    service._handle_command_autocomplete.side_effect = DiscordEffectDeliveryError(
+        effect=DiscordResponseEffect(text="busy", ephemeral=True),
+        interaction_id="inter-1",
+        interaction_token="token-1",
+        delivery_status="ack_failed",
+    )
+    ctx = _ctx(
+        kind=InteractionKind.AUTOCOMPLETE,
+        command_path=("car", "bind"),
+        focused_name="workspace",
+        focused_value="codex",
+    )
+
+    await execute_ingressed_interaction(service, ctx, {})
+
+    service._respond_autocomplete.assert_awaited_once_with(
+        "inter-1",
+        "token-1",
+        choices=[],
+    )
+
+
+@pytest.mark.anyio
 async def test_component_with_custom_id_routes_to_component_handler() -> None:
     service = _FakeService()
     ctx = _ctx(
