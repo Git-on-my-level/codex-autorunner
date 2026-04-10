@@ -276,6 +276,17 @@ class HubRepoListingService:
                     fingerprint=fingerprint,
                     payload=payload,
                 )
+                projection_store = self._projection_store()
+                if projection_store is not None:
+                    try:
+                        projection_store.set_cache(
+                            f"hub_listing:{','.join(cache_key)}",
+                            fingerprint,
+                            payload,
+                            namespace=_HUB_LISTING_PROJECTION_NAMESPACE,
+                        )
+                    except Exception:
+                        pass
 
             task = asyncio.create_task(_refresh())
             self._response_refresh_tasks[cache_key] = task
@@ -403,10 +414,24 @@ class HubRepoListingService:
         requested = set(sections or REPO_LISTING_SECTIONS)
         cache_key = tuple(sorted(requested))
         durable_cache_key = f"hub_listing:{','.join(cache_key)}"
+        needs_repos = bool(requested & {"repos", "freshness"})
+        needs_agent_workspaces = bool(requested & {"agent_workspaces", "freshness"})
         snapshots, agent_workspaces = self._current_topology_snapshots(
-            needs_repos=bool(requested & {"repos", "freshness"}),
-            needs_agent_workspaces=bool(requested & {"agent_workspaces", "freshness"}),
+            needs_repos=needs_repos,
+            needs_agent_workspaces=needs_agent_workspaces,
         )
+        supervisor_state = getattr(self._context.supervisor, "state", None)
+        if (
+            needs_repos
+            and not snapshots
+            and getattr(supervisor_state, "last_scan_at", None) is None
+        ):
+            snapshots = await asyncio.to_thread(self._context.supervisor.scan)
+            if needs_agent_workspaces:
+                agent_workspaces = await asyncio.to_thread(
+                    self._context.supervisor.list_agent_workspaces,
+                    use_cache=False,
+                )
         stale_threshold_seconds = resolve_stale_threshold_seconds(
             getattr(
                 self._context.config.pma,
