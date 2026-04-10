@@ -970,6 +970,18 @@ class _ThreadExecutionLifecycle:
         self.thread_store.set_execution_backend_id(
             execution.execution_id, resolved_turn_id
         )
+        log_event(
+            logger,
+            logging.INFO,
+            "orchestration.thread.runtime_turn_started",
+            thread_target_id=thread.thread_target_id,
+            execution_id=execution.execution_id,
+            backend_thread_id=resolved_conversation_id,
+            backend_turn_id=resolved_turn_id,
+            request_kind=request.kind,
+            reused_conversation=used_existing_conversation,
+            stale_session_recovery=fresh_conversation_retry_attempted,
+        )
         refreshed = self.get_execution(thread.thread_target_id, execution.execution_id)
         if refreshed is None:
             raise KeyError(

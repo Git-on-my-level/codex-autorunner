@@ -12,6 +12,7 @@ from ...agents.base import (
     harness_progress_event_stream,
     harness_supports_progress_event_stream,
 )
+from ...core.logging_utils import log_event
 from ...core.orchestration.models import MessageRequest
 from ...core.orchestration.runtime_thread_events import (
     RuntimeThreadRunEventState,
@@ -20,6 +21,7 @@ from ...core.orchestration.runtime_thread_events import (
     terminal_run_event_from_outcome,
 )
 from ...core.orchestration.runtime_threads import (
+    RUNTIME_THREAD_TIMEOUT_ERROR,
     RuntimeThreadExecution,
     RuntimeThreadOutcome,
     await_runtime_thread_outcome,
@@ -999,6 +1001,40 @@ def _surface_metadata(
     return metadata
 
 
+def _managed_thread_trace_fields(
+    *,
+    managed_thread_id: str,
+    managed_turn_id: str,
+    backend_thread_id: Optional[str],
+    backend_turn_id: Optional[str],
+    surface: ManagedThreadSurfaceInfo,
+) -> dict[str, Any]:
+    fields = {
+        "managed_thread_id": managed_thread_id,
+        "managed_turn_id": managed_turn_id,
+        "backend_thread_id": backend_thread_id,
+        "backend_turn_id": backend_turn_id,
+        "surface_kind": surface.surface_kind,
+        "surface_key": surface.surface_key,
+    }
+    fields.update(dict(surface.metadata))
+    return fields
+
+
+def _managed_thread_completion_source(
+    outcome: RuntimeThreadOutcome,
+    *,
+    recovered_after_completion: bool,
+) -> str:
+    if recovered_after_completion:
+        return "post_completion_recovery"
+    if outcome.status == "interrupted":
+        return "interrupt"
+    if str(outcome.error or "").strip() == RUNTIME_THREAD_TIMEOUT_ERROR:
+        return "timeout"
+    return "prompt_return"
+
+
 async def finalize_managed_thread_execution(
     *,
     orchestration_service: Any,
@@ -1033,6 +1069,22 @@ async def finalize_managed_thread_execution(
     timeline_events: list[Any] = []
     live_timeline_count = 0
     live_timeline_error_logged = False
+
+    log_event(
+        logger,
+        logging.INFO,
+        "chat.managed_thread.turn_finalize_started",
+        **_managed_thread_trace_fields(
+            managed_thread_id=managed_thread_id,
+            managed_turn_id=managed_turn_id,
+            backend_thread_id=current_backend_thread_id or None,
+            backend_turn_id=started.execution.backend_id,
+            surface=surface,
+        ),
+        execution_status=started_execution_status or "running",
+        request_kind=getattr(started.request, "kind", None),
+        agent_id=getattr(started.thread, "agent_id", None),
+    )
 
     def _persist_live_timeline_events(events: list[Any]) -> None:
         nonlocal live_timeline_count
@@ -1083,6 +1135,19 @@ async def finalize_managed_thread_execution(
             surface.log_label,
             stream_backend_turn_id,
             managed_thread_id,
+        )
+        log_event(
+            logger,
+            logging.WARNING,
+            "chat.managed_thread.backend_turn_id_fallback",
+            **_managed_thread_trace_fields(
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=managed_turn_id,
+                backend_thread_id=stream_backend_thread_id or None,
+                backend_turn_id=stream_backend_turn_id or None,
+                surface=surface,
+            ),
+            original_backend_turn_id=started.execution.backend_id,
         )
 
     if (
@@ -1144,6 +1209,20 @@ async def finalize_managed_thread_execution(
                     raw_events_received,
                     run_events_dispatched,
                 )
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "chat.managed_thread.progress_pump_finished",
+                    **_managed_thread_trace_fields(
+                        managed_thread_id=managed_thread_id,
+                        managed_turn_id=managed_turn_id,
+                        backend_thread_id=stream_backend_thread_id or None,
+                        backend_turn_id=stream_backend_turn_id or None,
+                        surface=surface,
+                    ),
+                    raw_events_received=raw_events_received,
+                    run_events_dispatched=run_events_dispatched,
+                )
 
         stream_task = asyncio.create_task(_pump_runtime_events())
 
@@ -1203,13 +1282,27 @@ async def finalize_managed_thread_execution(
                 raise drain_cancel
 
     recovered_outcome = recover_post_completion_outcome(outcome, event_state)
-    if recovered_outcome is not outcome:
+    recovered_after_completion = recovered_outcome is not outcome
+    if recovered_after_completion:
         logger.warning(
             "%s runtime turn recovered from post-completion error: thread=%s turn=%s error=%s",
             surface.log_label,
             managed_thread_id,
             managed_turn_id,
             outcome.error,
+        )
+        log_event(
+            logger,
+            logging.WARNING,
+            "chat.managed_thread.outcome_recovered",
+            **_managed_thread_trace_fields(
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=managed_turn_id,
+                backend_thread_id=current_backend_thread_id or None,
+                backend_turn_id=outcome.backend_turn_id or started.execution.backend_id,
+                surface=surface,
+            ),
+            original_error=outcome.error,
         )
         outcome = recovered_outcome
 
@@ -1279,6 +1372,10 @@ async def finalize_managed_thread_execution(
         or outcome.backend_thread_id
         or current_backend_thread_id
     )
+    completion_source = _managed_thread_completion_source(
+        outcome,
+        recovered_after_completion=recovered_after_completion,
+    )
 
     if outcome.status == "ok":
         transcript_turn_id: Optional[str] = None
@@ -1342,6 +1439,23 @@ async def finalize_managed_thread_execution(
                     timeout_error=errors.timeout_error,
                     interrupted_error=errors.interrupted_error,
                 )
+            log_event(
+                logger,
+                logging.WARNING,
+                "chat.managed_thread.finalization_failed_after_prompt_return",
+                **_managed_thread_trace_fields(
+                    managed_thread_id=managed_thread_id,
+                    managed_turn_id=managed_turn_id,
+                    backend_thread_id=resolved_backend_thread_id,
+                    backend_turn_id=outcome.backend_turn_id
+                    or started.execution.backend_id,
+                    surface=surface,
+                ),
+                completion_source=completion_source,
+                finalized_status=finalized_status or None,
+                detail=detail,
+                event_error=event_state.last_error_message,
+            )
             return _build_finalization_result(
                 status="error",
                 assistant_text="",
@@ -1355,6 +1469,23 @@ async def finalize_managed_thread_execution(
             managed_thread_id,
             last_turn_id=managed_turn_id,
             last_message_preview=turn_preview,
+        )
+        log_event(
+            logger,
+            logging.INFO,
+            "chat.managed_thread.turn_finalized",
+            **_managed_thread_trace_fields(
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=managed_turn_id,
+                backend_thread_id=resolved_backend_thread_id,
+                backend_turn_id=outcome.backend_turn_id or started.execution.backend_id,
+                surface=surface,
+            ),
+            status="ok",
+            completion_source=completion_source,
+            assistant_chars=len(resolved_assistant_text),
+            event_error=event_state.last_error_message,
+            token_usage=event_state.token_usage,
         )
         return _build_finalization_result(
             status="ok",
@@ -1374,6 +1505,23 @@ async def finalize_managed_thread_execution(
             )
         except KeyError:
             pass
+        log_event(
+            logger,
+            logging.INFO,
+            "chat.managed_thread.turn_finalized",
+            **_managed_thread_trace_fields(
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=managed_turn_id,
+                backend_thread_id=resolved_backend_thread_id,
+                backend_turn_id=outcome.backend_turn_id or started.execution.backend_id,
+                surface=surface,
+            ),
+            status="interrupted",
+            completion_source=completion_source,
+            detail=errors.interrupted_error,
+            event_error=event_state.last_error_message,
+            token_usage=event_state.token_usage,
+        )
         return _build_finalization_result(
             status="interrupted",
             assistant_text="",
@@ -1403,6 +1551,24 @@ async def finalize_managed_thread_execution(
         )
     except KeyError:
         pass
+    log_event(
+        logger,
+        logging.INFO,
+        "chat.managed_thread.turn_finalized",
+        **_managed_thread_trace_fields(
+            managed_thread_id=managed_thread_id,
+            managed_turn_id=managed_turn_id,
+            backend_thread_id=resolved_backend_thread_id,
+            backend_turn_id=outcome.backend_turn_id or started.execution.backend_id,
+            surface=surface,
+        ),
+        status="error",
+        completion_source=completion_source,
+        detail=detail,
+        outcome_error=outcome.error,
+        event_error=event_state.last_error_message,
+        token_usage=event_state.token_usage,
+    )
     return _build_finalization_result(
         status="error",
         assistant_text="",

@@ -13,9 +13,11 @@ from codex_autorunner.agents.hermes.supervisor import HermesSupervisor
 @pytest.mark.asyncio
 async def test_hermes_supervisor_waits_for_official_prompt_result_before_completing(
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     supervisor = HermesSupervisor(fake_acp_command("official_prompt_hang"))
     try:
+        caplog.set_level("INFO")
         session = await supervisor.create_session(tmp_path)
         turn_id = await supervisor.start_turn(tmp_path, session.session_id, "hello")
 
@@ -35,5 +37,10 @@ async def test_hermes_supervisor_waits_for_official_prompt_result_before_complet
             in {"prompt/completed", "prompt/failed", "prompt/cancelled"}
             for event in events
         )
+        assert "hermes.turn.started" in caplog.text
+        assert "hermes.turn.wait_timeout" in caplog.text
+        assert f'"session_id":"{session.session_id}"' in caplog.text
+        assert f'"turn_id":"{turn_id}"' in caplog.text
+        assert '"last_session_update_kind":"agent_thought_chunk"' in caplog.text
     finally:
         await supervisor.close_all()

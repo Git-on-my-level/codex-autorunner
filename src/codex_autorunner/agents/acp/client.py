@@ -4,11 +4,13 @@ import asyncio
 import json
 import logging
 import re
+import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable, Optional, Sequence
 
+from ...core.logging_utils import log_event
 from ...core.text_utils import _normalize_optional_text
 from .errors import (
     ACPError,
@@ -104,12 +106,27 @@ class _PromptState:
     closed: bool = False
     replay_task: Optional[asyncio.Task[None]] = None
     request_task: Optional[asyncio.Task[Any]] = None
+    request_started_at: Optional[float] = None
+    last_session_update_kind: Optional[str] = None
+    last_session_update_excerpt: Optional[str] = None
+    last_session_update_at: Optional[float] = None
 
 
 def _coerce_mapping(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return dict(value)
     return {}
+
+
+def _text_excerpt(value: Any, *, limit: int = 120) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: limit - 3] + "..."
 
 
 def _stringify(value: Any) -> str:
@@ -280,6 +297,7 @@ class ACPClient:
         self._turn_counter = 0
         self._session_active_turns: dict[str, str] = {}
         self._background_tasks: set[asyncio.Task[Any]] = set()
+        self._trace_enabled = False
 
     @property
     def initialize_result(self) -> Optional[ACPInitializeResult]:
@@ -322,6 +340,18 @@ class ACPClient:
                     raise ACPInitializationError(str(exc)) from exc
                 self._initialize_result = ACPInitializeResult.from_result(
                     initialize_payload
+                )
+                self._trace_enabled = self._should_trace_acp_runtime(
+                    self._initialize_result
+                )
+                self._log_trace_event(
+                    "acp.client.initialized",
+                    server_name=self._initialize_result.server_name,
+                    server_version=self._initialize_result.server_version,
+                    protocol_version=self._initialize_result.protocol_version,
+                    capabilities=self._initialize_result.capabilities,
+                    command=self._command,
+                    cwd=self._cwd,
                 )
                 try:
                     await self._write_message({"method": "initialized", "params": {}})
@@ -400,6 +430,7 @@ class ACPClient:
         metadata: Optional[dict[str, Any]] = None,
     ) -> ACPSessionDescriptor:
         await self.start()
+        started_at = time.monotonic()
         params: dict[str, Any] = {
             "cwd": cwd or self._cwd or str(Path.cwd()),
             "mcpServers": [],
@@ -409,19 +440,42 @@ class ACPClient:
         if metadata:
             params["metadata"] = dict(metadata)
         result = await self.request("session/new", params)
-        return ACPSessionDescriptor.from_result(result)
+        session = ACPSessionDescriptor.from_result(result)
+        self._log_trace_event(
+            "acp.session.new",
+            session_id=session.session_id,
+            cwd=params["cwd"],
+            title=title,
+            elapsed_ms=self._elapsed_ms(started_at),
+            metadata_keys=sorted((metadata or {}).keys()),
+        )
+        return session
 
     async def load_session(self, session_id: str) -> ACPSessionDescriptor:
         await self.start()
-        result = await self.request(
-            "session/load",
-            {
-                "cwd": self._cwd or str(Path.cwd()),
-                "mcpServers": [],
-                "sessionId": session_id,
-            },
-        )
+        started_at = time.monotonic()
+        params = {
+            "cwd": self._cwd or str(Path.cwd()),
+            "mcpServers": [],
+            "sessionId": session_id,
+        }
+        try:
+            result = await self.request("session/load", params)
+        except ACPMissingSessionError:
+            self._log_trace_event(
+                "acp.session.load_missing",
+                session_id=session_id,
+                cwd=params["cwd"],
+                elapsed_ms=self._elapsed_ms(started_at),
+            )
+            raise
         if result is None:
+            self._log_trace_event(
+                "acp.session.load_missing",
+                session_id=session_id,
+                cwd=params["cwd"],
+                elapsed_ms=self._elapsed_ms(started_at),
+            )
             raise ACPMissingSessionError(
                 method="session/load",
                 code=-32004,
@@ -429,12 +483,20 @@ class ACPClient:
             )
         payload = _coerce_mapping(result)
         try:
-            return ACPSessionDescriptor.from_result(payload)
+            session = ACPSessionDescriptor.from_result(payload)
         except ValueError:
-            return ACPSessionDescriptor(
+            session = ACPSessionDescriptor(
                 session_id=session_id,
                 raw=payload,
             )
+        self._log_trace_event(
+            "acp.session.load",
+            session_id=session.session_id,
+            cwd=params["cwd"],
+            elapsed_ms=self._elapsed_ms(started_at),
+            sparse_payload=not bool(payload),
+        )
+        return session
 
     async def list_sessions(self) -> list[ACPSessionDescriptor]:
         await self.start()
@@ -462,6 +524,11 @@ class ACPClient:
 
     async def cancel_prompt(self, session_id: str, turn_id: str) -> Any:
         await self.start()
+        self._log_trace_event(
+            "acp.prompt.cancel_requested",
+            session_id=session_id,
+            turn_id=turn_id,
+        )
         await self.notify("session/cancel", {"sessionId": session_id})
         return None
 
@@ -827,6 +894,7 @@ class ACPClient:
     async def _record_prompt_event(self, state: _PromptState, event: ACPEvent) -> None:
         if state.closed:
             return
+        self._note_prompt_trace_event(state, event)
         state.events.append(event)
         if isinstance(event, ACPOutputDeltaEvent):
             state.final_output += event.delta
@@ -849,6 +917,14 @@ class ACPClient:
         turn_id = f"turn-{self._turn_counter}"
         state = self._ensure_prompt_state(session_id, turn_id)
         self._session_active_turns[session_id] = turn_id
+        self._log_trace_event(
+            "acp.prompt.started",
+            session_id=session_id,
+            turn_id=turn_id,
+            model=model,
+            prompt_chars=len(prompt),
+            metadata_keys=sorted((metadata or {}).keys()),
+        )
         await self._record_prompt_event(
             state,
             normalize_notification(
@@ -881,6 +957,7 @@ class ACPClient:
         model: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
     ) -> None:
+        state.request_started_at = time.monotonic()
         try:
             if model:
                 await self.call_optional(
@@ -899,10 +976,32 @@ class ACPClient:
             )
         except (ACPError, asyncio.TimeoutError) as exc:
             self._session_active_turns.pop(state.session_id, None)
+            self._log_trace_event(
+                "acp.prompt.request_failed",
+                session_id=state.session_id,
+                turn_id=state.turn_id,
+                error=str(exc),
+                error_type=type(exc).__name__,
+                elapsed_ms=self._elapsed_ms(state.request_started_at),
+                **self._prompt_trace_fields(state),
+            )
             if not state.future.done():
                 state.future.set_exception(exc)
             await state.queue.put(_QUEUE_SENTINEL)
             return
+        result_payload = _coerce_mapping(result)
+        self._log_trace_event(
+            "acp.prompt.request_returned",
+            session_id=state.session_id,
+            turn_id=state.turn_id,
+            status=self._official_prompt_terminal_status(result_payload),
+            stop_reason=_normalize_optional_text(
+                result_payload.get("stopReason") or result_payload.get("stop_reason")
+            ),
+            completion_source="prompt_return",
+            elapsed_ms=self._elapsed_ms(state.request_started_at),
+            **self._prompt_trace_fields(state),
+        )
         await self._record_prompt_event(
             state,
             normalize_notification(
@@ -978,6 +1077,52 @@ class ACPClient:
             self._log_background_task_result(done)
 
         task.add_done_callback(_discard)
+
+    def _should_trace_acp_runtime(self, result: ACPInitializeResult) -> bool:
+        server_name = str(result.server_name or "").strip().lower()
+        return "hermes" in server_name
+
+    def _elapsed_ms(self, started_at: Optional[float]) -> Optional[int]:
+        if started_at is None:
+            return None
+        return max(int((time.monotonic() - started_at) * 1000), 0)
+
+    def _log_trace_event(self, event: str, **fields: Any) -> None:
+        if not self._trace_enabled:
+            return
+        log_event(self._logger, logging.INFO, event, **fields)
+
+    def _prompt_trace_fields(self, state: _PromptState) -> dict[str, Any]:
+        return {
+            "last_session_update_kind": state.last_session_update_kind,
+            "last_session_update_excerpt": state.last_session_update_excerpt,
+            "last_session_update_elapsed_ms": self._elapsed_ms(
+                state.last_session_update_at
+            ),
+        }
+
+    def _note_prompt_trace_event(self, state: _PromptState, event: ACPEvent) -> None:
+        if event.method != "session/update":
+            return
+        update = _coerce_mapping(event.payload.get("update"))
+        content = _coerce_mapping(update.get("content"))
+        state.last_session_update_kind = _normalize_optional_text(
+            update.get("sessionUpdate") or update.get("session_update")
+        )
+        state.last_session_update_excerpt = _text_excerpt(
+            content.get("text")
+            or update.get("message")
+            or event.payload.get("message")
+            or ""
+        )
+        state.last_session_update_at = time.monotonic()
+        self._log_trace_event(
+            "acp.prompt.session_update",
+            session_id=state.session_id,
+            turn_id=state.turn_id,
+            session_update=state.last_session_update_kind,
+            text_excerpt=state.last_session_update_excerpt,
+        )
 
     def _response_error(
         self, method: Optional[str], payload: dict[str, Any]

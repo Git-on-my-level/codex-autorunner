@@ -170,6 +170,33 @@ async def test_client_official_prompt_stays_non_terminal_until_request_returns(
 
 
 @pytest.mark.asyncio
+async def test_client_logs_official_prompt_lifecycle_trace(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = ACPClient(fixture_command("official"), cwd=tmp_path)
+    try:
+        caplog.set_level("INFO")
+        created = await client.create_session(cwd=str(tmp_path))
+        await client.load_session(created.session_id)
+        handle = await client.start_prompt(created.session_id, "Reply with exactly OK.")
+        await handle.wait()
+
+        assert "acp.client.initialized" in caplog.text
+        assert "acp.session.new" in caplog.text
+        assert "acp.session.load" in caplog.text
+        assert "acp.prompt.started" in caplog.text
+        assert "acp.prompt.session_update" in caplog.text
+        assert "acp.prompt.request_returned" in caplog.text
+        assert f'"session_id":"{created.session_id}"' in caplog.text
+        assert f'"turn_id":"{handle.turn_id}"' in caplog.text
+        assert '"completion_source":"prompt_return"' in caplog.text
+        assert '"last_session_update_kind":"agent_message_chunk"' in caplog.text
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
 async def test_client_prompt_streams_updates_and_calls_permission_hook(
     tmp_path: Path,
 ) -> None:
