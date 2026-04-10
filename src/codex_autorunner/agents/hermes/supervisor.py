@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
 from os.path import basename
 from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable, Mapping, Optional, Sequence
 
 from ...core.config import HubConfig, RepoConfig
+from ...core.logging_utils import log_event
 from ...core.orchestration.turn_event_buffer import TurnEventBuffer
 from ...core.text_utils import _normalize_optional_text
 from ...core.utils import resolve_executable
@@ -53,6 +55,8 @@ class _HermesTurnState:
     approval_mode: Optional[str] = None
     pending_approval_task: Optional[asyncio.Future[Any]] = None
     event_buffer: TurnEventBuffer = field(default_factory=TurnEventBuffer)
+    last_event_method: Optional[str] = None
+    last_session_update_kind: Optional[str] = None
 
 
 class HermesSupervisor:
@@ -104,10 +108,20 @@ class HermesSupervisor:
         title: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
     ) -> HermesSessionHandle:
+        started_at = time.monotonic()
         session = await self._acp.create_session(
             workspace_root,
             title=title,
             metadata=metadata,
+        )
+        log_event(
+            self._logger,
+            logging.INFO,
+            "hermes.session.created",
+            workspace_root=_workspace_key(workspace_root),
+            session_id=session.session_id,
+            title=title,
+            elapsed_ms=_elapsed_ms(started_at),
         )
         return HermesSessionHandle(
             session_id=session.session_id,
@@ -120,7 +134,16 @@ class HermesSupervisor:
         workspace_root: Path,
         session_id: str,
     ) -> HermesSessionHandle:
+        started_at = time.monotonic()
         session = await self._acp.load_session(workspace_root, session_id)
+        log_event(
+            self._logger,
+            logging.INFO,
+            "hermes.session.resumed",
+            workspace_root=_workspace_key(workspace_root),
+            session_id=session.session_id,
+            elapsed_ms=_elapsed_ms(started_at),
+        )
         return HermesSessionHandle(
             session_id=session.session_id,
             title=session.title,
@@ -148,6 +171,7 @@ class HermesSupervisor:
         approval_mode: Optional[str] = None,
     ) -> str:
         workspace = _workspace_key(workspace_root)
+        started_at = time.monotonic()
         handle = await self._acp.start_prompt(
             workspace_root,
             session_id,
@@ -182,6 +206,17 @@ class HermesSupervisor:
                     dict(raw_notification),
                     terminal=isinstance(event, ACPTurnTerminalEvent),
                 )
+        log_event(
+            self._logger,
+            logging.INFO,
+            "hermes.turn.started",
+            workspace_root=workspace,
+            session_id=session_id,
+            turn_id=handle.turn_id,
+            approval_mode=_normalize_optional_text(approval_mode),
+            model=_normalize_optional_text(model),
+            elapsed_ms=_elapsed_ms(started_at),
+        )
         return handle.turn_id
 
     async def wait_for_turn(
@@ -198,10 +233,41 @@ class HermesSupervisor:
             turn_id,
         )
         state = await self._require_turn_state(workspace_root, resolved_turn_id)
-        result = await state.handle.wait(timeout=timeout)
+        started_at = time.monotonic()
+        try:
+            result = await state.handle.wait(timeout=timeout)
+        except asyncio.TimeoutError:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "hermes.turn.wait_timeout",
+                workspace_root=_workspace_key(workspace_root),
+                session_id=session_id,
+                turn_id=resolved_turn_id,
+                timeout_seconds=timeout,
+                elapsed_ms=_elapsed_ms(started_at),
+                last_event_method=state.last_event_method,
+                last_session_update_kind=state.last_session_update_kind,
+            )
+            raise
+        await self._sync_prompt_snapshot_into_event_buffer(workspace_root, state)
         await state.event_buffer.close()
         errors = [result.error_message] if result.error_message else []
         raw_events = state.event_buffer.snapshot()
+        log_event(
+            self._logger,
+            logging.INFO,
+            "hermes.turn.completed",
+            workspace_root=_workspace_key(workspace_root),
+            session_id=session_id,
+            turn_id=resolved_turn_id,
+            status=result.status,
+            elapsed_ms=_elapsed_ms(started_at),
+            raw_event_count=len(raw_events),
+            last_event_method=state.last_event_method,
+            last_session_update_kind=state.last_session_update_kind,
+            error_message=result.error_message,
+        )
         return TerminalTurnResult(
             status=result.status,
             assistant_text=result.final_output,
@@ -343,9 +409,46 @@ class HermesSupervisor:
         *,
         terminal: bool = False,
     ) -> None:
+        state.last_event_method = str(payload.get("method") or "").strip() or None
+        params = payload.get("params")
+        if (
+            isinstance(params, dict)
+            and str(payload.get("method") or "") == "session/update"
+        ):
+            update = params.get("update")
+            if isinstance(update, dict):
+                state.last_session_update_kind = _normalize_optional_text(
+                    update.get("sessionUpdate") or update.get("session_update")
+                )
         await state.event_buffer.append(payload)
         if terminal:
             await state.event_buffer.close()
+
+    async def _sync_prompt_snapshot_into_event_buffer(
+        self,
+        workspace_root: Path,
+        state: _HermesTurnState,
+    ) -> None:
+        existing_events = state.event_buffer.snapshot()
+        prompt_events = await self._acp.prompt_events_snapshot(
+            workspace_root, state.turn_id
+        )
+        for event in prompt_events:
+            raw_notification = getattr(event, "raw_notification", None)
+            if not isinstance(raw_notification, dict):
+                continue
+            payload = dict(raw_notification)
+            if payload in existing_events:
+                continue
+            terminal = isinstance(event, ACPTurnTerminalEvent) and event.method not in (
+                _HERMES_IDLE_TERMINAL_METHODS
+            )
+            await self._append_raw_event(
+                state,
+                payload,
+                terminal=terminal,
+            )
+            existing_events.append(payload)
 
     async def _retire_turn_state(self, state: _HermesTurnState) -> None:
         async with self._lock:
@@ -573,6 +676,10 @@ def _build_surface_approval_request(
 
 def _workspace_key(workspace_root: Path) -> str:
     return str(canonical_workspace_root(workspace_root))
+
+
+def _elapsed_ms(started_at: float) -> int:
+    return max(int((time.monotonic() - started_at) * 1000), 0)
 
 
 def _configured_hermes_binary(

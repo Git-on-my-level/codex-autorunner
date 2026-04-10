@@ -28,3 +28,4 @@ bin/
 .coverage
 htmlcov/
 scorecard.png
+tmp_telegram_timeout_probe*/

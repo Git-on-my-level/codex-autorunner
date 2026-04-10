@@ -4,6 +4,8 @@ import logging
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
+from ...core.orchestration.interfaces import FreshConversationRequiredError
+from ..acp import ACPMissingSessionError
 from ..base import AgentHarness
 from ..types import (
     AgentId,
@@ -57,7 +59,20 @@ class HermesHarness(AgentHarness):
     async def resume_conversation(
         self, workspace_root: Path, conversation_id: str
     ) -> ConversationRef:
-        session = await self._supervisor.resume_session(workspace_root, conversation_id)
+        try:
+            session = await self._supervisor.resume_session(
+                workspace_root, conversation_id
+            )
+        except ACPMissingSessionError as exc:
+            raise FreshConversationRequiredError(
+                (
+                    f"Hermes session '{conversation_id}' could not be resumed; "
+                    "refresh the conversation binding"
+                ),
+                conversation_id=conversation_id,
+                operation="resume_conversation",
+                status_code=exc.code,
+            ) from exc
         return ConversationRef(agent=self.agent_id, id=session.session_id)
 
     async def start_turn(

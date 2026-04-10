@@ -3,12 +3,15 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
 import pytest
 
+from codex_autorunner.agents.hermes.harness import HermesHarness
+from codex_autorunner.agents.hermes.supervisor import HermesSupervisor
 from codex_autorunner.agents.registry import AgentDescriptor
 from codex_autorunner.agents.types import TerminalTurnResult
 from codex_autorunner.core.orchestration import (
@@ -33,6 +36,8 @@ from codex_autorunner.core.orchestration.service import (
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.orchestration.transcript_mirror import TranscriptMirrorStore
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
+
+FIXTURE_PATH = Path(__file__).resolve().parents[2] / "fixtures" / "fake_acp_server.py"
 
 
 @dataclass
@@ -225,6 +230,10 @@ def _thread_runtime_binding(
     service: HarnessBackedOrchestrationService, thread_target_id: str
 ):
     return service.thread_store.get_thread_runtime_binding(thread_target_id)
+
+
+def _fake_acp_command(scenario: str) -> list[str]:
+    return [sys.executable, "-u", str(FIXTURE_PATH), "--scenario", scenario]
 
 
 def test_service_exposes_thread_runtime_binding_lookup(tmp_path: Path) -> None:
@@ -736,6 +745,52 @@ async def test_send_review_retries_with_fresh_conversation_when_existing_binding
         and payload.get("status_code") == 400
         for payload in payloads
     )
+
+
+async def test_send_message_recovers_missing_hermes_session_load_end_to_end(
+    tmp_path: Path,
+) -> None:
+    supervisor = HermesSupervisor(_fake_acp_command("official_missing_load_result"))
+    harness = HermesHarness(supervisor)
+    descriptor = AgentDescriptor(
+        id="hermes",
+        name="Hermes",
+        capabilities=harness.capabilities,
+        make_harness=lambda _ctx: harness,
+    )
+    catalog = MappingAgentDefinitionCatalog({"hermes": descriptor})
+    store = PmaThreadExecutionStore(PmaThreadStore(tmp_path / "hub"))
+    service = HarnessBackedOrchestrationService(
+        definition_catalog=catalog,
+        thread_store=store,
+        harness_factory=lambda _agent_id: harness,
+    )
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target(
+        "hermes",
+        workspace_root,
+        backend_thread_id="missing-session",
+    )
+
+    try:
+        execution = await service.send_message(
+            MessageRequest(
+                target_id=thread.thread_target_id,
+                target_kind="thread",
+                message_text="hello again",
+            )
+        )
+    finally:
+        await supervisor.close_all()
+
+    binding = _thread_runtime_binding(service, thread.thread_target_id)
+
+    assert execution.status == "running"
+    assert execution.error is None
+    assert execution.backend_id == "turn-1"
+    assert binding is not None
+    assert binding.backend_thread_id == "session-1"
 
 
 async def test_send_message_rehydrates_from_transcripts_after_runtime_binding_restart(
@@ -1490,6 +1545,53 @@ async def test_send_message_records_failed_execution_when_start_is_cancelled(
     assert persisted is not None
     assert persisted.status == "error"
     assert persisted.error == "Managed thread execution failed"
+    assert service.get_running_execution(thread.thread_target_id) is None
+
+
+async def test_send_message_records_failed_execution_when_cancelled_before_binding_resolution(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+    captured_execution_id: Optional[str] = None
+
+    async def _slow_ensure_ready(workspace_root_arg: Path) -> None:
+        _ = workspace_root_arg
+        nonlocal captured_execution_id
+        running = service.get_running_execution(thread.thread_target_id)
+        assert running is not None
+        captured_execution_id = running.execution_id
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            raise
+
+    harness.ensure_ready = _slow_ensure_ready  # type: ignore[assignment]
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(
+            service.send_message(
+                MessageRequest(
+                    target_id=thread.thread_target_id,
+                    target_kind="thread",
+                    message_text="Need an answer",
+                    metadata={
+                        "execution_error_message": "Managed thread execution failed"
+                    },
+                )
+            ),
+            timeout=0.01,
+        )
+
+    assert captured_execution_id is not None
+    persisted = service.get_execution(thread.thread_target_id, captured_execution_id)
+    assert persisted is not None
+    assert persisted.status == "error"
+    assert persisted.error == "Managed thread execution failed"
+    assert harness.new_conversation_calls == []
     assert service.get_running_execution(thread.thread_target_id) is None
 
 

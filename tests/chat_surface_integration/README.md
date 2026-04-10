@@ -7,7 +7,7 @@ need to exercise real surface ingress plus a subprocess-backed runtime.
 
 - Discord PMA message ingress through `DiscordBotService`
 - Telegram PMA message ingress through `TelegramBotService`
-- Hermes runtime behavior through the ACP subprocess fixture in
+- Hermes official ACP runtime behavior through the subprocess fixture in
   `tests/fixtures/fake_acp_server.py`
 
 ## Fastest way to use it
@@ -18,18 +18,23 @@ Run the Hermes PMA surface parity tests:
 .venv/bin/pytest tests/chat_surface_integration/test_hermes_pma_surfaces.py -m integration
 ```
 
-Run the supervisor-only characterization for Hermes ACP edge cases:
+Run the official-path timeout characterization:
 
 ```bash
-.venv/bin/pytest tests/agents/hermes/test_hermes_supervisor.py -k missing_turn_id
+.venv/bin/pytest tests/chat_surface_integration/test_hermes_pma_official_timeout.py -q
 ```
 
-## Current regression fixture
+## Current regression coverage
 
-`terminal_missing_turn_id` simulates a Hermes ACP server that completes a turn
-without including `turnId` in the terminal notification. Discord PMA previously
-stayed on the live `working` placeholder indefinitely in this condition because
-the active turn never resolved.
+The Hermes surface tests cover the current official session lifecycle only:
+
+- Discord sends an initial preparation message.
+- Progress updates edit that same placeholder into `working`.
+- Completion edits the placeholder to `done`, deletes it, then sends the final reply.
+- Telegram sends a lightweight `Working...` placeholder and then a separate final reply.
+
+Legacy ACP prompt-notification fixtures still exist in `fake_acp_server.py` for
+generic ACP compatibility work, but they are not the current Hermes contract.
 
 ## Adding a new scenario
 
@@ -37,6 +42,6 @@ the active turn never resolved.
 1. Reuse `HermesFixtureRuntime` from `harness.py`.
 1. Drive the surface under test with `DiscordSurfaceHarness` or
    `TelegramSurfaceHarness`.
-1. Assert both progress visibility and final delivery so the test catches
-   "spinner forever" regressions instead of only backend failures.
-
+1. Assert the actual surface lifecycle, not just backend completion. For
+   Discord this means preparation send, progress edits, placeholder cleanup,
+   and final reply delivery.

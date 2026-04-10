@@ -32,6 +32,10 @@ class ACPResponseError(ACPError):
         self.data = data
 
 
+class ACPMissingSessionError(ACPResponseError):
+    """Raised when an ACP session-scoped request references a missing session."""
+
+
 class ACPMethodNotFoundError(ACPResponseError):
     """Raised when the ACP server does not implement a requested method."""
 
@@ -58,6 +62,7 @@ class ACPProcessCrashedError(ACPTransportError):
 __all__ = [
     "ACPError",
     "ACPInitializationError",
+    "ACPMissingSessionError",
     "ACPMethodNotFoundError",
     "ACPProcessCrashedError",
     "ACPProtocolError",

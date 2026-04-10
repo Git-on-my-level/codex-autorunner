@@ -17,7 +17,11 @@ from codex_autorunner.core.orchestration.models import (
 from codex_autorunner.core.orchestration.runtime_thread_events import (
     RuntimeThreadRunEventState,
 )
-from codex_autorunner.core.orchestration.runtime_threads import RuntimeThreadExecution
+from codex_autorunner.core.orchestration.runtime_threads import (
+    RUNTIME_THREAD_TIMEOUT_ERROR,
+    RuntimeThreadExecution,
+    RuntimeThreadOutcome,
+)
 
 
 def _build_started_execution(tmp_path: Path) -> RuntimeThreadExecution:
@@ -707,3 +711,228 @@ def test_resolve_managed_thread_target_reuses_backend_matched_thread(
             "metadata": {"topic_key": "telegram:-1001:101"},
         }
     ]
+
+
+def _started_execution_with_backend_ids(tmp_path: Path) -> RuntimeThreadExecution:
+    return RuntimeThreadExecution(
+        service=SimpleNamespace(),
+        harness=SimpleNamespace(),
+        thread=ThreadTarget(
+            thread_target_id="thread-1",
+            agent_id="hermes",
+            workspace_root=str(tmp_path),
+            lifecycle_status="active",
+            backend_thread_id="session-1",
+        ),
+        execution=ExecutionRecord(
+            execution_id="exec-1",
+            target_id="thread-1",
+            target_kind="thread",
+            status="running",
+            backend_id="turn-1",
+        ),
+        workspace_root=tmp_path,
+        request=MessageRequest(
+            target_id="thread-1",
+            target_kind="thread",
+            message_text="hello",
+        ),
+    )
+
+
+class _FakeThreadStore:
+    def __init__(self, _root: Path) -> None:
+        self.updated: list[tuple[str, str, str]] = []
+
+    def get_thread(self, _managed_thread_id: str) -> dict[str, Any]:
+        return {}
+
+    def update_thread_after_turn(
+        self,
+        managed_thread_id: str,
+        *,
+        last_turn_id: str,
+        last_message_preview: str,
+    ) -> None:
+        self.updated.append((managed_thread_id, last_turn_id, last_message_preview))
+
+
+class _FakeTranscriptStore:
+    def __init__(self, _root: Path) -> None:
+        self.writes: list[tuple[str, dict[str, Any], str]] = []
+
+    def write_transcript(
+        self,
+        *,
+        turn_id: str,
+        metadata: dict[str, Any],
+        assistant_text: str,
+    ) -> None:
+        self.writes.append((turn_id, metadata, assistant_text))
+
+
+@pytest.mark.anyio
+async def test_finalize_managed_thread_execution_logs_timeout_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    started = _started_execution_with_backend_ids(tmp_path)
+    fake_thread_store = _FakeThreadStore(tmp_path)
+
+    monkeypatch.setattr(
+        managed_thread_turns_module, "PmaThreadStore", lambda _root: fake_thread_store
+    )
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "PmaTranscriptStore",
+        lambda _root: _FakeTranscriptStore(tmp_path),
+    )
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "persist_turn_timeline",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "harness_supports_progress_event_stream",
+        lambda _harness: False,
+    )
+
+    async def _timeout_outcome(*args: Any, **kwargs: Any) -> RuntimeThreadOutcome:
+        return RuntimeThreadOutcome(
+            status="error",
+            assistant_text="",
+            error=RUNTIME_THREAD_TIMEOUT_ERROR,
+            backend_thread_id="session-1",
+            backend_turn_id="turn-1",
+        )
+
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "await_runtime_thread_outcome",
+        _timeout_outcome,
+    )
+
+    orchestration_service = SimpleNamespace(
+        get_thread_target=lambda managed_thread_id: SimpleNamespace(
+            backend_thread_id="session-1"
+        ),
+        get_thread_runtime_binding=lambda managed_thread_id: SimpleNamespace(
+            backend_thread_id="session-1"
+        ),
+        record_execution_result=lambda *args, **kwargs: SimpleNamespace(
+            status="error",
+            error=kwargs.get("error"),
+        ),
+    )
+
+    caplog.set_level(logging.INFO)
+    result = await managed_thread_turns_module.finalize_managed_thread_execution(
+        orchestration_service=orchestration_service,
+        started=started,
+        state_root=tmp_path,
+        surface=managed_thread_turns_module.ManagedThreadSurfaceInfo(
+            log_label="Discord",
+            surface_kind="discord",
+            surface_key="discord:chan-1:msg-1",
+        ),
+        errors=managed_thread_turns_module.ManagedThreadErrorMessages(
+            public_execution_error="Discord PMA execution failed",
+            timeout_error="Discord PMA turn timed out",
+            interrupted_error="Discord PMA turn interrupted",
+            timeout_seconds=5,
+        ),
+        logger=logging.getLogger("test.managed_thread.timeout"),
+        turn_preview="preview",
+    )
+
+    assert result.status == "error"
+    assert "chat.managed_thread.turn_finalized" in caplog.text
+    assert '"completion_source":"timeout"' in caplog.text
+    assert '"managed_thread_id":"thread-1"' in caplog.text
+    assert '"backend_thread_id":"session-1"' in caplog.text
+
+
+@pytest.mark.anyio
+async def test_finalize_managed_thread_execution_logs_finalization_failure_after_prompt_return(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    started = _started_execution_with_backend_ids(tmp_path)
+    fake_thread_store = _FakeThreadStore(tmp_path)
+    fake_transcripts = _FakeTranscriptStore(tmp_path)
+
+    monkeypatch.setattr(
+        managed_thread_turns_module, "PmaThreadStore", lambda _root: fake_thread_store
+    )
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "PmaTranscriptStore",
+        lambda _root: fake_transcripts,
+    )
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "persist_turn_timeline",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "harness_supports_progress_event_stream",
+        lambda _harness: False,
+    )
+
+    async def _successful_outcome(*args: Any, **kwargs: Any) -> RuntimeThreadOutcome:
+        return RuntimeThreadOutcome(
+            status="ok",
+            assistant_text="fixture reply",
+            error=None,
+            backend_thread_id="session-1",
+            backend_turn_id="turn-1",
+        )
+
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "await_runtime_thread_outcome",
+        _successful_outcome,
+    )
+
+    orchestration_service = SimpleNamespace(
+        get_thread_target=lambda managed_thread_id: SimpleNamespace(
+            backend_thread_id="session-1"
+        ),
+        get_thread_runtime_binding=lambda managed_thread_id: SimpleNamespace(
+            backend_thread_id="session-1"
+        ),
+        record_execution_result=lambda *args, **kwargs: SimpleNamespace(
+            status="error",
+            error="persist failed",
+        ),
+        get_execution=lambda managed_thread_id, managed_turn_id: None,
+    )
+
+    caplog.set_level(logging.INFO)
+    result = await managed_thread_turns_module.finalize_managed_thread_execution(
+        orchestration_service=orchestration_service,
+        started=started,
+        state_root=tmp_path,
+        surface=managed_thread_turns_module.ManagedThreadSurfaceInfo(
+            log_label="Telegram",
+            surface_kind="telegram",
+            surface_key="telegram:-1001:101",
+        ),
+        errors=managed_thread_turns_module.ManagedThreadErrorMessages(
+            public_execution_error="Telegram PMA execution failed",
+            timeout_error="Telegram PMA turn timed out",
+            interrupted_error="Telegram PMA turn interrupted",
+            timeout_seconds=5,
+        ),
+        logger=logging.getLogger("test.managed_thread.finalization"),
+        turn_preview="preview",
+    )
+
+    assert result.status == "error"
+    assert "chat.managed_thread.finalization_failed_after_prompt_return" in caplog.text
+    assert '"completion_source":"prompt_return"' in caplog.text
+    assert '"managed_turn_id":"exec-1"' in caplog.text

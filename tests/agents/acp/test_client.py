@@ -9,13 +9,12 @@ import pytest
 from codex_autorunner.agents.acp import (
     ACPClient,
     ACPInitializationError,
-    ACPMethodNotFoundError,
+    ACPMissingSessionError,
     ACPPermissionRequestEvent,
 )
 from codex_autorunner.agents.acp.errors import (
     ACPProcessCrashedError,
     ACPProtocolError,
-    ACPResponseError,
 )
 
 FIXTURE_PATH = Path(__file__).resolve().parents[2] / "fixtures" / "fake_acp_server.py"
@@ -26,19 +25,11 @@ def fixture_command(scenario: str) -> list[str]:
     return [sys.executable, "-u", str(FIXTURE_PATH), "--scenario", scenario]
 
 
-@pytest.mark.parametrize(
-    ("method", "status"),
-    (
-        ("prompt/completed", "completed"),
-        ("prompt/failed", "failed"),
-        ("prompt/cancelled", "cancelled"),
-    ),
-)
-def test_client_maps_prompt_terminal_notifications_without_turn_id(
+@pytest.mark.parametrize(("method"), ("session/update", "session/request_permission"))
+def test_client_maps_session_scoped_official_events_without_turn_id(
     method: str,
-    status: str,
 ) -> None:
-    client = ACPClient(fixture_command("basic"))
+    client = ACPClient(fixture_command("official"))
     client._session_active_turns["session-1"] = "turn-2"
 
     message = client._message_with_mapped_turn_id(
@@ -46,7 +37,7 @@ def test_client_maps_prompt_terminal_notifications_without_turn_id(
             "method": method,
             "params": {
                 "sessionId": "session-1",
-                "status": status,
+                "update": {"sessionUpdate": "agent_message_chunk"},
             },
         }
     )
@@ -55,65 +46,8 @@ def test_client_maps_prompt_terminal_notifications_without_turn_id(
 
 
 @pytest.mark.asyncio
-async def test_client_primes_prompt_state_with_fallback_session_id() -> None:
-    client = ACPClient(fixture_command("basic"))
-    try:
-        client._prime_prompt_state_from_start_result(
-            {"turnId": "turn-1"},
-            fallback_session_id="session-1",
-        )
-
-        assert client._session_active_turns == {"session-1": "turn-1"}
-        assert "turn-1" in client._prompts
-    finally:
-        await client.close()
-
-
-@pytest.mark.asyncio
-async def test_client_wait_for_prompt_completes_when_terminal_notification_omits_turn_id(
-    tmp_path: Path,
-) -> None:
-    client = ACPClient(fixture_command("terminal_missing_turn_id"), cwd=tmp_path)
-    try:
-        await client.start()
-        session = await client.create_session(cwd=str(tmp_path))
-        handle = await client.start_prompt(session.session_id, "hello from hermes")
-        result = await asyncio.wait_for(handle.wait(), timeout=2.0)
-
-        assert result.status == "completed"
-        assert result.final_output == "fixture reply"
-        assert any(
-            getattr(event, "method", None) == "prompt/completed"
-            and getattr(event, "turn_id", None) == handle.turn_id
-            for event in result.events
-        )
-    finally:
-        await client.close()
-
-
-@pytest.mark.asyncio
-async def test_client_prefers_prompt_completed_after_idle_session_status(
-    tmp_path: Path,
-) -> None:
-    client = ACPClient(
-        fixture_command("session_status_idle_then_prompt_completed"),
-        cwd=tmp_path,
-    )
-    try:
-        await client.start()
-        session = await client.create_session(cwd=str(tmp_path))
-        handle = await client.start_prompt(session.session_id, "hello from hermes")
-        result = await asyncio.wait_for(handle.wait(), timeout=2.0)
-
-        assert result.status == "completed"
-        assert result.final_output == "final canonical output"
-    finally:
-        await client.close()
-
-
-@pytest.mark.asyncio
 async def test_client_initialize_and_session_roundtrip(tmp_path: Path) -> None:
-    client = ACPClient(fixture_command("basic"), cwd=tmp_path)
+    client = ACPClient(fixture_command("official"), cwd=tmp_path)
     try:
         initialize = await client.start()
         status = await client.request("fixture/status", {})
@@ -123,7 +57,7 @@ async def test_client_initialize_and_session_roundtrip(tmp_path: Path) -> None:
         loaded = await client.load_session(created.session_id)
         listed = await client.list_sessions()
 
-        assert initialize.server_name == "fake-acp"
+        assert initialize.server_name == "fake-hermes"
         assert status == {
             "initialized": True,
             "initializedNotification": True,
@@ -155,22 +89,27 @@ async def test_client_supports_official_acp_session_and_prompt_flow(
         initialize = await client.start()
         created = await client.create_session(cwd=str(tmp_path))
         loaded = await client.load_session(created.session_id)
-        with pytest.raises(ACPMethodNotFoundError, match="session/list"):
-            await client.list_sessions()
+        listed = await client.list_sessions()
         handle = await client.start_prompt(created.session_id, "Reply with exactly OK.")
         events = [event async for event in handle.events()]
         result = await handle.wait()
 
         assert initialize.server_name == "fake-hermes"
         assert created.session_id == loaded.session_id
+        assert [session.session_id for session in listed] == [created.session_id]
         assert result.status == "completed"
-        assert result.final_output == "OK"
+        assert result.final_output == "fixture reply"
         assert [event.kind for event in events] == [
             "turn_started",
             "progress",
             "output_delta",
             "turn_terminal",
         ]
+        assert any(
+            getattr(event, "method", None) == "session/update"
+            and getattr(event, "turn_id", None) == handle.turn_id
+            for event in events
+        )
     finally:
         await client.close()
 
@@ -198,7 +137,7 @@ async def test_client_rejects_official_load_session_null_result(
     try:
         await client.start()
         with pytest.raises(
-            ACPResponseError, match="session not found: missing-session"
+            ACPMissingSessionError, match="session not found: missing-session"
         ):
             await client.load_session("missing-session")
     finally:
@@ -231,6 +170,33 @@ async def test_client_official_prompt_stays_non_terminal_until_request_returns(
 
 
 @pytest.mark.asyncio
+async def test_client_logs_official_prompt_lifecycle_trace(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = ACPClient(fixture_command("official"), cwd=tmp_path)
+    try:
+        caplog.set_level("INFO")
+        created = await client.create_session(cwd=str(tmp_path))
+        await client.load_session(created.session_id)
+        handle = await client.start_prompt(created.session_id, "Reply with exactly OK.")
+        await handle.wait()
+
+        assert "acp.client.initialized" in caplog.text
+        assert "acp.session.new" in caplog.text
+        assert "acp.session.load" in caplog.text
+        assert "acp.prompt.started" in caplog.text
+        assert "acp.prompt.session_update" in caplog.text
+        assert "acp.prompt.request_returned" in caplog.text
+        assert f'"session_id":"{created.session_id}"' in caplog.text
+        assert f'"turn_id":"{handle.turn_id}"' in caplog.text
+        assert '"completion_source":"prompt_return"' in caplog.text
+        assert '"last_session_update_kind":"agent_message_chunk"' in caplog.text
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
 async def test_client_prompt_streams_updates_and_calls_permission_hook(
     tmp_path: Path,
 ) -> None:
@@ -241,7 +207,7 @@ async def test_client_prompt_streams_updates_and_calls_permission_hook(
         return "accept"
 
     client = ACPClient(
-        fixture_command("basic"),
+        fixture_command("official"),
         cwd=tmp_path,
         permission_handler=permission_handler,
     )
@@ -257,13 +223,14 @@ async def test_client_prompt_streams_updates_and_calls_permission_hook(
         assert result.final_output == "fixture reply"
         assert [event.kind for event in events] == [
             "turn_started",
-            "output_delta",
+            "progress",
             "permission_requested",
             "output_delta",
             "turn_terminal",
         ]
         assert len(seen_permissions) == 1
         assert seen_permissions[0].request_id == "perm-1"
+        assert seen_permissions[0].turn_id == handle.turn_id
     finally:
         await client.close()
 
@@ -274,7 +241,7 @@ async def test_client_can_deny_permission_requests(tmp_path: Path) -> None:
         return "decline"
 
     client = ACPClient(
-        fixture_command("basic"),
+        fixture_command("official"),
         cwd=tmp_path,
         permission_handler=permission_handler,
     )
@@ -293,7 +260,7 @@ async def test_client_can_deny_permission_requests(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_client_can_cancel_inflight_prompt(tmp_path: Path) -> None:
-    client = ACPClient(fixture_command("basic"), cwd=tmp_path)
+    client = ACPClient(fixture_command("official"), cwd=tmp_path)
     try:
         session = await client.create_session(cwd=str(tmp_path))
         handle = await client.start_prompt(session.session_id, "cancel me")
@@ -301,7 +268,7 @@ async def test_client_can_cancel_inflight_prompt(tmp_path: Path) -> None:
         result = await handle.wait()
 
         assert result.status == "cancelled"
-        assert result.final_output == "fixture "
+        assert result.final_output == ""
     finally:
         await client.close()
 
@@ -310,7 +277,7 @@ async def test_client_can_cancel_inflight_prompt(tmp_path: Path) -> None:
 async def test_client_optional_custom_method_missing_returns_none(
     tmp_path: Path,
 ) -> None:
-    client = ACPClient(fixture_command("basic"), cwd=tmp_path)
+    client = ACPClient(fixture_command("official"), cwd=tmp_path)
     try:
         echoed = await client.call_optional("custom/echo", {"value": "ok"})
         missing = await client.call_optional("custom/missing", {"value": "noop"})
@@ -323,7 +290,7 @@ async def test_client_optional_custom_method_missing_returns_none(
 
 @pytest.mark.asyncio
 async def test_client_reports_subprocess_crash_during_prompt(tmp_path: Path) -> None:
-    client = ACPClient(fixture_command("basic"), cwd=tmp_path)
+    client = ACPClient(fixture_command("official"), cwd=tmp_path)
     try:
         session = await client.create_session(cwd=str(tmp_path))
         handle = await client.start_prompt(session.session_id, "crash")
@@ -336,7 +303,7 @@ async def test_client_reports_subprocess_crash_during_prompt(tmp_path: Path) -> 
 
 @pytest.mark.asyncio
 async def test_client_ignores_known_cli_noise_on_stdout(tmp_path: Path) -> None:
-    client = ACPClient(fixture_command("basic"), cwd=tmp_path)
+    client = ACPClient(fixture_command("official"), cwd=tmp_path)
     try:
         session = await client.create_session(cwd=str(tmp_path))
         handle = await client.start_prompt(session.session_id, "stdout noise")
@@ -350,7 +317,7 @@ async def test_client_ignores_known_cli_noise_on_stdout(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_client_rejects_unclassified_non_json_stdout(tmp_path: Path) -> None:
-    client = ACPClient(fixture_command("basic"), cwd=tmp_path)
+    client = ACPClient(fixture_command("official"), cwd=tmp_path)
     try:
         session = await client.create_session(cwd=str(tmp_path))
         handle = await client.start_prompt(session.session_id, "stdout invalid")
@@ -365,7 +332,7 @@ async def test_client_rejects_unclassified_non_json_stdout(tmp_path: Path) -> No
 
 @pytest.mark.asyncio
 async def test_client_rejects_bracketed_json_like_stdout(tmp_path: Path) -> None:
-    client = ACPClient(fixture_command("basic"), cwd=tmp_path)
+    client = ACPClient(fixture_command("official"), cwd=tmp_path)
     try:
         session = await client.create_session(cwd=str(tmp_path))
         handle = await client.start_prompt(
@@ -390,7 +357,7 @@ async def test_client_logs_background_permission_notification_task_failures(
     failures: list[str] = []
 
     client = ACPClient(
-        fixture_command("basic"),
+        fixture_command("official"),
         cwd=tmp_path,
         permission_handler=permission_handler,
     )

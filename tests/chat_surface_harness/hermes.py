@@ -14,7 +14,6 @@ from codex_autorunner.agents.registry import AgentDescriptor
 FAKE_ACP_FIXTURE_PATH = (
     Path(__file__).resolve().parents[1] / "fixtures" / "fake_acp_server.py"
 )
-SESSION_STATUS_IDLE_COMPLETION_GAP = "session_status_idle_completion_gap"
 
 
 def fake_acp_command(scenario: str) -> list[str]:

@@ -19,7 +19,7 @@ def fixture_command(scenario: str) -> list[str]:
 async def test_supervisor_reuses_workspace_client_and_closes_all(
     tmp_path: Path,
 ) -> None:
-    supervisor = ACPSubprocessSupervisor(fixture_command("basic"))
+    supervisor = ACPSubprocessSupervisor(fixture_command("official"))
     try:
         client_a = await supervisor.get_client(tmp_path)
         client_b = await supervisor.get_client(tmp_path)
