@@ -699,6 +699,57 @@ def test_process_due_watches_initializes_post_open_boost_for_baseline_pending_wa
     assert refreshed.snapshot["post_open_boost_until"] == "2026-03-30T01:15:00Z"
 
 
+def test_arm_watch_preserves_rate_limit_backoff_even_when_post_open_boost_enabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binding = PrBindingStore(tmp_path).upsert_binding(
+        provider="github",
+        repo_slug="acme/widgets",
+        pr_number=17,
+        pr_state="open",
+        head_branch="feature/scm-polling",
+        base_branch="main",
+    )
+
+    def _factory(repo_root: Path, raw_config=None) -> _GitHubServiceStub:
+        return _GitHubServiceStub(
+            repo_root,
+            raw_config,
+            pr_view_payload={},
+            reviews_payload=[],
+            checks_payload=[],
+            pr_view_exception=GitHubError(
+                "API rate limit exceeded for graphql",
+                status_code=429,
+            ),
+        )
+
+    monkeypatch.setattr(
+        github_polling,
+        "_utc_now",
+        lambda: datetime(2026, 3, 30, 1, 0, 0, tzinfo=timezone.utc),
+    )
+    monkeypatch.setattr(github_polling, "now_iso", lambda: "2026-03-30T01:00:00Z")
+    monkeypatch.setattr(scm_polling_watches, "now_iso", lambda: "2026-03-30T01:00:00Z")
+
+    service = GitHubScmPollingService(
+        tmp_path,
+        raw_config=_polling_config(
+            post_open_boost_minutes=20,
+            post_open_boost_interval_seconds=30,
+        ),
+        github_service_factory=_factory,
+        event_store=ScmEventStore(tmp_path),
+    )
+
+    watch = service.arm_watch(binding=binding, workspace_root=tmp_path / "repo")
+
+    assert watch is not None
+    assert watch.snapshot["baseline_pending"] is True
+    assert watch.next_poll_at == "2026-03-30T01:15:00Z"
+
+
 def test_arm_watch_backfill_uses_current_arm_time_for_reactivated_watch(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

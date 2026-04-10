@@ -760,6 +760,7 @@ class GitHubScmPollingService:
         scheduled_next_poll_at = next_poll_at or _iso_after_seconds(
             polling_config.interval_seconds
         )
+        schedule_forced_by_rate_limit = False
         snapshot: dict[str, Any] = {"baseline_pending": True}
         if establish_baseline:
             try:
@@ -782,6 +783,7 @@ class GitHubScmPollingService:
                     if _is_rate_limit_error(exc)
                     else now_timestamp
                 )
+                schedule_forced_by_rate_limit = _is_rate_limit_error(exc)
         post_open_boost_until = _initial_post_open_boost_until(
             binding=binding,
             snapshot=snapshot,
@@ -793,7 +795,8 @@ class GitHubScmPollingService:
         )
         boost_interval_seconds = polling_config.post_open_boost_interval_seconds
         if (
-            post_open_boost_until is not None
+            not schedule_forced_by_rate_limit
+            and post_open_boost_until is not None
             and boost_interval_seconds > 0
             and _parse_iso(post_open_boost_until) > _utc_now()
         ):
