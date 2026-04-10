@@ -34,6 +34,7 @@ class FakeACPServer:
         self._next_permission = 1
         self._sessions: dict[str, dict[str, Any]] = {}
         self._cancel_events: dict[str, threading.Event] = {}
+        self._session_cancel_events: dict[str, threading.Event] = {}
         self._permission_waiters: dict[str, threading.Event] = {}
         self._permission_results: dict[str, dict[str, Any]] = {}
 
@@ -240,11 +241,127 @@ class FakeACPServer:
             }
         )
 
+    def _stream_official_prompt(
+        self,
+        *,
+        request_id: Any,
+        session_id: str,
+        prompt: str,
+    ) -> None:
+        cancel_event = self._session_cancel_events[session_id]
+        self.send(
+            {
+                "method": "session/update",
+                "params": {
+                    "sessionId": session_id,
+                    "update": {
+                        "sessionUpdate": "agent_thought_chunk",
+                        "content": {"type": "text", "text": "thinking"},
+                    },
+                },
+            }
+        )
+        if prompt == "stdout noise":
+            _write_raw_stdout(self._lock, "\n")
+            _write_raw_stdout(
+                self._lock,
+                "  ┊ 💻 $ curl -fsS http://127.0.0.1:4517/car/hub... 0.3s\n",
+            )
+            _write_raw_stdout(
+                self._lock,
+                "\x1b[33m  [tool] (｡•́︿•̀｡) deliberating...\x1b[0m\n",
+            )
+        if prompt == "stdout invalid":
+            _write_raw_stdout(self._lock, "ACP dependencies not installed.\n")
+            return
+        if prompt == "stdout invalid bracketed":
+            _write_raw_stdout(
+                self._lock,
+                '[tool] {"id":"1","method":"prompt/completed"}\n',
+            )
+            return
+        if prompt == "needs permission":
+            permission_id = f"perm-{self._next_permission}"
+            self._next_permission += 1
+            waiter = threading.Event()
+            self._permission_waiters[permission_id] = waiter
+            self.send(
+                {
+                    "id": permission_id,
+                    "method": "session/request_permission",
+                    "params": {
+                        "sessionId": session_id,
+                        "requestId": permission_id,
+                        "description": "Need approval",
+                        "toolCall": {
+                            "kind": "shell",
+                            "rawInput": {"command": ["ls"]},
+                        },
+                        "options": [
+                            {"optionId": "allow", "label": "Allow once"},
+                            {"optionId": "deny", "label": "Deny"},
+                        ],
+                        "context": {"tool": "shell", "command": ["ls"]},
+                    },
+                }
+            )
+            while True:
+                if cancel_event.wait(0.02):
+                    cancel_event.clear()
+                    self._send_result(request_id, {"stopReason": "cancelled"})
+                    return
+                if waiter.is_set():
+                    break
+            result = self._permission_results.pop(permission_id, {})
+            outcome = result.get("outcome")
+            if isinstance(outcome, dict):
+                outcome_type = outcome.get("outcome")
+                if outcome_type == "cancelled":
+                    cancel_event.clear()
+                    self._send_result(request_id, {"stopReason": "cancelled"})
+                    return
+                if outcome_type == "selected" and outcome.get("optionId") == "deny":
+                    self._send_result(
+                        request_id,
+                        {
+                            "stopReason": "refusal",
+                            "message": "permission denied",
+                        },
+                    )
+                    return
+        if prompt == "crash":
+            sys.stderr.write("fixture crash requested\n")
+            sys.stderr.flush()
+            os._exit(17)
+        if prompt == "cancel me":
+            while not cancel_event.wait(0.02):
+                pass
+            cancel_event.clear()
+            self._send_result(request_id, {"stopReason": "cancelled"})
+            return
+        time.sleep(0.05)
+        self.send(
+            {
+                "method": "session/update",
+                "params": {
+                    "sessionId": session_id,
+                    "update": {
+                        "sessionUpdate": "agent_message_chunk",
+                        "content": {"type": "text", "text": "fixture reply"},
+                    },
+                },
+            }
+        )
+        if self._scenario == "official_prompt_hang":
+            return
+        cancel_event.clear()
+        self._send_result(request_id, {"stopReason": "end_turn"})
+
     def _handle_request(self, message: dict[str, Any]) -> None:
         request_id = message.get("id")
         method = message.get("method")
         params = message.get("params") or {}
-        is_official = self._scenario.startswith("official")
+        is_official = self._scenario != "initialize_error"
         if method != "initialize" and not self._initialized:
             self._send_error(request_id, -32000, "not initialized")
             return
@@ -316,9 +433,6 @@ class FakeACPServer:
             self._send_result(request_id, {"session": session})
             return
         if method == "session/list":
-            if is_official:
-                self._send_error(request_id, -32601, "Method not found: session/list")
-                return
             self._send_result(
                 request_id,
                 {"sessions": list(self._sessions.values())},
@@ -330,42 +444,35 @@ class FakeACPServer:
             session = {
                 "sessionId": session_id,
                 "cwd": params.get("cwd"),
+                "title": params.get("title"),
             }
             self._sessions[session_id] = session
-            self._send_result(request_id, {"sessionId": session_id})
+            self._session_cancel_events[session_id] = threading.Event()
+            self._send_result(request_id, session)
             return
         if method == "session/prompt":
             session_id = str(params.get("sessionId") or "")
             if session_id not in self._sessions:
                 self._send_error(request_id, -32004, "session not found")
                 return
-            self.send(
-                {
-                    "method": "session/update",
-                    "params": {
-                        "sessionId": session_id,
-                        "update": {
-                            "sessionUpdate": "agent_thought_chunk",
-                            "content": {"type": "text", "text": "thinking"},
-                        },
-                    },
-                }
+            prompt_items = params.get("prompt")
+            prompt_text = ""
+            if isinstance(prompt_items, list):
+                prompt_text = " ".join(
+                    str(item.get("text") or "")
+                    for item in prompt_items
+                    if isinstance(item, dict)
+                ).strip()
+            worker = threading.Thread(
+                target=self._stream_official_prompt,
+                kwargs={
+                    "request_id": request_id,
+                    "session_id": session_id,
+                    "prompt": prompt_text,
+                },
+                daemon=True,
             )
-            self.send(
-                {
-                    "method": "session/update",
-                    "params": {
-                        "sessionId": session_id,
-                        "update": {
-                            "sessionUpdate": "agent_message_chunk",
-                            "content": {"type": "text", "text": "OK"},
-                        },
-                    },
-                }
-            )
-            if self._scenario == "official_prompt_hang":
-                return
-            self._send_result(request_id, {"stopReason": "end_turn"})
+            worker.start()
             return
         if method == "prompt/start":
             session_id = str(params.get("sessionId") or "")
@@ -427,6 +534,11 @@ class FakeACPServer:
             self._initialized_notification = True
             return
         if method == "session/cancel":
+            params = message.get("params") or {}
+            session_id = str(params.get("sessionId") or "")
+            cancel_event = self._session_cancel_events.get(session_id)
+            if cancel_event is not None:
+                cancel_event.set()
             return
         if method == "exit":
             self._running = False

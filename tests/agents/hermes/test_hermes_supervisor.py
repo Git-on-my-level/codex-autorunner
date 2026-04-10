@@ -72,7 +72,7 @@ async def _collect_events(
 async def test_hermes_supervisor_session_roundtrip_and_turn_streaming(
     tmp_path: Path,
 ) -> None:
-    supervisor = HermesSupervisor(fixture_command("basic"))
+    supervisor = HermesSupervisor(fixture_command("official"))
     try:
         await supervisor.ensure_ready(tmp_path)
         created = await supervisor.create_session(tmp_path, title="Fixture Session")
@@ -101,38 +101,29 @@ async def test_hermes_supervisor_session_roundtrip_and_turn_streaming(
         assert result.assistant_text == "fixture reply"
         assert [event.get("method") for event in events] == [
             "prompt/started",
-            "prompt/progress",
-            "prompt/progress",
+            "session/update",
+            "session/update",
             "prompt/completed",
         ]
         assert [event.get("method") for event in result.raw_events] == [
             "prompt/started",
-            "prompt/progress",
-            "prompt/progress",
+            "session/update",
+            "session/update",
             "prompt/completed",
         ]
     finally:
         await supervisor.close_all()
 
 
-@pytest.mark.parametrize(
-    ("scenario", "expected_terminal_method"),
-    (
-        ("terminal_missing_turn_id", "prompt/completed"),
-        ("session_status_idle_completion_gap", "session.status"),
-    ),
-)
 @pytest.mark.slow
 @pytest.mark.asyncio
-async def test_hermes_supervisor_maps_terminal_completion_signals(
+async def test_hermes_supervisor_maps_session_scoped_updates_to_active_turn(
     tmp_path: Path,
-    scenario: str,
-    expected_terminal_method: str,
 ) -> None:
-    supervisor = HermesSupervisor(fixture_command(scenario))
+    supervisor = HermesSupervisor(fixture_command("official"))
     try:
         await supervisor.ensure_ready(tmp_path)
-        session = await supervisor.create_session(tmp_path, title="Missing turn id")
+        session = await supervisor.create_session(tmp_path, title="Official mapping")
         turn_id = await supervisor.start_turn(
             tmp_path,
             session.session_id,
@@ -149,49 +140,7 @@ async def test_hermes_supervisor_maps_terminal_completion_signals(
         assert result.status == "completed"
         assert result.assistant_text == "fixture reply"
         assert any(
-            event.get("method") == expected_terminal_method
-            and event.get("params", {}).get("turnId") == turn_id
-            for event in events
-        )
-    finally:
-        await supervisor.close_all()
-
-
-@pytest.mark.slow
-@pytest.mark.asyncio
-async def test_hermes_supervisor_prefers_prompt_completed_after_idle_session_status(
-    tmp_path: Path,
-) -> None:
-    supervisor = HermesSupervisor(
-        fixture_command("session_status_idle_then_prompt_completed")
-    )
-    try:
-        await supervisor.ensure_ready(tmp_path)
-        session = await supervisor.create_session(
-            tmp_path, title="Idle before complete"
-        )
-        turn_id = await supervisor.start_turn(
-            tmp_path,
-            session.session_id,
-            "hello from hermes",
-        )
-        result = await asyncio.wait_for(
-            supervisor.wait_for_turn(tmp_path, session.session_id, turn_id),
-            timeout=2.0,
-        )
-        events = await _collect_events(
-            supervisor, tmp_path, session.session_id, turn_id
-        )
-
-        assert result.status == "completed"
-        assert result.assistant_text == "final canonical output"
-        assert any(
-            event.get("method") == "session.status"
-            and event.get("params", {}).get("status", {}).get("type") == "idle"
-            for event in events
-        )
-        assert any(
-            event.get("method") == "prompt/completed"
+            event.get("method") == "session/update"
             and event.get("params", {}).get("turnId") == turn_id
             for event in events
         )
@@ -345,7 +294,7 @@ async def test_hermes_supervisor_bridges_permission_requests_and_allows(
         return "accept"
 
     supervisor = HermesSupervisor(
-        fixture_command("basic"),
+        fixture_command("official"),
         approval_handler=approval_handler,
         default_approval_decision="cancel",
         approval_timeout_seconds=0.1,
@@ -358,11 +307,11 @@ async def test_hermes_supervisor_bridges_permission_requests_and_allows(
             "needs permission",
             approval_mode="on-request",
         )
-
-        events = await _collect_events(
-            supervisor, tmp_path, session.session_id, turn_id
+        stream_task = asyncio.create_task(
+            _collect_events(supervisor, tmp_path, session.session_id, turn_id)
         )
         result = await supervisor.wait_for_turn(tmp_path, session.session_id, turn_id)
+        events = await stream_task
 
         assert result.status == "completed"
         assert result.assistant_text == "fixture reply"
@@ -370,21 +319,22 @@ async def test_hermes_supervisor_bridges_permission_requests_and_allows(
         assert seen_requests[0]["method"] == "item/commandExecution/requestApproval"
         assert [event.get("method") for event in events] == [
             "prompt/started",
-            "prompt/progress",
+            "session/update",
             "session/request_permission",
             "permission/decision",
-            "prompt/progress",
+            "session/update",
             "prompt/completed",
         ]
         assert [event.get("method") for event in result.raw_events] == [
             "prompt/started",
-            "prompt/progress",
+            "session/update",
             "session/request_permission",
             "permission/decision",
-            "prompt/progress",
+            "session/update",
             "prompt/completed",
         ]
         assert result.raw_events[3]["params"]["decision"] == "accept"
+        assert events[2]["params"]["turnId"] == turn_id
     finally:
         await supervisor.close_all()
 
@@ -395,7 +345,7 @@ async def test_hermes_supervisor_auto_accepts_when_approval_mode_never(
     tmp_path: Path,
 ) -> None:
     supervisor = HermesSupervisor(
-        fixture_command("basic"),
+        fixture_command("official"),
         default_approval_decision="cancel",
         approval_timeout_seconds=0.1,
     )
@@ -429,7 +379,7 @@ async def test_hermes_supervisor_can_deny_permission_requests(
         return "decline"
 
     supervisor = HermesSupervisor(
-        fixture_command("basic"),
+        fixture_command("official"),
         approval_handler=approval_handler,
         default_approval_decision="cancel",
         approval_timeout_seconds=0.1,
@@ -464,7 +414,7 @@ async def test_hermes_supervisor_times_out_pending_permission_requests(
         return "accept"
 
     supervisor = HermesSupervisor(
-        fixture_command("basic"),
+        fixture_command("official"),
         approval_handler=approval_handler,
         default_approval_decision="cancel",
         approval_timeout_seconds=0.05,
@@ -495,7 +445,7 @@ async def test_hermes_supervisor_times_out_pending_permission_requests(
 async def test_hermes_supervisor_can_interrupt_active_turn_without_explicit_turn_id(
     tmp_path: Path,
 ) -> None:
-    supervisor = HermesSupervisor(fixture_command("basic"))
+    supervisor = HermesSupervisor(fixture_command("official"))
     try:
         session = await supervisor.create_session(tmp_path)
         turn_id = await supervisor.start_turn(tmp_path, session.session_id, "cancel me")
@@ -503,7 +453,7 @@ async def test_hermes_supervisor_can_interrupt_active_turn_without_explicit_turn
         result = await supervisor.wait_for_turn(tmp_path, session.session_id, turn_id)
 
         assert result.status == "cancelled"
-        assert result.assistant_text == "fixture "
+        assert result.assistant_text == ""
     finally:
         await supervisor.close_all()
 
@@ -520,7 +470,7 @@ async def test_hermes_supervisor_interrupt_cancels_pending_permission_wait(
         return "accept"
 
     supervisor = HermesSupervisor(
-        fixture_command("basic"),
+        fixture_command("official"),
         approval_handler=approval_handler,
         default_approval_decision="cancel",
         approval_timeout_seconds=5.0,
@@ -567,7 +517,7 @@ async def test_hermes_supervisor_replacing_turn_cancels_previous_pending_approva
         return "accept"
 
     supervisor = HermesSupervisor(
-        fixture_command("basic"),
+        fixture_command("official"),
         approval_handler=approval_handler,
         default_approval_decision="cancel",
         approval_timeout_seconds=5.0,
@@ -624,7 +574,7 @@ async def test_hermes_supervisor_close_workspace_retires_pending_turn_state(
         return "accept"
 
     supervisor = HermesSupervisor(
-        fixture_command("basic"),
+        fixture_command("official"),
         approval_handler=approval_handler,
         default_approval_decision="cancel",
         approval_timeout_seconds=5.0,
@@ -658,7 +608,7 @@ async def test_hermes_supervisor_propagates_approval_handler_exception(
         raise RuntimeError("approval handler boom")
 
     supervisor = HermesSupervisor(
-        fixture_command("basic"),
+        fixture_command("official"),
         approval_handler=approval_handler,
         default_approval_decision="cancel",
         approval_timeout_seconds=5.0,
@@ -715,7 +665,7 @@ async def test_hermes_supervisor_propagates_subprocess_crash_during_wait(
 @pytest.mark.slow
 @pytest.mark.asyncio
 async def test_hermes_supervisor_rejects_unknown_turn_lookup(tmp_path: Path) -> None:
-    supervisor = HermesSupervisor(fixture_command("basic"))
+    supervisor = HermesSupervisor(fixture_command("official"))
     try:
         session = await supervisor.create_session(tmp_path)
 

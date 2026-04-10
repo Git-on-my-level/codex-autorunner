@@ -7,31 +7,16 @@ Use this guide before changing `client.py`, `events.py`, `protocol.py`, or
 
 ## Why this guide exists
 
-ACP has two materially different shapes in this codebase:
+Hermes now uses the official ACP session protocol only.
 
-- Legacy / notification-heavy adapters
-- Official ACP session protocol adapters
+- session creation uses `session/new`
+- prompts run via `session/prompt`
+- streaming progress arrives through `session/update`
+- approvals arrive through `session/request_permission`
+- turn completion is the `session/prompt` RPC response
 
-Several Hermes regressions came from treating those two shapes as interchangeable.
-The main risk is assuming a notification-based terminal contract in places where
-official ACP is actually request/response based.
-
-## Core split: legacy vs official ACP
-
-`ACPClient._uses_official_session_protocol()` is the branch point.
-
-- Legacy ACP:
-  - session creation uses `session/create`
-  - prompts start via `prompt/start`
-  - prompt lifecycle can be driven by terminal notifications such as
-    `prompt/completed`, `prompt/failed`, `prompt/cancelled`
-- Official ACP session protocol:
-  - session creation uses `session/new`
-  - prompts run via `session/prompt`
-  - streaming progress arrives through `session/update`
-  - turn completion is the `session/prompt` RPC response
-
-Do not assume fixes for one side automatically apply to the other.
+Do not reintroduce legacy notification-terminal heuristics into `client.py`
+without a concrete supported runtime and dedicated coverage.
 
 ## Invariants to preserve
 
@@ -57,24 +42,23 @@ Official ACP `session/load` responses may be sparse.
 Do not require `sessionId` in official `session/load` success payloads unless
 the protocol itself changes and the code/tests are updated together.
 
-### Legacy terminal fallback logic
+### Session-scoped turn rebinding
 
-Legacy adapters may emit prompt-scoped terminal notifications without `turnId`,
-or may emit idle/status before a canonical completion event.
+Hermes may omit `turnId` on official session-scoped streaming and approval
+events.
 
-- Session-level fallback mapping for missing `turnId` is legacy-only defensive
-  behavior.
-- Idle-terminal grace logic exists to prefer explicit completion when both idle
-  and prompt completion signals appear close together.
+- Only `session/update` and `session/request_permission` are rebound to the
+  active local turn.
+- Prompt terminal notifications are not part of the official contract.
 
-Do not copy those heuristics into official ACP logic unless you have a concrete
-protocol reason.
+Do not broaden this fallback set unless the protocol requires it and the tests
+prove the need.
 
 ## File responsibilities
 
 | File | Responsibility |
 |---|---|
-| `client.py` | Transport, request/response tracking, official-vs-legacy branching, prompt state |
+| `client.py` | Transport, request/response tracking, official session protocol, prompt state |
 | `events.py` | Notification normalization into CAR event types |
 | `protocol.py` | Coercion/parsing of ACP initialize/session/prompt payloads |
 | `supervisor.py` | Workspace-scoped client lifecycle and higher-level handle management |
@@ -84,10 +68,10 @@ protocol reason.
 
 Answer these questions explicitly:
 
-1. Is this change for legacy ACP, official ACP, or both?
-2. Is the completion boundary notification-driven or RPC-response-driven?
-3. Are you changing protocol interpretation, or just hardening around malformed
+1. Is the completion boundary still RPC-response-driven?
+2. Are you changing official protocol interpretation, or just hardening around malformed
    adapters?
+3. Does Hermes still need this fallback, or is it dead compatibility logic?
 4. What test proves the exact boundary being changed?
 
 If the answer is unclear, stop and add a fixture/test first.
@@ -107,15 +91,13 @@ as:
 
 ## Existing regression coverage to preserve
 
-These tests cover real historical failure modes:
+These tests cover real official-path failure modes:
 
-- legacy terminal notification without `turnId`
-- idle-status then explicit completion ordering
+- session-scoped updates rebinding onto the active turn
+- session-scoped permission requests rebinding onto the active turn
 - official `session/prompt` hang remaining non-terminal until RPC return
 - official sparse `session/load` success payloads
 - official `null` `session/load` failure payloads
-
-If you remove or weaken one of these, document why in the PR.
 
 ## When integrating a new ACP-backed agent
 

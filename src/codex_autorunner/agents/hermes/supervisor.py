@@ -199,6 +199,7 @@ class HermesSupervisor:
         )
         state = await self._require_turn_state(workspace_root, resolved_turn_id)
         result = await state.handle.wait(timeout=timeout)
+        await self._sync_prompt_snapshot_into_event_buffer(workspace_root, state)
         await state.event_buffer.close()
         errors = [result.error_message] if result.error_message else []
         raw_events = state.event_buffer.snapshot()
@@ -346,6 +347,32 @@ class HermesSupervisor:
         await state.event_buffer.append(payload)
         if terminal:
             await state.event_buffer.close()
+
+    async def _sync_prompt_snapshot_into_event_buffer(
+        self,
+        workspace_root: Path,
+        state: _HermesTurnState,
+    ) -> None:
+        existing_events = state.event_buffer.snapshot()
+        prompt_events = await self._acp.prompt_events_snapshot(
+            workspace_root, state.turn_id
+        )
+        for event in prompt_events:
+            raw_notification = getattr(event, "raw_notification", None)
+            if not isinstance(raw_notification, dict):
+                continue
+            payload = dict(raw_notification)
+            if payload in existing_events:
+                continue
+            terminal = isinstance(event, ACPTurnTerminalEvent) and event.method not in (
+                _HERMES_IDLE_TERMINAL_METHODS
+            )
+            await self._append_raw_event(
+                state,
+                payload,
+                terminal=terminal,
+            )
+            existing_events.append(payload)
 
     async def _retire_turn_state(self, state: _HermesTurnState) -> None:
         async with self._lock:
