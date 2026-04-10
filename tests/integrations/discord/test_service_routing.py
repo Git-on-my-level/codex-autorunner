@@ -4063,10 +4063,10 @@ async def test_car_session_resume_with_partial_thread_prompts_filtered_picker(
     try:
         await service.run_forever()
         assert rest.interaction_responses[0]["payload"]["type"] == 5
-        assert len(rest.followup_messages) == 2
+        assert len(rest.followup_messages) == 1
         content = rest.followup_messages[0]["payload"]["content"].lower()
         assert "matched 1 threads" in content
-        select = rest.followup_messages[1]["payload"]["components"][0]["components"][0]
+        select = rest.followup_messages[0]["payload"]["components"][0]["components"][0]
         values = [option["value"] for option in select["options"]]
         assert values == ["thread-def"]
     finally:
@@ -4854,8 +4854,8 @@ async def test_normalized_interaction_session_resume_without_thread_uses_picker(
         await service._handle_normalized_interaction(event, context)
         assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 5
-        assert len(rest.followup_messages) == 2
-        picker_payload = rest.followup_messages[1]["payload"]
+        assert len(rest.followup_messages) == 1
+        picker_payload = rest.followup_messages[0]["payload"]
         components = picker_payload.get("components") or []
         assert components
         menu = components[0]["components"][0]

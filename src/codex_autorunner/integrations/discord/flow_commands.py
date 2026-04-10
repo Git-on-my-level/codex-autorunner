@@ -48,6 +48,7 @@ from .interaction_registry import FLOW_ACTION_SELECT_PREFIX
 from .interaction_runtime import (
     ensure_component_response_deferred,
     ensure_public_response_deferred,
+    interaction_response_deferred,
     send_runtime_ephemeral,
     update_runtime_component_message,
 )
@@ -810,7 +811,7 @@ async def handle_flow_runs(
     workspace_root: Path,
     options: dict[str, Any],
 ) -> None:
-    deferred = service._interaction_has_initial_response(interaction_token)
+    deferred = interaction_response_deferred(service, interaction_token)
     raw_limit = options.get("limit")
     limit = FLOW_RUNS_DEFAULT_LIMIT
     if isinstance(raw_limit, int):
@@ -892,7 +893,7 @@ async def handle_flow_issue(
         )
         return
     issue_ref = issue_ref.strip()
-    deferred = service._interaction_has_initial_response(interaction_token)
+    deferred = interaction_response_deferred(service, interaction_token)
     try:
 
         def _seed_issue() -> Any:
@@ -1766,7 +1767,7 @@ async def handle_flow_archive(
     channel_id: Optional[str] = None,
     guild_id: Optional[str] = None,
 ) -> None:
-    deferred = service._interaction_has_initial_response(interaction_token)
+    deferred = interaction_response_deferred(service, interaction_token)
     confirmed = bool(options.get("confirmed"))
     run_id_opt = options.get("run_id")
     if isinstance(run_id_opt, str) and run_id_opt.strip():
@@ -2252,9 +2253,11 @@ async def handle_flow_button(
             )
             return
 
-        await service._send_followup_ephemeral(
-            interaction_token=interaction_token,
-            content=flow_archive_in_progress_text(target.id),
+        await send_runtime_ephemeral(
+            service,
+            interaction_id,
+            interaction_token,
+            flow_archive_in_progress_text(target.id),
         )
         try:
             summary = await asyncio.to_thread(

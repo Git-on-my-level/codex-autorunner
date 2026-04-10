@@ -23,6 +23,7 @@ from ..components import (
     build_model_picker,
 )
 from ..interaction_registry import AGENT_PROFILE_SELECT_ID
+from ..interaction_runtime import ensure_ephemeral_response_deferred
 from ..rendering import format_discord_message
 
 MODEL_SEARCH_FETCH_LIMIT = 200
@@ -32,21 +33,6 @@ _VALID_REASONING_EFFORTS = REASONING_EFFORT_VALUES
 
 class _AppServerUnavailableError(Exception):
     pass
-
-
-async def _interaction_deferred(
-    service: Any,
-    interaction_id: str,
-    interaction_token: str,
-) -> bool:
-    if service._interaction_has_initial_response(interaction_token):
-        return True
-    return bool(
-        await service._defer_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-        )
-    )
 
 
 def _coerce_model_picker_items(
@@ -282,7 +268,7 @@ async def handle_car_model(
     effort = options.get("effort")
 
     if not model_name:
-        deferred = await _interaction_deferred(
+        deferred = await ensure_ephemeral_response_deferred(
             service,
             interaction_id,
             interaction_token,

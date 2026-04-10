@@ -15,6 +15,10 @@ from ..chat.model_selection import (
     reasoning_effort_command_choices,
     reasoning_effort_description,
 )
+from .interaction_runtime import (
+    ensure_component_response_deferred,
+    ensure_ephemeral_response_deferred,
+)
 
 DiscordAckPolicy = Literal[
     "immediate",
@@ -1768,9 +1772,10 @@ async def _handle_flow_action_select_component(service: Any, ctx: Any) -> None:
         )
         pending_text = service._pending_flow_reply_text.pop(pending_key, None)
         if not isinstance(pending_text, str) or not pending_text.strip():
-            deferred = await service._defer_ephemeral(
-                interaction_id=ctx.interaction_id,
-                interaction_token=ctx.interaction_token,
+            deferred = await ensure_ephemeral_response_deferred(
+                service,
+                ctx.interaction_id,
+                ctx.interaction_token,
             )
             await service._send_or_respond_ephemeral(
                 interaction_id=ctx.interaction_id,
@@ -1794,9 +1799,10 @@ async def _prepare_flow_button_component(service: Any, ctx: Any) -> bool:
     flow_action = flow_parts[2].strip().lower() if len(flow_parts) >= 3 else ""
     if flow_action not in FLOW_COMPONENT_PREPARE_ACTIONS:
         return True
-    prepared = await service._defer_component_update(
-        interaction_id=ctx.interaction_id,
-        interaction_token=ctx.interaction_token,
+    prepared = await ensure_component_response_deferred(
+        service,
+        ctx.interaction_id,
+        ctx.interaction_token,
     )
     if prepared:
         return True

@@ -11,6 +11,7 @@ from ....core.pma_thread_store import PmaThreadStore
 from ....core.utils import canonicalize_path
 from ...chat.compaction import build_compact_seed_prompt
 from ..errors import DiscordAPIError
+from ..interaction_runtime import ensure_ephemeral_response_deferred
 from ..rendering import (
     chunk_discord_message,
 )
@@ -48,21 +49,6 @@ def _build_fallback_compact_summary(
     return (
         "Fallback context recovered from recent Discord thread transcripts.\n\n"
         + "\n\n".join(sections)
-    )
-
-
-async def _interaction_deferred(
-    service: Any,
-    interaction_id: str,
-    interaction_token: str,
-) -> bool:
-    if service._interaction_has_initial_response(interaction_token):
-        return True
-    return bool(
-        await service._defer_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-        )
     )
 
 
@@ -138,7 +124,11 @@ async def handle_car_compact(
         )
         return
 
-    deferred = await _interaction_deferred(service, interaction_id, interaction_token)
+    deferred = await ensure_ephemeral_response_deferred(
+        service,
+        interaction_id,
+        interaction_token,
+    )
 
     interaction_text: Optional[str] = None
     previous_thread_id = current_thread.thread_target_id

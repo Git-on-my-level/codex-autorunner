@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+# This module is the only handler-facing boundary for Discord interaction
+# ack/defer state. Business handlers should use these helpers instead of
+# reaching into low-level service defer/followup/session methods directly.
+
 
 def interaction_response_deferred(service: Any, interaction_token: str) -> bool:
     has_initial_response = getattr(service, "_interaction_has_initial_response", None)

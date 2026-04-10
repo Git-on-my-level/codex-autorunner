@@ -71,15 +71,6 @@ class DiscordResponder:
     ) -> Optional[DiscordInteractionSession]:
         return self._sessions.get_session(interaction_token)
 
-    def prepared_interaction_policy(
-        self,
-        interaction_token: str,
-    ) -> Optional[str]:
-        session = self.get_session(interaction_token)
-        if session is None:
-            return None
-        return session.prepared_policy()
-
     async def _restore_ack_if_needed(
         self,
         *,

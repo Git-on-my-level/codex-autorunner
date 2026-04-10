@@ -30,6 +30,7 @@ from ..interaction_runtime import (
     ensure_component_response_deferred,
     ensure_ephemeral_response_deferred,
     ensure_public_response_deferred,
+    send_runtime_components_ephemeral,
 )
 from ..message_turns import (
     clear_discord_turn_progress_reuse,
@@ -840,22 +841,18 @@ async def handle_car_resume(
                     if current_thread_id
                     else ""
                 )
-                await service._send_or_respond_ephemeral(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    deferred=deferred,
-                    text=format_discord_message(
+                await send_runtime_components_ephemeral(
+                    service,
+                    interaction_id,
+                    interaction_token,
+                    format_discord_message(
                         header
                         + (
                             f"Matched {len(filtered_items)} threads for "
-                            f"`{query_text}`. Select a thread to resume:"
+                            f"`{query_text}`. Choose one thread to resume:"
                         )
                     ),
-                )
-                await service._send_followup_ephemeral(
-                    interaction_token=interaction_token,
-                    content="Choose one thread from the filtered picker below.",
-                    components=[build_session_threads_picker(filtered_items)],
+                    [build_session_threads_picker(filtered_items)],
                 )
 
             resolved_thread_id = await service._resolve_picker_query_or_prompt(
@@ -948,16 +945,14 @@ async def handle_car_resume(
                 if current_thread_id
                 else ""
             )
-            await service._send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=format_discord_message(header + "Select a thread to resume:"),
-            )
-            await service._send_followup_ephemeral(
-                interaction_token=interaction_token,
-                content="Choose one thread from the picker below.",
-                components=[build_session_threads_picker(thread_items)],
+            await send_runtime_components_ephemeral(
+                service,
+                interaction_id,
+                interaction_token,
+                format_discord_message(
+                    header + "Choose one thread to resume from the picker below:"
+                ),
+                [build_session_threads_picker(thread_items)],
             )
             return
         if current_thread_id:

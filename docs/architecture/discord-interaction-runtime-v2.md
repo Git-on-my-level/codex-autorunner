@@ -121,6 +121,16 @@ The following modules must not call those raw primitives after cutover:
 Those modules may request response operations only through the runtime
 responder/state-machine interface.
 
+Handler-facing rule after cutover:
+
+- business handlers and command modules must go through
+  `src/codex_autorunner/integrations/discord/interaction_runtime.py` for
+  defer-state checks and runtime defer/followup transitions
+- low-level service helpers such as `_defer_*`,
+  `_send_followup_*`, and `_interaction_has_initial_response()` stay owned by
+  the runtime boundary (`service.py`, `effects.py`, and
+  `interaction_runtime.py`) and are not a handler API
+
 ### Target module boundaries
 
 | Ownership area | Target boundary |
