@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional, cast
@@ -91,6 +92,13 @@ def flow_archive_in_progress_text(run_id: str) -> str:
     return f"Archiving run {run_id}... This can take a few seconds."
 
 
+def _normalize_run_id(value: str) -> Optional[str]:
+    try:
+        return str(uuid.UUID(str(value)))
+    except ValueError:
+        return None
+
+
 def _legacy_flow_archive_root(workspace_root: Path, run_id: str) -> Path:
     return workspace_root / ".codex-autorunner" / "flows" / run_id
 
@@ -99,9 +107,12 @@ def _describe_archived_flow_run(
     workspace_root: Path,
     run_id: str,
 ) -> Optional[dict[str, Any]]:
+    normalized_run_id = _normalize_run_id(run_id)
+    if normalized_run_id is None:
+        return None
     roots = (
-        (flow_run_archive_root(workspace_root, run_id), True),
-        (_legacy_flow_archive_root(workspace_root, run_id), False),
+        (flow_run_archive_root(workspace_root, normalized_run_id), True),
+        (_legacy_flow_archive_root(workspace_root, normalized_run_id), False),
     )
     for archive_root, treat_any_child_as_archive in roots:
         if not archive_root.exists() or not archive_root.is_dir():
@@ -157,7 +168,7 @@ def _describe_archived_flow_run(
         except ValueError:
             archive_path = str(archive_root)
         return {
-            "run_id": run_id,
+            "run_id": normalized_run_id,
             "archive_path": archive_path,
             "archived_at": archived_at,
             "has_tickets": has_tickets,
