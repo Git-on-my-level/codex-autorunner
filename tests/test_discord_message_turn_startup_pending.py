@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from typing import Any
+from types import SimpleNamespace
 
 import pytest
 
@@ -22,7 +22,7 @@ from tests.discord_message_turns_support import (
 
 
 @pytest.mark.anyio
-async def test_message_create_startup_pending_keeps_placeholder_without_public_error(
+async def test_message_create_startup_failure_keeps_generic_error_without_raw_detail(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     workspace = tmp_path / "workspace"
@@ -47,22 +47,42 @@ async def test_message_create_startup_pending_keeps_placeholder_without_public_e
         outbox_manager=_FakeOutboxManager(),
     )
 
-    async def _startup_pending(**kwargs: Any) -> Any:
-        _ = kwargs
-        raise discord_message_turns_module.DiscordTurnStartupPending(
-            "Discord turn is still starting up. Please retry in a moment."
-        )
+    submit_started = asyncio.Event()
+
+    async def _hanging_submit(self, *args, **kwargs):
+        _ = args, kwargs
+        submit_started.set()
+        await asyncio.Future()
 
     monkeypatch.setattr(
-        service,
-        "_run_agent_turn_for_message",
-        _startup_pending,
+        discord_message_turns_module,
+        "resolve_discord_thread_target",
+        lambda *args, **kwargs: (
+            SimpleNamespace(),
+            SimpleNamespace(thread_target_id="thread-1"),
+        ),
+    )
+    monkeypatch.setattr(
+        discord_message_turns_module,
+        "DISCORD_MANAGED_THREAD_SUBMISSION_TIMEOUT_SECONDS",
+        0.01,
+    )
+    monkeypatch.setattr(
+        discord_message_turns_module.ManagedThreadTurnCoordinator,
+        "submit_execution",
+        _hanging_submit,
     )
 
     try:
         await asyncio.wait_for(service.run_forever(), timeout=5)
+        assert submit_started.is_set()
+        assert rest.edited_channel_messages
+        assert any(
+            "Turn failed to start in time. Please retry."
+            in item["payload"].get("content", "")
+            for item in rest.edited_channel_messages
+        )
         contents = [msg["payload"].get("content", "") for msg in rest.channel_messages]
-        assert "Received. Preparing turn..." in contents
         assert not any("Turn failed:" in content for content in contents)
     finally:
         await store.close()

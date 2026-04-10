@@ -106,8 +106,8 @@ DISCORD_PMA_PROGRESS_MIN_EDIT_INTERVAL_SECONDS = 1.0
 DISCORD_PMA_PROGRESS_HEARTBEAT_INTERVAL_SECONDS = 2.0
 
 
-class DiscordTurnStartupPending(RuntimeError):
-    """Raised when a Discord turn is accepted before runtime execution exists."""
+class DiscordTurnStartupFailure(RuntimeError):
+    """Raised after a Discord turn startup failure has been surfaced to the user."""
 
 
 @dataclass(frozen=True)
@@ -924,11 +924,11 @@ async def _execute_discord_thread_message(
             DiscordMessageTurnResult,
             await dispatch.service._run_agent_turn_for_message(**run_turn_kwargs),
         )
-    except DiscordTurnStartupPending as exc:
+    except DiscordTurnStartupFailure as exc:
         dispatch.log_event_fn(
             dispatch.service._logger,
             logging.INFO,
-            "discord.turn.startup_pending",
+            "discord.turn.startup_failed",
             channel_id=dispatch.channel_id,
             conversation_id=dispatch.context.conversation_id,
             workspace_root=str(dispatch.workspace_root),
@@ -1706,7 +1706,8 @@ async def _run_discord_orchestrated_turn_for_message(
             agent=logical_agent,
         )
         await _stop_progress_heartbeat()
-        tracker.set_label("queued")
+        tracker.set_label("failed")
+        tracker.note_error("Turn failed to start in time. Please retry.")
         if progress_message_id:
             await _edit_progress(
                 force=True,
@@ -1715,18 +1716,14 @@ async def _run_discord_orchestrated_turn_for_message(
         else:
             await service._send_channel_message_safe(
                 channel_id,
-                {
-                    "content": (
-                        "Turn is still starting up. It will run when the session is ready."
-                    )
-                },
+                {"content": ("Turn failed to start in time. Please retry.")},
                 record_id=(
                     f"discord:runtime-submit-timeout:{managed_thread_id}:"
                     f"{uuid.uuid4().hex[:8]}"
                 ),
             )
-        raise DiscordTurnStartupPending(
-            "Discord turn is still starting up. Please retry in a moment."
+        raise DiscordTurnStartupFailure(
+            "Turn failed to start in time. Please retry."
         ) from exc
     except (RuntimeError, ConnectionError, OSError, ValueError, TypeError):
         await _stop_progress_heartbeat()

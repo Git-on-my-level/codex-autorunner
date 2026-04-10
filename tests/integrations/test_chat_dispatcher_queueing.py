@@ -217,6 +217,34 @@ async def test_dispatcher_holds_conversation_while_external_busy_until_woken() -
 
 
 @pytest.mark.anyio
+async def test_dispatcher_rechecks_external_busy_before_skipping_worker_start() -> None:
+    busy_checks = 0
+
+    async def busy_predicate(_event, _context) -> bool:
+        nonlocal busy_checks
+        busy_checks += 1
+        return busy_checks == 1
+
+    dispatcher = ChatDispatcher(busy_predicate=busy_predicate)
+    observed: list[str] = []
+
+    async def handler(event, _context) -> None:
+        observed.append(event.update_id)
+
+    result = await dispatcher.dispatch(
+        _message_event("normal-1", message_id="m-1"),
+        handler,
+    )
+    await asyncio.wait_for(dispatcher.wait_idle(), timeout=1.0)
+
+    assert result.status == "queued"
+    assert result.queued_pending == 1
+    assert result.queued_while_busy is False
+    assert observed == ["normal-1"]
+    assert busy_checks == 2
+
+
+@pytest.mark.anyio
 async def test_dispatcher_close_cancels_workers_and_queued_events() -> None:
     dispatcher = ChatDispatcher()
     entered = asyncio.Event()

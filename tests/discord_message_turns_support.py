@@ -1149,7 +1149,7 @@ async def test_orchestrated_turn_submission_timeout_deletes_progress_placeholder
     service = _Service()
     with pytest.raises(
         RuntimeError,
-        match="still starting up. Please retry in a moment",
+        match="Turn failed to start in time. Please retry.",
     ):
         await discord_message_turns_module._run_discord_orchestrated_turn_for_message(
             service,
@@ -1181,7 +1181,11 @@ async def test_orchestrated_turn_submission_timeout_deletes_progress_placeholder
     assert rest.deleted_channel_messages == []
     assert rest.edited_channel_messages
     assert rest.edited_channel_messages[-1]["message_id"] == "msg-1"
-    assert "queued" in rest.edited_channel_messages[-1]["payload"]["content"].lower()
+    assert "failed" in rest.edited_channel_messages[-1]["payload"]["content"].lower()
+    assert (
+        "Turn failed to start in time. Please retry."
+        in rest.edited_channel_messages[-1]["payload"]["content"]
+    )
     assert rest.edited_channel_messages[-1]["payload"]["components"] == []
 
 

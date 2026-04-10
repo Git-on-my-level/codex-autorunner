@@ -475,16 +475,26 @@ class ChatDispatcher:
             had_pending = bool(queue)
             queue.append((event, context, handler))
             self._idle_event.clear()
+            still_externally_busy = externally_busy
+            if (
+                externally_busy
+                and conversation_id not in self._workers
+                and not is_resetting
+                and self._busy_predicate is not None
+            ):
+                still_externally_busy = await _resolve_predicate(
+                    self._busy_predicate, event, context
+                )
             if (
                 conversation_id not in self._workers
                 and not is_resetting
-                and not externally_busy
+                and not still_externally_busy
             ):
                 self._workers[conversation_id] = asyncio.create_task(
                     self._drain_conversation(conversation_id)
                 )
             pending = len(queue)
-            queued_while_busy = had_worker or had_pending or externally_busy
+            queued_while_busy = had_worker or had_pending or still_externally_busy
             self._publish_queue_state_locked(conversation_id)
         log_event(
             self._logger,
