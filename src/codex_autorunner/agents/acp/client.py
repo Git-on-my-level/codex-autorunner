@@ -109,6 +109,9 @@ class _PromptState:
     request_started_at: Optional[float] = None
     last_session_update_kind: Optional[str] = None
     last_session_update_excerpt: Optional[str] = None
+    last_session_update_content_kind: Optional[str] = None
+    last_session_update_part_types: tuple[str, ...] = ()
+    last_session_update_text_length: Optional[int] = None
     last_session_update_at: Optional[float] = None
 
 
@@ -127,6 +130,55 @@ def _text_excerpt(value: Any, *, limit: int = 120) -> Optional[str]:
     if len(normalized) <= limit:
         return normalized
     return normalized[: limit - 3] + "..."
+
+
+def _extract_text_content(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        for key in ("text", "message"):
+            candidate = value.get(key)
+            if isinstance(candidate, str) and candidate:
+                return candidate
+        return _extract_text_content(value.get("content"))
+    if isinstance(value, list):
+        text_parts: list[str] = []
+        for item in value:
+            if isinstance(item, str) and item:
+                text_parts.append(item)
+                continue
+            if not isinstance(item, dict):
+                continue
+            item_type = _normalize_optional_text(item.get("type"))
+            if item_type and item_type not in {"text", "output_text", "message"}:
+                continue
+            text = _extract_text_content(item)
+            if text:
+                text_parts.append(text)
+        return "".join(text_parts)
+    return ""
+
+
+def _session_update_content_summary(update: dict[str, Any]) -> dict[str, Any]:
+    content = update.get("content")
+    part_types: list[str] = []
+    if isinstance(content, list):
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            item_type = _normalize_optional_text(item.get("type"))
+            if item_type:
+                part_types.append(item_type)
+    extracted_text = _extract_text_content(content)
+    if not extracted_text:
+        fallback_message = update.get("message")
+        if isinstance(fallback_message, str):
+            extracted_text = fallback_message
+    return {
+        "content_kind": type(content).__name__ if content is not None else "missing",
+        "content_part_types": tuple(part_types),
+        "text": extracted_text,
+    }
 
 
 def _stringify(value: Any) -> str:
@@ -1096,6 +1148,9 @@ class ACPClient:
         return {
             "last_session_update_kind": state.last_session_update_kind,
             "last_session_update_excerpt": state.last_session_update_excerpt,
+            "last_session_update_content_kind": state.last_session_update_content_kind,
+            "last_session_update_part_types": state.last_session_update_part_types,
+            "last_session_update_text_length": state.last_session_update_text_length,
             "last_session_update_elapsed_ms": self._elapsed_ms(
                 state.last_session_update_at
             ),
@@ -1105,15 +1160,22 @@ class ACPClient:
         if event.method != "session/update":
             return
         update = _coerce_mapping(event.payload.get("update"))
-        content = _coerce_mapping(update.get("content"))
+        content_summary = _session_update_content_summary(update)
+        extracted_text = str(content_summary.get("text") or "")
         state.last_session_update_kind = _normalize_optional_text(
             update.get("sessionUpdate") or update.get("session_update")
         )
-        state.last_session_update_excerpt = _text_excerpt(
-            content.get("text")
-            or update.get("message")
-            or event.payload.get("message")
-            or ""
+        state.last_session_update_excerpt = _text_excerpt(extracted_text)
+        state.last_session_update_content_kind = _normalize_optional_text(
+            content_summary.get("content_kind")
+        )
+        state.last_session_update_part_types = tuple(
+            str(item)
+            for item in (content_summary.get("content_part_types") or ())
+            if str(item).strip()
+        )
+        state.last_session_update_text_length = (
+            len(extracted_text) if extracted_text else 0
         )
         state.last_session_update_at = time.monotonic()
         self._log_trace_event(
@@ -1122,7 +1184,23 @@ class ACPClient:
             turn_id=state.turn_id,
             session_update=state.last_session_update_kind,
             text_excerpt=state.last_session_update_excerpt,
+            content_kind=state.last_session_update_content_kind,
+            content_part_types=state.last_session_update_part_types,
+            text_length=state.last_session_update_text_length,
         )
+        if (
+            state.last_session_update_kind in {"agent_message_chunk", "agent_thought_chunk"}
+            and not extracted_text
+        ):
+            self._log_trace_event(
+                "acp.prompt.session_update.unparsed",
+                session_id=state.session_id,
+                turn_id=state.turn_id,
+                session_update=state.last_session_update_kind,
+                content_kind=state.last_session_update_content_kind,
+                content_part_types=state.last_session_update_part_types,
+                raw_update=update,
+            )
 
     def _response_error(
         self, method: Optional[str], payload: dict[str, Any]

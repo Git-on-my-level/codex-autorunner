@@ -111,6 +111,75 @@ def test_normalize_notification_maps_session_update_message_chunk() -> None:
     assert event.delta == "hello"
 
 
+def test_normalize_notification_maps_session_update_message_chunk_with_content_parts() -> (
+    None
+):
+    event = normalize_notification(
+        {
+            "method": "session/update",
+            "params": {
+                "sessionId": "session-1",
+                "turnId": "turn-1",
+                "update": {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": [
+                        {"type": "text", "text": "hello"},
+                        {"type": "output_text", "text": " world"},
+                    ],
+                },
+            },
+        }
+    )
+
+    assert isinstance(event, ACPOutputDeltaEvent)
+    assert event.delta == "hello world"
+
+
+def test_normalize_notification_maps_session_update_message_chunk_with_message_parts() -> (
+    None
+):
+    event = normalize_notification(
+        {
+            "method": "session/update",
+            "params": {
+                "sessionId": "session-1",
+                "turnId": "turn-1",
+                "update": {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": [
+                        {"type": "message", "message": "hello"},
+                        {"type": "message", "text": " world"},
+                    ],
+                },
+            },
+        }
+    )
+
+    assert isinstance(event, ACPOutputDeltaEvent)
+    assert event.delta == "hello world"
+
+
+def test_normalize_notification_maps_session_update_thought_chunk_with_string_content() -> (
+    None
+):
+    event = normalize_notification(
+        {
+            "method": "session/update",
+            "params": {
+                "sessionId": "session-1",
+                "turnId": "turn-1",
+                "update": {
+                    "sessionUpdate": "agent_thought_chunk",
+                    "content": "thinking hard",
+                },
+            },
+        }
+    )
+
+    assert isinstance(event, ACPProgressEvent)
+    assert event.message == "thinking hard"
+
+
 def test_normalize_notification_maps_session_idle_to_terminal_event() -> None:
     event = normalize_notification(
         {

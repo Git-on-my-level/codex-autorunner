@@ -29,6 +29,32 @@ def _extract_text(payload: Mapping[str, Any], *keys: str) -> Optional[str]:
     return None
 
 
+def _extract_text_content(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, Mapping):
+        text = _extract_text(value, "text", "message")
+        if text:
+            return text
+        return _extract_text_content(value.get("content"))
+    if isinstance(value, list):
+        text_parts: list[str] = []
+        for item in value:
+            if isinstance(item, str) and item:
+                text_parts.append(item)
+                continue
+            if not isinstance(item, Mapping):
+                continue
+            item_type = _normalize_optional_text(item.get("type"))
+            if item_type and item_type not in {"text", "output_text", "message"}:
+                continue
+            part_text = _extract_text_content(item)
+            if part_text:
+                text_parts.append(part_text)
+        return "".join(text_parts)
+    return ""
+
+
 def _session_update_kind(payload: Mapping[str, Any]) -> Optional[str]:
     value = payload.get("sessionUpdate")
     if value is None:
@@ -227,8 +253,9 @@ def normalize_notification(message: Mapping[str, Any]) -> ACPEvent:
     if method == "session/update":
         update = _coerce_mapping(payload.get("update"))
         update_kind = _session_update_kind(update) or ""
-        content = _coerce_mapping(update.get("content"))
-        text = _extract_text(content, "text") or ""
+        text = _extract_text_content(update.get("content")) or ""
+        if not text:
+            text = _extract_text(update, "message") or ""
         if update_kind == "agent_message_chunk":
             return ACPOutputDeltaEvent(
                 kind="output_delta",

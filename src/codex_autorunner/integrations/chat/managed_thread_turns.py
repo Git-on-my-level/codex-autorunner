@@ -103,6 +103,52 @@ _DIRECT_RUN_EVENT_TYPES = (
 )
 
 
+def _runtime_raw_event_message(raw_event: Any) -> dict[str, Any]:
+    if not isinstance(raw_event, dict):
+        return {}
+    message = raw_event.get("message")
+    if isinstance(message, dict):
+        return message
+    return raw_event
+
+
+def _runtime_raw_event_method(raw_event: Any) -> str:
+    message = _runtime_raw_event_message(raw_event)
+    return str(message.get("method") or "").strip()
+
+
+def _runtime_raw_event_session_update(raw_event: Any) -> dict[str, Any]:
+    message = _runtime_raw_event_message(raw_event)
+    params = message.get("params")
+    if not isinstance(params, dict):
+        return {}
+    update = params.get("update")
+    if isinstance(update, dict):
+        return update
+    return {}
+
+
+def _runtime_raw_event_content_summary(raw_event: Any) -> dict[str, Any]:
+    update = _runtime_raw_event_session_update(raw_event)
+    content = update.get("content")
+    part_types: list[str] = []
+    if isinstance(content, list):
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            item_type = str(item.get("type") or "").strip()
+            if item_type:
+                part_types.append(item_type)
+    return {
+        "session_update_kind": str(
+            update.get("sessionUpdate") or update.get("session_update") or ""
+        ).strip(),
+        "content_kind": type(content).__name__ if content is not None else "missing",
+        "content_part_count": len(content) if isinstance(content, list) else None,
+        "content_part_types": tuple(part_types),
+    }
+
+
 @dataclass(frozen=True)
 class ManagedThreadErrorMessages:
     public_execution_error: str
@@ -1159,6 +1205,8 @@ async def finalize_managed_thread_execution(
         async def _pump_runtime_events() -> None:
             raw_events_received = 0
             run_events_dispatched = 0
+            empty_session_update_events = 0
+            empty_session_update_kinds: dict[str, int] = {}
             try:
                 async for raw_event in harness_progress_event_stream(
                     started.harness,
@@ -1171,6 +1219,35 @@ async def finalize_managed_thread_execution(
                         raw_event,
                         event_state,
                     )
+                    raw_method = _runtime_raw_event_method(raw_event)
+                    if not run_events and raw_method == "session/update":
+                        content_summary = _runtime_raw_event_content_summary(raw_event)
+                        summary_kind = str(
+                            content_summary.get("session_update_kind") or "unknown"
+                        ).strip() or "unknown"
+                        if summary_kind in {"agent_message_chunk", "agent_thought_chunk"}:
+                            empty_session_update_events += 1
+                            empty_session_update_kinds[summary_kind] = (
+                                empty_session_update_kinds.get(summary_kind, 0) + 1
+                            )
+                            log_event(
+                                logger,
+                                logging.WARNING,
+                                "chat.managed_thread.session_update_unparsed",
+                                **_managed_thread_trace_fields(
+                                    managed_thread_id=managed_thread_id,
+                                    managed_turn_id=managed_turn_id,
+                                    backend_thread_id=stream_backend_thread_id or None,
+                                    backend_turn_id=stream_backend_turn_id or None,
+                                    surface=surface,
+                                ),
+                                raw_event=raw_event,
+                                event_state_completed=event_state.completed_seen,
+                                event_state_best_assistant_chars=len(
+                                    event_state.best_assistant_text()
+                                ),
+                                content_summary=content_summary,
+                            )
                     timeline_events.extend(run_events)
                     _persist_live_timeline_events(run_events)
                     if on_progress_event is None:
@@ -1222,6 +1299,8 @@ async def finalize_managed_thread_execution(
                     ),
                     raw_events_received=raw_events_received,
                     run_events_dispatched=run_events_dispatched,
+                    empty_session_update_events=empty_session_update_events,
+                    empty_session_update_kinds=empty_session_update_kinds,
                 )
 
         stream_task = asyncio.create_task(_pump_runtime_events())

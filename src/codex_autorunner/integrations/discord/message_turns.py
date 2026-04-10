@@ -1034,6 +1034,19 @@ async def _deliver_discord_turn_result(
         preview_message_id = None
         send_final_message = True
 
+    log_event(
+        dispatch.service._logger,
+        logging.INFO,
+        "discord.turn.delivery_started",
+        channel_id=dispatch.channel_id,
+        session_key=dispatch.session_key,
+        preview_message_id=preview_message_id,
+        send_final_message=send_final_message,
+        response_chars=len(response_text or ""),
+        workspace_root=str(workspace_root),
+        agent=dispatch.agent,
+    )
+
     if isinstance(preview_message_id, str) and preview_message_id:
         await dispatch.service._delete_channel_message_safe(
             channel_id=dispatch.channel_id,
@@ -1060,6 +1073,19 @@ async def _deliver_discord_turn_result(
             workspace_root=workspace_root,
             channel_id=dispatch.channel_id,
         )
+    log_event(
+        dispatch.service._logger,
+        logging.INFO,
+        "discord.turn.delivery_finished",
+        channel_id=dispatch.channel_id,
+        session_key=dispatch.session_key,
+        preview_message_deleted=isinstance(preview_message_id, str)
+        and bool(preview_message_id),
+        send_final_message=send_final_message,
+        response_chars=len(response_text or ""),
+        flushed_outbox_files=send_final_message,
+        agent=dispatch.agent,
+    )
 
 
 async def handle_message_event(
@@ -1754,6 +1780,18 @@ async def _run_discord_orchestrated_turn_for_message(
             )
 
     if submission.queued:
+        log_event(
+            service._logger,
+            logging.INFO,
+            "discord.turn.managed_thread_submission",
+            channel_id=channel_id,
+            managed_thread_id=managed_thread_id,
+            execution_id=getattr(started_execution.execution, "execution_id", None),
+            backend_turn_id=getattr(started_execution.execution, "backend_id", None),
+            queued=True,
+            progress_message_id=progress_message_id,
+            agent=logical_agent,
+        )
         await _stop_progress_heartbeat()
         tracker.set_label("queued")
         try:
@@ -1769,6 +1807,18 @@ async def _run_discord_orchestrated_turn_for_message(
         return DiscordMessageTurnResult(
             final_message="Queued (waiting for available worker...)"
         )
+    log_event(
+        service._logger,
+        logging.INFO,
+        "discord.turn.managed_thread_submission",
+        channel_id=channel_id,
+        managed_thread_id=managed_thread_id,
+        execution_id=getattr(started_execution.execution, "execution_id", None),
+        backend_turn_id=getattr(started_execution.execution, "backend_id", None),
+        queued=False,
+        progress_message_id=progress_message_id,
+        agent=logical_agent,
+    )
 
     try:
         finalized_flow = await complete_managed_thread_execution(
@@ -1805,6 +1855,20 @@ async def _run_discord_orchestrated_turn_for_message(
 
     finalized = coerce_managed_thread_finalization_result(finalized_flow.finalized)
     assert finalized is not None
+    log_event(
+        service._logger,
+        logging.INFO,
+        "discord.turn.managed_thread_finalized",
+        channel_id=channel_id,
+        managed_thread_id=managed_thread_id,
+        status=finalized.status,
+        backend_thread_id=finalized.backend_thread_id,
+        preview_message_id=progress_message_id,
+        assistant_chars=len(str(finalized.assistant_text or "")),
+        token_usage_present=isinstance(finalized.token_usage, dict),
+        elapsed_ms=max(int((time.monotonic() - tracker.started_at) * 1000), 0),
+        agent=logical_agent,
+    )
     if finalized.status != "ok":
         if finalized.status == "interrupted":
             reuse_request = _peek_discord_progress_reuse_request(

@@ -10,6 +10,39 @@ def coerce_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _extract_text_content(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        text = value.get("text")
+        if isinstance(text, str) and text:
+            return text
+        message = value.get("message")
+        if isinstance(message, str) and message:
+            return message
+        return _extract_text_content(value.get("content"))
+    if isinstance(value, list):
+        parts: list[str] = []
+        for entry in value:
+            if isinstance(entry, str) and entry:
+                parts.append(entry)
+                continue
+            if not isinstance(entry, dict):
+                continue
+            entry_type = entry.get("type")
+            if isinstance(entry_type, str) and entry_type not in (
+                "text",
+                "output_text",
+                "message",
+            ):
+                continue
+            text = _extract_text_content(entry)
+            if text:
+                parts.append(text)
+        return "".join(parts)
+    return ""
+
+
 def extract_message_properties(params: dict[str, Any]) -> dict[str, Any]:
     return coerce_dict(params.get("properties"))
 
@@ -108,12 +141,9 @@ def extract_output_delta(
 ) -> str:
     for key in ("content", "delta", "text", "output"):
         value = params.get(key)
-        if isinstance(value, str) and value:
-            return value
-        if isinstance(value, dict):
-            nested_text = value.get("text")
-            if isinstance(nested_text, str) and nested_text:
-                return nested_text
+        extracted = _extract_text_content(value)
+        if extracted:
+            return extracted
     properties = extract_message_properties(params)
     delta_raw = properties.get("delta")
     if isinstance(delta_raw, str) and delta_raw:

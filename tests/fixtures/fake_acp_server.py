@@ -249,6 +249,17 @@ class FakeACPServer:
         prompt: str,
     ) -> None:
         cancel_event = self._session_cancel_events[session_id]
+        thought_content: Any = {"type": "text", "text": "thinking"}
+        reply_content: Any = {"type": "text", "text": "fixture reply"}
+        if self._scenario == "official_content_parts":
+            thought_content = [
+                {"type": "text", "text": "thinking"},
+                {"type": "output_text", "text": " more"},
+            ]
+            reply_content = [
+                {"type": "text", "text": "fixture"},
+                {"type": "output_text", "text": " reply"},
+            ]
         self.send(
             {
                 "method": "session/update",
@@ -256,7 +267,7 @@ class FakeACPServer:
                     "sessionId": session_id,
                     "update": {
                         "sessionUpdate": "agent_thought_chunk",
-                        "content": {"type": "text", "text": "thinking"},
+                        "content": thought_content,
                     },
                 },
             }
@@ -347,7 +358,7 @@ class FakeACPServer:
                     "sessionId": session_id,
                     "update": {
                         "sessionUpdate": "agent_message_chunk",
-                        "content": {"type": "text", "text": "fixture reply"},
+                        "content": reply_content,
                     },
                 },
             }

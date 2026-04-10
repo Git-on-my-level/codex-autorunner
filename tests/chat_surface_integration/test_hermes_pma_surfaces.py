@@ -85,3 +85,50 @@ async def test_telegram_hermes_pma_uses_official_turn_delivery_flow(
     finally:
         await harness.close()
         await runtime.close()
+
+
+@pytest.mark.anyio
+async def test_discord_hermes_pma_handles_official_session_update_content_parts(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = HermesFixtureRuntime("official_content_parts")
+    patch_hermes_runtime(monkeypatch, runtime)
+    harness = DiscordSurfaceHarness(tmp_path / "discord")
+    await harness.setup(agent="hermes")
+    try:
+        rest = await harness.run_message("echo hello world")
+
+        assert any(
+            op["op"] == "send"
+            and "fixture reply" in str(op["payload"].get("content", ""))
+            for op in rest.message_ops
+        )
+        assert any(
+            op["op"] == "edit"
+            and "done" in str(op["payload"].get("content", "")).lower()
+            for op in rest.message_ops
+        )
+    finally:
+        await harness.close()
+        await runtime.close()
+
+
+@pytest.mark.anyio
+async def test_telegram_hermes_pma_handles_official_session_update_content_parts(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = HermesFixtureRuntime("official_content_parts")
+    patch_hermes_runtime(monkeypatch, runtime)
+    harness = TelegramSurfaceHarness(tmp_path / "telegram")
+    await harness.setup(agent="hermes")
+    try:
+        bot = await harness.run_message("echo hello world")
+
+        sent_texts = [str(item["text"]) for item in bot.messages]
+        assert sent_texts[0] == "Working..."
+        assert any("fixture reply" in text for text in sent_texts[1:])
+    finally:
+        await harness.close()
+        await runtime.close()
