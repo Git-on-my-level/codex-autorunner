@@ -40,7 +40,6 @@ from ...core.config import (
     load_repo_config,
     resolve_env_for_root,
 )
-from ...core.exceptions import CircuitOpenError
 from ...core.filebox import (
     delete_regular_files,
     inbox_dir,
@@ -242,6 +241,10 @@ from .interaction_dispatch import (
 )
 from .interaction_dispatch import (
     handle_normalized_interaction as _dispatch_normalized_interaction,
+)
+from .interaction_session import (
+    DiscordInteractionSession,
+    InteractionSessionKind,
 )
 from .message_turns import (
     DiscordMessageTurnResult,
@@ -4187,22 +4190,53 @@ class DiscordBotService:
                 return ("car", command_path[2])
         return command_path
 
-    def _prepared_interaction_policy(
+    def _interaction_session_kind(
         self,
-        interaction_token: str,
-    ) -> Optional[str]:
-        return self._responder.prepared_interaction_policy(interaction_token)
+        kind: InteractionKind | InteractionSessionKind | str | None,
+    ) -> InteractionSessionKind:
+        if isinstance(kind, InteractionSessionKind):
+            return kind
+        if isinstance(kind, InteractionKind):
+            return InteractionSessionKind(kind.value)
+        if isinstance(kind, str):
+            try:
+                return InteractionSessionKind(kind)
+            except ValueError:
+                return InteractionSessionKind.UNKNOWN
+        return InteractionSessionKind.UNKNOWN
 
-    def _remember_prepared_interaction_policy(
+    def _ensure_interaction_session(
         self,
-        *,
+        interaction_id: str,
         interaction_token: str,
-        policy: str,
-    ) -> None:
-        self._responder.remember_prepared_interaction_policy(
+        *,
+        kind: InteractionKind | InteractionSessionKind | str | None = None,
+    ) -> DiscordInteractionSession:
+        return self._responder.start_session(
+            interaction_id=interaction_id,
             interaction_token=interaction_token,
-            policy=policy,
+            kind=self._interaction_session_kind(kind),
         )
+
+    def _get_interaction_session(
+        self,
+        interaction_token: str,
+    ) -> Optional[DiscordInteractionSession]:
+        return self._responder.get_session(interaction_token)
+
+    def _interaction_has_initial_response(
+        self,
+        interaction_token: str,
+    ) -> bool:
+        session = self._get_interaction_session(interaction_token)
+        return bool(session and session.has_initial_response())
+
+    def _interaction_is_deferred(
+        self,
+        interaction_token: str,
+    ) -> bool:
+        session = self._get_interaction_session(interaction_token)
+        return bool(session and session.is_deferred())
 
     async def _prepare_command_interaction(
         self,
@@ -4217,6 +4251,11 @@ class DiscordBotService:
             return False
         if entry.discord_ack_timing != timing:
             return False
+        self._ensure_interaction_session(
+            interaction_id,
+            interaction_token,
+            kind=InteractionSessionKind.SLASH_COMMAND,
+        )
         if entry.discord_ack_policy == "defer_public":
             return await self._defer_public(
                 interaction_id=interaction_id,
@@ -4240,7 +4279,12 @@ class DiscordBotService:
         command_path: tuple[str, ...],
         timing: str = "dispatch",
     ) -> bool:
-        if self._prepared_interaction_policy(interaction_token) is not None:
+        session = self._ensure_interaction_session(
+            interaction_id,
+            interaction_token,
+            kind=InteractionSessionKind.SLASH_COMMAND,
+        )
+        if session.has_initial_response():
             return True
         entry = command_contract_entry_for_path(command_path)
         if entry is None or entry.discord_ack_policy in (None, "immediate"):
@@ -4371,10 +4415,16 @@ class DiscordBotService:
             except (OSError, ValueError):
                 cwd = workspace_root
 
-        deferred = await self._defer_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
+        session = self._ensure_interaction_session(
+            interaction_id,
+            interaction_token,
         )
+        deferred = session.has_initial_response()
+        if not deferred:
+            deferred = await self._defer_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+            )
         git_check = ["git", "rev-parse", "--is-inside-work-tree"]
         try:
             result = await asyncio.to_thread(
@@ -4646,39 +4696,27 @@ class DiscordBotService:
         field_label: str,
         field_value: str,
     ) -> None:
-        payload = {
-            "type": 9,
-            "data": {
-                "custom_id": custom_id[:100],
-                "title": title[:45],
-                "components": [
-                    {
-                        "type": 18,
-                        "label": field_label[:45],
-                        "component": {
-                            "type": 4,
-                            "custom_id": TICKETS_BODY_INPUT_ID,
-                            "style": 2,
-                            "value": field_value[:4000],
-                            "required": True,
-                            "max_length": 4000,
-                        },
+        await self._responder.respond_modal(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            kind=InteractionSessionKind.COMPONENT,
+            custom_id=custom_id,
+            title=title,
+            components=[
+                {
+                    "type": 18,
+                    "label": field_label[:45],
+                    "component": {
+                        "type": 4,
+                        "custom_id": TICKETS_BODY_INPUT_ID,
+                        "style": 2,
+                        "value": field_value[:4000],
+                        "required": True,
+                        "max_length": 4000,
                     },
-                ],
-            },
-        }
-        try:
-            await self._rest.create_interaction_response(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                payload=payload,
-            )
-        except (DiscordAPIError, CircuitOpenError) as exc:
-            self._logger.error(
-                "Failed to send modal response: %s (interaction_id=%s)",
-                exc,
-                interaction_id,
-            )
+                },
+            ],
+        )
 
     async def _handle_mcp(
         self,
@@ -4817,10 +4855,16 @@ class DiscordBotService:
         *,
         channel_id: str,
     ) -> None:
-        deferred = await self._defer_public(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
+        session = self._ensure_interaction_session(
+            interaction_id,
+            interaction_token,
         )
+        deferred = session.has_initial_response()
+        if not deferred:
+            deferred = await self._defer_public(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+            )
         binding = await self._store.get_binding(channel_id=channel_id)
         if binding is None:
             text = format_discord_message(
@@ -5543,7 +5587,11 @@ class DiscordBotService:
         *,
         channel_id: str,
     ) -> Optional[Path]:
-        deferred = self._prepared_interaction_policy(interaction_token) is not None
+        session = self._ensure_interaction_session(
+            interaction_id,
+            interaction_token,
+        )
+        deferred = session.is_deferred()
         binding = await self._store.get_binding(channel_id=channel_id)
         if binding is None:
             text = format_discord_message(
@@ -6211,26 +6259,17 @@ class DiscordBotService:
         interaction_id: str,
         interaction_token: str,
     ) -> bool:
-        if self._prepared_interaction_policy(interaction_token) is not None:
-            return True
-        try:
-            await self._rest.create_interaction_response(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                payload={"type": 6},
-            )
-        except (DiscordAPIError, CircuitOpenError) as exc:
-            self._logger.warning(
-                "Failed to defer component update: %s (interaction_id=%s)",
-                exc,
-                interaction_id,
-            )
-            return False
-        self._remember_prepared_interaction_policy(
-            interaction_token=interaction_token,
-            policy="defer_component_update",
+        session = self._ensure_interaction_session(
+            interaction_id,
+            interaction_token,
+            kind=InteractionSessionKind.COMPONENT,
         )
-        return True
+        if session.has_initial_response():
+            return True
+        return await self._responder.defer_component_update(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
 
     async def _send_or_respond_ephemeral(
         self,
@@ -6322,35 +6361,11 @@ class DiscordBotService:
         *,
         choices: list[dict[str, str]],
     ) -> None:
-        sanitized_choices: list[dict[str, str]] = []
-        for choice in choices[:DISCORD_SELECT_OPTION_MAX_OPTIONS]:
-            name = choice.get("name", "")
-            value = choice.get("value", "")
-            if not isinstance(name, str) or not isinstance(value, str):
-                continue
-            normalized_name = name.strip()
-            normalized_value = value.strip()
-            if not normalized_name or not normalized_value:
-                continue
-            sanitized_choices.append(
-                {
-                    "name": normalized_name[:100],
-                    "value": normalized_value[:100],
-                }
-            )
-
-        try:
-            await self._rest.create_interaction_response(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                payload={"type": 8, "data": {"choices": sanitized_choices}},
-            )
-        except (DiscordAPIError, CircuitOpenError) as exc:
-            self._logger.error(
-                "Failed to send autocomplete response: %s (interaction_id=%s)",
-                exc,
-                interaction_id,
-            )
+        await self._responder.respond_autocomplete(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            choices=choices,
+        )
 
     async def _update_component_message(
         self,
@@ -6360,51 +6375,12 @@ class DiscordBotService:
         text: str,
         components: list[dict[str, Any]],
     ) -> None:
-        max_len = max(int(self._config.max_message_length), 32)
-        content = truncate_for_discord(text, max_len=max_len)
-        prepared_policy = self._prepared_interaction_policy(interaction_token)
-        if prepared_policy == "defer_component_update":
-            updated = await self._responder.edit_original_component_message(
-                interaction_token=interaction_token,
-                text=content,
-                components=components,
-            )
-            if updated:
-                return
-        if prepared_policy is not None:
-            sent_followup = await self._responder.send_followup(
-                interaction_token=interaction_token,
-                content=content,
-                components=components,
-                ephemeral=True,
-            )
-            if sent_followup:
-                return
-        try:
-            await self._rest.create_interaction_response(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                payload={
-                    "type": 7,
-                    "data": {
-                        "content": content,
-                        "components": components,
-                    },
-                },
-            )
-        except DiscordAPIError as exc:
-            sent_followup = await self._responder.send_followup(
-                interaction_token=interaction_token,
-                content=content,
-                components=components,
-                ephemeral=True,
-            )
-            if not sent_followup:
-                self._logger.error(
-                    "Failed to update component message: %s (interaction_id=%s)",
-                    exc,
-                    interaction_id,
-                )
+        await self._responder.update_component_message(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            text=text,
+            components=components,
+        )
 
     async def _edit_original_component_message(
         self,

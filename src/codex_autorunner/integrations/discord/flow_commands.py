@@ -58,7 +58,7 @@ async def _public_interaction_deferred(
     interaction_id: str,
     interaction_token: str,
 ) -> bool:
-    if service._prepared_interaction_policy(interaction_token) is not None:
+    if service._interaction_has_initial_response(interaction_token):
         return True
     return bool(
         await service._defer_public(
@@ -819,7 +819,7 @@ async def handle_flow_runs(
     workspace_root: Path,
     options: dict[str, Any],
 ) -> None:
-    deferred = service._prepared_interaction_policy(interaction_token) is not None
+    deferred = service._interaction_has_initial_response(interaction_token)
     raw_limit = options.get("limit")
     limit = FLOW_RUNS_DEFAULT_LIMIT
     if isinstance(raw_limit, int):
@@ -901,7 +901,7 @@ async def handle_flow_issue(
         )
         return
     issue_ref = issue_ref.strip()
-    deferred = service._prepared_interaction_policy(interaction_token) is not None
+    deferred = service._interaction_has_initial_response(interaction_token)
     try:
 
         def _seed_issue() -> Any:
@@ -1775,7 +1775,7 @@ async def handle_flow_archive(
     channel_id: Optional[str] = None,
     guild_id: Optional[str] = None,
 ) -> None:
-    deferred = service._prepared_interaction_policy(interaction_token) is not None
+    deferred = service._interaction_has_initial_response(interaction_token)
     confirmed = bool(options.get("confirmed"))
     run_id_opt = options.get("run_id")
     if isinstance(run_id_opt, str) and run_id_opt.strip():

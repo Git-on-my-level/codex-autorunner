@@ -104,10 +104,16 @@ def _config(
     )
 
 
-def _pma_interaction(*, subcommand: str, user_id: str = "user-1") -> dict[str, Any]:
+def _pma_interaction(
+    *,
+    subcommand: str,
+    user_id: str = "user-1",
+    interaction_id: str = "inter-1",
+    interaction_token: str = "token-1",
+) -> dict[str, Any]:
     return {
-        "id": "inter-1",
-        "token": "token-1",
+        "id": interaction_id,
+        "token": interaction_token,
         "channel_id": "channel-1",
         "guild_id": "guild-1",
         "member": {"user": {"id": user_id}},
@@ -298,7 +304,18 @@ async def test_pma_off_after_unbound_pma_on_returns_to_unbound(tmp_path: Path) -
 
     rest = _FakeRest()
     gateway = _FakeGateway(
-        [_pma_interaction(subcommand="on"), _pma_interaction(subcommand="off")]
+        [
+            _pma_interaction(
+                subcommand="on",
+                interaction_id="inter-on",
+                interaction_token="token-on",
+            ),
+            _pma_interaction(
+                subcommand="off",
+                interaction_id="inter-off",
+                interaction_token="token-off",
+            ),
+        ]
     )
     service = DiscordBotService(
         _config(tmp_path, allow_user_ids=frozenset({"user-1"})),

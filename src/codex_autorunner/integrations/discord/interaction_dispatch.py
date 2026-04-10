@@ -86,6 +86,11 @@ async def handle_normalized_interaction(
         return
 
     if payload_data.get("type") == "component":
+        service._ensure_interaction_session(
+            interaction_id,
+            interaction_token,
+            kind=InteractionKind.COMPONENT,
+        )
         custom_id = payload_data.get("component_id")
         if not custom_id:
             service._logger.debug(
@@ -114,6 +119,11 @@ async def handle_normalized_interaction(
         return
 
     if payload_data.get("type") == "modal_submit":
+        service._ensure_interaction_session(
+            interaction_id,
+            interaction_token,
+            kind=InteractionKind.MODAL_SUBMIT,
+        )
         custom_id_raw = payload_data.get("custom_id")
         modal_values_raw = payload_data.get("values")
         custom_id = custom_id_raw if isinstance(custom_id_raw, str) else ""
@@ -133,6 +143,11 @@ async def handle_normalized_interaction(
         return
 
     if payload_data.get("type") == "autocomplete":
+        service._ensure_interaction_session(
+            interaction_id,
+            interaction_token,
+            kind=InteractionKind.AUTOCOMPLETE,
+        )
         command_raw = payload_data.get("command")
         command_path = (
             tuple(part for part in str(command_raw).split(":") if part)
@@ -197,6 +212,11 @@ async def handle_normalized_interaction(
     ingress = replace(
         ingress,
         command_path=service._normalize_discord_command_path(ingress.command_path),
+    )
+    service._ensure_interaction_session(
+        interaction_id,
+        interaction_token,
+        kind=InteractionKind.SLASH_COMMAND,
     )
     prepared = await service._prepare_command_interaction_or_abort(
         interaction_id=interaction_id,

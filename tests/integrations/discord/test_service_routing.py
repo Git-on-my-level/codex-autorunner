@@ -52,6 +52,10 @@ from codex_autorunner.integrations.discord.errors import (
     DiscordAPIError,
     DiscordPermanentError,
 )
+from codex_autorunner.integrations.discord.interaction_session import (
+    InteractionInitialResponse,
+    InteractionSessionKind,
+)
 from codex_autorunner.integrations.discord.service import (
     DiscordBotService,
     DiscordMessageTurnResult,
@@ -5325,10 +5329,12 @@ async def test_car_reset_uses_prepared_interaction_state(
         outbox_manager=_FakeOutboxManager(),
     )
 
-    service._remember_prepared_interaction_policy(
-        interaction_token="token-1",
-        policy="defer_ephemeral",
+    session = service._ensure_interaction_session(
+        "inter-1",
+        "token-1",
+        kind=InteractionSessionKind.SLASH_COMMAND,
     )
+    session.initial_response = InteractionInitialResponse.DEFER_EPHEMERAL
 
     async def _unexpected_defer(*_args: Any, **_kwargs: Any) -> bool:
         raise AssertionError("handler should use ingress-prepared interaction state")
@@ -5369,10 +5375,12 @@ async def test_car_update_status_uses_prepared_interaction_state(
         outbox_manager=_FakeOutboxManager(),
     )
 
-    service._remember_prepared_interaction_policy(
-        interaction_token="token-1",
-        policy="defer_ephemeral",
+    session = service._ensure_interaction_session(
+        "inter-1",
+        "token-1",
+        kind=InteractionSessionKind.SLASH_COMMAND,
     )
+    session.initial_response = InteractionInitialResponse.DEFER_EPHEMERAL
 
     async def _unexpected_defer(*_args: Any, **_kwargs: Any) -> bool:
         raise AssertionError("handler should use ingress-prepared interaction state")

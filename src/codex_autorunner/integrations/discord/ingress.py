@@ -113,6 +113,11 @@ class InteractionIngress:
                 accepted=False,
                 rejection_reason="normalization_failed",
             )
+        self._service._ensure_interaction_session(
+            ctx.interaction_id,
+            ctx.interaction_token,
+            kind=ctx.kind,
+        )
         ctx.timing = IngressTiming(
             interaction_created_at=ctx.timing.interaction_created_at,
             ingress_started_at=now,
@@ -327,16 +332,18 @@ class InteractionIngress:
     async def _perform_ack(self, ctx: IngressContext) -> bool:
         if ctx.command_spec is None:
             return True
+        session = self._service._ensure_interaction_session(
+            ctx.interaction_id,
+            ctx.interaction_token,
+            kind=ctx.kind,
+        )
         policy = ctx.command_spec.ack_policy
         if policy is None or policy == "immediate":
             return True
         if ctx.command_spec.ack_timing != "dispatch":
             return True
-        if (
-            self._service._prepared_interaction_policy(ctx.interaction_token)
-            is not None
-        ):
-            ctx.deferred = True
+        if session.has_initial_response():
+            ctx.deferred = session.is_deferred()
             return True
         prepared: bool = await self._service._prepare_command_interaction(
             interaction_id=ctx.interaction_id,

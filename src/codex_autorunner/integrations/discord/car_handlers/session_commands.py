@@ -43,7 +43,7 @@ async def _interaction_deferred(
     *,
     public: bool = False,
 ) -> bool:
-    if service._prepared_interaction_policy(interaction_token) is not None:
+    if service._interaction_has_initial_response(interaction_token):
         return True
     defer_fn = service._defer_public if public else service._defer_ephemeral
     return bool(

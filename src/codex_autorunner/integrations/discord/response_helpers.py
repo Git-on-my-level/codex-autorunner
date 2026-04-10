@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import logging
-from collections import OrderedDict
 from typing import Any, Optional
 
-from .errors import DiscordAPIError
-from .rendering import truncate_for_discord
+from .interaction_session import (
+    DiscordInteractionSession,
+    DiscordInteractionSessionManager,
+    InteractionSessionError,
+    InteractionSessionKind,
+)
 from .rest import DiscordRestClient
-
-DISCORD_EPHEMERAL_FLAG = 64
-PREPARED_INTERACTION_CACHE_LIMIT = 512
 
 
 class DiscordResponder:
@@ -19,98 +19,55 @@ class DiscordResponder:
         config: Any,
         logger: logging.Logger,
     ) -> None:
-        self._rest = rest
-        self._config = config
-        self._logger = logger
-        self._prepared_interaction_policies: OrderedDict[str, str] = OrderedDict()
+        self._sessions = DiscordInteractionSessionManager(
+            rest=rest,
+            config=config,
+            logger=logger,
+        )
+
+    def start_session(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+        kind: InteractionSessionKind,
+    ) -> DiscordInteractionSession:
+        return self._sessions.start_session(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            kind=kind,
+        )
+
+    def session(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+        kind: InteractionSessionKind = InteractionSessionKind.UNKNOWN,
+    ) -> DiscordInteractionSession:
+        existing = self.get_session(interaction_token)
+        if existing is not None:
+            return existing.refresh(interaction_id=interaction_id, kind=kind)
+        return self.start_session(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            kind=kind,
+        )
+
+    def get_session(
+        self,
+        interaction_token: str,
+    ) -> Optional[DiscordInteractionSession]:
+        return self._sessions.get_session(interaction_token)
 
     def prepared_interaction_policy(
         self,
         interaction_token: str,
     ) -> Optional[str]:
-        token = interaction_token.strip()
-        if not token:
+        session = self.get_session(interaction_token)
+        if session is None:
             return None
-        policy = self._prepared_interaction_policies.get(token)
-        if policy is None:
-            return None
-        self._prepared_interaction_policies.move_to_end(token)
-        return policy
-
-    def remember_prepared_interaction_policy(
-        self,
-        *,
-        interaction_token: str,
-        policy: str,
-    ) -> None:
-        token = interaction_token.strip()
-        if not token:
-            return
-        self._prepared_interaction_policies[token] = policy
-        self._prepared_interaction_policies.move_to_end(token)
-        while (
-            len(self._prepared_interaction_policies) > PREPARED_INTERACTION_CACHE_LIMIT
-        ):
-            self._prepared_interaction_policies.popitem(last=False)
-
-    async def send_followup(
-        self,
-        *,
-        interaction_token: str,
-        content: str,
-        components: Optional[list[dict[str, Any]]] = None,
-        ephemeral: bool = False,
-    ) -> bool:
-        application_id = (self._config.application_id or "").strip()
-        if not application_id:
-            return False
-        payload: dict[str, Any] = {
-            "content": content,
-        }
-        if ephemeral:
-            payload["flags"] = DISCORD_EPHEMERAL_FLAG
-        if components:
-            payload["components"] = components
-        try:
-            await self._rest.create_followup_message(
-                application_id=application_id,
-                interaction_token=interaction_token,
-                payload=payload,
-            )
-        except (
-            Exception
-        ):  # intentional: best-effort followup, any failure returns False
-            return False
-        return True
-
-    async def edit_original_component_message(
-        self,
-        *,
-        interaction_token: str,
-        text: str,
-        components: Optional[list[dict[str, Any]]] = None,
-    ) -> bool:
-        application_id = (self._config.application_id or "").strip()
-        if not application_id:
-            return False
-        max_len = max(int(self._config.max_message_length), 32)
-        payload: dict[str, Any] = {
-            "content": truncate_for_discord(text, max_len=max_len),
-            "components": components or [],
-        }
-        try:
-            await self._rest.edit_original_interaction_response(
-                application_id=application_id,
-                interaction_token=interaction_token,
-                payload=payload,
-            )
-        except DiscordAPIError as exc:
-            self._logger.error(
-                "Failed to edit original interaction response: %s",
-                exc,
-            )
-            return False
-        return True
+        return session.prepared_policy()
 
     async def respond(
         self,
@@ -120,48 +77,11 @@ class DiscordResponder:
         *,
         ephemeral: bool = False,
     ) -> None:
-        max_len = max(int(self._config.max_message_length), 32)
-        content = truncate_for_discord(text, max_len=max_len)
-        prepared_policy = self.prepared_interaction_policy(interaction_token)
-        if prepared_policy == "defer_component_update":
-            updated = await self.edit_original_component_message(
-                interaction_token=interaction_token,
-                text=content,
-                components=[],
-            )
-            if updated:
-                return
-        if prepared_policy is not None:
-            sent_followup = await self.send_followup(
-                interaction_token=interaction_token,
-                content=content,
-                ephemeral=ephemeral,
-            )
-            if sent_followup:
-                return
-        data: dict[str, Any] = {"content": content}
-        if ephemeral:
-            data["flags"] = DISCORD_EPHEMERAL_FLAG
-        try:
-            await self._rest.create_interaction_response(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                payload={"type": 4, "data": data},
-            )
-        except Exception as exc:  # intentional: primary response failed, try followup
-            sent_followup = await self.send_followup(
-                interaction_token=interaction_token,
-                content=content,
-                ephemeral=ephemeral,
-            )
-            if not sent_followup:
-                label = "ephemeral" if ephemeral else "public"
-                self._logger.error(
-                    "Failed to send %s response: %s (interaction_id=%s)",
-                    label,
-                    exc,
-                    interaction_id,
-                )
+        session = self.session(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
+        await session.send_message(text, ephemeral=ephemeral)
 
     async def defer(
         self,
@@ -170,32 +90,76 @@ class DiscordResponder:
         interaction_token: str,
         ephemeral: bool = False,
     ) -> bool:
-        if self.prepared_interaction_policy(interaction_token) is not None:
-            return True
-        payload: dict[str, Any] = {"type": 5}
+        session = self.session(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
         if ephemeral:
-            payload["data"] = {"flags": DISCORD_EPHEMERAL_FLAG}
-        try:
-            await self._rest.create_interaction_response(
+            return await session.defer_ephemeral()
+        return await session.defer_public()
+
+    async def defer_component_update(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+    ) -> bool:
+        session = self.session(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            kind=InteractionSessionKind.COMPONENT,
+        )
+        return await session.defer_component_update()
+
+    async def send_followup(
+        self,
+        *,
+        interaction_id: Optional[str] = None,
+        interaction_token: str,
+        content: str,
+        components: Optional[list[dict[str, Any]]] = None,
+        ephemeral: bool = False,
+    ) -> bool:
+        session = self.get_session(interaction_token)
+        if session is None:
+            if interaction_id is None:
+                return False
+            session = self.session(
                 interaction_id=interaction_id,
                 interaction_token=interaction_token,
-                payload=payload,
             )
-        except Exception as exc:  # intentional: primary response failed, try followup
-            label = "ephemeral" if ephemeral else "public"
-            self._logger.warning(
-                "Failed to defer %s response: %s (interaction_id=%s)",
-                label,
-                exc,
-                interaction_id,
+        try:
+            return await session.send_followup(
+                content=content,
+                components=components,
+                ephemeral=ephemeral,
             )
+        except InteractionSessionError:
             return False
-        policy = "defer_ephemeral" if ephemeral else "defer_public"
-        self.remember_prepared_interaction_policy(
-            interaction_token=interaction_token,
-            policy=policy,
-        )
-        return True
+
+    async def edit_original_component_message(
+        self,
+        *,
+        interaction_id: Optional[str] = None,
+        interaction_token: str,
+        text: str,
+        components: Optional[list[dict[str, Any]]] = None,
+    ) -> bool:
+        session = self.get_session(interaction_token)
+        if session is None:
+            if interaction_id is None:
+                return False
+            session = self.session(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+            )
+        try:
+            return await session.edit_original_message(
+                text=text,
+                components=components,
+            )
+        except InteractionSessionError:
+            return False
 
     async def send_or_respond(
         self,
@@ -206,16 +170,20 @@ class DiscordResponder:
         text: str,
         ephemeral: bool = False,
     ) -> None:
-        if deferred:
-            max_len = max(int(self._config.max_message_length), 32)
+        session = self.session(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
+        if deferred and session.has_initial_response():
             sent = await self.send_followup(
+                interaction_id=interaction_id,
                 interaction_token=interaction_token,
-                content=truncate_for_discord(text, max_len=max_len),
+                content=text,
                 ephemeral=ephemeral,
             )
             if sent:
                 return
-        await self.respond(interaction_id, interaction_token, text, ephemeral=ephemeral)
+        await session.send_message(text, ephemeral=ephemeral)
 
     async def send_or_respond_with_components(
         self,
@@ -227,23 +195,21 @@ class DiscordResponder:
         components: list[dict[str, Any]],
         ephemeral: bool = False,
     ) -> None:
-        if deferred:
-            max_len = max(int(self._config.max_message_length), 32)
+        session = self.session(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
+        if deferred and session.has_initial_response():
             sent = await self.send_followup(
+                interaction_id=interaction_id,
                 interaction_token=interaction_token,
-                content=truncate_for_discord(text, max_len=max_len),
+                content=text,
                 components=components,
                 ephemeral=ephemeral,
             )
             if sent:
                 return
-        await self.respond_with_components(
-            interaction_id,
-            interaction_token,
-            text,
-            components,
-            ephemeral=ephemeral,
-        )
+        await session.send_message(text, ephemeral=ephemeral, components=components)
 
     async def respond_with_components(
         self,
@@ -254,47 +220,58 @@ class DiscordResponder:
         *,
         ephemeral: bool = False,
     ) -> None:
-        max_len = max(int(self._config.max_message_length), 32)
-        content = truncate_for_discord(text, max_len=max_len)
-        prepared_policy = self.prepared_interaction_policy(interaction_token)
-        if prepared_policy == "defer_component_update":
-            updated = await self.edit_original_component_message(
-                interaction_token=interaction_token,
-                text=content,
-                components=components,
-            )
-            if updated:
-                return
-        if prepared_policy is not None:
-            sent_followup = await self.send_followup(
-                interaction_token=interaction_token,
-                content=content,
-                components=components,
-                ephemeral=ephemeral,
-            )
-            if sent_followup:
-                return
-        data: dict[str, Any] = {"content": content, "components": components}
-        if ephemeral:
-            data["flags"] = DISCORD_EPHEMERAL_FLAG
-        try:
-            await self._rest.create_interaction_response(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                payload={"type": 4, "data": data},
-            )
-        except DiscordAPIError as exc:
-            sent_followup = await self.send_followup(
-                interaction_token=interaction_token,
-                content=content,
-                components=components,
-                ephemeral=ephemeral,
-            )
-            if not sent_followup:
-                label = "ephemeral" if ephemeral else "public"
-                self._logger.error(
-                    "Failed to send %s component response: %s (interaction_id=%s)",
-                    label,
-                    exc,
-                    interaction_id,
-                )
+        session = self.session(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
+        await session.send_message(text, ephemeral=ephemeral, components=components)
+
+    async def update_component_message(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+        text: str,
+        components: list[dict[str, Any]],
+    ) -> None:
+        session = self.session(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            kind=InteractionSessionKind.COMPONENT,
+        )
+        await session.update_component_message(text=text, components=components)
+
+    async def respond_autocomplete(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+        choices: list[dict[str, str]],
+    ) -> None:
+        session = self.session(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            kind=InteractionSessionKind.AUTOCOMPLETE,
+        )
+        await session.respond_autocomplete(choices=choices)
+
+    async def respond_modal(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+        kind: InteractionSessionKind,
+        custom_id: str,
+        title: str,
+        components: list[dict[str, Any]],
+    ) -> None:
+        session = self.session(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            kind=kind,
+        )
+        await session.respond_modal(
+            custom_id=custom_id,
+            title=title,
+            components=components,
+        )

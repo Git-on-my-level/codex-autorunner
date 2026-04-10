@@ -61,6 +61,7 @@ class _FakeService:
         self.prepare_command_calls: list[dict[str, Any]] = []
         self.log_collaboration_calls: list[dict[str, Any]] = []
         self.normalize_path_calls: list[tuple[str, ...]] = []
+        self.sessions: dict[str, _FakeSession] = {}
 
     def _evaluate_interaction_collaboration_policy(
         self,
@@ -102,8 +103,22 @@ class _FakeService:
             }
         )
 
-    def _prepared_interaction_policy(self, token: str) -> Optional[str]:
-        return self._prepared_policy
+    def _ensure_interaction_session(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        kind: Any = None,
+    ) -> "_FakeSession":
+        session = self.sessions.get(interaction_token)
+        if session is None:
+            session = _FakeSession(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                prepared_policy=self._prepared_policy,
+            )
+            self.sessions[interaction_token] = session
+        return session
 
     async def _prepare_command_interaction(
         self,
@@ -159,6 +174,25 @@ def _slash_command_payload(
             ],
         },
     }
+
+
+class _FakeSession:
+    def __init__(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+        prepared_policy: Optional[str] = None,
+    ) -> None:
+        self.interaction_id = interaction_id
+        self.interaction_token = interaction_token
+        self._prepared_policy = prepared_policy
+
+    def has_initial_response(self) -> bool:
+        return self._prepared_policy is not None
+
+    def is_deferred(self) -> bool:
+        return self._prepared_policy is not None
 
 
 def _component_payload(
