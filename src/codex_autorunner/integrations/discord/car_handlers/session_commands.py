@@ -62,16 +62,38 @@ def _newt_branch_name(channel_id: str, workspace_root: Path) -> str:
     return f"thread-{safe_channel_id}-{branch_suffix}"
 
 
-def _build_newt_reject_components() -> list[dict[str, Any]]:
+def _newt_workspace_token(workspace_root: Path) -> str:
+    return hashlib.sha256(str(workspace_root).encode("utf-8")).hexdigest()[:12]
+
+
+def _newt_component_custom_id(prefix: str, workspace_root: Path) -> str:
+    return f"{prefix}:{_newt_workspace_token(workspace_root)}"
+
+
+def _parse_newt_component_custom_id(custom_id: str, prefix: str) -> Optional[str]:
+    if custom_id == prefix:
+        return ""
+    if not custom_id.startswith(f"{prefix}:"):
+        return None
+    token = custom_id.split(":", 1)[1].strip()
+    return token or None
+
+
+def _build_newt_reject_components(workspace_root: Path) -> list[dict[str, Any]]:
     return [
         build_action_row(
             [
                 build_button(
                     "Hard reset",
-                    NEWT_HARD_RESET_CUSTOM_ID,
+                    _newt_component_custom_id(
+                        NEWT_HARD_RESET_CUSTOM_ID, workspace_root
+                    ),
                     style=DISCORD_BUTTON_STYLE_DANGER,
                 ),
-                build_button("Cancel", NEWT_CANCEL_CUSTOM_ID),
+                build_button(
+                    "Cancel",
+                    _newt_component_custom_id(NEWT_CANCEL_CUSTOM_ID, workspace_root),
+                ),
             ]
         )
     ]
@@ -498,7 +520,7 @@ async def handle_car_newt(
                 deferred=deferred,
                 text=_format_newt_reject_message(reasons),
                 component_response=False,
-                components=_build_newt_reject_components(),
+                components=_build_newt_reject_components(workspace_root),
             )
             return
         text = format_discord_message(
@@ -534,6 +556,7 @@ async def handle_car_newt_hard_reset(
     interaction_token: str,
     *,
     channel_id: str,
+    expected_workspace_token: Optional[str],
 ) -> None:
     from ..service import log_event, reset_branch_from_origin_main
 
@@ -585,6 +608,24 @@ async def handle_car_newt_hard_reset(
             deferred=deferred,
             text=format_discord_message(
                 "Binding is invalid. Run `/car bind path:<workspace>`."
+            ),
+            component_response=True,
+            components=[],
+        )
+        return
+    current_workspace_token = _newt_workspace_token(workspace_root)
+    if (
+        not expected_workspace_token
+        or expected_workspace_token != current_workspace_token
+    ):
+        await _send_newt_response(
+            service,
+            interaction_id,
+            interaction_token,
+            deferred=deferred,
+            text=format_discord_message(
+                "This `/car newt` action no longer matches the channel's current "
+                "workspace binding. Run `/car newt` again from the current workspace."
             ),
             component_response=True,
             components=[],
@@ -694,7 +735,10 @@ async def handle_car_newt_cancel(
     service: Any,
     interaction_id: str,
     interaction_token: str,
+    *,
+    expected_workspace_token: Optional[str] = None,
 ) -> None:
+    _ = expected_workspace_token
     deferred = await service._defer_component_update(
         interaction_id=interaction_id,
         interaction_token=interaction_token,

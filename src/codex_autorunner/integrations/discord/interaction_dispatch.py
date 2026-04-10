@@ -10,6 +10,7 @@ from ...integrations.chat.command_ingress import canonicalize_command_ingress
 from .car_handlers.session_commands import (
     NEWT_CANCEL_CUSTOM_ID,
     NEWT_HARD_RESET_CUSTOM_ID,
+    _parse_newt_component_custom_id,
 )
 from .errors import DiscordTransientError
 from .ingress import CommandSpec, IngressContext, IngressTiming, InteractionKind
@@ -458,18 +459,24 @@ async def handle_component_interaction(
             )
             return
 
-        if custom_id == NEWT_HARD_RESET_CUSTOM_ID:
+        hard_reset_token = _parse_newt_component_custom_id(
+            custom_id, NEWT_HARD_RESET_CUSTOM_ID
+        )
+        if hard_reset_token is not None:
             await service._handle_car_newt_hard_reset(
                 interaction_id,
                 interaction_token,
                 channel_id=channel_id,
+                expected_workspace_token=hard_reset_token,
             )
             return
 
-        if custom_id == NEWT_CANCEL_CUSTOM_ID:
+        cancel_token = _parse_newt_component_custom_id(custom_id, NEWT_CANCEL_CUSTOM_ID)
+        if cancel_token is not None:
             await service._handle_car_newt_cancel(
                 interaction_id,
                 interaction_token,
+                expected_workspace_token=cancel_token,
             )
             return
 

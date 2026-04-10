@@ -6699,14 +6699,17 @@ async def test_car_newt_dirty_worktree_shows_hard_reset_prompt(
         assert "changed.txt" in payload["content"]
         assert ".tmp/" in payload["content"]
         buttons = payload["components"][0]["components"]
+        expected_token = discord_session_commands_module._newt_workspace_token(
+            workspace.resolve()
+        )
         assert [button["label"] for button in buttons] == ["Hard reset", "Cancel"]
         assert (
             buttons[0]["custom_id"]
-            == discord_session_commands_module.NEWT_HARD_RESET_CUSTOM_ID
+            == f"{discord_session_commands_module.NEWT_HARD_RESET_CUSTOM_ID}:{expected_token}"
         )
         assert (
             buttons[1]["custom_id"]
-            == discord_session_commands_module.NEWT_CANCEL_CUSTOM_ID
+            == f"{discord_session_commands_module.NEWT_CANCEL_CUSTOM_ID}:{expected_token}"
         )
     finally:
         await store.close()
@@ -6729,11 +6732,14 @@ async def test_car_newt_hard_reset_button_discards_changes_and_retries(
     )
 
     rest = _FakeRest()
+    workspace_token = discord_session_commands_module._newt_workspace_token(
+        workspace.resolve()
+    )
     gateway = _FakeGateway(
         [
             _interaction(name="newt", options=[]),
             _component_interaction(
-                custom_id=discord_session_commands_module.NEWT_HARD_RESET_CUSTOM_ID
+                custom_id=f"{discord_session_commands_module.NEWT_HARD_RESET_CUSTOM_ID}:{workspace_token}"
             ),
         ]
     )
@@ -6818,11 +6824,14 @@ async def test_car_newt_hard_reset_reports_discard_when_retry_reset_fails(
     )
 
     rest = _FakeRest()
+    workspace_token = discord_session_commands_module._newt_workspace_token(
+        workspace.resolve()
+    )
     gateway = _FakeGateway(
         [
             _interaction(name="newt", options=[]),
             _component_interaction(
-                custom_id=discord_session_commands_module.NEWT_HARD_RESET_CUSTOM_ID
+                custom_id=f"{discord_session_commands_module.NEWT_HARD_RESET_CUSTOM_ID}:{workspace_token}"
             ),
         ]
     )
@@ -6898,11 +6907,14 @@ async def test_car_newt_hard_reset_reports_when_tracked_discard_step_fails(
     )
 
     rest = _FakeRest()
+    workspace_token = discord_session_commands_module._newt_workspace_token(
+        workspace.resolve()
+    )
     gateway = _FakeGateway(
         [
             _interaction(name="newt", options=[]),
             _component_interaction(
-                custom_id=discord_session_commands_module.NEWT_HARD_RESET_CUSTOM_ID
+                custom_id=f"{discord_session_commands_module.NEWT_HARD_RESET_CUSTOM_ID}:{workspace_token}"
             ),
         ]
     )
@@ -6969,11 +6981,14 @@ async def test_car_newt_hard_reset_reports_when_untracked_cleanup_fails(
     )
 
     rest = _FakeRest()
+    workspace_token = discord_session_commands_module._newt_workspace_token(
+        workspace.resolve()
+    )
     gateway = _FakeGateway(
         [
             _interaction(name="newt", options=[]),
             _component_interaction(
-                custom_id=discord_session_commands_module.NEWT_HARD_RESET_CUSTOM_ID
+                custom_id=f"{discord_session_commands_module.NEWT_HARD_RESET_CUSTOM_ID}:{workspace_token}"
             ),
         ]
     )
@@ -7024,6 +7039,89 @@ async def test_car_newt_hard_reset_reports_when_untracked_cleanup_fails(
         assert "some untracked paths could not be removed" in content
         assert "simulated failure" in content
         assert edited_payload["components"] == []
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_newt_hard_reset_rejects_stale_workspace_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace-a"
+    workspace.mkdir()
+    rebound_workspace = tmp_path / "workspace-b"
+    rebound_workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+    stale_token = discord_session_commands_module._newt_workspace_token(
+        workspace.resolve()
+    )
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(rebound_workspace),
+        repo_id="repo-2",
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _component_interaction(
+                custom_id=f"{discord_session_commands_module.NEWT_HARD_RESET_CUSTOM_ID}:{stale_token}"
+            ),
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    branch_calls: list[dict[str, Any]] = []
+    reset_calls: list[Path] = []
+    clean_calls: list[Path] = []
+
+    def _reset_branch(repo_root: Path, branch_name: str) -> str:
+        branch_calls.append({"repo_root": repo_root, "branch_name": branch_name})
+        return "main"
+
+    monkeypatch.setattr(
+        discord_service_module, "reset_branch_from_origin_main", _reset_branch
+    )
+    monkeypatch.setattr(
+        discord_session_commands_module,
+        "reset_worktree_to_head",
+        lambda repo_root: reset_calls.append(repo_root),
+    )
+    monkeypatch.setattr(
+        discord_session_commands_module,
+        "clean_untracked_worktree",
+        lambda repo_root: clean_calls.append(repo_root),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 6
+        assert len(rest.edited_original_interaction_responses) == 1
+        edited_payload = rest.edited_original_interaction_responses[0]["payload"]
+        assert "no longer matches the channel's current workspace binding" in (
+            edited_payload["content"].lower()
+        )
+        assert edited_payload["components"] == []
+        assert branch_calls == []
+        assert reset_calls == []
+        assert clean_calls == []
     finally:
         await store.close()
 

@@ -4948,6 +4948,7 @@ class DiscordBotService:
         interaction_token: str,
         *,
         channel_id: str,
+        expected_workspace_token: str | None,
     ) -> None:
         from .car_handlers.session_commands import handle_car_newt_hard_reset
 
@@ -4956,12 +4957,15 @@ class DiscordBotService:
             interaction_id,
             interaction_token,
             channel_id=channel_id,
+            expected_workspace_token=expected_workspace_token,
         )
 
     async def _handle_car_newt_cancel(
         self,
         interaction_id: str,
         interaction_token: str,
+        *,
+        expected_workspace_token: str | None = None,
     ) -> None:
         from .car_handlers.session_commands import handle_car_newt_cancel
 
@@ -4969,6 +4973,7 @@ class DiscordBotService:
             self,
             interaction_id,
             interaction_token,
+            expected_workspace_token=expected_workspace_token,
         )
 
     async def _handle_car_resume(
