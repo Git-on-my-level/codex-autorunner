@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 
 _REPO_ENRICH_CACHE_TTL_SECONDS = 45.0
 _REPO_RUNTIME_PROJECTION_NAMESPACE = "repo_runtime_v1"
+_REPO_RUNTIME_PROJECTION_MAX_AGE_SECONDS = 300.0
 
 
 @dataclass(frozen=True)
@@ -237,6 +238,7 @@ class HubRepoEnricher:
                 cached_payload = projection_store.get_cache(
                     cache_key,
                     fingerprint,
+                    max_age_seconds=_REPO_RUNTIME_PROJECTION_MAX_AGE_SECONDS,
                     namespace=_REPO_RUNTIME_PROJECTION_NAMESPACE,
                 )
             except Exception:

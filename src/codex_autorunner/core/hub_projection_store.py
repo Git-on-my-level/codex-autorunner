@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -17,6 +18,23 @@ _CACHE_TABLE = "projection_cache"
 
 def _stable_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def _current_utc_ts() -> float:
+    return datetime.now(timezone.utc).timestamp()
+
+
+def _parse_iso_ts(value: Any) -> Optional[float]:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    normalized = text[:-1] + "+00:00" if text.endswith("Z") else text
+    try:
+        return datetime.fromisoformat(normalized).timestamp()
+    except ValueError:
+        return None
 
 
 def path_stat_fingerprint(path: Path) -> tuple[bool, Optional[int], Optional[int]]:
@@ -59,6 +77,7 @@ class HubProjectionStore:
         cache_key: str,
         fingerprint: Any,
         *,
+        max_age_seconds: Optional[float] = None,
         namespace: str = "default",
     ) -> Any | None:
         fingerprint_text = _stable_json(fingerprint)
@@ -67,7 +86,7 @@ class HubProjectionStore:
                 self._ensure_schema(conn)
                 row = conn.execute(
                     f"""
-                    SELECT fingerprint, payload
+                    SELECT fingerprint, payload, updated_at
                       FROM {_CACHE_TABLE}
                      WHERE namespace = ? AND cache_key = ?
                     """,
@@ -83,6 +102,12 @@ class HubProjectionStore:
             return None
         if row is None or str(row["fingerprint"]) != fingerprint_text:
             return None
+        if max_age_seconds is not None:
+            updated_at_ts = _parse_iso_ts(row["updated_at"])
+            if updated_at_ts is None:
+                return None
+            if (_current_utc_ts() - updated_at_ts) > max(0.0, float(max_age_seconds)):
+                return None
         try:
             return json.loads(str(row["payload"]))
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
@@ -154,8 +179,20 @@ class HubProjectionStore:
                 exc,
             )
 
-    def get(self, *, namespace: str, key: str, fingerprint: Any) -> Any | None:
-        return self.get_cache(key, fingerprint, namespace=namespace)
+    def get(
+        self,
+        *,
+        namespace: str,
+        key: str,
+        fingerprint: Any,
+        max_age_seconds: Optional[float] = None,
+    ) -> Any | None:
+        return self.get_cache(
+            key,
+            fingerprint,
+            namespace=namespace,
+            max_age_seconds=max_age_seconds,
+        )
 
     def put(
         self,

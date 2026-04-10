@@ -32,6 +32,7 @@ if TYPE_CHECKING:
 REPO_LISTING_SECTIONS = frozenset({"repos", "agent_workspaces", "freshness"})
 _REPO_LISTING_RESPONSE_CACHE_TTL_SECONDS = 20.0
 _HUB_LISTING_PROJECTION_NAMESPACE = "hub_listing_v1"
+_HUB_LISTING_PROJECTION_MAX_AGE_SECONDS = 60.0
 
 
 @dataclass(frozen=True)
@@ -257,6 +258,47 @@ class HubRepoListingService:
             agent_workspaces = list(self._context.supervisor.list_agent_workspaces())
         return snapshots, agent_workspaces
 
+    def _force_list_repos(self) -> list[Any]:
+        try:
+            return list(self._context.supervisor.list_repos(use_cache=False))
+        except TypeError:
+            return list(self._context.supervisor.list_repos())
+
+    def _force_list_agent_workspaces(self) -> list[Any]:
+        try:
+            return list(self._context.supervisor.list_agent_workspaces(use_cache=False))
+        except TypeError:
+            return list(self._context.supervisor.list_agent_workspaces())
+
+    async def _load_topology_snapshots(
+        self,
+        *,
+        needs_repos: bool,
+        needs_agent_workspaces: bool,
+        force_refresh: bool,
+    ) -> tuple[list[Any], list[Any]]:
+        if force_refresh:
+            if needs_repos:
+                snapshots = await asyncio.to_thread(self._force_list_repos)
+                supervisor_state = getattr(self._context.supervisor, "state", None)
+                agent_workspaces = list(
+                    getattr(supervisor_state, "agent_workspaces", []) or []
+                )
+                if needs_agent_workspaces and not agent_workspaces:
+                    agent_workspaces = await asyncio.to_thread(
+                        self._force_list_agent_workspaces
+                    )
+                return list(snapshots), list(agent_workspaces)
+            if needs_agent_workspaces:
+                agent_workspaces = await asyncio.to_thread(
+                    self._force_list_agent_workspaces
+                )
+                return [], list(agent_workspaces)
+        return self._current_topology_snapshots(
+            needs_repos=needs_repos,
+            needs_agent_workspaces=needs_agent_workspaces,
+        )
+
     def _schedule_response_refresh(
         self,
         *,
@@ -270,10 +312,36 @@ class HubRepoListingService:
                 return
 
             async def _refresh() -> None:
-                payload = await self._build_listing_payload(sections=requested)
+                needs_repos = bool(requested & {"repos", "freshness"})
+                needs_agent_workspaces = bool(
+                    requested & {"agent_workspaces", "freshness"}
+                )
+                snapshots, agent_workspaces = await self._load_topology_snapshots(
+                    needs_repos=needs_repos,
+                    needs_agent_workspaces=needs_agent_workspaces,
+                    force_refresh=True,
+                )
+                stale_threshold_seconds = resolve_stale_threshold_seconds(
+                    getattr(
+                        self._context.config.pma,
+                        "freshness_stale_threshold_seconds",
+                        None,
+                    )
+                )
+                refreshed_fingerprint = self._listing_fingerprint(
+                    requested=requested,
+                    stale_threshold_seconds=stale_threshold_seconds,
+                    repos=snapshots,
+                    agent_workspaces=agent_workspaces,
+                )
+                payload = await self._build_listing_payload(
+                    sections=requested,
+                    snapshots=snapshots,
+                    agent_workspaces=agent_workspaces,
+                )
                 self._store_response_cache(
                     cache_key=cache_key,
-                    fingerprint=fingerprint,
+                    fingerprint=refreshed_fingerprint,
                     payload=payload,
                 )
                 projection_store = self._projection_store()
@@ -281,7 +349,7 @@ class HubRepoListingService:
                     try:
                         projection_store.set_cache(
                             f"hub_listing:{','.join(cache_key)}",
-                            fingerprint,
+                            refreshed_fingerprint,
                             payload,
                             namespace=_HUB_LISTING_PROJECTION_NAMESPACE,
                         )
@@ -416,9 +484,10 @@ class HubRepoListingService:
         durable_cache_key = f"hub_listing:{','.join(cache_key)}"
         needs_repos = bool(requested & {"repos", "freshness"})
         needs_agent_workspaces = bool(requested & {"agent_workspaces", "freshness"})
-        snapshots, agent_workspaces = self._current_topology_snapshots(
+        snapshots, agent_workspaces = await self._load_topology_snapshots(
             needs_repos=needs_repos,
             needs_agent_workspaces=needs_agent_workspaces,
+            force_refresh=False,
         )
         supervisor_state = getattr(self._context.supervisor, "state", None)
         if (
@@ -457,12 +526,24 @@ class HubRepoListingService:
                 requested=requested,
             )
             return copy.deepcopy(cached.payload)
+        snapshots, agent_workspaces = await self._load_topology_snapshots(
+            needs_repos=needs_repos,
+            needs_agent_workspaces=needs_agent_workspaces,
+            force_refresh=True,
+        )
+        fingerprint = self._listing_fingerprint(
+            requested=requested,
+            stale_threshold_seconds=stale_threshold_seconds,
+            repos=snapshots,
+            agent_workspaces=agent_workspaces,
+        )
         projection_store = self._projection_store()
         if projection_store is not None:
             try:
                 cached = projection_store.get_cache(
                     durable_cache_key,
                     fingerprint,
+                    max_age_seconds=_HUB_LISTING_PROJECTION_MAX_AGE_SECONDS,
                     namespace=_HUB_LISTING_PROJECTION_NAMESPACE,
                 )
             except Exception:
