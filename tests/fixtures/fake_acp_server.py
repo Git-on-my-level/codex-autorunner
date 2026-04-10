@@ -40,7 +40,7 @@ class FakeACPServer:
     def send(self, payload: dict[str, Any]) -> None:
         _write_line(self._lock, payload)
 
-    def _send_result(self, request_id: Any, result: dict[str, Any]) -> None:
+    def _send_result(self, request_id: Any, result: Any) -> None:
         self.send({"id": request_id, "result": result})
 
     def _send_error(self, request_id: Any, code: int, message: str) -> None:
@@ -244,6 +244,7 @@ class FakeACPServer:
         request_id = message.get("id")
         method = message.get("method")
         params = message.get("params") or {}
+        is_official = self._scenario.startswith("official")
         if method != "initialize" and not self._initialized:
             self._send_error(request_id, -32000, "not initialized")
             return
@@ -251,11 +252,11 @@ class FakeACPServer:
             if self._scenario == "initialize_error":
                 self._send_error(request_id, -32001, "initialize failed")
                 return
-            if self._scenario == "official" and "protocolVersion" not in params:
+            if is_official and "protocolVersion" not in params:
                 self._send_error(request_id, -32602, "Invalid params")
                 return
             self._initialized = True
-            if self._scenario == "official":
+            if is_official:
                 self._send_result(
                     request_id,
                     {
@@ -303,13 +304,16 @@ class FakeACPServer:
         if method == "session/load":
             session_id = str(params.get("sessionId") or "")
             session = self._sessions.get(session_id)
+            if self._scenario == "official_missing_load_result" and session is None:
+                self._send_result(request_id, None)
+                return
             if session is None:
                 self._send_error(request_id, -32004, "session not found")
                 return
             self._send_result(request_id, {"session": session})
             return
         if method == "session/list":
-            if self._scenario == "official":
+            if is_official:
                 self._send_error(request_id, -32601, "Method not found: session/list")
                 return
             self._send_result(
@@ -356,6 +360,8 @@ class FakeACPServer:
                     },
                 }
             )
+            if self._scenario == "official_prompt_hang":
+                return
             self._send_result(request_id, {"stopReason": "end_turn"})
             return
         if method == "prompt/start":

@@ -15,6 +15,7 @@ from codex_autorunner.agents.acp import (
 from codex_autorunner.agents.acp.errors import (
     ACPProcessCrashedError,
     ACPProtocolError,
+    ACPResponseError,
 )
 
 FIXTURE_PATH = Path(__file__).resolve().parents[2] / "fixtures" / "fake_acp_server.py"
@@ -169,6 +170,46 @@ async def test_client_supports_official_acp_session_and_prompt_flow(
             "progress",
             "output_delta",
             "turn_terminal",
+        ]
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_client_rejects_official_load_session_empty_result(
+    tmp_path: Path,
+) -> None:
+    client = ACPClient(fixture_command("official_missing_load_result"), cwd=tmp_path)
+    try:
+        await client.start()
+        with pytest.raises(
+            ACPResponseError, match="session not found: missing-session"
+        ):
+            await client.load_session("missing-session")
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_client_official_prompt_stays_non_terminal_until_request_returns(
+    tmp_path: Path,
+) -> None:
+    client = ACPClient(fixture_command("official_prompt_hang"), cwd=tmp_path)
+    try:
+        created = await client.create_session(cwd=str(tmp_path))
+        handle = await client.start_prompt(created.session_id, "Reply with exactly OK.")
+        for _ in range(20):
+            if len(handle.snapshot_events()) >= 3:
+                break
+            await asyncio.sleep(0.01)
+
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(handle.wait(), timeout=0.1)
+
+        assert [event.kind for event in handle.snapshot_events()] == [
+            "turn_started",
+            "progress",
+            "output_delta",
         ]
     finally:
         await client.close()
