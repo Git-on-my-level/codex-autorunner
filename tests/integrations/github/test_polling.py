@@ -1006,6 +1006,7 @@ def test_process_due_watches_reacts_then_wakes_thread_and_notifies_bound_chat(
                             "body": "Please cover the inline review wakeup path too.",
                             "author_login": "reviewer",
                             "author_type": "User",
+                            "html_url": "https://github.com/acme/widgets/pull/17#discussion_r2844",
                             "path": "src/codex_autorunner/integrations/github/polling.py",
                             "line": 196,
                             "updated_at": "2026-03-30T00:04:00Z",
@@ -1122,6 +1123,7 @@ def test_process_due_watches_reacts_then_wakes_thread_and_notifies_bound_chat(
         and "taking a look" in str(record.payload_json.get("content", "")).lower()
         and "inline review wakeup path"
         in str(record.payload_json.get("content", "")).lower()
+        and "discussion_r2844" in str(record.payload_json.get("content", ""))
         for record in outbox
     )
 
@@ -1214,6 +1216,7 @@ def test_process_due_watches_keeps_distinct_bound_notices_for_multiple_review_co
                             "body": "Please cover the inline review wakeup path too.",
                             "author_login": "reviewer",
                             "author_type": "User",
+                            "html_url": "https://github.com/acme/widgets/pull/17#discussion_r2844",
                             "path": "src/codex_autorunner/integrations/github/polling.py",
                             "line": 196,
                             "updated_at": "2026-03-30T00:04:00Z",
@@ -1223,6 +1226,7 @@ def test_process_due_watches_keeps_distinct_bound_notices_for_multiple_review_co
                             "body": "Also verify the bound notification does not dedupe away later comments.",
                             "author_login": "reviewer",
                             "author_type": "User",
+                            "html_url": "https://github.com/acme/widgets/pull/17#discussion_r2845",
                             "path": "src/codex_autorunner/core/scm_automation_service.py",
                             "line": 526,
                             "updated_at": "2026-03-30T00:04:01Z",
@@ -1327,12 +1331,17 @@ def test_process_due_watches_keeps_distinct_bound_notices_for_multiple_review_co
 
     outbox = asyncio.run(_load_outbox())
     contents = [
-        str(record.payload_json.get("content", "")).lower()
+        str(record.payload_json.get("content", ""))
         for record in outbox
         if record.channel_id == "repo-discord"
     ]
     assert len(contents) == 2
-    assert any("inline review wakeup path" in content for content in contents)
+    normalized_contents = [content.lower() for content in contents]
+    assert any(
+        "inline review wakeup path" in content for content in normalized_contents
+    )
+    assert any("discussion_r2844" in content for content in contents)
+    assert any("discussion_r2845" in content for content in contents)
     assert any("does not dedupe away later comments" in content for content in contents)
 
 

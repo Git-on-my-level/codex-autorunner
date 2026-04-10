@@ -123,6 +123,13 @@ class TestFormatDiscordMessage:
         assert "docs" in result
         assert "https://example.com/docs" in result
 
+    def test_preserves_autolinks_without_escaping_markdown_characters(self) -> None:
+        text = "Link: <https://github.com/acme/widgets/pull/42#discussion_r2844>"
+
+        result = format_discord_message(text)
+
+        assert result == text
+
 
 class TestTruncateForDiscord:
     def test_keeps_short_text(self) -> None:
