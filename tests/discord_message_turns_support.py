@@ -386,6 +386,7 @@ async def test_orchestrated_turn_interrupt_send_hands_off_progress_message(
             self._config = _config(tmp_path)
             self._store = _Store()
             self._rest = rest
+            self._logger = logging.getLogger(__name__)
             self._spawn_task = asyncio.create_task
 
         async def _send_channel_message(
@@ -512,6 +513,7 @@ async def test_orchestrated_turn_interrupt_send_reuses_existing_progress_message
             self._config = _config(tmp_path)
             self._store = _Store()
             self._rest = rest
+            self._logger = logging.getLogger(__name__)
             self._spawn_task = asyncio.create_task
 
         async def _send_channel_message(
@@ -757,6 +759,7 @@ async def test_orchestrated_turn_interrupt_send_falls_back_when_progress_ack_edi
             self._config = _config(tmp_path)
             self._store = _Store()
             self._rest = rest
+            self._logger = logging.getLogger(__name__)
 
         async def _send_channel_message(
             self, channel_id: str, payload: dict[str, Any]
@@ -886,6 +889,7 @@ async def test_orchestrated_turn_placeholder_sent_before_runtime_begin(
             self._config = _config(tmp_path)
             self._store = _Store()
             self._rest = rest
+            self._logger = logging.getLogger(__name__)
 
         async def _send_channel_message(
             self, channel_id: str, payload: dict[str, Any]
@@ -1227,6 +1231,7 @@ async def test_orchestrated_turn_queued_updates_placeholder_skips_finalize(
             self._config = _config(tmp_path)
             self._store = _Store()
             self._rest = rest
+            self._logger = logging.getLogger(__name__)
             self._spawn_task = asyncio.create_task
 
         async def _send_channel_message(
