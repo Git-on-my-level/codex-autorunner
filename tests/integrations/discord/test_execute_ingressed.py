@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any, Optional
 from unittest.mock import AsyncMock
 
 import pytest
 
+from codex_autorunner.integrations.discord.effects import (
+    DiscordEffectDeliveryError,
+    DiscordResponseEffect,
+)
 from codex_autorunner.integrations.discord.ingress import (
     CommandSpec,
     IngressContext,
@@ -187,3 +192,36 @@ async def test_slash_command_without_command_spec_responds_error() -> None:
     service._respond_ephemeral.assert_awaited()
     call_args = service._respond_ephemeral.call_args
     assert "could not parse" in call_args[0][2].lower()
+
+
+@pytest.mark.anyio
+async def test_callback_errors_are_logged_separately_from_handler_errors() -> None:
+    service = _FakeService()
+    callback_events: list[dict[str, Any]] = []
+    original_log = service._logger.log
+
+    def capture_log(level: int, msg: str, *args: Any, **kwargs: Any) -> None:
+        try:
+            parsed = json.loads(msg)
+        except (TypeError, json.JSONDecodeError):
+            pass
+        else:
+            if parsed.get("event") == "discord.runner.callback_error":
+                callback_events.append(parsed)
+        original_log(level, msg, *args, **kwargs)
+
+    service._logger.log = capture_log  # type: ignore[assignment]
+    service._handle_car_command.side_effect = DiscordEffectDeliveryError(
+        effect=DiscordResponseEffect(text="boom", ephemeral=True),
+        interaction_id="inter-1",
+        interaction_token="token-1",
+        delivery_status="followup_failed",
+        delivery_error="callback failed",
+    )
+    ctx = _ctx(command_path=("car", "status"))
+
+    await execute_ingressed_interaction(service, ctx, {})
+
+    assert callback_events
+    assert callback_events[0]["interaction_id"] == "inter-1"
+    service._respond_ephemeral.assert_not_awaited()

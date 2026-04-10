@@ -13,7 +13,6 @@ from ...chat.compaction import build_compact_seed_prompt
 from ..errors import DiscordAPIError
 from ..rendering import (
     chunk_discord_message,
-    truncate_for_discord,
 )
 
 COMPACT_SUMMARY_PROMPT = (
@@ -77,25 +76,11 @@ async def handle_car_compact(
     from ..service import log_event
 
     async def _finish_compact_interaction(text: str) -> None:
-        if deferred:
-            updated = await service._edit_original_component_message(
-                interaction_token=interaction_token,
-                text=text,
-                components=[],
-            )
-            if updated:
-                return
-            max_len = max(int(service._config.max_message_length), 32)
-            sent = await service._send_followup_ephemeral(
-                interaction_token=interaction_token,
-                content=truncate_for_discord(text, max_len=max_len),
-            )
-            if sent:
-                return
-        await service._respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            text,
+        await service._send_or_respond_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text=text,
         )
 
     binding = await service._store.get_binding(channel_id=channel_id)

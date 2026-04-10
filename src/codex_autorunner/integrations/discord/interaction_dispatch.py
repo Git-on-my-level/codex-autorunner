@@ -7,6 +7,7 @@ from typing import Any, Optional
 
 from ...core.logging_utils import log_event
 from ...integrations.chat.command_ingress import canonicalize_command_ingress
+from .effects import DiscordEffectDeliveryError
 from .errors import DiscordTransientError
 from .ingress import CommandSpec, IngressContext, IngressTiming, InteractionKind
 from .interaction_registry import (
@@ -232,6 +233,17 @@ async def handle_normalized_interaction(
     except DiscordTransientError as exc:
         user_msg = exc.user_message or "An error occurred. Please try again later."
         await service._respond_ephemeral(interaction_id, interaction_token, user_msg)
+    except DiscordEffectDeliveryError as exc:
+        log_event(
+            service._logger,
+            logging.ERROR,
+            "discord.interaction.callback_error",
+            command=command,
+            channel_id=channel_id,
+            interaction_id=interaction_id,
+            delivery_status=exc.delivery_status,
+            exc=exc,
+        )
     except (
         Exception
     ) as exc:  # intentional: top-level normalized interaction error handler
@@ -261,6 +273,17 @@ async def handle_component_interaction(
         user_msg = exc.user_message or "An error occurred. Please try again later."
         await service._respond_ephemeral(
             ctx.interaction_id, ctx.interaction_token, user_msg
+        )
+    except DiscordEffectDeliveryError as exc:
+        log_event(
+            service._logger,
+            logging.ERROR,
+            "discord.component.callback_error",
+            custom_id=custom_id,
+            channel_id=ctx.channel_id,
+            interaction_id=ctx.interaction_id,
+            delivery_status=exc.delivery_status,
+            exc=exc,
         )
     except (
         Exception
@@ -363,6 +386,17 @@ async def execute_ingressed_interaction(
     except DiscordTransientError as exc:
         user_msg = exc.user_message or "An error occurred. Please try again later."
         await service._respond_ephemeral(interaction_id, interaction_token, user_msg)
+    except DiscordEffectDeliveryError as exc:
+        log_event(
+            service._logger,
+            logging.ERROR,
+            "discord.runner.callback_error",
+            command_path=command_path,
+            channel_id=channel_id,
+            interaction_id=interaction_id,
+            delivery_status=exc.delivery_status,
+            exc=exc,
+        )
     except Exception as exc:
         log_event(
             service._logger,

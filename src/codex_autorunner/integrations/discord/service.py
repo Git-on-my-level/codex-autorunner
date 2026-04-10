@@ -204,6 +204,20 @@ from .components import (
     build_ticket_picker,
 )
 from .config import DiscordBotConfig
+from .effects import (
+    DiscordAutocompleteEffect,
+    DiscordComponentResponseEffect,
+    DiscordComponentUpdateEffect,
+    DiscordDeferEffect,
+    DiscordEffect,
+    DiscordEffectServiceProxy,
+    DiscordEffectSink,
+    DiscordFollowupEffect,
+    DiscordHandlerResult,
+    DiscordModalEffect,
+    DiscordOriginalMessageEditEffect,
+    DiscordResponseEffect,
+)
 from .errors import DiscordAPIError
 from .flow_commands import (
     build_flow_archive_confirmation_components,
@@ -631,6 +645,7 @@ class DiscordBotService:
             record_ack=self._record_interaction_ack,
             record_delivery=self._record_interaction_delivery,
         )
+        self._effect_sink = DiscordEffectSink(self)
         self._queued_notice_messages: dict[tuple[str, str], str] = {}
         self._discord_turn_progress_reuse_requests: dict[str, Any] = {}
         self._discord_reusable_progress_messages: dict[str, Any] = {}
@@ -3428,6 +3443,9 @@ class DiscordBotService:
                     conversation_id=conversation_id,
                     fast_ack=fast_ack,
                 )
+                # Let the admitted interaction task start before the next gateway
+                # interaction is processed so deferred command ordering stays stable.
+                await asyncio.sleep(0)
             return
         if event_type == "MESSAGE_CREATE":
             # Keep MESSAGE_CREATE handling off the gateway hot path. Channel/guild
@@ -3625,8 +3643,8 @@ class DiscordBotService:
         guild_id: Optional[str],
         options: dict[str, Any],
     ) -> None:
-        await handle_bind(
-            self,
+        await self._run_effectful_handler(
+            handle_bind,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -4035,8 +4053,8 @@ class DiscordBotService:
         workspace_root: Path,
         options: dict[str, Any],
     ) -> None:
-        await handle_tickets(
-            self,
+        await self._run_effectful_handler(
+            handle_tickets,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -4306,8 +4324,8 @@ class DiscordBotService:
         focused_name: Optional[str],
         focused_value: str,
     ) -> None:
-        await dispatch_autocomplete(
-            self,
+        await self._run_effectful_handler(
+            dispatch_autocomplete,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -4403,6 +4421,71 @@ class DiscordBotService:
             delivery_error=delivery_error,
             original_response_message_id=original_response_message_id,
         )
+
+    async def _apply_discord_effect(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+        effect: DiscordEffect,
+    ) -> None:
+        await self._effect_sink.apply(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            effect=effect,
+        )
+
+    async def _apply_discord_result(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+        result: DiscordHandlerResult,
+    ) -> None:
+        await self._effect_sink.apply_result(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            result=result,
+        )
+
+    async def _run_effectful_handler(
+        self,
+        handler: Callable[..., Awaitable[object | None]],
+        interaction_id: str,
+        interaction_token: str,
+        *args: object,
+        **kwargs: object,
+    ) -> object | None:
+        if not hasattr(self, "_responder") or not hasattr(self, "_effect_sink"):
+            return await handler(
+                self,
+                *args,
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                **kwargs,
+            )
+        proxy = DiscordEffectServiceProxy(
+            self,
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
+        returned = await handler(
+            proxy,
+            *args,
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            **kwargs,
+        )
+        result = proxy.result
+        if isinstance(returned, DiscordHandlerResult):
+            result.extend(returned.effects)
+        await DiscordBotService._apply_discord_result(
+            self,
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            result=result,
+        )
+        return returned
 
     async def _register_interaction_ingress(self, ctx: IngressContext) -> bool:
         registration = await self._store.register_interaction(
@@ -4533,8 +4616,8 @@ class DiscordBotService:
     ) -> None:
         from .workspace_commands import _bind_with_path as _impl
 
-        await _impl(
-            self,
+        await self._run_effectful_handler(
+            _impl,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -4551,8 +4634,9 @@ class DiscordBotService:
         guild_id: Optional[str] = None,
         user_id: Optional[str] = None,
     ) -> None:
-        await handle_status(
+        await DiscordBotService._run_effectful_handler(
             self,
+            handle_status,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -4576,8 +4660,8 @@ class DiscordBotService:
         guild_id: Optional[str] = None,
         user_id: Optional[str] = None,
     ) -> None:
-        await handle_debug(
-            self,
+        await self._run_effectful_handler(
+            handle_debug,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -4590,7 +4674,11 @@ class DiscordBotService:
         interaction_id: str,
         interaction_token: str,
     ) -> None:
-        await handle_help(self, interaction_id, interaction_token)
+        await self._run_effectful_handler(
+            handle_help,
+            interaction_id,
+            interaction_token,
+        )
 
     async def _handle_ids(
         self,
@@ -4601,8 +4689,8 @@ class DiscordBotService:
         guild_id: Optional[str] = None,
         user_id: Optional[str] = None,
     ) -> None:
-        await handle_ids(
-            self,
+        await self._run_effectful_handler(
+            handle_ids,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -4912,26 +5000,28 @@ class DiscordBotService:
         field_label: str,
         field_value: str,
     ) -> None:
-        await self._responder.respond_modal(
+        await self._apply_discord_effect(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
-            kind=InteractionSessionKind.COMPONENT,
-            custom_id=custom_id,
-            title=title,
-            components=[
-                {
-                    "type": 18,
-                    "label": field_label[:45],
-                    "component": {
-                        "type": 4,
-                        "custom_id": TICKETS_BODY_INPUT_ID,
-                        "style": 2,
-                        "value": field_value[:4000],
-                        "required": True,
-                        "max_length": 4000,
+            effect=DiscordModalEffect(
+                kind=InteractionSessionKind.COMPONENT,
+                custom_id=custom_id,
+                title=title,
+                components=[
+                    {
+                        "type": 18,
+                        "label": field_label[:45],
+                        "component": {
+                            "type": 4,
+                            "custom_id": TICKETS_BODY_INPUT_ID,
+                            "style": 2,
+                            "value": field_value[:4000],
+                            "required": True,
+                            "max_length": 4000,
+                        },
                     },
-                },
-            ],
+                ],
+            ),
         )
 
     async def _handle_mcp(
@@ -5205,8 +5295,8 @@ class DiscordBotService:
     ) -> None:
         from .car_handlers.session_commands import handle_car_newt
 
-        await handle_car_newt(
-            self,
+        await self._run_effectful_handler(
+            handle_car_newt,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -5223,8 +5313,8 @@ class DiscordBotService:
     ) -> None:
         from .car_handlers.session_commands import handle_car_newt_hard_reset
 
-        await handle_car_newt_hard_reset(
-            self,
+        await self._run_effectful_handler(
+            handle_car_newt_hard_reset,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -5240,8 +5330,8 @@ class DiscordBotService:
     ) -> None:
         from .car_handlers.session_commands import handle_car_newt_cancel
 
-        await handle_car_newt_cancel(
-            self,
+        await self._run_effectful_handler(
+            handle_car_newt_cancel,
             interaction_id,
             interaction_token,
             expected_workspace_token=expected_workspace_token,
@@ -5257,8 +5347,8 @@ class DiscordBotService:
     ) -> None:
         from .car_handlers.session_commands import handle_car_resume
 
-        await handle_car_resume(
-            self,
+        await self._run_effectful_handler(
+            handle_car_resume,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -5276,8 +5366,8 @@ class DiscordBotService:
     ) -> None:
         from .car_handlers.system_commands import handle_car_update
 
-        await handle_car_update(
-            self,
+        await self._run_effectful_handler(
+            handle_car_update,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -5400,8 +5490,8 @@ class DiscordBotService:
     ) -> None:
         from .car_handlers.system_commands import handle_car_update_status
 
-        await handle_car_update_status(
-            self,
+        await self._run_effectful_handler(
+            handle_car_update_status,
             interaction_id=interaction_id,
             interaction_token=interaction_token,
             component_response=component_response,
@@ -5455,8 +5545,8 @@ class DiscordBotService:
     ) -> None:
         from .car_handlers.agent_commands import handle_car_agent
 
-        await handle_car_agent(
-            self,
+        await self._run_effectful_handler(
+            handle_car_agent,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -5511,8 +5601,8 @@ class DiscordBotService:
     ) -> None:
         from .car_handlers.agent_commands import handle_car_model
 
-        await handle_car_model(
-            self,
+        await self._run_effectful_handler(
+            handle_car_model,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -5894,8 +5984,8 @@ class DiscordBotService:
         guild_id: Optional[str] = None,
         update_message: bool = False,
     ) -> None:
-        await handle_flow_status(
-            self,
+        await self._run_effectful_handler(
+            handle_flow_status,
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
@@ -5913,8 +6003,8 @@ class DiscordBotService:
         workspace_root: Path,
         options: dict[str, Any],
     ) -> None:
-        await handle_flow_runs(
-            self,
+        await self._run_effectful_handler(
+            handle_flow_runs,
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
@@ -5931,8 +6021,8 @@ class DiscordBotService:
         channel_id: Optional[str] = None,
         guild_id: Optional[str] = None,
     ) -> None:
-        await handle_flow_issue(
-            self,
+        await self._run_effectful_handler(
+            handle_flow_issue,
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
@@ -5951,8 +6041,8 @@ class DiscordBotService:
         channel_id: Optional[str] = None,
         guild_id: Optional[str] = None,
     ) -> None:
-        await handle_flow_plan(
-            self,
+        await self._run_effectful_handler(
+            handle_flow_plan,
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
@@ -5970,8 +6060,8 @@ class DiscordBotService:
         options: dict[str, Any],
         deferred_public: Optional[bool] = None,
     ) -> None:
-        await handle_flow_start(
-            self,
+        await self._run_effectful_handler(
+            handle_flow_start,
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
@@ -5988,8 +6078,8 @@ class DiscordBotService:
         options: dict[str, Any],
         deferred_public: Optional[bool] = None,
     ) -> None:
-        await handle_flow_restart(
-            self,
+        await self._run_effectful_handler(
+            handle_flow_restart,
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
@@ -6005,8 +6095,8 @@ class DiscordBotService:
         workspace_root: Path,
         options: dict[str, Any],
     ) -> None:
-        await handle_flow_recover(
-            self,
+        await self._run_effectful_handler(
+            handle_flow_recover,
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
@@ -6023,8 +6113,8 @@ class DiscordBotService:
         channel_id: Optional[str] = None,
         guild_id: Optional[str] = None,
     ) -> None:
-        await handle_flow_resume(
-            self,
+        await self._run_effectful_handler(
+            handle_flow_resume,
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
@@ -6043,8 +6133,8 @@ class DiscordBotService:
         channel_id: Optional[str] = None,
         guild_id: Optional[str] = None,
     ) -> None:
-        await handle_flow_stop(
-            self,
+        await self._run_effectful_handler(
+            handle_flow_stop,
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
@@ -6063,8 +6153,8 @@ class DiscordBotService:
         channel_id: Optional[str] = None,
         guild_id: Optional[str] = None,
     ) -> None:
-        await handle_flow_archive(
-            self,
+        await self._run_effectful_handler(
+            handle_flow_archive,
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
@@ -6084,8 +6174,8 @@ class DiscordBotService:
         guild_id: Optional[str] = None,
         user_id: Optional[str] = None,
     ) -> None:
-        await handle_flow_reply(
-            self,
+        await self._run_effectful_handler(
+            handle_flow_reply,
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
@@ -6411,8 +6501,8 @@ class DiscordBotService:
         channel_id: str,
         guild_id: Optional[str],
     ) -> None:
-        await handle_pma_on(
-            self,
+        await self._run_effectful_handler(
+            handle_pma_on,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -6426,8 +6516,8 @@ class DiscordBotService:
         *,
         channel_id: str,
     ) -> None:
-        await handle_pma_off(
-            self,
+        await self._run_effectful_handler(
+            handle_pma_off,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -6440,8 +6530,8 @@ class DiscordBotService:
         *,
         channel_id: str,
     ) -> None:
-        await handle_pma_status(
-            self,
+        await self._run_effectful_handler(
+            handle_pma_status,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -6453,8 +6543,14 @@ class DiscordBotService:
         interaction_token: str,
         text: str,
     ) -> None:
-        await self._responder.respond(
-            interaction_id, interaction_token, text, ephemeral=True
+        await self._apply_discord_effect(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            effect=DiscordResponseEffect(
+                text=text,
+                ephemeral=True,
+                prefer_followup=False,
+            ),
         )
 
     async def _defer_ephemeral(
@@ -6463,11 +6559,15 @@ class DiscordBotService:
         interaction_id: str,
         interaction_token: str,
     ) -> bool:
-        return await self._responder.defer(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            ephemeral=True,
-        )
+        try:
+            await self._apply_discord_effect(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                effect=DiscordDeferEffect(mode="ephemeral"),
+            )
+        except Exception:
+            return False
+        return True
 
     async def _defer_component_update(
         self,
@@ -6482,10 +6582,15 @@ class DiscordBotService:
         )
         if session.has_initial_response():
             return True
-        return await self._responder.defer_component_update(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-        )
+        try:
+            await self._apply_discord_effect(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                effect=DiscordDeferEffect(mode="component_update"),
+            )
+        except Exception:
+            return False
+        return True
 
     async def _send_or_respond_ephemeral(
         self,
@@ -6495,12 +6600,15 @@ class DiscordBotService:
         deferred: bool,
         text: str,
     ) -> None:
-        await self._responder.send_or_respond(
+        _ = deferred
+        await self._apply_discord_effect(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
-            deferred=deferred,
-            text=text,
-            ephemeral=True,
+            effect=DiscordResponseEffect(
+                text=text,
+                ephemeral=True,
+                prefer_followup=True,
+            ),
         )
 
     async def _send_or_respond_with_components_ephemeral(
@@ -6512,13 +6620,16 @@ class DiscordBotService:
         text: str,
         components: list[dict[str, Any]],
     ) -> None:
-        await self._responder.send_or_respond_with_components(
+        _ = deferred
+        await self._apply_discord_effect(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
-            deferred=deferred,
-            text=text,
-            components=components,
-            ephemeral=True,
+            effect=DiscordResponseEffect(
+                text=text,
+                ephemeral=True,
+                components=components,
+                prefer_followup=True,
+            ),
         )
 
     async def _send_or_update_component_message(
@@ -6530,29 +6641,17 @@ class DiscordBotService:
         text: str,
         components: Optional[list[dict[str, Any]]] = None,
     ) -> None:
-        if deferred:
-            updated = await self._responder.edit_original_component_message(
-                interaction_token=interaction_token,
-                text=text,
-                components=components,
-            )
-            if updated:
-                return
-            max_len = max(int(self._config.max_message_length), 32)
-            sent = await self._responder.send_followup(
-                interaction_token=interaction_token,
-                content=truncate_for_discord(text, max_len=max_len),
-                components=components,
-                ephemeral=True,
-            )
-            if sent:
-                return
-            return
-        await self._update_component_message(
+        await self._apply_discord_effect(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
-            text=text,
-            components=components or [],
+            effect=DiscordComponentResponseEffect(
+                text=truncate_for_discord(
+                    text,
+                    max_len=max(int(self._config.max_message_length), 32),
+                ),
+                deferred=deferred,
+                components=components,
+            ),
         )
 
     async def _respond_with_components(
@@ -6562,12 +6661,15 @@ class DiscordBotService:
         text: str,
         components: list[dict[str, Any]],
     ) -> None:
-        await self._responder.respond_with_components(
-            interaction_id,
-            interaction_token,
-            text,
-            components,
-            ephemeral=True,
+        await self._apply_discord_effect(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            effect=DiscordResponseEffect(
+                text=text,
+                ephemeral=True,
+                components=components,
+                prefer_followup=False,
+            ),
         )
 
     async def _respond_autocomplete(
@@ -6577,10 +6679,10 @@ class DiscordBotService:
         *,
         choices: list[dict[str, str]],
     ) -> None:
-        await self._responder.respond_autocomplete(
+        await self._apply_discord_effect(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
-            choices=choices,
+            effect=DiscordAutocompleteEffect(choices=choices),
         )
 
     async def _update_component_message(
@@ -6591,11 +6693,10 @@ class DiscordBotService:
         text: str,
         components: list[dict[str, Any]],
     ) -> None:
-        await self._responder.update_component_message(
+        await self._apply_discord_effect(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
-            text=text,
-            components=components,
+            effect=DiscordComponentUpdateEffect(text=text, components=components),
         )
 
     async def _edit_original_component_message(
@@ -6605,11 +6706,13 @@ class DiscordBotService:
         text: str,
         components: Optional[list[dict[str, Any]]] = None,
     ) -> bool:
-        return await self._responder.edit_original_component_message(
+        session = self._responder.get_session(interaction_token)
+        await self._apply_discord_effect(
+            interaction_id=session.interaction_id if session is not None else "",
             interaction_token=interaction_token,
-            text=text,
-            components=components,
+            effect=DiscordOriginalMessageEditEffect(text=text, components=components),
         )
+        return True
 
     async def _send_followup_ephemeral(
         self,
@@ -6618,12 +6721,17 @@ class DiscordBotService:
         content: str,
         components: Optional[list[dict[str, Any]]] = None,
     ) -> bool:
-        return await self._responder.send_followup(
+        session = self._responder.get_session(interaction_token)
+        await self._apply_discord_effect(
+            interaction_id=session.interaction_id if session is not None else "",
             interaction_token=interaction_token,
-            content=content,
-            components=components,
-            ephemeral=True,
+            effect=DiscordFollowupEffect(
+                content=content,
+                ephemeral=True,
+                components=components,
+            ),
         )
+        return True
 
     async def _respond_public(
         self,
@@ -6631,8 +6739,14 @@ class DiscordBotService:
         interaction_token: str,
         text: str,
     ) -> None:
-        await self._responder.respond(
-            interaction_id, interaction_token, text, ephemeral=False
+        await self._apply_discord_effect(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            effect=DiscordResponseEffect(
+                text=text,
+                ephemeral=False,
+                prefer_followup=False,
+            ),
         )
 
     async def _defer_public(
@@ -6641,11 +6755,15 @@ class DiscordBotService:
         interaction_id: str,
         interaction_token: str,
     ) -> bool:
-        return await self._responder.defer(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            ephemeral=False,
-        )
+        try:
+            await self._apply_discord_effect(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                effect=DiscordDeferEffect(mode="public"),
+            )
+        except Exception:
+            return False
+        return True
 
     async def _send_or_respond_public(
         self,
@@ -6655,12 +6773,15 @@ class DiscordBotService:
         deferred: bool,
         text: str,
     ) -> None:
-        await self._responder.send_or_respond(
+        _ = deferred
+        await self._apply_discord_effect(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
-            deferred=deferred,
-            text=text,
-            ephemeral=False,
+            effect=DiscordResponseEffect(
+                text=text,
+                ephemeral=False,
+                prefer_followup=True,
+            ),
         )
 
     async def _send_or_respond_with_components_public(
@@ -6672,13 +6793,16 @@ class DiscordBotService:
         text: str,
         components: list[dict[str, Any]],
     ) -> None:
-        await self._responder.send_or_respond_with_components(
+        _ = deferred
+        await self._apply_discord_effect(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
-            deferred=deferred,
-            text=text,
-            components=components,
-            ephemeral=False,
+            effect=DiscordResponseEffect(
+                text=text,
+                ephemeral=False,
+                components=components,
+                prefer_followup=True,
+            ),
         )
 
     async def _respond_with_components_public(
@@ -6688,12 +6812,15 @@ class DiscordBotService:
         text: str,
         components: list[dict[str, Any]],
     ) -> None:
-        await self._responder.respond_with_components(
-            interaction_id,
-            interaction_token,
-            text,
-            components,
-            ephemeral=False,
+        await self._apply_discord_effect(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            effect=DiscordResponseEffect(
+                text=text,
+                ephemeral=False,
+                components=components,
+                prefer_followup=False,
+            ),
         )
 
     async def _send_followup_public(
@@ -6703,12 +6830,17 @@ class DiscordBotService:
         content: str,
         components: Optional[list[dict[str, Any]]] = None,
     ) -> bool:
-        return await self._responder.send_followup(
+        session = self._responder.get_session(interaction_token)
+        await self._apply_discord_effect(
+            interaction_id=session.interaction_id if session is not None else "",
             interaction_token=interaction_token,
-            content=content,
-            components=components,
-            ephemeral=False,
+            effect=DiscordFollowupEffect(
+                content=content,
+                ephemeral=False,
+                components=components,
+            ),
         )
+        return True
 
     async def _handle_component_interaction_normalized(
         self,
@@ -6751,8 +6883,8 @@ class DiscordBotService:
     ) -> None:
         from .workspace_commands import _bind_to_workspace_candidate as _impl
 
-        await _impl(
-            self,
+        await self._run_effectful_handler(
+            _impl,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -6771,8 +6903,8 @@ class DiscordBotService:
         guild_id: Optional[str],
         selected_workspace_value: str,
     ) -> None:
-        await handle_bind_selection(
-            self,
+        await self._run_effectful_handler(
+            handle_bind_selection,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -6787,8 +6919,8 @@ class DiscordBotService:
         *,
         page_token: str,
     ) -> None:
-        await handle_bind_page_component(
-            self,
+        await self._run_effectful_handler(
+            handle_bind_page_component,
             interaction_id,
             interaction_token,
             page_token=page_token,
@@ -6804,8 +6936,8 @@ class DiscordBotService:
         channel_id: Optional[str] = None,
         guild_id: Optional[str] = None,
     ) -> None:
-        await handle_flow_button(
-            self,
+        await self._run_effectful_handler(
+            handle_flow_button,
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
@@ -6823,8 +6955,8 @@ class DiscordBotService:
     ) -> None:
         from .car_handlers.session_commands import handle_car_reset
 
-        await handle_car_reset(
-            self,
+        await self._run_effectful_handler(
+            handle_car_reset,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -6841,8 +6973,8 @@ class DiscordBotService:
     ) -> None:
         from .car_handlers.review_commands import handle_car_review
 
-        await handle_car_review(
-            self,
+        await self._run_effectful_handler(
+            handle_car_review,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -6860,8 +6992,9 @@ class DiscordBotService:
     ) -> None:
         from .car_handlers.review_commands import handle_car_approvals
 
-        await handle_car_approvals(
+        await DiscordBotService._run_effectful_handler(
             self,
+            handle_car_approvals,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -6878,8 +7011,8 @@ class DiscordBotService:
     ) -> None:
         from .car_handlers.system_commands import handle_car_mention
 
-        await handle_car_mention(
-            self,
+        await self._run_effectful_handler(
+            handle_car_mention,
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
@@ -6896,8 +7029,8 @@ class DiscordBotService:
     ) -> None:
         from .car_handlers.agent_commands import handle_car_experimental
 
-        await handle_car_experimental(
-            self,
+        await self._run_effectful_handler(
+            handle_car_experimental,
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
@@ -6918,8 +7051,8 @@ class DiscordBotService:
     ) -> None:
         from .car_handlers.compact_commands import handle_car_compact
 
-        await handle_car_compact(
-            self,
+        await self._run_effectful_handler(
+            handle_car_compact,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -6934,8 +7067,8 @@ class DiscordBotService:
     ) -> None:
         from .car_handlers.agent_commands import handle_car_rollout
 
-        await handle_car_rollout(
-            self,
+        await self._run_effectful_handler(
+            handle_car_rollout,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -6950,8 +7083,8 @@ class DiscordBotService:
     ) -> None:
         from .car_handlers.system_commands import handle_car_logout
 
-        await handle_car_logout(
-            self,
+        await self._run_effectful_handler(
+            handle_car_logout,
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
@@ -6968,8 +7101,8 @@ class DiscordBotService:
     ) -> None:
         from .car_handlers.system_commands import handle_car_feedback
 
-        await handle_car_feedback(
-            self,
+        await self._run_effectful_handler(
+            handle_car_feedback,
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
@@ -6986,8 +7119,8 @@ class DiscordBotService:
     ) -> None:
         from .car_handlers.session_commands import handle_car_archive
 
-        await handle_car_archive(
-            self,
+        await self._run_effectful_handler(
+            handle_car_archive,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -7012,8 +7145,8 @@ class DiscordBotService:
     ) -> None:
         from .car_handlers.session_commands import handle_car_interrupt
 
-        await handle_car_interrupt(
-            self,
+        await self._run_effectful_handler(
+            handle_car_interrupt,
             interaction_id,
             interaction_token,
             channel_id=channel_id,

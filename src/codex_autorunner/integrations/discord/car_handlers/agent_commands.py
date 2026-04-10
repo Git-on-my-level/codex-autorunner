@@ -313,26 +313,20 @@ async def handle_car_model(
             *,
             components: Optional[list[dict[str, Any]]] = None,
         ) -> None:
-            if deferred:
-                sent = await service._send_followup_ephemeral(
+            if components:
+                await service._send_or_respond_with_components_ephemeral(
+                    interaction_id=interaction_id,
                     interaction_token=interaction_token,
-                    content=text,
+                    deferred=deferred,
+                    text=text,
                     components=components,
                 )
-                if sent:
-                    return
-            if components:
-                await service._respond_with_components(
-                    interaction_id,
-                    interaction_token,
-                    text,
-                    components,
-                )
                 return
-            await service._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                text,
+            await service._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=text,
             )
 
         supports_model_listing = service._agent_supports_capability(
