@@ -523,11 +523,171 @@ async def test_discord_message_turns_delete_immediate_placeholder_when_backgroun
     await asyncio.gather(*list(service._background_tasks), return_exceptions=True)
 
     assert [message["payload"]["content"] for message in sent_messages] == [
-        "Received. Preparing turn...",
+        "Preparing attachments...",
         "Some Discord attachments could not be downloaded. Continuing with available inputs.",
         "Failed to download attachments from Discord. Please retry.",
     ]
     assert deleted_messages == [{"channel_id": "channel-1", "message_id": "msg-1"}]
+
+
+@pytest.mark.anyio
+async def test_discord_message_turns_show_busy_placeholder_for_attachment_prep(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    sent_messages: list[dict[str, object]] = []
+
+    class _StoreStub:
+        async def get_binding(self, *, channel_id: str) -> dict[str, object] | None:
+            assert channel_id == "channel-1"
+            return {
+                "workspace_path": str(workspace),
+                "agent": "codex",
+                "pma_enabled": False,
+                "model_override": None,
+                "reasoning_effort": None,
+            }
+
+    class _ServiceStub:
+        def __init__(self) -> None:
+            self._store = _StoreStub()
+            self._logger = logging.getLogger("test")
+            self._config = SimpleNamespace(root=tmp_path)
+            self._background_tasks: set[asyncio.Task[Any]] = set()
+
+        def _resolve_agent_state(self, binding: dict[str, object]) -> tuple[str, None]:
+            return str(binding.get("agent") or "codex"), None
+
+        def _runtime_agent_for_binding(self, binding: dict[str, object]) -> str:
+            return str(binding.get("agent") or "codex")
+
+        def _normalize_agent(self, value: object) -> str:
+            return str(value or "codex")
+
+        def _build_message_session_key(self, **_kwargs: object) -> str:
+            return "session-key"
+
+        async def _with_attachment_context(
+            self, *, prompt_text: str, **_kwargs: object
+        ) -> tuple[str, int, int, None, list[dict[str, object]]]:
+            _ = prompt_text
+            return "", 0, 1, None, []
+
+        async def _send_channel_message(
+            self, channel_id: str, payload: dict[str, object]
+        ) -> dict[str, object]:
+            sent_messages.append({"channel_id": channel_id, "payload": dict(payload)})
+            return {"id": f"msg-{len(sent_messages)}"}
+
+        async def _send_channel_message_safe(
+            self, channel_id: str, payload: dict[str, object]
+        ) -> None:
+            sent_messages.append({"channel_id": channel_id, "payload": dict(payload)})
+
+        async def _delete_channel_message_safe(
+            self, *, channel_id: str, message_id: str, record_id: str
+        ) -> None:
+            _ = channel_id, message_id, record_id
+
+        async def _run_agent_turn_for_message(self, **_kwargs: object) -> object:
+            raise AssertionError("background turn should exit before submission")
+
+        def _spawn_task(self, coro: Any) -> asyncio.Task[Any]:
+            task = asyncio.create_task(coro)
+            self._background_tasks.add(task)
+            task.add_done_callback(self._background_tasks.discard)
+            return task
+
+    class _IngressStub:
+        async def submit_message(
+            self,
+            request,
+            *,
+            resolve_paused_flow_target,
+            submit_flow_reply,
+            submit_thread_message,
+        ):
+            _ = resolve_paused_flow_target, submit_flow_reply
+            thread_result = await submit_thread_message(request)
+            return SimpleNamespace(route="thread", thread_result=thread_result)
+
+    class _BusyOrchestrationService:
+        def get_binding(self, *, surface_kind: str, surface_key: str) -> object | None:
+            assert surface_kind == "discord"
+            assert surface_key == "channel-1"
+            return SimpleNamespace(mode="repo", thread_target_id="thread-target-123")
+
+        def get_thread_target(self, thread_target_id: str) -> object | None:
+            assert thread_target_id == "thread-target-123"
+            return SimpleNamespace(
+                thread_target_id=thread_target_id, workspace_root=str(workspace)
+            )
+
+        def get_running_execution(self, thread_target_id: str) -> object | None:
+            assert thread_target_id == "thread-target-123"
+            return object()
+
+        def list_queued_executions(
+            self, thread_target_id: str, *, limit: int | None = None
+        ) -> list[object]:
+            _ = limit
+            assert thread_target_id == "thread-target-123"
+            return []
+
+    monkeypatch.setattr(
+        discord_message_turns,
+        "build_surface_orchestration_ingress",
+        lambda **_: _IngressStub(),
+    )
+    monkeypatch.setattr(
+        discord_message_turns,
+        "build_discord_thread_orchestration_service",
+        lambda *_args, **_kwargs: _BusyOrchestrationService(),
+    )
+    monkeypatch.setattr(
+        discord_message_turns,
+        "resolve_discord_thread_target",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("status inspection should not create or resolve a thread")
+        ),
+    )
+
+    thread = ChatThreadRef(platform="discord", chat_id="channel-1", thread_id=None)
+    event = ChatMessageEvent(
+        update_id="update-2c",
+        thread=thread,
+        message=ChatMessageRef(thread=thread, message_id="msg-2"),
+        from_user_id="user-1",
+        text="voice note",
+        attachments=[
+            {
+                "id": "att-1",
+                "filename": "voice.ogg",
+                "url": "https://example.invalid/voice.ogg",
+            }
+        ],
+    )
+    context = build_dispatch_context(event)
+
+    service = _ServiceStub()
+    await discord_message_turns.handle_message_event(
+        service,
+        event,
+        context,
+        channel_id="channel-1",
+        text="voice note",
+        has_attachments=True,
+        policy_result=None,
+        log_event_fn=lambda *args, **kwargs: None,
+        build_ticket_flow_controller_fn=lambda *_args, **_kwargs: None,
+        ensure_worker_fn=lambda *_args, **_kwargs: None,
+    )
+    await asyncio.gather(*list(service._background_tasks), return_exceptions=True)
+
+    assert sent_messages[0]["payload"]["content"] == (
+        "Busy. Preparing attachments while the current turn finishes..."
+    )
 
 
 @pytest.mark.anyio

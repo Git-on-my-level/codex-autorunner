@@ -146,6 +146,7 @@ class _DiscordMessageTurnDispatch:
     service: Any
     event: ChatMessageEvent
     context: DispatchContext
+    binding: dict[str, object]
     channel_id: str
     text: str
     has_attachments: bool
@@ -655,12 +656,25 @@ async def _submit_discord_thread_message(
     managed_thread_surface_key = _managed_thread_surface_key_for_notification_reply(
         dispatch.notification_reply
     )
+    managed_thread_status = _resolve_discord_managed_thread_status(
+        dispatch,
+        workspace_root=request.workspace_root,
+        managed_thread_surface_key=managed_thread_surface_key,
+        pma_enabled=request.pma_enabled,
+    )
 
     async def _send_initial_progress_placeholder() -> Optional[str]:
+        initial_content = "Received. Preparing turn..."
+        if dispatch.has_attachments:
+            initial_content = "Preparing attachments..."
+            if managed_thread_status.busy:
+                initial_content = (
+                    "Busy. Preparing attachments while the current turn finishes..."
+                )
         try:
             response = await dispatch.service._send_channel_message(
                 dispatch.channel_id,
-                {"content": "Received. Preparing turn..."},
+                {"content": initial_content},
             )
         except (RuntimeError, ConnectionError, OSError):
             dispatch.service._logger.warning(
@@ -727,7 +741,9 @@ async def _submit_discord_thread_message(
         and isinstance(dispatch.event.message.message_id, str)
         and dispatch.event.message.message_id
     ):
-        thread_target_id = await _resolve_managed_thread_id()
+        thread_target_id = managed_thread_status.thread_target_id
+        if not thread_target_id:
+            thread_target_id = await _resolve_managed_thread_id()
         if thread_target_id:
             _stash_discord_reusable_progress_message(
                 dispatch.service,
@@ -1143,6 +1159,7 @@ async def handle_message_event(
         service=service,
         event=event,
         context=context,
+        binding=binding,
         channel_id=channel_id,
         text=text,
         has_attachments=has_attachments,
@@ -1327,6 +1344,64 @@ def resolve_discord_thread_target(
             reusable_agent_ids=(runtime_agent,),
         ),
     )
+
+
+@dataclass(frozen=True)
+class _DiscordManagedThreadStatus:
+    thread_target_id: Optional[str]
+    busy: bool
+
+
+def _resolve_discord_managed_thread_status(
+    dispatch: _DiscordMessageTurnDispatch,
+    *,
+    workspace_root: Path,
+    managed_thread_surface_key: Optional[str],
+    pma_enabled: bool,
+) -> _DiscordManagedThreadStatus:
+    orchestration_service = build_discord_thread_orchestration_service(dispatch.service)
+    surface_key = managed_thread_surface_key or dispatch.channel_id
+    get_binding = getattr(orchestration_service, "get_binding", None)
+    get_thread_target = getattr(orchestration_service, "get_thread_target", None)
+    if not callable(get_binding) or not callable(get_thread_target):
+        return _DiscordManagedThreadStatus(thread_target_id=None, busy=False)
+    try:
+        binding = get_binding(surface_kind="discord", surface_key=surface_key)
+    except (RuntimeError, ValueError, TypeError, KeyError, AttributeError):
+        return _DiscordManagedThreadStatus(thread_target_id=None, busy=False)
+    normalized_mode = "pma" if pma_enabled else "repo"
+    if str(getattr(binding, "mode", "") or "").strip().lower() != normalized_mode:
+        return _DiscordManagedThreadStatus(thread_target_id=None, busy=False)
+    thread_target_id = (
+        str(getattr(binding, "thread_target_id", "") or "").strip() or None
+    )
+    if not thread_target_id:
+        return _DiscordManagedThreadStatus(thread_target_id=None, busy=False)
+    try:
+        thread = get_thread_target(thread_target_id)
+    except (RuntimeError, ValueError, TypeError, KeyError, AttributeError):
+        return _DiscordManagedThreadStatus(thread_target_id=None, busy=False)
+    canonical_workspace = str(canonicalize_path(workspace_root))
+    if str(getattr(thread, "workspace_root", "") or "").strip() != canonical_workspace:
+        return _DiscordManagedThreadStatus(thread_target_id=None, busy=False)
+
+    busy = False
+    get_running_execution = getattr(
+        orchestration_service, "get_running_execution", None
+    )
+    if callable(get_running_execution):
+        with contextlib.suppress(RuntimeError, ValueError, TypeError, AttributeError):
+            busy = get_running_execution(thread_target_id) is not None
+    if not busy:
+        list_queued_executions = getattr(
+            orchestration_service, "list_queued_executions", None
+        )
+        if callable(list_queued_executions):
+            with contextlib.suppress(
+                RuntimeError, ValueError, TypeError, AttributeError
+            ):
+                busy = bool(list_queued_executions(thread_target_id, limit=1))
+    return _DiscordManagedThreadStatus(thread_target_id=thread_target_id, busy=busy)
 
 
 def _build_discord_managed_thread_coordinator(
