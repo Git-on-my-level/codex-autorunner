@@ -3,60 +3,32 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, AsyncIterator, Literal, Optional
+from typing import Any, AsyncIterator, Optional
 
 from ..sse import format_sse
 from .models import ExecutionRecord, MessageRequest, ThreadTarget
+from .runtime_turn_terminal_state import (
+    RuntimeThreadOutcome,
+    RuntimeTurnTerminalStateMachine,
+)
 from .service import HarnessBackedOrchestrationService
 
-RuntimeThreadOutcomeStatus = Literal["ok", "error", "interrupted"]
 _INTERRUPT_POLL_INTERVAL_SECONDS = 0.05
 RUNTIME_THREAD_TIMEOUT_ERROR = "Runtime thread timed out"
 RUNTIME_THREAD_INTERRUPTED_ERROR = "Runtime thread interrupted"
 RUNTIME_THREAD_MISSING_BACKEND_IDS_ERROR = (
     "Runtime thread execution is missing backend ids"
 )
-_SUCCESSFUL_COMPLETION_STATUSES = frozenset(
-    {"ok", "completed", "complete", "done", "success"}
-)
 
 
-def _raw_event_session_status_type(raw_event: dict[str, Any]) -> str:
-    params = raw_event.get("params")
-    if not isinstance(params, dict):
-        return ""
-    status = params.get("status")
-    if isinstance(status, dict):
-        for key in ("type", "status", "state"):
-            value = str(status.get(key) or "").strip().lower()
-            if value:
-                return value
-    properties = params.get("properties")
-    if isinstance(properties, dict):
-        nested_status = properties.get("status")
-        if isinstance(nested_status, dict):
-            for key in ("type", "status", "state"):
-                value = str(nested_status.get(key) or "").strip().lower()
-                if value:
-                    return value
-    return str(params.get("status") or "").strip().lower()
-
-
-def _raw_events_show_completion(raw_events: tuple[Any, ...]) -> bool:
-    for raw_event in raw_events:
-        if not isinstance(raw_event, dict):
-            continue
-        method = str(raw_event.get("method") or "").strip().lower()
-        if not method:
-            message = raw_event.get("message")
-            if isinstance(message, dict):
-                method = str(message.get("method") or "").strip().lower()
-        if method in {"turn/completed", "prompt/completed", "session.idle"}:
-            return True
-        if method in {"session.status", "session/status"}:
-            if _raw_event_session_status_type(raw_event) == "idle":
-                return True
-    return False
+def _harness_supports_progress_event_stream(harness: Any) -> bool:
+    supports = getattr(harness, "supports", None)
+    if not callable(supports) or not supports("event_streaming"):
+        return False
+    allows_parallel = getattr(harness, "allows_parallel_event_stream", None)
+    if callable(allows_parallel):
+        return bool(allows_parallel())
+    return True
 
 
 @dataclass(frozen=True)
@@ -69,18 +41,6 @@ class RuntimeThreadExecution:
     execution: ExecutionRecord
     workspace_root: Path
     request: MessageRequest
-
-
-@dataclass(frozen=True)
-class RuntimeThreadOutcome:
-    """Collected outcome of one runtime-thread execution before persistence."""
-
-    status: RuntimeThreadOutcomeStatus
-    assistant_text: str
-    error: Optional[str]
-    backend_thread_id: str
-    backend_turn_id: Optional[str]
-    raw_events: tuple[Any, ...] = ()
 
 
 async def begin_runtime_thread_execution(
@@ -183,19 +143,20 @@ async def await_runtime_thread_outcome(
     interrupt_event: Optional[asyncio.Event],
     timeout_seconds: float,
     execution_error_message: str,
+    terminal_state: Optional[RuntimeTurnTerminalStateMachine] = None,
+    observe_progress_events: bool = True,
 ) -> RuntimeThreadOutcome:
     """Wait for a started runtime-thread execution to reach a terminal outcome."""
 
     backend_thread_id = execution.thread.backend_thread_id or ""
     backend_turn_id = execution.execution.backend_id
+    state = terminal_state or RuntimeTurnTerminalStateMachine(
+        backend_thread_id=backend_thread_id,
+        backend_turn_id=backend_turn_id,
+    )
     if not backend_thread_id or not backend_turn_id:
-        return RuntimeThreadOutcome(
-            status="error",
-            assistant_text="",
-            error=RUNTIME_THREAD_MISSING_BACKEND_IDS_ERROR,
-            backend_thread_id=backend_thread_id,
-            backend_turn_id=backend_turn_id,
-            raw_events=(),
+        return state.build_missing_backend_ids_outcome(
+            RUNTIME_THREAD_MISSING_BACKEND_IDS_ERROR
         )
     collector_task = asyncio.create_task(
         execution.harness.wait_for_turn(
@@ -211,54 +172,53 @@ async def await_runtime_thread_outcome(
         if interrupt_event is not None
         else None
     )
+    stream_terminal_task = None
+    stream_task = None
+    if observe_progress_events and _harness_supports_progress_event_stream(
+        execution.harness
+    ):
+        stream_terminal_task = asyncio.create_task(
+            state.terminal_signal_waiter().wait()
+        )
+        stream_task = asyncio.create_task(
+            _observe_runtime_terminal_state(execution, state)
+        )
 
     try:
         wait_tasks = {collector_task, timeout_task}
         if interrupt_task is not None:
             wait_tasks.add(interrupt_task)
-        done, _ = await asyncio.wait(
-            wait_tasks,
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        if timeout_task in done:
-            await execution.harness.interrupt(
-                execution.workspace_root,
-                backend_thread_id,
-                backend_turn_id,
+        if stream_terminal_task is not None:
+            wait_tasks.add(stream_terminal_task)
+        while True:
+            done, _ = await asyncio.wait(
+                wait_tasks,
+                return_when=asyncio.FIRST_COMPLETED,
             )
-            return RuntimeThreadOutcome(
-                status="error",
-                assistant_text="",
-                error=RUNTIME_THREAD_TIMEOUT_ERROR,
-                backend_thread_id=backend_thread_id,
-                backend_turn_id=backend_turn_id,
-                raw_events=(),
-            )
-        if interrupt_task is not None and interrupt_task in done:
-            await execution.harness.interrupt(
-                execution.workspace_root,
-                backend_thread_id,
-                backend_turn_id,
-            )
-            return RuntimeThreadOutcome(
-                status="interrupted",
-                assistant_text="",
-                error=RUNTIME_THREAD_INTERRUPTED_ERROR,
-                backend_thread_id=backend_thread_id,
-                backend_turn_id=backend_turn_id,
-                raw_events=(),
-            )
-
-        result = await collector_task
+            if collector_task in done:
+                result = await collector_task
+                state.note_transport_result(result)
+                return state.build_outcome(execution_error_message)
+            if stream_terminal_task is not None and stream_terminal_task in done:
+                return state.build_outcome(execution_error_message)
+            if interrupt_task is not None and interrupt_task in done:
+                await execution.harness.interrupt(
+                    execution.workspace_root,
+                    backend_thread_id,
+                    backend_turn_id,
+                )
+                return state.build_interrupted_outcome(RUNTIME_THREAD_INTERRUPTED_ERROR)
+            if timeout_task in done:
+                await execution.harness.interrupt(
+                    execution.workspace_root,
+                    backend_thread_id,
+                    backend_turn_id,
+                )
+                return state.build_timeout_outcome(RUNTIME_THREAD_TIMEOUT_ERROR)
     except Exception as exc:  # intentional: harness runtime errors are unpredictable
         detail = str(exc or "").strip()
-        return RuntimeThreadOutcome(
-            status="error",
-            assistant_text="",
-            error=detail or execution_error_message,
-            backend_thread_id=backend_thread_id,
-            backend_turn_id=backend_turn_id,
-            raw_events=(),
+        return state.build_transport_exception_outcome(
+            detail or execution_error_message
         )
     finally:
         cleanup_tasks: list[asyncio.Task[Any]] = [timeout_task]
@@ -266,87 +226,36 @@ async def await_runtime_thread_outcome(
             cleanup_tasks.append(collector_task)
         if interrupt_task is not None:
             cleanup_tasks.append(interrupt_task)
+        if stream_terminal_task is not None:
+            cleanup_tasks.append(stream_terminal_task)
+        if stream_task is not None:
+            cleanup_tasks.append(stream_task)
         for task in cleanup_tasks:
             task.cancel()
         if cleanup_tasks:
             await asyncio.gather(*cleanup_tasks, return_exceptions=True)
 
-    status = str(getattr(result, "status", "") or "").strip().lower()
-    assistant_text = str(getattr(result, "assistant_text", "") or "")
-    errors = tuple(getattr(result, "errors", ()) or ())
-    raw_events = tuple(getattr(result, "raw_events", ()) or ())
-    successful_completion = status in _SUCCESSFUL_COMPLETION_STATUSES
-    if errors:
-        detail = next(
-            (str(error or "").strip() for error in errors if str(error or "").strip()),
-            "",
-        )
-        # Some runtimes can emit a trailing transport error after a completed turn.
-        # Only prefer the final text when the runtime explicitly reported success
-        # and the raw event stream confirms completion was already observed.
-        if (
-            assistant_text.strip()
-            and successful_completion
-            and _raw_events_show_completion(raw_events)
-        ):
-            return RuntimeThreadOutcome(
-                status="ok",
-                assistant_text=assistant_text,
-                error=None,
-                backend_thread_id=backend_thread_id,
-                backend_turn_id=backend_turn_id,
-                raw_events=raw_events,
-            )
-        # OpenCode sets output.error while still returning assistant text; preserve text
-        # for Telegram/Discord even when the harness reports a secondary error list.
-        if assistant_text.strip():
-            return RuntimeThreadOutcome(
-                status="ok",
-                assistant_text=assistant_text,
-                error=detail or None,
-                backend_thread_id=backend_thread_id,
-                backend_turn_id=backend_turn_id,
-                raw_events=raw_events,
-            )
-        return RuntimeThreadOutcome(
-            status="error",
-            assistant_text="",
-            error=detail or execution_error_message,
-            backend_thread_id=backend_thread_id,
-            backend_turn_id=backend_turn_id,
-            raw_events=raw_events,
-        )
-    if status in {"interrupted", "cancelled", "canceled", "aborted"}:
-        return RuntimeThreadOutcome(
-            status="interrupted",
-            assistant_text="",
-            error=RUNTIME_THREAD_INTERRUPTED_ERROR,
-            backend_thread_id=backend_thread_id,
-            backend_turn_id=backend_turn_id,
-            raw_events=raw_events,
-        )
-    if status and not successful_completion:
-        return RuntimeThreadOutcome(
-            status="error",
-            assistant_text="",
-            error=execution_error_message,
-            backend_thread_id=backend_thread_id,
-            backend_turn_id=backend_turn_id,
-            raw_events=raw_events,
-        )
-    return RuntimeThreadOutcome(
-        status="ok",
-        assistant_text=assistant_text,
-        error=None,
-        backend_thread_id=backend_thread_id,
-        backend_turn_id=backend_turn_id,
-        raw_events=raw_events,
-    )
-
 
 async def _wait_for_interrupt(interrupt_event: asyncio.Event) -> None:
     while not interrupt_event.is_set():
         await asyncio.sleep(_INTERRUPT_POLL_INTERVAL_SECONDS)
+
+
+async def _observe_runtime_terminal_state(
+    execution: RuntimeThreadExecution,
+    state: RuntimeTurnTerminalStateMachine,
+) -> None:
+    try:
+        async for raw_event in execution.harness.stream_events(
+            execution.workspace_root,
+            execution.thread.backend_thread_id or "",
+            execution.execution.backend_id or "",
+        ):
+            state.note_raw_event(raw_event)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        return
 
 
 __all__ = [
@@ -355,6 +264,7 @@ __all__ = [
     "RUNTIME_THREAD_TIMEOUT_ERROR",
     "RuntimeThreadExecution",
     "RuntimeThreadOutcome",
+    "RuntimeTurnTerminalStateMachine",
     "await_runtime_thread_outcome",
     "begin_next_queued_runtime_thread_execution",
     "begin_runtime_thread_execution",

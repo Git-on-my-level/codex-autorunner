@@ -24,6 +24,7 @@ from ...core.orchestration.runtime_threads import (
     RUNTIME_THREAD_TIMEOUT_ERROR,
     RuntimeThreadExecution,
     RuntimeThreadOutcome,
+    RuntimeTurnTerminalStateMachine,
     await_runtime_thread_outcome,
     begin_next_queued_runtime_thread_execution,
     begin_runtime_thread_execution,
@@ -1086,12 +1087,14 @@ def _managed_thread_completion_source(
     *,
     recovered_after_completion: bool,
 ) -> str:
-    if recovered_after_completion:
+    if recovered_after_completion and outcome.completion_source == "prompt_return":
         return "post_completion_recovery"
     if outcome.status == "interrupted":
         return "interrupt"
     if str(outcome.error or "").strip() == RUNTIME_THREAD_TIMEOUT_ERROR:
         return "timeout"
+    if outcome.completion_source:
+        return outcome.completion_source
     return "prompt_return"
 
 
@@ -1188,6 +1191,10 @@ async def finalize_managed_thread_execution(
 
     stream_backend_thread_id = current_backend_thread_id
     stream_backend_turn_id = str(started.execution.backend_id or "").strip()
+    terminal_state = RuntimeTurnTerminalStateMachine(
+        backend_thread_id=current_backend_thread_id,
+        backend_turn_id=started.execution.backend_id,
+    )
     if not stream_backend_turn_id:
         stream_backend_turn_id = str(started.execution.execution_id or "").strip()
         logger.warning(
@@ -1229,6 +1236,7 @@ async def finalize_managed_thread_execution(
                     stream_backend_turn_id,
                 ):
                     raw_events_received += 1
+                    terminal_state.note_raw_event(raw_event)
                     run_events = await _normalize_runtime_progress_event(
                         raw_event,
                         event_state,
@@ -1350,6 +1358,8 @@ async def finalize_managed_thread_execution(
                 interrupt_event=None,
                 timeout_seconds=errors.timeout_seconds,
                 execution_error_message=errors.public_execution_error,
+                terminal_state=terminal_state,
+                observe_progress_events=False,
             )
     except (
         RuntimeError,

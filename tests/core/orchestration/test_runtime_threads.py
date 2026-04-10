@@ -995,6 +995,93 @@ async def test_stream_runtime_thread_events_proxies_harness_stream(
     assert "message.delta" in events[0]
 
 
+async def test_runtime_thread_stream_terminal_event_finishes_before_wait_return(
+    tmp_path: Path,
+) -> None:
+    @dataclass
+    class _HarnessWithTerminalStream(_HarnessWithBlockingWait):
+        capabilities: frozenset[str] = frozenset(
+            ["durable_threads", "message_turns", "interrupt", "event_streaming"]
+        )
+
+        async def stream_events(
+            self, workspace_root: Path, conversation_id: str, turn_id: str
+        ):
+            _ = workspace_root, conversation_id, turn_id
+            yield {"message": {"method": "message.delta", "params": {"delta": "done"}}}
+            yield {
+                "message": {
+                    "method": "turn/completed",
+                    "params": {"status": "completed"},
+                }
+            }
+            await asyncio.Future()
+
+    harness = _HarnessWithTerminalStream()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+
+    started = await begin_runtime_thread_execution(
+        service,
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="user-visible prompt",
+        ),
+    )
+    outcome = await asyncio.wait_for(
+        await_runtime_thread_outcome(
+            started,
+            interrupt_event=None,
+            timeout_seconds=5,
+            execution_error_message="Managed thread execution failed",
+        ),
+        timeout=1,
+    )
+
+    assert outcome.status == "ok"
+    assert outcome.assistant_text == "done"
+    assert outcome.completion_source == "stream_terminal_event"
+    assert outcome.transport_request_return_timestamp is None
+    assert outcome.terminal_signals
+    assert outcome.terminal_signals[0].source == "turn/completed"
+    assert harness.interrupt_calls == []
+    assert harness.wait_cancelled.is_set()
+
+
+async def test_runtime_threads_prompt_return_tracks_completion_metadata(
+    tmp_path: Path,
+) -> None:
+    harness = _HarnessWithWait()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+
+    started = await begin_runtime_thread_execution(
+        service,
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="user-visible prompt",
+        ),
+    )
+    outcome = await await_runtime_thread_outcome(
+        started,
+        interrupt_event=None,
+        timeout_seconds=5,
+        execution_error_message="Managed thread execution failed",
+    )
+
+    assert outcome.status == "ok"
+    assert outcome.completion_source == "prompt_return"
+    assert outcome.transport_request_return_timestamp is not None
+    assert outcome.last_progress_timestamp is None
+    assert outcome.terminal_signals == ()
+
+
 async def test_runtime_thread_timeout_cancels_wait_collector(
     tmp_path: Path,
 ) -> None:
@@ -1025,6 +1112,9 @@ async def test_runtime_thread_timeout_cancels_wait_collector(
 
     assert outcome.status == "error"
     assert outcome.error == "Runtime thread timed out"
+    assert outcome.completion_source == "timeout"
+    assert outcome.failure_cause == "Runtime thread timed out"
+    assert outcome.terminal_signals[-1].source == "timeout"
     assert harness.interrupt_calls == [
         (workspace_root, "backend-thread-1", "backend-turn-1")
     ]

@@ -59,6 +59,7 @@ from .models import (
 from .runtime_threads import (
     RuntimeThreadExecution,
     RuntimeThreadOutcome,
+    RuntimeTurnTerminalStateMachine,
     await_runtime_thread_outcome,
     begin_runtime_thread_execution,
     stream_runtime_thread_events,
@@ -130,6 +131,7 @@ __all__ = [
     "RuntimeThreadExecution",
     "RuntimeThreadHarness",
     "RuntimeThreadOutcome",
+    "RuntimeTurnTerminalStateMachine",
     "RuntimeTurnHandle",
     "SurfaceIngressResult",
     "SurfaceOrchestrationIngress",
