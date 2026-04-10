@@ -25,6 +25,38 @@ def fixture_command(scenario: str) -> list[str]:
     return [sys.executable, "-u", str(FIXTURE_PATH), "--scenario", scenario]
 
 
+def test_client_does_not_map_prompt_terminal_notifications_without_turn_id() -> None:
+    client = ACPClient(fixture_command("basic"))
+    client._session_active_turns["session-1"] = "turn-2"
+
+    message = client._message_with_mapped_turn_id(
+        {
+            "method": "prompt/completed",
+            "params": {
+                "sessionId": "session-1",
+                "status": "completed",
+            },
+        }
+    )
+
+    assert "turnId" not in message["params"]
+
+
+@pytest.mark.asyncio
+async def test_client_primes_prompt_state_with_fallback_session_id() -> None:
+    client = ACPClient(fixture_command("basic"))
+    try:
+        client._prime_prompt_state_from_start_result(
+            {"turnId": "turn-1"},
+            fallback_session_id="session-1",
+        )
+
+        assert client._session_active_turns == {"session-1": "turn-1"}
+        assert "turn-1" in client._prompts
+    finally:
+        await client.close()
+
+
 @pytest.mark.asyncio
 async def test_client_initialize_and_session_roundtrip(tmp_path: Path) -> None:
     client = ACPClient(fixture_command("basic"), cwd=tmp_path)
