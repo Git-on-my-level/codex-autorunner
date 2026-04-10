@@ -701,6 +701,9 @@ class _ThreadExecutionLifecycle:
         runtime_prompt = self.resolve_runtime_prompt(request)
         fresh_conversation_retry_attempted = False
         rehydrated_runtime_prompt = False
+        runtime_instance_id: Optional[str] = None
+        conversation_id: Optional[str] = None
+        used_existing_conversation = False
         try:
             await harness.ensure_ready(workspace_root)
             runtime_instance_id = await _resolve_harness_runtime_instance_id(

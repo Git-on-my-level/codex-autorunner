@@ -1548,6 +1548,53 @@ async def test_send_message_records_failed_execution_when_start_is_cancelled(
     assert service.get_running_execution(thread.thread_target_id) is None
 
 
+async def test_send_message_records_failed_execution_when_cancelled_before_binding_resolution(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+    captured_execution_id: Optional[str] = None
+
+    async def _slow_ensure_ready(workspace_root_arg: Path) -> None:
+        _ = workspace_root_arg
+        nonlocal captured_execution_id
+        running = service.get_running_execution(thread.thread_target_id)
+        assert running is not None
+        captured_execution_id = running.execution_id
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            raise
+
+    harness.ensure_ready = _slow_ensure_ready  # type: ignore[assignment]
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(
+            service.send_message(
+                MessageRequest(
+                    target_id=thread.thread_target_id,
+                    target_kind="thread",
+                    message_text="Need an answer",
+                    metadata={
+                        "execution_error_message": "Managed thread execution failed"
+                    },
+                )
+            ),
+            timeout=0.01,
+        )
+
+    assert captured_execution_id is not None
+    persisted = service.get_execution(thread.thread_target_id, captured_execution_id)
+    assert persisted is not None
+    assert persisted.status == "error"
+    assert persisted.error == "Managed thread execution failed"
+    assert harness.new_conversation_calls == []
+    assert service.get_running_execution(thread.thread_target_id) is None
+
+
 async def test_interrupt_thread_rejects_when_harness_lacks_interrupt_capability(
     tmp_path: Path,
 ) -> None:
