@@ -406,10 +406,7 @@ def normalize_runtime_thread_message(
         update_kind = _extract_session_update_kind(update)
         if update_kind == "agent_message_chunk":
             return _assistant_stream_events(
-                {
-                    "content": update.get("content"),
-                    "message": update.get("message"),
-                },
+                _extract_session_update_message_params(update),
                 state,
                 timestamp=event_timestamp,
             )
@@ -925,15 +922,35 @@ def _extract_session_update_kind(update: dict[str, Any]) -> str:
     return ""
 
 
+def _extract_session_update_message_params(update: dict[str, Any]) -> dict[str, Any]:
+    content = update.get("content")
+    if isinstance(content, dict):
+        params = dict(content)
+        message = update.get("message")
+        if isinstance(message, str) and message.strip() and "message" not in params:
+            params["message"] = message
+        return params
+    return {
+        "content": content,
+        "message": update.get("message"),
+    }
+
+
 def _extract_session_update_text(update: dict[str, Any]) -> str:
     content = update.get("content")
     if isinstance(content, str) and content.strip():
         return content
     if isinstance(content, dict):
-        for key in ("text", "message"):
+        for key in ("text", "message", "status"):
             value = content.get(key)
             if isinstance(value, str) and value.strip():
                 return value
+        progress_message = _extract_acp_progress_message(content)
+        if progress_message:
+            return progress_message
+        output_delta = _extract_output_delta(content)
+        if output_delta:
+            return output_delta
     if isinstance(content, list):
         text_parts: list[str] = []
         for entry in content:
@@ -949,12 +966,19 @@ def _extract_session_update_text(update: dict[str, Any]) -> str:
                 "message",
             ):
                 continue
-            entry_text = entry.get("text")
-            if isinstance(entry_text, str) and entry_text:
+            entry_text = ""
+            message_text = entry.get("message")
+            if isinstance(message_text, str) and message_text:
+                entry_text = message_text
+            if not entry_text:
+                entry_text = _extract_output_delta(entry)
+            if not entry_text:
+                entry_text = _extract_acp_progress_message(entry)
+            if entry_text:
                 text_parts.append(entry_text)
         if text_parts:
             return "".join(text_parts)
-    return str(update.get("message") or "").strip()
+    return _extract_acp_progress_message(update)
 
 
 def _extract_acp_progress_message(params: dict[str, Any]) -> str:
