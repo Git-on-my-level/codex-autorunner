@@ -450,6 +450,7 @@ async def test_discord_notification_reply_routes_to_pma_thread_with_context(
             self._logger = logging.getLogger("test")
             self._config = SimpleNamespace(root=tmp_path)
             self._hub_supervisor = object()
+            self._background_tasks: set[asyncio.Task[Any]] = set()
 
         def _resolve_agent_state(self, binding: dict[str, object]) -> tuple[str, None]:
             return str(binding.get("agent") or "codex"), None
@@ -501,6 +502,17 @@ async def test_discord_notification_reply_routes_to_pma_thread_with_context(
         ) -> None:
             return
 
+        async def _send_channel_message(
+            self, _channel_id: str, _payload: dict[str, object]
+        ) -> dict[str, object]:
+            return {"id": "msg-1"}
+
+        def _spawn_task(self, coro: Any) -> asyncio.Task[Any]:
+            task = asyncio.create_task(coro)
+            self._background_tasks.add(task)
+            task.add_done_callback(self._background_tasks.discard)
+            return task
+
         async def _delete_channel_message_safe(
             self, *, channel_id: str, message_id: str, record_id: str
         ) -> None:
@@ -550,6 +562,14 @@ async def test_discord_notification_reply_routes_to_pma_thread_with_context(
             )
         ),
     )
+    monkeypatch.setattr(
+        discord_message_turns,
+        "resolve_discord_thread_target",
+        lambda *_args, **_kwargs: (
+            object(),
+            SimpleNamespace(thread_target_id="thread-target-123"),
+        ),
+    )
 
     thread = ChatThreadRef(platform="discord", chat_id="channel-1", thread_id=None)
     event = ChatMessageEvent(
@@ -562,8 +582,9 @@ async def test_discord_notification_reply_routes_to_pma_thread_with_context(
     )
     context = build_dispatch_context(event)
 
+    service = _ServiceStub()
     await discord_message_turns.handle_message_event(
-        _ServiceStub(),
+        service,
         event,
         context,
         channel_id="channel-1",
@@ -574,6 +595,7 @@ async def test_discord_notification_reply_routes_to_pma_thread_with_context(
         build_ticket_flow_controller_fn=lambda *_args, **_kwargs: None,
         ensure_worker_fn=lambda *_args, **_kwargs: None,
     )
+    await asyncio.gather(*list(service._background_tasks), return_exceptions=True)
 
     run_turn_kwargs = captured.get("run_turn_kwargs")
     assert isinstance(run_turn_kwargs, dict)

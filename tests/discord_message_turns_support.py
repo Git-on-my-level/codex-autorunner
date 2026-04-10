@@ -53,6 +53,7 @@ from codex_autorunner.integrations.chat.collaboration_policy import (
     build_discord_collaboration_policy,
 )
 from codex_autorunner.integrations.chat.compaction import build_compact_seed_prompt
+from codex_autorunner.integrations.chat.dispatcher import build_dispatch_context
 from codex_autorunner.integrations.discord.config import (
     DiscordBotConfig,
     DiscordBotMediaConfig,
@@ -2320,20 +2321,26 @@ async def test_message_event_submits_through_surface_orchestration_ingress(
         repo_id="repo-1",
     )
     rest = _FakeRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("route via ingress"))])
     service = DiscordBotService(
         _config(tmp_path, allowed_channel_ids=frozenset({"channel-1"})),
         logger=logging.getLogger("test"),
         rest_client=rest,
-        gateway_client=gateway,
+        gateway_client=_FakeGateway([]),
         state_store=store,
         outbox_manager=_FakeOutboxManager(),
     )
     captured: dict[str, object] = {}
+    turn_started = asyncio.Event()
+    release_turn = asyncio.Event()
 
     async def _fake_run_turn(**kwargs: Any) -> DiscordMessageTurnResult:
         captured["session_key"] = kwargs["session_key"]
-        return DiscordMessageTurnResult(final_message="handled by ingress")
+        turn_started.set()
+        await release_turn.wait()
+        return DiscordMessageTurnResult(
+            final_message="handled by ingress",
+            preview_message_id="msg-1",
+        )
 
     class _FakeIngress:
         async def submit_message(
@@ -2358,15 +2365,38 @@ async def test_message_event_submits_through_surface_orchestration_ingress(
     service._run_agent_turn_for_message = _fake_run_turn  # type: ignore[assignment]
 
     try:
-        await service.run_forever()
+        event = service._chat_adapter.parse_message_event(
+            _message_create("route via ingress")
+        )
+        assert event is not None
+        await discord_message_turns_module.handle_message_event(
+            service,
+            event,
+            build_dispatch_context(event),
+            channel_id="channel-1",
+            text="route via ingress",
+            has_attachments=False,
+            policy_result=None,
+            log_event_fn=discord_service_module.log_event,
+            build_ticket_flow_controller_fn=discord_service_module.build_ticket_flow_controller,
+            ensure_worker_fn=discord_service_module.ensure_worker,
+        )
+        await asyncio.wait_for(turn_started.wait(), timeout=1)
         assert captured["surface_kind"] == "discord"
         assert captured["prompt_text"] == "route via ingress"
         assert isinstance(captured["session_key"], str)
+        assert any(
+            message["payload"]["content"] == "Received. Preparing turn..."
+            for message in rest.channel_messages
+        )
+        release_turn.set()
+        await asyncio.gather(*list(service._background_tasks), return_exceptions=True)
         assert any(
             message["payload"]["content"] == "handled by ingress"
             for message in rest.channel_messages
         )
     finally:
+        release_turn.set()
         await store.close()
 
 
@@ -9699,17 +9729,18 @@ async def test_reset_discord_thread_binding_preserves_logical_hermes_profile(
             pma_enabled=False,
         )
 
-        had_previous, replacement_thread_id = (
-            await service._reset_discord_thread_binding(
-                channel_id="channel-1",
-                workspace_root=workspace.resolve(),
-                agent="hermes",
-                agent_profile="m4-pma",
-                repo_id=None,
-                resource_kind=None,
-                resource_id=None,
-                pma_enabled=False,
-            )
+        (
+            had_previous,
+            replacement_thread_id,
+        ) = await service._reset_discord_thread_binding(
+            channel_id="channel-1",
+            workspace_root=workspace.resolve(),
+            agent="hermes",
+            agent_profile="m4-pma",
+            repo_id=None,
+            resource_kind=None,
+            resource_id=None,
+            pma_enabled=False,
         )
 
         assert had_previous is True

@@ -139,14 +139,17 @@ def test_discord_ordinary_turn_entrypoint_routes_only_via_shared_ingress() -> No
     path = REPO_ROOT / "src/codex_autorunner/integrations/discord/message_turns.py"
     function_node = _parse_function(path, "handle_message_event")
     submit_helper = _parse_function(path, "_submit_discord_thread_message")
+    execute_helper = _parse_function(path, "_execute_discord_thread_message")
 
     entrypoint_calls = _collect_reachable_call_names(function_node)
-    helper_calls = _collect_reachable_call_names(submit_helper)
+    submit_helper_calls = _collect_reachable_call_names(submit_helper)
+    execute_helper_calls = _collect_reachable_call_names(execute_helper)
 
     assert "_build_discord_surface_ingress" in entrypoint_calls
     assert "ingress.submit_message" in entrypoint_calls
     assert "service._run_agent_turn_for_message" not in entrypoint_calls
-    assert "dispatch.service._run_agent_turn_for_message" in helper_calls
+    assert "_execute_discord_thread_message" in submit_helper_calls
+    assert "dispatch.service._run_agent_turn_for_message" in execute_helper_calls
 
 
 def test_telegram_ordinary_turn_entrypoint_routes_only_via_shared_ingress() -> None:
