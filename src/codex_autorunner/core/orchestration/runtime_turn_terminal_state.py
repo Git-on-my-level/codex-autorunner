@@ -415,6 +415,7 @@ def _inspect_raw_event(
         if (
             isinstance(item, dict)
             and str(item.get("type") or "").strip() == "agentMessage"
+            and str(item.get("phase") or "").strip().lower() != "commentary"
         ):
             assistant_message_text = _extract_agent_message_text(item)
 

@@ -8,13 +8,13 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, cast
 
 from ...core.sqlite_utils import connect_sqlite
 from ...core.state import now_iso
 from ..chat.agents import normalize_hermes_profile
 
-DISCORD_STATE_SCHEMA_VERSION = 9
+DISCORD_STATE_SCHEMA_VERSION = 10
 _UNSET = object()
 _logger = logging.getLogger(__name__)
 
@@ -30,6 +30,20 @@ class OutboxRecord:
     next_attempt_at: Optional[str] = None
     created_at: str = ""
     last_error: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class DiscordTurnProgressLease:
+    lease_id: str
+    managed_thread_id: str
+    execution_id: Optional[str]
+    channel_id: str
+    message_id: str
+    source_message_id: Optional[str]
+    state: str
+    progress_label: Optional[str]
+    created_at: str
+    updated_at: str
 
 
 class DiscordStateStore:
@@ -106,6 +120,87 @@ class DiscordStateStore:
 
     async def mark_outbox_delivered(self, record_id: str) -> None:
         await self._run(self._delete_outbox_sync, record_id)
+
+    async def upsert_turn_progress_lease(
+        self,
+        *,
+        lease_id: str,
+        managed_thread_id: str,
+        execution_id: Optional[str],
+        channel_id: str,
+        message_id: str,
+        source_message_id: Optional[str] = None,
+        state: str = "pending",
+        progress_label: Optional[str] = None,
+    ) -> Optional[DiscordTurnProgressLease]:
+        return cast(
+            Optional[DiscordTurnProgressLease],
+            await self._run(
+                self._upsert_turn_progress_lease_sync,
+                lease_id,
+                managed_thread_id,
+                execution_id,
+                channel_id,
+                message_id,
+                source_message_id,
+                state,
+                progress_label,
+            ),
+        )
+
+    async def get_turn_progress_lease(
+        self,
+        *,
+        lease_id: str,
+    ) -> Optional[DiscordTurnProgressLease]:
+        return cast(
+            Optional[DiscordTurnProgressLease],
+            await self._run(
+                self._get_turn_progress_lease_sync,
+                lease_id,
+            ),
+        )
+
+    async def list_turn_progress_leases(
+        self,
+        *,
+        managed_thread_id: Optional[str] = None,
+        execution_id: Optional[str] = None,
+        channel_id: Optional[str] = None,
+        message_id: Optional[str] = None,
+    ) -> list[DiscordTurnProgressLease]:
+        return cast(
+            list[DiscordTurnProgressLease],
+            await self._run(
+                self._list_turn_progress_leases_sync,
+                managed_thread_id,
+                execution_id,
+                channel_id,
+                message_id,
+            ),
+        )
+
+    async def update_turn_progress_lease(
+        self,
+        *,
+        lease_id: str,
+        execution_id: Optional[str] | object = _UNSET,
+        state: Optional[str] | object = _UNSET,
+        progress_label: Optional[str] | object = _UNSET,
+    ) -> Optional[DiscordTurnProgressLease]:
+        return cast(
+            Optional[DiscordTurnProgressLease],
+            await self._run(
+                self._update_turn_progress_lease_sync,
+                lease_id,
+                execution_id,
+                state,
+                progress_label,
+            ),
+        )
+
+    async def delete_turn_progress_lease(self, *, lease_id: str) -> None:
+        await self._run(self._delete_turn_progress_lease_sync, lease_id)
 
     async def mark_pause_dispatch_seen(
         self,
@@ -324,6 +419,34 @@ class DiscordStateStore:
                 """
                 CREATE INDEX IF NOT EXISTS idx_discord_outbox_created
                     ON outbox(created_at)
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS turn_progress_leases (
+                    lease_id TEXT PRIMARY KEY,
+                    managed_thread_id TEXT NOT NULL,
+                    execution_id TEXT,
+                    channel_id TEXT NOT NULL,
+                    message_id TEXT NOT NULL,
+                    source_message_id TEXT,
+                    state TEXT NOT NULL,
+                    progress_label TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_discord_turn_progress_thread_exec
+                    ON turn_progress_leases(managed_thread_id, execution_id, updated_at)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_discord_turn_progress_channel_message
+                    ON turn_progress_leases(channel_id, message_id, updated_at)
                 """
             )
             self._ensure_channel_binding_columns(conn)
@@ -968,4 +1091,218 @@ class DiscordStateStore:
                 WHERE record_id = ?
                 """,
                 (attempts, next_attempt_at, str(error)[:500], record_id),
+            )
+
+    def _turn_progress_lease_from_row(
+        self, row: sqlite3.Row
+    ) -> DiscordTurnProgressLease:
+        return DiscordTurnProgressLease(
+            lease_id=str(row["lease_id"]),
+            managed_thread_id=str(row["managed_thread_id"]),
+            execution_id=(
+                str(row["execution_id"])
+                if isinstance(row["execution_id"], str) and row["execution_id"]
+                else None
+            ),
+            channel_id=str(row["channel_id"]),
+            message_id=str(row["message_id"]),
+            source_message_id=(
+                str(row["source_message_id"])
+                if isinstance(row["source_message_id"], str)
+                and row["source_message_id"]
+                else None
+            ),
+            state=str(row["state"]),
+            progress_label=(
+                str(row["progress_label"])
+                if isinstance(row["progress_label"], str) and row["progress_label"]
+                else None
+            ),
+            created_at=str(row["created_at"]),
+            updated_at=str(row["updated_at"]),
+        )
+
+    def _upsert_turn_progress_lease_sync(
+        self,
+        lease_id: str,
+        managed_thread_id: str,
+        execution_id: Optional[str],
+        channel_id: str,
+        message_id: str,
+        source_message_id: Optional[str],
+        state: str,
+        progress_label: Optional[str],
+    ) -> Optional[DiscordTurnProgressLease]:
+        normalized_lease_id = str(lease_id or "").strip()
+        normalized_thread_id = str(managed_thread_id or "").strip()
+        normalized_channel_id = str(channel_id or "").strip()
+        normalized_message_id = str(message_id or "").strip()
+        normalized_state = str(state or "").strip() or "pending"
+        if (
+            not normalized_lease_id
+            or not normalized_thread_id
+            or not normalized_channel_id
+            or not normalized_message_id
+        ):
+            return None
+        normalized_execution_id = str(execution_id or "").strip() or None
+        normalized_source_message_id = str(source_message_id or "").strip() or None
+        normalized_label = str(progress_label or "").strip() or None
+        conn = self._connection_sync()
+        timestamp = now_iso()
+        with conn:
+            conn.execute(
+                """
+                DELETE FROM turn_progress_leases
+                 WHERE channel_id = ?
+                   AND message_id = ?
+                   AND lease_id != ?
+                """,
+                (
+                    normalized_channel_id,
+                    normalized_message_id,
+                    normalized_lease_id,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO turn_progress_leases (
+                    lease_id,
+                    managed_thread_id,
+                    execution_id,
+                    channel_id,
+                    message_id,
+                    source_message_id,
+                    state,
+                    progress_label,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(lease_id) DO UPDATE SET
+                    managed_thread_id=excluded.managed_thread_id,
+                    execution_id=excluded.execution_id,
+                    channel_id=excluded.channel_id,
+                    message_id=excluded.message_id,
+                    source_message_id=excluded.source_message_id,
+                    state=excluded.state,
+                    progress_label=excluded.progress_label,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    normalized_lease_id,
+                    normalized_thread_id,
+                    normalized_execution_id,
+                    normalized_channel_id,
+                    normalized_message_id,
+                    normalized_source_message_id,
+                    normalized_state,
+                    normalized_label,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+        return self._get_turn_progress_lease_sync(normalized_lease_id)
+
+    def _get_turn_progress_lease_sync(
+        self, lease_id: str
+    ) -> Optional[DiscordTurnProgressLease]:
+        conn = self._connection_sync()
+        row = conn.execute(
+            """
+            SELECT *
+              FROM turn_progress_leases
+             WHERE lease_id = ?
+            """,
+            (lease_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return self._turn_progress_lease_from_row(row)
+
+    def _list_turn_progress_leases_sync(
+        self,
+        managed_thread_id: Optional[str],
+        execution_id: Optional[str],
+        channel_id: Optional[str],
+        message_id: Optional[str],
+    ) -> list[DiscordTurnProgressLease]:
+        conn = self._connection_sync()
+        clauses: list[str] = []
+        params: list[Any] = []
+        if isinstance(managed_thread_id, str) and managed_thread_id.strip():
+            clauses.append("managed_thread_id = ?")
+            params.append(managed_thread_id.strip())
+        if execution_id is not None:
+            normalized_execution_id = str(execution_id).strip()
+            if normalized_execution_id:
+                clauses.append("execution_id = ?")
+                params.append(normalized_execution_id)
+            else:
+                clauses.append("execution_id IS NULL")
+        if isinstance(channel_id, str) and channel_id.strip():
+            clauses.append("channel_id = ?")
+            params.append(channel_id.strip())
+        if isinstance(message_id, str) and message_id.strip():
+            clauses.append("message_id = ?")
+            params.append(message_id.strip())
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        rows = conn.execute(
+            f"""
+            SELECT *
+              FROM turn_progress_leases
+              {where_sql}
+             ORDER BY updated_at DESC, lease_id DESC
+            """,
+            tuple(params),
+        ).fetchall()
+        return [self._turn_progress_lease_from_row(row) for row in rows]
+
+    def _update_turn_progress_lease_sync(
+        self,
+        lease_id: str,
+        execution_id: Optional[str] | object,
+        state: Optional[str] | object,
+        progress_label: Optional[str] | object,
+    ) -> Optional[DiscordTurnProgressLease]:
+        normalized_lease_id = str(lease_id or "").strip()
+        if not normalized_lease_id:
+            return None
+        assignments: list[str] = []
+        params: list[Any] = []
+        if execution_id is not _UNSET:
+            assignments.append("execution_id = ?")
+            params.append(str(execution_id or "").strip() or None)
+        if state is not _UNSET:
+            assignments.append("state = ?")
+            params.append(str(state or "").strip() or None)
+        if progress_label is not _UNSET:
+            assignments.append("progress_label = ?")
+            params.append(str(progress_label or "").strip() or None)
+        if not assignments:
+            return self._get_turn_progress_lease_sync(normalized_lease_id)
+        assignments.append("updated_at = ?")
+        params.append(now_iso())
+        params.append(normalized_lease_id)
+        conn = self._connection_sync()
+        with conn:
+            conn.execute(
+                f"""
+                UPDATE turn_progress_leases
+                   SET {', '.join(assignments)}
+                 WHERE lease_id = ?
+                """,
+                tuple(params),
+            )
+        return self._get_turn_progress_lease_sync(normalized_lease_id)
+
+    def _delete_turn_progress_lease_sync(self, lease_id: str) -> None:
+        normalized_lease_id = str(lease_id or "").strip()
+        if not normalized_lease_id:
+            return
+        conn = self._connection_sync()
+        with conn:
+            conn.execute(
+                "DELETE FROM turn_progress_leases WHERE lease_id = ?",
+                (normalized_lease_id,),
             )

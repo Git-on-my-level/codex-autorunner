@@ -1973,6 +1973,15 @@ async def test_car_files_inbox_lists_workspace_files(tmp_path: Path) -> None:
         workspace_path=str(workspace),
         repo_id="repo-1",
     )
+    await store.upsert_turn_progress_lease(
+        lease_id="lease-1",
+        managed_thread_id="thread-1",
+        execution_id="turn-1",
+        channel_id="channel-1",
+        message_id="preview-1",
+        state="active",
+        progress_label="working",
+    )
 
     rest = _FakeRest()
     gateway = _FakeGateway(
@@ -7941,6 +7950,13 @@ async def test_cancel_turn_button_stale_execution_does_not_interrupt_newer_turn(
         assert "newer turn is active" in (
             rest.edited_channel_messages[0]["payload"]["content"].lower()
         )
+        assert (
+            await store.list_turn_progress_leases(
+                managed_thread_id="thread-1",
+                execution_id="turn-1",
+            )
+            == []
+        )
     finally:
         await store.close()
 
@@ -7959,6 +7975,15 @@ async def test_cancel_turn_button_stale_execution_ignores_message_fetch_failures
         guild_id="guild-1",
         workspace_path=str(workspace),
         repo_id="repo-1",
+    )
+    await store.upsert_turn_progress_lease(
+        lease_id="lease-1",
+        managed_thread_id="thread-1",
+        execution_id="turn-1",
+        channel_id="channel-1",
+        message_id="preview-1",
+        state="active",
+        progress_label="working",
     )
 
     rest = _FakeRest()
@@ -8000,6 +8025,13 @@ async def test_cancel_turn_button_stale_execution_ignores_message_fetch_failures
 
         assert len(rest.followup_messages) == 1
         assert "older turn" in rest.followup_messages[0]["payload"]["content"].lower()
+        assert (
+            await store.list_turn_progress_leases(
+                managed_thread_id="thread-1",
+                execution_id="turn-1",
+            )
+            == []
+        )
     finally:
         await store.close()
 

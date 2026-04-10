@@ -245,7 +245,9 @@ from .interaction_dispatch import (
 )
 from .message_turns import (
     DiscordMessageTurnResult,
+    bind_discord_progress_task_context,
     build_discord_thread_orchestration_service,
+    reconcile_discord_turn_progress_leases,
     resolve_bound_workspace_root,
     run_agent_turn_for_message,
     run_managed_thread_turn_for_message,
@@ -665,6 +667,7 @@ class DiscordBotService:
     async def run_forever(self) -> None:
         self._reap_managed_processes(stage="startup")
         await self._store.initialize()
+        await self._reconcile_discord_progress_leases_on_startup()
         await run_chat_bootstrap_steps(
             platform="discord",
             logger=self._logger,
@@ -3237,9 +3240,82 @@ class DiscordBotService:
         task.add_done_callback(self._on_background_task_done)
         return task
 
+    async def _reconcile_discord_progress_leases_on_startup(self) -> None:
+        try:
+            reconciled = await reconcile_discord_turn_progress_leases(
+                self,
+                orphaned=True,
+                startup=True,
+            )
+        except Exception as exc:  # intentional: startup reconciliation is best-effort
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.turn.progress_reconcile_startup_failed",
+                exc=exc,
+            )
+            return
+        if reconciled:
+            log_event(
+                self._logger,
+                logging.INFO,
+                "discord.turn.progress_reconcile_startup_finished",
+                reconciled=reconciled,
+            )
+
+    async def _reconcile_background_task_failure(
+        self, task_context: dict[str, Any]
+    ) -> None:
+        failure_note = task_context.get("failure_note")
+        if not isinstance(failure_note, str) or not failure_note.strip():
+            failure_note = "Status: this progress message lost its worker."
+        reconciled = await reconcile_discord_turn_progress_leases(
+            self,
+            lease_id=(
+                task_context.get("lease_id")
+                if isinstance(task_context.get("lease_id"), str)
+                else None
+            ),
+            managed_thread_id=(
+                task_context.get("managed_thread_id")
+                if isinstance(task_context.get("managed_thread_id"), str)
+                else None
+            ),
+            execution_id=(
+                task_context.get("execution_id")
+                if isinstance(task_context.get("execution_id"), str)
+                else None
+            ),
+            channel_id=(
+                task_context.get("channel_id")
+                if isinstance(task_context.get("channel_id"), str)
+                else None
+            ),
+            message_id=(
+                task_context.get("message_id")
+                if isinstance(task_context.get("message_id"), str)
+                else None
+            ),
+            failure_note=failure_note,
+            orphaned=bool(task_context.get("orphaned")),
+        )
+        if reconciled:
+            return
+        fallback_channel_id = (
+            task_context.get("channel_id")
+            if isinstance(task_context.get("channel_id"), str)
+            else None
+        )
+        if fallback_channel_id:
+            await self._send_channel_message_safe(
+                fallback_channel_id,
+                {"content": failure_note},
+            )
+
     def _on_background_task_done(self, task: asyncio.Task[Any]) -> None:
         self._background_tasks.discard(task)
         self._background_shutdown_wait_tasks.discard(task)
+        task_context = getattr(task, "_discord_progress_task_context", None)
         try:
             task.result()
         except asyncio.CancelledError:
@@ -3253,6 +3329,11 @@ class DiscordBotService:
                 "discord.background_task.failed",
                 exc=exc,
             )
+            if isinstance(task_context, dict) and task_context:
+                reconcile_task = self._spawn_task(
+                    self._reconcile_background_task_failure(task_context)
+                )
+                bind_discord_progress_task_context(reconcile_task)
 
     async def _on_dispatch(self, event_type: str, payload: dict[str, Any]) -> None:
         if event_type == "INTERACTION_CREATE":
