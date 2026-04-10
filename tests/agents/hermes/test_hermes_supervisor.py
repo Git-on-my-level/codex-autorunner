@@ -167,7 +167,9 @@ async def test_hermes_supervisor_prefers_prompt_completed_after_idle_session_sta
     )
     try:
         await supervisor.ensure_ready(tmp_path)
-        session = await supervisor.create_session(tmp_path, title="Idle before complete")
+        session = await supervisor.create_session(
+            tmp_path, title="Idle before complete"
+        )
         turn_id = await supervisor.start_turn(
             tmp_path,
             session.session_id,
