@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import html
 import importlib
 import json
 import logging
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -40,6 +42,11 @@ from .scm_reaction_types import (
 from .text_utils import _normalize_text
 
 _LOGGER = logging.getLogger(__name__)
+_MARKDOWN_LINK_RE = re.compile(r"!\[([^\]\n]*)\]\([^)]+\)|\[([^\]\n]+)\]\([^)]+\)")
+_REVIEW_BADGE_RE = re.compile(r"!\s*(P\d+)\s+Badge\b", re.IGNORECASE)
+_REVIEW_HTML_TAG_RE = re.compile(
+    r"</?(?:sub|sup|strong|b|em|i|code|br)\b[^>\n]*>", re.IGNORECASE
+)
 
 
 class ScmEventLookup(Protocol):
@@ -270,8 +277,21 @@ def _collapse_whitespace(value: Any) -> Optional[str]:
     return text or None
 
 
+def _plain_text_review_summary(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    text = html.unescape(value)
+    text = _MARKDOWN_LINK_RE.sub(
+        lambda match: match.group(1) or match.group(2) or " ", text
+    )
+    text = _REVIEW_HTML_TAG_RE.sub(" ", text)
+    text = text.replace("*", " ").replace("`", " ").replace("~", " ")
+    text = _REVIEW_BADGE_RE.sub(r"\1", text)
+    return _collapse_whitespace(text)
+
+
 def _trimmed_summary(value: Any, *, limit: int = 120) -> Optional[str]:
-    text = _collapse_whitespace(value)
+    text = _plain_text_review_summary(value)
     if text is None:
         return None
     if len(text) <= limit:
@@ -289,6 +309,13 @@ def _review_comment_location(payload: Mapping[str, Any]) -> Optional[str]:
     return path
 
 
+def _review_comment_url(payload: Mapping[str, Any]) -> Optional[str]:
+    url = _collapse_whitespace(payload.get("html_url"))
+    if url is None or not url.startswith(("http://", "https://")):
+        return None
+    return url
+
+
 def _review_comment_wakeup_message(
     *,
     event: ScmEvent,
@@ -299,17 +326,19 @@ def _review_comment_wakeup_message(
     commenter_login = _collapse_whitespace(payload.get("author_login"))
     location = _review_comment_location(payload)
     comment_summary = _trimmed_summary(payload.get("body"))
+    review_url = _review_comment_url(payload)
 
-    summary = f"Received PR review feedback on {subject}"
+    lines = [f"PR review feedback on {subject}"]
     if commenter_login is not None:
-        summary = f"{summary} from {commenter_login}"
+        lines.append(f"From: {commenter_login}")
     if location is not None:
-        summary = f"{summary} at {location}"
+        lines.append(f"Location: {location}")
     if comment_summary is not None:
-        summary = f"{summary}: {comment_summary}"
-    if not summary.endswith((".", "!", "?")):
-        summary = f"{summary}."
-    return f"{summary} The bound agent thread is taking a look."
+        lines.append(f"Summary: {comment_summary}")
+    if review_url is not None:
+        lines.append(f"Link: <{review_url}>")
+    lines.append("The bound agent thread is taking a look.")
+    return "\n".join(lines)
 
 
 def _reaction_subject(tracking: Mapping[str, Any]) -> str:

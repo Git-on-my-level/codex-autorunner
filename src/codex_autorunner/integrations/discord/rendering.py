@@ -12,6 +12,7 @@ _CODE_BLOCK_RE = re.compile(r"```([^\n`]*)\n(.*?)```", re.DOTALL)
 _INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
 _BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
 _ITALIC_RE = re.compile(r"\*(.+?)\*")
+_AUTOLINK_RE = re.compile(r"<https?://[^>\s]+>")
 _DISCORD_ESCAPE_RE = re.compile(r"([*_~`>|{}\\])")
 
 
@@ -85,6 +86,7 @@ def _format_discord_inline(text: str) -> str:
     code_placeholders: list[str] = []
     bold_placeholders: list[str] = []
     italic_placeholders: list[str] = []
+    autolink_placeholders: list[str] = []
 
     def _replace_code(match: re.Match[str]) -> str:
         code_placeholders.append(escape_discord_code(match.group(1)))
@@ -98,12 +100,20 @@ def _format_discord_inline(text: str) -> str:
         italic_placeholders.append(escape_discord_markdown(match.group(1)))
         return f"\x00ITALIC{len(italic_placeholders) - 1}\x00"
 
+    def _replace_autolink(match: re.Match[str]) -> str:
+        autolink_placeholders.append(match.group(0))
+        return f"\x00AUTOLINK{len(autolink_placeholders) - 1}\x00"
+
     text = _INLINE_CODE_RE.sub(_replace_code, text)
     text = _BOLD_RE.sub(_replace_bold, text)
     text = _ITALIC_RE.sub(_replace_italic, text)
+    text = _AUTOLINK_RE.sub(_replace_autolink, text)
 
     escaped = escape_discord_markdown(text)
 
+    for idx, autolink in enumerate(autolink_placeholders):
+        token = f"\x00AUTOLINK{idx}\x00"
+        escaped = escaped.replace(token, autolink)
     for idx, italic in enumerate(italic_placeholders):
         token = f"\x00ITALIC{idx}\x00"
         escaped = escaped.replace(token, f"*{italic}*")

@@ -190,6 +190,61 @@ async def test_dispatcher_supports_custom_bypass_rules() -> None:
 
 
 @pytest.mark.anyio
+async def test_dispatcher_holds_conversation_while_external_busy_until_woken() -> None:
+    externally_busy = True
+    dispatcher = ChatDispatcher(busy_predicate=lambda _event, _context: externally_busy)
+    observed: list[str] = []
+
+    async def handler(event, _context) -> None:
+        observed.append(event.update_id)
+
+    result = await dispatcher.dispatch(
+        _message_event("normal-1", message_id="m-1"),
+        handler,
+    )
+    await asyncio.sleep(0.01)
+
+    assert result.status == "queued"
+    assert result.queued_pending == 1
+    assert result.queued_while_busy is True
+    assert observed == []
+
+    externally_busy = False
+    assert await dispatcher.wake_conversation("fake:chat-1:thread-1") is True
+    await asyncio.wait_for(dispatcher.wait_idle(), timeout=1.0)
+
+    assert observed == ["normal-1"]
+
+
+@pytest.mark.anyio
+async def test_dispatcher_rechecks_external_busy_before_skipping_worker_start() -> None:
+    busy_checks = 0
+
+    async def busy_predicate(_event, _context) -> bool:
+        nonlocal busy_checks
+        busy_checks += 1
+        return busy_checks == 1
+
+    dispatcher = ChatDispatcher(busy_predicate=busy_predicate)
+    observed: list[str] = []
+
+    async def handler(event, _context) -> None:
+        observed.append(event.update_id)
+
+    result = await dispatcher.dispatch(
+        _message_event("normal-1", message_id="m-1"),
+        handler,
+    )
+    await asyncio.wait_for(dispatcher.wait_idle(), timeout=1.0)
+
+    assert result.status == "queued"
+    assert result.queued_pending == 1
+    assert result.queued_while_busy is False
+    assert observed == ["normal-1"]
+    assert busy_checks == 2
+
+
+@pytest.mark.anyio
 async def test_dispatcher_close_cancels_workers_and_queued_events() -> None:
     dispatcher = ChatDispatcher()
     entered = asyncio.Event()

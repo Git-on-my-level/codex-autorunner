@@ -564,6 +564,7 @@ class DiscordBotService:
             bypass_predicate=lambda event, context: self._bypass_predicate(
                 event, context
             ),
+            busy_predicate=lambda event, context: self._busy_predicate(event, context),
             handler_timeout_seconds=config.dispatch.handler_timeout_seconds,
             handler_stalled_warning_seconds=(
                 config.dispatch.handler_stalled_warning_seconds
@@ -658,6 +659,7 @@ class DiscordBotService:
                 stalled_warning_seconds=config.dispatch.handler_stalled_warning_seconds,
             ),
             logger=self._logger,
+            on_ingressed_conversation_idle=self._wake_dispatcher_conversation,
         )
 
     async def run_forever(self) -> None:
@@ -828,6 +830,25 @@ class DiscordBotService:
             plain_text_turn_fn=should_trigger_plain_text_turn,
         )
 
+    def _is_message_turn_candidate_shape(self, event: ChatMessageEvent) -> bool:
+        text = (event.text or "").strip()
+        has_attachments = bool(event.attachments)
+        has_forwarded_content = event.forwarded_from is not None
+        if not text and not has_attachments and not has_forwarded_content:
+            return False
+        if text.startswith("/"):
+            return False
+        if text.startswith("!"):
+            return False
+        return True
+
+    def _busy_predicate(self, event: ChatEvent, context: DispatchContext) -> bool:
+        if not isinstance(event, ChatMessageEvent):
+            return False
+        if not self._is_message_turn_candidate_shape(event):
+            return False
+        return self._command_runner.is_ingressed_busy(context.conversation_id)
+
     def _build_plain_text_turn_context(
         self,
         *,
@@ -955,12 +976,7 @@ class DiscordBotService:
         )
 
     def _is_turn_candidate_message_event(self, event: ChatMessageEvent) -> bool:
-        text = (event.text or "").strip()
-        has_attachments = bool(event.attachments)
-        has_forwarded_content = event.forwarded_from is not None
-        if not text and not has_attachments and not has_forwarded_content:
-            return False
-        if text.startswith("/"):
+        if not self._is_message_turn_candidate_shape(event):
             return False
         result = self._evaluate_message_collaboration_policy(
             event,
@@ -982,6 +998,11 @@ class DiscordBotService:
     ) -> str:
         return conversation_id_for("discord", channel_id, guild_id)
 
+    async def _wake_dispatcher_conversation(self, conversation_id: str) -> None:
+        wake = getattr(self._dispatcher, "wake_conversation", None)
+        if callable(wake):
+            await wake(conversation_id)
+
     async def _clear_queued_notice(
         self,
         *,
@@ -999,6 +1020,17 @@ class DiscordBotService:
             record_id=f"queue-notice-delete:{channel_id}:{source_message_id}",
         )
 
+    def _queued_notice_content_for_conversation(
+        self, conversation_id: str
+    ) -> Optional[str]:
+        describe_busy = getattr(self._command_runner, "describe_ingressed_busy", None)
+        if not callable(describe_busy):
+            return None
+        command_label = describe_busy(conversation_id)
+        if not isinstance(command_label, str) or not command_label.strip():
+            return None
+        return f"Queued behind {command_label}; will run when it finishes."
+
     async def _maybe_send_queued_notice(
         self, event: ChatEvent, dispatch_result: DispatchResult
     ) -> None:
@@ -1009,9 +1041,13 @@ class DiscordBotService:
         if not await self._can_start_message_turn_in_channel(event):
             return
         channel_id = dispatch_result.context.chat_id
+        notice_content = self._queued_notice_content_for_conversation(
+            dispatch_result.context.conversation_id
+        )
         source_message_id = event.message.message_id
         queued_notice_payload = build_discord_queue_notice_message(
             source_message_id=source_message_id,
+            content=notice_content,
         )
         try:
             response = await self._send_channel_message(
@@ -1026,7 +1062,10 @@ class DiscordBotService:
         except (DiscordAPIError, OSError, TypeError, ValueError):
             await self._send_channel_message_safe(
                 channel_id,
-                build_discord_queue_notice_message(source_message_id=None).to_payload(),
+                build_discord_queue_notice_message(
+                    source_message_id=None,
+                    content=notice_content,
+                ).to_payload(),
                 record_id=f"queue-notice:{channel_id}:{dispatch_result.context.update_id}",
             )
         log_event(
@@ -2947,25 +2986,38 @@ class DiscordBotService:
             )
 
     async def _shutdown(self) -> None:
-        drainable_tasks = [
-            task
-            for task in list(self._background_shutdown_wait_tasks)
-            if not task.done()
-        ]
-        if drainable_tasks:
+        shutdown_deadline = (
+            time.monotonic() + DISCORD_BACKGROUND_TASK_SHUTDOWN_GRACE_SECONDS
+        )
+        pending_shutdown_tasks: list[asyncio.Task[Any]] = []
+        while True:
+            drainable_tasks = [
+                task
+                for task in list(self._background_shutdown_wait_tasks)
+                if not task.done()
+            ]
+            if not drainable_tasks:
+                break
+            remaining = shutdown_deadline - time.monotonic()
+            if remaining <= 0:
+                pending_shutdown_tasks = drainable_tasks
+                break
             done, pending = await asyncio.wait(
                 drainable_tasks,
-                timeout=DISCORD_BACKGROUND_TASK_SHUTDOWN_GRACE_SECONDS,
+                timeout=remaining,
             )
             self._background_shutdown_wait_tasks.difference_update(done)
+            pending_shutdown_tasks = list(pending)
             if pending:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "discord.background_task.shutdown_timeout",
-                    timeout_seconds=DISCORD_BACKGROUND_TASK_SHUTDOWN_GRACE_SECONDS,
-                    pending_count=len(pending),
-                )
+                break
+        if pending_shutdown_tasks:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.background_task.shutdown_timeout",
+                timeout_seconds=DISCORD_BACKGROUND_TASK_SHUTDOWN_GRACE_SECONDS,
+                pending_count=len(pending_shutdown_tasks),
+            )
         if self._background_tasks:
             for task in list(self._background_tasks):
                 task.cancel()
