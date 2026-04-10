@@ -146,6 +146,7 @@ class ChatDispatcher:
         allowlist_predicate: Optional[DispatchPredicate] = None,
         dedupe_predicate: Optional[DispatchPredicate] = None,
         bypass_predicate: Optional[DispatchPredicate] = None,
+        busy_predicate: Optional[DispatchPredicate] = None,
         bypass_interaction_prefixes: Optional[Iterable[str]] = None,
         bypass_callback_ids: Optional[Iterable[str]] = None,
         bypass_message_texts: Optional[Iterable[str]] = None,
@@ -157,6 +158,7 @@ class ChatDispatcher:
         self._allowlist_predicate = allowlist_predicate
         self._dedupe_predicate = dedupe_predicate
         self._bypass_predicate = bypass_predicate
+        self._busy_predicate = busy_predicate
         self._bypass_interaction_prefixes = _normalize_casefolded_values(
             bypass_interaction_prefixes,
             default=DEFAULT_BYPASS_INTERACTION_PREFIXES,
@@ -265,8 +267,18 @@ class ChatDispatcher:
             await self._run_handler(event, context, handler)
             return DispatchResult(status="dispatched", context=context, bypassed=True)
 
+        externally_busy = False
+        if self._busy_predicate is not None:
+            externally_busy = await _resolve_predicate(
+                self._busy_predicate, event, context
+            )
+
         queued_pending, queued_while_busy = await self._enqueue(
-            context.conversation_id, event, context, handler
+            context.conversation_id,
+            event,
+            context,
+            handler,
+            externally_busy=externally_busy,
         )
         return DispatchResult(
             status="queued",
@@ -286,6 +298,22 @@ class ChatDispatcher:
         async with self._lock:
             queue = self._queues.get(conversation_id)
             return len(queue) if queue is not None else 0
+
+    async def wake_conversation(self, conversation_id: str) -> bool:
+        """Start draining a queued conversation after an external busy gate clears."""
+
+        async with self._lock:
+            if conversation_id in self._resetting_conversations:
+                return False
+            queue = self._queues.get(conversation_id)
+            if not queue or conversation_id in self._workers:
+                return False
+            self._workers[conversation_id] = asyncio.create_task(
+                self._drain_conversation(conversation_id)
+            )
+            self._idle_event.clear()
+            self._publish_queue_state_locked(conversation_id)
+            return True
 
     async def clear_pending(self, conversation_id: str) -> int:
         """Cancel queued items for one conversation without interrupting active work."""
@@ -434,6 +462,8 @@ class ChatDispatcher:
         event: ChatEvent,
         context: DispatchContext,
         handler: DispatchHandler,
+        *,
+        externally_busy: bool = False,
     ) -> tuple[int, bool]:
         async with self._lock:
             queue = self._queues.get(conversation_id)
@@ -445,12 +475,16 @@ class ChatDispatcher:
             had_pending = bool(queue)
             queue.append((event, context, handler))
             self._idle_event.clear()
-            if conversation_id not in self._workers and not is_resetting:
+            if (
+                conversation_id not in self._workers
+                and not is_resetting
+                and not externally_busy
+            ):
                 self._workers[conversation_id] = asyncio.create_task(
                     self._drain_conversation(conversation_id)
                 )
             pending = len(queue)
-            queued_while_busy = had_worker or had_pending
+            queued_while_busy = had_worker or had_pending or externally_busy
             self._publish_queue_state_locked(conversation_id)
         log_event(
             self._logger,

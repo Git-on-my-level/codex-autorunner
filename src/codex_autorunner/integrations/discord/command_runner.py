@@ -21,11 +21,12 @@ timeouts internally.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import time
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Deque, Dict, Optional, Set
+from typing import Any, Awaitable, Callable, Deque, Dict, Optional, Set
 
 from ...core.logging_utils import log_event
 from ...integrations.chat.dispatcher import conversation_id_for
@@ -59,15 +60,20 @@ class CommandRunner:
         *,
         config: RunnerConfig,
         logger: logging.Logger,
+        on_ingressed_conversation_idle: Optional[
+            Callable[[str], Awaitable[None] | None]
+        ] = None,
     ) -> None:
         self._service = service
         self._config = config
         self._logger = logger
+        self._on_ingressed_conversation_idle = on_ingressed_conversation_idle
         self._queue: asyncio.Queue[Any] = asyncio.Queue()
         self._drain_task: Optional[asyncio.Task[None]] = None
         self._direct_tasks: Set[asyncio.Task[None]] = set()
         self._ingressed_queues: Dict[str, Deque[QueuedIngressInteraction]] = {}
         self._ingressed_workers: Dict[str, asyncio.Task[None]] = {}
+        self._active_ingressed_commands: Dict[str, str] = {}
         self._started = False
 
     def start(self) -> None:
@@ -120,7 +126,32 @@ class CommandRunner:
                 name=f"discord-runner-ingressed-{conversation_id}",
             )
 
+    def is_ingressed_busy(self, conversation_id: str) -> bool:
+        queue = self._ingressed_queues.get(conversation_id)
+        worker = self._ingressed_workers.get(conversation_id)
+        return bool(queue) or (worker is not None and not worker.done())
+
+    def describe_ingressed_busy(self, conversation_id: str) -> Optional[str]:
+        active = self._active_ingressed_commands.get(conversation_id)
+        if isinstance(active, str) and active.strip():
+            return active
+        queue = self._ingressed_queues.get(conversation_id)
+        if queue:
+            return self._format_command_label(queue[0].ctx)
+        return None
+
+    async def _notify_ingressed_conversations_idle(
+        self, conversation_ids: set[str]
+    ) -> None:
+        if not conversation_ids or self._on_ingressed_conversation_idle is None:
+            return
+        for conversation_id in conversation_ids:
+            maybe_awaitable = self._on_ingressed_conversation_idle(conversation_id)
+            if inspect.isawaitable(maybe_awaitable):
+                await maybe_awaitable
+
     async def shutdown(self, *, grace_seconds: float = 5.0) -> None:
+        idle_conversations: set[str] = set()
         if self._drain_task is not None and not self._drain_task.done():
             await self._queue.put(_DRAIN_SENTINEL)
             try:
@@ -145,6 +176,9 @@ class CommandRunner:
                 await asyncio.gather(*pending, return_exceptions=True)
             self._direct_tasks.clear()
         if self._ingressed_workers:
+            idle_conversations.update(self._ingressed_workers)
+            idle_conversations.update(self._ingressed_queues)
+            idle_conversations.update(self._active_ingressed_commands)
             workers = list(self._ingressed_workers.values())
             done, pending = await asyncio.wait(
                 workers,
@@ -157,6 +191,8 @@ class CommandRunner:
                 await asyncio.gather(*pending, return_exceptions=True)
             self._ingressed_workers.clear()
             self._ingressed_queues.clear()
+            self._active_ingressed_commands.clear()
+        await self._notify_ingressed_conversations_idle(idle_conversations)
         self._started = False
 
     def _ensure_started(self) -> None:
@@ -166,6 +202,12 @@ class CommandRunner:
     @staticmethod
     def _ingressed_conversation_id(ctx: IngressContext) -> str:
         return conversation_id_for("discord", ctx.channel_id, ctx.guild_id)
+
+    @staticmethod
+    def _format_command_label(ctx: IngressContext) -> str:
+        if ctx.command_spec and ctx.command_spec.path:
+            return "/" + " ".join(ctx.command_spec.path)
+        return ctx.kind.value
 
     async def _drain_loop(self) -> None:
         try:
@@ -217,6 +259,7 @@ class CommandRunner:
             return
 
     async def _drain_ingressed_conversation(self, conversation_id: str) -> None:
+        notify_idle = False
         try:
             while True:
                 queue = self._ingressed_queues.get(conversation_id)
@@ -225,6 +268,9 @@ class CommandRunner:
                     return
                 item = queue.popleft()
                 try:
+                    self._active_ingressed_commands[conversation_id] = (
+                        self._format_command_label(item.ctx)
+                    )
                     started_at = time.monotonic()
                     log_event(
                         self._logger,
@@ -260,8 +306,12 @@ class CommandRunner:
             current = self._ingressed_workers.get(conversation_id)
             if current is asyncio.current_task():
                 self._ingressed_workers.pop(conversation_id, None)
+            self._active_ingressed_commands.pop(conversation_id, None)
             if not self._ingressed_queues.get(conversation_id):
                 self._ingressed_queues.pop(conversation_id, None)
+                notify_idle = True
+            if notify_idle:
+                await self._notify_ingressed_conversations_idle({conversation_id})
 
     def _direct_task_done(self, task: asyncio.Task[None]) -> None:
         self._direct_tasks.discard(task)

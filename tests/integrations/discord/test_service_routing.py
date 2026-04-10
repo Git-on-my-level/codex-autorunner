@@ -177,13 +177,19 @@ class _FakeRest:
 
 
 class _FakeGateway:
-    def __init__(self, events: list[dict[str, Any]]) -> None:
+    def __init__(
+        self, events: list[dict[str, Any] | tuple[str, dict[str, Any]]]
+    ) -> None:
         self._events = events
         self.stopped = False
 
     async def run(self, on_dispatch) -> None:
-        for payload in self._events:
-            await on_dispatch("INTERACTION_CREATE", payload)
+        for item in self._events:
+            if isinstance(item, tuple):
+                event_type, payload = item
+            else:
+                event_type, payload = "INTERACTION_CREATE", item
+            await on_dispatch(event_type, payload)
 
     async def stop(self) -> None:
         self.stopped = True
@@ -6177,6 +6183,257 @@ async def test_dispatch_deferred_slash_commands_ack_before_prior_handler_finishe
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_turn_waits_for_ingressed_slash_command_to_finish(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    release_newt = asyncio.Event()
+    message_turn_started = asyncio.Event()
+    observed: list[str] = []
+
+    async def _fake_handle_newt(
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+        guild_id: str | None,
+    ) -> None:
+        _ = interaction_id, interaction_token, channel_id, guild_id
+        observed.append("newt:start")
+        await release_newt.wait()
+        observed.append("newt:end")
+
+    async def _fake_run_turn(
+        self,
+        *,
+        workspace_root: Path,
+        prompt_text: str,
+        input_items: list[dict[str, Any]] | None = None,
+        source_message_id: str | None = None,
+        agent: str,
+        model_override: str | None,
+        reasoning_effort: str | None,
+        session_key: str,
+        orchestrator_channel_key: str,
+        managed_thread_surface_key: str | None = None,
+    ) -> DiscordMessageTurnResult:
+        _ = (
+            workspace_root,
+            input_items,
+            source_message_id,
+            agent,
+            model_override,
+            reasoning_effort,
+            session_key,
+            orchestrator_channel_key,
+            managed_thread_surface_key,
+        )
+        observed.append(f"message:{prompt_text}")
+        message_turn_started.set()
+        return DiscordMessageTurnResult(final_message="message reply")
+
+    service._handle_car_newt = _fake_handle_newt  # type: ignore[assignment]
+    service._run_agent_turn_for_message = _fake_run_turn.__get__(  # type: ignore[method-assign]
+        service,
+        DiscordBotService,
+    )
+
+    interaction = _interaction(name="newt", options=[])
+    interaction["id"] = "inter-1"
+    interaction["token"] = "token-1"
+    message_payload = {
+        "id": "m-1",
+        "channel_id": "channel-1",
+        "guild_id": "guild-1",
+        "content": "please continue",
+        "author": {"id": "user-1", "bot": False},
+        "attachments": [],
+    }
+
+    try:
+        await service._on_dispatch("INTERACTION_CREATE", interaction)
+        await service._on_dispatch("MESSAGE_CREATE", message_payload)
+
+        for _ in range(50):
+            if any(
+                "Queued (waiting for available worker...)"
+                in item["payload"].get("content", "")
+                for item in rest.channel_messages
+            ):
+                break
+            await asyncio.sleep(0.01)
+
+        assert observed == ["newt:start"]
+        assert message_turn_started.is_set() is False
+        assert any(
+            "Queued behind /car newt; will run when it finishes."
+            in item["payload"].get("content", "")
+            for item in rest.channel_messages
+        )
+
+        release_newt.set()
+
+        for _ in range(100):
+            if message_turn_started.is_set():
+                break
+            await asyncio.sleep(0.01)
+
+        assert observed == ["newt:start", "newt:end", "message:please continue"]
+        assert any(
+            "message reply" in item["payload"].get("content", "")
+            for item in rest.channel_messages
+        )
+    finally:
+        release_newt.set()
+        await service._shutdown()
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_run_forever_drains_message_queued_behind_ingressed_slash_command(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+
+    rest = _FakeRest()
+    interaction = _interaction(name="newt", options=[])
+    interaction["id"] = "inter-1"
+    interaction["token"] = "token-1"
+    gateway = _FakeGateway(
+        [
+            ("INTERACTION_CREATE", interaction),
+            (
+                "MESSAGE_CREATE",
+                {
+                    "id": "m-1",
+                    "channel_id": "channel-1",
+                    "guild_id": "guild-1",
+                    "content": "please continue",
+                    "author": {"id": "user-1", "bot": False},
+                    "attachments": [],
+                },
+            ),
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    release_newt = asyncio.Event()
+    newt_started = asyncio.Event()
+    observed: list[str] = []
+
+    async def _fake_handle_newt(
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+        guild_id: str | None,
+    ) -> None:
+        _ = interaction_id, interaction_token, channel_id, guild_id
+        observed.append("newt:start")
+        newt_started.set()
+        await release_newt.wait()
+        observed.append("newt:end")
+
+    async def _fake_run_turn(
+        self,
+        *,
+        workspace_root: Path,
+        prompt_text: str,
+        input_items: list[dict[str, Any]] | None = None,
+        source_message_id: str | None = None,
+        agent: str,
+        model_override: str | None,
+        reasoning_effort: str | None,
+        session_key: str,
+        orchestrator_channel_key: str,
+        managed_thread_surface_key: str | None = None,
+    ) -> DiscordMessageTurnResult:
+        _ = (
+            workspace_root,
+            input_items,
+            source_message_id,
+            agent,
+            model_override,
+            reasoning_effort,
+            session_key,
+            orchestrator_channel_key,
+            managed_thread_surface_key,
+        )
+        observed.append(f"message:{prompt_text}")
+        return DiscordMessageTurnResult(final_message="message reply")
+
+    async def _release_later() -> None:
+        await newt_started.wait()
+        await asyncio.sleep(0.05)
+        release_newt.set()
+
+    service._handle_car_newt = _fake_handle_newt  # type: ignore[assignment]
+    service._run_agent_turn_for_message = _fake_run_turn.__get__(  # type: ignore[method-assign]
+        service,
+        DiscordBotService,
+    )
+
+    release_task = asyncio.create_task(_release_later())
+    try:
+        await asyncio.wait_for(service.run_forever(), timeout=5)
+        assert observed == ["newt:start", "newt:end", "message:please continue"]
+        assert any(
+            "Queued behind /car newt; will run when it finishes."
+            in item["payload"].get("content", "")
+            for item in rest.channel_messages
+        )
+        assert any(
+            "message reply" in item["payload"].get("content", "")
+            for item in rest.channel_messages
+        )
+    finally:
+        release_newt.set()
+        if not release_task.done():
+            release_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await release_task
         await store.close()
 
 

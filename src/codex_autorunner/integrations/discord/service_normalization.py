@@ -332,12 +332,13 @@ def build_discord_approval_message(
 def build_discord_queue_notice_message(
     *,
     source_message_id: Optional[str],
+    content: Optional[str] = None,
 ) -> DiscordMessagePayload:
     components: Optional[Sequence[dict[str, Any]]] = None
     if source_message_id:
         components = (build_queue_notice_buttons(source_message_id),)
     return DiscordMessagePayload(
-        content="Queued (waiting for available worker...)",
+        content=content or "Queued (waiting for available worker...)",
         components=components,
     )
 

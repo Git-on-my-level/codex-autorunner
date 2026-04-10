@@ -1149,7 +1149,7 @@ async def test_orchestrated_turn_submission_timeout_deletes_progress_placeholder
     service = _Service()
     with pytest.raises(
         RuntimeError,
-        match="failed to start before runtime execution was created",
+        match="still starting up. Please retry in a moment",
     ):
         await discord_message_turns_module._run_discord_orchestrated_turn_for_message(
             service,
@@ -1178,8 +1178,11 @@ async def test_orchestrated_turn_submission_timeout_deletes_progress_placeholder
 
     assert submit_started.is_set()
     assert len(rest.channel_messages) == 1
-    assert rest.deleted_channel_messages
-    assert rest.deleted_channel_messages[-1]["message_id"] == "msg-1"
+    assert rest.deleted_channel_messages == []
+    assert rest.edited_channel_messages
+    assert rest.edited_channel_messages[-1]["message_id"] == "msg-1"
+    assert "queued" in rest.edited_channel_messages[-1]["payload"]["content"].lower()
+    assert rest.edited_channel_messages[-1]["payload"]["components"] == []
 
 
 @pytest.mark.asyncio
@@ -6034,7 +6037,7 @@ async def test_message_create_progress_edit_failures_are_best_effort_and_throttl
 
     try:
         await service.run_forever()
-        assert 1 <= rest.edit_attempts <= 2
+        assert 1 <= rest.edit_attempts <= 3
         assert len(rest.deleted_channel_messages) == 1
         assert rest.deleted_channel_messages[0]["message_id"] == "msg-1"
         assert any(
