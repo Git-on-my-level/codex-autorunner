@@ -537,6 +537,7 @@ async def test_discord_message_turns_show_busy_placeholder_for_attachment_prep(
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     sent_messages: list[dict[str, object]] = []
+    stashed_progress_messages: list[dict[str, str]] = []
 
     class _StoreStub:
         async def get_binding(self, *, channel_id: str) -> dict[str, object] | None:
@@ -648,8 +649,23 @@ async def test_discord_message_turns_show_busy_placeholder_for_attachment_prep(
     monkeypatch.setattr(
         discord_message_turns,
         "resolve_discord_thread_target",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("status inspection should not create or resolve a thread")
+        lambda *_args, **_kwargs: (
+            object(),
+            SimpleNamespace(thread_target_id="thread-target-456"),
+        ),
+    )
+    monkeypatch.setattr(
+        discord_message_turns,
+        "_stash_discord_reusable_progress_message",
+        lambda service, *, thread_target_id, source_message_id, channel_id, message_id: (
+            stashed_progress_messages.append(
+                {
+                    "thread_target_id": thread_target_id,
+                    "source_message_id": source_message_id,
+                    "channel_id": channel_id,
+                    "message_id": message_id,
+                }
+            )
         ),
     )
 
@@ -688,6 +704,14 @@ async def test_discord_message_turns_show_busy_placeholder_for_attachment_prep(
     assert sent_messages[0]["payload"]["content"] == (
         "Busy. Preparing attachments while the current turn finishes..."
     )
+    assert stashed_progress_messages == [
+        {
+            "thread_target_id": "thread-target-456",
+            "source_message_id": "msg-2",
+            "channel_id": "channel-1",
+            "message_id": "msg-1",
+        }
+    ]
 
 
 @pytest.mark.anyio

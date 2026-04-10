@@ -741,9 +741,7 @@ async def _submit_discord_thread_message(
         and isinstance(dispatch.event.message.message_id, str)
         and dispatch.event.message.message_id
     ):
-        thread_target_id = managed_thread_status.thread_target_id
-        if not thread_target_id:
-            thread_target_id = await _resolve_managed_thread_id()
+        thread_target_id = await _resolve_managed_thread_id()
         if thread_target_id:
             _stash_discord_reusable_progress_message(
                 dispatch.service,
