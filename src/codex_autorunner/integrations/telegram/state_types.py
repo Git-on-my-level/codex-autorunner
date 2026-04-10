@@ -173,6 +173,7 @@ class TelegramTopicRecord:
     last_active_at: Optional[str] = None
     last_ticket_dispatch_seq: Optional[str] = None
     last_terminal_run_id: Optional[str] = None
+    last_terminal_finished_at: Optional[str] = None
 
     @classmethod
     def from_dict(
@@ -325,6 +326,11 @@ class TelegramTopicRecord:
         )
         if not isinstance(last_terminal_run_id, str):
             last_terminal_run_id = None
+        last_terminal_finished_at = payload.get(
+            "last_terminal_finished_at"
+        ) or payload.get("lastTerminalFinishedAt")
+        if not isinstance(last_terminal_finished_at, str):
+            last_terminal_finished_at = None
         return cls(
             repo_id=repo_id,
             resource_kind=resource_kind,
@@ -356,6 +362,7 @@ class TelegramTopicRecord:
             last_active_at=last_active_at,
             last_ticket_dispatch_seq=last_ticket_dispatch_seq,
             last_terminal_run_id=last_terminal_run_id,
+            last_terminal_finished_at=last_terminal_finished_at,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -393,6 +400,7 @@ class TelegramTopicRecord:
             "last_active_at": self.last_active_at,
             "last_ticket_dispatch_seq": self.last_ticket_dispatch_seq,
             "last_terminal_run_id": self.last_terminal_run_id,
+            "last_terminal_finished_at": self.last_terminal_finished_at,
         }
 
 

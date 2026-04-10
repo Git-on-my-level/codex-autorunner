@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
@@ -35,6 +35,8 @@ from .state import parse_topic_key
 
 class TelegramTicketFlowBridge:
     """Encapsulate ticket_flow pause/resume plumbing for Telegram service."""
+
+    _LEGACY_STALE_TERMINAL_FALLBACK_SECONDS = 30.0
 
     def __init__(
         self,
@@ -100,9 +102,65 @@ class TelegramTicketFlowBridge:
         if not isinstance(raw, str):
             return float("-inf")
         try:
-            return datetime.strptime(raw, "%Y-%m-%dT%H:%M:%SZ").timestamp()
+            parsed = datetime.strptime(raw, "%Y-%m-%dT%H:%M:%SZ").replace(
+                tzinfo=timezone.utc
+            )
+            return parsed.timestamp()
         except ValueError:
             return float("-inf")
+
+    @staticmethod
+    def _parse_iso_timestamp(raw: Optional[str]) -> Optional[float]:
+        if not isinstance(raw, str):
+            return None
+        text = raw.strip()
+        if not text:
+            return None
+        try:
+            return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            return None
+
+    def _should_notify_terminal(
+        self,
+        *,
+        record: object,
+        run_id: str,
+        status: str,
+        terminal_at: Optional[str],
+    ) -> bool:
+        last_run_id = getattr(record, "last_terminal_run_id", None)
+        if last_run_id == run_id:
+            return False
+
+        current_ts = self._parse_iso_timestamp(terminal_at)
+        if current_ts is None:
+            return True
+
+        seen_ts = self._parse_iso_timestamp(
+            getattr(record, "last_terminal_finished_at", None)
+        )
+        if seen_ts is not None and current_ts < seen_ts:
+            return False
+
+        # Backward compatibility for existing topic records that only have run_id:
+        # suppress stale terminal notices that predate the topic's last activity.
+        if (
+            seen_ts is None
+            and status == FlowRunStatus.STOPPED.value
+            and isinstance(last_run_id, str)
+            and last_run_id.strip()
+        ):
+            last_active_ts = self._parse_last_active(
+                getattr(record, "last_active_at", None)
+            )
+            if (
+                current_ts
+                <= last_active_ts - self._LEGACY_STALE_TERMINAL_FALLBACK_SECONDS
+            ):
+                return False
+
+        return True
 
     async def watch_ticket_flow_pauses(self, interval_seconds: float) -> None:
         interval = max(interval_seconds, 1.0)
@@ -740,11 +798,16 @@ class TelegramTicketFlowBridge:
         self._clear_scan_failure_marker("terminal", workspace_root)
         if terminal_run is None:
             return
-        run_id, status, error_message = terminal_run
+        run_id, status, error_message, terminal_at = terminal_run
         pending = [
             (key, record)
             for key, record in entries
-            if getattr(record, "last_terminal_run_id", None) != run_id
+            if self._should_notify_terminal(
+                record=record,
+                run_id=run_id,
+                status=status,
+                terminal_at=terminal_at,
+            )
         ]
         if not pending:
             return
@@ -787,7 +850,10 @@ class TelegramTicketFlowBridge:
             )
             return
         for key, _record in pending:
-            await self._store.update_topic(key, self._set_terminal_run_marker(run_id))
+            await self._store.update_topic(
+                key,
+                self._set_terminal_run_marker(run_id, finished_at=terminal_at),
+            )
         log_event(
             self._logger,
             logging.INFO,
@@ -799,7 +865,7 @@ class TelegramTicketFlowBridge:
 
     def _load_latest_terminal_run(
         self, workspace_root: Path
-    ) -> Optional[tuple[str, str, Optional[str]]]:
+    ) -> Optional[tuple[str, str, Optional[str], Optional[str]]]:
         db_path = workspace_root / ".codex-autorunner" / "flows.db"
         if not db_path.exists():
             return None
@@ -831,7 +897,13 @@ class TelegramTicketFlowBridge:
             store.close()
         if latest_run is None:
             return None
-        return (latest_run.id, latest_run.status.value, latest_run.error_message)
+        terminal_at = latest_run.finished_at or latest_run.created_at
+        return (
+            latest_run.id,
+            latest_run.status.value,
+            latest_run.error_message,
+            terminal_at,
+        )
 
     def _format_terminal_notification(
         self, *, run_id: str, status: str, error_message: Optional[str]
@@ -854,9 +926,11 @@ class TelegramTicketFlowBridge:
         return normalized
 
     @staticmethod
-    def _set_terminal_run_marker(value: Optional[str]):
+    def _set_terminal_run_marker(value: Optional[str], *, finished_at: Optional[str]):
         def apply(topic) -> None:
             topic.last_terminal_run_id = value
+            if hasattr(topic, "last_terminal_finished_at"):
+                topic.last_terminal_finished_at = finished_at
 
         return apply
 
