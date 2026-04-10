@@ -828,6 +828,110 @@ def test_ingest_event_tracks_review_comment_operations_in_separate_state_namespa
     ]
 
 
+def test_ingest_event_formats_review_comment_notice_with_link_and_clean_summary(
+    tmp_path: Path,
+) -> None:
+    event = ScmEvent(
+        event_id="github:event-inline-comment-formatted",
+        provider="github",
+        event_type="pull_request_review_comment",
+        occurred_at="2026-03-26T00:00:00Z",
+        received_at="2026-03-26T00:00:01Z",
+        created_at="2026-03-26T00:00:02Z",
+        repo_slug="acme/widgets",
+        repo_id="repo-1",
+        pr_number=42,
+        delivery_id="delivery-1",
+        payload={
+            "action": "created",
+            "comment_id": "2844",
+            "author_login": "reviewer",
+            "author_type": "User",
+            "issue_author_login": "pr-author",
+            "body": "**<sub><sub>!P1 Badge</sub></sub>** Surface startup timeouts as fallback regressions.",
+            "path": "src/codex_autorunner/integrations/discord/message_turns.py",
+            "line": 942,
+            "html_url": "https://github.com/acme/widgets/pull/42#discussion_r2844",
+        },
+        raw_payload=None,
+    )
+    binding = _binding()
+    service = ScmAutomationService(
+        tmp_path,
+        event_store=_EventStoreFake(event),
+        binding_resolver=_BindingResolverFake(binding),
+        reaction_router=route_scm_reactions,
+        reaction_state_store=_PermissiveReactionStateFake(),
+        journal=_JournalFake(),
+        publish_processor=_ProcessorFake(processed=[]),
+    )
+
+    result = service.ingest_event(event.event_id)
+
+    notify_op = next(
+        operation
+        for operation in result.publish_operations
+        if operation.operation_kind == "notify_chat"
+    )
+    assert notify_op.payload["message"] == (
+        "PR review feedback on acme/widgets#42\n"
+        "From: reviewer\n"
+        "Location: src/codex_autorunner/integrations/discord/message_turns.py:942\n"
+        "Summary: P1 Surface startup timeouts as fallback regressions.\n"
+        "Link: <https://github.com/acme/widgets/pull/42#discussion_r2844>\n"
+        "The bound agent thread is taking a look."
+    )
+
+
+def test_ingest_event_preserves_angle_bracket_content_in_review_summary(
+    tmp_path: Path,
+) -> None:
+    event = ScmEvent(
+        event_id="github:event-inline-comment-generics",
+        provider="github",
+        event_type="pull_request_review_comment",
+        occurred_at="2026-03-26T00:00:00Z",
+        received_at="2026-03-26T00:00:01Z",
+        created_at="2026-03-26T00:00:02Z",
+        repo_slug="acme/widgets",
+        repo_id="repo-1",
+        pr_number=42,
+        delivery_id="delivery-1",
+        payload={
+            "action": "created",
+            "comment_id": "2845",
+            "author_login": "reviewer",
+            "author_type": "User",
+            "issue_author_login": "pr-author",
+            "body": "Keep Response<T> and <foo> examples intact while removing <sub>badge</sub> wrappers.",
+            "path": "src/codex_autorunner/core/scm_automation_service.py",
+            "line": 300,
+        },
+        raw_payload=None,
+    )
+    binding = _binding()
+    service = ScmAutomationService(
+        tmp_path,
+        event_store=_EventStoreFake(event),
+        binding_resolver=_BindingResolverFake(binding),
+        reaction_router=route_scm_reactions,
+        reaction_state_store=_PermissiveReactionStateFake(),
+        journal=_JournalFake(),
+        publish_processor=_ProcessorFake(processed=[]),
+    )
+
+    result = service.ingest_event(event.event_id)
+
+    notify_op = next(
+        operation
+        for operation in result.publish_operations
+        if operation.operation_kind == "notify_chat"
+    )
+    assert "Response<T>" in notify_op.payload["message"]
+    assert "<foo>" in notify_op.payload["message"]
+    assert "<sub>" not in notify_op.payload["message"]
+
+
 def test_handle_processed_operations_uses_reaction_state_kind_tracking_key(
     tmp_path: Path,
 ) -> None:
