@@ -11,6 +11,7 @@ from codex_autorunner.integrations.discord.effects import (
     DiscordEffectDeliveryError,
     DiscordResponseEffect,
 )
+from codex_autorunner.integrations.discord.errors import DiscordTransientError
 from codex_autorunner.integrations.discord.ingress import (
     CommandSpec,
     IngressContext,
@@ -76,6 +77,7 @@ class _FakeService:
         self._handle_ticket_select_component = AsyncMock()
         self._handle_approval_component = AsyncMock()
         self._respond_ephemeral = AsyncMock()
+        self._respond_autocomplete = AsyncMock()
 
 
 @pytest.mark.anyio
@@ -137,6 +139,49 @@ async def test_modal_submit_routes_to_modal_handler() -> None:
     call_kwargs = service._handle_ticket_modal_submit.call_args[1]
     assert call_kwargs["custom_id"] == "tickets_modal:abc"
     assert call_kwargs["values"] == {"ticket_body": "test body"}
+
+
+@pytest.mark.anyio
+async def test_modal_submit_transient_error_responds_ephemeral() -> None:
+    service = _FakeService()
+    service._handle_ticket_modal_submit.side_effect = DiscordTransientError(
+        "expired",
+        user_message="This ticket modal has expired. Re-open it and try again.",
+    )
+    ctx = _ctx(
+        kind=InteractionKind.MODAL_SUBMIT,
+        custom_id="tickets_modal:abc",
+        modal_values={"ticket_body": "test body"},
+    )
+
+    await execute_ingressed_interaction(service, ctx, {})
+
+    service._respond_ephemeral.assert_awaited_once()
+    call_args = service._respond_ephemeral.call_args
+    assert "expired" in call_args[0][2].lower()
+
+
+@pytest.mark.anyio
+async def test_autocomplete_transient_error_returns_empty_choices() -> None:
+    service = _FakeService()
+    service._handle_command_autocomplete.side_effect = DiscordTransientError(
+        "autocomplete failed",
+        user_message="busy",
+    )
+    ctx = _ctx(
+        kind=InteractionKind.AUTOCOMPLETE,
+        command_path=("car", "bind"),
+        focused_name="workspace",
+        focused_value="codex",
+    )
+
+    await execute_ingressed_interaction(service, ctx, {})
+
+    service._respond_autocomplete.assert_awaited_once_with(
+        "inter-1",
+        "token-1",
+        choices=[],
+    )
 
 
 @pytest.mark.anyio
