@@ -1189,7 +1189,8 @@ class ACPClient:
             text_length=state.last_session_update_text_length,
         )
         if (
-            state.last_session_update_kind in {"agent_message_chunk", "agent_thought_chunk"}
+            state.last_session_update_kind
+            in {"agent_message_chunk", "agent_thought_chunk"}
             and not extracted_text
         ):
             self._log_trace_event(

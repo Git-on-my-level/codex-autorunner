@@ -924,6 +924,7 @@ def _extract_session_update_kind(update: dict[str, Any]) -> str:
             return value.strip()
     return ""
 
+
 def _extract_session_update_text(update: dict[str, Any]) -> str:
     content = update.get("content")
     if isinstance(content, str) and content.strip():

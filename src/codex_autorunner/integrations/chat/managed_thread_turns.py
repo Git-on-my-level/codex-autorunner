@@ -1222,10 +1222,16 @@ async def finalize_managed_thread_execution(
                     raw_method = _runtime_raw_event_method(raw_event)
                     if not run_events and raw_method == "session/update":
                         content_summary = _runtime_raw_event_content_summary(raw_event)
-                        summary_kind = str(
-                            content_summary.get("session_update_kind") or "unknown"
-                        ).strip() or "unknown"
-                        if summary_kind in {"agent_message_chunk", "agent_thought_chunk"}:
+                        summary_kind = (
+                            str(
+                                content_summary.get("session_update_kind") or "unknown"
+                            ).strip()
+                            or "unknown"
+                        )
+                        if summary_kind in {
+                            "agent_message_chunk",
+                            "agent_thought_chunk",
+                        }:
                             empty_session_update_events += 1
                             empty_session_update_kinds[summary_kind] = (
                                 empty_session_update_kinds.get(summary_kind, 0) + 1
