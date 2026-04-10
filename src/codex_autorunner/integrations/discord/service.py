@@ -235,7 +235,7 @@ from .flow_watchers import (
 )
 from .flow_watchers import watch_ticket_flow_pauses, watch_ticket_flow_terminals
 from .gateway import DiscordGatewayClient
-from .ingress import InteractionIngress, InteractionKind
+from .ingress import IngressContext, InteractionIngress, InteractionKind
 from .interaction_dispatch import (
     handle_component_interaction as _dispatch_component_interaction,
 )
@@ -629,6 +629,9 @@ class DiscordBotService:
             rest=self._rest,
             config=self._config,
             logger=self._logger,
+            hydrate_ack_mode=self._load_interaction_ack_mode,
+            record_ack=self._record_interaction_ack,
+            record_delivery=self._record_interaction_delivery,
         )
         self._queued_notice_messages: dict[tuple[str, str], str] = {}
         self._discord_turn_progress_reuse_requests: dict[str, Any] = {}
@@ -4237,6 +4240,85 @@ class DiscordBotService:
     ) -> bool:
         session = self._get_interaction_session(interaction_token)
         return bool(session and session.is_deferred())
+
+    async def _load_interaction_ack_mode(self, interaction_id: str) -> Optional[str]:
+        record = await self._store.get_interaction(interaction_id)
+        if record is None:
+            return None
+        return record.ack_mode
+
+    async def _record_interaction_ack(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        ack_mode: str,
+        original_response_message_id: Optional[str],
+    ) -> None:
+        await self._store.mark_interaction_acknowledged(
+            interaction_id,
+            ack_mode=ack_mode,
+            original_response_message_id=original_response_message_id,
+        )
+
+    async def _record_interaction_delivery(
+        self,
+        interaction_id: str,
+        delivery_status: str,
+        delivery_error: Optional[str],
+        original_response_message_id: Optional[str],
+    ) -> None:
+        await self._store.record_interaction_delivery(
+            interaction_id,
+            delivery_status=delivery_status,
+            delivery_error=delivery_error,
+            original_response_message_id=original_response_message_id,
+        )
+
+    async def _register_interaction_ingress(self, ctx: IngressContext) -> bool:
+        registration = await self._store.register_interaction(
+            interaction_id=ctx.interaction_id,
+            interaction_token=ctx.interaction_token,
+            interaction_kind=ctx.kind.value,
+            channel_id=ctx.channel_id,
+            guild_id=ctx.guild_id,
+            user_id=ctx.user_id,
+            metadata_json=self._interaction_ledger_metadata(ctx),
+        )
+        return not registration.inserted
+
+    async def _begin_interaction_execution(self, ctx: IngressContext) -> bool:
+        return await self._store.claim_interaction_execution(ctx.interaction_id)
+
+    async def _finish_interaction_execution(
+        self,
+        ctx: IngressContext,
+        *,
+        execution_status: str,
+        execution_error: Optional[str] = None,
+    ) -> None:
+        await self._store.mark_interaction_execution(
+            ctx.interaction_id,
+            execution_status=execution_status,
+            execution_error=execution_error,
+        )
+
+    def _interaction_ledger_metadata(self, ctx: IngressContext) -> dict[str, Any]:
+        command_path = list(ctx.command_spec.path) if ctx.command_spec else None
+        command_options = ctx.command_spec.options if ctx.command_spec else None
+        return {
+            "kind": ctx.kind.value,
+            "channel_id": ctx.channel_id,
+            "guild_id": ctx.guild_id,
+            "user_id": ctx.user_id,
+            "command_path": command_path,
+            "command_options": command_options,
+            "custom_id": ctx.custom_id,
+            "values": ctx.values,
+            "modal_values": ctx.modal_values,
+            "focused_name": ctx.focused_name,
+            "focused_value": ctx.focused_value,
+            "message_id": ctx.message_id,
+        }
 
     async def _prepare_command_interaction(
         self,

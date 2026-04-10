@@ -8,13 +8,14 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, cast
 
 from ...core.sqlite_utils import connect_sqlite
 from ...core.state import now_iso
 from ..chat.agents import normalize_hermes_profile
 
-DISCORD_STATE_SCHEMA_VERSION = 9
+DISCORD_STATE_SCHEMA_VERSION = 10
+DISCORD_INTERACTION_LEDGER_RETENTION_DAYS = 14
 _UNSET = object()
 _logger = logging.getLogger(__name__)
 
@@ -30,6 +31,35 @@ class OutboxRecord:
     next_attempt_at: Optional[str] = None
     created_at: str = ""
     last_error: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class InteractionLedgerRecord:
+    interaction_id: str
+    interaction_token: str
+    interaction_kind: str
+    channel_id: str
+    guild_id: Optional[str]
+    user_id: Optional[str]
+    metadata_json: dict[str, Any]
+    ack_mode: Optional[str] = None
+    ack_completed_at: Optional[str] = None
+    execution_status: str = "received"
+    execution_started_at: Optional[str] = None
+    execution_finished_at: Optional[str] = None
+    execution_error: Optional[str] = None
+    final_delivery_status: Optional[str] = None
+    final_delivery_error: Optional[str] = None
+    original_response_message_id: Optional[str] = None
+    created_at: str = ""
+    updated_at: str = ""
+    last_seen_at: str = ""
+
+
+@dataclass(frozen=True)
+class InteractionLedgerRegistration:
+    record: InteractionLedgerRecord
+    inserted: bool
 
 
 class DiscordStateStore:
@@ -245,6 +275,91 @@ class DiscordStateStore:
             self._record_outbox_failure_sync, record_id, error, retry_after_seconds
         )
 
+    async def register_interaction(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+        interaction_kind: str,
+        channel_id: str,
+        guild_id: Optional[str],
+        user_id: Optional[str],
+        metadata_json: dict[str, Any],
+    ) -> InteractionLedgerRegistration:
+        return cast(
+            InteractionLedgerRegistration,
+            await self._run(
+                self._register_interaction_sync,
+                interaction_id,
+                interaction_token,
+                interaction_kind,
+                channel_id,
+                guild_id,
+                user_id,
+                metadata_json,
+            ),
+        )
+
+    async def get_interaction(
+        self,
+        interaction_id: str,
+    ) -> Optional[InteractionLedgerRecord]:
+        return await self._run(self._get_interaction_sync, interaction_id)  # type: ignore[no-any-return]
+
+    async def claim_interaction_execution(self, interaction_id: str) -> bool:
+        return await self._run(self._claim_interaction_execution_sync, interaction_id)  # type: ignore[no-any-return]
+
+    async def mark_interaction_acknowledged(
+        self,
+        interaction_id: str,
+        *,
+        ack_mode: str,
+        original_response_message_id: Optional[str] = None,
+    ) -> None:
+        await self._run(
+            self._mark_interaction_acknowledged_sync,
+            interaction_id,
+            ack_mode,
+            original_response_message_id,
+        )
+
+    async def mark_interaction_execution(
+        self,
+        interaction_id: str,
+        *,
+        execution_status: str,
+        execution_error: Optional[str] = None,
+    ) -> None:
+        await self._run(
+            self._mark_interaction_execution_sync,
+            interaction_id,
+            execution_status,
+            execution_error,
+        )
+
+    async def record_interaction_delivery(
+        self,
+        interaction_id: str,
+        *,
+        delivery_status: str,
+        delivery_error: Optional[str] = None,
+        original_response_message_id: Optional[str] = None,
+    ) -> None:
+        await self._run(
+            self._record_interaction_delivery_sync,
+            interaction_id,
+            delivery_status,
+            delivery_error,
+            original_response_message_id,
+        )
+
+    async def prune_interactions(
+        self,
+        *,
+        retention_days: int = DISCORD_INTERACTION_LEDGER_RETENTION_DAYS,
+    ) -> int:
+        return await self._run(self._prune_interactions_sync, retention_days)  # type: ignore[no-any-return]
+
     async def _run(self, func: Callable[..., Any], *args: Any) -> Any:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(self._executor, func, *args)
@@ -257,6 +372,7 @@ class DiscordStateStore:
 
     def _ensure_initialized_sync(self) -> None:
         self._connection_sync()
+        self._prune_interactions_sync(DISCORD_INTERACTION_LEDGER_RETENTION_DAYS)
 
     def _close_sync(self) -> None:
         if self._connection is not None:
@@ -326,7 +442,45 @@ class DiscordStateStore:
                     ON outbox(created_at)
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS interaction_ledger (
+                    interaction_id TEXT PRIMARY KEY,
+                    interaction_token TEXT NOT NULL,
+                    interaction_kind TEXT NOT NULL,
+                    channel_id TEXT NOT NULL,
+                    guild_id TEXT,
+                    user_id TEXT,
+                    metadata_json TEXT NOT NULL,
+                    ack_mode TEXT,
+                    ack_completed_at TEXT,
+                    execution_status TEXT NOT NULL,
+                    execution_started_at TEXT,
+                    execution_finished_at TEXT,
+                    execution_error TEXT,
+                    final_delivery_status TEXT,
+                    final_delivery_error TEXT,
+                    original_response_message_id TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    last_seen_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_discord_interaction_ledger_last_seen
+                    ON interaction_ledger(last_seen_at)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_discord_interaction_ledger_execution_status
+                    ON interaction_ledger(execution_status)
+                """
+            )
             self._ensure_channel_binding_columns(conn)
+            self._ensure_interaction_ledger_columns(conn)
             if current_version < DISCORD_STATE_SCHEMA_VERSION:
                 conn.execute(
                     "UPDATE schema_info SET version = ?",
@@ -405,6 +559,28 @@ class DiscordStateStore:
         if "pending_compact_session_key" not in names:
             conn.execute(
                 "ALTER TABLE channel_bindings ADD COLUMN pending_compact_session_key TEXT"
+            )
+
+    def _ensure_interaction_ledger_columns(self, conn: sqlite3.Connection) -> None:
+        rows = conn.execute("PRAGMA table_info(interaction_ledger)").fetchall()
+        names = {str(row["name"]) for row in rows}
+        if not names:
+            return
+        if "execution_error" not in names:
+            conn.execute(
+                "ALTER TABLE interaction_ledger ADD COLUMN execution_error TEXT"
+            )
+        if "final_delivery_status" not in names:
+            conn.execute(
+                "ALTER TABLE interaction_ledger ADD COLUMN final_delivery_status TEXT"
+            )
+        if "final_delivery_error" not in names:
+            conn.execute(
+                "ALTER TABLE interaction_ledger ADD COLUMN final_delivery_error TEXT"
+            )
+        if "original_response_message_id" not in names:
+            conn.execute(
+                "ALTER TABLE interaction_ledger ADD COLUMN original_response_message_id TEXT"
             )
 
     def _upsert_binding_sync(
@@ -969,3 +1145,314 @@ class DiscordStateStore:
                 """,
                 (attempts, next_attempt_at, str(error)[:500], record_id),
             )
+
+    def _register_interaction_sync(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        interaction_kind: str,
+        channel_id: str,
+        guild_id: Optional[str],
+        user_id: Optional[str],
+        metadata_json: dict[str, Any],
+    ) -> InteractionLedgerRegistration:
+        conn = self._connection_sync()
+        row = conn.execute(
+            "SELECT * FROM interaction_ledger WHERE interaction_id = ?",
+            (interaction_id,),
+        ).fetchone()
+        now = now_iso()
+        inserted = row is None
+        metadata_blob = json.dumps(metadata_json, sort_keys=True)
+        with conn:
+            if inserted:
+                conn.execute(
+                    """
+                    INSERT INTO interaction_ledger (
+                        interaction_id,
+                        interaction_token,
+                        interaction_kind,
+                        channel_id,
+                        guild_id,
+                        user_id,
+                        metadata_json,
+                        execution_status,
+                        created_at,
+                        updated_at,
+                        last_seen_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        interaction_id,
+                        interaction_token,
+                        interaction_kind,
+                        channel_id,
+                        guild_id,
+                        user_id,
+                        metadata_blob,
+                        "received",
+                        now,
+                        now,
+                        now,
+                    ),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE interaction_ledger
+                    SET interaction_token = ?,
+                        interaction_kind = ?,
+                        channel_id = ?,
+                        guild_id = ?,
+                        user_id = ?,
+                        metadata_json = ?,
+                        updated_at = ?,
+                        last_seen_at = ?
+                    WHERE interaction_id = ?
+                    """,
+                    (
+                        interaction_token,
+                        interaction_kind,
+                        channel_id,
+                        guild_id,
+                        user_id,
+                        metadata_blob,
+                        now,
+                        now,
+                        interaction_id,
+                    ),
+                )
+        stored = conn.execute(
+            "SELECT * FROM interaction_ledger WHERE interaction_id = ?",
+            (interaction_id,),
+        ).fetchone()
+        if stored is None:
+            raise RuntimeError(
+                f"interaction ledger missing after registration: {interaction_id}"
+            )
+        return InteractionLedgerRegistration(
+            record=self._interaction_from_row(stored),
+            inserted=inserted,
+        )
+
+    def _interaction_from_row(self, row: sqlite3.Row) -> InteractionLedgerRecord:
+        raw_metadata = row["metadata_json"]
+        metadata: dict[str, Any] = {}
+        if isinstance(raw_metadata, str) and raw_metadata:
+            try:
+                parsed = json.loads(raw_metadata)
+            except json.JSONDecodeError:
+                parsed = {}
+            if isinstance(parsed, dict):
+                metadata = parsed
+        return InteractionLedgerRecord(
+            interaction_id=str(row["interaction_id"]),
+            interaction_token=str(row["interaction_token"]),
+            interaction_kind=str(row["interaction_kind"]),
+            channel_id=str(row["channel_id"]),
+            guild_id=row["guild_id"] if isinstance(row["guild_id"], str) else None,
+            user_id=row["user_id"] if isinstance(row["user_id"], str) else None,
+            metadata_json=metadata,
+            ack_mode=row["ack_mode"] if isinstance(row["ack_mode"], str) else None,
+            ack_completed_at=(
+                row["ack_completed_at"]
+                if isinstance(row["ack_completed_at"], str)
+                else None
+            ),
+            execution_status=str(row["execution_status"]),
+            execution_started_at=(
+                row["execution_started_at"]
+                if isinstance(row["execution_started_at"], str)
+                else None
+            ),
+            execution_finished_at=(
+                row["execution_finished_at"]
+                if isinstance(row["execution_finished_at"], str)
+                else None
+            ),
+            execution_error=(
+                row["execution_error"]
+                if isinstance(row["execution_error"], str)
+                else None
+            ),
+            final_delivery_status=(
+                row["final_delivery_status"]
+                if isinstance(row["final_delivery_status"], str)
+                else None
+            ),
+            final_delivery_error=(
+                row["final_delivery_error"]
+                if isinstance(row["final_delivery_error"], str)
+                else None
+            ),
+            original_response_message_id=(
+                row["original_response_message_id"]
+                if isinstance(row["original_response_message_id"], str)
+                else None
+            ),
+            created_at=str(row["created_at"]),
+            updated_at=str(row["updated_at"]),
+            last_seen_at=str(row["last_seen_at"]),
+        )
+
+    def _get_interaction_sync(
+        self,
+        interaction_id: str,
+    ) -> Optional[InteractionLedgerRecord]:
+        conn = self._connection_sync()
+        row = conn.execute(
+            "SELECT * FROM interaction_ledger WHERE interaction_id = ?",
+            (interaction_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return self._interaction_from_row(row)
+
+    def _claim_interaction_execution_sync(self, interaction_id: str) -> bool:
+        conn = self._connection_sync()
+        now = now_iso()
+        with conn:
+            cursor = conn.execute(
+                """
+                UPDATE interaction_ledger
+                SET execution_status = 'running',
+                    execution_started_at = COALESCE(execution_started_at, ?),
+                    updated_at = ?,
+                    last_seen_at = ?
+                WHERE interaction_id = ?
+                  AND execution_status IN ('received', 'acknowledged')
+                """,
+                (now, now, now, interaction_id),
+            )
+        return cursor.rowcount > 0
+
+    def _mark_interaction_acknowledged_sync(
+        self,
+        interaction_id: str,
+        ack_mode: str,
+        original_response_message_id: Optional[str],
+    ) -> None:
+        conn = self._connection_sync()
+        now = now_iso()
+        with conn:
+            conn.execute(
+                """
+                UPDATE interaction_ledger
+                SET ack_mode = COALESCE(ack_mode, ?),
+                    ack_completed_at = COALESCE(ack_completed_at, ?),
+                    execution_status = CASE
+                        WHEN execution_status = 'received' THEN 'acknowledged'
+                        ELSE execution_status
+                    END,
+                    original_response_message_id = COALESCE(?, original_response_message_id),
+                    updated_at = ?,
+                    last_seen_at = ?
+                WHERE interaction_id = ?
+                """,
+                (
+                    ack_mode,
+                    now,
+                    original_response_message_id,
+                    now,
+                    now,
+                    interaction_id,
+                ),
+            )
+
+    def _mark_interaction_execution_sync(
+        self,
+        interaction_id: str,
+        execution_status: str,
+        execution_error: Optional[str],
+    ) -> None:
+        conn = self._connection_sync()
+        now = now_iso()
+        error_text = str(execution_error)[:500] if execution_error is not None else None
+        if execution_status == "running":
+            with conn:
+                conn.execute(
+                    """
+                    UPDATE interaction_ledger
+                    SET execution_status = ?,
+                        execution_started_at = COALESCE(execution_started_at, ?),
+                        execution_error = ?,
+                        updated_at = ?,
+                        last_seen_at = ?
+                    WHERE interaction_id = ?
+                    """,
+                    (
+                        execution_status,
+                        now,
+                        error_text,
+                        now,
+                        now,
+                        interaction_id,
+                    ),
+                )
+            return
+        with conn:
+            conn.execute(
+                """
+                UPDATE interaction_ledger
+                SET execution_status = ?,
+                    execution_finished_at = ?,
+                    execution_error = ?,
+                    updated_at = ?,
+                    last_seen_at = ?
+                WHERE interaction_id = ?
+                """,
+                (
+                    execution_status,
+                    now,
+                    error_text,
+                    now,
+                    now,
+                    interaction_id,
+                ),
+            )
+
+    def _record_interaction_delivery_sync(
+        self,
+        interaction_id: str,
+        delivery_status: str,
+        delivery_error: Optional[str],
+        original_response_message_id: Optional[str],
+    ) -> None:
+        conn = self._connection_sync()
+        now = now_iso()
+        error_text = str(delivery_error)[:500] if delivery_error is not None else None
+        with conn:
+            conn.execute(
+                """
+                UPDATE interaction_ledger
+                SET final_delivery_status = ?,
+                    final_delivery_error = ?,
+                    original_response_message_id = COALESCE(?, original_response_message_id),
+                    updated_at = ?,
+                    last_seen_at = ?
+                WHERE interaction_id = ?
+                """,
+                (
+                    delivery_status,
+                    error_text,
+                    original_response_message_id,
+                    now,
+                    now,
+                    interaction_id,
+                ),
+            )
+
+    def _prune_interactions_sync(self, retention_days: int) -> int:
+        if retention_days <= 0:
+            return 0
+        conn = self._connection_sync()
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=int(retention_days))
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with conn:
+            cursor = conn.execute(
+                "DELETE FROM interaction_ledger WHERE last_seen_at < ?",
+                (cutoff,),
+            )
+        return int(cursor.rowcount or 0)

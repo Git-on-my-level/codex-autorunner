@@ -335,6 +335,20 @@ class CommandRunner:
         ctx: IngressContext,
         payload: dict[str, Any],
     ) -> None:
+        begin_execution = getattr(self._service, "_begin_interaction_execution", None)
+        finish_execution = getattr(self._service, "_finish_interaction_execution", None)
+        claimed_execution = True
+        if callable(begin_execution):
+            claimed_execution = bool(await begin_execution(ctx))
+        if not claimed_execution:
+            log_event(
+                self._logger,
+                logging.DEBUG,
+                "discord.runner.execute.duplicate_skipped",
+                interaction_id=ctx.interaction_id,
+                kind=ctx.kind.value,
+            )
+            return
         started_at = time.monotonic()
         command_label = (
             ":".join(ctx.command_spec.path) if ctx.command_spec else ctx.kind.value
@@ -366,6 +380,8 @@ class CommandRunner:
 
         handler_task: Optional[asyncio.Task[None]] = None
         stall_task: Optional[asyncio.Task[None]] = None
+        execution_status = "completed"
+        execution_error: Optional[str] = None
         try:
             handler_task = asyncio.create_task(
                 self._execute_body(ctx, payload),
@@ -384,13 +400,19 @@ class CommandRunner:
                         timeout=self._config.timeout_seconds,
                     )
             except asyncio.TimeoutError:
+                execution_status = "timeout"
+                execution_error = "handler_timeout"
                 self._handle_timeout(handler_task, ctx, started_at)
                 return
         except asyncio.CancelledError:
             if handler_task is not None and not handler_task.done():
                 handler_task.cancel()
+            execution_status = "cancelled"
+            execution_error = "handler_cancelled"
             raise
         except Exception as exc:
+            execution_status = "failed"
+            execution_error = str(exc)
             log_event(
                 self._logger,
                 logging.ERROR,
@@ -427,6 +449,12 @@ class CommandRunner:
                     ctx, finished_at
                 ),
             )
+            if callable(finish_execution):
+                await finish_execution(
+                    ctx,
+                    execution_status=execution_status,
+                    execution_error=execution_error,
+                )
 
     async def _execute_body(
         self,

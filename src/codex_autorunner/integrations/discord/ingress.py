@@ -118,6 +118,21 @@ class InteractionIngress:
             ctx.interaction_token,
             kind=ctx.kind,
         )
+        register_interaction = getattr(
+            self._service, "_register_interaction_ingress", None
+        )
+        if callable(register_interaction):
+            is_duplicate = await register_interaction(ctx)
+            if is_duplicate:
+                self._logger.debug(
+                    "Skipping duplicate Discord interaction delivery: %s",
+                    ctx.interaction_id,
+                )
+                return IngressResult(
+                    accepted=False,
+                    context=ctx,
+                    rejection_reason="duplicate_interaction",
+                )
         ctx.timing = IngressTiming(
             interaction_created_at=ctx.timing.interaction_created_at,
             ingress_started_at=now,

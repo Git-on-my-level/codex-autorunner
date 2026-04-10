@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 from .interaction_session import (
     DiscordInteractionSession,
@@ -18,12 +18,23 @@ class DiscordResponder:
         rest: DiscordRestClient,
         config: Any,
         logger: logging.Logger,
+        *,
+        hydrate_ack_mode: Optional[Callable[[str], Awaitable[Optional[str]]]] = None,
+        record_ack: Optional[
+            Callable[[str, str, str, Optional[str]], Awaitable[None]]
+        ] = None,
+        record_delivery: Optional[
+            Callable[[str, str, Optional[str], Optional[str]], Awaitable[None]]
+        ] = None,
     ) -> None:
         self._sessions = DiscordInteractionSessionManager(
             rest=rest,
             config=config,
             logger=logger,
         )
+        self._hydrate_ack_mode = hydrate_ack_mode
+        self._record_ack = record_ack
+        self._record_delivery = record_delivery
 
     def start_session(
         self,
@@ -69,6 +80,49 @@ class DiscordResponder:
             return None
         return session.prepared_policy()
 
+    async def _restore_ack_if_needed(
+        self,
+        *,
+        session: DiscordInteractionSession,
+        interaction_id: str,
+    ) -> None:
+        if session.has_initial_response() or self._hydrate_ack_mode is None:
+            return
+        ack_mode = await self._hydrate_ack_mode(interaction_id)
+        if isinstance(ack_mode, str) and ack_mode.strip():
+            session.restore_initial_response(ack_mode)
+
+    async def _persist_session_state(
+        self,
+        *,
+        session: DiscordInteractionSession,
+        interaction_id: str,
+        interaction_token: str,
+        had_initial_response: bool,
+    ) -> None:
+        if (
+            not had_initial_response
+            and session.has_initial_response()
+            and self._record_ack is not None
+            and session.initial_response is not None
+        ):
+            await self._record_ack(
+                interaction_id,
+                interaction_token,
+                session.initial_response.value,
+                session.last_delivery_message_id,
+            )
+        if (
+            self._record_delivery is not None
+            and session.last_delivery_status is not None
+        ):
+            await self._record_delivery(
+                interaction_id,
+                session.last_delivery_status,
+                session.last_delivery_error,
+                session.last_delivery_message_id,
+            )
+
     async def respond(
         self,
         interaction_id: str,
@@ -81,7 +135,19 @@ class DiscordResponder:
             interaction_id=interaction_id,
             interaction_token=interaction_token,
         )
+        had_initial_response = session.has_initial_response()
+        if not had_initial_response:
+            await self._restore_ack_if_needed(
+                session=session,
+                interaction_id=interaction_id,
+            )
         await session.send_message(text, ephemeral=ephemeral)
+        await self._persist_session_state(
+            session=session,
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            had_initial_response=had_initial_response,
+        )
 
     async def defer(
         self,
@@ -94,9 +160,18 @@ class DiscordResponder:
             interaction_id=interaction_id,
             interaction_token=interaction_token,
         )
+        had_initial_response = session.has_initial_response()
         if ephemeral:
-            return await session.defer_ephemeral()
-        return await session.defer_public()
+            deferred = await session.defer_ephemeral()
+        else:
+            deferred = await session.defer_public()
+        await self._persist_session_state(
+            session=session,
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            had_initial_response=had_initial_response,
+        )
+        return deferred
 
     async def defer_component_update(
         self,
@@ -109,7 +184,15 @@ class DiscordResponder:
             interaction_token=interaction_token,
             kind=InteractionSessionKind.COMPONENT,
         )
-        return await session.defer_component_update()
+        had_initial_response = session.has_initial_response()
+        deferred = await session.defer_component_update()
+        await self._persist_session_state(
+            session=session,
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            had_initial_response=had_initial_response,
+        )
+        return deferred
 
     async def send_followup(
         self,
@@ -128,14 +211,26 @@ class DiscordResponder:
                 interaction_id=interaction_id,
                 interaction_token=interaction_token,
             )
+        await self._restore_ack_if_needed(
+            session=session,
+            interaction_id=interaction_id or session.interaction_id,
+        )
+        had_initial_response = session.has_initial_response()
         try:
-            return await session.send_followup(
+            sent = await session.send_followup(
                 content=content,
                 components=components,
                 ephemeral=ephemeral,
             )
         except InteractionSessionError:
             return False
+        await self._persist_session_state(
+            session=session,
+            interaction_id=interaction_id or session.interaction_id,
+            interaction_token=interaction_token,
+            had_initial_response=had_initial_response,
+        )
+        return sent
 
     async def edit_original_component_message(
         self,
@@ -153,13 +248,25 @@ class DiscordResponder:
                 interaction_id=interaction_id,
                 interaction_token=interaction_token,
             )
+        await self._restore_ack_if_needed(
+            session=session,
+            interaction_id=interaction_id or session.interaction_id,
+        )
+        had_initial_response = session.has_initial_response()
         try:
-            return await session.edit_original_message(
+            updated = await session.edit_original_message(
                 text=text,
                 components=components,
             )
         except InteractionSessionError:
             return False
+        await self._persist_session_state(
+            session=session,
+            interaction_id=interaction_id or session.interaction_id,
+            interaction_token=interaction_token,
+            had_initial_response=had_initial_response,
+        )
+        return updated
 
     async def send_or_respond(
         self,
@@ -173,6 +280,10 @@ class DiscordResponder:
         session = self.session(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
+        )
+        await self._restore_ack_if_needed(
+            session=session,
+            interaction_id=interaction_id,
         )
         if deferred and session.has_initial_response():
             sent = await self.send_followup(
@@ -199,6 +310,10 @@ class DiscordResponder:
             interaction_id=interaction_id,
             interaction_token=interaction_token,
         )
+        await self._restore_ack_if_needed(
+            session=session,
+            interaction_id=interaction_id,
+        )
         if deferred and session.has_initial_response():
             sent = await self.send_followup(
                 interaction_id=interaction_id,
@@ -224,7 +339,19 @@ class DiscordResponder:
             interaction_id=interaction_id,
             interaction_token=interaction_token,
         )
+        had_initial_response = session.has_initial_response()
+        if not had_initial_response:
+            await self._restore_ack_if_needed(
+                session=session,
+                interaction_id=interaction_id,
+            )
         await session.send_message(text, ephemeral=ephemeral, components=components)
+        await self._persist_session_state(
+            session=session,
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            had_initial_response=had_initial_response,
+        )
 
     async def update_component_message(
         self,
@@ -239,7 +366,19 @@ class DiscordResponder:
             interaction_token=interaction_token,
             kind=InteractionSessionKind.COMPONENT,
         )
+        had_initial_response = session.has_initial_response()
+        if not had_initial_response:
+            await self._restore_ack_if_needed(
+                session=session,
+                interaction_id=interaction_id,
+            )
         await session.update_component_message(text=text, components=components)
+        await self._persist_session_state(
+            session=session,
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            had_initial_response=had_initial_response,
+        )
 
     async def respond_autocomplete(
         self,
@@ -253,7 +392,14 @@ class DiscordResponder:
             interaction_token=interaction_token,
             kind=InteractionSessionKind.AUTOCOMPLETE,
         )
+        had_initial_response = session.has_initial_response()
         await session.respond_autocomplete(choices=choices)
+        await self._persist_session_state(
+            session=session,
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            had_initial_response=had_initial_response,
+        )
 
     async def respond_modal(
         self,
@@ -270,8 +416,15 @@ class DiscordResponder:
             interaction_token=interaction_token,
             kind=kind,
         )
+        had_initial_response = session.has_initial_response()
         await session.respond_modal(
             custom_id=custom_id,
             title=title,
             components=components,
+        )
+        await self._persist_session_state(
+            session=session,
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            had_initial_response=had_initial_response,
         )

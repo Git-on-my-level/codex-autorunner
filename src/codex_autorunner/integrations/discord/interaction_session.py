@@ -54,6 +54,9 @@ class DiscordInteractionSession:
         self.interaction_token = interaction_token
         self.kind = kind
         self.initial_response: Optional[InteractionInitialResponse] = None
+        self.last_delivery_status: Optional[str] = None
+        self.last_delivery_error: Optional[str] = None
+        self.last_delivery_message_id: Optional[str] = None
 
     def refresh(
         self,
@@ -102,6 +105,26 @@ class DiscordInteractionSession:
                 f"{self.initial_response.value}"
             )
         self.initial_response = mode
+
+    def restore_initial_response(self, mode: InteractionInitialResponse | str) -> None:
+        if isinstance(mode, str):
+            try:
+                mode = InteractionInitialResponse(mode)
+            except ValueError:
+                return
+        if self.initial_response is None:
+            self.initial_response = mode
+
+    def _note_delivery(
+        self,
+        status: str,
+        *,
+        message_id: Optional[str] = None,
+        error: Optional[str] = None,
+    ) -> None:
+        self.last_delivery_status = status
+        self.last_delivery_message_id = message_id
+        self.last_delivery_error = error
 
     def _require_unacknowledged(
         self,
@@ -165,45 +188,57 @@ class DiscordInteractionSession:
     async def _send_followup_payload(self, payload: dict[str, Any]) -> bool:
         application_id = self._application_id()
         if not application_id:
+            self._note_delivery("followup_unavailable", error="missing_application_id")
             return False
         try:
-            await self._rest.create_followup_message(
+            response = await self._rest.create_followup_message(
                 application_id=application_id,
                 interaction_token=self.interaction_token,
                 payload=payload,
             )
-        except Exception:
+        except Exception as exc:
+            self._note_delivery("followup_failed", error=str(exc))
             return False
+        message_id = response.get("id") if isinstance(response.get("id"), str) else None
+        self._note_delivery("followup_sent", message_id=message_id)
         return True
 
     async def defer_public(self) -> bool:
         self._require_unacknowledged(operation="defer_public")
         try:
-            return await self._create_initial_response(
+            created = await self._create_initial_response(
                 payload={"type": 5},
                 mode=InteractionInitialResponse.DEFER_PUBLIC,
             )
+            if created:
+                self._note_delivery("ack_deferred_public")
+            return created
         except Exception as exc:
             self._logger.warning(
                 "Failed to defer public response: %s (interaction_id=%s)",
                 exc,
                 self.interaction_id,
             )
+            self._note_delivery("ack_failed", error=str(exc))
             return False
 
     async def defer_ephemeral(self) -> bool:
         self._require_unacknowledged(operation="defer_ephemeral")
         try:
-            return await self._create_initial_response(
+            created = await self._create_initial_response(
                 payload={"type": 5, "data": {"flags": DISCORD_EPHEMERAL_FLAG}},
                 mode=InteractionInitialResponse.DEFER_EPHEMERAL,
             )
+            if created:
+                self._note_delivery("ack_deferred_ephemeral")
+            return created
         except Exception as exc:
             self._logger.warning(
                 "Failed to defer ephemeral response: %s (interaction_id=%s)",
                 exc,
                 self.interaction_id,
             )
+            self._note_delivery("ack_failed", error=str(exc))
             return False
 
     async def defer_component_update(self) -> bool:
@@ -212,16 +247,20 @@ class DiscordInteractionSession:
             allowed_kinds={InteractionSessionKind.COMPONENT},
         )
         try:
-            return await self._create_initial_response(
+            created = await self._create_initial_response(
                 payload={"type": 6},
                 mode=InteractionInitialResponse.DEFER_COMPONENT_UPDATE,
             )
+            if created:
+                self._note_delivery("ack_deferred_component_update")
+            return created
         except Exception as exc:
             self._logger.warning(
                 "Failed to defer component update: %s (interaction_id=%s)",
                 exc,
                 self.interaction_id,
             )
+            self._note_delivery("ack_failed", error=str(exc))
             return False
 
     async def send_message(
@@ -243,6 +282,7 @@ class DiscordInteractionSession:
                     payload={"type": 4, "data": data},
                     mode=InteractionInitialResponse.IMMEDIATE_MESSAGE,
                 )
+                self._note_delivery("initial_response_sent")
                 return
             except Exception as exc:
                 sent_followup = await self._send_followup_payload(
@@ -256,6 +296,7 @@ class DiscordInteractionSession:
                     self.initial_response = InteractionInitialResponse.IMMEDIATE_MESSAGE
                     return
                 label = "ephemeral" if ephemeral else "public"
+                self._note_delivery("initial_response_failed", error=str(exc))
                 self._logger.error(
                     "Failed to send %s response: %s (interaction_id=%s)",
                     label,
@@ -318,17 +359,20 @@ class DiscordInteractionSession:
         if components is not None:
             payload["components"] = components
         try:
-            await self._rest.edit_original_interaction_response(
+            response = await self._rest.edit_original_interaction_response(
                 application_id=application_id,
                 interaction_token=self.interaction_token,
                 payload=payload,
             )
         except DiscordAPIError as exc:
+            self._note_delivery("original_response_edit_failed", error=str(exc))
             self._logger.error(
                 "Failed to edit original interaction response: %s",
                 exc,
             )
             return False
+        message_id = response.get("id") if isinstance(response.get("id"), str) else None
+        self._note_delivery("original_response_edited", message_id=message_id)
         return True
 
     async def update_component_message(
@@ -354,6 +398,7 @@ class DiscordInteractionSession:
                     },
                     mode=InteractionInitialResponse.COMPONENT_UPDATE,
                 )
+                self._note_delivery("component_update_sent")
                 return
             except DiscordAPIError as exc:
                 sent_followup = await self._send_followup_payload(
@@ -366,6 +411,7 @@ class DiscordInteractionSession:
                 if sent_followup:
                     self.initial_response = InteractionInitialResponse.COMPONENT_UPDATE
                     return
+                self._note_delivery("component_update_failed", error=str(exc))
                 self._logger.error(
                     "Failed to update component message: %s (interaction_id=%s)",
                     exc,
@@ -418,7 +464,9 @@ class DiscordInteractionSession:
                 payload={"type": 8, "data": {"choices": sanitized_choices}},
                 mode=InteractionInitialResponse.AUTOCOMPLETE,
             )
+            self._note_delivery("autocomplete_sent")
         except Exception as exc:
+            self._note_delivery("autocomplete_failed", error=str(exc))
             self._logger.error(
                 "Failed to send autocomplete response: %s (interaction_id=%s)",
                 exc,
@@ -451,7 +499,9 @@ class DiscordInteractionSession:
                 },
                 mode=InteractionInitialResponse.MODAL,
             )
+            self._note_delivery("modal_sent")
         except Exception as exc:
+            self._note_delivery("modal_failed", error=str(exc))
             self._logger.error(
                 "Failed to send modal response: %s (interaction_id=%s)",
                 exc,
