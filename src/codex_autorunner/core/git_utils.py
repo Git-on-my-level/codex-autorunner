@@ -169,6 +169,70 @@ def git_status_porcelain(repo_root: Path) -> Optional[str]:
     return (proc.stdout or "").strip()
 
 
+def _status_path_from_porcelain_line(line: str) -> str:
+    path = line[3:].strip() if len(line) > 3 else ""
+    if " -> " in path:
+        path = path.split(" -> ", 1)[1].strip()
+    if path.startswith('"') and path.endswith('"') and len(path) >= 2:
+        path = path[1:-1]
+    return path
+
+
+def describe_newt_reject_reasons(
+    repo_root: Path, *, max_examples_per_bucket: int = 2
+) -> list[str]:
+    """
+    Summarize the working tree blockers that prevent /newt from running.
+
+    Returns:
+        Human-readable reason lines suitable for a compact UI list.
+    """
+    status = git_status_porcelain(repo_root)
+    if status is None:
+        return ["Unable to inspect git status for this workspace."]
+    if not status.strip():
+        return []
+
+    buckets: list[tuple[str, list[str]]] = [
+        ("merge conflict", []),
+        ("staged tracked change", []),
+        ("unstaged tracked change", []),
+        ("untracked path", []),
+    ]
+    conflict_codes = {"DD", "AU", "UD", "UA", "DU", "AA", "UU"}
+
+    for raw_line in status.splitlines():
+        line = raw_line.rstrip()
+        if len(line) < 2:
+            continue
+        code = line[:2]
+        path = _status_path_from_porcelain_line(line)
+        if code == "??":
+            buckets[3][1].append(path)
+            continue
+        if code in conflict_codes:
+            buckets[0][1].append(path)
+            continue
+        if code[0] not in {" ", "?"}:
+            buckets[1][1].append(path)
+        if code[1] not in {" ", "?"}:
+            buckets[2][1].append(path)
+
+    reasons: list[str] = []
+    for label, paths in buckets:
+        count = len(paths)
+        if count <= 0:
+            continue
+        suffix = "" if count == 1 else "s"
+        reason = f"{count} {label}{suffix}"
+        examples = [item for item in paths if item][:max_examples_per_bucket]
+        if examples:
+            rendered = ", ".join(f"`{item}`" for item in examples)
+            reason += f", including {rendered}"
+        reasons.append(reason)
+    return reasons
+
+
 def git_upstream_status(repo_root: Path) -> Optional[dict]:
     """
     Get upstream tracking status for the current branch.
@@ -270,6 +334,16 @@ def reset_branch_from_origin_main(repo_root: Path, branch_name: str) -> str:
         check=True,
     )
     return default_branch
+
+
+def reset_worktree_to_head(repo_root: Path) -> None:
+    """Discard tracked changes in the current worktree."""
+    run_git(["reset", "--hard", "HEAD"], repo_root, timeout_seconds=60, check=True)
+
+
+def clean_untracked_worktree(repo_root: Path) -> None:
+    """Remove untracked paths, including nested git dirs, from the worktree."""
+    run_git(["clean", "-ffd"], repo_root, timeout_seconds=60, check=True)
 
 
 def git_diff_stats(

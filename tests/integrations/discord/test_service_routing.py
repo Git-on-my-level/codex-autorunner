@@ -41,6 +41,9 @@ from codex_autorunner.integrations.discord.car_autocomplete import (
     repo_autocomplete_value,
     workspace_autocomplete_value,
 )
+from codex_autorunner.integrations.discord.car_handlers import (
+    session_commands as discord_session_commands_module,
+)
 from codex_autorunner.integrations.discord.config import (
     DiscordBotConfig,
     DiscordCommandRegistration,
@@ -6637,6 +6640,390 @@ async def test_car_newt_reports_branch_reset_errors(
         assert len(rest.followup_messages) == 1
         content = rest.followup_messages[0]["payload"]["content"].lower()
         assert "failed to reset branch" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_newt_dirty_worktree_shows_hard_reset_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway([_interaction(name="newt", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    def _reject_reset_branch(_repo_root: Path, _branch_name: str) -> None:
+        raise discord_service_module.GitError(
+            "working tree has uncommitted changes; commit or stash before /newt"
+        )
+
+    monkeypatch.setattr(
+        discord_service_module, "reset_branch_from_origin_main", _reject_reset_branch
+    )
+    monkeypatch.setattr(
+        discord_session_commands_module,
+        "describe_newt_reject_reasons",
+        lambda _repo_root: [
+            "1 unstaged tracked change, including `changed.txt`",
+            "1 untracked path, including `.tmp/`",
+        ],
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        payload = rest.followup_messages[0]["payload"]
+        content = payload["content"].lower()
+        assert "can't start a fresh" in content
+        assert "changed.txt" in payload["content"]
+        assert ".tmp/" in payload["content"]
+        buttons = payload["components"][0]["components"]
+        assert [button["label"] for button in buttons] == ["Hard reset", "Cancel"]
+        assert (
+            buttons[0]["custom_id"]
+            == discord_session_commands_module.NEWT_HARD_RESET_CUSTOM_ID
+        )
+        assert (
+            buttons[1]["custom_id"]
+            == discord_session_commands_module.NEWT_CANCEL_CUSTOM_ID
+        )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_newt_hard_reset_button_discards_changes_and_retries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _interaction(name="newt", options=[]),
+            _component_interaction(
+                custom_id=discord_session_commands_module.NEWT_HARD_RESET_CUSTOM_ID
+            ),
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    branch_calls: list[dict[str, Any]] = []
+    hard_reset_calls: list[Path] = []
+
+    def _reset_branch(repo_root: Path, branch_name: str) -> str:
+        branch_calls.append({"repo_root": repo_root, "branch_name": branch_name})
+        if len(branch_calls) == 1:
+            raise discord_service_module.GitError(
+                "working tree has uncommitted changes; commit or stash before /newt"
+            )
+        return "master"
+
+    monkeypatch.setattr(
+        discord_service_module, "reset_branch_from_origin_main", _reset_branch
+    )
+    monkeypatch.setattr(
+        discord_session_commands_module,
+        "describe_newt_reject_reasons",
+        lambda _repo_root: ["1 untracked path, including `.tmp/`"],
+    )
+    monkeypatch.setattr(
+        discord_session_commands_module,
+        "reset_worktree_to_head",
+        lambda repo_root: hard_reset_calls.append(repo_root),
+    )
+    monkeypatch.setattr(
+        discord_session_commands_module,
+        "clean_untracked_worktree",
+        lambda _repo_root: None,
+    )
+
+    try:
+        await service.run_forever()
+        expected_branch = (
+            "thread-channel-1-"
+            f"{hashlib.sha256(str(workspace.resolve()).encode('utf-8')).hexdigest()[:10]}"
+        )
+        assert branch_calls == [
+            {"repo_root": workspace.resolve(), "branch_name": expected_branch},
+            {"repo_root": workspace.resolve(), "branch_name": expected_branch},
+        ]
+        assert hard_reset_calls == [workspace.resolve()]
+        assert [item["payload"]["type"] for item in rest.interaction_responses] == [
+            5,
+            6,
+        ]
+        assert len(rest.followup_messages) == 1
+        assert len(rest.edited_original_interaction_responses) == 1
+        edited_payload = rest.edited_original_interaction_responses[0]["payload"]
+        assert "reset branch" in edited_payload["content"].lower()
+        assert "origin/master" in edited_payload["content"].lower()
+        assert edited_payload["components"] == []
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_newt_hard_reset_reports_discard_when_retry_reset_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _interaction(name="newt", options=[]),
+            _component_interaction(
+                custom_id=discord_session_commands_module.NEWT_HARD_RESET_CUSTOM_ID
+            ),
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    branch_calls: list[dict[str, Any]] = []
+    hard_reset_calls: list[Path] = []
+
+    def _reset_branch(repo_root: Path, branch_name: str) -> str:
+        branch_calls.append({"repo_root": repo_root, "branch_name": branch_name})
+        if len(branch_calls) == 1:
+            raise discord_service_module.GitError(
+                "working tree has uncommitted changes; commit or stash before /newt"
+            )
+        raise discord_service_module.GitError("git fetch failed: simulated failure")
+
+    monkeypatch.setattr(
+        discord_service_module, "reset_branch_from_origin_main", _reset_branch
+    )
+    monkeypatch.setattr(
+        discord_session_commands_module,
+        "describe_newt_reject_reasons",
+        lambda _repo_root: ["1 untracked path, including `.tmp/`"],
+    )
+    monkeypatch.setattr(
+        discord_session_commands_module,
+        "reset_worktree_to_head",
+        lambda repo_root: hard_reset_calls.append(repo_root),
+    )
+    monkeypatch.setattr(
+        discord_session_commands_module,
+        "clean_untracked_worktree",
+        lambda _repo_root: None,
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 2
+        assert rest.interaction_responses[1]["payload"]["type"] == 6
+        assert hard_reset_calls == [workspace.resolve()]
+        assert len(rest.edited_original_interaction_responses) == 1
+        edited_payload = rest.edited_original_interaction_responses[0]["payload"]
+        content = edited_payload["content"].lower()
+        assert "local changes were discarded" in content
+        assert "retry `/car newt`" in content
+        assert "simulated failure" in content
+        assert edited_payload["components"] == []
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_newt_hard_reset_reports_when_tracked_discard_step_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _interaction(name="newt", options=[]),
+            _component_interaction(
+                custom_id=discord_session_commands_module.NEWT_HARD_RESET_CUSTOM_ID
+            ),
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    def _reset_branch(repo_root: Path, branch_name: str) -> str:
+        _ = repo_root, branch_name
+        raise discord_service_module.GitError(
+            "working tree has uncommitted changes; commit or stash before /newt"
+        )
+
+    monkeypatch.setattr(
+        discord_service_module, "reset_branch_from_origin_main", _reset_branch
+    )
+    monkeypatch.setattr(
+        discord_session_commands_module,
+        "describe_newt_reject_reasons",
+        lambda _repo_root: ["1 untracked path, including `.tmp/`"],
+    )
+
+    def _fail_reset_worktree(_repo_root: Path) -> None:
+        raise discord_service_module.GitError("git reset failed: simulated failure")
+
+    monkeypatch.setattr(
+        discord_session_commands_module, "reset_worktree_to_head", _fail_reset_worktree
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 2
+        assert rest.interaction_responses[1]["payload"]["type"] == 6
+        assert len(rest.edited_original_interaction_responses) == 1
+        edited_payload = rest.edited_original_interaction_responses[0]["payload"]
+        content = edited_payload["content"].lower()
+        assert "did not complete cleanly" in content
+        assert "simulated failure" in content
+        assert "were discarded" not in content
+        assert edited_payload["components"] == []
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_newt_hard_reset_reports_when_untracked_cleanup_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _interaction(name="newt", options=[]),
+            _component_interaction(
+                custom_id=discord_session_commands_module.NEWT_HARD_RESET_CUSTOM_ID
+            ),
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    def _reset_branch(repo_root: Path, branch_name: str) -> str:
+        _ = repo_root, branch_name
+        raise discord_service_module.GitError(
+            "working tree has uncommitted changes; commit or stash before /newt"
+        )
+
+    monkeypatch.setattr(
+        discord_service_module, "reset_branch_from_origin_main", _reset_branch
+    )
+    monkeypatch.setattr(
+        discord_session_commands_module,
+        "describe_newt_reject_reasons",
+        lambda _repo_root: ["1 untracked path, including `.tmp/`"],
+    )
+    monkeypatch.setattr(
+        discord_session_commands_module,
+        "reset_worktree_to_head",
+        lambda _repo_root: None,
+    )
+
+    def _fail_clean(_repo_root: Path) -> None:
+        raise discord_service_module.GitError("git clean failed: simulated failure")
+
+    monkeypatch.setattr(
+        discord_session_commands_module, "clean_untracked_worktree", _fail_clean
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 2
+        assert rest.interaction_responses[1]["payload"]["type"] == 6
+        assert len(rest.edited_original_interaction_responses) == 1
+        edited_payload = rest.edited_original_interaction_responses[0]["payload"]
+        content = edited_payload["content"].lower()
+        assert "tracked changes were discarded" in content
+        assert "some untracked paths could not be removed" in content
+        assert "simulated failure" in content
+        assert edited_payload["components"] == []
     finally:
         await store.close()
 

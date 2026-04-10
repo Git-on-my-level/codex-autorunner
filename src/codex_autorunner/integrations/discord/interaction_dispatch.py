@@ -7,6 +7,10 @@ from typing import Any, Optional
 
 from ...core.logging_utils import log_event
 from ...integrations.chat.command_ingress import canonicalize_command_ingress
+from .car_handlers.session_commands import (
+    NEWT_CANCEL_CUSTOM_ID,
+    NEWT_HARD_RESET_CUSTOM_ID,
+)
 from .errors import DiscordTransientError
 from .ingress import CommandSpec, IngressContext, IngressTiming, InteractionKind
 
@@ -451,6 +455,21 @@ async def handle_component_interaction(
                 interaction_token=interaction_token,
                 text="Update cancelled.",
                 components=[],
+            )
+            return
+
+        if custom_id == NEWT_HARD_RESET_CUSTOM_ID:
+            await service._handle_car_newt_hard_reset(
+                interaction_id,
+                interaction_token,
+                channel_id=channel_id,
+            )
+            return
+
+        if custom_id == NEWT_CANCEL_CUSTOM_ID:
+            await service._handle_car_newt_cancel(
+                interaction_id,
+                interaction_token,
             )
             return
 

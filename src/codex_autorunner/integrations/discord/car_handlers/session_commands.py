@@ -7,13 +7,24 @@ import re
 from pathlib import Path
 from typing import Any, Optional
 
-from ....core.git_utils import GitError
+from ....core.git_utils import (
+    GitError,
+    clean_untracked_worktree,
+    describe_newt_reject_reasons,
+    reset_worktree_to_head,
+)
 from ....core.utils import canonicalize_path
 from ...chat.session_messages import (
     build_fresh_session_started_lines,
     build_thread_detail_lines,
 )
-from ..components import DISCORD_SELECT_OPTION_MAX_OPTIONS, build_session_threads_picker
+from ..components import (
+    DISCORD_BUTTON_STYLE_DANGER,
+    DISCORD_SELECT_OPTION_MAX_OPTIONS,
+    build_action_row,
+    build_button,
+    build_session_threads_picker,
+)
 from ..message_turns import (
     clear_discord_turn_progress_reuse,
     request_discord_turn_progress_reuse,
@@ -21,6 +32,8 @@ from ..message_turns import (
 from ..rendering import format_discord_message, truncate_for_discord
 
 _logger = logging.getLogger(__name__)
+NEWT_HARD_RESET_CUSTOM_ID = "newt_hard_reset"
+NEWT_CANCEL_CUSTOM_ID = "newt_cancel"
 
 
 async def _interaction_deferred(
@@ -38,6 +51,229 @@ async def _interaction_deferred(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
         )
+    )
+
+
+def _newt_branch_name(channel_id: str, workspace_root: Path) -> str:
+    safe_channel_id = re.sub(r"[^a-zA-Z0-9]+", "-", channel_id).strip("-")
+    if not safe_channel_id:
+        safe_channel_id = "channel"
+    branch_suffix = hashlib.sha256(str(workspace_root).encode("utf-8")).hexdigest()[:10]
+    return f"thread-{safe_channel_id}-{branch_suffix}"
+
+
+def _build_newt_reject_components() -> list[dict[str, Any]]:
+    return [
+        build_action_row(
+            [
+                build_button(
+                    "Hard reset",
+                    NEWT_HARD_RESET_CUSTOM_ID,
+                    style=DISCORD_BUTTON_STYLE_DANGER,
+                ),
+                build_button("Cancel", NEWT_CANCEL_CUSTOM_ID),
+            ]
+        )
+    ]
+
+
+def _format_newt_reject_message(reasons: list[str]) -> str:
+    lines = [
+        "Can't start a fresh `/car newt` yet.",
+        "",
+        "Why:",
+        *[f"- {reason}" for reason in reasons],
+        "",
+        "Choose **Hard reset** to discard local changes and continue, or **Cancel** to keep them.",
+    ]
+    return format_discord_message("\n".join(lines))
+
+
+async def _send_newt_response(
+    service: Any,
+    interaction_id: str,
+    interaction_token: str,
+    *,
+    deferred: bool,
+    text: str,
+    component_response: bool,
+    components: Optional[list[dict[str, Any]]] = None,
+) -> None:
+    if component_response:
+        await service._send_or_update_component_message(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text=text,
+            components=components,
+        )
+        return
+    if components:
+        await service._send_or_respond_with_components_public(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text=text,
+            components=components,
+        )
+        return
+    await service._send_or_respond_public(
+        interaction_id=interaction_id,
+        interaction_token=interaction_token,
+        deferred=deferred,
+        text=text,
+    )
+
+
+async def _finalize_car_newt(
+    service: Any,
+    interaction_id: str,
+    interaction_token: str,
+    *,
+    channel_id: str,
+    deferred: bool,
+    binding: dict[str, Any],
+    workspace_root: Path,
+    pma_enabled: bool,
+    branch_name: str,
+    default_branch: str,
+    component_response: bool = False,
+) -> None:
+    from ..service import log_event
+
+    setup_command_count = 0
+    hub_supervisor = getattr(service, "_hub_supervisor", None)
+    if hub_supervisor is not None:
+        repo_id_raw = binding.get("repo_id")
+        repo_id_hint = (
+            repo_id_raw.strip()
+            if isinstance(repo_id_raw, str) and repo_id_raw
+            else None
+        )
+        try:
+            setup_command_count = await asyncio.to_thread(
+                hub_supervisor.run_setup_commands_for_workspace,
+                workspace_root,
+                repo_id_hint=repo_id_hint,
+            )
+        except (
+            RuntimeError,
+            OSError,
+        ) as exc:  # intentional: runs arbitrary setup commands with unpredictable failures
+            log_event(
+                service._logger,
+                logging.WARNING,
+                "discord.newt.setup.failed",
+                channel_id=channel_id,
+                workspace_path=str(workspace_root),
+                exc=exc,
+            )
+            text = format_discord_message(
+                f"Reset branch `{branch_name}` to `origin/{default_branch}` but setup commands failed: {exc}"
+            )
+            await _send_newt_response(
+                service,
+                interaction_id,
+                interaction_token,
+                deferred=deferred,
+                text=text,
+                component_response=component_response,
+                components=[] if component_response else None,
+            )
+            return
+
+    agent, agent_profile = service._resolve_agent_state(binding)
+    resource_kind = (
+        str(binding.get("resource_kind")).strip()
+        if isinstance(binding.get("resource_kind"), str)
+        and str(binding.get("resource_kind")).strip()
+        else None
+    )
+    resource_id = (
+        str(binding.get("resource_id")).strip()
+        if isinstance(binding.get("resource_id"), str)
+        and str(binding.get("resource_id")).strip()
+        else None
+    )
+
+    try:
+        had_previous, new_thread_id = await service._reset_discord_thread_binding(
+            channel_id=channel_id,
+            workspace_root=workspace_root,
+            agent=agent,
+            agent_profile=agent_profile,
+            repo_id=(
+                str(binding.get("repo_id")).strip()
+                if isinstance(binding.get("repo_id"), str)
+                and str(binding.get("repo_id")).strip()
+                else None
+            ),
+            resource_kind=resource_kind,
+            resource_id=resource_id,
+            pma_enabled=pma_enabled,
+        )
+    except (
+        RuntimeError,
+        OSError,
+        ValueError,
+        TypeError,
+    ) as exc:
+        log_event(
+            service._logger,
+            logging.WARNING,
+            "discord.newt.thread_reset.failed",
+            channel_id=channel_id,
+            workspace_root=str(workspace_root),
+            agent=agent,
+            exc=exc,
+        )
+        text = format_discord_message(
+            "Branch reset succeeded, but starting a fresh session failed."
+        )
+        await _send_newt_response(
+            service,
+            interaction_id,
+            interaction_token,
+            deferred=deferred,
+            text=text,
+            component_response=component_response,
+            components=[] if component_response else None,
+        )
+        return
+
+    await service._store.clear_pending_compact_seed(channel_id=channel_id)
+    mode_label = "PMA" if pma_enabled else "repo"
+    state_label = "cleared previous thread" if had_previous else "new thread ready"
+    setup_note = (
+        f" Ran {setup_command_count} setup command(s)." if setup_command_count else ""
+    )
+    actor_label = service._format_agent_state(agent, agent_profile)
+    text = format_discord_message(
+        "\n".join(
+            [
+                (
+                    f"Reset branch `{branch_name}` to `origin/{default_branch}` "
+                    f"in current workspace and started fresh {mode_label} session "
+                    f"for `{actor_label}` ({state_label}).{setup_note}"
+                ),
+                *build_thread_detail_lines(
+                    thread_id=new_thread_id,
+                    workspace_path=str(workspace_root),
+                    actor_label=actor_label,
+                    model=service._status_model_label(binding),
+                    effort=service._status_effort_label(binding, agent),
+                ),
+            ]
+        )
+    )
+    await _send_newt_response(
+        service,
+        interaction_id,
+        interaction_token,
+        deferred=deferred,
+        text=text,
+        component_response=component_response,
+        components=[] if component_response else None,
     )
 
 
@@ -234,11 +470,7 @@ async def handle_car_newt(
         )
         return
 
-    safe_channel_id = re.sub(r"[^a-zA-Z0-9]+", "-", channel_id).strip("-")
-    if not safe_channel_id:
-        safe_channel_id = "channel"
-    branch_suffix = hashlib.sha256(str(workspace_root).encode("utf-8")).hexdigest()[:10]
-    branch_name = f"thread-{safe_channel_id}-{branch_suffix}"
+    branch_name = _newt_branch_name(channel_id, workspace_root)
 
     try:
         default_branch = await asyncio.to_thread(
@@ -255,140 +487,226 @@ async def handle_car_newt(
             branch=branch_name,
             exc=exc,
         )
+        if "working tree has uncommitted changes" in str(exc):
+            reasons = describe_newt_reject_reasons(workspace_root)
+            if not reasons:
+                reasons = ["Local git changes are blocking the reset."]
+            await _send_newt_response(
+                service,
+                interaction_id,
+                interaction_token,
+                deferred=deferred,
+                text=_format_newt_reject_message(reasons),
+                component_response=False,
+                components=_build_newt_reject_components(),
+            )
+            return
         text = format_discord_message(
             f"Failed to reset branch `{branch_name}` from origin default branch: {exc}"
         )
-        await service._send_or_respond_public(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
+        await _send_newt_response(
+            service,
+            interaction_id,
+            interaction_token,
             deferred=deferred,
             text=text,
+            component_response=False,
         )
         return
 
-    setup_command_count = 0
-    hub_supervisor = getattr(service, "_hub_supervisor", None)
-    if hub_supervisor is not None:
-        repo_id_raw = binding.get("repo_id")
-        repo_id_hint = (
-            repo_id_raw.strip()
-            if isinstance(repo_id_raw, str) and repo_id_raw
-            else None
-        )
-        try:
-            setup_command_count = await asyncio.to_thread(
-                hub_supervisor.run_setup_commands_for_workspace,
-                workspace_root,
-                repo_id_hint=repo_id_hint,
-            )
-        except (
-            RuntimeError,
-            OSError,
-        ) as exc:  # intentional: runs arbitrary setup commands with unpredictable failures
-            log_event(
-                service._logger,
-                logging.WARNING,
-                "discord.newt.setup.failed",
-                channel_id=channel_id,
-                workspace_path=str(workspace_root),
-                exc=exc,
-            )
-            text = format_discord_message(
-                f"Reset branch `{branch_name}` to `origin/{default_branch}` but setup commands failed: {exc}"
-            )
-            await service._send_or_respond_public(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=text,
-            )
-            return
-
-    agent, agent_profile = service._resolve_agent_state(binding)
-    resource_kind = (
-        str(binding.get("resource_kind")).strip()
-        if isinstance(binding.get("resource_kind"), str)
-        and str(binding.get("resource_kind")).strip()
-        else None
-    )
-    resource_id = (
-        str(binding.get("resource_id")).strip()
-        if isinstance(binding.get("resource_id"), str)
-        and str(binding.get("resource_id")).strip()
-        else None
+    await _finalize_car_newt(
+        service,
+        interaction_id,
+        interaction_token,
+        channel_id=channel_id,
+        deferred=deferred,
+        binding=binding,
+        workspace_root=workspace_root,
+        pma_enabled=pma_enabled,
+        branch_name=branch_name,
+        default_branch=default_branch,
     )
 
-    try:
-        had_previous, _new_thread_id = await service._reset_discord_thread_binding(
-            channel_id=channel_id,
-            workspace_root=workspace_root,
-            agent=agent,
-            agent_profile=agent_profile,
-            repo_id=(
-                str(binding.get("repo_id")).strip()
-                if isinstance(binding.get("repo_id"), str)
-                and str(binding.get("repo_id")).strip()
-                else None
+
+async def handle_car_newt_hard_reset(
+    service: Any,
+    interaction_id: str,
+    interaction_token: str,
+    *,
+    channel_id: str,
+) -> None:
+    from ..service import log_event, reset_branch_from_origin_main
+
+    deferred = await service._defer_component_update(
+        interaction_id=interaction_id,
+        interaction_token=interaction_token,
+    )
+    binding = await service._store.get_binding(channel_id=channel_id)
+    if binding is None:
+        await _send_newt_response(
+            service,
+            interaction_id,
+            interaction_token,
+            deferred=deferred,
+            text=format_discord_message(
+                "This channel is not bound. Run `/car bind path:<...>` first."
             ),
-            resource_kind=resource_kind,
-            resource_id=resource_id,
-            pma_enabled=pma_enabled,
+            component_response=True,
+            components=[],
         )
-    except (
-        RuntimeError,
-        OSError,
-        ValueError,
-        TypeError,
-    ) as exc:
+        return
+
+    pma_enabled = bool(binding.get("pma_enabled", False))
+    if pma_enabled:
+        await _send_newt_response(
+            service,
+            interaction_id,
+            interaction_token,
+            deferred=deferred,
+            text=format_discord_message(
+                "/car newt is not available in PMA mode. Use `/car new` instead."
+            ),
+            component_response=True,
+            components=[],
+        )
+        return
+
+    workspace_raw = binding.get("workspace_path")
+    workspace_root: Optional[Path] = None
+    if isinstance(workspace_raw, str) and workspace_raw.strip():
+        workspace_root = canonicalize_path(Path(workspace_raw))
+        if not workspace_root.exists() or not workspace_root.is_dir():
+            workspace_root = None
+    if workspace_root is None:
+        await _send_newt_response(
+            service,
+            interaction_id,
+            interaction_token,
+            deferred=deferred,
+            text=format_discord_message(
+                "Binding is invalid. Run `/car bind path:<workspace>`."
+            ),
+            component_response=True,
+            components=[],
+        )
+        return
+
+    branch_name = _newt_branch_name(channel_id, workspace_root)
+    try:
+        await asyncio.to_thread(reset_worktree_to_head, workspace_root)
+    except GitError as exc:
         log_event(
             service._logger,
             logging.WARNING,
-            "discord.newt.thread_reset.failed",
+            "discord.newt.hard_reset_tracked.failed",
             channel_id=channel_id,
-            workspace_root=str(workspace_root),
-            agent=agent,
+            branch=branch_name,
             exc=exc,
         )
         text = format_discord_message(
-            "Branch reset succeeded, but starting a fresh session failed."
+            "Hard reset did not complete cleanly before `/car newt` was cancelled.\n\n"
+            f"Reason: {exc}"
         )
-        await service._send_or_respond_public(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
+        await _send_newt_response(
+            service,
+            interaction_id,
+            interaction_token,
             deferred=deferred,
             text=text,
+            component_response=True,
+            components=[],
         )
         return
-    await service._store.clear_pending_compact_seed(channel_id=channel_id)
-    mode_label = "PMA" if pma_enabled else "repo"
-    state_label = "cleared previous thread" if had_previous else "new thread ready"
-    setup_note = (
-        f" Ran {setup_command_count} setup command(s)." if setup_command_count else ""
-    )
-    actor_label = service._format_agent_state(agent, agent_profile)
-    text = format_discord_message(
-        "\n".join(
-            [
-                (
-                    f"Reset branch `{branch_name}` to `origin/{default_branch}` "
-                    f"in current workspace and started fresh {mode_label} session "
-                    f"for `{actor_label}` ({state_label}).{setup_note}"
-                ),
-                *build_thread_detail_lines(
-                    thread_id=_new_thread_id,
-                    workspace_path=str(workspace_root),
-                    actor_label=actor_label,
-                    model=service._status_model_label(binding),
-                    effort=service._status_effort_label(binding, agent),
-                ),
-            ]
+    try:
+        await asyncio.to_thread(clean_untracked_worktree, workspace_root)
+    except GitError as exc:
+        log_event(
+            service._logger,
+            logging.WARNING,
+            "discord.newt.hard_reset_untracked.failed",
+            channel_id=channel_id,
+            branch=branch_name,
+            exc=exc,
         )
+        text = format_discord_message(
+            "Tracked changes were discarded, but some untracked paths could not be "
+            "removed, so `/car newt` was cancelled.\n\n"
+            f"Reason: {exc}"
+        )
+        await _send_newt_response(
+            service,
+            interaction_id,
+            interaction_token,
+            deferred=deferred,
+            text=text,
+            component_response=True,
+            components=[],
+        )
+        return
+    try:
+        default_branch = await asyncio.to_thread(
+            reset_branch_from_origin_main,
+            workspace_root,
+            branch_name,
+        )
+    except GitError as exc:
+        log_event(
+            service._logger,
+            logging.WARNING,
+            "discord.newt.branch_reset_after_hard_reset.failed",
+            channel_id=channel_id,
+            branch=branch_name,
+            exc=exc,
+        )
+        text = format_discord_message(
+            "Local changes were discarded, but `/car newt` still failed while "
+            "resetting the branch from origin.\n\n"
+            f"Reason: {exc}\n\n"
+            "You can retry `/car newt` after fixing the git problem."
+        )
+        await _send_newt_response(
+            service,
+            interaction_id,
+            interaction_token,
+            deferred=deferred,
+            text=text,
+            component_response=True,
+            components=[],
+        )
+        return
+
+    await _finalize_car_newt(
+        service,
+        interaction_id,
+        interaction_token,
+        channel_id=channel_id,
+        deferred=deferred,
+        binding=binding,
+        workspace_root=workspace_root,
+        pma_enabled=pma_enabled,
+        branch_name=branch_name,
+        default_branch=default_branch,
+        component_response=True,
     )
-    await service._send_or_respond_public(
+
+
+async def handle_car_newt_cancel(
+    service: Any,
+    interaction_id: str,
+    interaction_token: str,
+) -> None:
+    deferred = await service._defer_component_update(
         interaction_id=interaction_id,
         interaction_token=interaction_token,
+    )
+    await _send_newt_response(
+        service,
+        interaction_id,
+        interaction_token,
         deferred=deferred,
-        text=text,
+        text=format_discord_message("Cancelled `/car newt`. Kept local changes."),
+        component_response=True,
+        components=[],
     )
 
 
@@ -1229,6 +1547,7 @@ async def handle_car_interrupt(
             deferred=deferred,
             text=text,
         )
+
     except (RuntimeError, ConnectionError, OSError, ValueError) as exc:
         if progress_reuse_source_message_id or progress_reuse_acknowledgement:
             clear_discord_turn_progress_reuse(
@@ -1257,3 +1576,16 @@ async def handle_car_interrupt(
             deferred=deferred,
             text=text,
         )
+
+
+# Keep explicit module-level references so dead-code heuristics treat the
+# Discord session command handlers as part of the intended surface.
+_DISCORD_SESSION_COMMAND_HANDLERS = (
+    handle_car_new,
+    handle_car_newt,
+    handle_car_newt_hard_reset,
+    handle_car_newt_cancel,
+    handle_car_resume,
+    handle_car_reset,
+    handle_car_archive,
+)

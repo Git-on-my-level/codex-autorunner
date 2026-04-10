@@ -97,3 +97,20 @@ def test_reset_branch_from_origin_main_raises_when_worktree_dirty(
         match="working tree has uncommitted changes; commit or stash before /newt",
     ):
         git_utils.reset_branch_from_origin_main(Path("/tmp/repo"), "thread-123")
+
+
+def test_describe_newt_reject_reasons_summarizes_git_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        git_utils,
+        "git_status_porcelain",
+        lambda _repo_root: "M  staged.py\n M unstaged.py\n?? .tmp/\nUU conflict.txt\n",
+    )
+
+    assert git_utils.describe_newt_reject_reasons(Path("/tmp/repo")) == [
+        "1 merge conflict, including `conflict.txt`",
+        "1 staged tracked change, including `staged.py`",
+        "1 unstaged tracked change, including `unstaged.py`",
+        "1 untracked path, including `.tmp/`",
+    ]

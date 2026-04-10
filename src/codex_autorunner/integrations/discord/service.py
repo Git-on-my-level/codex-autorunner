@@ -4942,6 +4942,35 @@ class DiscordBotService:
             guild_id=guild_id,
         )
 
+    async def _handle_car_newt_hard_reset(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+    ) -> None:
+        from .car_handlers.session_commands import handle_car_newt_hard_reset
+
+        await handle_car_newt_hard_reset(
+            self,
+            interaction_id,
+            interaction_token,
+            channel_id=channel_id,
+        )
+
+    async def _handle_car_newt_cancel(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+    ) -> None:
+        from .car_handlers.session_commands import handle_car_newt_cancel
+
+        await handle_car_newt_cancel(
+            self,
+            interaction_id,
+            interaction_token,
+        )
+
     async def _handle_car_resume(
         self,
         interaction_id: str,
