@@ -8,7 +8,7 @@ import uuid
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
-from typing import Any, Optional, cast
+from typing import Any, Awaitable, Optional, cast
 
 from ...agents.registry import get_registered_agents, wrap_requested_agent_context
 from ...core.context_awareness import (
@@ -356,6 +356,26 @@ def _managed_thread_surface_key_for_notification_reply(
     if isinstance(notification_id, str) and notification_id.strip():
         return notification_surface_key(notification_id)
     return None
+
+
+def _spawn_discord_background_task(
+    service: Any,
+    coro: Awaitable[None],
+    *,
+    await_on_shutdown: bool = False,
+) -> asyncio.Task[Any]:
+    spawn_task = service._spawn_task
+    if not await_on_shutdown:
+        return cast(asyncio.Task[Any], spawn_task(coro))
+    try:
+        return cast(
+            asyncio.Task[Any],
+            spawn_task(coro, await_on_shutdown=True),
+        )
+    except TypeError as exc:
+        if "await_on_shutdown" not in str(exc):
+            raise
+        return cast(asyncio.Task[Any], spawn_task(coro))
 
 
 async def _acknowledge_discord_progress_reuse(
@@ -712,7 +732,11 @@ async def _submit_discord_thread_message(
                 channel_id=dispatch.channel_id,
                 message_id=progress_message_id,
             )
-    dispatch.service._spawn_task(_run_in_background())
+    _spawn_discord_background_task(
+        dispatch.service,
+        _run_in_background(),
+        await_on_shutdown=True,
+    )
     return DiscordMessageTurnResult(
         final_message="",
         send_final_message=False,
@@ -1569,7 +1593,9 @@ async def _run_discord_orchestrated_turn_for_message(
         coordinator.ensure_queue_worker(
             task_map=_get_discord_thread_queue_task_map(service),
             managed_thread_id=managed_thread_id,
-            spawn_task=service._spawn_task,
+            spawn_task=lambda coro: _spawn_discord_background_task(
+                service, coro, await_on_shutdown=True
+            ),
             hooks=_build_discord_queue_worker_hooks(
                 service,
                 channel_id=channel_id,

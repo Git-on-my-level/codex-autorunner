@@ -305,6 +305,7 @@ DISCORD_TURN_PROGRESS_MIN_EDIT_INTERVAL_SECONDS = 1.0
 DISCORD_TURN_PROGRESS_HEARTBEAT_INTERVAL_SECONDS = 2.0
 DISCORD_TURN_PROGRESS_MAX_ACTIONS = 12
 DISCORD_TYPING_HEARTBEAT_INTERVAL_SECONDS = 5.0
+DISCORD_BACKGROUND_TASK_SHUTDOWN_GRACE_SECONDS = 10.0
 SHELL_OUTPUT_TRUNCATION_SUFFIX = "\n...[truncated]..."
 DISCORD_ATTACHMENT_MAX_BYTES = 100_000_000
 THREAD_LIST_MAX_PAGES = 5
@@ -629,6 +630,7 @@ class DiscordBotService:
         self._discord_turn_progress_reuse_requests: dict[str, Any] = {}
         self._discord_reusable_progress_messages: dict[str, Any] = {}
         self._background_tasks: set[asyncio.Task[Any]] = set()
+        self._background_shutdown_wait_tasks: set[asyncio.Task[Any]] = set()
         self._typing_sessions: dict[str, int] = {}
         self._typing_tasks: dict[str, asyncio.Task[Any]] = {}
         self._typing_lock: Optional[asyncio.Lock] = None
@@ -2945,11 +2947,31 @@ class DiscordBotService:
             )
 
     async def _shutdown(self) -> None:
+        drainable_tasks = [
+            task
+            for task in list(self._background_shutdown_wait_tasks)
+            if not task.done()
+        ]
+        if drainable_tasks:
+            done, pending = await asyncio.wait(
+                drainable_tasks,
+                timeout=DISCORD_BACKGROUND_TASK_SHUTDOWN_GRACE_SECONDS,
+            )
+            self._background_shutdown_wait_tasks.difference_update(done)
+            if pending:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "discord.background_task.shutdown_timeout",
+                    timeout_seconds=DISCORD_BACKGROUND_TASK_SHUTDOWN_GRACE_SECONDS,
+                    pending_count=len(pending),
+                )
         if self._background_tasks:
             for task in list(self._background_tasks):
                 task.cancel()
             await asyncio.gather(*list(self._background_tasks), return_exceptions=True)
             self._background_tasks.clear()
+        self._background_shutdown_wait_tasks.clear()
         await self._command_runner.shutdown()
         if self._owns_gateway:
             with contextlib.suppress(Exception):  # intentional: shutdown cleanup
@@ -3141,14 +3163,19 @@ class DiscordBotService:
                     exc=enqueue_exc,
                 )
 
-    def _spawn_task(self, coro: Awaitable[None]) -> asyncio.Task[Any]:
+    def _spawn_task(
+        self, coro: Awaitable[None], *, await_on_shutdown: bool = False
+    ) -> asyncio.Task[Any]:
         task = cast(asyncio.Task[Any], asyncio.ensure_future(coro))
         self._background_tasks.add(task)
+        if await_on_shutdown:
+            self._background_shutdown_wait_tasks.add(task)
         task.add_done_callback(self._on_background_task_done)
         return task
 
     def _on_background_task_done(self, task: asyncio.Task[Any]) -> None:
         self._background_tasks.discard(task)
+        self._background_shutdown_wait_tasks.discard(task)
         try:
             task.result()
         except asyncio.CancelledError:
