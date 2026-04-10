@@ -192,15 +192,28 @@ class FakeACPServer:
                 },
             }
         )
+        if self._scenario == "session_status_idle_completion_gap":
+            self.send(
+                {
+                    "method": "session.status",
+                    "params": {
+                        "sessionId": session_id,
+                        "status": {"type": "idle"},
+                    },
+                }
+            )
+            return
+        completed_params = {
+            "sessionId": session_id,
+            "status": "completed",
+            "finalOutput": "fixture reply",
+        }
+        if self._scenario != "terminal_missing_turn_id":
+            completed_params["turnId"] = turn_id
         self.send(
             {
                 "method": "prompt/completed",
-                "params": {
-                    "sessionId": session_id,
-                    "turnId": turn_id,
-                    "status": "completed",
-                    "finalOutput": "fixture reply",
-                },
+                "params": completed_params,
             }
         )
 

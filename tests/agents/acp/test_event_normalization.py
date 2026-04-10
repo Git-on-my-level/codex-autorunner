@@ -3,6 +3,7 @@ from __future__ import annotations
 from codex_autorunner.agents.acp import (
     ACPOutputDeltaEvent,
     ACPPermissionRequestEvent,
+    ACPProgressEvent,
     ACPTurnTerminalEvent,
     normalize_notification,
 )
@@ -108,3 +109,53 @@ def test_normalize_notification_maps_session_update_message_chunk() -> None:
     assert event.session_id == "session-1"
     assert event.turn_id == "turn-1"
     assert event.delta == "hello"
+
+
+def test_normalize_notification_maps_session_idle_to_terminal_event() -> None:
+    event = normalize_notification(
+        {
+            "method": "session.idle",
+            "params": {
+                "sessionId": "session-1",
+                "turnId": "turn-1",
+            },
+        }
+    )
+
+    assert isinstance(event, ACPTurnTerminalEvent)
+    assert event.status == "completed"
+    assert event.turn_id == "turn-1"
+
+
+def test_normalize_notification_maps_idle_session_status_to_terminal_event() -> None:
+    event = normalize_notification(
+        {
+            "method": "session.status",
+            "params": {
+                "sessionId": "session-1",
+                "turnId": "turn-1",
+                "status": {"type": "idle"},
+            },
+        }
+    )
+
+    assert isinstance(event, ACPTurnTerminalEvent)
+    assert event.status == "completed"
+    assert event.turn_id == "turn-1"
+
+
+def test_normalize_notification_maps_busy_session_status_to_progress_event() -> None:
+    event = normalize_notification(
+        {
+            "method": "session.status",
+            "params": {
+                "sessionId": "session-1",
+                "turnId": "turn-1",
+                "status": {"type": "running"},
+            },
+        }
+    )
+
+    assert isinstance(event, ACPProgressEvent)
+    assert event.message == "running"
+    assert event.turn_id == "turn-1"

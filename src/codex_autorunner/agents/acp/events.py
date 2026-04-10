@@ -56,6 +56,28 @@ def _permission_description(payload: Mapping[str, Any]) -> str:
     return kind or ""
 
 
+def _session_status_payload(payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    status = payload.get("status")
+    if isinstance(status, Mapping):
+        return status
+    properties = payload.get("properties")
+    if isinstance(properties, Mapping):
+        nested_status = properties.get("status")
+        if isinstance(nested_status, Mapping):
+            return nested_status
+    return {}
+
+
+def _session_status_type(payload: Mapping[str, Any]) -> Optional[str]:
+    status = _session_status_payload(payload)
+    if status:
+        for key in ("type", "status", "state"):
+            normalized = _normalize_optional_text(status.get(key))
+            if normalized:
+                return normalized
+    return _normalize_optional_text(payload.get("status"))
+
+
 @dataclass(frozen=True)
 class ACPEventEnvelope:
     kind: str
@@ -159,6 +181,47 @@ def normalize_notification(message: Mapping[str, Any]) -> ACPEvent:
             raw_notification=raw_notification,
             action=action,
             session=session,
+        )
+
+    if method == "session.idle":
+        return ACPTurnTerminalEvent(
+            kind="turn_terminal",
+            method=method,
+            session_id=session_id,
+            turn_id=turn_id,
+            payload=payload,
+            raw_notification=raw_notification,
+            status="completed",
+            final_output=_extract_text(
+                payload, "finalOutput", "final_output", "message"
+            )
+            or "",
+        )
+
+    if method in {"session.status", "session/status"}:
+        status_type = _session_status_type(payload)
+        if status_type == "idle":
+            return ACPTurnTerminalEvent(
+                kind="turn_terminal",
+                method=method,
+                session_id=session_id,
+                turn_id=turn_id,
+                payload=payload,
+                raw_notification=raw_notification,
+                status="completed",
+                final_output=_extract_text(
+                    payload, "finalOutput", "final_output", "message"
+                )
+                or "",
+            )
+        return ACPProgressEvent(
+            kind="progress",
+            method=method,
+            session_id=session_id,
+            turn_id=turn_id,
+            payload=payload,
+            raw_notification=raw_notification,
+            message=status_type or "",
         )
 
     if method == "session/update":
