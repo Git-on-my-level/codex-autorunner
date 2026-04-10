@@ -44,8 +44,8 @@ from .components import (
     build_flow_status_buttons,
 )
 from .errors import DiscordTransientError
+from .interaction_registry import FLOW_ACTION_SELECT_PREFIX
 
-FLOW_ACTION_SELECT_PREFIX = "flow_action_select"
 FLOW_RUNS_DEFAULT_LIMIT = 5
 FLOW_RUNS_MAX_LIMIT = DISCORD_SELECT_OPTION_MAX_OPTIONS
 _LEGACY_FLOW_ARCHIVE_MARKERS = frozenset(

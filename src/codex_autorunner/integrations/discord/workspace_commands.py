@@ -34,11 +34,10 @@ from .components import (
     build_bind_picker,
     build_button,
 )
+from .interaction_registry import BIND_PAGE_CUSTOM_ID_PREFIX
 from .rendering import format_discord_message
 
 _logger = logging.getLogger(__name__)
-
-BIND_PAGE_CUSTOM_ID_PREFIX = "bind_page"
 
 
 def _list_manifest_repos(

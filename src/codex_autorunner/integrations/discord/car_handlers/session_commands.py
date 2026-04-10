@@ -25,6 +25,7 @@ from ..components import (
     build_button,
     build_session_threads_picker,
 )
+from ..interaction_registry import NEWT_CANCEL_CUSTOM_ID, NEWT_HARD_RESET_CUSTOM_ID
 from ..message_turns import (
     clear_discord_turn_progress_reuse,
     request_discord_turn_progress_reuse,
@@ -32,8 +33,6 @@ from ..message_turns import (
 from ..rendering import format_discord_message, truncate_for_discord
 
 _logger = logging.getLogger(__name__)
-NEWT_HARD_RESET_CUSTOM_ID = "newt_hard_reset"
-NEWT_CANCEL_CUSTOM_ID = "newt_cancel"
 
 
 async def _interaction_deferred(

@@ -7,35 +7,11 @@ from typing import Any, Optional
 
 from ...core.logging_utils import log_event
 from ...integrations.chat.command_ingress import canonicalize_command_ingress
-from .car_handlers.session_commands import (
-    NEWT_CANCEL_CUSTOM_ID,
-    NEWT_HARD_RESET_CUSTOM_ID,
-    _parse_newt_component_custom_id,
-)
 from .errors import DiscordTransientError
 from .ingress import CommandSpec, IngressContext, IngressTiming, InteractionKind
-
-TICKETS_FILTER_SELECT_ID = "tickets_filter_select"
-TICKETS_SELECT_ID = "tickets_select"
-BIND_PAGE_CUSTOM_ID_PREFIX = "bind_page"
-AGENT_PROFILE_SELECT_ID = "agent_profile_select"
-MODEL_EFFORT_SELECT_ID = "model_effort_select"
-SESSION_RESUME_SELECT_ID = "session_resume_select"
-UPDATE_TARGET_SELECT_ID = "update_target_select"
-UPDATE_CONFIRM_PREFIX = "update_confirm"
-UPDATE_CANCEL_PREFIX = "update_cancel"
-REVIEW_COMMIT_SELECT_ID = "review_commit_select"
-FLOW_ACTION_SELECT_PREFIX = "flow_action_select"
-FLOW_COMPONENT_PREPARE_ACTIONS = frozenset(
-    {
-        "archive",
-        "archive_cancel",
-        "archive_cancel_prompt",
-        "archive_confirm",
-        "archive_confirm_prompt",
-        "refresh",
-        "restart",
-    }
+from .interaction_registry import (
+    dispatch_component_interaction,
+    dispatch_modal_submit,
 )
 
 
@@ -233,7 +209,7 @@ async def handle_normalized_interaction(
                 interaction_id,
                 interaction_token,
                 channel_id=channel_id,
-                guild_id=context.thread_id,
+                guild_id=guild_id,
                 user_id=event.from_user_id,
                 command_path=ingress.command_path,
                 options=ingress.options,
@@ -278,341 +254,14 @@ async def handle_component_interaction(
     service: Any,
     ctx: IngressContext,
 ) -> None:
-    interaction_id = ctx.interaction_id
-    interaction_token = ctx.interaction_token
-    channel_id = ctx.channel_id
     custom_id = ctx.custom_id or ""
-    values = ctx.values
-    guild_id = ctx.guild_id
-    user_id = ctx.user_id
-    message_id = ctx.message_id
     try:
-        if custom_id == TICKETS_FILTER_SELECT_ID:
-            await service._handle_ticket_filter_component(
-                interaction_id,
-                interaction_token,
-                channel_id=channel_id,
-                values=values,
-            )
-            return
-
-        if custom_id == TICKETS_SELECT_ID:
-            await service._handle_ticket_select_component(
-                interaction_id,
-                interaction_token,
-                channel_id=channel_id,
-                values=values,
-            )
-            return
-
-        if custom_id.startswith(f"{BIND_PAGE_CUSTOM_ID_PREFIX}:"):
-            page_token = custom_id.split(":", 1)[1].strip()
-            await service._handle_bind_page_component(
-                interaction_id,
-                interaction_token,
-                page_token=page_token,
-            )
-            return
-
-        if custom_id == "bind_select":
-            if not values:
-                await service._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
-                    "Please select a repository and try again.",
-                )
-                return
-            await service._handle_bind_selection(
-                interaction_id,
-                interaction_token,
-                channel_id=channel_id,
-                guild_id=guild_id,
-                selected_workspace_value=values[0],
-            )
-            return
-
-        if custom_id == "flow_runs_select":
-            if not values:
-                await service._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
-                    "Please select a run and try again.",
-                )
-                return
-            workspace_root = await service._require_bound_workspace(
-                interaction_id, interaction_token, channel_id=channel_id
-            )
-            if workspace_root:
-                await service._handle_flow_status(
-                    interaction_id,
-                    interaction_token,
-                    workspace_root=workspace_root,
-                    options={"run_id": values[0]},
-                    channel_id=channel_id,
-                    guild_id=guild_id,
-                )
-            return
-
-        if custom_id == "agent_select":
-            if not values:
-                await service._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
-                    "Please select an agent and try again.",
-                )
-                return
-            await service._handle_car_agent(
-                interaction_id,
-                interaction_token,
-                channel_id=channel_id,
-                options={"name": values[0]},
-            )
-            return
-
-        if custom_id == AGENT_PROFILE_SELECT_ID:
-            if not values:
-                await service._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
-                    "Please select a Hermes profile and try again.",
-                )
-                return
-            await service._handle_agent_profile_picker_selection(
-                interaction_id,
-                interaction_token,
-                channel_id=channel_id,
-                selected_profile=values[0],
-            )
-            return
-
-        if custom_id == "model_select":
-            if not values:
-                await service._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
-                    "Please select a model and try again.",
-                )
-                return
-            await service._handle_model_picker_selection(
-                interaction_id,
-                interaction_token,
-                channel_id=channel_id,
-                user_id=user_id,
-                selected_model=values[0],
-            )
-            return
-
-        if custom_id == MODEL_EFFORT_SELECT_ID:
-            if not values:
-                await service._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
-                    "Please select reasoning effort and try again.",
-                )
-                return
-            await service._handle_model_effort_selection(
-                interaction_id,
-                interaction_token,
-                channel_id=channel_id,
-                user_id=user_id,
-                selected_effort=values[0],
-            )
-            return
-
-        if custom_id == SESSION_RESUME_SELECT_ID:
-            if not values:
-                await service._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
-                    "Please select a thread and try again.",
-                )
-                return
-            await service._handle_car_resume(
-                interaction_id,
-                interaction_token,
-                channel_id=channel_id,
-                options={"thread_id": values[0]},
-            )
-            return
-
-        if custom_id == UPDATE_TARGET_SELECT_ID:
-            if not values:
-                await service._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
-                    "Please select an update target and try again.",
-                )
-                return
-            await service._handle_car_update(
-                interaction_id,
-                interaction_token,
-                channel_id=channel_id,
-                options={"target": values[0]},
-                response_mode="component",
-            )
-            return
-
-        if custom_id.startswith(f"{UPDATE_CONFIRM_PREFIX}:"):
-            raw_target = custom_id.split(":", 1)[1].strip()
-            if not raw_target:
-                await service._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
-                    "Please select an update target and try again.",
-                )
-                return
-            await service._handle_car_update(
-                interaction_id,
-                interaction_token,
-                channel_id=channel_id,
-                options={"target": raw_target, "confirmed": True},
-                response_mode="component",
-            )
-            return
-
-        if custom_id.startswith(f"{UPDATE_CANCEL_PREFIX}:"):
-            await service._update_component_message(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                text="Update cancelled.",
-                components=[],
-            )
-            return
-
-        hard_reset_token = _parse_newt_component_custom_id(
-            custom_id, NEWT_HARD_RESET_CUSTOM_ID
-        )
-        if hard_reset_token is not None:
-            await service._handle_car_newt_hard_reset(
-                interaction_id,
-                interaction_token,
-                channel_id=channel_id,
-                expected_workspace_token=hard_reset_token,
-            )
-            return
-
-        cancel_token = _parse_newt_component_custom_id(custom_id, NEWT_CANCEL_CUSTOM_ID)
-        if cancel_token is not None:
-            await service._handle_car_newt_cancel(
-                interaction_id,
-                interaction_token,
-                expected_workspace_token=cancel_token,
-            )
-            return
-
-        if custom_id == REVIEW_COMMIT_SELECT_ID:
-            if not values:
-                await service._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
-                    "Please select a commit and try again.",
-                )
-                return
-            workspace_root = await service._require_bound_workspace(
-                interaction_id,
-                interaction_token,
-                channel_id=channel_id,
-            )
-            if workspace_root:
-                await service._handle_car_review(
-                    interaction_id,
-                    interaction_token,
-                    channel_id=channel_id,
-                    workspace_root=workspace_root,
-                    options={"target": f"commit {values[0]}"},
-                )
-            return
-
-        if custom_id.startswith(f"{FLOW_ACTION_SELECT_PREFIX}:"):
-            await _handle_flow_action_select(service, ctx)
-            return
-
-        if custom_id.startswith("flow:"):
-            flow_parts = custom_id.split(":")
-            flow_action = flow_parts[2].strip().lower() if len(flow_parts) >= 3 else ""
-            if flow_action in FLOW_COMPONENT_PREPARE_ACTIONS:
-                prepared = await service._defer_component_update(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                )
-                if not prepared:
-                    await service._respond_ephemeral(
-                        interaction_id,
-                        interaction_token,
-                        "Discord interaction did not acknowledge. Please retry.",
-                    )
-                    return
-            workspace_root = await service._require_bound_workspace(
-                interaction_id, interaction_token, channel_id=channel_id
-            )
-            if workspace_root:
-                await service._handle_flow_button(
-                    interaction_id,
-                    interaction_token,
-                    workspace_root=workspace_root,
-                    custom_id=custom_id,
-                    channel_id=channel_id,
-                    guild_id=guild_id,
-                )
-            return
-
-        if custom_id.startswith("approval:"):
-            await service._handle_approval_component(
-                interaction_id,
-                interaction_token,
-                custom_id=custom_id,
-            )
-            return
-
-        if custom_id.startswith("queue_cancel:"):
-            await service._handle_queue_cancel_button(
-                interaction_id,
-                interaction_token,
-                channel_id=channel_id,
-                custom_id=custom_id,
-                message_id=message_id,
-                guild_id=guild_id,
-            )
-            return
-
-        if custom_id.startswith("queue_interrupt_send:"):
-            await service._handle_queue_interrupt_send_button(
-                interaction_id,
-                interaction_token,
-                channel_id=channel_id,
-                custom_id=custom_id,
-                message_id=message_id,
-                guild_id=guild_id,
-                user_id=user_id,
-            )
-            return
-
-        if custom_id == "cancel_turn" or custom_id.startswith("cancel_turn:"):
-            await service._handle_cancel_turn_button(
-                interaction_id,
-                interaction_token,
-                channel_id=channel_id,
-                user_id=user_id,
-                message_id=message_id,
-                custom_id=custom_id,
-            )
-            return
-
-        if custom_id == "continue_turn":
-            await service._handle_continue_turn_button(
-                interaction_id,
-                interaction_token,
-            )
-            return
-
-        await service._respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            f"Unknown component: {custom_id}",
-        )
+        await dispatch_component_interaction(service, ctx)
     except DiscordTransientError as exc:
         user_msg = exc.user_message or "An error occurred. Please try again later."
-        await service._respond_ephemeral(interaction_id, interaction_token, user_msg)
+        await service._respond_ephemeral(
+            ctx.interaction_id, ctx.interaction_token, user_msg
+        )
     except (
         Exception
     ) as exc:  # intentional: top-level component interaction error handler
@@ -621,137 +270,14 @@ async def handle_component_interaction(
             logging.ERROR,
             "discord.component.normalized.unhandled_error",
             custom_id=custom_id,
-            channel_id=channel_id,
+            channel_id=ctx.channel_id,
             exc=exc,
         )
         await service._respond_ephemeral(
-            interaction_id,
-            interaction_token,
+            ctx.interaction_id,
+            ctx.interaction_token,
             "An unexpected error occurred. Please try again later.",
         )
-
-
-async def _handle_flow_action_select(
-    service: Any,
-    ctx: IngressContext,
-) -> None:
-    from ...core.flows import FLOW_ACTIONS_WITH_RUN_PICKER
-
-    interaction_id = ctx.interaction_id
-    interaction_token = ctx.interaction_token
-    channel_id = ctx.channel_id
-    custom_id = ctx.custom_id or ""
-    values = ctx.values
-    guild_id = ctx.guild_id
-    user_id = ctx.user_id
-
-    action = custom_id.split(":", 1)[1].strip().lower()
-    if not values:
-        await service._respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            "Please select a run and try again.",
-        )
-        return
-    if action not in FLOW_ACTIONS_WITH_RUN_PICKER:
-        await service._respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            f"Unknown flow action picker: {action}",
-        )
-        return
-    workspace_root = await service._require_bound_workspace(
-        interaction_id,
-        interaction_token,
-        channel_id=channel_id,
-    )
-    if not workspace_root:
-        return
-    run_id = values[0]
-    if action == "status":
-        await service._handle_flow_status(
-            interaction_id,
-            interaction_token,
-            workspace_root=workspace_root,
-            options={"run_id": run_id},
-            channel_id=channel_id,
-            guild_id=guild_id,
-        )
-        return
-    if action == "restart":
-        await service._handle_flow_restart(
-            interaction_id,
-            interaction_token,
-            workspace_root=workspace_root,
-            options={"run_id": run_id},
-        )
-        return
-    if action == "resume":
-        await service._handle_flow_resume(
-            interaction_id,
-            interaction_token,
-            workspace_root=workspace_root,
-            options={"run_id": run_id},
-            channel_id=channel_id,
-            guild_id=guild_id,
-        )
-        return
-    if action == "stop":
-        await service._handle_flow_stop(
-            interaction_id,
-            interaction_token,
-            workspace_root=workspace_root,
-            options={"run_id": run_id},
-            channel_id=channel_id,
-            guild_id=guild_id,
-        )
-        return
-    if action == "archive":
-        await service._handle_flow_archive(
-            interaction_id,
-            interaction_token,
-            workspace_root=workspace_root,
-            options={"run_id": run_id},
-            channel_id=channel_id,
-            guild_id=guild_id,
-        )
-        return
-    if action == "recover":
-        await service._handle_flow_recover(
-            interaction_id,
-            interaction_token,
-            workspace_root=workspace_root,
-            options={"run_id": run_id},
-        )
-        return
-    if action == "reply":
-        pending_key = service._pending_interaction_scope_key(
-            channel_id=channel_id,
-            user_id=user_id,
-        )
-        pending_text = service._pending_flow_reply_text.pop(pending_key, None)
-        if not isinstance(pending_text, str) or not pending_text.strip():
-            deferred = await service._defer_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-            )
-            await service._send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text="Reply selection expired. Re-run `/flow reply text:<...>`.",
-            )
-            return
-        await service._handle_flow_reply(
-            interaction_id,
-            interaction_token,
-            workspace_root=workspace_root,
-            options={"run_id": run_id, "text": pending_text},
-            channel_id=channel_id,
-            guild_id=guild_id,
-            user_id=user_id,
-        )
-        return
 
 
 async def execute_ingressed_interaction(
@@ -795,13 +321,7 @@ async def execute_ingressed_interaction(
         return
 
     if ctx.kind == InteractionKind.MODAL_SUBMIT:
-        await service._handle_ticket_modal_submit(
-            interaction_id,
-            interaction_token,
-            channel_id=channel_id,
-            custom_id=ctx.custom_id or "",
-            values=ctx.modal_values or {},
-        )
+        await dispatch_modal_submit(service, ctx)
         return
 
     command_path = ctx.command_spec.path if ctx.command_spec else ()

@@ -20,10 +20,11 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from ...core.logging_utils import log_event
-from ...integrations.chat.command_contract import (
+from .interaction_registry import (
     DiscordAckPolicy,
     DiscordAckTiming,
-    command_contract_entry_for_path,
+    normalize_discord_command_path,
+    slash_command_ack_metadata_for_path,
 )
 from .interactions import (
     extract_autocomplete_command_context,
@@ -325,23 +326,16 @@ class InteractionIngress:
         if ctx.command_spec is None:
             return
         raw_path = ctx.command_spec.path
-        normalized_path = self._service._normalize_discord_command_path(raw_path)
-        entry = command_contract_entry_for_path(normalized_path)
-        if entry is None:
-            ctx.command_spec = CommandSpec(
-                path=normalized_path,
-                options=ctx.command_spec.options,
-                ack_policy=None,
-                ack_timing="dispatch",
-                requires_workspace=False,
-            )
-            return
+        normalized_path = normalize_discord_command_path(raw_path)
+        ack_policy, ack_timing, requires_workspace = (
+            slash_command_ack_metadata_for_path(normalized_path)
+        )
         ctx.command_spec = CommandSpec(
             path=normalized_path,
             options=ctx.command_spec.options,
-            ack_policy=entry.discord_ack_policy,
-            ack_timing=entry.discord_ack_timing,
-            requires_workspace=entry.requires_bound_workspace,
+            ack_policy=ack_policy,
+            ack_timing=ack_timing,
+            requires_workspace=requires_workspace,
         )
 
     async def _perform_ack(self, ctx: IngressContext) -> bool:

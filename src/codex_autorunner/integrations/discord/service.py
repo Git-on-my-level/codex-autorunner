@@ -126,7 +126,6 @@ from ...integrations.chat.collaboration_policy import (
     evaluate_collaboration_admission,
     evaluate_collaboration_policy,
 )
-from ...integrations.chat.command_contract import command_contract_entry_for_path
 from ...integrations.chat.command_diagnostics import (
     ActiveFlowInfo,
 )
@@ -191,9 +190,6 @@ from ...voice.service import VoiceTransientError
 from ..telegram.constants import DEFAULT_SKILLS_LIST_LIMIT
 from ..telegram.helpers import _format_skills_list
 from .adapter import DiscordChatAdapter
-from .car_autocomplete import (
-    handle_command_autocomplete as handle_car_command_autocomplete,
-)
 from .car_command_dispatch import handle_car_command as dispatch_car_command
 from .collaboration_helpers import (
     collaboration_probe_text,
@@ -201,7 +197,6 @@ from .collaboration_helpers import (
 from .command_registry import sync_commands
 from .command_runner import CommandRunner as _CommandRunner
 from .command_runner import RunnerConfig as _RunnerConfig
-from .commands import build_application_commands
 from .components import (
     DISCORD_SELECT_OPTION_MAX_OPTIONS,
     build_model_effort_picker,
@@ -241,6 +236,19 @@ from .interaction_dispatch import (
 )
 from .interaction_dispatch import (
     handle_normalized_interaction as _dispatch_normalized_interaction,
+)
+from .interaction_registry import (
+    MODEL_EFFORT_SELECT_ID,
+    TICKETS_MODAL_PREFIX,
+    build_application_commands,
+    component_scheduler_ack_strategy,
+    component_workspace_lock_policy,
+    dispatch_autocomplete,
+    modal_scheduler_ack_strategy,
+    modal_workspace_lock_policy,
+    normalize_discord_command_path,
+    slash_command_ack_metadata_for_path,
+    slash_command_workspace_lock_policy,
 )
 from .interaction_session import (
     DiscordInteractionSession,
@@ -323,17 +331,7 @@ DISCORD_WHISPER_TRANSCRIPT_DISCLAIMER = (
     "Note: transcribed from user voice. If confusing or possibly inaccurate and you "
     "cannot infer the intention please clarify before proceeding."
 )
-SESSION_RESUME_SELECT_ID = "session_resume_select"
-AGENT_PROFILE_SELECT_ID = "agent_profile_select"
-UPDATE_TARGET_SELECT_ID = "update_target_select"
-UPDATE_CONFIRM_PREFIX = "update_confirm"
-UPDATE_CANCEL_PREFIX = "update_cancel"
-REVIEW_COMMIT_SELECT_ID = "review_commit_select"
-MODEL_EFFORT_SELECT_ID = "model_effort_select"
 TICKET_PICKER_TOKEN_PREFIX = "ticket@"
-TICKETS_FILTER_SELECT_ID = "tickets_filter_select"
-TICKETS_SELECT_ID = "tickets_select"
-TICKETS_MODAL_PREFIX = "tickets_modal"
 TICKETS_BODY_INPUT_ID = "ticket_body"
 
 
@@ -1052,34 +1050,15 @@ class DiscordBotService:
 
     def _interaction_requires_workspace_lock(self, ctx: IngressContext) -> bool:
         if ctx.kind == InteractionKind.MODAL_SUBMIT:
-            return True
+            custom_id = str(ctx.custom_id or "").strip()
+            return modal_workspace_lock_policy(custom_id) != "none"
         if ctx.kind == InteractionKind.COMPONENT:
             custom_id = str(ctx.custom_id or "").strip()
-            return (
-                custom_id == "bind_select"
-                or custom_id.startswith("approval:")
-                or custom_id.startswith("flow:")
-                or custom_id.startswith("flow_action_select:")
-                or custom_id.startswith("newt_hard_reset:")
-                or custom_id.startswith("newt_cancel:")
-            )
+            return component_workspace_lock_policy(custom_id) != "none"
         if ctx.kind != InteractionKind.SLASH_COMMAND or ctx.command_spec is None:
             return False
         command_path = self._normalize_discord_command_path(ctx.command_spec.path)
-        return command_path in {
-            ("car", "bind"),
-            ("car", "new"),
-            ("car", "newt"),
-            ("car", "flow", "issue"),
-            ("car", "flow", "plan"),
-            ("car", "flow", "start"),
-            ("car", "flow", "restart"),
-            ("car", "flow", "resume"),
-            ("car", "flow", "stop"),
-            ("car", "flow", "archive"),
-            ("car", "flow", "recover"),
-            ("car", "flow", "reply"),
-        }
+        return slash_command_workspace_lock_policy(command_path) != "none"
 
     async def _interaction_workspace_scheduler_key(
         self, ctx: IngressContext
@@ -1089,7 +1068,10 @@ class DiscordBotService:
         workspace_root: Optional[Path] = None
         if ctx.kind == InteractionKind.SLASH_COMMAND and ctx.command_spec is not None:
             command_path = self._normalize_discord_command_path(ctx.command_spec.path)
-            if command_path == ("car", "bind"):
+            if (
+                slash_command_workspace_lock_policy(command_path)
+                == "bind_target_workspace"
+            ):
                 workspace_root = await self._scheduler_bind_target_workspace_root(
                     ctx.command_spec.options.get("workspace")
                 )
@@ -1099,7 +1081,8 @@ class DiscordBotService:
                 )
         elif (
             ctx.kind == InteractionKind.COMPONENT
-            and (ctx.custom_id or "") == "bind_select"
+            and component_workspace_lock_policy(str(ctx.custom_id or "").strip())
+            == "bind_target_workspace"
         ):
             selected_value = ctx.values[0] if ctx.values else None
             workspace_root = await self._scheduler_bind_target_workspace_root(
@@ -1156,9 +1139,17 @@ class DiscordBotService:
             resource_keys.append(conversation_key)
 
         if ctx.kind == InteractionKind.COMPONENT:
-            fast_ack = self._scheduler_fast_ack_component
+            if (
+                component_scheduler_ack_strategy(str(ctx.custom_id or "").strip())
+                == "scheduler_component_update"
+            ):
+                fast_ack = self._scheduler_fast_ack_component
         elif ctx.kind == InteractionKind.MODAL_SUBMIT:
-            fast_ack = self._scheduler_fast_ack_modal_submit
+            if (
+                modal_scheduler_ack_strategy(str(ctx.custom_id or "").strip())
+                == "scheduler_ephemeral"
+            ):
+                fast_ack = self._scheduler_fast_ack_modal_submit
 
         workspace_key = await self._interaction_workspace_scheduler_key(ctx)
         if workspace_key is not None:
@@ -4315,8 +4306,7 @@ class DiscordBotService:
         focused_name: Optional[str],
         focused_value: str,
     ) -> None:
-        command_path = self._normalize_discord_command_path(command_path)
-        await handle_car_command_autocomplete(
+        await dispatch_autocomplete(
             self,
             interaction_id,
             interaction_token,
@@ -4331,23 +4321,7 @@ class DiscordBotService:
     def _normalize_discord_command_path(
         command_path: tuple[str, ...],
     ) -> tuple[str, ...]:
-        if command_path[:1] == ("flow",):
-            return ("car", "flow", *command_path[1:])
-        if len(command_path) == 3 and command_path[:2] == ("car", "admin"):
-            admin_aliases = {
-                "help",
-                "debug",
-                "ids",
-                "mcp",
-                "init",
-                "repos",
-                "experimental",
-                "rollout",
-                "feedback",
-            }
-            if command_path[2] in admin_aliases:
-                return ("car", command_path[2])
-        return command_path
+        return normalize_discord_command_path(command_path)
 
     def _interaction_session_kind(
         self,
@@ -4484,22 +4458,24 @@ class DiscordBotService:
         command_path: tuple[str, ...],
         timing: str = "dispatch",
     ) -> bool:
-        entry = command_contract_entry_for_path(command_path)
-        if entry is None or entry.discord_ack_policy in (None, "immediate"):
+        ack_policy, ack_timing, _requires_workspace = (
+            slash_command_ack_metadata_for_path(command_path)
+        )
+        if ack_policy in (None, "immediate"):
             return False
-        if entry.discord_ack_timing != timing:
+        if ack_timing != timing:
             return False
         self._ensure_interaction_session(
             interaction_id,
             interaction_token,
             kind=InteractionSessionKind.SLASH_COMMAND,
         )
-        if entry.discord_ack_policy == "defer_public":
+        if ack_policy == "defer_public":
             return await self._defer_public(
                 interaction_id=interaction_id,
                 interaction_token=interaction_token,
             )
-        if entry.discord_ack_policy == "defer_component_update":
+        if ack_policy == "defer_component_update":
             return await self._defer_component_update(
                 interaction_id=interaction_id,
                 interaction_token=interaction_token,
@@ -4524,10 +4500,12 @@ class DiscordBotService:
         )
         if session.has_initial_response():
             return True
-        entry = command_contract_entry_for_path(command_path)
-        if entry is None or entry.discord_ack_policy in (None, "immediate"):
+        ack_policy, ack_timing, _requires_workspace = (
+            slash_command_ack_metadata_for_path(command_path)
+        )
+        if ack_policy in (None, "immediate"):
             return True
-        if entry.discord_ack_timing != timing:
+        if ack_timing != timing:
             return True
         prepared = await self._prepare_command_interaction(
             interaction_id=interaction_id,

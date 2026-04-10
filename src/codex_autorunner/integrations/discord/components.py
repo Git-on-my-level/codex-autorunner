@@ -8,6 +8,19 @@ from ...core.update_targets import (
 )
 from ..chat.agents import chat_agent_definitions, chat_hermes_profile_options
 from ..chat.model_selection import REASONING_EFFORT_VALUES
+from .interaction_registry import (
+    AGENT_PROFILE_SELECT_ID,
+    AGENT_SELECT_CUSTOM_ID,
+    BIND_SELECT_CUSTOM_ID,
+    FLOW_RUNS_SELECT_ID,
+    MODEL_EFFORT_SELECT_ID,
+    MODEL_SELECT_CUSTOM_ID,
+    REVIEW_COMMIT_SELECT_ID,
+    SESSION_RESUME_SELECT_ID,
+    TICKETS_FILTER_SELECT_ID,
+    TICKETS_SELECT_ID,
+    UPDATE_TARGET_SELECT_ID,
+)
 
 DISCORD_BUTTON_STYLE_PRIMARY = 1
 DISCORD_BUTTON_STYLE_SECONDARY = 2
@@ -89,7 +102,7 @@ def build_select_option(
 def build_bind_picker(
     workspaces: list[tuple[str, str] | tuple[str, str, Optional[str]]],
     *,
-    custom_id: str = "bind_select",
+    custom_id: str = BIND_SELECT_CUSTOM_ID,
     placeholder: str = "Select a workspace...",
 ) -> dict[str, Any]:
     options = []
@@ -117,7 +130,7 @@ def build_agent_picker(
     *,
     current_agent: str,
     context: Any = None,
-    custom_id: str = "agent_select",
+    custom_id: str = AGENT_SELECT_CUSTOM_ID,
     placeholder: str = "Select an agent...",
 ) -> dict[str, Any]:
     options = [
@@ -138,7 +151,7 @@ def build_agent_profile_picker(
     *,
     current_profile: Optional[str],
     context: Any = None,
-    custom_id: str = "agent_profile_select",
+    custom_id: str = AGENT_PROFILE_SELECT_ID,
     placeholder: str = "Select a Hermes profile...",
 ) -> dict[str, Any]:
     options = [
@@ -180,7 +193,7 @@ def build_model_picker(
     models: list[tuple[str, str]],
     *,
     current_model: Optional[str] = None,
-    custom_id: str = "model_select",
+    custom_id: str = MODEL_SELECT_CUSTOM_ID,
     placeholder: str = "Select a model...",
 ) -> dict[str, Any]:
     options = [
@@ -219,7 +232,7 @@ def build_model_picker(
 
 def build_model_effort_picker(
     *,
-    custom_id: str = "model_effort_select",
+    custom_id: str = MODEL_EFFORT_SELECT_ID,
     placeholder: str = "Select reasoning effort...",
 ) -> dict[str, Any]:
     options = []
@@ -322,7 +335,7 @@ def build_flow_status_buttons(
 def build_flow_runs_picker(
     runs: list[tuple[str, str]],
     *,
-    custom_id: str = "flow_runs_select",
+    custom_id: str = FLOW_RUNS_SELECT_ID,
     placeholder: str = "Select a run...",
     current_run_id: Optional[str] = None,
 ) -> dict[str, Any]:
@@ -369,7 +382,7 @@ def build_flow_runs_picker(
 def build_session_threads_picker(
     threads: list[tuple[str, str]],
     *,
-    custom_id: str = "session_resume_select",
+    custom_id: str = SESSION_RESUME_SELECT_ID,
     placeholder: str = "Select a thread to resume...",
 ) -> dict[str, Any]:
     options = [
@@ -390,7 +403,7 @@ def build_session_threads_picker(
 def build_review_commit_picker(
     commits: list[tuple[str, str]],
     *,
-    custom_id: str = "review_commit_select",
+    custom_id: str = REVIEW_COMMIT_SELECT_ID,
     placeholder: str = "Select a commit...",
 ) -> dict[str, Any]:
     options = [
@@ -411,7 +424,7 @@ def build_review_commit_picker(
 def build_update_target_picker(
     *,
     target_definitions: Optional[Sequence[UpdateTargetDefinition]] = None,
-    custom_id: str = "update_target_select",
+    custom_id: str = UPDATE_TARGET_SELECT_ID,
     placeholder: str = "Select update target...",
 ) -> dict[str, Any]:
     definitions = (
@@ -438,7 +451,7 @@ def build_update_target_picker(
 def build_ticket_filter_picker(
     *,
     current_filter: str,
-    custom_id: str = "tickets_filter_select",
+    custom_id: str = TICKETS_FILTER_SELECT_ID,
     placeholder: str = "Filter tickets...",
 ) -> dict[str, Any]:
     normalized = current_filter.strip().lower() if current_filter else "all"
@@ -472,7 +485,7 @@ def build_ticket_filter_picker(
 def build_ticket_picker(
     tickets: list[tuple[str, str, str]],
     *,
-    custom_id: str = "tickets_select",
+    custom_id: str = TICKETS_SELECT_ID,
     placeholder: str = "Select a ticket...",
 ) -> dict[str, Any]:
     options = [

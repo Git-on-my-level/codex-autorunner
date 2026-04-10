@@ -10,10 +10,9 @@ from ..components import (
     DISCORD_SELECT_OPTION_MAX_OPTIONS,
     build_review_commit_picker,
 )
+from ..interaction_registry import REVIEW_COMMIT_SELECT_ID
 from ..message_turns import DiscordMessageTurnResult
 from ..rendering import chunk_discord_message
-
-REVIEW_COMMIT_SELECT_ID = "review_commit_select"
 
 
 async def _interaction_deferred(

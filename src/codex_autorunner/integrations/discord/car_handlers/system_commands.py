@@ -25,6 +25,11 @@ from ..components import (
     build_button,
     build_update_target_picker,
 )
+from ..interaction_registry import (
+    UPDATE_CANCEL_PREFIX,
+    UPDATE_CONFIRM_PREFIX,
+    UPDATE_TARGET_SELECT_ID,
+)
 from ..rendering import (
     format_discord_message,
 )
@@ -33,10 +38,6 @@ from ..service_normalization import (
     DiscordUpdateNoticeContext,
     format_discord_update_status_message,
 )
-
-UPDATE_TARGET_SELECT_ID = "update_target_select"
-UPDATE_CONFIRM_PREFIX = "update_confirm"
-UPDATE_CANCEL_PREFIX = "update_cancel"
 
 
 async def _interaction_deferred(

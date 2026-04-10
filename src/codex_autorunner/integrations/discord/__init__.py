@@ -8,7 +8,6 @@ from .chat_state_store import (
     parse_discord_conversation_key,
 )
 from .command_registry import sync_commands
-from .commands import build_application_commands
 from .config import (
     DEFAULT_STATE_FILE,
     DiscordBotConfig,
@@ -43,7 +42,6 @@ from .interactions import (
 )
 from .outbox import DiscordOutboxManager
 from .rest import DiscordRestClient
-from .service import DiscordBotService, create_discord_bot_service
 from .state import DiscordStateStore, OutboxRecord
 
 __all__ = [
@@ -89,3 +87,21 @@ __all__ = [
     "parse_gateway_frame",
     "sync_commands",
 ]
+
+
+def __getattr__(name: str):
+    if name in {
+        "DiscordBotService",
+        "build_application_commands",
+        "create_discord_bot_service",
+    }:
+        from .commands import build_application_commands
+        from .service import DiscordBotService, create_discord_bot_service
+
+        exported = {
+            "DiscordBotService": DiscordBotService,
+            "build_application_commands": build_application_commands,
+            "create_discord_bot_service": create_discord_bot_service,
+        }
+        return exported[name]
+    raise AttributeError(name)

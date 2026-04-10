@@ -22,10 +22,10 @@ from ..components import (
     build_agent_profile_picker,
     build_model_picker,
 )
+from ..interaction_registry import AGENT_PROFILE_SELECT_ID
 from ..rendering import format_discord_message
 
 MODEL_SEARCH_FETCH_LIMIT = 200
-AGENT_PROFILE_SELECT_ID = "agent_profile_select"
 
 _VALID_REASONING_EFFORTS = REASONING_EFFORT_VALUES
 

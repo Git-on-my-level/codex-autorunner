@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
-from typing import Literal, Optional
+from functools import lru_cache
+from typing import Literal, Optional, overload
 
 CommandStatus = Literal["stable", "partial", "unsupported"]
 TelegramExposure = Literal["public", "hidden", "legacy_alias"]
@@ -39,7 +41,28 @@ class TelegramCommandMetadata:
     allow_during_turn: bool
 
 
-COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
+def _apply_discord_registry(entry: CommandContractEntry) -> CommandContractEntry:
+    from ..discord.interaction_registry import discord_contract_metadata_for_id
+
+    metadata = discord_contract_metadata_for_id(entry.id)
+    required_capabilities = (
+        metadata["required_capabilities"] or entry.required_capabilities
+    )
+    return CommandContractEntry(
+        id=entry.id,
+        path=entry.path,
+        requires_bound_workspace=entry.requires_bound_workspace,
+        status=entry.status,
+        telegram_commands=entry.telegram_commands,
+        discord_paths=metadata["discord_paths"],
+        discord_ack_policy=metadata["discord_ack_policy"],
+        discord_ack_timing=metadata["discord_ack_timing"],
+        discord_exposure=metadata["discord_exposure"],
+        required_capabilities=required_capabilities,
+    )
+
+
+_COMMAND_CONTRACT_BASE: tuple[CommandContractEntry, ...] = (
     # Cross-surface core commands (stable parity).
     CommandContractEntry(
         id="car.bind",
@@ -518,6 +541,36 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
     ),
 )
 
+
+@lru_cache(maxsize=1)
+def _resolved_command_contract() -> tuple[CommandContractEntry, ...]:
+    return tuple(_apply_discord_registry(entry) for entry in _COMMAND_CONTRACT_BASE)
+
+
+class _LazyCommandContract(Sequence[CommandContractEntry]):
+    def _entries(self) -> tuple[CommandContractEntry, ...]:
+        return _resolved_command_contract()
+
+    @overload
+    def __getitem__(self, index: int) -> CommandContractEntry: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> Sequence[CommandContractEntry]: ...
+
+    def __getitem__(
+        self, index: int | slice
+    ) -> CommandContractEntry | Sequence[CommandContractEntry]:
+        return self._entries()[index]
+
+    def __iter__(self) -> Iterator[CommandContractEntry]:
+        return iter(self._entries())
+
+    def __len__(self) -> int:
+        return len(self._entries())
+
+
+COMMAND_CONTRACT: Sequence[CommandContractEntry] = _LazyCommandContract()
+
 _TELEGRAM_COMMAND_METADATA: dict[str, TelegramCommandMetadata] = {
     "repos": TelegramCommandMetadata(
         exposure="public",
@@ -677,26 +730,6 @@ _TELEGRAM_COMMAND_METADATA: dict[str, TelegramCommandMetadata] = {
 }
 
 
-def command_contract_entry_for_path(
-    path: tuple[str, ...],
-) -> Optional[CommandContractEntry]:
-    """Resolve a contract entry for Discord dispatch or parity checks.
-
-    ``entry.path`` is the logical (often Telegram-shaped) tuple. Discord may
-    register the same command under a different tuple (for example
-    ``("car", "session", "resume")`` vs ``("car", "resume")``); those aliases
-    live in ``entry.discord_paths`` and must match here so early ACK/defer
-    logic sees the same policy as the command manifest.
-    """
-    for entry in COMMAND_CONTRACT:
-        if entry.path == path:
-            return entry
-    for entry in COMMAND_CONTRACT:
-        if path in entry.discord_paths:
-            return entry
-    return None
-
-
 def telegram_command_metadata_for_name(
     name: str,
 ) -> Optional[TelegramCommandMetadata]:
@@ -704,7 +737,7 @@ def telegram_command_metadata_for_name(
 
 
 def telegram_runtime_command_names_from_contract(
-    contract: tuple[CommandContractEntry, ...] = COMMAND_CONTRACT,
+    contract: Sequence[CommandContractEntry] = COMMAND_CONTRACT,
 ) -> tuple[str, ...]:
     names: list[str] = []
     seen: set[str] = set()
