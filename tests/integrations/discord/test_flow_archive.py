@@ -412,6 +412,53 @@ async def test_flow_archive_button_deletes_run_record_by_default(
     assert "Archiving run" in rest.followup_messages[0]["payload"]["content"]
     edited = rest.edited_original_interaction_responses[0]["payload"]
     assert "Archived run" in edited["content"]
+
+
+@pytest.mark.anyio
+async def test_flow_archive_button_real_archive_renders_archived_state(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    run_id = str(uuid.uuid4())
+    _create_run(workspace, run_id, FlowRunStatus.COMPLETED)
+
+    tickets_dir = workspace / ".codex-autorunner" / "tickets"
+    tickets_dir.mkdir(parents=True, exist_ok=True)
+    (tickets_dir / "TICKET-001.md").write_text("ticket", encoding="utf-8")
+
+    context_dir = workspace / ".codex-autorunner" / "contextspace"
+    context_dir.mkdir(parents=True, exist_ok=True)
+    (context_dir / "active_context.md").write_text("Active context\n", encoding="utf-8")
+
+    run_dir = workspace / ".codex-autorunner" / "runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "DISPATCH.md").write_text("dispatch", encoding="utf-8")
+    live_flow_dir = workspace / ".codex-autorunner" / "flows" / run_id / "chat"
+    live_flow_dir.mkdir(parents=True, exist_ok=True)
+    (live_flow_dir / "outbound.jsonl").write_text("{}", encoding="utf-8")
+
+    rest = _FakeRest()
+    service = _service(tmp_path, rest)
+
+    try:
+        await service._handle_flow_button(
+            "interaction-2-real",
+            "token-2-real",
+            workspace_root=workspace,
+            custom_id=f"flow:{run_id}:archive",
+            channel_id="channel-1",
+            guild_id="guild-1",
+        )
+    finally:
+        await service._store.close()
+
+    assert rest.interaction_responses[0]["payload"]["type"] == 6
+    assert len(rest.followup_messages) == 1
+    assert "Archiving run" in rest.followup_messages[0]["payload"]["content"]
+    edited = rest.edited_original_interaction_responses[0]["payload"]
+    assert "Archived run" in edited["content"]
+    assert "Status: archived" in edited["content"]
+    assert f"Archive path: .codex-autorunner/archive/runs/{run_id}" in edited["content"]
     assert edited["components"] == []
 
 

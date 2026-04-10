@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional, cast
 
@@ -12,6 +14,7 @@ from ...core.flows import (
     FlowRunStatus,
     flow_action_label,
 )
+from ...core.flows.archive_helpers import flow_run_archive_root
 from ...core.flows.reconciler import reconcile_flow_run
 from ...core.flows.ux_helpers import (
     GitHubServiceProtocol,
@@ -45,6 +48,9 @@ from .errors import DiscordTransientError
 FLOW_ACTION_SELECT_PREFIX = "flow_action_select"
 FLOW_RUNS_DEFAULT_LIMIT = 5
 FLOW_RUNS_MAX_LIMIT = DISCORD_SELECT_OPTION_MAX_OPTIONS
+_LEGACY_FLOW_ARCHIVE_MARKERS = frozenset(
+    {"archived_tickets", "archived_runs", "contextspace", "flow_state"}
+)
 
 
 async def _public_interaction_deferred(
@@ -84,6 +90,144 @@ def flow_archive_prompt_text(record: FlowRunRecord) -> str:
 
 def flow_archive_in_progress_text(run_id: str) -> str:
     return f"Archiving run {run_id}... This can take a few seconds."
+
+
+def _normalize_run_id(value: str) -> Optional[str]:
+    try:
+        return str(uuid.UUID(str(value)))
+    except ValueError:
+        return None
+
+
+def _legacy_flow_archive_root(workspace_root: Path, run_id: str) -> Path:
+    return workspace_root / ".codex-autorunner" / "flows" / run_id
+
+
+def _describe_archived_flow_run(
+    workspace_root: Path,
+    run_id: str,
+) -> Optional[dict[str, Any]]:
+    normalized_run_id = _normalize_run_id(run_id)
+    if normalized_run_id is None:
+        return None
+    roots = (
+        (flow_run_archive_root(workspace_root, normalized_run_id), True),
+        (_legacy_flow_archive_root(workspace_root, normalized_run_id), False),
+    )
+    for archive_root, treat_any_child_as_archive in roots:
+        if not archive_root.exists() or not archive_root.is_dir():
+            continue
+        tickets_dir = archive_root / "archived_tickets"
+        runs_dirs = [
+            child
+            for child in archive_root.iterdir()
+            if child.is_dir() and child.name.startswith("archived_runs")
+        ]
+        flow_state_dirs = [
+            child
+            for child in archive_root.iterdir()
+            if child.is_dir() and child.name.startswith("flow_state")
+        ]
+        contextspace_dir = archive_root / "contextspace"
+        has_tickets = tickets_dir.exists() and tickets_dir.is_dir()
+        has_runs = bool(runs_dirs)
+        has_contextspace = contextspace_dir.exists() and contextspace_dir.is_dir()
+        has_flow_state = bool(flow_state_dirs)
+        if not any((has_tickets, has_runs, has_contextspace, has_flow_state)):
+            continue
+        artifact_children: list[Path] = []
+        if has_tickets:
+            artifact_children.append(tickets_dir)
+        artifact_children.extend(runs_dirs)
+        if has_contextspace:
+            artifact_children.append(contextspace_dir)
+        artifact_children.extend(flow_state_dirs)
+        if not treat_any_child_as_archive:
+            artifact_children = [
+                child
+                for child in artifact_children
+                if child.name in _LEGACY_FLOW_ARCHIVE_MARKERS
+                or child.name.startswith("archived_runs")
+                or child.name.startswith("flow_state")
+            ]
+        if not artifact_children:
+            continue
+        mtime_candidates = []
+        for child in artifact_children:
+            try:
+                mtime_candidates.append(child.stat().st_mtime)
+            except OSError:
+                continue
+        archived_at = None
+        if mtime_candidates:
+            archived_at = datetime.fromtimestamp(
+                max(mtime_candidates), tz=timezone.utc
+            ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        try:
+            archive_path = archive_root.relative_to(workspace_root).as_posix()
+        except ValueError:
+            archive_path = str(archive_root)
+        return {
+            "run_id": normalized_run_id,
+            "archive_path": archive_path,
+            "archived_at": archived_at,
+            "has_tickets": has_tickets,
+            "has_runs": has_runs,
+            "has_contextspace": has_contextspace,
+            "has_flow_state": has_flow_state,
+        }
+    return None
+
+
+def _format_archived_flow_status_text(
+    run_id: str,
+    archived_summary: dict[str, Any],
+    *,
+    prefix: Optional[str] = None,
+) -> str:
+    lines: list[str] = []
+    if isinstance(prefix, str) and prefix.strip():
+        lines.append(prefix.strip())
+        lines.append("")
+    else:
+        lines.append(f"Run {run_id} has already been archived.")
+        lines.append("")
+    lines.append(f"Run: {run_id}")
+    lines.append("Status: archived")
+    archived_at = archived_summary.get("archived_at")
+    if isinstance(archived_at, str) and archived_at.strip():
+        lines.append(f"Archived at: {archived_at.strip()}")
+    archive_path = archived_summary.get("archive_path")
+    if isinstance(archive_path, str) and archive_path.strip():
+        lines.append(f"Archive path: {archive_path.strip()}")
+    lines.append(
+        "Tickets archived: " f"{'yes' if archived_summary.get('has_tickets') else 'no'}"
+    )
+    lines.append(
+        "Run artifacts archived: "
+        f"{'yes' if archived_summary.get('has_runs') else 'no'}"
+    )
+    lines.append(
+        "Contextspace archived: "
+        f"{'yes' if archived_summary.get('has_contextspace') else 'no'}"
+    )
+    lines.append(
+        "Flow state archived: "
+        f"{'yes' if archived_summary.get('has_flow_state') else 'no'}"
+    )
+    lines.append(
+        "Use /flow status to inspect the current run or /flow runs for history."
+    )
+    return "\n".join(lines)
+
+
+def _format_flow_archive_completion_text(summary: dict[str, Any]) -> str:
+    return (
+        f"Archived run {summary['run_id']} "
+        f"(tickets={summary['archived_tickets']}, "
+        f"runs_archived={summary['archived_runs']}, "
+        f"contextspace={summary['archived_contextspace']})."
+    )
 
 
 def build_flow_archive_confirmation_components(
@@ -397,6 +541,7 @@ async def handle_flow_status(
     channel_id: Optional[str] = None,
     guild_id: Optional[str] = None,
     update_message: bool = False,
+    prefix: Optional[str] = None,
 ) -> None:
     deferred_public = False
     deferred_component = False
@@ -484,6 +629,33 @@ async def handle_flow_status(
             run_id_opt.strip()
         )
         if record is None:
+            archived_summary = None
+            if explicit_run_requested:
+                archived_summary = _describe_archived_flow_run(
+                    workspace_root, run_id_opt.strip()
+                )
+            if archived_summary is not None:
+                archived_text = _format_archived_flow_status_text(
+                    run_id_opt.strip(),
+                    archived_summary,
+                    prefix=prefix,
+                )
+                if update_message:
+                    await service._update_component_message(
+                        interaction_id=interaction_id,
+                        interaction_token=interaction_token,
+                        text=archived_text,
+                        components=[],
+                    )
+                else:
+                    await service._send_or_respond_with_components_public(
+                        interaction_id=interaction_id,
+                        interaction_token=interaction_token,
+                        deferred=deferred_public,
+                        text=archived_text,
+                        components=[],
+                    )
+                return
             if runs and not explicit_run_requested:
                 content = (
                     "No ticket_flow run found.\n\n"
@@ -579,6 +751,7 @@ async def handle_flow_status(
         record=record,
         runs=runs,
         snapshot=snapshot,
+        prefix=prefix,
     )
     run_mirror = service._flow_run_mirror(workspace_root)
     run_mirror.mirror_inbound(
@@ -1743,12 +1916,7 @@ async def handle_flow_archive(
         )
         return
 
-    outbound_text = (
-        f"Archived run {summary['run_id']} "
-        f"(tickets={summary['archived_tickets']}, "
-        f"runs_archived={summary['archived_runs']}, "
-        f"contextspace={summary['archived_contextspace']})."
-    )
+    outbound_text = _format_flow_archive_completion_text(summary)
     await service._send_or_respond_ephemeral(
         interaction_id=interaction_id,
         interaction_token=interaction_token,
@@ -2119,27 +2287,18 @@ async def handle_flow_button(
             )
             return
 
-        archived_text = (
-            f"Archived run {summary['run_id']} "
-            f"(tickets={summary['archived_tickets']}, "
-            f"runs_archived={summary['archived_runs']}, "
-            f"contextspace={summary['archived_contextspace']}).\n\n"
-            "Use /flow status or /flow runs to inspect historical runs."
+        await handle_flow_status(
+            service,
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
+            options={"run_id": summary["run_id"]},
+            channel_id=channel_id,
+            guild_id=guild_id,
+            update_message=True,
+            prefix=_format_flow_archive_completion_text(summary),
         )
-        if deferred:
-            updated = await service._edit_original_component_message(
-                interaction_token=interaction_token,
-                text=archived_text,
-                components=[],
-            )
-            if updated:
-                return
-        await service._update_component_message(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            text=archived_text,
-            components=[],
-        )
+        return
     elif action == "restart":
         deferred = await service._defer_component_update(
             interaction_id=interaction_id,

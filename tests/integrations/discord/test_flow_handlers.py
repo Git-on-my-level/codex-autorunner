@@ -699,6 +699,152 @@ async def test_flow_status_with_missing_explicit_run_id_reports_not_found(
 
 
 @pytest.mark.anyio
+async def test_flow_status_with_archived_explicit_run_id_renders_archived_state(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    run_id = str(uuid.uuid4())
+    archive_root = workspace / ".codex-autorunner" / "archive" / "runs" / run_id
+    (archive_root / "archived_tickets").mkdir(parents=True, exist_ok=True)
+    (archive_root / "flow_state").mkdir(parents=True, exist_ok=True)
+    (archive_root / "archived_tickets" / "TICKET-001.md").write_text(
+        "ticket",
+        encoding="utf-8",
+    )
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _flow_interaction(
+                name="status",
+                options=[{"type": 3, "name": "run_id", "value": run_id}],
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        content = rest.followup_messages[0]["payload"]["content"]
+        assert f"Run {run_id} has already been archived." in content
+        assert "Status: archived" in content
+        assert f"Archive path: .codex-autorunner/archive/runs/{run_id}" in content
+        assert "not found" not in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_flow_status_with_stray_archive_dir_still_reports_not_found(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    run_id = str(uuid.uuid4())
+    archive_root = workspace / ".codex-autorunner" / "archive" / "runs" / run_id
+    (archive_root / "scratch").mkdir(parents=True, exist_ok=True)
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _flow_interaction(
+                name="status",
+                options=[{"type": 3, "name": "run_id", "value": run_id}],
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        content = rest.followup_messages[0]["payload"]["content"]
+        assert content == f"Ticket_flow run {run_id} not found."
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_flow_status_with_path_traversal_run_id_does_not_render_archived_state(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    malicious_run_id = "../../../"
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _flow_interaction(
+                name="status",
+                options=[{"type": 3, "name": "run_id", "value": malicious_run_id}],
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        content = rest.followup_messages[0]["payload"]["content"]
+        assert content == f"Ticket_flow run {malicious_run_id} not found."
+        assert "Status: archived" not in content
+        assert "Archive path:" not in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_flow_refresh_button_updates_existing_status_message(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
