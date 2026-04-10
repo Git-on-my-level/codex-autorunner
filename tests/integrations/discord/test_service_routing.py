@@ -5703,6 +5703,104 @@ async def test_normalized_component_empty_values_returns_error(
 
 
 @pytest.mark.anyio
+async def test_normalized_flow_refresh_component_defers_before_workspace_lookup(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    captured: dict[str, Any] = {}
+
+    async def _fake_require_bound_workspace(
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+    ) -> Path:
+        captured["require_args"] = (
+            interaction_id,
+            interaction_token,
+            channel_id,
+        )
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 6
+        return workspace
+
+    async def _fake_handle_flow_button(
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        workspace_root: Path,
+        custom_id: str,
+        channel_id: str | None = None,
+        guild_id: str | None = None,
+    ) -> None:
+        captured["button_args"] = {
+            "interaction_id": interaction_id,
+            "interaction_token": interaction_token,
+            "workspace_root": workspace_root,
+            "custom_id": custom_id,
+            "channel_id": channel_id,
+            "guild_id": guild_id,
+        }
+
+    service._require_bound_workspace = _fake_require_bound_workspace  # type: ignore[assignment]
+    service._handle_flow_button = _fake_handle_flow_button  # type: ignore[assignment]
+
+    try:
+        event = _normalized_component_event(component_id="flow:run-1:refresh")
+        context = build_dispatch_context(event)
+        await service._handle_normalized_interaction(event, context)
+        assert captured["button_args"]["custom_id"] == "flow:run-1:refresh"
+        assert captured["button_args"]["workspace_root"] == workspace
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_normalized_flow_refresh_component_binding_error_uses_followup(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        event = _normalized_component_event(component_id="flow:run-1:refresh")
+        context = build_dispatch_context(event)
+        await service._handle_normalized_interaction(event, context)
+
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 6
+        assert len(rest.followup_messages) == 1
+        assert (
+            "not bound"
+            in str(rest.followup_messages[0]["payload"].get("content", "")).lower()
+        )
+        assert rest.edited_original_interaction_responses == []
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_unknown_car_subcommand_has_explicit_unknown_message(
     tmp_path: Path,
 ) -> None:

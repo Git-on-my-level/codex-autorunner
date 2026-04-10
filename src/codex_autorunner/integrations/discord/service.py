@@ -5498,25 +5498,28 @@ class DiscordBotService:
         *,
         channel_id: str,
     ) -> Optional[Path]:
+        deferred = self._prepared_interaction_policy(interaction_token) is not None
         binding = await self._store.get_binding(channel_id=channel_id)
         if binding is None:
             text = format_discord_message(
                 "This channel is not bound. Run `/car bind path:<...>` first."
             )
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                text,
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=text,
             )
             return None
         if bool(binding.get("pma_enabled", False)):
             text = format_discord_message(
                 "PMA mode is enabled for this channel. Run `/pma off` to use workspace-scoped `/car` commands."
             )
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                text,
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=text,
             )
             return None
         workspace_raw = binding.get("workspace_path")
@@ -5524,10 +5527,11 @@ class DiscordBotService:
             text = format_discord_message(
                 "Binding is invalid. Run `/car bind path:<...>` first."
             )
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                text,
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=text,
             )
             return None
         return canonicalize_path(Path(workspace_raw))

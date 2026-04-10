@@ -21,6 +21,17 @@ UPDATE_CONFIRM_PREFIX = "update_confirm"
 UPDATE_CANCEL_PREFIX = "update_cancel"
 REVIEW_COMMIT_SELECT_ID = "review_commit_select"
 FLOW_ACTION_SELECT_PREFIX = "flow_action_select"
+FLOW_COMPONENT_PREPARE_ACTIONS = frozenset(
+    {
+        "archive",
+        "archive_cancel",
+        "archive_cancel_prompt",
+        "archive_confirm",
+        "archive_confirm_prompt",
+        "refresh",
+        "restart",
+    }
+)
 
 
 async def handle_normalized_interaction(
@@ -471,6 +482,20 @@ async def handle_component_interaction(
             return
 
         if custom_id.startswith("flow:"):
+            flow_parts = custom_id.split(":")
+            flow_action = flow_parts[2].strip().lower() if len(flow_parts) >= 3 else ""
+            if flow_action in FLOW_COMPONENT_PREPARE_ACTIONS:
+                prepared = await service._defer_component_update(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                )
+                if not prepared:
+                    await service._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        "Discord interaction did not acknowledge. Please retry.",
+                    )
+                    return
             workspace_root = await service._require_bound_workspace(
                 interaction_id, interaction_token, channel_id=channel_id
             )
