@@ -157,6 +157,46 @@ async def test_hermes_supervisor_maps_terminal_completion_signals(
         await supervisor.close_all()
 
 
+@pytest.mark.slow
+@pytest.mark.asyncio
+async def test_hermes_supervisor_prefers_prompt_completed_after_idle_session_status(
+    tmp_path: Path,
+) -> None:
+    supervisor = HermesSupervisor(
+        fixture_command("session_status_idle_then_prompt_completed")
+    )
+    try:
+        await supervisor.ensure_ready(tmp_path)
+        session = await supervisor.create_session(tmp_path, title="Idle before complete")
+        turn_id = await supervisor.start_turn(
+            tmp_path,
+            session.session_id,
+            "hello from hermes",
+        )
+        result = await asyncio.wait_for(
+            supervisor.wait_for_turn(tmp_path, session.session_id, turn_id),
+            timeout=2.0,
+        )
+        events = await _collect_events(
+            supervisor, tmp_path, session.session_id, turn_id
+        )
+
+        assert result.status == "completed"
+        assert result.assistant_text == "final canonical output"
+        assert any(
+            event.get("method") == "session.status"
+            and event.get("params", {}).get("status", {}).get("type") == "idle"
+            for event in events
+        )
+        assert any(
+            event.get("method") == "prompt/completed"
+            and event.get("params", {}).get("turnId") == turn_id
+            for event in events
+        )
+    finally:
+        await supervisor.close_all()
+
+
 def test_hermes_runtime_preflight_accepts_plain_acp_help(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

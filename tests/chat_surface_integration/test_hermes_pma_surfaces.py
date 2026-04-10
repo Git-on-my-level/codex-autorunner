@@ -14,7 +14,11 @@ pytestmark = pytest.mark.integration
 
 @pytest.mark.parametrize(
     "scenario",
-    ("terminal_missing_turn_id", "session_status_idle_completion_gap"),
+    (
+        "terminal_missing_turn_id",
+        "session_status_idle_completion_gap",
+        "session_status_idle_then_prompt_completed",
+    ),
 )
 @pytest.mark.anyio
 async def test_discord_hermes_pma_completes_for_hermes_terminal_completion_signals(
@@ -48,7 +52,10 @@ async def test_discord_hermes_pma_completes_for_hermes_terminal_completion_signa
             index
             for index, op in enumerate(rest.message_ops)
             if op["op"] == "send"
-            and "fixture reply" in str(op["payload"].get("content", ""))
+            and (
+                "fixture reply" in str(op["payload"].get("content", ""))
+                or "final canonical output" in str(op["payload"].get("content", ""))
+            )
         )
         assert delete_index < reply_index
     finally:
@@ -58,7 +65,11 @@ async def test_discord_hermes_pma_completes_for_hermes_terminal_completion_signa
 
 @pytest.mark.parametrize(
     "scenario",
-    ("terminal_missing_turn_id", "session_status_idle_completion_gap"),
+    (
+        "terminal_missing_turn_id",
+        "session_status_idle_completion_gap",
+        "session_status_idle_then_prompt_completed",
+    ),
 )
 @pytest.mark.anyio
 async def test_telegram_hermes_pma_completes_for_hermes_terminal_completion_signals(
@@ -75,7 +86,10 @@ async def test_telegram_hermes_pma_completes_for_hermes_terminal_completion_sign
         sent_texts = [str(item["text"]) for item in bot.messages]
         edited_texts = [str(item["text"]) for item in bot.edited_messages]
         assert any("working" in text.lower() for text in sent_texts + edited_texts)
-        assert any("fixture reply" in text for text in sent_texts + edited_texts)
+        assert any(
+            "fixture reply" in text or "final canonical output" in text
+            for text in sent_texts + edited_texts
+        )
     finally:
         await harness.close()
         await runtime.close()

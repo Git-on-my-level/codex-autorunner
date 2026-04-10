@@ -91,6 +91,26 @@ async def test_client_wait_for_prompt_completes_when_terminal_notification_omits
 
 
 @pytest.mark.asyncio
+async def test_client_prefers_prompt_completed_after_idle_session_status(
+    tmp_path: Path,
+) -> None:
+    client = ACPClient(
+        fixture_command("session_status_idle_then_prompt_completed"),
+        cwd=tmp_path,
+    )
+    try:
+        await client.start()
+        session = await client.create_session(cwd=str(tmp_path))
+        handle = await client.start_prompt(session.session_id, "hello from hermes")
+        result = await asyncio.wait_for(handle.wait(), timeout=2.0)
+
+        assert result.status == "completed"
+        assert result.final_output == "final canonical output"
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
 async def test_client_initialize_and_session_roundtrip(tmp_path: Path) -> None:
     client = ACPClient(fixture_command("basic"), cwd=tmp_path)
     try:

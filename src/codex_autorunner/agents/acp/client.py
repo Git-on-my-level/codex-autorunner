@@ -74,6 +74,7 @@ _ACP_STDOUT_NOISE_PREFIXES = (
 )
 _ACP_STDOUT_BRACKETED_STATUS_RE = re.compile(r"^\[[^\]\s]{1,32}\]\s+(?![\[{])\S")
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+_IDLE_TERMINAL_GRACE_SECONDS = 0.2
 _SESSION_TURN_ID_FALLBACK_METHODS = frozenset(
     {
         "session/update",
@@ -118,6 +119,7 @@ class _PromptState:
     closed: bool = False
     replay_task: Optional[asyncio.Task[None]] = None
     request_task: Optional[asyncio.Task[Any]] = None
+    pending_idle_terminal_task: Optional[asyncio.Task[None]] = None
 
 
 def _coerce_mapping(value: Any) -> dict[str, Any]:
@@ -835,6 +837,46 @@ class ACPClient:
             await asyncio.shield(replay_task)
         await self._record_prompt_event(state, event)
 
+    def _is_idle_terminal_event(self, event: ACPEvent) -> bool:
+        return isinstance(event, ACPTurnTerminalEvent) and event.method in {
+            "session.idle",
+            "session.status",
+            "session/status",
+        }
+
+    async def _finalize_prompt_with_event(
+        self,
+        state: _PromptState,
+        event: ACPTurnTerminalEvent,
+    ) -> None:
+        if state.closed:
+            return
+        state.pending_idle_terminal_task = None
+        state.closed = True
+        if self._session_active_turns.get(state.session_id) == state.turn_id:
+            self._session_active_turns.pop(state.session_id, None)
+        if not state.future.done():
+            final_output = event.final_output or state.final_output
+            state.future.set_result(
+                ACPPromptResult(
+                    session_id=state.session_id,
+                    turn_id=state.turn_id,
+                    status=event.status,
+                    final_output=final_output,
+                    error_message=event.error_message,
+                    events=tuple(state.events),
+                )
+            )
+        await state.queue.put(_QUEUE_SENTINEL)
+
+    async def _finalize_idle_terminal_after_grace(
+        self,
+        state: _PromptState,
+        event: ACPTurnTerminalEvent,
+    ) -> None:
+        await asyncio.sleep(_IDLE_TERMINAL_GRACE_SECONDS)
+        await self._finalize_prompt_with_event(state, event)
+
     def _log_background_task_result(self, task: asyncio.Task[Any]) -> None:
         try:
             task.result()
@@ -875,22 +917,23 @@ class ACPClient:
         await state.queue.put(event)
         if not isinstance(event, ACPTurnTerminalEvent):
             return
-        state.closed = True
-        if self._session_active_turns.get(state.session_id) == state.turn_id:
-            self._session_active_turns.pop(state.session_id, None)
-        if not state.future.done():
-            final_output = event.final_output or state.final_output
-            state.future.set_result(
-                ACPPromptResult(
-                    session_id=state.session_id,
-                    turn_id=state.turn_id,
-                    status=event.status,
-                    final_output=final_output,
-                    error_message=event.error_message,
-                    events=tuple(state.events),
+        pending_idle_terminal = state.pending_idle_terminal_task
+        if self._is_idle_terminal_event(event) and not event.error_message:
+            if pending_idle_terminal is None or pending_idle_terminal.done():
+                pending_idle_terminal = asyncio.create_task(
+                    self._finalize_idle_terminal_after_grace(state, event)
                 )
-            )
-        await state.queue.put(_QUEUE_SENTINEL)
+                state.pending_idle_terminal_task = pending_idle_terminal
+                self._track_background_task(pending_idle_terminal)
+            return
+        if pending_idle_terminal is not None and not pending_idle_terminal.done():
+            pending_idle_terminal.cancel()
+            try:
+                await pending_idle_terminal
+            except asyncio.CancelledError:
+                pass
+        state.pending_idle_terminal_task = None
+        await self._finalize_prompt_with_event(state, event)
 
     async def _start_prompt_official(
         self,
