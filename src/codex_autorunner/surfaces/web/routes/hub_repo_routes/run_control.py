@@ -25,6 +25,21 @@ class HubRunControlService:
         self._mount_manager = mount_manager
         self._enricher = enricher
 
+    async def _refresh_repo_listing_cache(self) -> None:
+        from .....core.logging_utils import safe_log
+
+        try:
+            await asyncio.to_thread(
+                self._context.supervisor.list_repos, use_cache=False
+            )
+        except Exception as exc:  # intentional: cache refresh is best-effort
+            safe_log(
+                self._context.logger,
+                logging.WARNING,
+                "Hub repo listing refresh failed after runtime mutation",
+                exc=exc,
+            )
+
     async def run_repo(self, repo_id: str, once: bool = False) -> dict:
         from .....core.logging_utils import safe_log
 
@@ -44,7 +59,9 @@ class HubRunControlService:
             Exception
         ) as exc:  # intentional: pluggable spawn_fn may raise unpredictable errors
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        await self._refresh_repo_listing_cache()
         await self._mount_manager.refresh_mounts([snapshot], full_refresh=False)
+        self._enricher.invalidate_runtime_caches()
         return self._enricher.enrich_repo(snapshot)
 
     async def stop_repo(self, repo_id: str) -> dict:
@@ -57,6 +74,8 @@ class HubRunControlService:
             )
         except (ValueError, OSError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        await self._refresh_repo_listing_cache()
+        self._enricher.invalidate_runtime_caches()
         return self._enricher.enrich_repo(snapshot)
 
     async def resume_repo(self, repo_id: str, once: bool = False) -> dict:
@@ -78,7 +97,9 @@ class HubRunControlService:
             Exception
         ) as exc:  # intentional: pluggable spawn_fn may raise unpredictable errors
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        await self._refresh_repo_listing_cache()
         await self._mount_manager.refresh_mounts([snapshot], full_refresh=False)
+        self._enricher.invalidate_runtime_caches()
         return self._enricher.enrich_repo(snapshot)
 
     async def kill_repo(self, repo_id: str) -> dict:
@@ -91,6 +112,8 @@ class HubRunControlService:
             )
         except (ValueError, OSError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        await self._refresh_repo_listing_cache()
+        self._enricher.invalidate_runtime_caches()
         return self._enricher.enrich_repo(snapshot)
 
     async def init_repo(self, repo_id: str) -> dict:
@@ -103,7 +126,9 @@ class HubRunControlService:
             )
         except (ValueError, OSError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        await self._refresh_repo_listing_cache()
         await self._mount_manager.refresh_mounts([snapshot], full_refresh=False)
+        self._enricher.invalidate_runtime_caches()
         return self._enricher.enrich_repo(snapshot)
 
     async def sync_main(self, repo_id: str) -> dict:
@@ -116,5 +141,7 @@ class HubRunControlService:
             )
         except (ValueError, OSError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        await self._refresh_repo_listing_cache()
         await self._mount_manager.refresh_mounts([snapshot], full_refresh=False)
+        self._enricher.invalidate_runtime_caches()
         return self._enricher.enrich_repo(snapshot)

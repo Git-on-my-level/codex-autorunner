@@ -154,6 +154,17 @@ def build_hub_repo_routes(
             )
             return {}
 
+    async def _refresh_repo_listing_cache() -> None:
+        try:
+            await asyncio.to_thread(context.supervisor.list_repos, use_cache=False)
+        except Exception as exc:  # intentional: cache refresh is best-effort
+            safe_log(
+                context.logger,
+                logging.WARNING,
+                "Hub repo listing refresh failed after cleanup/archive mutation",
+                exc=exc,
+            )
+
     def _enrich_repo(
         snapshot,
         chat_binding_counts: Optional[dict[str, int]] = None,
@@ -1130,6 +1141,7 @@ def build_hub_repo_routes(
                 archive_note=payload.archive_note,
                 archive_profile=payload.archive_profile,
             )
+            await _refresh_repo_listing_cache()
             enricher.invalidate_runtime_caches()
             return result
         except (
@@ -1149,6 +1161,7 @@ def build_hub_repo_routes(
                 context.supervisor.cleanup_repo_threads,
                 repo_id=repo_id,
             )
+            await _refresh_repo_listing_cache()
             enricher.invalidate_runtime_caches()
             return result
         except (
@@ -1167,6 +1180,7 @@ def build_hub_repo_routes(
             result = await asyncio.to_thread(
                 context.supervisor.cleanup_all_repo_threads
             )
+            await _refresh_repo_listing_cache()
             enricher.invalidate_runtime_caches()
             return result
         except (
@@ -1196,6 +1210,7 @@ def build_hub_repo_routes(
 
         async def _run_cleanup_all():
             result = await asyncio.to_thread(context.supervisor.cleanup_all)
+            await _refresh_repo_listing_cache()
             enricher.invalidate_runtime_caches()
             return result
 

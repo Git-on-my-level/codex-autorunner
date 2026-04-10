@@ -7,12 +7,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
+from .....core.hub_projection_store import path_stat_fingerprint
+
 if TYPE_CHECKING:
     from ...app_state import HubAppContext
     from .mount_manager import HubMountManager
 
 
 _REPO_ENRICH_CACHE_TTL_SECONDS = 45.0
+_REPO_RUNTIME_PROJECTION_NAMESPACE = "repo_runtime_v1"
+_REPO_RUNTIME_PROJECTION_MAX_AGE_SECONDS = 300.0
 
 
 @dataclass(frozen=True)
@@ -32,12 +36,29 @@ class HubRepoEnricher:
         self._repo_state_cache: dict[str, _RepoEnrichmentCacheEntry] = {}
         self._repo_state_cache_lock = threading.Lock()
 
+    def repo_state_fingerprint(
+        self,
+        snapshot,
+        *,
+        stale_threshold_seconds: Optional[int],
+    ) -> tuple[Any, ...]:
+        return self._repo_state_fingerprint(
+            snapshot,
+            stale_threshold_seconds=stale_threshold_seconds,
+        )
+
     def invalidate_runtime_caches(self) -> None:
         with self._unbound_thread_counts_lock:
             self._unbound_thread_counts_cache = None
             self._unbound_thread_counts_cached_at = 0.0
         with self._repo_state_cache_lock:
             self._repo_state_cache.clear()
+        projection_store = getattr(self._context, "projection_store", None)
+        if projection_store is not None:
+            try:
+                projection_store.delete(namespace=_REPO_RUNTIME_PROJECTION_NAMESPACE)
+            except Exception:
+                pass
 
     def _unbound_repo_thread_counts(self) -> dict[str, int]:
         with self._unbound_thread_counts_lock:
@@ -58,11 +79,10 @@ class HubRepoEnricher:
     def _path_stat_fingerprint(
         self, path: Path
     ) -> tuple[bool, Optional[int], Optional[int]]:
-        try:
-            stat = path.stat()
-        except OSError:
-            return (False, None, None)
-        return (True, int(stat.st_mtime_ns), int(stat.st_size))
+        return path_stat_fingerprint(path)
+
+    def _repo_state_projection_key(self, snapshot) -> str:
+        return f"{snapshot.id}:{snapshot.path}"
 
     def _repo_state_fingerprint(
         self,
@@ -199,11 +219,12 @@ class HubRepoEnricher:
         stale_threshold_seconds: Optional[int],
     ) -> dict[str, Any]:
         now = time.monotonic()
-        cache_key = str(snapshot.id)
         fingerprint = self._repo_state_fingerprint(
             snapshot,
             stale_threshold_seconds=stale_threshold_seconds,
         )
+        cache_key = self._repo_state_projection_key(snapshot)
+        projection_store = getattr(self._context, "projection_store", None)
         with self._repo_state_cache_lock:
             cached = self._repo_state_cache.get(cache_key)
             if (
@@ -212,6 +233,24 @@ class HubRepoEnricher:
                 and cached.fingerprint == fingerprint
             ):
                 return copy.deepcopy(cached.payload)
+        if projection_store is not None:
+            try:
+                cached_payload = projection_store.get_cache(
+                    cache_key,
+                    fingerprint,
+                    max_age_seconds=_REPO_RUNTIME_PROJECTION_MAX_AGE_SECONDS,
+                    namespace=_REPO_RUNTIME_PROJECTION_NAMESPACE,
+                )
+            except Exception:
+                cached_payload = None
+            if cached_payload is not None:
+                with self._repo_state_cache_lock:
+                    self._repo_state_cache[cache_key] = _RepoEnrichmentCacheEntry(
+                        fingerprint=fingerprint,
+                        expires_at=now + _REPO_ENRICH_CACHE_TTL_SECONDS,
+                        payload=copy.deepcopy(cached_payload),
+                    )
+                return copy.deepcopy(cached_payload)
         payload = self._compute_repo_state_payload(
             snapshot,
             stale_threshold_seconds=stale_threshold_seconds,
@@ -222,6 +261,16 @@ class HubRepoEnricher:
                 expires_at=now + _REPO_ENRICH_CACHE_TTL_SECONDS,
                 payload=copy.deepcopy(payload),
             )
+        if projection_store is not None:
+            try:
+                projection_store.set_cache(
+                    cache_key,
+                    fingerprint,
+                    payload,
+                    namespace=_REPO_RUNTIME_PROJECTION_NAMESPACE,
+                )
+            except Exception:
+                pass
         return payload
 
     def enrich_repo(

@@ -6,8 +6,11 @@ import threading
 from pathlib import Path
 from types import SimpleNamespace
 
+import codex_autorunner.core.chat_bindings as chat_bindings_module
+import codex_autorunner.core.hub_projection_store as projection_store_module
 from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.core.hub import LockStatus, RepoSnapshot, RepoStatus
+from codex_autorunner.core.hub_projection_store import HubProjectionStore
 from codex_autorunner.surfaces.web.routes.hub_repo_routes import (
     channels as hub_channels_module,
 )
@@ -133,6 +136,179 @@ def test_hub_repo_enricher_reuses_cached_repo_state(
         "ticket_flow_summary": 1,
         "run_state": 1,
         "canonical_state": 1,
+    }
+
+
+def test_hub_repo_enricher_reuses_durable_repo_state_across_instances(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    hub_root = tmp_path / "hub"
+    repo_root = hub_root / "demo"
+    tickets_dir = repo_root / ".codex-autorunner" / "tickets"
+    tickets_dir.mkdir(parents=True, exist_ok=True)
+    snapshot = _repo_snapshot(repo_root)
+    calls = {
+        "has_car_state": 0,
+        "ticket_flow_summary": 0,
+        "run_state": 0,
+        "canonical_state": 0,
+    }
+
+    def build_context() -> SimpleNamespace:
+        return SimpleNamespace(
+            config=SimpleNamespace(
+                root=hub_root,
+                pma=SimpleNamespace(freshness_stale_threshold_seconds=None),
+            ),
+            projection_store=HubProjectionStore(hub_root, durable=False),
+            supervisor=SimpleNamespace(unbound_repo_thread_counts=lambda: {"demo": 0}),
+        )
+
+    def fake_has_car_state(_path: Path) -> bool:
+        calls["has_car_state"] += 1
+        return True
+
+    def fake_ticket_flow_summary(
+        _path: Path, *, include_failure: bool, store=None
+    ) -> dict[str, object]:
+        assert include_failure is True
+        calls["ticket_flow_summary"] += 1
+        return {
+            "status": "running",
+            "done_count": 1,
+            "total_count": 2,
+            "run_id": "r1",
+        }
+
+    def fake_run_state(
+        _repo_root: Path, _repo_id: str, *, store=None
+    ) -> tuple[dict[str, object], None]:
+        calls["run_state"] += 1
+        return ({"state": "running", "flow_status": "running", "run_id": "r1"}, None)
+
+    def fake_canonical_state(**_kwargs) -> dict[str, object]:
+        calls["canonical_state"] += 1
+        return {"status": "running"}
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.archive.has_car_state", fake_has_car_state
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.ticket_flow_summary.build_ticket_flow_summary",
+        fake_ticket_flow_summary,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.pma_context.get_latest_ticket_flow_run_state_with_record",
+        fake_run_state,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.ticket_flow_projection.build_canonical_state_v1",
+        fake_canonical_state,
+    )
+
+    first = HubRepoEnricher(build_context(), _MountManager())  # type: ignore[arg-type]
+    second = HubRepoEnricher(build_context(), _MountManager())  # type: ignore[arg-type]
+
+    assert first.enrich_repo(snapshot)["canonical_state_v1"] == {"status": "running"}
+    assert second.enrich_repo(snapshot)["canonical_state_v1"] == {"status": "running"}
+    assert calls == {
+        "has_car_state": 1,
+        "ticket_flow_summary": 1,
+        "run_state": 1,
+        "canonical_state": 1,
+    }
+
+
+def test_hub_repo_enricher_expires_durable_repo_state_across_instances(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    hub_root = tmp_path / "hub"
+    repo_root = hub_root / "demo"
+    tickets_dir = repo_root / ".codex-autorunner" / "tickets"
+    tickets_dir.mkdir(parents=True, exist_ok=True)
+    snapshot = _repo_snapshot(repo_root)
+    calls = {
+        "has_car_state": 0,
+        "ticket_flow_summary": 0,
+        "run_state": 0,
+        "canonical_state": 0,
+    }
+
+    def build_context() -> SimpleNamespace:
+        return SimpleNamespace(
+            config=SimpleNamespace(
+                root=hub_root,
+                pma=SimpleNamespace(freshness_stale_threshold_seconds=None),
+            ),
+            projection_store=HubProjectionStore(hub_root, durable=False),
+            supervisor=SimpleNamespace(unbound_repo_thread_counts=lambda: {"demo": 0}),
+        )
+
+    def fake_has_car_state(_path: Path) -> bool:
+        calls["has_car_state"] += 1
+        return True
+
+    def fake_ticket_flow_summary(
+        _path: Path, *, include_failure: bool, store=None
+    ) -> dict[str, object]:
+        assert include_failure is True
+        calls["ticket_flow_summary"] += 1
+        return {
+            "status": "running",
+            "done_count": 1,
+            "total_count": 2,
+            "run_id": f"r{calls['ticket_flow_summary']}",
+        }
+
+    def fake_run_state(
+        _repo_root: Path, _repo_id: str, *, store=None
+    ) -> tuple[dict[str, object], None]:
+        calls["run_state"] += 1
+        return ({"state": "running", "flow_status": "running", "run_id": "r1"}, None)
+
+    def fake_canonical_state(**_kwargs) -> dict[str, object]:
+        calls["canonical_state"] += 1
+        return {"status": "running"}
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.archive.has_car_state", fake_has_car_state
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.ticket_flow_summary.build_ticket_flow_summary",
+        fake_ticket_flow_summary,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.pma_context.get_latest_ticket_flow_run_state_with_record",
+        fake_run_state,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.ticket_flow_projection.build_canonical_state_v1",
+        fake_canonical_state,
+    )
+    monkeypatch.setattr(
+        projection_store_module,
+        "now_iso",
+        lambda: "1970-01-01T00:16:40+00:00",
+    )
+    monkeypatch.setattr(projection_store_module, "_current_utc_ts", lambda: 1000.0)
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.web.routes.hub_repo_routes.services._REPO_RUNTIME_PROJECTION_MAX_AGE_SECONDS",
+        1.0,
+    )
+
+    first = HubRepoEnricher(build_context(), _MountManager())  # type: ignore[arg-type]
+    assert first.enrich_repo(snapshot)["ticket_flow"]["run_id"] == "r1"
+
+    monkeypatch.setattr(projection_store_module, "_current_utc_ts", lambda: 1002.0)
+    second = HubRepoEnricher(build_context(), _MountManager())  # type: ignore[arg-type]
+    assert second.enrich_repo(snapshot)["ticket_flow"]["run_id"] == "r2"
+    assert calls == {
+        "has_car_state": 2,
+        "ticket_flow_summary": 2,
+        "run_state": 2,
+        "canonical_state": 2,
     }
 
 
@@ -403,7 +579,10 @@ def test_hub_repo_listing_service_invalidates_cache_when_manifest_changes(
     snapshot = _repo_snapshot(tmp_path / "repo-1", repo_id="repo-1")
     manifest_path = tmp_path / ".codex-autorunner" / "manifest.yml"
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_text("repos:\n  - id: repo-1\n", encoding="utf-8")
+    manifest_path.write_text(
+        "version: 3\nrepos:\n  - id: repo-1\n    path: repo-1\n",
+        encoding="utf-8",
+    )
     calls = {"enrich_repo": 0}
 
     def enrich_repo(
@@ -445,6 +624,130 @@ def test_hub_repo_listing_service_invalidates_cache_when_manifest_changes(
     assert first["repos"][0]["call"] == 1
     assert second["repos"][0]["call"] == 2
     assert calls["enrich_repo"] == 2
+
+
+def test_hub_repo_listing_service_reuses_durable_projection_across_instances(
+    tmp_path: Path,
+) -> None:
+    class _AsyncMountManager:
+        async def refresh_mounts(self, _snapshots) -> None:
+            return None
+
+    snapshot = _repo_snapshot(tmp_path / "repo-1", repo_id="repo-1")
+    manifest_path = tmp_path / ".codex-autorunner" / "manifest.yml"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text("repos:\n  - id: repo-1\n", encoding="utf-8")
+    calls = {"enrich_repo": 0}
+
+    def enrich_repo(
+        _snapshot, chat_binding_counts: dict[str, int], chat_binding_counts_by_source
+    ) -> dict[str, object]:
+        assert chat_binding_counts == {}
+        assert chat_binding_counts_by_source == {}
+        calls["enrich_repo"] += 1
+        return {"repo_id": "repo-1", "call": calls["enrich_repo"]}
+
+    def build_context() -> SimpleNamespace:
+        return SimpleNamespace(
+            config=SimpleNamespace(
+                root=tmp_path,
+                raw={},
+                manifest_path=manifest_path,
+                pma=SimpleNamespace(freshness_stale_threshold_seconds=None),
+            ),
+            projection_store=HubProjectionStore(tmp_path, durable=False),
+            supervisor=SimpleNamespace(
+                list_repos=lambda: [snapshot],
+                state=SimpleNamespace(
+                    last_scan_at="2026-04-05T00:00:00Z",
+                    pinned_parent_repo_ids=[],
+                    repos=[snapshot],
+                    agent_workspaces=[],
+                ),
+            ),
+            logger=logging.getLogger(__name__),
+        )
+
+    first_service = HubRepoListingService(
+        build_context(),
+        _AsyncMountManager(),  # type: ignore[arg-type]
+        SimpleNamespace(
+            enrich_repo=enrich_repo,
+            repo_state_fingerprint=lambda *_args, **_kwargs: ("repo-1",),
+        ),
+    )
+    second_service = HubRepoListingService(
+        build_context(),
+        _AsyncMountManager(),  # type: ignore[arg-type]
+        SimpleNamespace(
+            enrich_repo=enrich_repo,
+            repo_state_fingerprint=lambda *_args, **_kwargs: ("repo-1",),
+        ),
+    )
+
+    first = asyncio.run(first_service.list_repos(sections={"repos"}))
+    second = asyncio.run(second_service.list_repos(sections={"repos"}))
+
+    assert first["repos"][0]["call"] == 1
+    assert second["repos"][0]["call"] == 1
+    assert calls["enrich_repo"] == 1
+
+
+def test_active_chat_binding_counts_by_source_reuses_durable_projection(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir(parents=True, exist_ok=True)
+    calls = {"pma": 0, "orchestration": 0, "discord": 0, "telegram": 0}
+
+    monkeypatch.setattr(
+        chat_bindings_module,
+        "_repo_id_by_workspace_path",
+        lambda _hub_root, _raw_config: {},
+    )
+
+    def fake_pma(_hub_root: Path, _repo_id_by_workspace) -> dict[str, int]:
+        calls["pma"] += 1
+        return {"demo": 1}
+
+    def fake_orchestration(*, hub_root: Path, repo_id_by_workspace):
+        calls["orchestration"] += 1
+        return {"demo": {"discord": 2}}
+
+    def fake_discord(*, db_path: Path, repo_id_by_workspace):
+        calls["discord"] += 1
+        return {"demo": 5}
+
+    def fake_telegram(*, db_path: Path, repo_id_by_workspace):
+        calls["telegram"] += 1
+        return {"demo": 3}
+
+    monkeypatch.setattr(chat_bindings_module, "_active_pma_thread_counts", fake_pma)
+    monkeypatch.setattr(
+        chat_bindings_module,
+        "_orchestration_binding_counts_by_source",
+        fake_orchestration,
+    )
+    monkeypatch.setattr(chat_bindings_module, "_read_discord_repo_counts", fake_discord)
+    monkeypatch.setattr(
+        chat_bindings_module,
+        "_read_current_telegram_repo_counts",
+        fake_telegram,
+    )
+
+    first = chat_bindings_module.active_chat_binding_counts_by_source(
+        hub_root=hub_root,
+        raw_config={},
+    )
+    second = chat_bindings_module.active_chat_binding_counts_by_source(
+        hub_root=hub_root,
+        raw_config={},
+    )
+
+    assert first == {"demo": {"pma": 1, "discord": 2, "telegram": 3}}
+    assert second == first
+    assert calls == {"pma": 1, "orchestration": 1, "discord": 1, "telegram": 1}
 
 
 def test_hub_channel_service_reuses_ttl_cache(

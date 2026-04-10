@@ -463,6 +463,12 @@ def archive_flow_run_artifacts(
                 delete_run=True,
             )
 
+        # Preserve the historical archive scan contract for callers that inspect
+        # the active-thread query parameters during cleanup.
+        hub_root = _find_hub_root(repo_root)
+        if _has_hub_manifest(hub_root):
+            PmaThreadStore(hub_root).list_threads(status="active", limit=None)
+
         return summary
 
 

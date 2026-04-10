@@ -23,6 +23,7 @@ from ...core.config import (
     resolve_env_for_root,
 )
 from ...core.flows.workspace_root import resolve_ticket_flow_workspace_root
+from ...core.hub_projection_store import HubProjectionStore
 from ...core.logging_utils import safe_log, setup_rotating_logger
 from ...core.optional_dependencies import require_optional_dependencies
 from ...core.runtime import RuntimeContext
@@ -108,6 +109,7 @@ class HubAppContext:
     opencode_supervisor: Optional[OpenCodeSupervisor]
     opencode_prune_interval: Optional[float]
     runtime_services: RuntimeServices
+    projection_store: HubProjectionStore
     static_dir: Path
     static_assets_context: Optional[object]
     asset_version: str
@@ -747,6 +749,10 @@ def build_hub_context(
         app_server_supervisor=app_server_supervisor,
         opencode_supervisor=opencode_supervisor,
     )
+    projection_store = HubProjectionStore(
+        config.root,
+        durable=bool(getattr(config, "durable_writes", False)),
+    )
     static_dir, static_context = materialize_static_assets(
         config.static_assets.cache_root,
         max_cache_entries=config.static_assets.max_cache_entries,
@@ -777,6 +783,7 @@ def build_hub_context(
         opencode_supervisor=opencode_supervisor,
         opencode_prune_interval=opencode_prune_interval,
         runtime_services=runtime_services,
+        projection_store=projection_store,
         static_dir=static_dir,
         static_assets_context=static_context,
         asset_version=asset_version(static_dir),
@@ -796,6 +803,7 @@ def apply_hub_context(app, context: HubAppContext) -> None:
     app.state.opencode_supervisor = context.opencode_supervisor
     app.state.opencode_prune_interval = context.opencode_prune_interval
     app.state.runtime_services = context.runtime_services
+    app.state.hub_projection_store = context.projection_store
     app.state.static_dir = context.static_dir
     app.state.static_assets_context = context.static_assets_context
     app.state.asset_version = context.asset_version
