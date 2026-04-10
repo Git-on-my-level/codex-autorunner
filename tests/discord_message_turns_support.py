@@ -2412,7 +2412,6 @@ async def test_message_event_submits_through_surface_orchestration_ingress(
         await store.close()
 
 
-@pytest.mark.anyio
 async def test_message_create_after_compact_uses_pending_seed_and_clears_it(
     tmp_path: Path,
 ) -> None:
