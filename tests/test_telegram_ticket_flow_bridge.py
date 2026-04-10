@@ -18,6 +18,9 @@ class _DummyRecord:
     def __init__(self, workspace_path: Path) -> None:
         self.workspace_path = str(workspace_path)
         self.last_ticket_dispatch_seq = None
+        self.last_terminal_run_id = None
+        self.last_terminal_finished_at = None
+        self.last_active_at = None
 
 
 class _DummyStore:
@@ -583,6 +586,208 @@ async def test_terminal_scan_failure_sends_degraded_notice_once_until_recovery(
     await bridge._notify_terminal_for_workspace(workspace, [("123:456", record)])
 
     assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_terminal_scan_skips_stale_run_when_newer_terminal_was_already_marked(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "tg-terminal-stale"
+    workspace.mkdir()
+    record = _DummyRecord(workspace)
+    record.last_terminal_run_id = "run-completed"
+    record.last_terminal_finished_at = "2026-04-10T10:00:00Z"
+    calls: list[str] = []
+
+    async def send_message_with_outbox(
+        chat_id: int, text: str, thread_id=None, reply_to=None
+    ):
+        calls.append(text)
+        return True
+
+    async def send_document(**kwargs):
+        return True
+
+    bridge = TelegramTicketFlowBridge(
+        logger=logging.getLogger("test"),
+        store=_DummyStore({"123:456": record}),
+        pause_targets={},
+        send_message_with_outbox=send_message_with_outbox,
+        send_document=send_document,
+        pause_config=PauseDispatchNotifications(
+            enabled=True,
+            send_attachments=False,
+            max_file_size_bytes=10,
+            chunk_long_messages=False,
+        ),
+        default_notification_chat_id=None,
+        hub_root=None,
+        manifest_path=None,
+        config_root=workspace,
+    )
+    bridge._load_latest_terminal_run = lambda _path: (  # type: ignore[assignment]
+        "run-stopped",
+        FlowRunStatus.STOPPED.value,
+        None,
+        "2026-04-10T09:00:00Z",
+    )
+
+    await bridge._notify_terminal_for_workspace(workspace, [("123:456", record)])
+
+    assert calls == []
+    assert record.last_terminal_run_id == "run-completed"
+    assert record.last_terminal_finished_at == "2026-04-10T10:00:00Z"
+
+
+@pytest.mark.asyncio
+async def test_terminal_scan_uses_last_active_fallback_for_legacy_marker(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "tg-terminal-legacy"
+    workspace.mkdir()
+    record = _DummyRecord(workspace)
+    record.last_terminal_run_id = "run-completed"
+    record.last_terminal_finished_at = None
+    record.last_active_at = "2026-04-10T10:00:00Z"
+    calls: list[str] = []
+
+    async def send_message_with_outbox(
+        chat_id: int, text: str, thread_id=None, reply_to=None
+    ):
+        calls.append(text)
+        return True
+
+    async def send_document(**kwargs):
+        return True
+
+    bridge = TelegramTicketFlowBridge(
+        logger=logging.getLogger("test"),
+        store=_DummyStore({"123:456": record}),
+        pause_targets={},
+        send_message_with_outbox=send_message_with_outbox,
+        send_document=send_document,
+        pause_config=PauseDispatchNotifications(
+            enabled=True,
+            send_attachments=False,
+            max_file_size_bytes=10,
+            chunk_long_messages=False,
+        ),
+        default_notification_chat_id=None,
+        hub_root=None,
+        manifest_path=None,
+        config_root=workspace,
+    )
+    bridge._load_latest_terminal_run = lambda _path: (  # type: ignore[assignment]
+        "run-stopped",
+        FlowRunStatus.STOPPED.value,
+        None,
+        "2026-04-10T09:00:00Z",
+    )
+
+    await bridge._notify_terminal_for_workspace(workspace, [("123:456", record)])
+
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_terminal_scan_does_not_suppress_same_second_new_run(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "tg-terminal-same-second"
+    workspace.mkdir()
+    record = _DummyRecord(workspace)
+    record.last_terminal_run_id = "run-older"
+    record.last_terminal_finished_at = "2026-04-10T10:00:00Z"
+    calls: list[str] = []
+
+    async def send_message_with_outbox(
+        chat_id: int, text: str, thread_id=None, reply_to=None
+    ):
+        calls.append(text)
+        return True
+
+    async def send_document(**kwargs):
+        return True
+
+    bridge = TelegramTicketFlowBridge(
+        logger=logging.getLogger("test"),
+        store=_DummyStore({"123:456": record}),
+        pause_targets={},
+        send_message_with_outbox=send_message_with_outbox,
+        send_document=send_document,
+        pause_config=PauseDispatchNotifications(
+            enabled=True,
+            send_attachments=False,
+            max_file_size_bytes=10,
+            chunk_long_messages=False,
+        ),
+        default_notification_chat_id=None,
+        hub_root=None,
+        manifest_path=None,
+        config_root=workspace,
+    )
+    bridge._load_latest_terminal_run = lambda _path: (  # type: ignore[assignment]
+        "run-new",
+        FlowRunStatus.COMPLETED.value,
+        None,
+        "2026-04-10T10:00:00Z",
+    )
+
+    await bridge._notify_terminal_for_workspace(workspace, [("123:456", record)])
+
+    assert len(calls) == 1
+    assert "completed successfully (run run-new)" in calls[0]
+
+
+@pytest.mark.asyncio
+async def test_terminal_scan_legacy_fallback_keeps_fresh_stopped_notice(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "tg-terminal-legacy-fresh"
+    workspace.mkdir()
+    record = _DummyRecord(workspace)
+    record.last_terminal_run_id = "run-completed"
+    record.last_terminal_finished_at = None
+    record.last_active_at = "2026-04-10T10:00:00Z"
+    calls: list[str] = []
+
+    async def send_message_with_outbox(
+        chat_id: int, text: str, thread_id=None, reply_to=None
+    ):
+        calls.append(text)
+        return True
+
+    async def send_document(**kwargs):
+        return True
+
+    bridge = TelegramTicketFlowBridge(
+        logger=logging.getLogger("test"),
+        store=_DummyStore({"123:456": record}),
+        pause_targets={},
+        send_message_with_outbox=send_message_with_outbox,
+        send_document=send_document,
+        pause_config=PauseDispatchNotifications(
+            enabled=True,
+            send_attachments=False,
+            max_file_size_bytes=10,
+            chunk_long_messages=False,
+        ),
+        default_notification_chat_id=None,
+        hub_root=None,
+        manifest_path=None,
+        config_root=workspace,
+    )
+    bridge._load_latest_terminal_run = lambda _path: (  # type: ignore[assignment]
+        "run-stopped-fresh",
+        FlowRunStatus.STOPPED.value,
+        None,
+        "2026-04-10T09:59:45Z",
+    )
+
+    await bridge._notify_terminal_for_workspace(workspace, [("123:456", record)])
+
+    assert len(calls) == 1
+    assert "Ticket flow stopped (run run-stopped-fresh)." in calls[0]
 
 
 @pytest.mark.asyncio
