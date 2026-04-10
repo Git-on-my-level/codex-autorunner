@@ -26,6 +26,9 @@ _logger = logging.getLogger(__name__)
 HERMES_RUNTIME_ID = "hermes"
 HERMES_ACP_COMMAND = "acp"
 HERMES_APPROVAL_TIMEOUT_SECONDS = 300.0
+_HERMES_IDLE_TERMINAL_METHODS = frozenset(
+    {"session.idle", "session.status", "session/status"}
+)
 
 
 class HermesSupervisorError(RuntimeError):
@@ -196,6 +199,7 @@ class HermesSupervisor:
         )
         state = await self._require_turn_state(workspace_root, resolved_turn_id)
         result = await state.handle.wait(timeout=timeout)
+        await state.event_buffer.close()
         errors = [result.error_message] if result.error_message else []
         raw_events = state.event_buffer.snapshot()
         return TerminalTurnResult(
@@ -375,10 +379,13 @@ class HermesSupervisor:
         state = await self._wait_for_turn_state(workspace_root, turn_id)
         if state is None:
             return
+        terminal = isinstance(event, ACPTurnTerminalEvent) and event.method not in (
+            _HERMES_IDLE_TERMINAL_METHODS
+        )
         await self._append_raw_event(
             state,
             dict(raw_notification),
-            terminal=isinstance(event, ACPTurnTerminalEvent),
+            terminal=terminal,
         )
 
     async def _handle_permission_request(

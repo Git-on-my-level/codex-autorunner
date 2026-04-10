@@ -93,6 +93,13 @@ collaboration-allowed and ready to execute through a bound workspace or PMA.
 - The recommended migration pattern is `default_mode: command_only` plus explicit
   destinations captured from `/car admin ids`.
 
+## Integration Harness
+
+For cross-surface PMA regressions, use
+`tests/chat_surface_integration/README.md`. It drives Discord message ingress
+through `DiscordBotService` with a subprocess-backed Hermes fixture so surface
+progress and final delivery can be asserted together.
+
 ## Example config
 
 ```yaml

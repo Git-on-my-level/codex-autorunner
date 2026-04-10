@@ -868,6 +868,110 @@ async def test_runtime_threads_recovers_from_acp_prompt_completion_raw_event(
     assert outcome.error is None
 
 
+async def test_runtime_threads_recovers_from_session_status_idle_state_field(
+    tmp_path: Path,
+) -> None:
+    harness = _HarnessWithWait()
+
+    async def _wait_with_session_status_state(
+        workspace_root: Path,
+        conversation_id: str,
+        turn_id: Optional[str],
+        *,
+        timeout: Optional[float] = None,
+    ) -> SimpleNamespace:
+        _ = timeout
+        harness.wait_calls.append((workspace_root, conversation_id, turn_id))
+        return SimpleNamespace(
+            status="completed",
+            assistant_text="assistant-output",
+            errors=["transport disconnected after completion"],
+            raw_events=[
+                {
+                    "method": "session.status",
+                    "params": {"status": {"state": "idle"}},
+                }
+            ],
+        )
+
+    harness.wait_for_turn = _wait_with_session_status_state  # type: ignore[method-assign]
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+
+    started = await begin_runtime_thread_execution(
+        service,
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="user-visible prompt",
+        ),
+    )
+    outcome = await await_runtime_thread_outcome(
+        started,
+        interrupt_event=None,
+        timeout_seconds=5,
+        execution_error_message="Managed thread execution failed",
+    )
+
+    assert outcome.status == "ok"
+    assert outcome.assistant_text == "assistant-output"
+    assert outcome.error is None
+
+
+async def test_runtime_threads_recovers_from_session_status_idle_in_properties(
+    tmp_path: Path,
+) -> None:
+    harness = _HarnessWithWait()
+
+    async def _wait_with_session_status_properties(
+        workspace_root: Path,
+        conversation_id: str,
+        turn_id: Optional[str],
+        *,
+        timeout: Optional[float] = None,
+    ) -> SimpleNamespace:
+        _ = timeout
+        harness.wait_calls.append((workspace_root, conversation_id, turn_id))
+        return SimpleNamespace(
+            status="completed",
+            assistant_text="assistant-output",
+            errors=["transport disconnected after completion"],
+            raw_events=[
+                {
+                    "method": "session.status",
+                    "params": {"properties": {"status": {"type": "idle"}}},
+                }
+            ],
+        )
+
+    harness.wait_for_turn = _wait_with_session_status_properties  # type: ignore[method-assign]
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+
+    started = await begin_runtime_thread_execution(
+        service,
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="user-visible prompt",
+        ),
+    )
+    outcome = await await_runtime_thread_outcome(
+        started,
+        interrupt_event=None,
+        timeout_seconds=5,
+        execution_error_message="Managed thread execution failed",
+    )
+
+    assert outcome.status == "ok"
+    assert outcome.assistant_text == "assistant-output"
+    assert outcome.error is None
+
+
 async def test_stream_runtime_thread_events_proxies_harness_stream(
     tmp_path: Path,
 ) -> None:

@@ -203,6 +203,29 @@ class FakeACPServer:
                 }
             )
             return
+        if self._scenario == "session_status_idle_then_prompt_completed":
+            self.send(
+                {
+                    "method": "session.status",
+                    "params": {
+                        "sessionId": session_id,
+                        "status": {"type": "idle"},
+                    },
+                }
+            )
+            time.sleep(0.02)
+            self.send(
+                {
+                    "method": "prompt/completed",
+                    "params": {
+                        "sessionId": session_id,
+                        "turnId": turn_id,
+                        "status": "completed",
+                        "finalOutput": "final canonical output",
+                    },
+                }
+            )
+            return
         completed_params = {
             "sessionId": session_id,
             "status": "completed",
