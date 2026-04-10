@@ -109,6 +109,7 @@ DISCORD_PMA_PROGRESS_MAX_ACTIONS = 12
 DISCORD_PMA_PROGRESS_MIN_EDIT_INTERVAL_SECONDS = 1.0
 DISCORD_PMA_PROGRESS_HEARTBEAT_INTERVAL_SECONDS = 2.0
 _DISCORD_PROGRESS_LIVE_STATES = frozenset({"pending", "active"})
+_DISCORD_PROGRESS_RECONCILABLE_STATES = frozenset({"pending", "active", "retiring"})
 
 
 class DiscordTurnStartupFailure(RuntimeError):
@@ -713,13 +714,8 @@ async def reconcile_discord_turn_progress_leases(
         ):
             continue
         current_state = (_execution_field(lease, "state") or "").lower()
-        if current_state and current_state not in _DISCORD_PROGRESS_LIVE_STATES:
+        if current_state and current_state not in _DISCORD_PROGRESS_RECONCILABLE_STATES:
             continue
-        await _update_discord_progress_lease(
-            service,
-            lease_id=current_lease_id,
-            state="retiring",
-        )
 
         thread_missing = False
         resolved_thread = None
@@ -776,6 +772,11 @@ async def reconcile_discord_turn_progress_leases(
                 state="active",
             )
             continue
+        await _update_discord_progress_lease(
+            service,
+            lease_id=current_lease_id,
+            state="retiring",
+        )
         await _retire_discord_progress_message(
             service,
             channel_id=current_channel_id,
@@ -2640,6 +2641,27 @@ async def _run_discord_orchestrated_turn_for_message(
             raise exc
         raise exc
 
+    async def _on_after_submission_error(submission: Any, exc: Exception) -> None:
+        started_execution = getattr(submission, "started_execution", None)
+        execution = getattr(started_execution, "execution", None)
+        log_event(
+            service._logger,
+            logging.WARNING,
+            "discord.turn.managed_thread_post_submit_failed",
+            channel_id=channel_id,
+            managed_thread_id=managed_thread_id,
+            execution_id=(
+                str(getattr(execution, "execution_id", "") or "").strip() or None
+            ),
+            backend_turn_id=(
+                str(getattr(execution, "backend_id", "") or "").strip() or None
+            ),
+            queued=bool(getattr(submission, "queued", False)),
+            progress_message_id=progress_message_id,
+            exc=exc,
+            agent=logical_agent,
+        )
+
     async def _on_queued(_flow: Any) -> DiscordMessageTurnResult:
         log_event(
             service._logger,
@@ -2818,6 +2840,7 @@ async def _run_discord_orchestrated_turn_for_message(
             runtime_event_state=RuntimeThreadRunEventState(),
             after_submission=_after_submission,
             on_submission_error=_on_submission_error,
+            on_after_submission_error=_on_after_submission_error,
             on_queued=_on_queued,
             on_finalized=_on_finalized,
             after_completion=_after_completion,

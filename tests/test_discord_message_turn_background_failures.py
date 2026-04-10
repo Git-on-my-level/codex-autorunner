@@ -599,3 +599,45 @@ async def test_startup_reconciles_orphaned_progress_leases(
         assert await store.list_turn_progress_leases() == []
     finally:
         await store.close()
+
+
+@pytest.mark.anyio
+async def test_startup_reconciles_progress_leases_stuck_in_retiring_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allowed_channel_ids=frozenset({"channel-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    await store.upsert_turn_progress_lease(
+        lease_id="lease-1",
+        managed_thread_id="thread-1",
+        execution_id="exec-1",
+        channel_id="channel-1",
+        message_id="preview-1",
+        state="retiring",
+        progress_label="working",
+    )
+    monkeypatch.setattr(
+        discord_message_turns_module,
+        "build_discord_thread_orchestration_service",
+        lambda _service: _FakeThreadService(execution_status="running"),
+    )
+
+    try:
+        await service._reconcile_discord_progress_leases_on_startup()
+
+        assert rest.edited_channel_messages
+        assert "lost its discord worker during restart" in (
+            rest.edited_channel_messages[-1]["payload"]["content"].lower()
+        )
+        assert await store.list_turn_progress_leases() == []
+    finally:
+        await store.close()

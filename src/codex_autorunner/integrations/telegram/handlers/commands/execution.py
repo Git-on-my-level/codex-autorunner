@@ -974,6 +974,27 @@ async def _run_telegram_managed_thread_turn(
             transcript_text,
         )
 
+    async def _on_after_submission_error(submission: Any, exc: Exception) -> None:
+        started_execution = getattr(submission, "started_execution", None)
+        execution = getattr(started_execution, "execution", None)
+        logger = getattr(handlers, "_logger", logging.getLogger(__name__))
+        log_event(
+            logger,
+            logging.WARNING,
+            "telegram.turn.managed_thread_post_submit_failed",
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            topic_key=topic_key,
+            execution_id=(
+                str(getattr(execution, "execution_id", "") or "").strip() or None
+            ),
+            backend_turn_id=(
+                str(getattr(execution, "backend_id", "") or "").strip() or None
+            ),
+            queued=bool(getattr(submission, "queued", False)),
+            exc=exc,
+        )
+
     async def _on_queued(_flow: Any) -> _TurnRunResult:
         return _TurnRunResult(
             record=record,
@@ -1172,6 +1193,7 @@ async def _run_telegram_managed_thread_turn(
             runtime_event_state=RuntimeThreadRunEventState(),
             after_submission=_after_submission,
             on_submission_error=_on_submission_error,
+            on_after_submission_error=_on_after_submission_error,
             on_queued=_on_queued,
             on_finalized=_on_finalized,
             after_completion=_after_completion,

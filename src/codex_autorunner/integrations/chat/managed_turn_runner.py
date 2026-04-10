@@ -48,6 +48,9 @@ class ManagedSurfaceRunnerConfig(Generic[SurfaceResultT]):
     runtime_event_state: Optional[RuntimeThreadRunEventState] = None
     after_submission: Optional[Callable[[ManagedThreadSubmissionResult], object]] = None
     on_submission_error: Optional[Callable[[BaseException], object]] = None
+    on_after_submission_error: Optional[
+        Callable[[ManagedThreadSubmissionResult, Exception], object]
+    ] = None
     on_queued: Optional[Callable[[ManagedThreadExecutionFlowResult], object]] = None
     on_finalized: Optional[
         Callable[
@@ -127,8 +130,6 @@ async def run_managed_surface_turn(
                 )
             else:
                 submission = await submit_coro
-            if config.after_submission is not None:
-                await _resolve_callback_result(config.after_submission, submission)
         except BaseException as exc:
             if config.on_submission_error is None:
                 raise
@@ -136,6 +137,17 @@ async def run_managed_surface_turn(
                 SurfaceResultT,
                 await _resolve_callback_result(config.on_submission_error, exc),
             )
+        if config.after_submission is not None:
+            try:
+                await _resolve_callback_result(config.after_submission, submission)
+            except Exception as exc:
+                if config.on_after_submission_error is None:
+                    raise
+                await _resolve_callback_result(
+                    config.on_after_submission_error,
+                    submission,
+                    exc,
+                )
         if submission.queued:
             if config.queue is not None:
                 _ensure_queue_worker()

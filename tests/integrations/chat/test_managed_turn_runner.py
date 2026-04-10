@@ -180,3 +180,73 @@ async def test_run_managed_surface_turn_does_not_treat_finalize_callback_errors_
 
     assert submission_error_calls == []
     assert after_completion_calls == [True]
+
+
+@pytest.mark.anyio
+async def test_run_managed_surface_turn_continues_after_post_submit_callback_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = _build_started_execution(tmp_path)
+    submission_error_calls: list[str] = []
+    post_submit_error_calls: list[str] = []
+    after_completion_calls: list[bool] = []
+
+    async def _submit_execution(
+        *args: Any, **kwargs: Any
+    ) -> ManagedThreadSubmissionResult:
+        _ = args, kwargs
+        return ManagedThreadSubmissionResult(started_execution=started, queued=False)
+
+    async def _fake_complete(
+        coordinator: Any,
+        submission: ManagedThreadSubmissionResult,
+        **kwargs: Any,
+    ) -> ManagedThreadExecutionFlowResult:
+        _ = coordinator, submission, kwargs
+        return ManagedThreadExecutionFlowResult(
+            started_execution=started,
+            queued=False,
+            finalized=ManagedThreadFinalizationResult(
+                status="ok",
+                assistant_text="done",
+                error=None,
+                managed_thread_id="thread-1",
+                managed_turn_id="exec-1",
+                backend_thread_id="backend-thread-1",
+            ),
+        )
+
+    monkeypatch.setattr(
+        managed_turn_runner_module,
+        "complete_managed_thread_execution",
+        _fake_complete,
+    )
+
+    result = await managed_turn_runner_module.run_managed_surface_turn(
+        started.request,
+        config=managed_turn_runner_module.ManagedSurfaceRunnerConfig[str](
+            coordinator=SimpleNamespace(
+                submit_execution=_submit_execution,
+                ensure_queue_worker=lambda **kwargs: None,
+            ),
+            client_request_id="req-1",
+            sandbox_policy=None,
+            after_submission=lambda submission: (_ for _ in ()).throw(
+                ValueError("after submit boom")
+            ),
+            on_submission_error=lambda exc: submission_error_calls.append(str(exc)),
+            on_after_submission_error=lambda submission, exc: post_submit_error_calls.append(
+                str(exc)
+            ),
+            on_finalized=lambda flow, finalized: finalized.assistant_text,
+            after_completion=lambda flow: after_completion_calls.append(
+                flow is not None
+            ),
+        ),
+    )
+
+    assert result == "done"
+    assert submission_error_calls == []
+    assert post_submit_error_calls == ["after submit boom"]
+    assert after_completion_calls == [True]

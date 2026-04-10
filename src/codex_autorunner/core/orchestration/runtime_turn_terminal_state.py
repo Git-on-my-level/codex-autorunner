@@ -398,12 +398,14 @@ def _inspect_raw_event(
             timestamp=timestamp,
         )
     elif method == "session.idle":
+        assistant_message_text = _extract_message_text(params)
         terminal_signal = RuntimeThreadTerminalSignal(
             source=method,
             status="ok",
             timestamp=timestamp,
         )
     elif method in {"session.status", "session/status"}:
+        assistant_message_text = _extract_message_text(params)
         if _session_status_type(raw_event) == "idle":
             terminal_signal = RuntimeThreadTerminalSignal(
                 source=method,
@@ -508,7 +510,14 @@ def _extract_message_role(params: dict[str, Any]) -> str:
 
 
 def _extract_message_text(params: dict[str, Any]) -> Optional[str]:
-    for key in ("text", "content", "message", "final_message"):
+    for key in (
+        "text",
+        "content",
+        "message",
+        "final_message",
+        "finalOutput",
+        "final_output",
+    ):
         value = params.get(key)
         text = _string_from_value(value)
         if text:
