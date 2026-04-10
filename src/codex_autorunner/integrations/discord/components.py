@@ -539,21 +539,27 @@ def parse_cancel_turn_custom_id(custom_id: str) -> tuple[str | None, str | None]
     return normalized_thread_target_id, normalized_execution_id or None
 
 
-def build_queue_notice_buttons(source_message_id: str) -> dict[str, Any]:
+def build_queue_notice_buttons(
+    source_message_id: str,
+    *,
+    allow_interrupt: bool = True,
+) -> dict[str, Any]:
     source = str(source_message_id or "").strip()
     if not source:
         raise ValueError("source_message_id required")
-    return build_action_row(
-        [
-            build_button(
-                "Cancel",
-                f"queue_cancel:{source}",
-                style=DISCORD_BUTTON_STYLE_DANGER,
-            ),
+    buttons = [
+        build_button(
+            "Cancel",
+            f"queue_cancel:{source}",
+            style=DISCORD_BUTTON_STYLE_DANGER,
+        )
+    ]
+    if allow_interrupt:
+        buttons.append(
             build_button(
                 "Interrupt + Send",
                 f"queue_interrupt_send:{source}",
                 style=DISCORD_BUTTON_STYLE_PRIMARY,
-            ),
-        ]
-    )
+            )
+        )
+    return build_action_row(buttons)

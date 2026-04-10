@@ -18,6 +18,7 @@ from codex_autorunner.integrations.discord.components import (
     build_flow_status_buttons,
     build_model_effort_picker,
     build_model_picker,
+    build_queue_notice_buttons,
     build_review_commit_picker,
     build_select_menu,
     build_select_option,
@@ -68,6 +69,23 @@ class TestCancelTurnCustomId:
 
         assert thread_target_id == "thread-1"
         assert execution_id == "turn-1"
+
+
+class TestBuildQueueNoticeButtons:
+    def test_includes_interrupt_button_by_default(self) -> None:
+        row = build_queue_notice_buttons("message-1")
+
+        assert [button["custom_id"] for button in row["components"]] == [
+            "queue_cancel:message-1",
+            "queue_interrupt_send:message-1",
+        ]
+
+    def test_can_omit_interrupt_button(self) -> None:
+        row = build_queue_notice_buttons("message-1", allow_interrupt=False)
+
+        assert [button["custom_id"] for button in row["components"]] == [
+            "queue_cancel:message-1"
+        ]
 
 
 class TestBuildSelectMenu:

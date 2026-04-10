@@ -42,12 +42,20 @@ def test_build_discord_queue_notice_message_serializes_optional_components() -> 
     with_buttons = build_discord_queue_notice_message(
         source_message_id="message-1",
     ).to_payload()
+    without_interrupt = build_discord_queue_notice_message(
+        source_message_id="message-1",
+        allow_interrupt=False,
+    ).to_payload()
     without_buttons = build_discord_queue_notice_message(
         source_message_id=None,
     ).to_payload()
 
     assert with_buttons["content"] == "Queued (waiting for available worker...)"
     assert with_buttons["components"][0]["components"]
+    assert [
+        button["custom_id"]
+        for button in without_interrupt["components"][0]["components"]
+    ] == ["queue_cancel:message-1"]
     assert "components" not in without_buttons
 
 

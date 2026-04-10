@@ -333,10 +333,16 @@ def build_discord_queue_notice_message(
     *,
     source_message_id: Optional[str],
     content: Optional[str] = None,
+    allow_interrupt: bool = True,
 ) -> DiscordMessagePayload:
     components: Optional[Sequence[dict[str, Any]]] = None
     if source_message_id:
-        components = (build_queue_notice_buttons(source_message_id),)
+        components = (
+            build_queue_notice_buttons(
+                source_message_id,
+                allow_interrupt=allow_interrupt,
+            ),
+        )
     return DiscordMessagePayload(
         content=content or "Queued (waiting for available worker...)",
         components=components,

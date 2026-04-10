@@ -6388,11 +6388,20 @@ async def test_message_turn_waits_for_ingressed_slash_command_to_finish(
 
         assert observed == ["newt:start"]
         assert message_turn_started.is_set() is False
-        assert any(
-            "Queued behind /car newt; will run when it finishes."
-            in item["payload"].get("content", "")
-            for item in rest.channel_messages
+        queued_notice = next(
+            (
+                item["payload"]
+                for item in rest.channel_messages
+                if "Queued behind /car newt; will run when it finishes."
+                in item["payload"].get("content", "")
+            ),
+            None,
         )
+        assert queued_notice is not None
+        assert [
+            button["custom_id"]
+            for button in queued_notice["components"][0]["components"]
+        ] == ["queue_cancel:m-1"]
 
         release_newt.set()
 
@@ -6517,11 +6526,20 @@ async def test_run_forever_drains_message_queued_behind_ingressed_slash_command(
     try:
         await asyncio.wait_for(service.run_forever(), timeout=5)
         assert observed == ["newt:start", "newt:end", "message:please continue"]
-        assert any(
-            "Queued behind /car newt; will run when it finishes."
-            in item["payload"].get("content", "")
-            for item in rest.channel_messages
+        queued_notice = next(
+            (
+                item["payload"]
+                for item in rest.channel_messages
+                if "Queued behind /car newt; will run when it finishes."
+                in item["payload"].get("content", "")
+            ),
+            None,
         )
+        assert queued_notice is not None
+        assert [
+            button["custom_id"]
+            for button in queued_notice["components"][0]["components"]
+        ] == ["queue_cancel:m-1"]
         assert any(
             "message reply" in item["payload"].get("content", "")
             for item in rest.channel_messages
