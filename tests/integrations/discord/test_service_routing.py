@@ -385,6 +385,146 @@ async def test_discord_message_turns_include_reply_context_in_prompt(
 
 
 @pytest.mark.anyio
+async def test_discord_message_turns_delete_immediate_placeholder_when_background_turn_exits_early(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    sent_messages: list[dict[str, object]] = []
+    deleted_messages: list[dict[str, str]] = []
+
+    class _StoreStub:
+        async def get_binding(self, *, channel_id: str) -> dict[str, object] | None:
+            assert channel_id == "channel-1"
+            return {
+                "workspace_path": str(workspace),
+                "agent": "codex",
+                "pma_enabled": False,
+                "model_override": None,
+                "reasoning_effort": None,
+            }
+
+    class _ServiceStub:
+        def __init__(self) -> None:
+            self._store = _StoreStub()
+            self._logger = logging.getLogger("test")
+            self._config = SimpleNamespace(root=tmp_path)
+            self._background_tasks: set[asyncio.Task[Any]] = set()
+
+        def _resolve_agent_state(self, binding: dict[str, object]) -> tuple[str, None]:
+            return str(binding.get("agent") or "codex"), None
+
+        def _runtime_agent_for_binding(self, binding: dict[str, object]) -> str:
+            return str(binding.get("agent") or "codex")
+
+        def _normalize_agent(self, value: object) -> str:
+            return str(value or "codex")
+
+        def _build_message_session_key(self, **_kwargs: object) -> str:
+            return "session-key"
+
+        async def _with_attachment_context(
+            self, *, prompt_text: str, **_kwargs: object
+        ) -> tuple[str, int, int, None, list[dict[str, object]]]:
+            _ = prompt_text
+            return "", 0, 1, None, []
+
+        async def _send_channel_message(
+            self, channel_id: str, payload: dict[str, object]
+        ) -> dict[str, object]:
+            sent_messages.append({"channel_id": channel_id, "payload": dict(payload)})
+            return {"id": f"msg-{len(sent_messages)}"}
+
+        async def _send_channel_message_safe(
+            self, channel_id: str, payload: dict[str, object]
+        ) -> None:
+            sent_messages.append({"channel_id": channel_id, "payload": dict(payload)})
+
+        async def _delete_channel_message_safe(
+            self, *, channel_id: str, message_id: str, record_id: str
+        ) -> None:
+            _ = record_id
+            deleted_messages.append(
+                {"channel_id": channel_id, "message_id": message_id}
+            )
+
+        async def _run_agent_turn_for_message(self, **_kwargs: object) -> object:
+            raise AssertionError("background turn should exit before submission")
+
+        def _spawn_task(self, coro: Any) -> asyncio.Task[Any]:
+            task = asyncio.create_task(coro)
+            self._background_tasks.add(task)
+            task.add_done_callback(self._background_tasks.discard)
+            return task
+
+    class _IngressStub:
+        async def submit_message(
+            self,
+            request,
+            *,
+            resolve_paused_flow_target,
+            submit_flow_reply,
+            submit_thread_message,
+        ):
+            _ = resolve_paused_flow_target, submit_flow_reply
+            thread_result = await submit_thread_message(request)
+            return SimpleNamespace(route="thread", thread_result=thread_result)
+
+    monkeypatch.setattr(
+        discord_message_turns,
+        "build_surface_orchestration_ingress",
+        lambda **_: _IngressStub(),
+    )
+    monkeypatch.setattr(
+        discord_message_turns,
+        "resolve_discord_thread_target",
+        lambda *_args, **_kwargs: (
+            object(),
+            SimpleNamespace(thread_target_id="thread-target-123"),
+        ),
+    )
+
+    thread = ChatThreadRef(platform="discord", chat_id="channel-1", thread_id=None)
+    event = ChatMessageEvent(
+        update_id="update-2b",
+        thread=thread,
+        message=ChatMessageRef(thread=thread, message_id="msg-2"),
+        from_user_id="user-1",
+        text="",
+        attachments=[
+            {
+                "id": "att-1",
+                "filename": "note.txt",
+                "url": "https://example.invalid/note.txt",
+            }
+        ],
+    )
+    context = build_dispatch_context(event)
+
+    service = _ServiceStub()
+    await discord_message_turns.handle_message_event(
+        service,
+        event,
+        context,
+        channel_id="channel-1",
+        text="",
+        has_attachments=True,
+        policy_result=None,
+        log_event_fn=lambda *args, **kwargs: None,
+        build_ticket_flow_controller_fn=lambda *_args, **_kwargs: None,
+        ensure_worker_fn=lambda *_args, **_kwargs: None,
+    )
+    await asyncio.gather(*list(service._background_tasks), return_exceptions=True)
+
+    assert [message["payload"]["content"] for message in sent_messages] == [
+        "Received. Preparing turn...",
+        "Some Discord attachments could not be downloaded. Continuing with available inputs.",
+        "Failed to download attachments from Discord. Please retry.",
+    ]
+    assert deleted_messages == [{"channel_id": "channel-1", "message_id": "msg-1"}]
+
+
+@pytest.mark.anyio
 async def test_discord_notification_reply_routes_to_pma_thread_with_context(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -393,6 +533,7 @@ async def test_discord_notification_reply_routes_to_pma_thread_with_context(
     rebound_workspace = tmp_path / "rebound-workspace"
     rebound_workspace.mkdir()
     captured: dict[str, object] = {}
+    resolved_thread_target_calls: list[dict[str, object]] = []
     bind_calls: list[dict[str, str]] = []
 
     notification_reply = SimpleNamespace(
@@ -562,13 +703,15 @@ async def test_discord_notification_reply_routes_to_pma_thread_with_context(
             )
         ),
     )
+
+    def _fake_resolve_discord_thread_target(*_args: object, **kwargs: object) -> object:
+        resolved_thread_target_calls.append(dict(kwargs))
+        return object(), SimpleNamespace(thread_target_id="thread-target-123")
+
     monkeypatch.setattr(
         discord_message_turns,
         "resolve_discord_thread_target",
-        lambda *_args, **_kwargs: (
-            object(),
-            SimpleNamespace(thread_target_id="thread-target-123"),
-        ),
+        _fake_resolve_discord_thread_target,
     )
 
     thread = ChatThreadRef(platform="discord", chat_id="channel-1", thread_id=None)
@@ -604,6 +747,11 @@ async def test_discord_notification_reply_routes_to_pma_thread_with_context(
     assert run_turn_kwargs["orchestrator_channel_key"] == "pma:channel-1"
     assert run_turn_kwargs["workspace_root"] == notification_workspace
     assert captured["github_workspace_root"] == notification_workspace
+    assert resolved_thread_target_calls
+    assert (
+        resolved_thread_target_calls[-1]["managed_thread_surface_key"]
+        == "notification:notif-123"
+    )
     assert "<notification_context>" in str(run_turn_kwargs["prompt_text"])
     assert '"dispatch_paused"' in str(run_turn_kwargs["prompt_text"])
     assert "please triage this" in str(run_turn_kwargs["prompt_text"])

@@ -349,6 +349,15 @@ def _claim_discord_reusable_progress_message(
     return None
 
 
+def _managed_thread_surface_key_for_notification_reply(
+    notification_reply: Any,
+) -> Optional[str]:
+    notification_id = getattr(notification_reply, "notification_id", None)
+    if isinstance(notification_id, str) and notification_id.strip():
+        return notification_surface_key(notification_id)
+    return None
+
+
 async def _acknowledge_discord_progress_reuse(
     service: Any,
     *,
@@ -619,6 +628,10 @@ async def _submit_discord_thread_message(
     *,
     dispatch: _DiscordMessageTurnDispatch,
 ) -> DiscordMessageTurnResult:
+    managed_thread_surface_key = _managed_thread_surface_key_for_notification_reply(
+        dispatch.notification_reply
+    )
+
     async def _send_initial_progress_placeholder() -> Optional[str]:
         try:
             response = await dispatch.service._send_channel_message(
@@ -650,6 +663,7 @@ async def _submit_discord_thread_message(
         _orchestration_service, thread = resolve_discord_thread_target(
             dispatch.service,
             channel_id=dispatch.channel_id,
+            managed_thread_surface_key=managed_thread_surface_key,
             workspace_root=request.workspace_root,
             agent=logical_agent,
             agent_profile=agent_profile,
@@ -671,7 +685,12 @@ async def _submit_discord_thread_message(
         return thread_target_id or None
 
     async def _run_in_background() -> None:
-        turn_result = await _execute_discord_thread_message(request, dispatch=dispatch)
+        turn_result = await _execute_discord_thread_message(
+            request,
+            dispatch=dispatch,
+            initial_progress_message_id=progress_message_id,
+            managed_thread_surface_key=managed_thread_surface_key,
+        )
         await _deliver_discord_turn_result(
             dispatch,
             workspace_root=request.workspace_root,
@@ -705,6 +724,8 @@ async def _execute_discord_thread_message(
     request: SurfaceThreadMessageRequest,
     *,
     dispatch: _DiscordMessageTurnDispatch,
+    initial_progress_message_id: Optional[str] = None,
+    managed_thread_surface_key: Optional[str] = None,
 ) -> DiscordMessageTurnResult:
     request_workspace_root = request.workspace_root
     prompt_text = dispatch.turn_text
@@ -748,7 +769,11 @@ async def _execute_discord_thread_message(
                     ),
                 },
             )
-        return DiscordMessageTurnResult(final_message="", send_final_message=False)
+        return DiscordMessageTurnResult(
+            final_message="",
+            preview_message_id=initial_progress_message_id,
+            send_final_message=False,
+        )
 
     if not dispatch.effective_pma_enabled:
         prompt_text, injected = maybe_inject_car_awareness(
@@ -819,7 +844,11 @@ async def _execute_discord_thread_message(
                 dispatch.channel_id,
                 {"content": "Failed to build PMA context. Please try again."},
             )
-            return DiscordMessageTurnResult(final_message="", send_final_message=False)
+            return DiscordMessageTurnResult(
+                final_message="",
+                preview_message_id=initial_progress_message_id,
+                send_final_message=False,
+            )
 
     prompt_text, _github_injected = await dispatch.service._maybe_inject_github_context(
         prompt_text,
@@ -850,9 +879,15 @@ async def _execute_discord_thread_message(
         ),
         "source_message_id": dispatch.event.message.message_id,
     }
-    if dispatch.notification_reply is not None:
-        run_turn_kwargs["managed_thread_surface_key"] = notification_surface_key(
-            dispatch.notification_reply.notification_id
+    resolved_managed_thread_surface_key = (
+        managed_thread_surface_key
+        or _managed_thread_surface_key_for_notification_reply(
+            dispatch.notification_reply
+        )
+    )
+    if resolved_managed_thread_surface_key is not None:
+        run_turn_kwargs["managed_thread_surface_key"] = (
+            resolved_managed_thread_surface_key
         )
     if turn_input_items:
         run_turn_kwargs["input_items"] = turn_input_items
@@ -889,7 +924,11 @@ async def _execute_discord_thread_message(
                 )
             },
         )
-        return DiscordMessageTurnResult(final_message="", send_final_message=False)
+        return DiscordMessageTurnResult(
+            final_message="",
+            preview_message_id=initial_progress_message_id,
+            send_final_message=False,
+        )
 
 
 async def _handle_discord_notification_turn(
