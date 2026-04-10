@@ -7215,6 +7215,77 @@ async def test_car_newt_hard_reset_button_discards_changes_and_retries(
 
 
 @pytest.mark.anyio
+async def test_car_newt_cancel_button_keeps_local_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+
+    rest = _FakeRest()
+    workspace_token = discord_session_commands_module._newt_workspace_token(
+        workspace.resolve()
+    )
+    gateway = _FakeGateway(
+        [
+            _interaction(name="newt", options=[]),
+            _component_interaction(
+                custom_id=f"{discord_session_commands_module.NEWT_CANCEL_CUSTOM_ID}:{workspace_token}"
+            ),
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    branch_calls: list[dict[str, Any]] = []
+
+    def _reset_branch(repo_root: Path, branch_name: str) -> str:
+        branch_calls.append({"repo_root": repo_root, "branch_name": branch_name})
+        raise discord_service_module.GitError(
+            "working tree has uncommitted changes; commit or stash before /newt"
+        )
+
+    monkeypatch.setattr(
+        discord_service_module, "reset_branch_from_origin_main", _reset_branch
+    )
+    monkeypatch.setattr(
+        discord_session_commands_module,
+        "describe_newt_reject_reasons",
+        lambda _repo_root: ["1 untracked path, including `.tmp/`"],
+    )
+
+    try:
+        await service.run_forever()
+        assert len(branch_calls) == 1
+        assert [item["payload"]["type"] for item in rest.interaction_responses] == [
+            5,
+            6,
+        ]
+        assert len(rest.followup_messages) == 1
+        assert len(rest.edited_original_interaction_responses) == 1
+        edited_payload = rest.edited_original_interaction_responses[0]["payload"]
+        assert "cancelled `/car newt`" in edited_payload["content"].lower()
+        assert "kept local changes" in edited_payload["content"].lower()
+        assert edited_payload["components"] == []
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_car_newt_hard_reset_reports_discard_when_retry_reset_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

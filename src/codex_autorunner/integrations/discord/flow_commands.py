@@ -45,27 +45,18 @@ from .components import (
 )
 from .errors import DiscordTransientError
 from .interaction_registry import FLOW_ACTION_SELECT_PREFIX
+from .interaction_runtime import (
+    ensure_component_response_deferred,
+    ensure_public_response_deferred,
+    send_runtime_ephemeral,
+    update_runtime_component_message,
+)
 
 FLOW_RUNS_DEFAULT_LIMIT = 5
 FLOW_RUNS_MAX_LIMIT = DISCORD_SELECT_OPTION_MAX_OPTIONS
 _LEGACY_FLOW_ARCHIVE_MARKERS = frozenset(
     {"archived_tickets", "archived_runs", "contextspace", "flow_state"}
 )
-
-
-async def _public_interaction_deferred(
-    service: Any,
-    interaction_id: str,
-    interaction_token: str,
-) -> bool:
-    if service._interaction_has_initial_response(interaction_token):
-        return True
-    return bool(
-        await service._defer_public(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-        )
-    )
 
 
 def _flow_run_matches_action(record: FlowRunRecord, action: str) -> bool:
@@ -543,26 +534,20 @@ async def handle_flow_status(
     update_message: bool = False,
     prefix: Optional[str] = None,
 ) -> None:
-    deferred_public = False
-    deferred_component = False
     if update_message:
-        deferred_component = await service._defer_component_update(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-        )
-        if not deferred_component:
-            await service._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Discord interaction did not acknowledge. Please retry.",
-            )
-            return
-    else:
-        deferred_public = await _public_interaction_deferred(
+        deferred_component = await ensure_component_response_deferred(
             service,
             interaction_id,
             interaction_token,
         )
+        deferred_public = False
+    else:
+        deferred_public = await ensure_public_response_deferred(
+            service,
+            interaction_id,
+            interaction_token,
+        )
+        deferred_component = False
     run_id_opt = await resolve_flow_run_input(
         service,
         interaction_id,
@@ -641,10 +626,11 @@ async def handle_flow_status(
                     prefix=prefix,
                 )
                 if update_message:
-                    await service._update_component_message(
-                        interaction_id=interaction_id,
-                        interaction_token=interaction_token,
-                        text=archived_text,
+                    await update_runtime_component_message(
+                        service,
+                        interaction_id,
+                        interaction_token,
+                        archived_text,
                         components=[],
                     )
                 else:
@@ -663,28 +649,31 @@ async def handle_flow_status(
                 )
                 components = build_historical_runs_picker(runs)
                 if update_message:
-                    await service._update_component_message(
-                        interaction_id=interaction_id,
-                        interaction_token=interaction_token,
-                        text=content,
-                        components=components,
-                    )
-                else:
-                    await service._respond_with_components_public(
+                    await update_runtime_component_message(
+                        service,
                         interaction_id,
                         interaction_token,
                         content,
-                        components,
+                        components=components,
+                    )
+                else:
+                    await service._send_or_respond_with_components_public(
+                        interaction_id=interaction_id,
+                        interaction_token=interaction_token,
+                        deferred=deferred_public,
+                        text=content,
+                        components=components,
                     )
                 return
             if not explicit_run_requested:
                 summary_text = build_flow_status_summary_fallback(workspace_root)
                 if summary_text:
                     if update_message:
-                        await service._update_component_message(
-                            interaction_id=interaction_id,
-                            interaction_token=interaction_token,
-                            text=summary_text,
+                        await update_runtime_component_message(
+                            service,
+                            interaction_id,
+                            interaction_token,
+                            summary_text,
                             components=[],
                         )
                     else:
@@ -780,10 +769,11 @@ async def handle_flow_status(
     )
     if status_buttons:
         if update_message:
-            await service._update_component_message(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                text=response_text,
+            await update_runtime_component_message(
+                service,
+                interaction_id,
+                interaction_token,
+                response_text,
                 components=status_buttons,
             )
         else:
@@ -796,10 +786,11 @@ async def handle_flow_status(
             )
     else:
         if update_message:
-            await service._update_component_message(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                text=response_text,
+            await update_runtime_component_message(
+                service,
+                interaction_id,
+                interaction_token,
+                response_text,
                 components=[],
             )
         else:
@@ -991,7 +982,7 @@ async def handle_flow_start(
     restart_from = options.get("restart_from")
     flow_service = service._ticket_flow_orchestration_service(workspace_root)
     if deferred_public is None:
-        deferred_public = await _public_interaction_deferred(
+        deferred_public = await ensure_public_response_deferred(
             service,
             interaction_id,
             interaction_token,
@@ -1282,7 +1273,7 @@ async def handle_flow_restart(
     deferred_public: Optional[bool] = None,
 ) -> None:
     if deferred_public is None:
-        deferred_public = await _public_interaction_deferred(
+        deferred_public = await ensure_public_response_deferred(
             service,
             interaction_id,
             interaction_token,
@@ -1410,7 +1401,7 @@ async def handle_flow_recover(
     workspace_root: Path,
     options: dict[str, Any],
 ) -> None:
-    deferred = await _public_interaction_deferred(
+    deferred = await ensure_public_response_deferred(
         service,
         interaction_id,
         interaction_token,
@@ -1516,7 +1507,7 @@ async def handle_flow_resume(
     channel_id: Optional[str] = None,
     guild_id: Optional[str] = None,
 ) -> None:
-    deferred = await _public_interaction_deferred(
+    deferred = await ensure_public_response_deferred(
         service,
         interaction_id,
         interaction_token,
@@ -1645,7 +1636,7 @@ async def handle_flow_stop(
     channel_id: Optional[str] = None,
     guild_id: Optional[str] = None,
 ) -> None:
-    deferred = await _public_interaction_deferred(
+    deferred = await ensure_public_response_deferred(
         service,
         interaction_id,
         interaction_token,
@@ -1945,7 +1936,7 @@ async def handle_flow_reply(
         )
         return
 
-    deferred = await _public_interaction_deferred(
+    deferred = await ensure_public_response_deferred(
         service,
         interaction_id,
         interaction_token,
@@ -2102,7 +2093,8 @@ async def handle_flow_button(
 ) -> None:
     parts = custom_id.split(":")
     if len(parts) < 3:
-        await service._respond_ephemeral(
+        await send_runtime_ephemeral(
+            service,
             interaction_id,
             interaction_token,
             f"Invalid button action: {custom_id}",
@@ -2117,12 +2109,16 @@ async def handle_flow_button(
         try:
             updated = await flow_service.resume_flow_run(run_id)
         except (KeyError, ValueError) as exc:
-            await service._respond_ephemeral(
-                interaction_id, interaction_token, str(exc)
+            await send_runtime_ephemeral(
+                service,
+                interaction_id,
+                interaction_token,
+                str(exc),
             )
             return
 
-        await service._respond_ephemeral(
+        await send_runtime_ephemeral(
+            service,
             interaction_id,
             interaction_token,
             f"Resumed run {updated.run_id}.",
@@ -2131,12 +2127,16 @@ async def handle_flow_button(
         try:
             updated = await flow_service.stop_flow_run(run_id)
         except (KeyError, ValueError) as exc:
-            await service._respond_ephemeral(
-                interaction_id, interaction_token, str(exc)
+            await send_runtime_ephemeral(
+                service,
+                interaction_id,
+                interaction_token,
+                str(exc),
             )
             return
 
-        await service._respond_ephemeral(
+        await send_runtime_ephemeral(
+            service,
             interaction_id,
             interaction_token,
             f"Stop requested for run {updated.run_id} ({updated.status}).",
@@ -2148,17 +2148,11 @@ async def handle_flow_button(
         "archive_confirm_prompt",
         "archive_cancel_prompt",
     }:
-        deferred = await service._defer_component_update(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
+        deferred = await ensure_component_response_deferred(
+            service,
+            interaction_id,
+            interaction_token,
         )
-        if not deferred:
-            await service._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Discord interaction did not acknowledge. Please retry.",
-            )
-            return
         if action == "archive_cancel":
             await handle_flow_status(
                 service,
@@ -2172,10 +2166,11 @@ async def handle_flow_button(
             )
             return
         if action == "archive_cancel_prompt":
-            await service._update_component_message(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                text="Archive cancelled.",
+            await update_runtime_component_message(
+                service,
+                interaction_id,
+                interaction_token,
+                "Archive cancelled.",
                 components=[],
             )
             return
@@ -2228,10 +2223,11 @@ async def handle_flow_button(
         blocked_text = f"Run {target.id} is {target.status.value}. Stop or pause it before archiving."
         if archive_mode == "blocked":
             if action.endswith("_prompt"):
-                await service._update_component_message(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    text=blocked_text,
+                await update_runtime_component_message(
+                    service,
+                    interaction_id,
+                    interaction_token,
+                    blocked_text,
                     components=[],
                 )
             else:
@@ -2244,10 +2240,11 @@ async def handle_flow_button(
             return
 
         if action == "archive" and archive_mode == "confirm":
-            await service._update_component_message(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                text=flow_archive_prompt_text(target),
+            await update_runtime_component_message(
+                service,
+                interaction_id,
+                interaction_token,
+                flow_archive_prompt_text(target),
                 components=build_flow_archive_confirmation_components(
                     target.id,
                     prompt_variant=False,
@@ -2300,24 +2297,17 @@ async def handle_flow_button(
         )
         return
     elif action == "restart":
-        deferred = await service._defer_component_update(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-        )
-        if not deferred:
-            await service._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Discord interaction did not acknowledge. Please retry.",
-            )
-            return
         await handle_flow_restart(
             service,
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
             options={"run_id": run_id},
-            deferred_public=True,
+            deferred_public=await ensure_component_response_deferred(
+                service,
+                interaction_id,
+                interaction_token,
+            ),
         )
     elif action == "refresh":
         await handle_flow_status(
@@ -2331,7 +2321,8 @@ async def handle_flow_button(
             update_message=True,
         )
     else:
-        await service._respond_ephemeral(
+        await send_runtime_ephemeral(
+            service,
             interaction_id,
             interaction_token,
             f"Unknown action: {action}",

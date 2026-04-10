@@ -30,6 +30,13 @@ from ..interaction_registry import (
     UPDATE_CONFIRM_PREFIX,
     UPDATE_TARGET_SELECT_ID,
 )
+from ..interaction_runtime import (
+    ensure_component_response_deferred,
+    ensure_ephemeral_response_deferred,
+    send_runtime_components_ephemeral,
+    send_runtime_ephemeral,
+    update_runtime_component_message,
+)
 from ..rendering import (
     format_discord_message,
 )
@@ -38,21 +45,6 @@ from ..service_normalization import (
     DiscordUpdateNoticeContext,
     format_discord_update_status_message,
 )
-
-
-async def _interaction_deferred(
-    service: Any,
-    interaction_id: str,
-    interaction_token: str,
-) -> bool:
-    if service._interaction_has_initial_response(interaction_token):
-        return True
-    return bool(
-        await service._defer_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-        )
-    )
 
 
 def _update_thread_blocks_restart_warning(thread: Any) -> bool:
@@ -187,14 +179,16 @@ async def handle_car_update(
             )
         ]
         if component_response:
-            await service._update_component_message(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                text="Select update target:",
+            await update_runtime_component_message(
+                service,
+                interaction_id,
+                interaction_token,
+                "Select update target:",
                 components=components,
             )
         else:
-            await service._respond_with_components(
+            await send_runtime_components_ephemeral(
+                service,
                 interaction_id,
                 interaction_token,
                 "Select update target:",
@@ -223,14 +217,16 @@ async def handle_car_update(
         ]
         text = f"{exc} Select update target:"
         if component_response:
-            await service._update_component_message(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                text=text,
+            await update_runtime_component_message(
+                service,
+                interaction_id,
+                interaction_token,
+                text,
                 components=components,
             )
         else:
-            await service._respond_with_components(
+            await send_runtime_components_ephemeral(
+                service,
                 interaction_id,
                 interaction_token,
                 text,
@@ -238,12 +234,13 @@ async def handle_car_update(
             )
         return
     deferred = (
-        await service._defer_component_update(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
+        await ensure_component_response_deferred(
+            service,
+            interaction_id,
+            interaction_token,
         )
         if component_response
-        else await _interaction_deferred(
+        else await ensure_ephemeral_response_deferred(
             service,
             interaction_id,
             interaction_token,
@@ -430,14 +427,19 @@ async def handle_car_update_status(
         if not isinstance(status, dict):
             status = None
         text = _format_update_status_message(service, status)
-        await service._update_component_message(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            text=text,
+        await update_runtime_component_message(
+            service,
+            interaction_id,
+            interaction_token,
+            text,
             components=[],
         )
         return
-    deferred = await _interaction_deferred(service, interaction_id, interaction_token)
+    deferred = await ensure_ephemeral_response_deferred(
+        service,
+        interaction_id,
+        interaction_token,
+    )
     status = await asyncio.to_thread(read_status)
     if not isinstance(status, dict):
         status = None
@@ -459,7 +461,11 @@ async def handle_car_logout(
 ) -> None:
     from ..service import log_event
 
-    deferred = await _interaction_deferred(service, interaction_id, interaction_token)
+    deferred = await ensure_ephemeral_response_deferred(
+        service,
+        interaction_id,
+        interaction_token,
+    )
     client = await service._client_for_workspace(str(workspace_root))
     if client is None:
         await service._send_or_respond_ephemeral(
@@ -511,14 +517,19 @@ async def handle_car_feedback(
     reason = reason.strip()
 
     if not reason:
-        await service._respond_ephemeral(
+        await send_runtime_ephemeral(
+            service,
             interaction_id,
             interaction_token,
             "Usage: /car admin feedback reason:<description>",
         )
         return
 
-    deferred = await _interaction_deferred(service, interaction_id, interaction_token)
+    deferred = await ensure_ephemeral_response_deferred(
+        service,
+        interaction_id,
+        interaction_token,
+    )
     client = await service._client_for_workspace(str(workspace_root))
     if client is None:
         await service._send_or_respond_ephemeral(
@@ -587,7 +598,8 @@ async def handle_car_mention(
     request_arg = options.get("request", "Please review this file.")
 
     if not isinstance(path_arg, str) or not path_arg.strip():
-        await service._respond_ephemeral(
+        await send_runtime_ephemeral(
+            service,
             interaction_id,
             interaction_token,
             "Usage: /car mention path:<file> [request:<text>]",
@@ -601,7 +613,8 @@ async def handle_car_mention(
     try:
         path = canonicalize_path(path)
     except (OSError, ValueError):
-        await service._respond_ephemeral(
+        await send_runtime_ephemeral(
+            service,
             interaction_id,
             interaction_token,
             f"Could not resolve path: {path_arg}",
@@ -609,7 +622,8 @@ async def handle_car_mention(
         return
 
     if not path.exists() or not path.is_file():
-        await service._respond_ephemeral(
+        await send_runtime_ephemeral(
+            service,
             interaction_id,
             interaction_token,
             f"File not found: {path}",
@@ -619,14 +633,19 @@ async def handle_car_mention(
     try:
         path.relative_to(workspace_root)
     except ValueError:
-        await service._respond_ephemeral(
+        await send_runtime_ephemeral(
+            service,
             interaction_id,
             interaction_token,
             "File must be within the bound workspace.",
         )
         return
 
-    deferred = await _interaction_deferred(service, interaction_id, interaction_token)
+    deferred = await ensure_ephemeral_response_deferred(
+        service,
+        interaction_id,
+        interaction_token,
+    )
     max_bytes = 100000
     try:
         data = path.read_bytes()
