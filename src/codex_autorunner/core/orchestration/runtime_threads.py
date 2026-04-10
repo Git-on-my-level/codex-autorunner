@@ -21,6 +21,27 @@ _SUCCESSFUL_COMPLETION_STATUSES = frozenset(
 )
 
 
+def _raw_event_session_status_type(raw_event: dict[str, Any]) -> str:
+    params = raw_event.get("params")
+    if not isinstance(params, dict):
+        return ""
+    status = params.get("status")
+    if isinstance(status, dict):
+        for key in ("type", "status", "state"):
+            value = str(status.get(key) or "").strip().lower()
+            if value:
+                return value
+    properties = params.get("properties")
+    if isinstance(properties, dict):
+        nested_status = properties.get("status")
+        if isinstance(nested_status, dict):
+            for key in ("type", "status", "state"):
+                value = str(nested_status.get(key) or "").strip().lower()
+                if value:
+                    return value
+    return str(params.get("status") or "").strip().lower()
+
+
 def _raw_events_show_completion(raw_events: tuple[Any, ...]) -> bool:
     for raw_event in raw_events:
         if not isinstance(raw_event, dict):
@@ -32,6 +53,9 @@ def _raw_events_show_completion(raw_events: tuple[Any, ...]) -> bool:
                 method = str(message.get("method") or "").strip().lower()
         if method in {"turn/completed", "prompt/completed", "session.idle"}:
             return True
+        if method in {"session.status", "session/status"}:
+            if _raw_event_session_status_type(raw_event) == "idle":
+                return True
     return False
 
 

@@ -115,6 +115,48 @@ async def test_hermes_supervisor_session_roundtrip_and_turn_streaming(
         await supervisor.close_all()
 
 
+@pytest.mark.parametrize(
+    ("scenario", "expected_terminal_method"),
+    (
+        ("terminal_missing_turn_id", "prompt/completed"),
+        ("session_status_idle_completion_gap", "session.status"),
+    ),
+)
+@pytest.mark.slow
+@pytest.mark.asyncio
+async def test_hermes_supervisor_maps_terminal_completion_signals(
+    tmp_path: Path,
+    scenario: str,
+    expected_terminal_method: str,
+) -> None:
+    supervisor = HermesSupervisor(fixture_command(scenario))
+    try:
+        await supervisor.ensure_ready(tmp_path)
+        session = await supervisor.create_session(tmp_path, title="Missing turn id")
+        turn_id = await supervisor.start_turn(
+            tmp_path,
+            session.session_id,
+            "hello from hermes",
+        )
+        result = await asyncio.wait_for(
+            supervisor.wait_for_turn(tmp_path, session.session_id, turn_id),
+            timeout=2.0,
+        )
+        events = await _collect_events(
+            supervisor, tmp_path, session.session_id, turn_id
+        )
+
+        assert result.status == "completed"
+        assert result.assistant_text == "fixture reply"
+        assert any(
+            event.get("method") == expected_terminal_method
+            and event.get("params", {}).get("turnId") == turn_id
+            for event in events
+        )
+    finally:
+        await supervisor.close_all()
+
+
 def test_hermes_runtime_preflight_accepts_plain_acp_help(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

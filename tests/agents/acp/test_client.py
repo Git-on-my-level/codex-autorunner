@@ -25,21 +25,32 @@ def fixture_command(scenario: str) -> list[str]:
     return [sys.executable, "-u", str(FIXTURE_PATH), "--scenario", scenario]
 
 
-def test_client_does_not_map_prompt_terminal_notifications_without_turn_id() -> None:
+@pytest.mark.parametrize(
+    ("method", "status"),
+    (
+        ("prompt/completed", "completed"),
+        ("prompt/failed", "failed"),
+        ("prompt/cancelled", "cancelled"),
+    ),
+)
+def test_client_maps_prompt_terminal_notifications_without_turn_id(
+    method: str,
+    status: str,
+) -> None:
     client = ACPClient(fixture_command("basic"))
     client._session_active_turns["session-1"] = "turn-2"
 
     message = client._message_with_mapped_turn_id(
         {
-            "method": "prompt/completed",
+            "method": method,
             "params": {
                 "sessionId": "session-1",
-                "status": "completed",
+                "status": status,
             },
         }
     )
 
-    assert "turnId" not in message["params"]
+    assert message["params"]["turnId"] == "turn-2"
 
 
 @pytest.mark.asyncio
@@ -53,6 +64,28 @@ async def test_client_primes_prompt_state_with_fallback_session_id() -> None:
 
         assert client._session_active_turns == {"session-1": "turn-1"}
         assert "turn-1" in client._prompts
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_client_wait_for_prompt_completes_when_terminal_notification_omits_turn_id(
+    tmp_path: Path,
+) -> None:
+    client = ACPClient(fixture_command("terminal_missing_turn_id"), cwd=tmp_path)
+    try:
+        await client.start()
+        session = await client.create_session(cwd=str(tmp_path))
+        handle = await client.start_prompt(session.session_id, "hello from hermes")
+        result = await asyncio.wait_for(handle.wait(), timeout=2.0)
+
+        assert result.status == "completed"
+        assert result.final_output == "fixture reply"
+        assert any(
+            getattr(event, "method", None) == "prompt/completed"
+            and getattr(event, "turn_id", None) == handle.turn_id
+            for event in result.events
+        )
     finally:
         await client.close()
 

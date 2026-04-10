@@ -55,3 +55,10 @@ Examples:
 - Bootstrap from plan text: `/flow plan <text>`
 - Status + buttons: `/flow status` (use Resume/Stop/Recover/Restart/Archive/Refresh buttons)
 - Reply to a pause: `/flow reply <message>`, then `/flow resume`
+
+## Integration Harness
+
+For cross-surface PMA regressions, use
+`tests/chat_surface_integration/README.md`. It drives Telegram message ingress
+through `TelegramBotService` with the same subprocess-backed Hermes fixture used
+for Discord parity tests.
