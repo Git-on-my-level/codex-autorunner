@@ -192,6 +192,9 @@ Additional optional keys may be added by the registry when needed:
 
 - The scheduler is the only authority that decides whether work runs inline or
   queued after ack.
+- All ingress-accepted interactions submit through the same scheduler API with
+  explicit resource keys. Interactions that do not need serialization, such as
+  autocomplete, pass no resource keys and run immediately through that same API.
 - Slash commands that mutate repo or workspace state must serialize on both the
   conversation key and workspace key.
 - Components and modal submissions may run inline only if their registry entry

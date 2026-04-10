@@ -665,7 +665,7 @@ class DiscordBotService:
                 stalled_warning_seconds=config.dispatch.handler_stalled_warning_seconds,
             ),
             logger=self._logger,
-            on_ingressed_conversation_idle=self._wake_dispatcher_conversation,
+            on_scheduler_conversation_idle=self._wake_dispatcher_conversation,
         )
 
     async def run_forever(self) -> None:
@@ -853,7 +853,7 @@ class DiscordBotService:
             return False
         if not self._is_message_turn_candidate_shape(event):
             return False
-        return self._command_runner.is_ingressed_busy(context.conversation_id)
+        return self._command_runner.is_busy(context.conversation_id)
 
     def _build_plain_text_turn_context(
         self,
@@ -1004,6 +1004,168 @@ class DiscordBotService:
     ) -> str:
         return conversation_id_for("discord", channel_id, guild_id)
 
+    def _interaction_conversation_scheduler_key(
+        self,
+        *,
+        channel_id: str,
+        guild_id: Optional[str],
+    ) -> tuple[str, str]:
+        conversation_id = self._dispatcher_conversation_id(
+            channel_id=channel_id,
+            guild_id=guild_id,
+        )
+        return conversation_id, f"conversation:{conversation_id}"
+
+    @staticmethod
+    def _workspace_scheduler_key(workspace_path: str) -> str:
+        return f"workspace:{canonicalize_path(Path(workspace_path))}"
+
+    async def _scheduler_bound_workspace_root(
+        self, *, channel_id: str
+    ) -> Optional[Path]:
+        _binding, workspace_root = await resolve_bound_workspace_root(
+            self,
+            channel_id=channel_id,
+        )
+        return workspace_root
+
+    async def _scheduler_bind_target_workspace_root(self, token: Any) -> Optional[Path]:
+        if not isinstance(token, str) or not token.strip():
+            return None
+        normalized = token.strip()
+        resolved = self._resolve_workspace_from_token(
+            normalized,
+            self._list_bind_workspace_candidates(),
+        )
+        if resolved is not None:
+            candidate = canonicalize_path(Path(resolved[2]))
+            return candidate if candidate.exists() and candidate.is_dir() else None
+        candidate = Path(normalized)
+        if not candidate.is_absolute():
+            candidate = self._config.root / candidate
+        workspace_root = canonicalize_path(candidate)
+        return (
+            workspace_root
+            if workspace_root.exists() and workspace_root.is_dir()
+            else None
+        )
+
+    def _interaction_requires_workspace_lock(self, ctx: IngressContext) -> bool:
+        if ctx.kind == InteractionKind.MODAL_SUBMIT:
+            return True
+        if ctx.kind == InteractionKind.COMPONENT:
+            custom_id = str(ctx.custom_id or "").strip()
+            return (
+                custom_id == "bind_select"
+                or custom_id.startswith("approval:")
+                or custom_id.startswith("flow:")
+                or custom_id.startswith("flow_action_select:")
+                or custom_id.startswith("newt_hard_reset:")
+                or custom_id.startswith("newt_cancel:")
+            )
+        if ctx.kind != InteractionKind.SLASH_COMMAND or ctx.command_spec is None:
+            return False
+        command_path = self._normalize_discord_command_path(ctx.command_spec.path)
+        return command_path in {
+            ("car", "bind"),
+            ("car", "new"),
+            ("car", "newt"),
+            ("car", "flow", "issue"),
+            ("car", "flow", "plan"),
+            ("car", "flow", "start"),
+            ("car", "flow", "restart"),
+            ("car", "flow", "resume"),
+            ("car", "flow", "stop"),
+            ("car", "flow", "archive"),
+            ("car", "flow", "recover"),
+            ("car", "flow", "reply"),
+        }
+
+    async def _interaction_workspace_scheduler_key(
+        self, ctx: IngressContext
+    ) -> Optional[str]:
+        if not self._interaction_requires_workspace_lock(ctx):
+            return None
+        workspace_root: Optional[Path] = None
+        if ctx.kind == InteractionKind.SLASH_COMMAND and ctx.command_spec is not None:
+            command_path = self._normalize_discord_command_path(ctx.command_spec.path)
+            if command_path == ("car", "bind"):
+                workspace_root = await self._scheduler_bind_target_workspace_root(
+                    ctx.command_spec.options.get("workspace")
+                )
+            else:
+                workspace_root = await self._scheduler_bound_workspace_root(
+                    channel_id=ctx.channel_id
+                )
+        elif (
+            ctx.kind == InteractionKind.COMPONENT
+            and (ctx.custom_id or "") == "bind_select"
+        ):
+            selected_value = ctx.values[0] if ctx.values else None
+            workspace_root = await self._scheduler_bind_target_workspace_root(
+                selected_value
+            )
+        else:
+            workspace_root = await self._scheduler_bound_workspace_root(
+                channel_id=ctx.channel_id
+            )
+        if workspace_root is None:
+            return None
+        return self._workspace_scheduler_key(str(workspace_root))
+
+    async def _scheduler_fast_ack_component(self, ctx: IngressContext) -> bool:
+        acknowledged = await self._defer_component_update(
+            interaction_id=ctx.interaction_id,
+            interaction_token=ctx.interaction_token,
+        )
+        if acknowledged:
+            ctx.deferred = True
+        return acknowledged
+
+    async def _scheduler_fast_ack_modal_submit(self, ctx: IngressContext) -> bool:
+        if self._interaction_has_initial_response(ctx.interaction_token):
+            ctx.deferred = True
+            return True
+        acknowledged = await self._defer_ephemeral(
+            interaction_id=ctx.interaction_id,
+            interaction_token=ctx.interaction_token,
+        )
+        if acknowledged:
+            ctx.deferred = True
+        return acknowledged
+
+    async def _interaction_scheduler_submission(
+        self,
+        ctx: IngressContext,
+    ) -> tuple[
+        Optional[str],
+        tuple[str, ...],
+        Optional[Callable[[IngressContext], Awaitable[bool]]],
+    ]:
+        conversation_id: Optional[str] = None
+        resource_keys: list[str] = []
+        fast_ack: Optional[Callable[[IngressContext], Awaitable[bool]]] = None
+
+        if ctx.kind != InteractionKind.AUTOCOMPLETE:
+            conversation_id, conversation_key = (
+                self._interaction_conversation_scheduler_key(
+                    channel_id=ctx.channel_id,
+                    guild_id=ctx.guild_id,
+                )
+            )
+            resource_keys.append(conversation_key)
+
+        if ctx.kind == InteractionKind.COMPONENT:
+            fast_ack = self._scheduler_fast_ack_component
+        elif ctx.kind == InteractionKind.MODAL_SUBMIT:
+            fast_ack = self._scheduler_fast_ack_modal_submit
+
+        workspace_key = await self._interaction_workspace_scheduler_key(ctx)
+        if workspace_key is not None:
+            resource_keys.append(workspace_key)
+
+        return conversation_id, tuple(resource_keys), fast_ack
+
     async def _wake_dispatcher_conversation(self, conversation_id: str) -> None:
         wake = getattr(self._dispatcher, "wake_conversation", None)
         if callable(wake):
@@ -1029,7 +1191,7 @@ class DiscordBotService:
     async def _queued_notice_config_for_conversation(
         self, conversation_id: str
     ) -> tuple[Optional[str], bool]:
-        describe_busy = getattr(self._command_runner, "describe_ingressed_busy", None)
+        describe_busy = getattr(self._command_runner, "describe_busy", None)
         if not callable(describe_busy):
             return None, True
         command_label = describe_busy(conversation_id)
@@ -3265,22 +3427,16 @@ class DiscordBotService:
             if not ingress_result.accepted:
                 return
             if ingress_result.context is not None:
-                # Components, modal submits, and autocomplete have a hard
-                # initial-response deadline, so they skip the shared FIFO.
-                if ingress_result.context.kind in (
-                    InteractionKind.COMPONENT,
-                    InteractionKind.MODAL_SUBMIT,
-                    InteractionKind.AUTOCOMPLETE,
-                ):
-                    self._command_runner.submit(
-                        ingress_result.context,
-                        payload,
-                    )
-                else:
-                    self._command_runner.submit_ingressed(
-                        ingress_result.context,
-                        payload,
-                    )
+                conversation_id, resource_keys, fast_ack = (
+                    await self._interaction_scheduler_submission(ingress_result.context)
+                )
+                self._command_runner.submit(
+                    ingress_result.context,
+                    payload,
+                    resource_keys=resource_keys,
+                    conversation_id=conversation_id,
+                    fast_ack=fast_ack,
+                )
             return
         if event_type == "MESSAGE_CREATE":
             # Keep MESSAGE_CREATE handling off the gateway hot path. Channel/guild

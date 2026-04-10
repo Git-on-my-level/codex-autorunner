@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from codex_autorunner.integrations.chat.dispatcher import conversation_id_for
 from codex_autorunner.integrations.discord.command_runner import (
     CommandRunner,
     RunnerConfig,
@@ -500,7 +501,7 @@ async def test_submit_event_preserves_arrival_order() -> None:
 
 
 @pytest.mark.anyio
-async def test_submit_ingressed_preserves_fifo_within_conversation() -> None:
+async def test_submit_serializes_fifo_within_conversation() -> None:
     service = _FakeService()
     started_ids: list[str] = []
     first_started = asyncio.Event()
@@ -533,9 +534,21 @@ async def test_submit_ingressed_preserves_fifo_within_conversation() -> None:
         channel_id="chan-1",
         guild_id="guild-1",
     )
+    conversation_id = conversation_id_for("discord", "chan-1", "guild-1")
+    resource_keys = (f"conversation:{conversation_id}",)
 
-    runner.submit_ingressed(ctx_first, _slash_payload())
-    runner.submit_ingressed(ctx_second, _slash_payload())
+    runner.submit(
+        ctx_first,
+        _slash_payload(),
+        resource_keys=resource_keys,
+        conversation_id=conversation_id,
+    )
+    runner.submit(
+        ctx_second,
+        _slash_payload(),
+        resource_keys=resource_keys,
+        conversation_id=conversation_id,
+    )
 
     await asyncio.wait_for(first_started.wait(), timeout=1.0)
     await asyncio.sleep(0.05)
@@ -547,7 +560,7 @@ async def test_submit_ingressed_preserves_fifo_within_conversation() -> None:
 
 
 @pytest.mark.anyio
-async def test_submit_ingressed_does_not_block_other_conversations() -> None:
+async def test_submit_allows_other_conversations_to_run() -> None:
     service = _FakeService()
     first_started = asyncio.Event()
     second_started = asyncio.Event()
@@ -582,11 +595,23 @@ async def test_submit_ingressed_does_not_block_other_conversations() -> None:
         channel_id="chan-2",
         guild_id="guild-1",
     )
+    conversation_id_first = conversation_id_for("discord", "chan-1", "guild-1")
+    conversation_id_second = conversation_id_for("discord", "chan-2", "guild-1")
 
-    runner.submit_ingressed(ctx_first, _slash_payload())
+    runner.submit(
+        ctx_first,
+        _slash_payload(),
+        resource_keys=(f"conversation:{conversation_id_first}",),
+        conversation_id=conversation_id_first,
+    )
     await asyncio.wait_for(first_started.wait(), timeout=1.0)
 
-    runner.submit_ingressed(ctx_second, _slash_payload())
+    runner.submit(
+        ctx_second,
+        _slash_payload(),
+        resource_keys=(f"conversation:{conversation_id_second}",),
+        conversation_id=conversation_id_second,
+    )
     await asyncio.wait_for(second_started.wait(), timeout=1.0)
 
     release_first.set()

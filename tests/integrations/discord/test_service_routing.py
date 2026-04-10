@@ -1382,11 +1382,16 @@ def test_discord_thread_matches_agent_rejects_unknown_thread_agent_id(
 
 
 def _interaction(
-    *, name: str, options: list[dict[str, Any]], user_id: str = "user-1"
+    *,
+    name: str,
+    options: list[dict[str, Any]],
+    user_id: str = "user-1",
+    interaction_id: str = "inter-1",
+    interaction_token: str = "token-1",
 ) -> dict[str, Any]:
     return {
-        "id": "inter-1",
-        "token": "token-1",
+        "id": interaction_id,
+        "token": interaction_token,
         "channel_id": "channel-1",
         "guild_id": "guild-1",
         "member": {"user": {"id": user_id}},
@@ -1818,7 +1823,12 @@ async def test_service_bind_then_status_updates_and_reads_store(tmp_path: Path) 
                 name="bind",
                 options=[{"type": 3, "name": "workspace", "value": str(workspace)}],
             ),
-            _interaction(name="status", options=[]),
+            _interaction(
+                name="status",
+                options=[],
+                interaction_id="inter-2",
+                interaction_token="token-2",
+            ),
         ]
     )
     service = DiscordBotService(
@@ -1867,7 +1877,12 @@ async def test_service_status_reports_effective_collaboration_policy(
                 name="bind",
                 options=[{"type": 3, "name": "workspace", "value": str(workspace)}],
             ),
-            _interaction(name="status", options=[]),
+            _interaction(
+                name="status",
+                options=[],
+                interaction_id="inter-2",
+                interaction_token="token-2",
+            ),
         ]
     )
     policy = build_discord_collaboration_policy(
@@ -3265,7 +3280,7 @@ async def test_queued_notice_keeps_interrupt_when_message_turn_active(
             guild_id="guild-1",
         )
 
-        service._command_runner.describe_ingressed_busy = (  # type: ignore[method-assign]
+        service._command_runner.describe_busy = (  # type: ignore[method-assign]
             lambda _conversation_id: "/car newt"
         )
 
@@ -3307,7 +3322,7 @@ async def test_queued_notice_hides_interrupt_when_only_ingressed_busy(
             guild_id="guild-1",
         )
 
-        service._command_runner.describe_ingressed_busy = (  # type: ignore[method-assign]
+        service._command_runner.describe_busy = (  # type: ignore[method-assign]
             lambda _conversation_id: "/car newt"
         )
 
@@ -6180,13 +6195,15 @@ async def test_on_dispatch_backgrounds_interaction_handling(
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
-    ("payload", "expected_direct"),
+    ("payload", "expected_conversation", "expected_resource_keys", "expected_fast_ack"),
     [
         (
             _interaction_path(
                 command_path=("car", "session", "compact"),
                 options=[],
             ),
+            "discord:channel-1:guild-1",
+            ("conversation:discord:channel-1:guild-1",),
             False,
         ),
         (
@@ -6194,6 +6211,8 @@ async def test_on_dispatch_backgrounds_interaction_handling(
                 custom_id="approval:abc:approve",
                 values=None,
             ),
+            "discord:channel-1:guild-1",
+            ("conversation:discord:channel-1:guild-1",),
             True,
         ),
         (
@@ -6219,6 +6238,8 @@ async def test_on_dispatch_backgrounds_interaction_handling(
                     ],
                 },
             },
+            "discord:channel-1:guild-1",
+            ("conversation:discord:channel-1:guild-1",),
             True,
         ),
         (
@@ -6227,14 +6248,18 @@ async def test_on_dispatch_backgrounds_interaction_handling(
                 focused_name="workspace",
                 focused_value="codex",
             ),
-            True,
+            None,
+            (),
+            False,
         ),
     ],
 )
-async def test_on_dispatch_routes_deadline_bound_interactions_directly(
+async def test_on_dispatch_routes_interactions_through_scheduler(
     tmp_path: Path,
     payload: dict[str, Any],
-    expected_direct: bool,
+    expected_conversation: str | None,
+    expected_resource_keys: tuple[str, ...],
+    expected_fast_ack: bool,
 ) -> None:
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
     await store.initialize()
@@ -6247,19 +6272,16 @@ async def test_on_dispatch_routes_deadline_bound_interactions_directly(
         state_store=store,
         outbox_manager=_FakeOutboxManager(),
     )
-    direct_submit = MagicMock()
-    queued_submit = MagicMock()
-    service._command_runner.submit = direct_submit  # type: ignore[method-assign]
-    service._command_runner.submit_ingressed = queued_submit  # type: ignore[method-assign]
+    submit = MagicMock()
+    service._command_runner.submit = submit  # type: ignore[method-assign]
 
     try:
         await service._on_dispatch("INTERACTION_CREATE", payload)
-        if expected_direct:
-            direct_submit.assert_called_once()
-            queued_submit.assert_not_called()
-        else:
-            queued_submit.assert_called_once()
-            direct_submit.assert_not_called()
+        submit.assert_called_once()
+        kwargs = submit.call_args.kwargs
+        assert kwargs["conversation_id"] == expected_conversation
+        assert kwargs["resource_keys"] == expected_resource_keys
+        assert (kwargs["fast_ack"] is not None) is expected_fast_ack
     finally:
         await service._shutdown()
         await store.close()
@@ -6313,6 +6335,97 @@ async def test_autocomplete_bypasses_busy_ingressed_fifo(
             ),
         )
         await asyncio.wait_for(autocomplete_started.wait(), timeout=1.0)
+    finally:
+        slash_release.set()
+        await service._shutdown()
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_scheduler_serializes_workspace_mutations_across_channels(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+    await store.upsert_binding(
+        channel_id="channel-2",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+
+    rest = _FakeRest()
+    config = replace(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        allowed_channel_ids=frozenset({"channel-1", "channel-2"}),
+    )
+    service = DiscordBotService(
+        config,
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    slash_started = asyncio.Event()
+    slash_release = asyncio.Event()
+    component_started = asyncio.Event()
+    start_order: list[str] = []
+
+    async def _slow_car_new(*_args: Any, **_kwargs: Any) -> None:
+        start_order.append("slash")
+        slash_started.set()
+        await slash_release.wait()
+
+    async def _flow_restart(*_args: Any, **_kwargs: Any) -> None:
+        start_order.append("component")
+        component_started.set()
+
+    service._handle_car_new = _slow_car_new  # type: ignore[assignment]
+    service._handle_flow_restart = _flow_restart  # type: ignore[assignment]
+
+    try:
+        await service._on_dispatch(
+            "INTERACTION_CREATE",
+            _interaction_path(
+                command_path=("car", "new"),
+                options=[],
+            ),
+        )
+        await asyncio.wait_for(slash_started.wait(), timeout=1.0)
+
+        await service._on_dispatch(
+            "INTERACTION_CREATE",
+            {
+                "id": "inter-component-2",
+                "token": "token-component-2",
+                "channel_id": "channel-2",
+                "guild_id": "guild-1",
+                "type": 3,
+                "member": {"user": {"id": "user-1"}},
+                "data": {
+                    "component_type": 3,
+                    "custom_id": "flow_action_select:restart",
+                    "values": ["run-1"],
+                },
+            },
+        )
+
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(component_started.wait(), timeout=0.1)
+
+        slash_release.set()
+        await asyncio.wait_for(component_started.wait(), timeout=1.0)
+        assert start_order == ["slash", "component"]
     finally:
         slash_release.set()
         await service._shutdown()
