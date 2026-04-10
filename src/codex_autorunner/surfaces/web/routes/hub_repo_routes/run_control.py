@@ -44,7 +44,9 @@ class HubRunControlService:
             Exception
         ) as exc:  # intentional: pluggable spawn_fn may raise unpredictable errors
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        await asyncio.to_thread(self._context.supervisor.list_repos, use_cache=False)
         await self._mount_manager.refresh_mounts([snapshot], full_refresh=False)
+        self._enricher.invalidate_runtime_caches()
         return self._enricher.enrich_repo(snapshot)
 
     async def stop_repo(self, repo_id: str) -> dict:
@@ -57,6 +59,8 @@ class HubRunControlService:
             )
         except (ValueError, OSError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        await asyncio.to_thread(self._context.supervisor.list_repos, use_cache=False)
+        self._enricher.invalidate_runtime_caches()
         return self._enricher.enrich_repo(snapshot)
 
     async def resume_repo(self, repo_id: str, once: bool = False) -> dict:
@@ -78,7 +82,9 @@ class HubRunControlService:
             Exception
         ) as exc:  # intentional: pluggable spawn_fn may raise unpredictable errors
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        await asyncio.to_thread(self._context.supervisor.list_repos, use_cache=False)
         await self._mount_manager.refresh_mounts([snapshot], full_refresh=False)
+        self._enricher.invalidate_runtime_caches()
         return self._enricher.enrich_repo(snapshot)
 
     async def kill_repo(self, repo_id: str) -> dict:
@@ -91,6 +97,8 @@ class HubRunControlService:
             )
         except (ValueError, OSError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        await asyncio.to_thread(self._context.supervisor.list_repos, use_cache=False)
+        self._enricher.invalidate_runtime_caches()
         return self._enricher.enrich_repo(snapshot)
 
     async def init_repo(self, repo_id: str) -> dict:
@@ -103,7 +111,9 @@ class HubRunControlService:
             )
         except (ValueError, OSError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        await asyncio.to_thread(self._context.supervisor.list_repos, use_cache=False)
         await self._mount_manager.refresh_mounts([snapshot], full_refresh=False)
+        self._enricher.invalidate_runtime_caches()
         return self._enricher.enrich_repo(snapshot)
 
     async def sync_main(self, repo_id: str) -> dict:
@@ -116,5 +126,7 @@ class HubRunControlService:
             )
         except (ValueError, OSError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        await asyncio.to_thread(self._context.supervisor.list_repos, use_cache=False)
         await self._mount_manager.refresh_mounts([snapshot], full_refresh=False)
+        self._enricher.invalidate_runtime_caches()
         return self._enricher.enrich_repo(snapshot)

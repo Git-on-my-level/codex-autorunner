@@ -301,7 +301,8 @@ const hubViewPrefs: HubViewPrefs = { ...HUB_DEFAULT_VIEW_PREFS };
 let pinnedParentRepoIds = new Set<string>();
 
 const HUB_CACHE_TTL_MS = 30000;
-const HUB_CACHE_KEY = `car:hub:${HUB_BASE || "/"}`;
+const HUB_PERSISTENT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const HUB_CACHE_KEY = `car:hub:v2:${HUB_BASE || "/"}`;
 const HUB_USAGE_CACHE_KEY = `car:hub-usage:${HUB_BASE || "/"}`;
 const HUB_REFRESH_ACTIVE_MS = 5000;
 const HUB_REFRESH_IDLE_MS = 30000;
@@ -377,6 +378,47 @@ function loadSessionCache<T>(key: string, maxAgeMs: number): T | null {
   } catch (_err) {
     return null;
   }
+}
+
+function savePersistentCache<T>(key: string, value: T): void {
+  try {
+    const payload: SessionCachePayload<T> = { at: Date.now(), value };
+    localStorage.setItem(key, JSON.stringify(payload));
+  } catch (_err) {
+    // Ignore storage errors; cache is best-effort.
+  }
+}
+
+function loadPersistentCache<T>(key: string, maxAgeMs: number): T | null {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const payload = JSON.parse(raw) as SessionCachePayload<T>;
+    if (!payload || typeof payload.at !== "number") return null;
+    if (maxAgeMs && Date.now() - payload.at > maxAgeMs) return null;
+    return payload.value;
+  } catch (_err) {
+    return null;
+  }
+}
+
+function saveHubBootstrapCache(value: HubData): void {
+  saveSessionCache(HUB_CACHE_KEY, value);
+  savePersistentCache(HUB_CACHE_KEY, value);
+}
+
+function loadHubBootstrapCache(): HubData | null {
+  const sessionValue = loadSessionCache<HubData | null>(HUB_CACHE_KEY, HUB_CACHE_TTL_MS);
+  if (sessionValue) return sessionValue;
+  const persistentValue = loadPersistentCache<HubData | null>(
+    HUB_CACHE_KEY,
+    HUB_PERSISTENT_CACHE_TTL_MS
+  );
+  if (persistentValue) {
+    saveSessionCache(HUB_CACHE_KEY, persistentValue);
+    return persistentValue;
+  }
+  return null;
 }
 
 function saveHubViewPrefs(): void {
@@ -2544,7 +2586,7 @@ async function refreshHub(): Promise<void> {
     const data = await api("/hub/repos", { method: "GET" }) as HubData;
     applyHubData(data);
     markHubRefreshed();
-    saveSessionCache(HUB_CACHE_KEY, hubData);
+    saveHubBootstrapCache(hubData);
     renderSummary(hubData.repos || []);
     renderReposWithScroll(hubData.repos || []);
     renderAgentWorkspaces(hubData.agent_workspaces || []);
@@ -3610,7 +3652,7 @@ async function silentRefreshHub(): Promise<void> {
     const data = await api("/hub/repos", { method: "GET" }) as HubData;
     applyHubData(data);
     markHubRefreshed();
-    saveSessionCache(HUB_CACHE_KEY, hubData);
+    saveHubBootstrapCache(hubData);
     renderSummary(hubData.repos || []);
     renderReposWithScroll(hubData.repos || []);
     renderAgentWorkspaces(hubData.agent_workspaces || []);
@@ -3679,7 +3721,7 @@ export function initHub(): void {
   initHubPanelControls();
   if (!repoListEl) return;
   initNotificationBell();
-  const cachedHub = loadSessionCache<HubData | null>(HUB_CACHE_KEY, HUB_CACHE_TTL_MS);
+  const cachedHub = loadHubBootstrapCache();
   if (cachedHub) {
     applyHubData(cachedHub);
     renderSummary(hubData.repos || []);
@@ -3712,6 +3754,8 @@ export const __hubTest = {
   renderAgentWorkspaces,
   applyHubPanelState,
   toggleHubPanel,
+  loadHubBootstrapCache,
+  saveHubBootstrapCache,
   initInteractionHarness(): void {
     attachHubHandlers();
     initHubPanelControls();

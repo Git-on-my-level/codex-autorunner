@@ -26,6 +26,7 @@ GLOBAL_STATE_ROOT_ENV = "CAR_GLOBAL_STATE_ROOT"
 
 REPO_STATE_DIR = ".codex-autorunner"
 ORCHESTRATION_DB_FILENAME = "orchestration.sqlite3"
+HUB_PROJECTION_DB_FILENAME = "hub_projection.sqlite3"
 _SAFE_HUB_RESOURCE_SEGMENT = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
@@ -106,6 +107,17 @@ def resolve_hub_orchestration_db_path(hub_root: Path) -> Path:
         resolve=False,
     )
     return state_root / ORCHESTRATION_DB_FILENAME
+
+
+def resolve_hub_projection_db_path(hub_root: Path) -> Path:
+    """Return the canonical hub projection cache SQLite path."""
+    state_root = resolve_hub_state_root(hub_root)
+    validate_path_within_roots(
+        state_root,
+        allowed_roots=get_canonical_roots(hub_root=hub_root),
+        resolve=False,
+    )
+    return state_root / HUB_PROJECTION_DB_FILENAME
 
 
 def resolve_hub_templates_root(hub_root: Path) -> Path:
@@ -250,6 +262,7 @@ def get_canonical_roots(
 __all__ = [
     "GLOBAL_STATE_ROOT_ENV",
     "ORCHESTRATION_DB_FILENAME",
+    "HUB_PROJECTION_DB_FILENAME",
     "REPO_STATE_DIR",
     "StateRootError",
     "get_canonical_roots",
@@ -258,6 +271,7 @@ __all__ = [
     "resolve_global_state_root",
     "resolve_hub_agent_workspace_root",
     "resolve_hub_orchestration_db_path",
+    "resolve_hub_projection_db_path",
     "resolve_hub_runtime_root",
     "resolve_hub_runtimes_root",
     "resolve_hub_state_root",

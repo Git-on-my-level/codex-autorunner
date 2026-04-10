@@ -10,7 +10,11 @@ from typing import Any
 from urllib.parse import unquote
 
 from ..manifest import load_manifest
-from .orchestration.sqlite import open_orchestration_sqlite
+from .hub_projection_store import HubProjectionStore, path_stat_fingerprint
+from .orchestration.sqlite import (
+    open_orchestration_sqlite,
+    resolve_orchestration_sqlite_path,
+)
 from .pma_thread_store import PmaThreadStore, default_pma_threads_db_path
 from .sqlite_utils import open_sqlite
 
@@ -19,6 +23,8 @@ logger = logging.getLogger("codex_autorunner.core.chat_bindings")
 DISCORD_STATE_FILE_DEFAULT = ".codex-autorunner/discord_state.sqlite3"
 TELEGRAM_STATE_FILE_DEFAULT = ".codex-autorunner/telegram_state.sqlite3"
 MANIFEST_FILE_DEFAULT = ".codex-autorunner/manifest.yml"
+_CHAT_BINDING_PROJECTION_NAMESPACE = "chat_binding_counts_v1"
+_CHAT_BINDING_PROJECTION_KEY = "active_by_source"
 
 
 def _normalize_repo_id(value: Any) -> str | None:
@@ -78,6 +84,41 @@ def _resolve_manifest_path(hub_root: Path, raw_config: Mapping[str, Any]) -> Pat
     if not manifest_path.is_absolute():
         manifest_path = (hub_root / manifest_path).resolve()
     return manifest_path
+
+
+def _chat_binding_counts_fingerprint(
+    *, hub_root: Path, raw_config: Mapping[str, Any]
+) -> tuple[Any, ...]:
+    return (
+        path_stat_fingerprint(_resolve_manifest_path(hub_root, raw_config)),
+        path_stat_fingerprint(default_pma_threads_db_path(hub_root)),
+        path_stat_fingerprint(resolve_orchestration_sqlite_path(hub_root)),
+        _chat_surface_enabled(raw_config, "discord_bot"),
+        path_stat_fingerprint(_resolve_discord_state_path(hub_root, raw_config)),
+        _chat_surface_enabled(raw_config, "telegram_bot"),
+        path_stat_fingerprint(_resolve_telegram_state_path(hub_root, raw_config)),
+    )
+
+
+def _normalize_cached_source_counts(value: Any) -> dict[str, dict[str, int]] | None:
+    if not isinstance(value, Mapping):
+        return None
+    normalized: dict[str, dict[str, int]] = {}
+    for repo_id, raw_counts in value.items():
+        normalized_repo_id = _normalize_repo_id(repo_id)
+        if normalized_repo_id is None or not isinstance(raw_counts, Mapping):
+            continue
+        repo_counts: dict[str, int] = {}
+        for source, raw_count in raw_counts.items():
+            if not isinstance(source, str):
+                continue
+            count = _coerce_count(raw_count)
+            if count <= 0:
+                continue
+            repo_counts[source] = count
+        if repo_counts:
+            normalized[normalized_repo_id] = repo_counts
+    return normalized
 
 
 def _repo_id_by_workspace_path(
@@ -409,6 +450,9 @@ def _read_orchestration_binding_rows(
     hub_root: Path,
     repo_id_by_workspace: Mapping[str, str],
 ) -> list[dict[str, Any]]:
+    db_path = resolve_orchestration_sqlite_path(hub_root)
+    if not db_path.exists():
+        return []
     try:
         with open_orchestration_sqlite(hub_root) as conn:
             rows = conn.execute(
@@ -661,6 +705,20 @@ def active_chat_binding_counts_by_source(
 ) -> dict[str, dict[str, int]]:
     """Return repo-id keyed active chat binding counts split by source."""
 
+    projection_store = HubProjectionStore.from_hub_root(hub_root)
+    fingerprint = _chat_binding_counts_fingerprint(
+        hub_root=hub_root,
+        raw_config=raw_config,
+    )
+    cached = projection_store.get(
+        namespace=_CHAT_BINDING_PROJECTION_NAMESPACE,
+        key=_CHAT_BINDING_PROJECTION_KEY,
+        fingerprint=fingerprint,
+    )
+    normalized_cached = _normalize_cached_source_counts(cached)
+    if normalized_cached is not None:
+        return normalized_cached
+
     repo_id_by_workspace = _repo_id_by_workspace_path(hub_root, raw_config)
     source_counts: dict[str, dict[str, int]] = {}
 
@@ -698,6 +756,12 @@ def active_chat_binding_counts_by_source(
             continue
         _merge_counts("telegram", {repo_id: count})
 
+    projection_store.put(
+        namespace=_CHAT_BINDING_PROJECTION_NAMESPACE,
+        key=_CHAT_BINDING_PROJECTION_KEY,
+        fingerprint=fingerprint,
+        payload=source_counts,
+    )
     return source_counts
 
 

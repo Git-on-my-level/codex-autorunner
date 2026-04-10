@@ -140,6 +140,7 @@ class HubWorktreeService:
             )
         except (RuntimeError, OSError, ValueError, TypeError, KeyError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        self._enricher.invalidate_runtime_caches()
         if isinstance(result, dict):
             return result
         return {"status": "ok"}
@@ -166,6 +167,7 @@ class HubWorktreeService:
                 archive_note=payload.archive_note,
                 archive_profile=payload.archive_profile,
             )
+            self._enricher.invalidate_runtime_caches()
             if isinstance(result, dict):
                 return result
             return {"status": "ok"}
@@ -199,6 +201,7 @@ class HubWorktreeService:
             )
         except (RuntimeError, OSError, ValueError, TypeError, KeyError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        self._enricher.invalidate_runtime_caches()
         return cast(dict[str, Any], result)
 
     async def archive_worktree_state(
@@ -229,4 +232,5 @@ class HubWorktreeService:
             KeyError,
         ) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        self._enricher.invalidate_runtime_caches()
         return cast(dict[str, Any], result)

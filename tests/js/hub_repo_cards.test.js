@@ -407,6 +407,59 @@ test("hub panel toggles keep working when localStorage is unavailable", () => {
   }
 });
 
+test("hub bootstrap cache falls back to durable localStorage and restores session cache", () => {
+  sessionStorage.clear();
+  localStorage.clear();
+
+  const payload = {
+    repos: [
+      {
+        id: "cached-repo",
+        path: "/tmp/cached-repo",
+        display_name: "cached-repo",
+        enabled: true,
+        auto_run: false,
+        worktree_setup_commands: [],
+        kind: "base",
+        worktree_of: null,
+        branch: "main",
+        exists_on_disk: true,
+        is_clean: true,
+        initialized: true,
+        init_error: null,
+        status: "idle",
+        lock_status: "unlocked",
+        last_run_id: null,
+        last_exit_code: null,
+        last_run_started_at: null,
+        last_run_finished_at: null,
+        runner_pid: null,
+        effective_destination: { kind: "local" },
+        mounted: false,
+        mount_error: null,
+        cleanup_blocked_by_chat_binding: false,
+        ticket_flow: null,
+        ticket_flow_display: null,
+      },
+    ],
+    agent_workspaces: [],
+    last_scan_at: "2026-04-10T10:00:00Z",
+    pinned_parent_repo_ids: [],
+  };
+
+  __hubTest.saveHubBootstrapCache(payload);
+  sessionStorage.clear();
+
+  const restored = __hubTest.loadHubBootstrapCache();
+  const sessionValues = Array.from(
+    { length: sessionStorage.length },
+    (_, index) => sessionStorage.getItem(sessionStorage.key(index) || "") || ""
+  );
+
+  assert.deepEqual(restored, payload);
+  assert.equal(sessionValues.some((value) => value.includes("cached-repo")), true);
+});
+
 test("agent workspace cards render runtime, managed path, and lifecycle actions", () => {
   __hubTest.renderAgentWorkspaces([
     {

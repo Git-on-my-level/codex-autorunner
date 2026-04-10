@@ -1130,6 +1130,7 @@ def build_hub_repo_routes(
                 archive_note=payload.archive_note,
                 archive_profile=payload.archive_profile,
             )
+            await asyncio.to_thread(context.supervisor.list_repos, use_cache=False)
             enricher.invalidate_runtime_caches()
             return result
         except (
@@ -1149,6 +1150,7 @@ def build_hub_repo_routes(
                 context.supervisor.cleanup_repo_threads,
                 repo_id=repo_id,
             )
+            await asyncio.to_thread(context.supervisor.list_repos, use_cache=False)
             enricher.invalidate_runtime_caches()
             return result
         except (
@@ -1167,6 +1169,7 @@ def build_hub_repo_routes(
             result = await asyncio.to_thread(
                 context.supervisor.cleanup_all_repo_threads
             )
+            await asyncio.to_thread(context.supervisor.list_repos, use_cache=False)
             enricher.invalidate_runtime_caches()
             return result
         except (
@@ -1196,6 +1199,7 @@ def build_hub_repo_routes(
 
         async def _run_cleanup_all():
             result = await asyncio.to_thread(context.supervisor.cleanup_all)
+            await asyncio.to_thread(context.supervisor.list_repos, use_cache=False)
             enricher.invalidate_runtime_caches()
             return result
 
