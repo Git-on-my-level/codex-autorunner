@@ -383,6 +383,35 @@ class FakeACPServer:
             cancel_event.clear()
             self._send_result(request_id, {"stopReason": "end_turn"})
             return
+        if self._scenario == "official_terminal_without_turn_id":
+            self.send(
+                {
+                    "method": "prompt/completed",
+                    "params": {
+                        "sessionId": session_id,
+                        "status": "completed",
+                        "finalOutput": "fixture reply",
+                    },
+                }
+            )
+            time.sleep(0.05)
+            cancel_event.clear()
+            self._send_result(request_id, {"stopReason": "end_turn"})
+            return
+        if self._scenario == "official_session_status_idle_before_return":
+            self.send(
+                {
+                    "method": "session.status",
+                    "params": {
+                        "sessionId": session_id,
+                        "status": {"type": "idle"},
+                    },
+                }
+            )
+            time.sleep(0.05)
+            cancel_event.clear()
+            self._send_result(request_id, {"stopReason": "end_turn"})
+            return
         if self._scenario == "official_request_return_after_terminal":
             self.send(
                 {

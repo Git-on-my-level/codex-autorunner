@@ -46,6 +46,71 @@ def test_client_maps_session_scoped_official_events_without_turn_id(
     assert message["params"]["turnId"] == "turn-2"
 
 
+@pytest.mark.parametrize(
+    ("message", "expected_turn_id"),
+    (
+        (
+            {
+                "method": "prompt/completed",
+                "params": {"sessionId": "session-1", "status": "completed"},
+            },
+            "turn-2",
+        ),
+        (
+            {
+                "method": "prompt/failed",
+                "params": {"sessionId": "session-1", "status": "failed"},
+            },
+            "turn-2",
+        ),
+        (
+            {
+                "method": "prompt/cancelled",
+                "params": {"sessionId": "session-1", "status": "cancelled"},
+            },
+            "turn-2",
+        ),
+        (
+            {
+                "method": "session.idle",
+                "params": {"sessionId": "session-1"},
+            },
+            "turn-2",
+        ),
+        (
+            {
+                "method": "session.status",
+                "params": {
+                    "sessionId": "session-1",
+                    "status": {"type": "idle"},
+                },
+            },
+            "turn-2",
+        ),
+        (
+            {
+                "method": "session.status",
+                "params": {
+                    "sessionId": "session-1",
+                    "status": {"type": "busy"},
+                },
+            },
+            None,
+        ),
+    ),
+)
+def test_client_maps_only_explicit_terminal_official_events_without_turn_id(
+    message: dict[str, object],
+    expected_turn_id: str | None,
+) -> None:
+    client = ACPClient(fixture_command("official"))
+    client._session_active_turns["session-1"] = "turn-2"
+
+    mapped = client._message_with_mapped_turn_id(message)
+
+    assert mapped.get("params", {}).get("turnId") == expected_turn_id
+
+
 @pytest.mark.asyncio
 async def test_client_initialize_and_session_roundtrip(tmp_path: Path) -> None:
     client = ACPClient(fixture_command("official"), cwd=tmp_path)
@@ -241,6 +306,63 @@ async def test_client_official_terminal_event_can_complete_before_request_return
             payload.get("last_runtime_method") == "prompt/completed"
             for payload in payloads
         )
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_client_official_terminal_without_turn_id_can_complete_before_request_returns(
+    tmp_path: Path,
+) -> None:
+    client = ACPClient(
+        fixture_command("official_terminal_without_turn_id"),
+        cwd=tmp_path,
+    )
+    try:
+        created = await client.create_session(cwd=str(tmp_path))
+        handle = await client.start_prompt(created.session_id, "Reply with exactly OK.")
+        result = await asyncio.wait_for(handle.wait(), timeout=0.4)
+        state = client._prompts[handle.turn_id]
+
+        assert result.status == "completed"
+        assert result.final_output == "fixture reply"
+        assert state.request_task is not None
+        await asyncio.wait_for(state.request_task, timeout=0.4)
+        assert [event.kind for event in handle.snapshot_events()] == [
+            "turn_started",
+            "progress",
+            "output_delta",
+            "turn_terminal",
+        ]
+        assert handle.snapshot_events()[-1].turn_id == handle.turn_id
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_client_official_session_status_idle_can_complete_before_request_returns(
+    tmp_path: Path,
+) -> None:
+    client = ACPClient(
+        fixture_command("official_session_status_idle_before_return"),
+        cwd=tmp_path,
+    )
+    try:
+        created = await client.create_session(cwd=str(tmp_path))
+        handle = await client.start_prompt(created.session_id, "Reply with exactly OK.")
+        result = await asyncio.wait_for(handle.wait(), timeout=0.4)
+        state = client._prompts[handle.turn_id]
+
+        assert result.status == "completed"
+        assert result.final_output == "fixture reply"
+        assert state.request_task is not None
+        await asyncio.wait_for(state.request_task, timeout=0.4)
+        assert [event.method for event in handle.snapshot_events()] == [
+            "prompt/started",
+            "session/update",
+            "session/update",
+            "session.status",
+        ]
     finally:
         await client.close()
 

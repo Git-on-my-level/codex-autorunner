@@ -13,7 +13,8 @@ Hermes now uses the official ACP session protocol only.
 - prompts run via `session/prompt`
 - streaming progress arrives through `session/update`
 - approvals arrive through `session/request_permission`
-- turn completion is the `session/prompt` RPC response
+- turn completion is anchored in explicit terminal evidence, with the
+  `session/prompt` RPC response acting as the reconciliation fallback
 
 Do not reintroduce legacy notification-terminal heuristics into `client.py`
 without a concrete supported runtime and dedicated coverage.
@@ -22,14 +23,20 @@ without a concrete supported runtime and dedicated coverage.
 
 ### Official ACP turn completion
 
-For official ACP, CAR must not invent a notification-based completion contract.
+For official ACP, CAR must not invent completion from plain progress or
+assistant text alone.
 
 - `session/update` is progress, not terminal completion.
-- The `session/prompt` response is the completion boundary.
-- CAR synthesizes a local terminal event only after that RPC returns.
+- Explicit terminal notifications such as `prompt/completed`,
+  `prompt/failed`, `prompt/cancelled`, `session.idle`, or idle
+  `session.status` may close the local turn early when they can be bound to the
+  active turn.
+- The `session/prompt` response remains the fallback completion boundary and
+  reconciliation source when notifications arrive first.
 
-If `session/prompt` never returns, the turn is still open from ACP's point of
-view, even if many `session/update` notifications have arrived.
+If `session/prompt` never returns and no explicit terminal lifecycle evidence
+arrives, the turn is still open from ACP's point of view, even if many
+`session/update` notifications have arrived.
 
 ### Sparse official `session/load` responses
 
@@ -44,12 +51,13 @@ the protocol itself changes and the code/tests are updated together.
 
 ### Session-scoped turn rebinding
 
-Hermes may omit `turnId` on official session-scoped streaming and approval
-events.
+Hermes may omit `turnId` on official session-scoped streaming, approval, and
+terminal lifecycle events.
 
-- Only `session/update` and `session/request_permission` are rebound to the
-  active local turn.
-- Prompt terminal notifications are not part of the official contract.
+- `session/update`, `session/request_permission`, and explicit terminal
+  lifecycle events are rebound to the active local turn when they omit
+  `turnId`.
+- Busy `session.status` notifications must not be treated as terminal.
 
 Do not broaden this fallback set unless the protocol requires it and the tests
 prove the need.

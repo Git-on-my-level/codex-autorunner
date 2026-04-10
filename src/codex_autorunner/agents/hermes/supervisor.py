@@ -206,7 +206,7 @@ class HermesSupervisor:
                 await self._append_raw_event(
                     state,
                     dict(raw_notification),
-                    terminal=isinstance(event, ACPTurnTerminalEvent),
+                    terminal=_should_close_turn_buffer(event),
                 )
         log_event(
             self._logger,
@@ -447,13 +447,10 @@ class HermesSupervisor:
             payload = dict(raw_notification)
             if payload in existing_events:
                 continue
-            terminal = isinstance(event, ACPTurnTerminalEvent) and event.method not in (
-                _HERMES_IDLE_TERMINAL_METHODS
-            )
             await self._append_raw_event(
                 state,
                 payload,
-                terminal=terminal,
+                terminal=_should_close_turn_buffer(event),
             )
             existing_events.append(payload)
 
@@ -489,13 +486,10 @@ class HermesSupervisor:
         state = await self._wait_for_turn_state(workspace_root, turn_id)
         if state is None:
             return
-        terminal = isinstance(event, ACPTurnTerminalEvent) and event.method not in (
-            _HERMES_IDLE_TERMINAL_METHODS
-        )
         await self._append_raw_event(
             state,
             dict(raw_notification),
-            terminal=terminal,
+            terminal=_should_close_turn_buffer(event),
         )
 
     async def _handle_permission_request(
@@ -679,6 +673,12 @@ def _build_surface_approval_request(
         "method": method,
         "params": params,
     }
+
+
+def _should_close_turn_buffer(event: Any) -> bool:
+    return isinstance(event, ACPTurnTerminalEvent) and event.method not in (
+        _HERMES_IDLE_TERMINAL_METHODS
+    )
 
 
 def _workspace_key(workspace_root: Path) -> str:

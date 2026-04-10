@@ -83,6 +83,17 @@ _SESSION_TURN_ID_FALLBACK_METHODS = frozenset(
         "session/request_permission",
     }
 )
+_TERMINAL_TURN_ID_FALLBACK_METHODS = frozenset(
+    {
+        "prompt/completed",
+        "prompt/cancelled",
+        "prompt/failed",
+        "turn/completed",
+        "turn/cancelled",
+        "turn/failed",
+        "session.idle",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -107,7 +118,7 @@ class _PromptState:
     replay_task: Optional[asyncio.Task[None]] = None
     request_task: Optional[asyncio.Task[Any]] = None
     request_started_at: Optional[float] = None
-    next_terminal_completion_source: Optional[str] = None
+    completion_source: Optional[str] = None
     last_runtime_method: Optional[str] = None
     last_session_update_kind: Optional[str] = None
     last_session_update_excerpt: Optional[str] = None
@@ -181,6 +192,20 @@ def _session_update_content_summary(update: dict[str, Any]) -> dict[str, Any]:
         "content_part_types": tuple(part_types),
         "text": extracted_text,
     }
+
+
+def _session_status_type(payload: dict[str, Any]) -> Optional[str]:
+    status = payload.get("status")
+    if isinstance(status, dict):
+        for key in ("type", "status", "state"):
+            normalized = _normalize_optional_text(status.get(key))
+            if normalized:
+                return normalized.lower()
+        return None
+    normalized = _normalize_optional_text(status)
+    if normalized:
+        return normalized.lower()
+    return None
 
 
 def _stringify(value: Any) -> str:
@@ -896,12 +921,14 @@ class ACPClient:
         self,
         state: _PromptState,
         event: ACPTurnTerminalEvent,
+        *,
+        completion_source: Optional[str] = None,
     ) -> None:
         if state.closed:
             return
-        completion_source = state.next_terminal_completion_source or "terminal_event"
-        state.next_terminal_completion_source = None
+        resolved_completion_source = completion_source or "terminal_event"
         state.closed = True
+        state.completion_source = resolved_completion_source
         if self._session_active_turns.get(state.session_id) == state.turn_id:
             self._session_active_turns.pop(state.session_id, None)
         self._log_trace_event(
@@ -909,7 +936,7 @@ class ACPClient:
             session_id=state.session_id,
             turn_id=state.turn_id,
             status=event.status,
-            completion_source=completion_source,
+            completion_source=resolved_completion_source,
             error_message=event.error_message,
             elapsed_ms=self._elapsed_ms(state.request_started_at),
             **self._prompt_trace_fields(state),
@@ -970,6 +997,26 @@ class ACPClient:
         if not isinstance(event, ACPTurnTerminalEvent):
             return
         await self._finalize_prompt_with_event(state, event)
+
+    async def _record_prompt_terminal_event(
+        self,
+        state: _PromptState,
+        event: ACPTurnTerminalEvent,
+        *,
+        completion_source: str,
+    ) -> None:
+        if state.closed:
+            return
+        self._note_prompt_trace_event(state, event)
+        state.events.append(event)
+        if event.final_output:
+            state.final_output = event.final_output
+        await state.queue.put(event)
+        await self._finalize_prompt_with_event(
+            state,
+            event,
+            completion_source=completion_source,
+        )
 
     async def _start_prompt_official(
         self,
@@ -1041,6 +1088,18 @@ class ACPClient:
                 params,
             )
         except (ACPError, asyncio.TimeoutError) as exc:
+            if state.closed:
+                self._log_trace_event(
+                    "acp.prompt.request_failed_reconciled",
+                    session_id=state.session_id,
+                    turn_id=state.turn_id,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                    completion_source=state.completion_source or "terminal_event",
+                    elapsed_ms=self._elapsed_ms(state.request_started_at),
+                    **self._prompt_trace_fields(state),
+                )
+                return
             self._session_active_turns.pop(state.session_id, None)
             self._log_trace_event(
                 "acp.prompt.request_failed",
@@ -1068,21 +1127,41 @@ class ACPClient:
             elapsed_ms=self._elapsed_ms(state.request_started_at),
             **self._prompt_trace_fields(state),
         )
-        state.next_terminal_completion_source = "prompt_return"
-        await self._record_prompt_event(
+        if state.closed:
+            self._log_trace_event(
+                "acp.prompt.request_reconciled",
+                session_id=state.session_id,
+                turn_id=state.turn_id,
+                status=self._official_prompt_terminal_status(result_payload),
+                stop_reason=_normalize_optional_text(
+                    result_payload.get("stopReason")
+                    or result_payload.get("stop_reason")
+                ),
+                completion_source=state.completion_source or "terminal_event",
+                elapsed_ms=self._elapsed_ms(state.request_started_at),
+                **self._prompt_trace_fields(state),
+            )
+            return
+        terminal_event = normalize_notification(
+            {
+                "method": self._official_prompt_terminal_method(result),
+                "params": {
+                    "sessionId": state.session_id,
+                    "turnId": state.turn_id,
+                    "status": self._official_prompt_terminal_status(result),
+                    "finalOutput": state.final_output,
+                    "message": self._official_prompt_terminal_error(result),
+                },
+            }
+        )
+        if not isinstance(terminal_event, ACPTurnTerminalEvent):
+            raise ACPProtocolError(
+                "Official ACP prompt return did not normalize terminally"
+            )
+        await self._record_prompt_terminal_event(
             state,
-            normalize_notification(
-                {
-                    "method": self._official_prompt_terminal_method(result),
-                    "params": {
-                        "sessionId": state.session_id,
-                        "turnId": state.turn_id,
-                        "status": self._official_prompt_terminal_status(result),
-                        "finalOutput": state.final_output,
-                        "message": self._official_prompt_terminal_error(result),
-                    },
-                }
-            ),
+            terminal_event,
+            completion_source="prompt_return",
         )
 
     def _official_prompt_terminal_method(self, payload: Any) -> str:
@@ -1117,8 +1196,6 @@ class ACPClient:
 
     def _message_with_mapped_turn_id(self, message: dict[str, Any]) -> dict[str, Any]:
         method = _normalize_optional_text(message.get("method"))
-        if method not in _SESSION_TURN_ID_FALLBACK_METHODS:
-            return message
         params = _coerce_mapping(message.get("params"))
         if _normalize_optional_text(params.get("turnId") or params.get("turn_id")):
             return message
@@ -1126,6 +1203,13 @@ class ACPClient:
             params.get("sessionId") or params.get("session_id")
         )
         if not session_id:
+            return message
+        should_map = method in _SESSION_TURN_ID_FALLBACK_METHODS
+        if not should_map and method in _TERMINAL_TURN_ID_FALLBACK_METHODS:
+            should_map = True
+        if not should_map and method in {"session.status", "session/status"}:
+            should_map = _session_status_type(params) == "idle"
+        if not should_map:
             return message
         turn_id = self._session_active_turns.get(session_id)
         if not turn_id:
