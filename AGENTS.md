@@ -85,3 +85,8 @@ Reference docs in `docs/` (e.g., configuration, operations, debugging).
 
 ## Cursor Cloud specific instructions
 - See `docs/ops/running-in-a-vm.md` for VM/cloud-agent startup caveats, service commands, and known test quirks.
+- **First-time setup**: `sudo apt-get install -y python3.12-venv` then `make setup`. After that, run `CAR_DEV_INCLUDE_ROOT_REPO=1 .venv/bin/car init --mode hub` to bootstrap `.codex-autorunner/`.
+- **Dev server**: `CAR_DEV_INCLUDE_ROOT_REPO=1 make serve-dev HOST=0.0.0.0` (port 4173). Use `HOST=0.0.0.0` so the UI is accessible outside the VM.
+- **Tests**: `make test` runs non-integration tests. Use `-m "not integration and not slow"` for the pre-commit subset. Two tests are expected to fail in containerized VMs: `test_process_termination.py` (PID namespace constraints) and occasionally `test_text_delta_coalescer.py`.
+- **Lint**: `make check` runs the full pre-commit suite (black, ruff, mypy, eslint, custom scripts, build, pytest). Individual checks: `black --check src tests`, `ruff check src tests`, `pnpm lint`, `make typecheck-strict`.
+- **Build**: `make build` compiles TypeScript (`static_src/*.ts` → `static/generated/*.js`).
