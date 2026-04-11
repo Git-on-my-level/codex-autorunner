@@ -796,10 +796,12 @@ class _ManagedThreadSendResponse:
                 ((payload.get("notification") or {}).get("mode") or "")
             ).strip(),
             notification_lane=str(
-                (((payload.get("notification") or {}).get("subscription") or {}).get(
-                    "lane_id"
+                (
+                    ((payload.get("notification") or {}).get("subscription") or {}).get(
+                        "lane_id"
+                    )
+                    or ""
                 )
-                or "")
             ).strip(),
         )
 
@@ -854,14 +856,6 @@ def _normalize_notify_on(value: Optional[str]) -> Optional[str]:
     if text != "terminal":
         raise typer.BadParameter("notify-on must be 'terminal'")
     return text
-
-
-def _default_managed_thread_send_notify_on(config: Any) -> Optional[str]:
-    pma_config = getattr(config, "pma", None)
-    if pma_config is None:
-        return "terminal"
-    enabled = getattr(pma_config, "managed_thread_terminal_followup_default", True)
-    return "terminal" if bool(enabled) else None
 
 
 _CAPABILITY_REQUIREMENTS = {
@@ -2071,8 +2065,6 @@ def pma_thread_send(
     hub_root = _resolve_hub_path(path)
     try:
         config = load_hub_config(hub_root)
-        if normalized_notify_on is None:
-            normalized_notify_on = _default_managed_thread_send_notify_on(config)
         request_payload = _ManagedThreadSendRequest(
             message=message_body,
             busy_policy=normalized_if_busy,

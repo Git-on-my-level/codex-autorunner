@@ -22,6 +22,9 @@ from .....core.pma_thread_store import ManagedThreadNotActiveError
 from .....integrations.chat.approval_modes import resolve_approval_mode_policies
 from ...schemas import PmaManagedThreadMessageRequest
 from ...services.pma.common import pma_config_from_raw as shared_pma_config_from_raw
+from ...services.pma.managed_thread_followup import (
+    resolve_managed_thread_followup_policy,
+)
 from .automation_adapter import normalize_optional_text
 
 MANAGED_THREAD_PUBLIC_EXECUTION_ERROR = "Managed thread execution failed"
@@ -34,6 +37,7 @@ class ManagedThreadMessageOptions:
     notify_on: Optional[str]
     notify_lane: Optional[str]
     notify_once: bool
+    notify_required: bool
     defer_execution: bool
     model: Optional[str]
     reasoning: Optional[str]
@@ -45,6 +49,7 @@ class ManagedThreadMessageOptions:
     live_backend_thread_id: str
     execution_prompt: str
     delivery_payload: dict[str, Any]
+
 
 def get_pma_route_config(request: Request) -> dict[str, Any]:
     raw = getattr(request.app.state.config, "raw", {})
@@ -189,16 +194,15 @@ def resolve_managed_thread_message_options(
             detail=f"message exceeds max_text_chars ({max_text_chars} characters)",
         )
 
-    notify_on = normalize_optional_text(payload.notify_on)
-    if not notify_on and bool(defaults.get("managed_thread_terminal_followup_default")):
-        notify_on = "terminal"
-    if notify_on and notify_on != "terminal":
-        raise HTTPException(
-            status_code=400, detail="notify_on must be 'terminal' when provided"
-        )
-
-    notify_lane = normalize_optional_text(payload.notify_lane)
-    notify_once = bool(payload.notify_once)
+    followup_policy = resolve_managed_thread_followup_policy(
+        payload,
+        default_terminal_followup=bool(
+            defaults.get("managed_thread_terminal_followup_default")
+        ),
+    )
+    notify_on = followup_policy.event_mode
+    notify_lane = followup_policy.lane_id
+    notify_once = followup_policy.notify_once
     defer_execution = bool(payload.defer_execution)
     model = normalize_optional_text(payload.model) or defaults.get("model")
     reasoning = normalize_optional_text(payload.reasoning) or defaults.get("reasoning")
@@ -240,6 +244,7 @@ def resolve_managed_thread_message_options(
         notify_on=notify_on,
         notify_lane=notify_lane,
         notify_once=notify_once,
+        notify_required=followup_policy.required,
         defer_execution=defer_execution,
         model=model,
         reasoning=reasoning,

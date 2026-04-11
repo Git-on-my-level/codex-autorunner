@@ -911,7 +911,7 @@ def build_managed_thread_runtime_routes(
                         if options.notify_once
                         else None
                     ),
-                    required=True,
+                    required=options.notify_required,
                 )
             except ManagedThreadAutomationUnavailable as exc:
                 raise HTTPException(

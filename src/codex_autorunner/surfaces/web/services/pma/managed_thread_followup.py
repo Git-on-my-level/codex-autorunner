@@ -10,7 +10,7 @@ from ...routes.pma_routes.automation_adapter import (
     call_store_create_with_payload,
     get_automation_store,
 )
-from ...schemas import PmaManagedThreadCreateRequest
+from ...schemas import PmaManagedThreadCreateRequest, PmaManagedThreadMessageRequest
 from ...services.pma.common import normalize_optional_text
 
 
@@ -51,12 +51,12 @@ def build_managed_thread_terminal_notify_payload(
 
 
 def resolve_managed_thread_followup_policy(
-    payload: PmaManagedThreadCreateRequest,
+    payload: PmaManagedThreadCreateRequest | PmaManagedThreadMessageRequest,
     *,
     default_terminal_followup: bool,
 ) -> ManagedThreadFollowupPolicy:
     notify_on = payload.notify_on
-    terminal_followup = payload.terminal_followup
+    terminal_followup = getattr(payload, "terminal_followup", None)
     if terminal_followup is False and notify_on == "terminal":
         raise HTTPException(
             status_code=400,
@@ -77,9 +77,9 @@ def resolve_managed_thread_followup_policy(
         enabled=enabled,
         required=enabled
         and (
-            payload.notify_on_explicit
-            or payload.notify_lane_explicit
-            or payload.notify_once_explicit
+            getattr(payload, "notify_on_explicit", False)
+            or getattr(payload, "notify_lane_explicit", False)
+            or getattr(payload, "notify_once_explicit", False)
             or terminal_followup is True
         ),
         event_mode="terminal" if enabled else None,

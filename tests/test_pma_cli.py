@@ -1123,9 +1123,6 @@ def test_pma_cli_thread_send_reports_queued_busy_thread(
         "message": "follow up",
         "busy_policy": "queue",
         "defer_execution": True,
-        "notify_on": "terminal",
-        "notify_lane": None,
-        "notify_once": True,
     }
 
 
@@ -1191,9 +1188,6 @@ def test_pma_cli_thread_send_reads_message_from_file(
         "message": "literal `glm-5-turbo`\nsecond line\n",
         "busy_policy": "queue",
         "defer_execution": True,
-        "notify_on": "terminal",
-        "notify_lane": None,
-        "notify_once": True,
     }
     assert "delivered message:\nliteral `glm-5-turbo`\nsecond line\n" in result.stdout
     assert "\nassistant:\n" not in result.stdout
@@ -1259,9 +1253,6 @@ def test_pma_cli_thread_send_reads_message_from_stdin(
         "message": "stdin payload with backticks `glm-5-turbo`\n",
         "busy_policy": "queue",
         "defer_execution": True,
-        "notify_on": "terminal",
-        "notify_lane": None,
-        "notify_once": True,
     }
     assert (
         "delivered message:\nstdin payload with backticks `glm-5-turbo`\n"

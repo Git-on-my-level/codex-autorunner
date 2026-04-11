@@ -45,9 +45,9 @@ def _enable_pma(
     if max_text_chars is not None:
         cfg["pma"]["max_text_chars"] = max_text_chars
     if managed_thread_terminal_followup_default is not None:
-        cfg["pma"]["managed_thread_terminal_followup_default"] = (
-            managed_thread_terminal_followup_default
-        )
+        cfg["pma"][
+            "managed_thread_terminal_followup_default"
+        ] = managed_thread_terminal_followup_default
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
 
@@ -283,9 +283,7 @@ def test_send_message_persists_turns_and_reuses_backend_thread(hub_env) -> None:
 async def test_send_message_enqueues_assistant_output_to_bound_chat_outboxes(
     hub_env,
 ) -> None:
-    _enable_pma(
-        hub_env.hub_root, managed_thread_terminal_followup_default=False
-    )
+    _enable_pma(hub_env.hub_root, managed_thread_terminal_followup_default=False)
     app = create_hub_app(hub_env.hub_root)
 
     class FakeTurnHandle:

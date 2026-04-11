@@ -828,12 +828,40 @@ class PmaManagedThreadMessageRequest(Payload):
     notify_on: Optional[Literal["terminal"]] = Field(
         default=None, validation_alias=AliasChoices("notify_on", "notifyOn")
     )
+    terminal_followup: Optional[bool] = Field(
+        default=None,
+        validation_alias=AliasChoices("terminal_followup", "terminalFollowup"),
+    )
     notify_lane: Optional[str] = Field(
         default=None, validation_alias=AliasChoices("notify_lane", "notifyLane")
     )
     notify_once: bool = Field(
         default=True, validation_alias=AliasChoices("notify_once", "notifyOnce")
     )
+    notify_on_explicit: bool = Field(default=False, exclude=True)
+    terminal_followup_explicit: bool = Field(default=False, exclude=True)
+    notify_lane_explicit: bool = Field(default=False, exclude=True)
+    notify_once_explicit: bool = Field(default=False, exclude=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _capture_followup_intent(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        payload = dict(value)
+        payload["notify_on_explicit"] = any(
+            key in value for key in ("notify_on", "notifyOn")
+        )
+        payload["terminal_followup_explicit"] = any(
+            key in value for key in ("terminal_followup", "terminalFollowup")
+        )
+        payload["notify_lane_explicit"] = any(
+            key in value for key in ("notify_lane", "notifyLane")
+        )
+        payload["notify_once_explicit"] = any(
+            key in value for key in ("notify_once", "notifyOnce")
+        )
+        return payload
 
 
 class PmaManagedThreadCompactRequest(Payload):
