@@ -1927,10 +1927,12 @@ async def test_service_bind_then_status_updates_and_reads_store(tmp_path: Path) 
         bind_payload = rest.interaction_responses[0]["payload"]
         assert bind_payload["type"] == 5
         assert bind_payload["data"]["flags"] == 64
-        assert len(rest.followup_messages) == 2
+        assert len(rest.followup_messages) == 3
         bind_content = rest.followup_messages[0]["payload"]["content"].lower()
         assert "bound this channel" in bind_content
-        status_content = rest.followup_messages[1]["payload"]["content"].lower()
+        queue_wait_content = rest.followup_messages[1]["payload"]["content"].lower()
+        assert "queued behind /car bind in this channel" in queue_wait_content
+        status_content = rest.followup_messages[2]["payload"]["content"].lower()
         assert "channel is bound" in status_content
         assert "policy mode:" in status_content
     finally:
@@ -1995,8 +1997,10 @@ async def test_service_status_reports_effective_collaboration_policy(
         await service.run_forever()
         assert len(rest.interaction_responses) >= 1
         assert rest.interaction_responses[0]["payload"]["type"] == 5
-        assert len(rest.followup_messages) == 2
-        status_payload = rest.followup_messages[1]["payload"]["content"]
+        assert len(rest.followup_messages) == 3
+        queue_wait_content = rest.followup_messages[1]["payload"]["content"].lower()
+        assert "queued behind /car bind in this channel" in queue_wait_content
+        status_payload = rest.followup_messages[2]["payload"]["content"]
         lowered = status_payload.lower()
         assert "policy mode: active" in lowered
         assert "policy plain-text trigger: mentions" in lowered

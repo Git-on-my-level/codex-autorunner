@@ -374,15 +374,19 @@ async def test_flow_status_and_runs_render_expected_output(tmp_path: Path) -> No
         assert len(rest.interaction_responses) == 2
         assert rest.interaction_responses[0]["payload"]["type"] == 5
         assert rest.interaction_responses[1]["payload"]["type"] == 5
-        assert len(rest.followup_messages) == 2
+        assert len(rest.followup_messages) in (2, 3)
         status_payload = rest.followup_messages[0]["payload"]["content"]
-        runs_payload = rest.followup_messages[1]["payload"]["content"]
+        runs_payload = rest.followup_messages[-1]["payload"]["content"]
 
         assert f"Run: {paused_run_id}" in status_payload
         assert "Status: paused" in status_payload
         assert "Freshness:" in status_payload
         assert "Worker:" in status_payload
         assert "Current ticket:" in status_payload
+        if len(rest.followup_messages) == 3:
+            queue_wait_payload = rest.followup_messages[1]["payload"]["content"].lower()
+            assert "queued behind /car flow status" in queue_wait_payload
+            assert "in this channel" in queue_wait_payload
 
         assert "Recent ticket_flow runs (limit=2)" in runs_payload
         assert paused_run_id in runs_payload
