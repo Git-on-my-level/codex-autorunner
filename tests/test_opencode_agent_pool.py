@@ -15,6 +15,7 @@ from codex_autorunner.agents.types import (
 )
 from codex_autorunner.core.config import TicketFlowConfig
 from codex_autorunner.core.flows.models import FlowEventType
+from codex_autorunner.core.orchestration import ColdTraceStore
 from codex_autorunner.core.orchestration.turn_timeline import list_turn_timeline
 from codex_autorunner.integrations.agents.agent_pool_impl import DefaultAgentPool
 from codex_autorunner.tickets.agent_pool import AgentTurnRequest
@@ -859,6 +860,16 @@ async def test_run_turn_persists_full_timeline_from_raw_events_after_partial_liv
         "turn_completed",
     ]
     assert timeline[1]["event"]["result"] == {"stdout": str(tmp_path)}
+    checkpoint = ColdTraceStore(tmp_path).load_checkpoint(
+        str(result.raw["execution_id"])
+    )
+    assert checkpoint is not None
+    assert checkpoint.trace_manifest_id
+    manifest = ColdTraceStore(tmp_path).get_manifest_by_trace_id(
+        checkpoint.trace_manifest_id
+    )
+    assert manifest is not None
+    assert manifest.event_count == 3
 
 
 @pytest.mark.asyncio

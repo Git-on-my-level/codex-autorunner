@@ -18,7 +18,11 @@ from codex_autorunner.agents.registry import AgentDescriptor
 from codex_autorunner.bootstrap import pma_active_context_content, seed_hub_files
 from codex_autorunner.core import filebox
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
-from codex_autorunner.core.orchestration import ExecutionRecord, ThreadTarget
+from codex_autorunner.core.orchestration import (
+    ColdTraceStore,
+    ExecutionRecord,
+    ThreadTarget,
+)
 from codex_autorunner.core.pma_context import maybe_auto_prune_active_context
 from codex_autorunner.core.pma_queue import PmaQueue, QueueItemState
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
@@ -659,6 +663,9 @@ def test_pma_history_detail_includes_turn_timeline(hub_env) -> None:
     assert payload["timeline"][0]["event"]["message"] == "inspect state"
     assert payload["timeline"][1]["event"]["tool_input"] == {"cmd": "pwd"}
     assert payload["timeline"][2]["event"]["result"] == {"stdout": "/tmp"}
+    checkpoint = ColdTraceStore(hub_env.hub_root).load_checkpoint("turn-timeline")
+    assert checkpoint is not None
+    assert checkpoint.trace_manifest_id
 
 
 def test_pma_chat_github_injection_uses_raw_user_message(

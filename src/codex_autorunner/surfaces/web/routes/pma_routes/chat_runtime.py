@@ -26,6 +26,7 @@ from .....core.orchestration import (
     SurfaceThreadMessageRequest,
     build_surface_orchestration_ingress,
 )
+from .....core.orchestration.cold_trace_store import ColdTraceWriter
 from .....core.orchestration.runtime_thread_events import (
     RuntimeThreadRunEventState,
     merge_runtime_thread_raw_events,
@@ -33,6 +34,7 @@ from .....core.orchestration.runtime_thread_events import (
     normalize_runtime_thread_raw_event,
 )
 from .....core.orchestration.turn_timeline import (
+    append_turn_events_to_cold_trace,
     iso_from_epoch_millis,
     persist_turn_timeline,
 )
@@ -359,6 +361,19 @@ def _persist_timeline(
     metadata: dict[str, Any],
     events: list[RunEvent],
 ) -> int:
+    timeline_events = list(events)
+    trace_writer = ColdTraceWriter(
+        hub_root=hub_root,
+        execution_id=execution_id,
+        backend_thread_id=_normalize_optional_text(metadata.get("thread_id")),
+        backend_turn_id=_normalize_optional_text(metadata.get("turn_id")),
+    ).open()
+    trace_manifest_id: Optional[str] = None
+    try:
+        append_turn_events_to_cold_trace(trace_writer, events=timeline_events)
+        trace_manifest_id = trace_writer.finalize().trace_id
+    finally:
+        trace_writer.close()
     return persist_turn_timeline(
         hub_root,
         execution_id=execution_id,
@@ -366,8 +381,11 @@ def _persist_timeline(
         target_id=str(metadata.get("lane_id") or "").strip() or "pma:default",
         repo_id=_normalize_optional_text(metadata.get("repo_id")),
         run_id=_normalize_optional_text(metadata.get("run_id")),
-        metadata=metadata,
-        events=events,
+        metadata={
+            **metadata,
+            **({"trace_manifest_id": trace_manifest_id} if trace_manifest_id else {}),
+        },
+        events=timeline_events,
     )
 
 
@@ -414,7 +432,7 @@ async def _persist_transcript(
             metadata=metadata,
             assistant_text=assistant_text,
         )
-    except OSError:
+    except (OSError, RuntimeError, TypeError, ValueError):
         logger.exception("Failed to write PMA transcript")
         return None
     return {

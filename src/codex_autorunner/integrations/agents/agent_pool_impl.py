@@ -20,6 +20,7 @@ from ...core.orchestration import (
     MessageRequest,
     build_harness_backed_orchestration_service,
 )
+from ...core.orchestration.cold_trace_store import ColdTraceWriter
 from ...core.orchestration.opencode_event_fields import (
     extract_message_id as _event_extract_message_id,
 )
@@ -42,7 +43,10 @@ from ...core.orchestration.runtime_threads import (
     begin_next_queued_runtime_thread_execution,
 )
 from ...core.orchestration.stream_text_merge import merge_assistant_stream_text
-from ...core.orchestration.turn_timeline import persist_turn_timeline
+from ...core.orchestration.turn_timeline import (
+    append_turn_events_to_cold_trace,
+    persist_turn_timeline,
+)
 from ...core.pma_thread_store import PmaThreadStore
 from ...core.ports.run_event import (
     Completed,
@@ -775,6 +779,21 @@ class DefaultAgentPool:
             thread_metadata_value if isinstance(thread_metadata_value, dict) else {}
         )
         try:
+            trace_writer = ColdTraceWriter(
+                hub_root=self._hub_root,
+                execution_id=execution_id,
+                backend_thread_id=backend_thread_id or None,
+                backend_turn_id=final_turn_id or None,
+            ).open()
+            trace_manifest_id: Optional[str] = None
+            try:
+                append_turn_events_to_cold_trace(
+                    trace_writer,
+                    events=effective_summary.timeline_events,
+                )
+                trace_manifest_id = trace_writer.finalize().trace_id
+            finally:
+                trace_writer.close()
             persist_turn_timeline(
                 self._hub_root,
                 execution_id=execution_id,
@@ -795,6 +814,7 @@ class DefaultAgentPool:
                     "model": started.request.model,
                     "reasoning": started.request.reasoning,
                     "request_kind": started.request.kind,
+                    "trace_manifest_id": trace_manifest_id,
                 },
                 events=effective_summary.timeline_events,
             )

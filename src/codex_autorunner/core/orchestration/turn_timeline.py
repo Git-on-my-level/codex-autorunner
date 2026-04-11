@@ -587,6 +587,46 @@ def _log_hot_projection_truncation(
         )
 
 
+def _append_event_to_cold_trace(
+    *,
+    cold_trace_writer: ColdTraceWriter,
+    event: RunEvent,
+    event_type: str,
+    routing: Any,
+) -> None:
+    try:
+        cold_trace_writer.append(
+            event_family=routing.event_family,
+            event_type=event_type,
+            payload=asdict(event),
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "Failed to append execution event to the cold trace"
+        ) from exc
+
+
+def append_turn_events_to_cold_trace(
+    cold_trace_writer: ColdTraceWriter,
+    *,
+    events: Iterable[RunEvent],
+) -> int:
+    count = 0
+    for event in events:
+        event_type, _status = _event_type_and_status(event)
+        routing = route_run_event(event)
+        if not routing.capture_cold_trace:
+            continue
+        _append_event_to_cold_trace(
+            cold_trace_writer=cold_trace_writer,
+            event=event,
+            event_type=event_type,
+            routing=routing,
+        )
+        count += 1
+    return count
+
+
 def persist_turn_timeline(
     hub_root,
     *,
@@ -640,16 +680,12 @@ def persist_turn_timeline(
             )
 
             if cold_trace_writer is not None and routing.capture_cold_trace:
-                try:
-                    cold_trace_writer.append(
-                        event_family=routing.event_family,
-                        event_type=event_type,
-                        payload=asdict(event),
-                    )
-                except Exception as exc:
-                    raise RuntimeError(
-                        "Failed to append execution event to the cold trace"
-                    ) from exc
+                _append_event_to_cold_trace(
+                    cold_trace_writer=cold_trace_writer,
+                    event=event,
+                    event_type=event_type,
+                    routing=routing,
+                )
 
             count += 1
             if not routing.persist_hot_projection:
@@ -792,6 +828,7 @@ def list_turn_timeline(hub_root, *, execution_id: str) -> list[dict[str, Any]]:
 
 
 __all__ = [
+    "append_turn_events_to_cold_trace",
     "iso_from_epoch_millis",
     "list_turn_timeline",
     "persist_turn_timeline",

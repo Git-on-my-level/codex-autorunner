@@ -1196,6 +1196,16 @@ def test_managed_thread_message_persists_full_timeline_from_raw_events(
         "tool_result",
         "turn_completed",
     ]
+    checkpoint = ColdTraceStore(hub_env.hub_root).load_checkpoint(
+        "managed-turn-raw-events"
+    )
+    assert checkpoint is not None
+    assert checkpoint.trace_manifest_id
+    manifest = ColdTraceStore(hub_env.hub_root).get_manifest_by_trace_id(
+        checkpoint.trace_manifest_id
+    )
+    assert manifest is not None
+    assert manifest.event_count == 3
 
 
 def test_zeroclaw_managed_thread_projects_compat_agents_file_for_core_profile(

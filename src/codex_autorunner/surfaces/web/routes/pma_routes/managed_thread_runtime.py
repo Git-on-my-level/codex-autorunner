@@ -17,6 +17,7 @@ from .....agents.base import (
     harness_supports_progress_event_stream,
 )
 from .....core.orchestration import MessageRequest
+from .....core.orchestration.cold_trace_store import ColdTraceWriter
 from .....core.orchestration.runtime_thread_events import (
     RuntimeThreadRunEventState,
     merge_runtime_thread_raw_events,
@@ -29,7 +30,10 @@ from .....core.orchestration.runtime_threads import (
     begin_runtime_thread_execution,
 )
 from .....core.orchestration.service import BusyInterruptFailedError
-from .....core.orchestration.turn_timeline import persist_turn_timeline
+from .....core.orchestration.turn_timeline import (
+    append_turn_events_to_cold_trace,
+    persist_turn_timeline,
+)
 from .....core.pma_thread_store import (
     ManagedThreadAlreadyHasRunningTurnError,
     ManagedThreadNotActiveError,
@@ -308,7 +312,8 @@ def _persist_managed_thread_timeline(
     metadata: dict[str, Any],
     events: list[RunEvent],
     log_status: str,
-) -> None:
+    cold_trace_writer: Optional[ColdTraceWriter] = None,
+) -> Optional[str]:
     try:
         persist_turn_timeline(
             hub_root,
@@ -320,14 +325,24 @@ def _persist_managed_thread_timeline(
             resource_id=normalize_optional_text(thread_row.get("resource_id")),
             metadata=metadata,
             events=events,
+            cold_trace_writer=cold_trace_writer,
         )
-    except (OSError, TypeError, ValueError):  # best-effort timeline persistence
+    except (
+        OSError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):  # best-effort timeline persistence
         logger.exception(
             "Failed to persist %s managed-thread timeline (managed_thread_id=%s, managed_turn_id=%s)",
             log_status,
             managed_thread_id,
             managed_turn_id,
         )
+    finally:
+        if cold_trace_writer is not None:
+            cold_trace_writer.close()
+    return normalize_optional_text(metadata.get("trace_manifest_id"))
 
 
 async def _timeline_from_runtime_raw_events(
@@ -382,6 +397,7 @@ async def _run_managed_thread_execution(
     response_payload = dict(delivery_payload or {})
     live_timeline_count = 0
     live_timeline_error_logged = False
+    cold_trace_writer: Optional[ColdTraceWriter] = None
     live_timeline_metadata = _build_managed_thread_turn_metadata(
         managed_thread_id=managed_thread_id,
         managed_turn_id=current_turn_id,
@@ -393,11 +409,34 @@ async def _run_managed_thread_execution(
         reasoning=started.request.reasoning,
         status="running",
     )
+    try:
+        cold_trace_writer = ColdTraceWriter(
+            hub_root=hub_root,
+            execution_id=current_turn_id,
+            backend_thread_id=current_backend_thread_id or None,
+            backend_turn_id=started.execution.backend_id,
+        ).open()
+    except Exception:
+        logger.warning(
+            "Failed to open managed-thread cold trace writer (managed_thread_id=%s, managed_turn_id=%s)",
+            managed_thread_id,
+            current_turn_id,
+            exc_info=True,
+        )
 
     def _persist_live_timeline_events(events: list[RunEvent]) -> None:
         nonlocal live_timeline_count
         nonlocal live_timeline_error_logged
         if not events:
+            return
+        if cold_trace_writer is None:
+            if not live_timeline_error_logged:
+                live_timeline_error_logged = True
+                logger.error(
+                    "Skipping live managed-thread timeline persistence without a cold trace writer (managed_thread_id=%s, managed_turn_id=%s)",
+                    managed_thread_id,
+                    current_turn_id,
+                )
             return
         try:
             persist_turn_timeline(
@@ -415,6 +454,7 @@ async def _run_managed_thread_execution(
                 metadata=live_timeline_metadata,
                 events=events,
                 start_index=live_timeline_count + 1,
+                cold_trace_writer=cold_trace_writer,
             )
         except Exception:
             if not live_timeline_error_logged:
@@ -426,6 +466,103 @@ async def _run_managed_thread_execution(
                 )
         else:
             live_timeline_count += len(events)
+
+    def _finalize_live_cold_trace(events: list[RunEvent]) -> Optional[str]:
+        nonlocal cold_trace_writer
+        if cold_trace_writer is None or live_timeline_count <= 0:
+            return None
+        try:
+            append_turn_events_to_cold_trace(
+                cold_trace_writer,
+                events=events[live_timeline_count:],
+            )
+            return cold_trace_writer.finalize().trace_id
+        except Exception:
+            logger.exception(
+                "Failed to finalize live managed-thread cold trace (managed_thread_id=%s, managed_turn_id=%s)",
+                managed_thread_id,
+                current_turn_id,
+            )
+            return None
+        finally:
+            cold_trace_writer.close()
+            cold_trace_writer = None
+
+    def _persist_final_timeline_with_cold_trace(
+        *,
+        metadata: dict[str, Any],
+        events: list[RunEvent],
+        log_status: str,
+    ) -> Optional[str]:
+        manifest_id = normalize_optional_text(metadata.get("trace_manifest_id"))
+        if manifest_id is not None:
+            _persist_managed_thread_timeline(
+                hub_root=hub_root,
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=current_turn_id,
+                thread_row=current_thread_row,
+                metadata=metadata,
+                events=events,
+                log_status=log_status,
+            )
+            return manifest_id
+
+        final_writer: Optional[ColdTraceWriter] = cold_trace_writer
+        if final_writer is None:
+            try:
+                final_writer = ColdTraceWriter(
+                    hub_root=hub_root,
+                    execution_id=current_turn_id,
+                    backend_thread_id=normalize_optional_text(
+                        metadata.get("backend_thread_id")
+                    ),
+                    backend_turn_id=normalize_optional_text(
+                        metadata.get("backend_turn_id")
+                    ),
+                ).open()
+            except Exception:
+                logger.exception(
+                    "Failed to open final managed-thread cold trace writer (managed_thread_id=%s, managed_turn_id=%s)",
+                    managed_thread_id,
+                    current_turn_id,
+                )
+                _persist_managed_thread_timeline(
+                    hub_root=hub_root,
+                    managed_thread_id=managed_thread_id,
+                    managed_turn_id=current_turn_id,
+                    thread_row=current_thread_row,
+                    metadata=metadata,
+                    events=events,
+                    log_status=log_status,
+                )
+                return None
+
+        try:
+            append_turn_events_to_cold_trace(final_writer, events=events)
+            manifest_id = final_writer.finalize().trace_id
+        except Exception:
+            logger.exception(
+                "Failed to persist final managed-thread cold trace (managed_thread_id=%s, managed_turn_id=%s)",
+                managed_thread_id,
+                current_turn_id,
+            )
+            manifest_id = None
+        finally:
+            final_writer.close()
+
+        _persist_managed_thread_timeline(
+            hub_root=hub_root,
+            managed_thread_id=managed_thread_id,
+            managed_turn_id=current_turn_id,
+            thread_row=current_thread_row,
+            metadata={
+                **metadata,
+                **({"trace_manifest_id": manifest_id} if manifest_id else {}),
+            },
+            events=events,
+            log_status=log_status,
+        )
+        return manifest_id
 
     if (
         harness is not None
@@ -527,11 +664,10 @@ async def _run_managed_thread_execution(
         )
         transcript_turn_id: Optional[str] = None
         try:
-            _persist_managed_thread_timeline(
-                hub_root=hub_root,
-                managed_thread_id=managed_thread_id,
-                managed_turn_id=current_turn_id,
-                thread_row=current_thread_row,
+            final_trace_manifest_id = _finalize_live_cold_trace(timeline_events)
+            if final_trace_manifest_id:
+                transcript_metadata["trace_manifest_id"] = final_trace_manifest_id
+            _persist_final_timeline_with_cold_trace(
                 metadata=dict(transcript_metadata),
                 events=timeline_events,
                 log_status="ok",
@@ -631,22 +767,22 @@ async def _run_managed_thread_execution(
         timeline_events.append(
             Failed(timestamp=now_iso(), error_message="PMA chat interrupted")
         )
-        _persist_managed_thread_timeline(
-            hub_root=hub_root,
+        interrupted_metadata = _build_managed_thread_turn_metadata(
             managed_thread_id=managed_thread_id,
             managed_turn_id=current_turn_id,
             thread_row=current_thread_row,
-            metadata=_build_managed_thread_turn_metadata(
-                managed_thread_id=managed_thread_id,
-                managed_turn_id=current_turn_id,
-                thread_row=current_thread_row,
-                backend_thread_id=resolved_backend_thread_id,
-                backend_turn_id=outcome.backend_turn_id,
-                workspace_root=started.workspace_root,
-                model=started.request.model,
-                reasoning=started.request.reasoning,
-                status="interrupted",
-            ),
+            backend_thread_id=resolved_backend_thread_id,
+            backend_turn_id=outcome.backend_turn_id,
+            workspace_root=started.workspace_root,
+            model=started.request.model,
+            reasoning=started.request.reasoning,
+            status="interrupted",
+        )
+        final_trace_manifest_id = _finalize_live_cold_trace(timeline_events)
+        if final_trace_manifest_id:
+            interrupted_metadata["trace_manifest_id"] = final_trace_manifest_id
+        _persist_final_timeline_with_cold_trace(
+            metadata=interrupted_metadata,
             events=timeline_events,
             log_status="interrupted",
         )
@@ -675,22 +811,22 @@ async def _run_managed_thread_execution(
 
     detail = sanitize_managed_thread_result_error(outcome.error)
     timeline_events.append(Failed(timestamp=now_iso(), error_message=detail))
-    _persist_managed_thread_timeline(
-        hub_root=hub_root,
+    failed_metadata = _build_managed_thread_turn_metadata(
         managed_thread_id=managed_thread_id,
         managed_turn_id=current_turn_id,
         thread_row=current_thread_row,
-        metadata=_build_managed_thread_turn_metadata(
-            managed_thread_id=managed_thread_id,
-            managed_turn_id=current_turn_id,
-            thread_row=current_thread_row,
-            backend_thread_id=resolved_backend_thread_id,
-            backend_turn_id=outcome.backend_turn_id,
-            workspace_root=started.workspace_root,
-            model=started.request.model,
-            reasoning=started.request.reasoning,
-            status="error",
-        ),
+        backend_thread_id=resolved_backend_thread_id,
+        backend_turn_id=outcome.backend_turn_id,
+        workspace_root=started.workspace_root,
+        model=started.request.model,
+        reasoning=started.request.reasoning,
+        status="error",
+    )
+    final_trace_manifest_id = _finalize_live_cold_trace(timeline_events)
+    if final_trace_manifest_id:
+        failed_metadata["trace_manifest_id"] = final_trace_manifest_id
+    _persist_final_timeline_with_cold_trace(
+        metadata=failed_metadata,
         events=timeline_events,
         log_status="failed",
     )
