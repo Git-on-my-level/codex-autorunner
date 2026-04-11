@@ -139,6 +139,11 @@ def resolve_hub_runtimes_root(hub_root: Path) -> Path:
     return resolve_hub_state_root(hub_root) / "runtimes"
 
 
+def resolve_hub_traces_root(hub_root: Path) -> Path:
+    """Return the hub-scoped root for cold trace artifacts."""
+    return resolve_hub_state_root(hub_root) / "traces"
+
+
 def resolve_hub_runtime_root(hub_root: Path, *, runtime: str) -> Path:
     """Return the managed root for a specific runtime under the hub."""
     runtime_id = _validate_hub_resource_segment(runtime, label="runtime")
@@ -276,6 +281,7 @@ __all__ = [
     "resolve_hub_runtimes_root",
     "resolve_hub_state_root",
     "resolve_hub_templates_root",
+    "resolve_hub_traces_root",
     "resolve_repo_state_root",
     "validate_path_within_roots",
 ]

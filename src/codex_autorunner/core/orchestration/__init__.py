@@ -14,6 +14,7 @@ from .catalog import (
     map_agent_capabilities,
     merge_agent_capabilities,
 )
+from .cold_trace_store import ColdTraceReader, ColdTraceStore, ColdTraceWriter
 from .events import OrchestrationEvent, OrchestrationEventType
 from .execution_history import (
     DEFAULT_EXECUTION_RETENTION_POLICY,
@@ -24,6 +25,7 @@ from .execution_history import (
     ExecutionRetentionPolicy,
     ExecutionRetentionRule,
     ExecutionTraceManifest,
+    ExecutionTraceManifestStatus,
     HotProjectionEnvelope,
     HotProjectionPayloadContract,
     build_hot_projection_envelope,
@@ -118,6 +120,9 @@ __all__ = [
     "AgentDefinition",
     "AgentDefinitionCatalog",
     "Binding",
+    "ColdTraceReader",
+    "ColdTraceStore",
+    "ColdTraceWriter",
     "DEFAULT_EXECUTION_RETENTION_POLICY",
     "ExecutionRecord",
     "ExecutionCheckpoint",
@@ -127,6 +132,7 @@ __all__ = [
     "ExecutionRetentionPolicy",
     "ExecutionRetentionRule",
     "ExecutionTraceManifest",
+    "ExecutionTraceManifestStatus",
     "FlowBackedOrchestrationService",
     "FlowRunTarget",
     "FlowTarget",

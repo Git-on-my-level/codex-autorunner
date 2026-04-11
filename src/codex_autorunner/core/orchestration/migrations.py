@@ -8,7 +8,7 @@ from typing import Callable
 from ..time_utils import now_iso
 from .models import OrchestrationTableDefinition
 
-ORCHESTRATION_SCHEMA_VERSION = 17
+ORCHESTRATION_SCHEMA_VERSION = 18
 
 
 @dataclass(frozen=True)
@@ -1074,6 +1074,63 @@ def _apply_v17(conn: sqlite3.Connection) -> None:
     )
 
 
+def _apply_v18(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS orch_cold_trace_manifests (
+            trace_id TEXT PRIMARY KEY,
+            execution_id TEXT NOT NULL,
+            artifact_relpath TEXT NOT NULL,
+            trace_format TEXT NOT NULL,
+            event_count INTEGER NOT NULL DEFAULT 0,
+            byte_count INTEGER NOT NULL DEFAULT 0,
+            checksum TEXT,
+            schema_version INTEGER NOT NULL DEFAULT 1,
+            status TEXT NOT NULL,
+            started_at TEXT,
+            finished_at TEXT,
+            backend_thread_id TEXT,
+            backend_turn_id TEXT,
+            includes_families_json TEXT NOT NULL DEFAULT '[]',
+            redactions_applied_json TEXT NOT NULL DEFAULT '[]',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS orch_execution_checkpoints (
+            execution_id TEXT PRIMARY KEY,
+            thread_target_id TEXT,
+            status TEXT NOT NULL,
+            checkpoint_json TEXT NOT NULL DEFAULT '{}',
+            trace_manifest_id TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_cold_trace_manifests_execution
+            ON orch_cold_trace_manifests(execution_id, status)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_cold_trace_manifests_status_updated
+            ON orch_cold_trace_manifests(status, updated_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_execution_checkpoints_thread
+            ON orch_execution_checkpoints(thread_target_id, updated_at)
+        """
+    )
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
@@ -1096,6 +1153,7 @@ _MIGRATIONS = (
     _MigrationStep(15, "add_scm_polling_watch_store", _apply_v15),
     _MigrationStep(16, "add_notification_conversation_store", _apply_v16),
     _MigrationStep(17, "add_legacy_backfill_completion_flags", _apply_v17),
+    _MigrationStep(18, "add_cold_trace_manifest_and_checkpoint_tables", _apply_v18),
 )
 
 
@@ -1209,6 +1267,16 @@ _TABLE_DEFINITIONS = (
         name="orch_legacy_backfill_flags",
         role="ops",
         description="One-shot completion markers for legacy orchestration state backfill.",
+    ),
+    OrchestrationTableDefinition(
+        name="orch_cold_trace_manifests",
+        role="mirror",
+        description="Manifest metadata for cold full-fidelity execution trace artifacts stored outside the hot SQLite path.",
+    ),
+    OrchestrationTableDefinition(
+        name="orch_execution_checkpoints",
+        role="projection",
+        description="Compact execution checkpoints for startup/recovery, containing only bounded scalars and short previews.",
     ),
     OrchestrationTableDefinition(
         name="orch_schema_migrations",

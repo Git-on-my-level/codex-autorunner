@@ -32,6 +32,7 @@ HotProjectionPayloadContract = Literal[
     "none",
 ]
 CheckpointSignalStatus = Literal["ok", "error", "interrupted"]
+ExecutionTraceManifestStatus = Literal["open", "finalized", "archived"]
 
 
 @dataclass(frozen=True)
@@ -229,6 +230,10 @@ class ExecutionTraceManifest:
     artifact_relpath: str
     trace_format: str
     event_count: int
+    byte_count: int = 0
+    checksum: Optional[str] = None
+    schema_version: int = 1
+    status: ExecutionTraceManifestStatus = "open"
     started_at: Optional[str] = None
     finished_at: Optional[str] = None
     backend_thread_id: Optional[str] = None
@@ -354,6 +359,7 @@ __all__ = [
     "ExecutionRetentionPolicy",
     "ExecutionRetentionRule",
     "ExecutionTraceManifest",
+    "ExecutionTraceManifestStatus",
     "HotProjectionEnvelope",
     "HotProjectionPayloadContract",
     "build_hot_projection_envelope",
