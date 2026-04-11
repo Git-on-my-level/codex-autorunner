@@ -1299,10 +1299,11 @@ def test_pma_cli_thread_send_recovers_timeout_from_status_probe(
                 "thread": {
                     "last_turn_id": "turn-2",
                     "latest_turn_id": "turn-2",
-                    "last_message_preview": "follow up",
+                    "last_message_preview": "previous prompt",
                 },
                 "turn": {"managed_turn_id": "turn-2", "status": "running"},
                 "queue_depth": 0,
+                "queued_turns": [],
             },
         ]
     )
@@ -1340,7 +1341,101 @@ def test_pma_cli_thread_send_recovers_timeout_from_status_probe(
     assert result.exit_code == 0
     assert "send_state=accepted managed_turn_id=turn-2" in result.stdout
     assert "delivered message:\nfollow up\n" in result.stdout
-    assert "recovered accepted delivery from thread status" in result.stdout
+    assert "recovered delivery from thread status" in result.stdout
+
+
+def test_pma_cli_thread_send_recovers_queued_timeout_from_status_probe(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        pma_cli,
+        "load_hub_config",
+        lambda hub_root: SimpleNamespace(
+            server_base_path="",
+            server_host="127.0.0.1",
+            server_port=4321,
+            server_auth_token_env=None,
+        ),
+    )
+
+    def _fake_request_json_with_status(
+        method: str,
+        url: str,
+        payload=None,
+        token_env=None,
+        timeout=None,
+    ):
+        _ = method, url, payload, token_env, timeout
+        raise httpx.TimeoutException("timed out")
+
+    status_payloads = iter(
+        [
+            {
+                "thread": {
+                    "last_turn_id": "turn-1",
+                    "latest_turn_id": "turn-1",
+                    "last_message_preview": "previous prompt",
+                },
+                "turn": {"managed_turn_id": "turn-1", "status": "running"},
+                "queue_depth": 0,
+                "queued_turns": [],
+            },
+            {
+                "thread": {
+                    "last_turn_id": "turn-1",
+                    "latest_turn_id": "turn-1",
+                    "last_message_preview": "previous prompt",
+                },
+                "turn": {"managed_turn_id": "turn-1", "status": "running"},
+                "queue_depth": 1,
+                "queued_turns": [
+                    {
+                        "managed_turn_id": "turn-2",
+                        "prompt_preview": "follow up",
+                        "state": "queued",
+                    }
+                ],
+            },
+        ]
+    )
+
+    def _fake_request_json(
+        method: str,
+        url: str,
+        payload=None,
+        token_env=None,
+        params=None,
+    ):
+        _ = method, url, payload, token_env, params
+        return next(status_payloads)
+
+    monkeypatch.setattr(
+        pma_cli, "_request_json_with_status", _fake_request_json_with_status
+    )
+    monkeypatch.setattr(pma_cli, "_request_json", _fake_request_json)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        pma_app,
+        [
+            "thread",
+            "send",
+            "--id",
+            "thread-1",
+            "--message",
+            "follow up",
+            "--path",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert (
+        "send_state=queued managed_turn_id=turn-2 active_managed_turn_id=turn-1 "
+        "queue_depth=1" in result.stdout
+    )
+    assert "delivered message:\nfollow up\n" in result.stdout
+    assert "recovered delivery from thread status" in result.stdout
 
 
 def test_pma_cli_thread_send_timeout_warns_before_retry_when_status_unclear(

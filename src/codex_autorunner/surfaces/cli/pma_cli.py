@@ -41,6 +41,7 @@ from .commands.utils import format_hub_request_error
 
 logger = logging.getLogger(__name__)
 _MANAGED_THREAD_SEND_PREVIEW_LIMIT = 120
+_MANAGED_THREAD_SEND_TIMEOUT_STATUS_LIMIT = 50
 
 pma_app = typer.Typer(
     add_completion=False,
@@ -844,6 +845,8 @@ class _ManagedThreadSendTimeoutProbe:
     active_managed_turn_id: str
     active_turn_status: str
     queue_depth: int
+    queued_turn_ids: tuple[str, ...]
+    queued_prompt_previews: tuple[str, ...]
 
     @classmethod
     def from_status(cls, data: Any) -> "_ManagedThreadSendTimeoutProbe":
@@ -852,6 +855,18 @@ class _ManagedThreadSendTimeoutProbe:
         thread: dict[str, Any] = raw_thread if isinstance(raw_thread, dict) else {}
         raw_turn = payload.get("turn")
         turn: dict[str, Any] = raw_turn if isinstance(raw_turn, dict) else {}
+        raw_queued_turns = payload.get("queued_turns")
+        queued_turns = raw_queued_turns if isinstance(raw_queued_turns, list) else []
+        queued_turn_ids = tuple(
+            str(item.get("managed_turn_id") or "").strip()
+            for item in queued_turns
+            if isinstance(item, dict) and str(item.get("managed_turn_id") or "").strip()
+        )
+        queued_prompt_previews = tuple(
+            str(item.get("prompt_preview") or "").strip()
+            for item in queued_turns
+            if isinstance(item, dict) and str(item.get("prompt_preview") or "").strip()
+        )
         return cls(
             last_turn_id=str(
                 thread.get("last_turn_id")
@@ -863,6 +878,8 @@ class _ManagedThreadSendTimeoutProbe:
             active_managed_turn_id=str(turn.get("managed_turn_id") or "").strip(),
             active_turn_status=str(turn.get("status") or "").strip(),
             queue_depth=_coerce_optional_int(payload.get("queue_depth")) or 0,
+            queued_turn_ids=queued_turn_ids,
+            queued_prompt_previews=queued_prompt_previews,
         )
 
 
@@ -875,7 +892,7 @@ def _fetch_managed_thread_status_payload(
         "GET",
         _build_pma_url(config, f"/threads/{managed_thread_id}/status"),
         token_env=config.server_auth_token_env,
-        params={"limit": 1},
+        params={"limit": _MANAGED_THREAD_SEND_TIMEOUT_STATUS_LIMIT},
     )
 
 
@@ -919,31 +936,60 @@ def _recover_managed_thread_send_timeout(
     ).strip()
     if not expected_preview:
         return None
-    if current.last_turn_id == baseline.last_turn_id:
-        return None
-    if current.last_message_preview != expected_preview:
-        return None
+    recovered_turn_id = ""
+    queued = False
+    if current.last_turn_id != baseline.last_turn_id and current.last_turn_id:
+        recovered_turn_id = current.last_turn_id
+    else:
+        baseline_queued_ids = set(baseline.queued_turn_ids)
+        queued_match_id = next(
+            (
+                managed_turn_id
+                for managed_turn_id, prompt_preview in zip(
+                    current.queued_turn_ids, current.queued_prompt_previews
+                )
+                if prompt_preview == expected_preview
+                and managed_turn_id not in baseline_queued_ids
+            ),
+            "",
+        )
+        if (
+            not queued_match_id
+            and current.queue_depth > baseline.queue_depth
+            and expected_preview in current.queued_prompt_previews
+            and expected_preview not in baseline.queued_prompt_previews
+        ):
+            queued_match_id = next(
+                (
+                    managed_turn_id
+                    for managed_turn_id, prompt_preview in zip(
+                        current.queued_turn_ids, current.queued_prompt_previews
+                    )
+                    if prompt_preview == expected_preview
+                ),
+                "",
+            )
+        if not queued_match_id:
+            return None
+        recovered_turn_id = queued_match_id
+        queued = True
 
-    queued = (
-        current.active_managed_turn_id != ""
-        and current.last_turn_id != current.active_managed_turn_id
-    )
     payload: dict[str, Any] = {
         "status": "ok",
         "send_state": "queued" if queued else "accepted",
         "execution_state": (
             "queued" if queued else (current.active_turn_status or "running")
         ),
-        "managed_turn_id": current.last_turn_id,
+        "managed_turn_id": recovered_turn_id,
         "active_managed_turn_id": (
-            current.active_managed_turn_id if queued else current.last_turn_id
+            current.active_managed_turn_id if queued else recovered_turn_id
         ),
         "queue_depth": current.queue_depth,
         "delivered_message": message_body,
         "assistant_text": "",
         "detail": (
-            "Timed out waiting for send confirmation; recovered accepted delivery "
-            "from thread status."
+            "Timed out waiting for send confirmation; recovered delivery from "
+            "thread status."
         ),
         "error": "",
         "next_step": (
