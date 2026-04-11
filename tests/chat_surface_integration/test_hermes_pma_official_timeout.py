@@ -18,7 +18,7 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.mark.anyio
-async def test_discord_hermes_pma_times_out_for_official_prompt_hang(
+async def test_discord_hermes_pma_times_out_for_missing_terminal_and_missing_return(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -50,7 +50,7 @@ async def test_discord_hermes_pma_times_out_for_official_prompt_hang(
 
 
 @pytest.mark.anyio
-async def test_telegram_hermes_pma_times_out_for_official_prompt_hang(
+async def test_telegram_hermes_pma_times_out_for_missing_terminal_and_missing_return(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

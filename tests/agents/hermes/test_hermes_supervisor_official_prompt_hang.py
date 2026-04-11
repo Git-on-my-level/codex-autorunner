@@ -11,7 +11,7 @@ from codex_autorunner.agents.hermes.supervisor import HermesSupervisor
 
 @pytest.mark.slow
 @pytest.mark.asyncio
-async def test_hermes_supervisor_waits_for_official_prompt_result_before_completing(
+async def test_hermes_supervisor_times_out_when_official_prompt_never_emits_terminal_state(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -48,5 +48,39 @@ async def test_hermes_supervisor_waits_for_official_prompt_result_before_complet
             '"last_session_update_kind":"agent_thought_chunk"' in caplog.text
             or '"last_session_update_kind":"agent_message_chunk"' in caplog.text
         )
+    finally:
+        await supervisor.close_all()
+
+
+@pytest.mark.slow
+@pytest.mark.asyncio
+async def test_hermes_supervisor_completes_from_terminal_event_without_request_return(
+    tmp_path: Path,
+) -> None:
+    supervisor = HermesSupervisor(
+        fake_acp_command("official_terminal_without_request_return")
+    )
+    try:
+        session = await supervisor.create_session(tmp_path)
+        turn_id = await supervisor.start_turn(tmp_path, session.session_id, "hello")
+
+        result = await asyncio.wait_for(
+            supervisor.wait_for_turn(
+                tmp_path,
+                session.session_id,
+                turn_id,
+            ),
+            timeout=2.0,
+        )
+
+        events = await supervisor.list_turn_events_snapshot(turn_id)
+        assert result.status == "completed"
+        assert result.assistant_text == "fixture reply"
+        assert [event.get("method") for event in events] == [
+            "prompt/started",
+            "session/update",
+            "session/update",
+            "prompt/completed",
+        ]
     finally:
         await supervisor.close_all()
