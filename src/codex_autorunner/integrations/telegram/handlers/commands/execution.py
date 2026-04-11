@@ -24,7 +24,11 @@ from .....agents.opencode.runtime import (
     opencode_stream_timeouts,
     split_model_id,
 )
-from .....agents.registry import get_registered_agents, wrap_requested_agent_context
+from .....agents.registry import (
+    get_registered_agents,
+    resolve_agent_runtime,
+    wrap_requested_agent_context,
+)
 from .....core.config_contract import ConfigError
 from .....core.context_awareness import (
     has_file_context_signal,
@@ -350,11 +354,16 @@ def _build_telegram_thread_orchestration_service(handlers: Any) -> Any:
     descriptors = get_registered_agents(handlers)
 
     def _make_harness(agent_id: str, profile: Optional[str] = None) -> Any:
-        descriptor = descriptors.get(agent_id)
+        resolution = resolve_agent_runtime(agent_id, profile, context=handlers)
+        descriptor = descriptors.get(resolution.runtime_agent_id)
         if descriptor is None:
-            raise KeyError(f"Unknown agent definition '{agent_id}'")
+            raise KeyError(f"Unknown agent definition '{resolution.runtime_agent_id}'")
         return descriptor.make_harness(
-            wrap_requested_agent_context(handlers, agent_id=agent_id, profile=profile)
+            wrap_requested_agent_context(
+                handlers,
+                agent_id=resolution.runtime_agent_id,
+                profile=resolution.runtime_profile,
+            )
         )
 
     state_root = _telegram_state_root(handlers)

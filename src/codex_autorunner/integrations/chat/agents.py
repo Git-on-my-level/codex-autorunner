@@ -265,18 +265,19 @@ def resolve_chat_runtime_agent(
     default: Optional[str] = DEFAULT_CHAT_AGENT,
     context: Any = None,
 ) -> str:
+    from ...agents.registry import resolve_agent_runtime
+
     normalized_agent, normalized_profile = resolve_chat_agent_and_profile(
         agent,
         profile,
         default=default,
         context=context,
     )
-    if normalized_agent != "hermes" or normalized_profile is None:
-        return normalized_agent
-    for option in chat_hermes_profile_options(context):
-        if option.profile == normalized_profile:
-            return option.runtime_agent
-    return normalized_agent
+    return resolve_agent_runtime(
+        normalized_agent,
+        normalized_profile,
+        context=context,
+    ).runtime_agent_id
 
 
 def format_chat_agent_selection(agent: object, profile: object = None) -> str:

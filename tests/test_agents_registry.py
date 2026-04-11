@@ -13,10 +13,11 @@ from codex_autorunner.agents.registry import (
     get_registered_agents,
     has_capability,
     reload_agents,
+    resolve_agent_runtime,
     validate_agent_id,
     wrap_requested_agent_context,
 )
-from codex_autorunner.core.config import AgentConfig
+from codex_autorunner.core.config import AgentConfig, ResolvedAgentTarget
 
 
 @pytest.fixture
@@ -558,3 +559,50 @@ class TestHermesHarness:
 
         assert wrapped._requested_agent_id == "hermes"
         assert wrapped._requested_agent_profile == "m4"
+
+    def test_resolve_agent_runtime_maps_alias_input_to_logical_profile(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "codex_autorunner.agents.registry.get_registered_agents",
+            lambda context=None: {
+                "hermes": AgentDescriptor(
+                    id="hermes",
+                    name="Hermes",
+                    capabilities=frozenset(),
+                    make_harness=lambda _ctx: None,  # type: ignore[return-value]
+                    runtime_kind="hermes",
+                ),
+                "hermes-m4-pma": AgentDescriptor(
+                    id="hermes-m4-pma",
+                    name="Hermes Alias",
+                    capabilities=frozenset(),
+                    make_harness=lambda _ctx: None,  # type: ignore[return-value]
+                    runtime_kind="hermes",
+                ),
+            },
+        )
+        monkeypatch.setattr(
+            "codex_autorunner.agents.registry._resolve_runtime_agent_config",
+            lambda _ctx: SimpleNamespace(
+                resolve_runtime_agent_target=lambda agent_id, profile=None: (
+                    ResolvedAgentTarget(
+                        logical_agent_id=agent_id,
+                        logical_profile=profile,
+                        runtime_agent_id="hermes-m4-pma",
+                        runtime_profile=None,
+                        resolution_kind="alias_profile",
+                    )
+                    if agent_id == "hermes" and profile == "m4-pma"
+                    else None
+                )
+            ),
+        )
+
+        resolved = resolve_agent_runtime("hermes-m4-pma", context="ctx")
+
+        assert resolved.logical_agent_id == "hermes"
+        assert resolved.logical_profile == "m4-pma"
+        assert resolved.runtime_agent_id == "hermes-m4-pma"
+        assert resolved.runtime_profile is None
+        assert resolved.resolution_kind == "alias_profile"

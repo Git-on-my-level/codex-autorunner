@@ -10,7 +10,11 @@ from functools import partial
 from pathlib import Path
 from typing import Any, Awaitable, Optional, cast
 
-from ...agents.registry import get_registered_agents, wrap_requested_agent_context
+from ...agents.registry import (
+    get_registered_agents,
+    resolve_agent_runtime,
+    wrap_requested_agent_context,
+)
 from ...core.context_awareness import (
     maybe_inject_car_awareness,
     maybe_inject_filebox_hint,
@@ -2003,11 +2007,16 @@ def build_discord_thread_orchestration_service(service: Any) -> Any:
     descriptors = get_registered_agents(service)
 
     def _make_harness(agent_id: str, profile: Optional[str] = None) -> Any:
-        descriptor = descriptors.get(agent_id)
+        resolution = resolve_agent_runtime(agent_id, profile, context=service)
+        descriptor = descriptors.get(resolution.runtime_agent_id)
         if descriptor is None:
-            raise KeyError(f"Unknown agent definition '{agent_id}'")
+            raise KeyError(f"Unknown agent definition '{resolution.runtime_agent_id}'")
         return descriptor.make_harness(
-            wrap_requested_agent_context(service, agent_id=agent_id, profile=profile)
+            wrap_requested_agent_context(
+                service,
+                agent_id=resolution.runtime_agent_id,
+                profile=resolution.runtime_profile,
+            )
         )
 
     created = build_harness_backed_orchestration_service(

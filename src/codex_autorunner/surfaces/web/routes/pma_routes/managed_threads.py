@@ -6,7 +6,11 @@ from typing import TYPE_CHECKING, Annotated, Any, Optional, cast
 
 from fastapi import APIRouter, Body, HTTPException, Request
 
-from .....agents.registry import get_registered_agents, wrap_requested_agent_context
+from .....agents.registry import (
+    get_registered_agents,
+    resolve_agent_runtime,
+    wrap_requested_agent_context,
+)
 from .....core.chat_bindings import active_chat_binding_metadata_by_thread
 from .....core.orchestration import build_harness_backed_orchestration_service
 from .....core.orchestration.catalog import RuntimeAgentDescriptor
@@ -76,18 +80,21 @@ def build_managed_thread_orchestration_service(request: Request):
         if not isinstance(cache, dict):
             cache = {}
             request.app.state._managed_thread_harness_cache = cache
-        cache_key = (agent_id, profile or "")
+        resolution = resolve_agent_runtime(agent_id, profile, context=request.app.state)
+        runtime_agent_id = resolution.runtime_agent_id
+        runtime_profile = resolution.runtime_profile
+        cache_key = (runtime_agent_id, runtime_profile or "")
         cached = cache.get(cache_key)
         if cached is not None:
             return cached
-        descriptor = descriptors.get(agent_id)
+        descriptor = descriptors.get(runtime_agent_id)
         if descriptor is None:
-            raise KeyError(f"Unknown agent definition '{agent_id}'")
+            raise KeyError(f"Unknown agent definition '{runtime_agent_id}'")
         harness = descriptor.make_harness(
             wrap_requested_agent_context(
                 request.app.state,
-                agent_id=agent_id,
-                profile=profile,
+                agent_id=runtime_agent_id,
+                profile=runtime_profile,
             )
         )
         cache[cache_key] = harness

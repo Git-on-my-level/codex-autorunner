@@ -1078,6 +1078,15 @@ class AgentConfig:
 
 
 @dataclasses.dataclass(frozen=True)
+class ResolvedAgentTarget:
+    logical_agent_id: str
+    logical_profile: Optional[str]
+    runtime_agent_id: str
+    runtime_profile: Optional[str]
+    resolution_kind: Literal["passthrough", "canonical_profile", "alias_profile"]
+
+
+@dataclasses.dataclass(frozen=True)
 class TemplateRepoConfig:
     id: str
     url: str
@@ -1151,19 +1160,92 @@ def _parse_optional_int(value: Any) -> Optional[int]:
 class AgentConfigMixin:
     agents: Dict[str, AgentConfig]
 
+    @staticmethod
+    def _normalize_agent_token(value: object) -> str:
+        return str(value or "").strip().lower()
+
+    @classmethod
+    def _strip_agent_prefix(cls, agent_id: str, runtime_kind: str) -> Optional[str]:
+        normalized_agent_id = cls._normalize_agent_token(agent_id)
+        normalized_runtime_kind = cls._normalize_agent_token(runtime_kind)
+        if not normalized_agent_id or not normalized_runtime_kind:
+            return None
+        for prefix in (
+            f"{normalized_runtime_kind}-",
+            f"{normalized_runtime_kind}_",
+        ):
+            if normalized_agent_id.startswith(prefix):
+                suffix = normalized_agent_id[len(prefix) :].strip()
+                return suffix or None
+        return None
+
+    def resolve_runtime_agent_target(
+        self, agent_id: str, *, profile: Optional[str] = None
+    ) -> ResolvedAgentTarget:
+        logical_agent_id = self._normalize_agent_token(agent_id)
+        logical_profile = self._normalize_agent_token(profile) or None
+        if not logical_agent_id:
+            raise ConfigError("agent_id is required")
+
+        if logical_profile is not None:
+            agent = self.agents.get(logical_agent_id)
+            configured_profiles = agent.profiles if agent is not None else None
+            if (
+                isinstance(configured_profiles, dict)
+                and logical_profile in configured_profiles
+            ):
+                return ResolvedAgentTarget(
+                    logical_agent_id=logical_agent_id,
+                    logical_profile=logical_profile,
+                    runtime_agent_id=logical_agent_id,
+                    runtime_profile=logical_profile,
+                    resolution_kind="canonical_profile",
+                )
+
+            for raw_runtime_agent_id, runtime_agent in self.agents.items():
+                runtime_agent_id = self._normalize_agent_token(raw_runtime_agent_id)
+                if runtime_agent_id == logical_agent_id:
+                    continue
+                runtime_kind = self._normalize_agent_token(
+                    runtime_agent.backend or runtime_agent_id
+                )
+                if runtime_kind != logical_agent_id:
+                    continue
+                derived_profile = self._strip_agent_prefix(
+                    runtime_agent_id, logical_agent_id
+                )
+                if derived_profile != logical_profile:
+                    continue
+                return ResolvedAgentTarget(
+                    logical_agent_id=logical_agent_id,
+                    logical_profile=logical_profile,
+                    runtime_agent_id=runtime_agent_id,
+                    runtime_profile=None,
+                    resolution_kind="alias_profile",
+                )
+
+        return ResolvedAgentTarget(
+            logical_agent_id=logical_agent_id,
+            logical_profile=logical_profile,
+            runtime_agent_id=logical_agent_id,
+            runtime_profile=logical_profile,
+            resolution_kind="passthrough",
+        )
+
     def resolved_agent_config(
         self, agent_id: str, *, profile: Optional[str] = None
     ) -> AgentConfig:
-        agent = self.agents.get(agent_id)
+        resolved_target = self.resolve_runtime_agent_target(agent_id, profile=profile)
+        agent = self.agents.get(resolved_target.runtime_agent_id)
         if agent is None:
             raise ConfigError(f"agents.{agent_id}.binary is required")
-        normalized_profile = str(profile or "").strip().lower()
+        normalized_profile = str(resolved_target.runtime_profile or "").strip().lower()
         if not normalized_profile:
             return agent
         profile_config = (agent.profiles or {}).get(normalized_profile)
         if profile_config is None:
             raise ConfigError(
-                f"agents.{agent_id}.profiles.{normalized_profile} is not configured"
+                f"agents.{resolved_target.runtime_agent_id}.profiles.{normalized_profile} is not configured"
             )
         return AgentConfig(
             backend=profile_config.backend or agent.backend,

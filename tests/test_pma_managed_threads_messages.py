@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import anyio
 import httpx
@@ -272,6 +273,126 @@ def test_send_message_persists_turns_and_reuses_backend_thread(hub_env) -> None:
     assert metadata["model"] == "model-default"
     assert metadata["reasoning"] == "high"
     assert transcript["content"].strip() == "assistant-output-1"
+
+
+def test_send_message_resolves_alias_backed_hermes_profile_runtime(
+    hub_env, monkeypatch
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg.setdefault("pma", {})
+    cfg["pma"]["enabled"] = True
+    cfg.setdefault("agents", {})
+    cfg["agents"]["hermes"] = {"binary": "hermes"}
+    cfg["agents"]["hermes-m4-pma"] = {
+        "backend": "hermes",
+        "binary": "hermes-m4-pma",
+    }
+    write_test_config(hub_env.hub_root / CONFIG_FILENAME, cfg)
+
+    observed_supervisor_args: list[tuple[str, str | None]] = []
+
+    class _FakeHermesSupervisor:
+        async def ensure_ready(self, workspace_root: Path) -> None:
+            _ = workspace_root
+
+        async def create_session(self, workspace_root: Path, title: str | None = None):
+            _ = workspace_root, title
+            return SimpleNamespace(session_id="hermes-session-1")
+
+        async def resume_session(self, workspace_root: Path, conversation_id: str):
+            _ = workspace_root
+            return SimpleNamespace(session_id=conversation_id)
+
+        async def start_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            prompt: str,
+            *,
+            model: str | None = None,
+            approval_mode: str | None = None,
+        ) -> str:
+            _ = workspace_root, conversation_id, prompt, model, approval_mode
+            return "hermes-turn-1"
+
+        async def wait_for_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            turn_id: str,
+            *,
+            timeout: float | None = None,
+        ):
+            _ = workspace_root, conversation_id, turn_id, timeout
+            return SimpleNamespace(
+                status="ok",
+                assistant_text="hermes-output",
+                raw_events=[],
+                errors=[],
+            )
+
+        async def interrupt_turn(
+            self, workspace_root: Path, conversation_id: str, turn_id: str | None
+        ) -> None:
+            _ = workspace_root, conversation_id, turn_id
+
+        async def stream_turn_events(
+            self, workspace_root: Path, conversation_id: str, turn_id: str
+        ):
+            _ = workspace_root, conversation_id, turn_id
+            if False:
+                yield {}
+
+        async def list_turn_events_snapshot(
+            self, turn_id: str
+        ) -> list[dict[str, object]]:
+            _ = turn_id
+            return []
+
+    def _fake_build_supervisor(
+        _config,
+        *,
+        agent_id: str = "hermes",
+        profile: str | None = None,
+        **_kwargs,
+    ):
+        observed_supervisor_args.append((agent_id, profile))
+        return _FakeHermesSupervisor()
+
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry.build_hermes_supervisor_from_config",
+        _fake_build_supervisor,
+    )
+
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "hermes",
+                "profile": "m4-pma",
+                **_repo_owner(hub_env),
+            },
+        )
+        assert create_resp.status_code == 200
+        thread = create_resp.json()["thread"]
+        assert thread["agent"] == "hermes"
+        assert thread["agent_profile"] == "m4-pma"
+        managed_thread_id = thread["managed_thread_id"]
+
+        message_resp = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={"message": "hello hermes"},
+        )
+
+    assert message_resp.status_code == 200
+    payload = message_resp.json()
+    assert payload["status"] == "ok"
+    assert payload["assistant_text"] == "hermes-output"
+    assert payload["backend_thread_id"] == "hermes-session-1"
+    assert observed_supervisor_args == [("hermes-m4-pma", None)]
 
 
 @pytest.mark.anyio

@@ -262,7 +262,7 @@ class AppServerThreadArchiveRequest(Payload):
 class PmaManagedThreadCreateRequest(Payload):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    agent: Optional[Literal["codex", "hermes", "opencode", "zeroclaw"]] = None
+    agent: Optional[str] = None
     profile: Optional[str] = None
     resource_kind: Optional[Literal["repo", "agent_workspace"]] = Field(
         default=None, validation_alias=AliasChoices("resource_kind", "resourceKind")

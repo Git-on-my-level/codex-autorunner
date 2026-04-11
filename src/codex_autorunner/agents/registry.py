@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional, cast
 
-from ..core.config import load_hub_config, load_repo_config
+from ..core.config import ResolvedAgentTarget, load_hub_config, load_repo_config
 from ..core.config_contract import ConfigError
 from ..plugin_api import CAR_AGENT_ENTRYPOINT_GROUP, CAR_PLUGIN_API_VERSION
 from .aliased_harness import AliasedAgentHarness
@@ -78,6 +78,15 @@ class _RequestedAgentContext:
 
     def __setattr__(self, name: str, value: Any) -> None:
         setattr(self._delegate, name, value)
+
+
+@dataclass(frozen=True)
+class AgentRuntimeResolution:
+    logical_agent_id: str
+    logical_profile: Optional[str]
+    runtime_agent_id: str
+    runtime_profile: Optional[str]
+    resolution_kind: str
 
 
 def normalize_agent_capabilities(
@@ -319,6 +328,124 @@ def _resolve_context_root(ctx: Any) -> Optional[Path]:
         if isinstance(root, Path):
             return root
     return None
+
+
+def _normalize_optional_text(value: object) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    return normalized or None
+
+
+def _agent_runtime_kind(agent_id: str, descriptor: Any) -> str:
+    raw_runtime_kind = getattr(descriptor, "runtime_kind", None)
+    if isinstance(raw_runtime_kind, str) and raw_runtime_kind.strip():
+        return raw_runtime_kind.strip().lower()
+    normalized_agent_id = str(agent_id or "").strip().lower()
+    for separator in ("-", "_"):
+        if separator not in normalized_agent_id:
+            continue
+        prefix = normalized_agent_id.split(separator, 1)[0].strip()
+        if prefix and prefix in _all_agents():
+            return prefix
+    return normalized_agent_id
+
+
+def _strip_runtime_kind_prefix(agent_id: str, runtime_kind: str) -> str:
+    aid = str(agent_id or "").strip().lower()
+    rk = str(runtime_kind or "").strip().lower()
+    if not rk:
+        return aid
+    dash = f"{rk}-"
+    under = f"{rk}_"
+    if aid.startswith(dash):
+        suffix = aid[len(dash) :].strip()
+        return suffix if suffix else aid
+    if aid.startswith(under):
+        suffix = aid[len(under) :].strip()
+        return suffix if suffix else aid
+    return aid
+
+
+def _coerce_resolved_agent_target(value: object) -> Optional[ResolvedAgentTarget]:
+    if isinstance(value, ResolvedAgentTarget):
+        return value
+    return None
+
+
+def resolve_agent_runtime(
+    agent_id: str,
+    profile: Optional[str] = None,
+    *,
+    context: Any = None,
+) -> AgentRuntimeResolution:
+    normalized_agent_id = str(agent_id or "").strip().lower()
+    normalized_profile = _normalize_optional_text(profile)
+    if not normalized_agent_id:
+        raise ValueError("agent_id is required")
+
+    descriptors = get_registered_agents(context)
+    logical_agent_id = normalized_agent_id
+    logical_profile = normalized_profile
+
+    descriptor = descriptors.get(normalized_agent_id)
+    if descriptor is not None:
+        runtime_kind = _agent_runtime_kind(normalized_agent_id, descriptor)
+        if runtime_kind != normalized_agent_id:
+            derived_profile = _strip_runtime_kind_prefix(
+                normalized_agent_id,
+                runtime_kind,
+            )
+            if derived_profile != normalized_agent_id:
+                logical_agent_id = runtime_kind
+                if logical_profile is None:
+                    logical_profile = derived_profile
+
+    config = _resolve_runtime_agent_config(context)
+    resolver = getattr(config, "resolve_runtime_agent_target", None)
+    if callable(resolver):
+        try:
+            resolved_target = _coerce_resolved_agent_target(
+                resolver(logical_agent_id, profile=logical_profile)
+            )
+        except (ValueError, TypeError, RuntimeError, ConfigError):
+            resolved_target = None
+        if resolved_target is not None:
+            return AgentRuntimeResolution(
+                logical_agent_id=resolved_target.logical_agent_id,
+                logical_profile=resolved_target.logical_profile,
+                runtime_agent_id=resolved_target.runtime_agent_id,
+                runtime_profile=resolved_target.runtime_profile,
+                resolution_kind=resolved_target.resolution_kind,
+            )
+
+    if logical_profile is not None:
+        for candidate_id, candidate_descriptor in descriptors.items():
+            if candidate_id == logical_agent_id:
+                continue
+            if (
+                _agent_runtime_kind(candidate_id, candidate_descriptor)
+                != logical_agent_id
+            ):
+                continue
+            derived_profile = _strip_runtime_kind_prefix(candidate_id, logical_agent_id)
+            if derived_profile != logical_profile:
+                continue
+            return AgentRuntimeResolution(
+                logical_agent_id=logical_agent_id,
+                logical_profile=logical_profile,
+                runtime_agent_id=candidate_id,
+                runtime_profile=None,
+                resolution_kind="alias_profile",
+            )
+
+    return AgentRuntimeResolution(
+        logical_agent_id=logical_agent_id,
+        logical_profile=logical_profile,
+        runtime_agent_id=logical_agent_id,
+        runtime_profile=logical_profile,
+        resolution_kind="passthrough",
+    )
 
 
 def wrap_requested_agent_context(
@@ -693,6 +820,7 @@ def has_capability(agent_id: str, capability: str, context: Any = None) -> bool:
 
 
 __all__ = [
+    "AgentRuntimeResolution",
     "CAR_AGENT_ENTRYPOINT_GROUP",
     "CAR_PLUGIN_API_VERSION",
     "AgentCapability",
@@ -703,6 +831,7 @@ __all__ = [
     "has_capability",
     "normalize_agent_capabilities",
     "reload_agents",
+    "resolve_agent_runtime",
     "validate_agent_id",
     "wrap_requested_agent_context",
 ]

@@ -8,6 +8,7 @@ from typing import Any, Optional
 
 from fastapi import HTTPException, Request
 
+from .....agents.registry import resolve_agent_runtime, validate_agent_id
 from .....core.car_context import (
     default_managed_thread_context_profile,
     normalize_car_context_profile,
@@ -395,9 +396,8 @@ def _resolve_requested_profile(
     request: Request,
     *,
     agent_id: str,
-    payload: PmaManagedThreadCreateRequest,
+    requested_profile: Optional[str],
 ) -> Optional[str]:
-    requested_profile = normalize_optional_text(payload.profile)
     config = getattr(request.app.state, "config", None)
     profile_getter = getattr(config, "agent_profiles", None)
     default_profile_getter = getattr(config, "agent_default_profile", None)
@@ -428,7 +428,17 @@ def _resolve_requested_profile(
                 exc_info=True,
             )
     if requested_profile is not None and requested_profile not in valid_profiles:
-        raise HTTPException(status_code=400, detail="profile is invalid")
+        resolved = resolve_agent_runtime(
+            agent_id,
+            requested_profile,
+            context=request.app.state,
+        )
+        if (
+            resolved.logical_agent_id != agent_id
+            or resolved.logical_profile != requested_profile
+            or resolved.resolution_kind == "passthrough"
+        ):
+            raise HTTPException(status_code=400, detail="profile is invalid")
     return requested_profile
 
 
@@ -438,7 +448,21 @@ def resolve_managed_thread_create_resolution(
 ) -> ManagedThreadCreateResolution:
     hub_root = request.app.state.config.root
     pma_config = request.app.state.config.pma
-    agent_id = normalize_optional_text(payload.agent)
+    raw_agent_id = normalize_optional_text(payload.agent)
+    raw_profile = normalize_optional_text(payload.profile)
+    if raw_agent_id is not None:
+        try:
+            validate_agent_id(raw_agent_id, request.app.state)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    runtime_resolution = (
+        resolve_agent_runtime(raw_agent_id, raw_profile, context=request.app.state)
+        if raw_agent_id is not None
+        else None
+    )
+    agent_id = (
+        runtime_resolution.logical_agent_id if runtime_resolution is not None else None
+    )
     resource_kind, resource_id, resolved_repo_id = _normalize_resource_owner(
         resource_kind=payload.resource_kind,
         resource_id=payload.resource_id,
@@ -510,7 +534,11 @@ def resolve_managed_thread_create_resolution(
     requested_profile = _resolve_requested_profile(
         request,
         agent_id=agent_id,
-        payload=payload,
+        requested_profile=(
+            runtime_resolution.logical_profile
+            if runtime_resolution is not None
+            else raw_profile
+        ),
     )
     context_profile = normalize_car_context_profile(
         payload.context_profile,

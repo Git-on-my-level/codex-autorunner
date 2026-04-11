@@ -16,7 +16,11 @@ from .....agents.base import (
 )
 from .....agents.codex.harness import CodexHarness
 from .....agents.opencode.harness import OpenCodeHarness
-from .....agents.registry import get_registered_agents, wrap_requested_agent_context
+from .....agents.registry import (
+    get_registered_agents,
+    resolve_agent_runtime,
+    wrap_requested_agent_context,
+)
 from .....core.orchestration import (
     FreshConversationRequiredError,
     SurfaceThreadMessageRequest,
@@ -632,24 +636,9 @@ def _build_runtime_harness(
         if "positional argument" not in str(exc):
             raise
         descriptors = get_registered_agents()
-    effective_agent_id = agent_id
-    effective_profile = profile
-    if agent_id == "hermes":
-        try:
-            from .....integrations.chat.agents import resolve_chat_runtime_agent
-
-            runtime_agent = resolve_chat_runtime_agent(
-                "hermes", profile, context=request.app.state
-            )
-        except (
-            ImportError,
-            AttributeError,
-            RuntimeError,
-        ):  # intentional: import and call of optional integration
-            runtime_agent = agent_id
-        if runtime_agent != "hermes":
-            effective_agent_id = runtime_agent
-            effective_profile = None
+    resolution = resolve_agent_runtime(agent_id, profile, context=request.app.state)
+    effective_agent_id = resolution.runtime_agent_id
+    effective_profile = resolution.runtime_profile
     descriptor = descriptors.get(effective_agent_id)
     if descriptor is None:
         raise HTTPException(

@@ -52,8 +52,23 @@ agents:
 CAR does not install Hermes for you. The configured binary must already exist
 and be executable on the host that runs CAR.
 
-You can also expose multiple named CAR agents over the Hermes backend by adding
-aliases with `backend: hermes`:
+Prefer the canonical profile shape for user-facing Hermes selection:
+
+```yaml
+agents:
+  hermes:
+    binary: hermes
+    default_profile: m4-pma
+    profiles:
+      m4-pma:
+        display_name: M4 PMA
+        binary: hermes-m4-pma
+```
+
+CAR treats the logical identity as `agent + profile` and persists Hermes PMA
+threads in that canonical shape.
+
+Legacy alias agents remain supported as an internal compatibility path:
 
 ```yaml
 agents:
@@ -64,8 +79,10 @@ agents:
     binary: hermes-m4-pma
 ```
 
-Each configured alias is validated independently by `car doctor` and can be
-targeted explicitly by PMA, tickets, and other registry-driven CAR surfaces.
+When a logical request such as `agent=hermes, profile=m4-pma` has no canonical
+`agents.hermes.profiles.m4-pma` entry, CAR can still resolve the matching
+runtime alias for compatibility. Prefer migrating configs and examples toward
+the canonical profile shape over time.
 
 ## Launch Expectations
 
