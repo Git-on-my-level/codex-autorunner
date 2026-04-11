@@ -2001,6 +2001,26 @@ def _build_managed_thread_input_items(
     )
 
 
+def _coerce_launch_command(value: Any) -> Optional[list[str]]:
+    if isinstance(value, (list, tuple)):
+        command = [str(part) for part in value if str(part).strip()]
+        return command or None
+    return None
+
+
+def _runtime_launch_command_from_harness(harness: Any) -> Optional[list[str]]:
+    supervisor = getattr(harness, "_supervisor", None)
+    if supervisor is None:
+        return None
+    launch_command = getattr(supervisor, "launch_command", None)
+    if callable(launch_command):
+        try:
+            return _coerce_launch_command(launch_command())
+        except (RuntimeError, ValueError, TypeError, AttributeError):
+            return None
+    return _coerce_launch_command(launch_command)
+
+
 async def _evict_cached_runtime_supervisors(
     service: Any,
     *,
@@ -2073,13 +2093,31 @@ def build_discord_thread_orchestration_service(service: Any) -> Any:
         descriptor = descriptors.get(resolution.runtime_agent_id)
         if descriptor is None:
             raise KeyError(f"Unknown agent definition '{resolution.runtime_agent_id}'")
-        return descriptor.make_harness(
+        harness = descriptor.make_harness(
             wrap_requested_agent_context(
                 service,
                 agent_id=resolution.runtime_agent_id,
                 profile=resolution.runtime_profile,
             )
         )
+        runtime_kind = str(
+            getattr(descriptor, "runtime_kind", resolution.runtime_agent_id) or ""
+        ).strip()
+        if runtime_kind == "hermes" or resolution.logical_agent_id == "hermes":
+            log_event(
+                service._logger,
+                logging.INFO,
+                "discord.hermes.runtime_resolution",
+                requested_agent_id=agent_id,
+                requested_profile=profile,
+                logical_agent_id=resolution.logical_agent_id,
+                logical_profile=resolution.logical_profile,
+                resolution_kind=resolution.resolution_kind,
+                runtime_agent_id=resolution.runtime_agent_id,
+                runtime_profile=resolution.runtime_profile,
+                launch_command=_runtime_launch_command_from_harness(harness),
+            )
+        return harness
 
     created = build_harness_backed_orchestration_service(
         descriptors=cast(Any, descriptors),
