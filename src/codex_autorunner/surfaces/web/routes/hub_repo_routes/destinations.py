@@ -72,40 +72,40 @@ class HubDestinationService:
         from .....core.destinations import validate_destination_write_payload
         from .....manifest import save_manifest
 
-        normalized_kind = payload.kind.strip().lower()
+        normalized_input = payload.normalized_payload()
+        normalized_kind = str(normalized_input.get("kind") or "").strip().lower()
         destination: dict[str, Any]
         if normalized_kind == "local":
             destination = {"kind": "local"}
         elif normalized_kind == "docker":
-            destination = {"kind": "docker", "image": (payload.image or "").strip()}
-            container_name = (payload.container_name or "").strip()
+            destination = {
+                "kind": "docker",
+                "image": str(normalized_input.get("image") or "").strip(),
+            }
+            container_name = str(normalized_input.get("container_name") or "").strip()
             if container_name:
                 destination["container_name"] = container_name
-            profile = (payload.profile or "").strip()
+            profile = str(normalized_input.get("profile") or "").strip()
             if profile:
                 destination["profile"] = profile
-            workdir = (payload.workdir or "").strip()
+            workdir = str(normalized_input.get("workdir") or "").strip()
             if workdir:
                 destination["workdir"] = workdir
             env_passthrough = [
                 str(item).strip()
-                for item in (payload.env_passthrough or [])
+                for item in (normalized_input.get("env_passthrough") or [])
                 if str(item).strip()
             ]
             if env_passthrough:
                 destination["env_passthrough"] = env_passthrough
-            if payload.env:
-                destination["env"] = dict(payload.env)
+            if normalized_input.get("env"):
+                destination["env"] = dict(normalized_input["env"])
             mounts: list[dict[str, Any]] = []
-            for item in payload.mounts or []:
+            for item in normalized_input.get("mounts") or []:
                 source = str((item or {}).get("source") or "")
                 target = str((item or {}).get("target") or "")
                 mount_payload: dict[str, Any] = {"source": source, "target": target}
                 read_only = (item or {}).get("read_only")
-                if read_only is None and "readOnly" in (item or {}):
-                    read_only = (item or {}).get("readOnly")
-                if read_only is None and "readonly" in (item or {}):
-                    read_only = (item or {}).get("readonly")
                 if read_only is not None:
                     mount_payload["read_only"] = read_only
                 mounts.append(mount_payload)

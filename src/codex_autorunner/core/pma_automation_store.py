@@ -1230,10 +1230,22 @@ class PmaAutomationStore:
         )
         return {"timer": created.to_dict(), "deduped": deduped}
 
-    def cancel_timer(self, timer_id: str) -> bool:
+    def cancel_timer(
+        self,
+        timer_id: str,
+        payload: Optional[dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> bool:
         target_id = _normalize_text(timer_id)
         if target_id is None:
             return False
+        data = self._coerce_payload(payload, kwargs)
+        reason = _normalize_text(data.get("reason"))
+        cancelled_at = _normalize_due_timestamp(
+            data.get("timestamp"), field_name="timestamp"
+        )
+        if cancelled_at is None:
+            cancelled_at = _iso_now()
         with file_lock(self._lock_path()):
             state, subscriptions, timers, wakeups = self._load_structured_unlocked()
             changed = False
@@ -1243,7 +1255,9 @@ class PmaAutomationStore:
                 if entry.state == "cancelled":
                     continue
                 entry.state = "cancelled"
-                entry.updated_at = _iso_now()
+                entry.updated_at = cancelled_at
+                if reason is not None:
+                    entry.reason = reason
                 changed = True
                 break
             if changed:

@@ -122,3 +122,17 @@ def test_system_update_chat_target_skips_terminal_warning(
     assert payload["status"] == "ok"
     assert payload["requires_confirmation"] is False
     assert observed["update_target"] == "chat"
+
+
+def test_system_update_rejects_unknown_keys(tmp_path: Path) -> None:
+    app = _build_app(tmp_path)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/system/update",
+            json={"target": "all", "taret": "chat"},
+        )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert any(item["loc"][-1] == "taret" for item in detail)

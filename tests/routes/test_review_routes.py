@@ -56,3 +56,19 @@ def test_review_routes_serialize_typed_state() -> None:
         reset_res = client.post("/api/review/reset")
         assert reset_res.status_code == 200
         assert reset_res.json() == {"status": "idle", "detail": "Review state reset"}
+
+
+def test_review_start_rejects_unknown_keys() -> None:
+    app = FastAPI()
+    app.state.review_manager = _ReviewServiceStub()
+    app.include_router(build_review_routes())
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/review/start",
+            json={"agent": "opencode", "unexpected": "value"},
+        )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert any(item["loc"][-1] == "unexpected" for item in detail)

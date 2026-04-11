@@ -12,6 +12,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    StrictBool,
     field_validator,
     model_validator,
 )
@@ -30,7 +31,90 @@ class ResponseModel(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
 
+def _validate_supported_payload_keys(
+    data: dict[str, Any],
+    *,
+    supported_keys: set[str] | frozenset[str],
+    label: str,
+) -> None:
+    unknown_keys = sorted(
+        str(key)
+        for key in data.keys()
+        if isinstance(key, str) and key not in supported_keys
+    )
+    if unknown_keys:
+        raise ValueError(
+            f"Unsupported {label} keys: "
+            + ", ".join(unknown_keys)
+            + ". Valid keys: "
+            + ", ".join(sorted(supported_keys))
+        )
+
+
+def _normalize_filter_payload(
+    *,
+    raw_filter: Any,
+    supported_keys: set[str] | frozenset[str],
+    key_aliases: dict[str, str],
+    label: str,
+) -> dict[str, str]:
+    if raw_filter is None:
+        return {}
+    if not isinstance(raw_filter, dict):
+        raise ValueError(f"{label} must be an object")
+
+    normalized_filter: dict[str, str] = {}
+    unknown_filter_keys: list[str] = []
+    for raw_key, raw_value in raw_filter.items():
+        if not isinstance(raw_key, str):
+            unknown_filter_keys.append(str(raw_key))
+            continue
+        normalized_key = key_aliases.get(raw_key, raw_key)
+        if normalized_key not in supported_keys:
+            unknown_filter_keys.append(raw_key)
+            continue
+        normalized_value = _normalize_text(raw_value)
+        if normalized_value is None:
+            raise ValueError(f"{label}.{normalized_key} must be a non-empty string")
+        existing = normalized_filter.get(normalized_key)
+        if existing is not None and existing != normalized_value:
+            raise ValueError(
+                f"Conflicting {label} values for {normalized_key}: "
+                f"{existing!r} vs {normalized_value!r}"
+            )
+        normalized_filter[normalized_key] = normalized_value
+
+    if unknown_filter_keys:
+        raise ValueError(
+            f"Unsupported {label} keys: "
+            + ", ".join(sorted(unknown_filter_keys))
+            + ". Valid keys: "
+            + ", ".join(sorted(supported_keys))
+        )
+    return normalized_filter
+
+
+def _merge_normalized_filter(
+    data: dict[str, Any],
+    normalized_filter: dict[str, str],
+    *,
+    label: str,
+) -> dict[str, Any]:
+    for key, value in normalized_filter.items():
+        existing = _normalize_text(data.get(key))
+        if existing is not None and existing != value:
+            raise ValueError(
+                f"Conflicting values for {key}: top-level={existing!r}, "
+                f"{label}={value!r}"
+            )
+        if existing is None:
+            data[key] = value
+    return data
+
+
 class ContextspaceWriteRequest(Payload):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
     content: str = ""
 
 
@@ -99,6 +183,8 @@ class SpecIngestTicketsResponse(ResponseModel):
 
 
 class RunControlRequest(Payload):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
     once: bool = False
     agent: Optional[str] = None
     model: Optional[str] = None
@@ -106,6 +192,8 @@ class RunControlRequest(Payload):
 
 
 class HubCreateRepoRequest(Payload):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
     git_url: Optional[str] = Field(
         default=None, validation_alias=AliasChoices("git_url", "gitUrl")
     )
@@ -118,6 +206,8 @@ class HubCreateRepoRequest(Payload):
 
 
 class HubRemoveRepoRequest(Payload):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
     force: bool = False
     force_attestation: Optional[str] = Field(
         default=None,
@@ -128,6 +218,8 @@ class HubRemoveRepoRequest(Payload):
 
 
 class HubCreateAgentWorkspaceRequest(Payload):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
     workspace_id: Optional[str] = Field(
         default=None,
         validation_alias=AliasChoices("workspace_id", "workspaceId", "id"),
@@ -141,6 +233,8 @@ class HubCreateAgentWorkspaceRequest(Payload):
 
 
 class HubUpdateAgentWorkspaceRequest(Payload):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
     enabled: Optional[bool] = None
     display_name: Optional[str] = Field(
         default=None,
@@ -149,18 +243,24 @@ class HubUpdateAgentWorkspaceRequest(Payload):
 
 
 class HubRemoveAgentWorkspaceRequest(Payload):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
     delete_dir: bool = Field(
         default=False, validation_alias=AliasChoices("delete_dir", "deleteDir")
     )
 
 
 class HubDeleteAgentWorkspaceRequest(Payload):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
     delete_dir: bool = Field(
         default=True, validation_alias=AliasChoices("delete_dir", "deleteDir")
     )
 
 
 class HubCreateWorktreeRequest(Payload):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
     base_repo_id: str = Field(
         validation_alias=AliasChoices("base_repo_id", "baseRepoId")
     )
@@ -175,6 +275,8 @@ class HubCreateWorktreeRequest(Payload):
 
 
 class HubCleanupWorktreeRequest(Payload):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
     worktree_repo_id: str = Field(
         validation_alias=AliasChoices("worktree_repo_id", "worktreeRepoId")
     )
@@ -198,6 +300,8 @@ class HubCleanupWorktreeRequest(Payload):
 
 
 class HubArchiveWorktreeRequest(Payload):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
     worktree_repo_id: str = Field(
         validation_alias=AliasChoices("worktree_repo_id", "worktreeRepoId")
     )
@@ -210,6 +314,8 @@ class HubArchiveWorktreeRequest(Payload):
 
 
 class HubArchiveRepoStateRequest(Payload):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
     repo_id: str = Field(validation_alias=AliasChoices("repo_id", "repoId"))
     archive_note: Optional[str] = Field(
         default=None, validation_alias=AliasChoices("archive_note", "archiveNote")
@@ -340,6 +446,8 @@ class PmaManagedThreadCreateRequest(Payload):
 
 
 class SessionSettingsRequest(Payload):
+    model_config = ConfigDict(extra="forbid")
+
     autorunner_model_override: Optional[str] = None
     autorunner_effort_override: Optional[str] = None
     autorunner_approval_policy: Optional[str] = None
@@ -373,10 +481,25 @@ _GITHUB_REQUEST_MODELS = (
 
 
 class HubPinRepoRequest(Payload):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
     pinned: bool = True
 
 
+class HubDestinationMountRequest(Payload):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    source: Optional[str] = None
+    target: Optional[str] = None
+    read_only: Optional[StrictBool] = Field(
+        default=None,
+        validation_alias=AliasChoices("read_only", "readOnly", "readonly"),
+    )
+
+
 class HubDestinationSetRequest(Payload):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
     kind: str
     image: Optional[str] = None
     container_name: Optional[str] = Field(
@@ -396,7 +519,7 @@ class HubDestinationSetRequest(Payload):
         default=None,
         validation_alias=AliasChoices("env", "explicit_env", "explicitEnv"),
     )
-    mounts: Optional[List[Dict[str, Any]]] = None
+    mounts: Optional[List[HubDestinationMountRequest]] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -412,6 +535,9 @@ class HubDestinationSetRequest(Payload):
         normalized["env_passthrough"] = raw_env
         normalized.pop("env", None)
         return normalized
+
+    def normalized_payload(self) -> dict[str, Any]:
+        return self.model_dump(exclude_none=True)
 
 
 class HubAgentWorkspaceSummaryResponse(ResponseModel):
@@ -503,6 +629,8 @@ class TemplateReposResponse(ResponseModel):
 
 
 class TemplateRepoCreateRequest(Payload):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
     id: str
     url: str
     trusted: bool = False
@@ -512,6 +640,8 @@ class TemplateRepoCreateRequest(Payload):
 
 
 class TemplateRepoUpdateRequest(Payload):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
     url: Optional[str] = None
     trusted: Optional[bool] = None
     default_ref: Optional[str] = Field(
@@ -535,6 +665,8 @@ class TemplateFetchResponse(ResponseModel):
 
 
 class TemplateApplyRequest(Payload):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
     template: str
     at: Optional[int] = None
     next_index: bool = Field(
@@ -558,6 +690,8 @@ class TemplateApplyResponse(ResponseModel):
 
 
 class SystemUpdateRequest(Payload):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
     target: Optional[str] = None
     force: bool = False
 
@@ -729,6 +863,8 @@ class SystemUpdateCheckResponse(ResponseModel):
 
 
 class ReviewStartRequest(Payload):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
     agent: Optional[str] = None
     model: Optional[str] = None
     reasoning: Optional[str] = None
@@ -751,6 +887,8 @@ class ReviewControlResponse(ResponseModel):
 
 
 class TicketCreateRequest(Payload):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
     agent: str = "codex"
     title: Optional[str] = None
     goal: Optional[str] = None
@@ -796,11 +934,15 @@ class TicketReorderResponse(ResponseModel):
 
 
 class TicketBulkSetAgentRequest(Payload):
+    model_config = ConfigDict(extra="forbid")
+
     agent: str
     range: Optional[str] = None
 
 
 class TicketBulkClearModelRequest(Payload):
+    model_config = ConfigDict(extra="forbid")
+
     range: Optional[str] = None
 
 
@@ -865,6 +1007,8 @@ class PmaManagedThreadMessageRequest(Payload):
 
 
 class PmaManagedThreadCompactRequest(Payload):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
     summary: str
     reset_backend: bool = True
 
@@ -873,8 +1017,97 @@ class PmaManagedThreadResumeRequest(Payload):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
 
+class PmaChatRequest(Payload):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    message: Optional[str] = None
+    stream: bool = False
+    agent: Optional[str] = None
+    profile: Optional[str] = None
+    model: Optional[str] = None
+    reasoning: Optional[str] = None
+    client_turn_id: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("client_turn_id", "clientTurnId")
+    )
+
+
+class PmaStopRequest(Payload):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    lane_id: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("lane_id", "laneId")
+    )
+
+
+class PmaNewSessionRequest(Payload):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    agent: Optional[str] = None
+    profile: Optional[str] = None
+    lane_id: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("lane_id", "laneId")
+    )
+
+
+class PmaSessionResetRequest(Payload):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    agent: Optional[str] = None
+    profile: Optional[str] = None
+
+
+class PmaHistoryCompactRequest(Payload):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    summary: Optional[str] = None
+    agent: Optional[str] = None
+    thread_id: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("thread_id", "threadId")
+    )
+
+
+class PmaThreadResetRequest(Payload):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    agent: Optional[str] = None
+    profile: Optional[str] = None
+
+
 class PmaAutomationSubscriptionCreateRequest(Payload):
     model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    _SUPPORTED_PAYLOAD_KEYS = frozenset(
+        {
+            "event_types",
+            "repo_id",
+            "run_id",
+            "thread_id",
+            "lane_id",
+            "from_state",
+            "to_state",
+            "reason",
+            "timestamp",
+            "filter",
+        }
+    )
+    _SUPPORTED_FILTER_KEYS = frozenset(
+        {
+            "repo_id",
+            "run_id",
+            "thread_id",
+            "lane_id",
+            "from_state",
+            "to_state",
+        }
+    )
+    _FILTER_KEY_ALIASES = {
+        "repoId": "repo_id",
+        "runId": "run_id",
+        "threadId": "thread_id",
+        "laneId": "lane_id",
+        "fromState": "from_state",
+        "toState": "to_state",
+    }
 
     event_types: Optional[List[str]] = Field(
         default=None, validation_alias=AliasChoices("event_types", "eventTypes")
@@ -899,6 +1132,7 @@ class PmaAutomationSubscriptionCreateRequest(Payload):
     )
     reason: Optional[str] = None
     timestamp: Optional[str] = None
+    filter: Optional[Dict[str, Any]] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -938,9 +1172,69 @@ class PmaAutomationSubscriptionCreateRequest(Payload):
             data["event_types"] = []
         return data
 
+    def normalized_payload(self) -> dict[str, Any]:
+        data = dict(self.model_dump(exclude_none=True))
+        raw_filter = data.pop("filter", None)
+        _validate_supported_payload_keys(
+            data,
+            supported_keys=self._SUPPORTED_PAYLOAD_KEYS,
+            label="subscription",
+        )
+        if raw_filter is None:
+            return data
+        normalized_filter = _normalize_filter_payload(
+            raw_filter=raw_filter,
+            supported_keys=self._SUPPORTED_FILTER_KEYS,
+            key_aliases=self._FILTER_KEY_ALIASES,
+            label="subscription filter",
+        )
+        return _merge_normalized_filter(data, normalized_filter, label="filter")
+
 
 class PmaAutomationTimerCreateRequest(Payload):
     model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    _SUPPORTED_PAYLOAD_KEYS = frozenset(
+        {
+            "timer_type",
+            "delay_seconds",
+            "idle_seconds",
+            "due_at",
+            "subscription_id",
+            "timer_id",
+            "repo_id",
+            "run_id",
+            "thread_id",
+            "lane_id",
+            "from_state",
+            "to_state",
+            "reason",
+            "timestamp",
+            "idempotency_key",
+            "metadata",
+            "filter",
+        }
+    )
+    _SUPPORTED_FILTER_KEYS = frozenset(
+        {
+            "subscription_id",
+            "repo_id",
+            "run_id",
+            "thread_id",
+            "lane_id",
+            "from_state",
+            "to_state",
+        }
+    )
+    _FILTER_KEY_ALIASES = {
+        "subscriptionId": "subscription_id",
+        "repoId": "repo_id",
+        "runId": "run_id",
+        "threadId": "thread_id",
+        "laneId": "lane_id",
+        "fromState": "from_state",
+        "toState": "to_state",
+    }
 
     timer_type: Optional[Literal["one_shot", "watchdog"]] = Field(
         default=None, validation_alias=AliasChoices("timer_type", "timerType")
@@ -981,6 +1275,12 @@ class PmaAutomationTimerCreateRequest(Payload):
     )
     reason: Optional[str] = None
     timestamp: Optional[str] = None
+    idempotency_key: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("idempotency_key", "idempotencyKey"),
+    )
+    metadata: Optional[Dict[str, Any]] = None
+    filter: Optional[Dict[str, Any]] = None
 
     @field_validator("due_at")
     @classmethod
@@ -1008,16 +1308,77 @@ class PmaAutomationTimerCreateRequest(Payload):
             raise ValueError("idle_seconds is required for watchdog timers")
         return self
 
+    def normalized_payload(self) -> dict[str, Any]:
+        data = dict(self.model_dump(exclude_none=True))
+        raw_filter = data.pop("filter", None)
+        _validate_supported_payload_keys(
+            data,
+            supported_keys=self._SUPPORTED_PAYLOAD_KEYS,
+            label="timer",
+        )
+        if "metadata" in data and not isinstance(data.get("metadata"), dict):
+            raise ValueError("metadata must be an object")
+        if raw_filter is None:
+            return data
+        normalized_filter = _normalize_filter_payload(
+            raw_filter=raw_filter,
+            supported_keys=self._SUPPORTED_FILTER_KEYS,
+            key_aliases=self._FILTER_KEY_ALIASES,
+            label="timer filter",
+        )
+        return _merge_normalized_filter(data, normalized_filter, label="filter")
+
 
 class PmaAutomationTimerTouchRequest(Payload):
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
+    _SUPPORTED_PAYLOAD_KEYS = frozenset(
+        {"reason", "timestamp", "due_at", "delay_seconds"}
+    )
+
     reason: Optional[str] = None
     timestamp: Optional[str] = None
+    due_at: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("due_at", "dueAt")
+    )
+    delay_seconds: Optional[int] = Field(
+        default=None, validation_alias=AliasChoices("delay_seconds", "delaySeconds")
+    )
+
+    @field_validator("due_at")
+    @classmethod
+    def _validate_due_at(cls, value: Optional[str]) -> Optional[str]:
+        return PmaAutomationTimerCreateRequest._validate_due_at(value)
+
+    @model_validator(mode="after")
+    def _validate_touch_fields(self) -> "PmaAutomationTimerTouchRequest":
+        if self.delay_seconds is not None and self.delay_seconds < 0:
+            raise ValueError("delay_seconds must be >= 0")
+        return self
+
+    def normalized_payload(self) -> dict[str, Any]:
+        data = dict(self.model_dump(exclude_none=True))
+        _validate_supported_payload_keys(
+            data,
+            supported_keys=self._SUPPORTED_PAYLOAD_KEYS,
+            label="timer touch",
+        )
+        return data
 
 
 class PmaAutomationTimerCancelRequest(Payload):
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
+    _SUPPORTED_PAYLOAD_KEYS = frozenset({"reason", "timestamp"})
+
     reason: Optional[str] = None
     timestamp: Optional[str] = None
+
+    def normalized_payload(self) -> dict[str, Any]:
+        data = dict(self.model_dump(exclude_none=True))
+        _validate_supported_payload_keys(
+            data,
+            supported_keys=self._SUPPORTED_PAYLOAD_KEYS,
+            label="timer cancel",
+        )
+        return data

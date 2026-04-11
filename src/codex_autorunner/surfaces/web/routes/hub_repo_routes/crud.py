@@ -129,6 +129,18 @@ class HubRepoCrudService:
         from .....core.logging_utils import safe_log
 
         if isinstance(payload, dict):
+            unknown_keys = sorted(
+                str(key) for key in payload.keys() if key != "commands"
+            )
+            if unknown_keys:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Unsupported worktree setup keys: "
+                        + ", ".join(unknown_keys)
+                        + ". Valid keys: commands"
+                    ),
+                )
             commands_raw = payload.get("commands", [])
         elif isinstance(payload, list):
             commands_raw = payload

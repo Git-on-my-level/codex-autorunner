@@ -60,6 +60,14 @@ from .....core.time_utils import now_iso
 from .....integrations.app_server import is_missing_thread_error
 from .....integrations.app_server.threads import pma_base_key
 from .....integrations.github.context_injection import maybe_inject_github_context
+from ...schemas import (
+    PmaChatRequest,
+    PmaHistoryCompactRequest,
+    PmaNewSessionRequest,
+    PmaSessionResetRequest,
+    PmaStopRequest,
+    PmaThreadResetRequest,
+)
 from ...services.pma.common import (
     build_idempotency_key as service_build_idempotency_key,
 )
@@ -1731,16 +1739,15 @@ def build_chat_runtime_router(
         return {"active": active, "current": current, "last_result": last_result}
 
     @router.post("/chat")
-    async def pma_chat(request: Request):
+    async def pma_chat(request: Request, payload: PmaChatRequest):
         pma_config = _get_pma_config(request)
-        body = await request.json()
-        message = (body.get("message") or "").strip()
-        stream = bool(body.get("stream", False))
-        agent = _normalize_optional_text(body.get("agent"))
-        profile = _normalize_optional_text(body.get("profile"))
-        model = _normalize_optional_text(body.get("model"))
-        reasoning = _normalize_optional_text(body.get("reasoning"))
-        client_turn_id = (body.get("client_turn_id") or "").strip() or None
+        message = (payload.message or "").strip()
+        stream = bool(payload.stream)
+        agent = _normalize_optional_text(payload.agent)
+        profile = _normalize_optional_text(payload.profile)
+        model = _normalize_optional_text(payload.model)
+        reasoning = _normalize_optional_text(payload.reasoning)
+        client_turn_id = (payload.client_turn_id or "").strip() or None
 
         if not message:
             raise HTTPException(status_code=400, detail="message is required")
@@ -1768,7 +1775,7 @@ def build_chat_runtime_router(
             message=message,
         )
 
-        payload = {
+        queue_payload = {
             "message": message,
             "agent": agent,
             "profile": profile,
@@ -1779,7 +1786,7 @@ def build_chat_runtime_router(
             "hub_root": str(hub_root),
         }
 
-        item, dupe_reason = await queue.enqueue(lane_id, idempotency_key, payload)
+        item, dupe_reason = await queue.enqueue(lane_id, idempotency_key, queue_payload)
         if dupe_reason:
             logger.info("Duplicate PMA turn: %s", dupe_reason)
 
@@ -1820,9 +1827,10 @@ def build_chat_runtime_router(
         )
 
     @router.post("/stop")
-    async def pma_stop(request: Request) -> dict[str, Any]:
-        body = await request.json() if request.headers.get("content-type") else {}
-        lane_id = (body.get("lane_id") or "pma:default").strip()
+    async def pma_stop(
+        request: Request, payload: Optional[PmaStopRequest] = None
+    ) -> dict[str, Any]:
+        lane_id = ((payload.lane_id if payload else None) or "pma:default").strip()
         hub_root = request.app.state.config.root
         lifecycle_router = PmaLifecycleRouter(hub_root)
 
@@ -1848,11 +1856,12 @@ def build_chat_runtime_router(
         }
 
     @router.post("/new")
-    async def new_pma_session(request: Request) -> dict[str, Any]:
-        body = await request.json()
-        agent = _normalize_optional_text(body.get("agent"))
-        profile = _normalize_optional_text(body.get("profile"))
-        lane_id = (body.get("lane_id") or "pma:default").strip()
+    async def new_pma_session(
+        request: Request, payload: Optional[PmaNewSessionRequest] = None
+    ) -> dict[str, Any]:
+        agent = _normalize_optional_text(payload.agent if payload else None)
+        profile = _normalize_optional_text(payload.profile if payload else None)
+        lane_id = ((payload.lane_id if payload else None) or "pma:default").strip()
 
         hub_root = request.app.state.config.root
         lifecycle_router = PmaLifecycleRouter(hub_root)
@@ -1876,11 +1885,12 @@ def build_chat_runtime_router(
         }
 
     @router.post("/reset")
-    async def reset_pma_session(request: Request) -> dict[str, Any]:
-        body = await request.json() if request.headers.get("content-type") else {}
-        raw_agent = (body.get("agent") or "").strip().lower()
+    async def reset_pma_session(
+        request: Request, payload: Optional[PmaSessionResetRequest] = None
+    ) -> dict[str, Any]:
+        raw_agent = ((payload.agent if payload else None) or "").strip().lower()
         agent = raw_agent or None
-        profile = _normalize_optional_text(body.get("profile"))
+        profile = _normalize_optional_text(payload.profile if payload else None)
 
         hub_root = request.app.state.config.root
         lifecycle_router = PmaLifecycleRouter(hub_root)
@@ -1900,11 +1910,12 @@ def build_chat_runtime_router(
         }
 
     @router.post("/compact")
-    async def compact_pma_history(request: Request) -> dict[str, Any]:
-        body = await request.json()
-        summary = (body.get("summary") or "").strip()
-        agent = _normalize_optional_text(body.get("agent"))
-        thread_id = _normalize_optional_text(body.get("thread_id"))
+    async def compact_pma_history(
+        request: Request, payload: PmaHistoryCompactRequest
+    ) -> dict[str, Any]:
+        summary = (payload.summary or "").strip()
+        agent = _normalize_optional_text(payload.agent)
+        thread_id = _normalize_optional_text(payload.thread_id)
 
         if not summary:
             raise HTTPException(status_code=400, detail="summary is required")
@@ -1929,11 +1940,12 @@ def build_chat_runtime_router(
         }
 
     @router.post("/thread/reset")
-    async def reset_pma_thread(request: Request) -> dict[str, Any]:
-        body = await request.json()
-        raw_agent = (body.get("agent") or "").strip().lower()
+    async def reset_pma_thread(
+        request: Request, payload: Optional[PmaThreadResetRequest] = None
+    ) -> dict[str, Any]:
+        raw_agent = ((payload.agent if payload else None) or "").strip().lower()
         agent = raw_agent or None
-        profile = _normalize_optional_text(body.get("profile"))
+        profile = _normalize_optional_text(payload.profile if payload else None)
 
         hub_root = request.app.state.config.root
         lifecycle_router = PmaLifecycleRouter(hub_root)

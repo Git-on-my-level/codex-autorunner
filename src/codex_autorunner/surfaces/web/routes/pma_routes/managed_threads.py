@@ -120,13 +120,14 @@ def build_automation_routes(
     ) -> dict[str, Any]:
         store = await get_automation_store(request, get_runtime_state())
         try:
+            normalized_payload = payload.normalized_payload()
             created = await call_store_create_with_payload(
                 store,
                 (
                     "create_subscription",
                     "upsert_subscription",
                 ),
-                payload.model_dump(exclude_none=True),
+                normalized_payload,
             )
         except PmaAutomationThreadNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -202,10 +203,11 @@ def build_automation_routes(
     ) -> dict[str, Any]:
         store = await get_automation_store(request, get_runtime_state())
         try:
+            normalized_payload = payload.normalized_payload()
             created = await call_store_create_with_payload(
                 store,
                 ("create_timer", "upsert_timer"),
-                payload.model_dump(exclude_none=True),
+                normalized_payload,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -260,13 +262,17 @@ def build_automation_routes(
         if not normalized_id:
             raise HTTPException(status_code=400, detail="timer_id is required")
         store = await get_automation_store(request, get_runtime_state())
-        touched = await call_store_action_with_id(
-            store,
-            ("touch_timer", "refresh_timer", "renew_timer"),
-            normalized_id,
-            payload=payload.model_dump(exclude_none=True) if payload else {},
-            id_aliases=("timer_id", "id"),
-        )
+        try:
+            normalized_payload = payload.normalized_payload() if payload else {}
+            touched = await call_store_action_with_id(
+                store,
+                ("touch_timer", "refresh_timer", "renew_timer"),
+                normalized_id,
+                payload=normalized_payload,
+                id_aliases=("timer_id", "id"),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         if isinstance(touched, dict):
             out = dict(touched)
             out.setdefault("status", "ok")
@@ -287,13 +293,17 @@ def build_automation_routes(
         if not normalized_id:
             raise HTTPException(status_code=400, detail="timer_id is required")
         store = await get_automation_store(request, get_runtime_state())
-        cancelled = await call_store_action_with_id(
-            store,
-            ("cancel_timer",),
-            normalized_id,
-            payload=payload.model_dump(exclude_none=True) if payload else {},
-            id_aliases=("timer_id", "id"),
-        )
+        try:
+            normalized_payload = payload.normalized_payload() if payload else {}
+            cancelled = await call_store_action_with_id(
+                store,
+                ("cancel_timer",),
+                normalized_id,
+                payload=normalized_payload,
+                id_aliases=("timer_id", "id"),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         if isinstance(cancelled, dict):
             out = dict(cancelled)
             out.setdefault("status", "ok")

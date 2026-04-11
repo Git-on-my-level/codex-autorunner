@@ -1763,6 +1763,39 @@ def test_pma_new_creates_artifact(hub_env) -> None:
     assert artifact_path.exists()
 
 
+@pytest.mark.parametrize(
+    ("endpoint", "body", "unknown_key"),
+    [
+        ("/hub/pma/chat", {"message": "hi", "mesage": "typo"}, "mesage"),
+        ("/hub/pma/stop", {"lane_id": "pma:default", "laneid": "typo"}, "laneid"),
+        ("/hub/pma/new", {"agent": "codex", "laneid": "pma:default"}, "laneid"),
+        ("/hub/pma/reset", {"agent": "all", "profiel": "ops"}, "profiel"),
+        (
+            "/hub/pma/compact",
+            {"summary": "compact this PMA history", "threadid": "thread-1"},
+            "threadid",
+        ),
+        (
+            "/hub/pma/thread/reset",
+            {"agent": "codex", "profiel": "ops"},
+            "profiel",
+        ),
+    ],
+)
+def test_pma_runtime_routes_reject_unknown_keys(
+    hub_env, endpoint: str, body: dict[str, Any], unknown_key: str
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    response = client.post(endpoint, json=body)
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert any(item["loc"][-1] == unknown_key for item in detail)
+
+
 def test_pma_turn_events_stream_codex_respects_resume_cursor(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
@@ -3028,6 +3061,94 @@ def test_pma_automation_subscription_create_normalizes_event_type_aliases(
     ]
 
 
+def test_pma_automation_subscription_create_accepts_nested_filter_payload(
+    hub_env,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    class FakeAutomationStore:
+        def __init__(self) -> None:
+            self.created_payloads: list[dict[str, Any]] = []
+
+        def create_subscription(self, payload: dict[str, Any]) -> dict[str, Any]:
+            self.created_payloads.append(dict(payload))
+            return {"subscription_id": "sub-filter-1", **payload}
+
+    fake_store = FakeAutomationStore()
+    app.state.hub_supervisor.get_pma_automation_store = lambda: fake_store
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/subscriptions",
+            json={
+                "event_types": ["managed_thread_completed"],
+                "filter": {"thread_id": "thread-filter-1", "repoId": "repo-filter-1"},
+            },
+        )
+
+    assert create_resp.status_code == 200
+    assert fake_store.created_payloads == [
+        {
+            "event_types": ["managed_thread_completed"],
+            "thread_id": "thread-filter-1",
+            "repo_id": "repo-filter-1",
+        }
+    ]
+
+
+def test_pma_automation_subscription_create_rejects_unknown_filter_keys(
+    hub_env,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    class FakeAutomationStore:
+        def create_subscription(self, payload: dict[str, Any]) -> dict[str, Any]:
+            return {"subscription_id": "should-not-be-created", **payload}
+
+    app.state.hub_supervisor.get_pma_automation_store = lambda: FakeAutomationStore()
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/subscriptions",
+            json={
+                "event_types": ["managed_thread_completed"],
+                "filter": {"thread_id": "thread-filter-1", "workspace_id": "ws-1"},
+            },
+        )
+
+    assert create_resp.status_code == 400
+    assert "Unsupported subscription filter keys" in create_resp.json()["detail"]
+    assert "workspace_id" in create_resp.json()["detail"]
+
+
+def test_pma_automation_subscription_create_rejects_conflicting_filter_values(
+    hub_env,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    class FakeAutomationStore:
+        def create_subscription(self, payload: dict[str, Any]) -> dict[str, Any]:
+            return {"subscription_id": "should-not-be-created", **payload}
+
+    app.state.hub_supervisor.get_pma_automation_store = lambda: FakeAutomationStore()
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/subscriptions",
+            json={
+                "event_types": ["managed_thread_completed"],
+                "thread_id": "thread-top-level",
+                "filter": {"thread_id": "thread-filter"},
+            },
+        )
+
+    assert create_resp.status_code == 400
+    assert "Conflicting values for thread_id" in create_resp.json()["detail"]
+
+
 def test_pma_automation_timer_endpoints(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
@@ -3111,6 +3232,136 @@ def test_pma_automation_timer_endpoints(hub_env) -> None:
     )
     assert fake_store.touched == [("timer-1", {"reason": "heartbeat"})]
     assert fake_store.cancelled == [("timer-1", {"reason": "done"})]
+
+
+def test_pma_automation_timer_create_accepts_nested_filter_payload(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    class FakeAutomationStore:
+        def __init__(self) -> None:
+            self.created_payloads: list[dict[str, Any]] = []
+
+        def create_timer(self, payload: dict[str, Any]) -> dict[str, Any]:
+            self.created_payloads.append(dict(payload))
+            return {"timer_id": "timer-filter-1", **payload}
+
+    fake_store = FakeAutomationStore()
+    app.state.hub_supervisor.get_pma_automation_store = lambda: fake_store
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/timers",
+            json={
+                "timer_type": "one_shot",
+                "delay_seconds": 30,
+                "filter": {"threadId": "thread-filter-1", "repo_id": "repo-filter-1"},
+            },
+        )
+
+    assert create_resp.status_code == 200
+    assert fake_store.created_payloads == [
+        {
+            "timer_type": "one_shot",
+            "delay_seconds": 30,
+            "thread_id": "thread-filter-1",
+            "repo_id": "repo-filter-1",
+        }
+    ]
+
+
+def test_pma_automation_timer_create_rejects_unknown_filter_keys(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    class FakeAutomationStore:
+        def create_timer(self, payload: dict[str, Any]) -> dict[str, Any]:
+            return {"timer_id": "should-not-be-created", **payload}
+
+    app.state.hub_supervisor.get_pma_automation_store = lambda: FakeAutomationStore()
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/timers",
+            json={
+                "timer_type": "one_shot",
+                "delay_seconds": 30,
+                "filter": {"thread_id": "thread-filter-1", "workspace_id": "ws-1"},
+            },
+        )
+
+    assert create_resp.status_code == 400
+    assert "Unsupported timer filter keys" in create_resp.json()["detail"]
+    assert "workspace_id" in create_resp.json()["detail"]
+
+
+def test_pma_automation_timer_create_rejects_conflicting_filter_values(
+    hub_env,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    class FakeAutomationStore:
+        def create_timer(self, payload: dict[str, Any]) -> dict[str, Any]:
+            return {"timer_id": "should-not-be-created", **payload}
+
+    app.state.hub_supervisor.get_pma_automation_store = lambda: FakeAutomationStore()
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/timers",
+            json={
+                "timer_type": "one_shot",
+                "delay_seconds": 30,
+                "thread_id": "thread-top-level",
+                "filter": {"thread_id": "thread-filter"},
+            },
+        )
+
+    assert create_resp.status_code == 400
+    assert "Conflicting values for thread_id" in create_resp.json()["detail"]
+
+
+def test_pma_automation_timer_touch_rejects_unknown_keys(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    class FakeAutomationStore:
+        def touch_timer(self, timer_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+            return {"timer_id": timer_id, "payload": dict(payload)}
+
+    app.state.hub_supervisor.get_pma_automation_store = lambda: FakeAutomationStore()
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/hub/pma/timers/timer-1/touch",
+            json={"reason": "heartbeat", "oops": True},
+        )
+
+    assert response.status_code == 400
+    assert "Unsupported timer touch keys" in response.json()["detail"]
+
+
+def test_pma_automation_timer_cancel_rejects_unknown_keys(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    class FakeAutomationStore:
+        def cancel_timer(
+            self, timer_id: str, payload: dict[str, Any]
+        ) -> dict[str, Any]:
+            return {"timer_id": timer_id, "payload": dict(payload)}
+
+    app.state.hub_supervisor.get_pma_automation_store = lambda: FakeAutomationStore()
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/hub/pma/timers/timer-1/cancel",
+            json={"reason": "done", "unexpected": "value"},
+        )
+
+    assert response.status_code == 400
+    assert "Unsupported timer cancel keys" in response.json()["detail"]
 
 
 def test_pma_automation_subscription_alias_endpoint_supports_kwargs_only_store(
