@@ -18,6 +18,7 @@ from ..acp_lifecycle import (
     extract_output_delta as _extract_output_delta,
 )
 from ..time_utils import now_iso
+from .execution_history import ExecutionCheckpoint, ExecutionCheckpointSignal
 from .stream_text_merge import merge_assistant_stream_text
 
 RuntimeThreadOutcomeStatus = Literal["ok", "error", "interrupted"]
@@ -69,6 +70,8 @@ class _RawEventInspection:
     assistant_stream_text: Optional[str] = None
     failure_message: Optional[str] = None
     terminal_signal: Optional[RuntimeThreadTerminalSignal] = None
+    token_usage: Optional[dict[str, Any]] = None
+    runtime_method: Optional[str] = None
 
 
 @dataclass
@@ -83,6 +86,8 @@ class RuntimeTurnTerminalStateMachine:
     transport_request_return_timestamp: Optional[str] = None
     last_progress_timestamp: Optional[str] = None
     failure_cause: Optional[str] = None
+    token_usage: Optional[dict[str, Any]] = None
+    last_runtime_method: Optional[str] = None
     raw_events: list[Any] = field(default_factory=list)
     terminal_signals: list[RuntimeThreadTerminalSignal] = field(default_factory=list)
     _terminal_signal_keys: set[tuple[str, RuntimeThreadOutcomeStatus]] = field(
@@ -105,6 +110,8 @@ class RuntimeTurnTerminalStateMachine:
         self.raw_events.append(raw_event)
         self.last_progress_timestamp = event_timestamp
         inspection = _inspect_raw_event(raw_event, timestamp=event_timestamp)
+        if inspection.runtime_method:
+            self.last_runtime_method = inspection.runtime_method
         if inspection.assistant_stream_text:
             self.last_assistant_text = merge_assistant_stream_text(
                 self.last_assistant_text,
@@ -114,6 +121,8 @@ class RuntimeTurnTerminalStateMachine:
             self.last_assistant_text = inspection.assistant_message_text
         if inspection.failure_message:
             self.failure_cause = inspection.failure_message
+        if inspection.token_usage:
+            self.token_usage = dict(inspection.token_usage)
         if inspection.terminal_signal is not None:
             self._note_terminal_signal(inspection.terminal_signal)
 
@@ -152,6 +161,8 @@ class RuntimeTurnTerminalStateMachine:
                     self.last_assistant_text = inspection.assistant_message_text
                 if inspection.failure_message:
                     self.failure_cause = inspection.failure_message
+                if inspection.token_usage:
+                    self.token_usage = dict(inspection.token_usage)
                 if inspection.terminal_signal is not None:
                     self._note_terminal_signal(inspection.terminal_signal)
         if self.transport_errors and not self.failure_cause:
@@ -358,6 +369,56 @@ class RuntimeTurnTerminalStateMachine:
             failure_cause=self.failure_cause,
         )
 
+    def build_checkpoint(
+        self,
+        *,
+        execution_id: Optional[str] = None,
+        thread_target_id: Optional[str] = None,
+        status: Optional[str] = None,
+        completion_source: Optional[str] = None,
+        assistant_text: Optional[str] = None,
+        projection_event_cursor: int = 0,
+        trace_manifest_id: Optional[str] = None,
+    ) -> ExecutionCheckpoint:
+        effective_text = str(
+            self.last_assistant_text if assistant_text is None else assistant_text
+        )
+        latest_terminal = self._latest_terminal_signal()
+        checkpoint_status = (
+            str(status or "").strip()
+            or str(self.transport_status or "").strip()
+            or (latest_terminal.status if latest_terminal is not None else "running")
+        )
+        return ExecutionCheckpoint(
+            status=checkpoint_status or "running",
+            execution_id=execution_id,
+            thread_target_id=thread_target_id,
+            backend_thread_id=self.backend_thread_id or None,
+            backend_turn_id=self.backend_turn_id or None,
+            completion_source=completion_source,
+            assistant_text_preview=_checkpoint_preview(effective_text),
+            assistant_char_count=len(effective_text),
+            last_runtime_method=self.last_runtime_method,
+            last_progress_at=self.last_progress_timestamp,
+            transport_status=self.transport_status,
+            transport_request_return_timestamp=self.transport_request_return_timestamp,
+            token_usage=(
+                dict(self.token_usage) if isinstance(self.token_usage, dict) else None
+            ),
+            failure_cause=self.failure_cause,
+            raw_event_count=len(self.raw_events),
+            projection_event_cursor=max(int(projection_event_cursor or 0), 0),
+            terminal_signals=tuple(
+                ExecutionCheckpointSignal(
+                    source=signal.source,
+                    status=signal.status,
+                    timestamp=signal.timestamp,
+                )
+                for signal in self.terminal_signals
+            ),
+            trace_manifest_id=trace_manifest_id,
+        )
+
 
 def _merge_runtime_raw_events(
     streamed_raw_events: list[Any],
@@ -409,6 +470,7 @@ def _inspect_raw_event(
     assistant_stream_text = None
     failure_message = None
     terminal_signal = None
+    token_usage = _extract_usage(params)
     method_lower = method.lower()
     lifecycle = analyze_acp_lifecycle_message(payload)
 
@@ -472,7 +534,25 @@ def _inspect_raw_event(
         assistant_stream_text=assistant_stream_text,
         failure_message=failure_message,
         terminal_signal=terminal_signal,
+        token_usage=token_usage,
+        runtime_method=method,
     )
+
+
+def _extract_usage(params: dict[str, Any]) -> Optional[dict[str, Any]]:
+    usage = params.get("usage") or params.get("tokenUsage")
+    if isinstance(usage, dict):
+        return usage
+    return None
+
+
+def _checkpoint_preview(value: str, limit: int = 240) -> str:
+    text = str(value or "")
+    if len(text) <= limit:
+        return text
+    if limit <= 3:
+        return text[:limit]
+    return text[: limit - 3] + "..."
 
 
 def _extract_message_role(params: dict[str, Any]) -> str:
@@ -518,6 +598,7 @@ def _string_from_value(value: Any) -> Optional[str]:
 
 
 __all__ = [
+    "ExecutionCheckpoint",
     "RuntimeThreadCompletionSource",
     "RuntimeThreadOutcome",
     "RuntimeThreadOutcomeStatus",

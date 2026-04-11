@@ -54,10 +54,14 @@ def test_persist_turn_timeline_round_trips_events(tmp_path: Path) -> None:
         "tool_result",
         "turn_completed",
     ]
+    assert timeline[0]["storage_layer"] == "hot_projection"
+    assert timeline[0]["captures_cold_trace"] is True
+    assert timeline[0]["updates_checkpoint"] is True
     assert timeline[0]["event"]["kind"] == "thinking"
     assert timeline[1]["event"]["tool_name"] == "shell"
     assert timeline[2]["event"]["result"] == {"stdout": "/tmp"}
     assert timeline[3]["event"]["final_message"] == "done"
+    assert timeline[3]["hot_payload_contract"] == "terminal_summary"
 
 
 def test_persist_turn_timeline_appends_from_start_index(tmp_path: Path) -> None:

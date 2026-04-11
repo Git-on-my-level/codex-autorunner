@@ -1108,7 +1108,7 @@ _TABLE_DEFINITIONS = (
     OrchestrationTableDefinition(
         name="orch_thread_executions",
         role="authoritative",
-        description="Canonical orchestration execution metadata for thread targets.",
+        description="Canonical startup-critical execution metadata for thread targets, excluding full provider/raw traces.",
     ),
     OrchestrationTableDefinition(
         name="orch_thread_actions",
@@ -1188,12 +1188,12 @@ _TABLE_DEFINITIONS = (
     OrchestrationTableDefinition(
         name="orch_transcript_mirrors",
         role="mirror",
-        description="Plain-text transcript mirrors; searchable but non-authoritative.",
+        description="Sanitized plain-text transcript mirrors; searchable but non-authoritative and never used for recovery.",
     ),
     OrchestrationTableDefinition(
         name="orch_event_projections",
         role="projection",
-        description="Normalized event projections across thread and flow targets.",
+        description="Hot, bounded event projections across thread and flow targets; never raw provider payload archives or cumulative progress mirrors.",
     ),
     OrchestrationTableDefinition(
         name="orch_flow_run_projections",

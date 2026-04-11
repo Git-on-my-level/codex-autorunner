@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
 
@@ -18,6 +17,7 @@ from ..ports.run_event import (
     ToolResult,
 )
 from ..text_utils import _json_dumps
+from .execution_history import build_hot_projection_envelope, route_run_event
 from .sqlite import open_orchestration_sqlite
 
 _EVENT_FAMILY = "turn.timeline"
@@ -83,12 +83,16 @@ def persist_turn_timeline(
         for event in events:
             index = next_index + count
             event_type, status = _event_type_and_status(event)
-            event_payload = {
-                **base_metadata,
-                "event_index": index,
-                "event_type": event_type,
-                "event": asdict(event),
-            }
+            routing = route_run_event(event)
+            if not routing.persist_hot_projection:
+                continue
+            event_payload = build_hot_projection_envelope(
+                event_index=index,
+                event_type=event_type,
+                event=event,
+                metadata=base_metadata,
+                routing=routing,
+            ).to_payload()
             event_id = f"turn-timeline:{normalized_execution_id}:{index:04d}"
             event_timestamp = str(getattr(event, "timestamp", "") or "").strip()
             if not event_timestamp:

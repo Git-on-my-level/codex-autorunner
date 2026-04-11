@@ -143,7 +143,9 @@ class ThreadExecutionStore(Protocol):
     """Persistence boundary for orchestration thread targets and executions.
 
     `backend_thread_id` / `backend_runtime_instance_id` parameters are runtime
-    binding inputs, not durable thread identity.
+    binding inputs, not durable thread identity. Startup and managed-thread
+    recovery must be satisfiable from these authoritative execution rows plus
+    compact checkpoints, without replaying transcript mirrors or full traces.
     """
 
     def create_thread_target(
