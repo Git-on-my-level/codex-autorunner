@@ -79,10 +79,9 @@ async def test_client_initialize_and_session_roundtrip(tmp_path: Path) -> None:
         listed = await client.list_sessions()
 
         assert initialize.server_name == "fake-hermes"
-        assert status == {
-            "initialized": True,
-            "initializedNotification": True,
-        }
+        assert status["initialized"] is True
+        assert status["initializedNotification"] is True
+        assert status["lastOfficialPromptParams"] is None
         assert created.session_id == loaded.session_id
         assert [session.session_id for session in listed] == [created.session_id]
     finally:
@@ -318,6 +317,32 @@ async def test_client_official_session_status_idle_can_complete_before_request_r
             "session/update",
             "session.status",
         ]
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_client_official_prompt_sends_message_id_and_replays_server_turn_alias(
+    tmp_path: Path,
+) -> None:
+    client = ACPClient(
+        fixture_command("official_server_assigned_turn_id_before_return"),
+        cwd=tmp_path,
+    )
+    try:
+        created = await client.create_session(cwd=str(tmp_path))
+        handle = await client.start_prompt(created.session_id, "Reply with exactly OK.")
+        result = await asyncio.wait_for(handle.wait(), timeout=0.4)
+        status = await client.request("fixture/status", {})
+
+        assert status["lastOfficialPromptParams"]["messageId"] == handle.turn_id
+        assert result.status == "completed"
+        assert result.final_output == "fixture reply"
+        assert any(
+            getattr(event, "kind", None) == "turn_terminal"
+            and getattr(event, "turn_id", None) == "server-turn-1"
+            for event in handle.snapshot_events()
+        )
     finally:
         await client.close()
 

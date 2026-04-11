@@ -1349,6 +1349,68 @@ async def test_runtime_thread_prompt_completed_without_final_payload_uses_prior_
     assert harness.wait_cancelled.is_set()
 
 
+async def test_runtime_thread_session_status_idle_without_request_return_uses_prior_output_delta(
+    tmp_path: Path,
+) -> None:
+    @dataclass
+    class _HarnessWithSessionStatusIdle(_HarnessWithBlockingWait):
+        capabilities: frozenset[str] = frozenset(
+            ["durable_threads", "message_turns", "interrupt", "event_streaming"]
+        )
+
+        async def stream_events(
+            self, workspace_root: Path, conversation_id: str, turn_id: str
+        ):
+            _ = workspace_root, conversation_id, turn_id
+            yield {
+                "message": {
+                    "method": "prompt/delta",
+                    "params": {"delta": "idle completion"},
+                }
+            }
+            yield {
+                "message": {
+                    "method": "session.status",
+                    "params": {"status": {"type": "idle"}},
+                }
+            }
+            await asyncio.Future()
+
+    harness = _HarnessWithSessionStatusIdle()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+
+    started = await begin_runtime_thread_execution(
+        service,
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="user-visible prompt",
+        ),
+    )
+    outcome = await asyncio.wait_for(
+        await_runtime_thread_outcome(
+            started,
+            interrupt_event=None,
+            timeout_seconds=5,
+            execution_error_message="Managed thread execution failed",
+        ),
+        timeout=1,
+    )
+
+    assert outcome.status == "ok"
+    assert outcome.assistant_text == "idle completion"
+    assert outcome.error is None
+    assert outcome.completion_source == "stream_terminal_event"
+    assert outcome.transport_request_return_timestamp is None
+    assert outcome.terminal_signals
+    assert outcome.terminal_signals[0].source == "session.status"
+    assert harness.interrupt_calls == []
+    assert harness.wait_cancelled.is_set()
+
+
 async def test_runtime_threads_prompt_return_tracks_completion_metadata(
     tmp_path: Path,
 ) -> None:

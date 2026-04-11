@@ -38,6 +38,7 @@ class FakeACPServer:
         self._session_cancel_events: dict[str, threading.Event] = {}
         self._permission_waiters: dict[str, threading.Event] = {}
         self._permission_results: dict[str, dict[str, Any]] = {}
+        self._last_official_prompt_params: dict[str, Any] | None = None
 
     def send(self, payload: dict[str, Any]) -> None:
         _write_line(self._lock, payload)
@@ -469,6 +470,27 @@ class FakeACPServer:
                 {"stopReason": "end_turn", "userMessageId": turn_id},
             )
             return
+        if self._scenario == "official_server_assigned_turn_id_before_return":
+            server_turn_id = f"server-turn-{self._next_official_turn}"
+            self._next_official_turn += 1
+            self.send(
+                {
+                    "method": "prompt/completed",
+                    "params": {
+                        "sessionId": session_id,
+                        "turnId": server_turn_id,
+                        "status": "completed",
+                        "finalOutput": "fixture reply",
+                    },
+                }
+            )
+            time.sleep(0.05)
+            cancel_event.clear()
+            self._send_result(
+                request_id,
+                {"stopReason": "end_turn", "userMessageId": server_turn_id},
+            )
+            return
         if self._scenario == "official_terminal_without_request_return":
             self.send(
                 {
@@ -535,6 +557,7 @@ class FakeACPServer:
                 {
                     "initialized": self._initialized,
                     "initializedNotification": self._initialized_notification,
+                    "lastOfficialPromptParams": self._last_official_prompt_params,
                 },
             )
             return
@@ -586,6 +609,7 @@ class FakeACPServer:
             if session_id not in self._sessions:
                 self._send_error(request_id, -32004, "session not found")
                 return
+            self._last_official_prompt_params = dict(params)
             turn_id = str(params.get("messageId") or "").strip()
             if not turn_id:
                 turn_id = f"turn-{self._next_official_turn}"

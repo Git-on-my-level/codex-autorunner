@@ -120,6 +120,33 @@
     }
   },
   {
+    "name": "prompt_completed_with_agent_message_item",
+    "raw": {
+      "method": "prompt/completed",
+      "params": {
+        "sessionId": "session-1",
+        "status": "completed",
+        "item": {
+          "type": "agentMessage",
+          "text": "fixture reply from item"
+        }
+      }
+    },
+    "expected": {
+      "normalized_kind": "turn_terminal",
+      "terminal_status": "completed",
+      "runtime_terminal_status": "ok",
+      "uses_turn_id_fallback": true,
+      "closes_turn_buffer": true,
+      "assistant_text": "fixture reply from item",
+      "output_delta": "",
+      "progress_message": "",
+      "error_message": null,
+      "session_status": null,
+      "session_update_kind": null
+    }
+  },
+  {
     "name": "session_status_running_missing_turn_id",
     "raw": {
       "method": "session.status",

@@ -37,7 +37,7 @@ _SUCCESSFUL_COMPLETION_STATUSES = frozenset(
 _INTERRUPTED_COMPLETION_STATUSES = frozenset(
     {"interrupted", "cancelled", "canceled", "aborted"}
 )
-_TEXT_PART_TYPES = frozenset({"text", "output_text", "message"})
+_TEXT_PART_TYPES = frozenset({"text", "output_text", "message", "agentMessage"})
 
 
 ACPRuntimeTerminalStatus = Literal["ok", "error", "interrupted"]
@@ -127,7 +127,7 @@ def extract_text_content(value: Any) -> str:
     return (
         _string_from_value(
             value,
-            keys=("text", "message", "content"),
+            keys=("text", "message", "content", "item"),
         )
         or ""
     )
@@ -136,7 +136,7 @@ def extract_text_content(value: Any) -> str:
 def extract_output_delta(payload: Mapping[str, Any]) -> str:
     text = _string_from_value(
         payload,
-        keys=("delta", "text", "content", "output", "message"),
+        keys=("delta", "text", "content", "output", "message", "item"),
     )
     if text:
         return text
@@ -163,6 +163,7 @@ def extract_message_text(payload: Mapping[str, Any]) -> str:
             "final_message",
             "output",
             "parts",
+            "item",
         ),
     )
     if text:

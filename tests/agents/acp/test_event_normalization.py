@@ -125,6 +125,27 @@ def test_normalize_notification_maps_terminal_event() -> None:
     assert event.final_output == "done"
 
 
+def test_normalize_notification_maps_terminal_event_with_agent_message_item() -> None:
+    event = normalize_notification(
+        {
+            "method": "prompt/completed",
+            "params": {
+                "sessionId": "session-1",
+                "turnId": "turn-1",
+                "status": "completed",
+                "item": {
+                    "type": "agentMessage",
+                    "text": "done from item",
+                },
+            },
+        }
+    )
+
+    assert isinstance(event, ACPTurnTerminalEvent)
+    assert event.status == "completed"
+    assert event.final_output == "done from item"
+
+
 def test_normalize_notification_maps_session_update_message_chunk() -> None:
     event = normalize_notification(
         {

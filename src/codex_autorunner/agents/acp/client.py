@@ -815,6 +815,31 @@ class ACPClient:
                 task.add_done_callback(self._log_background_task_result)
         return state
 
+    async def _register_prompt_turn_alias(
+        self,
+        state: _PromptState,
+        alias_turn_id: Optional[str],
+    ) -> None:
+        normalized_alias = _normalize_optional_text(alias_turn_id)
+        if not normalized_alias or normalized_alias == state.turn_id:
+            return
+        existing = self._prompts.get(normalized_alias)
+        if existing is not None and existing is not state:
+            raise ACPProtocolError(
+                f"Official ACP turn alias '{normalized_alias}' collides with another prompt"
+            )
+        self._prompts[normalized_alias] = state
+        orphan_events = self._orphan_events.pop(normalized_alias, [])
+        if orphan_events:
+            await self._replay_orphan_prompt_events(state, orphan_events)
+        self._log_trace_event(
+            "acp.prompt.turn_alias_registered",
+            session_id=state.session_id,
+            turn_id=state.turn_id,
+            aliased_turn_id=normalized_alias,
+            **self._prompt_trace_fields(state),
+        )
+
     async def _replay_orphan_prompt_events(
         self,
         state: _PromptState,
@@ -1037,10 +1062,13 @@ class ACPClient:
             await state.queue.put(_QUEUE_SENTINEL)
             return
         result_payload = _coerce_mapping(result)
+        response_turn_id = self._official_prompt_response_turn_id(result_payload)
+        await self._register_prompt_turn_alias(state, response_turn_id)
         self._log_trace_event(
             "acp.prompt.request_returned",
             session_id=state.session_id,
             turn_id=state.turn_id,
+            response_turn_id=response_turn_id,
             status=self._official_prompt_terminal_status(result_payload),
             stop_reason=_normalize_optional_text(
                 result_payload.get("stopReason") or result_payload.get("stop_reason")
@@ -1054,6 +1082,7 @@ class ACPClient:
                 "acp.prompt.request_reconciled",
                 session_id=state.session_id,
                 turn_id=state.turn_id,
+                response_turn_id=response_turn_id,
                 status=self._official_prompt_terminal_status(result_payload),
                 stop_reason=_normalize_optional_text(
                     result_payload.get("stopReason")
@@ -1093,6 +1122,15 @@ class ACPClient:
         if status == "failed":
             return "prompt/failed"
         return "prompt/completed"
+
+    def _official_prompt_response_turn_id(self, payload: Any) -> Optional[str]:
+        result = _coerce_mapping(payload)
+        return _normalize_optional_text(
+            result.get("userMessageId")
+            or result.get("user_message_id")
+            or result.get("turnId")
+            or result.get("turn_id")
+        )
 
     def _official_prompt_terminal_status(self, payload: Any) -> str:
         result = _coerce_mapping(payload)

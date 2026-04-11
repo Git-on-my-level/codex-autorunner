@@ -1278,6 +1278,36 @@ async def test_normalize_runtime_thread_raw_event_reads_top_level_info_for_role_
     assert state.best_assistant_text() == "hello"
 
 
+async def test_normalize_runtime_thread_raw_event_reads_agent_message_item_on_message_completed() -> (
+    None
+):
+    state = RuntimeThreadRunEventState()
+
+    resolved = await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "message.completed",
+                    "params": {
+                        "info": {"id": "assistant-item", "role": "assistant"},
+                        "item": {
+                            "type": "agentMessage",
+                            "text": "final reply from item",
+                        },
+                    },
+                }
+            },
+        ),
+        state,
+    )
+
+    assert len(resolved) == 1
+    assert isinstance(resolved[0], OutputDelta)
+    assert resolved[0].content == "final reply from item"
+    assert state.best_assistant_text() == "final reply from item"
+
+
 async def test_message_delta_with_reasoning_part_type_is_dropped() -> None:
     """message.delta carrying reasoning part type must not become OutputDelta."""
     state = RuntimeThreadRunEventState()

@@ -11,6 +11,9 @@ from ..acp_lifecycle import (
     extract_error_message as _shared_acp_error_message,
 )
 from ..acp_lifecycle import (
+    extract_message_text as _shared_acp_message_text,
+)
+from ..acp_lifecycle import (
     extract_output_delta as _shared_acp_output_delta,
 )
 from ..acp_lifecycle import (
@@ -1271,6 +1274,13 @@ def _approval_summary(method: str, params: dict[str, Any]) -> str:
 
 
 def _extract_message_text(params: dict[str, Any]) -> str:
+    shared_text = _shared_acp_message_text(params)
+    if shared_text:
+        return shared_text
+    properties = _coerce_dict(params.get("properties"))
+    shared_properties_text = _shared_acp_message_text(properties)
+    if shared_properties_text:
+        return shared_properties_text
     for key in ("text", "message"):
         value = params.get(key)
         if isinstance(value, str) and value.strip():

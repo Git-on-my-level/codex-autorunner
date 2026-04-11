@@ -104,6 +104,22 @@ CASES = (
         expect_progress_retired=True,
     ),
     SurfaceParityCase(
+        case_id="session_status_idle_before_return",
+        runtime_scenario="official_session_status_idle_before_return",
+        prompt="echo hello world",
+        expected_status="ok",
+        expected_completion_source="prompt_return",
+        expected_reply_substrings={
+            "discord": "fixture reply",
+            "telegram": "fixture reply",
+        },
+        expected_progress_state={
+            "discord": "done",
+            "telegram": "retired",
+        },
+        expect_progress_retired=True,
+    ),
+    SurfaceParityCase(
         case_id="request_return_after_terminal",
         runtime_scenario="official_request_return_after_terminal",
         prompt="echo hello world",
