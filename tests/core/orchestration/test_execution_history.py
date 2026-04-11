@@ -210,6 +210,7 @@ def test_truncate_hot_event_large_tool_input_is_replaced_with_preview() -> None:
     assert "tool_input" not in bounded
     assert "tool_input_preview" in bounded
     assert bounded["tool_input_truncated"] is True
+    assert bounded["details_in_cold_trace"] is True
 
 
 def test_truncate_hot_event_large_tool_result_is_replaced_with_preview() -> None:
@@ -227,6 +228,7 @@ def test_truncate_hot_event_large_tool_result_is_replaced_with_preview() -> None
     assert "result" not in bounded
     assert "result_preview" in bounded
     assert bounded["result_truncated"] is True
+    assert bounded["details_in_cold_trace"] is True
 
 
 def test_truncate_hot_event_small_tool_result_keeps_full_payload() -> None:
@@ -293,6 +295,20 @@ def test_truncate_hot_event_delta_only_includes_char_count() -> None:
     assert bounded["delta_type"] == "assistant_stream"
 
 
+def test_truncate_hot_event_large_delta_only_marks_cold_trace_detail() -> None:
+    event = OutputDelta(
+        timestamp="2026-04-12T00:00:00Z",
+        content="x" * 800,
+        delta_type="assistant_stream",
+    )
+    bounded = truncate_hot_event_payload(event, "delta_only")
+
+    assert len(bounded["content"]) == 512
+    assert bounded["content_chars"] == 800
+    assert bounded["content_truncated"] is True
+    assert bounded["details_in_cold_trace"] is True
+
+
 def test_truncate_hot_event_none_contract_returns_empty() -> None:
     event = ToolCall(
         timestamp="2026-04-12T00:00:00Z",
@@ -318,6 +334,21 @@ def test_truncate_hot_event_large_run_notice_data_is_truncated() -> None:
     assert "data" not in bounded
     assert "data_preview" in bounded
     assert bounded["data_truncated"] is True
+    assert bounded["details_in_cold_trace"] is True
+
+
+def test_truncate_hot_event_large_run_notice_message_is_truncated() -> None:
+    event = RunNotice(
+        timestamp="2026-04-12T00:00:00Z",
+        kind="progress",
+        message="x" * 900,
+    )
+    bounded = truncate_hot_event_payload(event, "structured_event")
+
+    assert len(bounded["message"]) == 512
+    assert bounded["message_chars"] == 900
+    assert bounded["message_truncated"] is True
+    assert bounded["details_in_cold_trace"] is True
 
 
 def test_truncate_hot_event_envelope_uses_bounded_payload_for_large_tool_input() -> (

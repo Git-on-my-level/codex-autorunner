@@ -1133,6 +1133,7 @@ async def finalize_managed_thread_execution(
     timeline_events: list[Any] = []
     live_timeline_count = 0
     live_timeline_error_logged = False
+    final_trace_manifest_id: Optional[str] = None
 
     cold_trace_writer: Optional[ColdTraceWriter] = None
     try:
@@ -1479,7 +1480,8 @@ async def finalize_managed_thread_execution(
                 exc_info=True,
             )
         try:
-            cold_trace_writer.finalize()
+            final_trace_manifest = cold_trace_writer.finalize()
+            final_trace_manifest_id = final_trace_manifest.trace_id
             cold_trace_writer = None
         except Exception:
             logger.warning(
@@ -1509,6 +1511,11 @@ async def finalize_managed_thread_execution(
                 backend_thread_id=current_backend_thread_id or None,
                 backend_turn_id=outcome.backend_turn_id or started.execution.backend_id,
                 status=outcome.status,
+            )
+            | (
+                {"trace_manifest_id": final_trace_manifest_id}
+                if final_trace_manifest_id
+                else {}
             ),
             events=timeline_events,
         )

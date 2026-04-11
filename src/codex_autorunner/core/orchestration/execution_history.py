@@ -15,6 +15,7 @@ from ..ports.run_event import (
     ToolCall,
     ToolResult,
 )
+from ..text_utils import _truncate_text
 
 ExecutionHistoryEventFamily = Literal[
     "tool_call",
@@ -38,6 +39,8 @@ _HOT_TOOL_INPUT_MAX_CHARS = 2048
 _HOT_TOOL_RESULT_MAX_CHARS = 2048
 _HOT_TEXT_PREVIEW_CHARS = 240
 _HOT_NOTICE_DATA_MAX_CHARS = 1024
+_HOT_DELTA_CONTENT_MAX_CHARS = 512
+_HOT_NOTICE_MESSAGE_MAX_CHARS = 512
 
 
 @dataclass(frozen=True)
@@ -279,6 +282,9 @@ class ExecutionCheckpoint:
     completion_source: Optional[str] = None
     assistant_text_preview: str = ""
     assistant_char_count: int = 0
+    progress_text_preview: str = ""
+    progress_text_kind: Optional[str] = None
+    progress_char_count: int = 0
     last_runtime_method: Optional[str] = None
     last_progress_at: Optional[str] = None
     transport_status: Optional[str] = None
@@ -288,6 +294,7 @@ class ExecutionCheckpoint:
     raw_event_count: int = 0
     projection_event_cursor: int = 0
     reasoning_buffer_count: int = 0
+    hot_projection_state: Optional[dict[str, Any]] = None
     terminal_signals: tuple[ExecutionCheckpointSignal, ...] = ()
     trace_manifest_id: Optional[str] = None
 
@@ -363,8 +370,11 @@ def truncate_hot_event_payload(
             if key in raw:
                 bounded[key] = raw[key]
         content = str(raw.get("content", "") or "")
-        bounded["content"] = content
+        bounded["content"] = _truncate_text(content, _HOT_DELTA_CONTENT_MAX_CHARS)
         bounded["content_chars"] = len(content)
+        if len(content) > _HOT_DELTA_CONTENT_MAX_CHARS:
+            bounded["content_truncated"] = True
+            bounded["details_in_cold_trace"] = True
         return bounded
     bounded = dict(raw)
     if isinstance(event, ToolCall):
@@ -374,6 +384,7 @@ def truncate_hot_event_payload(
             if len(serialized) > _HOT_TOOL_INPUT_MAX_CHARS:
                 bounded["tool_input_preview"] = serialized[:_HOT_TOOL_INPUT_MAX_CHARS]
                 bounded["tool_input_truncated"] = True
+                bounded["details_in_cold_trace"] = True
                 del bounded["tool_input"]
     elif isinstance(event, ToolResult):
         result = raw.get("result")
@@ -382,6 +393,7 @@ def truncate_hot_event_payload(
             if len(serialized) > _HOT_TOOL_RESULT_MAX_CHARS:
                 bounded["result_preview"] = serialized[:_HOT_TOOL_RESULT_MAX_CHARS]
                 bounded["result_truncated"] = True
+                bounded["details_in_cold_trace"] = True
                 del bounded["result"]
         error = raw.get("error")
         if error is not None:
@@ -389,14 +401,22 @@ def truncate_hot_event_payload(
             if len(serialized) > _HOT_TOOL_RESULT_MAX_CHARS:
                 bounded["error_preview"] = serialized[:_HOT_TOOL_RESULT_MAX_CHARS]
                 bounded["error_truncated"] = True
+                bounded["details_in_cold_trace"] = True
                 del bounded["error"]
     elif isinstance(event, RunNotice):
+        message = str(raw.get("message", "") or "")
+        bounded["message"] = _truncate_text(message, _HOT_NOTICE_MESSAGE_MAX_CHARS)
+        if len(message) > _HOT_NOTICE_MESSAGE_MAX_CHARS:
+            bounded["message_truncated"] = True
+            bounded["message_chars"] = len(message)
+            bounded["details_in_cold_trace"] = True
         data = raw.get("data")
         if isinstance(data, dict) and data:
             serialized = str(data)
             if len(serialized) > _HOT_NOTICE_DATA_MAX_CHARS:
                 bounded["data_preview"] = serialized[:_HOT_NOTICE_DATA_MAX_CHARS]
                 bounded["data_truncated"] = True
+                bounded["details_in_cold_trace"] = True
                 del bounded["data"]
     return bounded
 
