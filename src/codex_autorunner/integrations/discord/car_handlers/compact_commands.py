@@ -62,7 +62,7 @@ async def handle_car_compact(
     from ..service import log_event
 
     async def _finish_compact_interaction(text: str) -> None:
-        await service._send_or_respond_ephemeral(
+        await service.send_or_respond_ephemeral(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
             deferred=deferred,
@@ -71,7 +71,7 @@ async def handle_car_compact(
 
     binding = await service._store.get_binding(channel_id=channel_id)
     if binding is None:
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             interaction_id,
             interaction_token,
             "Channel not bound. Use /car bind first.",
@@ -92,7 +92,7 @@ async def handle_car_compact(
             workspace_root = fallback
 
     if workspace_root is None:
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             interaction_id,
             interaction_token,
             "Binding is invalid. Run /car bind first.",
@@ -117,7 +117,7 @@ async def handle_car_compact(
         else ""
     )
     if current_thread is None or lifecycle_status != "active":
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             interaction_id,
             interaction_token,
             "No active session to compact. Send a message first to start a conversation.",

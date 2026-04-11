@@ -97,7 +97,7 @@ async def handle_car_review(
                         (commit_sha, commit_subjects.get(commit_sha, ""))
                         for commit_sha, _label in filtered_search_items
                     ]
-                    await service._send_or_respond_with_components_ephemeral(
+                    await service.send_or_respond_ephemeral_with_components(
                         interaction_id=interaction_id,
                         interaction_token=interaction_token,
                         deferred=deferred,
@@ -133,7 +133,7 @@ async def handle_car_review(
         elif target_lower in ("uncommitted", ""):
             pass
         elif target_lower == "custom":
-            await service._send_or_respond_ephemeral(
+            await service.send_or_respond_ephemeral(
                 interaction_id=interaction_id,
                 interaction_token=interaction_token,
                 deferred=deferred,
@@ -146,7 +146,7 @@ async def handle_car_review(
         elif target_lower.startswith("custom "):
             custom_instructions = target_text[7:].strip()
             if not custom_instructions:
-                await service._send_or_respond_ephemeral(
+                await service.send_or_respond_ephemeral(
                     interaction_id=interaction_id,
                     interaction_token=interaction_token,
                     deferred=deferred,
@@ -165,14 +165,14 @@ async def handle_car_review(
     if prompt_commit_picker:
         commits = await service._list_recent_commits_for_picker(workspace_root)
         if not commits:
-            await service._send_or_respond_ephemeral(
+            await service.send_or_respond_ephemeral(
                 interaction_id=interaction_id,
                 interaction_token=interaction_token,
                 deferred=deferred,
                 text="No recent commits found. Use `/car review target:commit <sha>`.",
             )
             return
-        await service._send_or_respond_with_components_ephemeral(
+        await service.send_or_respond_ephemeral_with_components(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
             deferred=deferred,

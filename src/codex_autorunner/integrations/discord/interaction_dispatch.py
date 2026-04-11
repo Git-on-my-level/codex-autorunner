@@ -22,7 +22,7 @@ from .interaction_registry import (
 
 async def _respond_empty_autocomplete(service: Any, ctx: IngressContext) -> None:
     try:
-        await service._respond_autocomplete(
+        await service.respond_autocomplete(
             ctx.interaction_id,
             ctx.interaction_token,
             choices=[],
@@ -40,7 +40,7 @@ async def handle_component_interaction(
         await dispatch_component_interaction(service, ctx)
     except DiscordTransientError as exc:
         user_msg = exc.user_message or "An error occurred. Please try again later."
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             ctx.interaction_id, ctx.interaction_token, user_msg
         )
     except DiscordEffectDeliveryError as exc:
@@ -65,7 +65,7 @@ async def handle_component_interaction(
             channel_id=ctx.channel_id,
             exc=exc,
         )
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             ctx.interaction_id,
             ctx.interaction_token,
             "An unexpected error occurred. Please try again later.",
@@ -81,7 +81,7 @@ async def handle_modal_submit_interaction(
         await dispatch_modal_submit(service, ctx)
     except DiscordTransientError as exc:
         user_msg = exc.user_message or "An error occurred. Please try again later."
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             ctx.interaction_id,
             ctx.interaction_token,
             user_msg,
@@ -107,7 +107,7 @@ async def handle_modal_submit_interaction(
             interaction_id=ctx.interaction_id,
             exc=exc,
         )
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             ctx.interaction_id,
             ctx.interaction_token,
             "An unexpected error occurred. Please try again later.",
@@ -188,7 +188,7 @@ async def execute_ingressed_interaction(
 
     if ctx.kind == InteractionKind.COMPONENT:
         if not ctx.custom_id:
-            await service._respond_ephemeral(
+            await service.respond_ephemeral(
                 interaction_id,
                 interaction_token,
                 "I could not identify this interaction action. Please retry.",
@@ -204,7 +204,7 @@ async def execute_ingressed_interaction(
     command_path = ctx.command_spec.path if ctx.command_spec else ()
     options = ctx.command_spec.options if ctx.command_spec else {}
     if not command_path:
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             interaction_id,
             interaction_token,
             "I could not parse this interaction. Please retry the command.",
@@ -232,14 +232,14 @@ async def execute_ingressed_interaction(
                 options=options,
             )
         else:
-            await service._respond_ephemeral(
+            await service.respond_ephemeral(
                 interaction_id,
                 interaction_token,
                 "Command not implemented yet for Discord.",
             )
     except DiscordTransientError as exc:
         user_msg = exc.user_message or "An error occurred. Please try again later."
-        await service._respond_ephemeral(interaction_id, interaction_token, user_msg)
+        await service.respond_ephemeral(interaction_id, interaction_token, user_msg)
     except DiscordEffectDeliveryError as exc:
         log_event(
             service._logger,
@@ -261,7 +261,7 @@ async def execute_ingressed_interaction(
             interaction_id=interaction_id,
             exc=exc,
         )
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             interaction_id,
             interaction_token,
             "An unexpected error occurred. Please try again later.",

@@ -26,7 +26,7 @@ async def handle_pma_on(
 ) -> None:
     binding = await service._store.get_binding(channel_id=channel_id)
     if binding is not None and binding.get("pma_enabled", False):
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             interaction_id,
             interaction_token,
             "PMA mode is already enabled for this channel. Use /pma off to exit.",
@@ -57,7 +57,7 @@ async def handle_pma_on(
     )
     await service._store.clear_pending_compact_seed(channel_id=channel_id)
 
-    await service._respond_ephemeral(
+    await service.respond_ephemeral(
         interaction_id,
         interaction_token,
         (
@@ -77,7 +77,7 @@ async def handle_pma_off(
 ) -> None:
     binding = await service._store.get_binding(channel_id=channel_id)
     if binding is None:
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             interaction_id,
             interaction_token,
             "PMA mode disabled. Back to repo mode.",
@@ -113,7 +113,7 @@ async def handle_pma_off(
         await service._store.delete_binding(channel_id=channel_id)
         hint = "Back to repo mode."
 
-    await service._respond_ephemeral(
+    await service.respond_ephemeral(
         interaction_id,
         interaction_token,
         f"PMA mode disabled. {hint}",
@@ -135,4 +135,4 @@ async def handle_pma_status(
     else:
         workspace = binding.get("workspace_path", "unknown")
         text = f"PMA mode: disabled\nCurrent workspace: {workspace}"
-    await service._respond_ephemeral(interaction_id, interaction_token, text)
+    await service.respond_ephemeral(interaction_id, interaction_token, text)

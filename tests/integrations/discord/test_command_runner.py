@@ -74,7 +74,8 @@ class _FakeService:
         self._handle_pma_command = AsyncMock()
         self._handle_command_autocomplete = AsyncMock()
         self._handle_ticket_modal_submit = AsyncMock()
-        self._respond_ephemeral = AsyncMock()
+        self.respond_ephemeral = AsyncMock()
+        self._respond_ephemeral = self.respond_ephemeral
         self._send_or_respond_ephemeral = AsyncMock()
 
 

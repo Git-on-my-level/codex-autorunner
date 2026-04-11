@@ -76,8 +76,8 @@ class _FakeService:
         self._handle_ticket_filter_component = AsyncMock()
         self._handle_ticket_select_component = AsyncMock()
         self._handle_approval_component = AsyncMock()
-        self._respond_ephemeral = AsyncMock()
-        self._respond_autocomplete = AsyncMock()
+        self.respond_ephemeral = AsyncMock()
+        self.respond_autocomplete = AsyncMock()
 
 
 @pytest.mark.anyio
@@ -156,8 +156,8 @@ async def test_modal_submit_transient_error_responds_ephemeral() -> None:
 
     await execute_ingressed_interaction(service, ctx, {})
 
-    service._respond_ephemeral.assert_awaited_once()
-    call_args = service._respond_ephemeral.call_args
+    service.respond_ephemeral.assert_awaited_once()
+    call_args = service.respond_ephemeral.call_args
     assert "expired" in call_args[0][2].lower()
 
 
@@ -177,7 +177,7 @@ async def test_autocomplete_transient_error_returns_empty_choices() -> None:
 
     await execute_ingressed_interaction(service, ctx, {})
 
-    service._respond_autocomplete.assert_awaited_once_with(
+    service.respond_autocomplete.assert_awaited_once_with(
         "inter-1",
         "token-1",
         choices=[],
@@ -202,7 +202,7 @@ async def test_autocomplete_delivery_error_returns_empty_choices() -> None:
 
     await execute_ingressed_interaction(service, ctx, {})
 
-    service._respond_autocomplete.assert_awaited_once_with(
+    service.respond_autocomplete.assert_awaited_once_with(
         "inter-1",
         "token-1",
         choices=[],
@@ -239,8 +239,8 @@ async def test_component_without_custom_id_responds_error() -> None:
 
     await execute_ingressed_interaction(service, ctx, payload)
 
-    service._respond_ephemeral.assert_awaited_once()
-    call_args = service._respond_ephemeral.call_args
+    service.respond_ephemeral.assert_awaited_once()
+    call_args = service.respond_ephemeral.call_args
     assert "could not identify" in call_args[0][2].lower()
 
 
@@ -259,8 +259,8 @@ async def test_slash_command_without_command_spec_responds_error() -> None:
 
     await execute_ingressed_interaction(service, ctx, payload)
 
-    service._respond_ephemeral.assert_awaited()
-    call_args = service._respond_ephemeral.call_args
+    service.respond_ephemeral.assert_awaited()
+    call_args = service.respond_ephemeral.call_args
     assert "could not parse" in call_args[0][2].lower()
 
 
@@ -294,4 +294,4 @@ async def test_callback_errors_are_logged_separately_from_handler_errors() -> No
 
     assert callback_events
     assert callback_events[0]["interaction_id"] == "inter-1"
-    service._respond_ephemeral.assert_not_awaited()
+    service.respond_ephemeral.assert_not_awaited()

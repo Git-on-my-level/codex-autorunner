@@ -13,10 +13,6 @@ class DiscordError(Exception):
         self.user_message = user_message
 
 
-class DiscordConfigError(DiscordError):
-    """Discord integration configuration error."""
-
-
 class DiscordAPIError(DiscordError):
     """Discord API request error."""
 

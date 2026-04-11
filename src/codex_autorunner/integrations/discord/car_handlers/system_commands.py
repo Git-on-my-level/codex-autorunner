@@ -260,7 +260,7 @@ async def handle_car_update(
                 update_target=update_target,
             )
             if component_response:
-                await service._send_or_update_component_message(
+                await service.send_or_update_component_message(
                     interaction_id=interaction_id,
                     interaction_token=interaction_token,
                     deferred=deferred,
@@ -268,7 +268,7 @@ async def handle_car_update(
                     components=components,
                 )
             else:
-                await service._send_or_respond_with_components_ephemeral(
+                await service.send_or_respond_ephemeral_with_components(
                     interaction_id=interaction_id,
                     interaction_token=interaction_token,
                     deferred=deferred,
@@ -286,14 +286,14 @@ async def handle_car_update(
             "Use `/car update target:status` for progress."
         )
         if component_response:
-            await service._send_or_update_component_message(
+            await service.send_or_update_component_message(
                 interaction_id=interaction_id,
                 interaction_token=interaction_token,
                 deferred=deferred,
                 text=text,
             )
         else:
-            await service._send_or_respond_ephemeral(
+            await service.send_or_respond_ephemeral(
                 interaction_id=interaction_id,
                 interaction_token=interaction_token,
                 deferred=deferred,
@@ -345,14 +345,14 @@ async def handle_car_update(
             f"{exc} Use `/car update target:status` for current state."
         )
         if component_response:
-            await service._send_or_update_component_message(
+            await service.send_or_update_component_message(
                 interaction_id=interaction_id,
                 interaction_token=interaction_token,
                 deferred=deferred,
                 text=text,
             )
         else:
-            await service._send_or_respond_ephemeral(
+            await service.send_or_respond_ephemeral(
                 interaction_id=interaction_id,
                 interaction_token=interaction_token,
                 deferred=deferred,
@@ -373,14 +373,14 @@ async def handle_car_update(
             exc=exc,
         )
         if component_response:
-            await service._send_or_update_component_message(
+            await service.send_or_update_component_message(
                 interaction_id=interaction_id,
                 interaction_token=interaction_token,
                 deferred=deferred,
                 text="Update failed to start. Check logs for details.",
             )
         else:
-            await service._send_or_respond_ephemeral(
+            await service.send_or_respond_ephemeral(
                 interaction_id=interaction_id,
                 interaction_token=interaction_token,
                 deferred=deferred,
@@ -397,14 +397,14 @@ async def handle_car_update(
         "Use `/car update target:status` for progress."
     )
     if component_response:
-        await service._send_or_update_component_message(
+        await service.send_or_update_component_message(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
             deferred=deferred,
             text=text,
         )
     else:
-        await service._send_or_respond_ephemeral(
+        await service.send_or_respond_ephemeral(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
             deferred=deferred,
@@ -444,7 +444,7 @@ async def handle_car_update_status(
     if not isinstance(status, dict):
         status = None
     text = _format_update_status_message(service, status)
-    await service._send_or_respond_ephemeral(
+    await service.send_or_respond_ephemeral(
         interaction_id=interaction_id,
         interaction_token=interaction_token,
         deferred=deferred,
@@ -468,7 +468,7 @@ async def handle_car_logout(
     )
     client = await service._client_for_workspace(str(workspace_root))
     if client is None:
-        await service._send_or_respond_ephemeral(
+        await service.send_or_respond_ephemeral(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
             deferred=deferred,
@@ -485,14 +485,14 @@ async def handle_car_logout(
             workspace_root=str(workspace_root),
             exc=exc,
         )
-        await service._send_or_respond_ephemeral(
+        await service.send_or_respond_ephemeral(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
             deferred=deferred,
             text=format_discord_message("Logout failed; check logs for details."),
         )
         return
-    await service._send_or_respond_ephemeral(
+    await service.send_or_respond_ephemeral(
         interaction_id=interaction_id,
         interaction_token=interaction_token,
         deferred=deferred,
@@ -532,7 +532,7 @@ async def handle_car_feedback(
     )
     client = await service._client_for_workspace(str(workspace_root))
     if client is None:
-        await service._send_or_respond_ephemeral(
+        await service.send_or_respond_ephemeral(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
             deferred=deferred,
@@ -562,7 +562,7 @@ async def handle_car_feedback(
             workspace_root=str(workspace_root),
             exc=exc,
         )
-        await service._send_or_respond_ephemeral(
+        await service.send_or_respond_ephemeral(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
             deferred=deferred,
@@ -578,7 +578,7 @@ async def handle_car_feedback(
     message_text = "Feedback sent."
     if isinstance(report_id, str):
         message_text = f"Feedback sent (report {report_id})."
-    await service._send_or_respond_ephemeral(
+    await service.send_or_respond_ephemeral(
         interaction_id=interaction_id,
         interaction_token=interaction_token,
         deferred=deferred,
@@ -650,7 +650,7 @@ async def handle_car_mention(
     try:
         data = path.read_bytes()
     except OSError:
-        await service._send_or_respond_ephemeral(
+        await service.send_or_respond_ephemeral(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
             deferred=deferred,
@@ -659,7 +659,7 @@ async def handle_car_mention(
         return
 
     if len(data) > max_bytes:
-        await service._send_or_respond_ephemeral(
+        await service.send_or_respond_ephemeral(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
             deferred=deferred,
@@ -669,7 +669,7 @@ async def handle_car_mention(
 
     null_count = data.count(b"\x00")
     if null_count > 0 and null_count > len(data) * 0.1:
-        await service._send_or_respond_ephemeral(
+        await service.send_or_respond_ephemeral(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
             deferred=deferred,
@@ -685,7 +685,7 @@ async def handle_car_mention(
     if not isinstance(request_arg, str) or not request_arg.strip():
         request_arg = "Please review this file."
 
-    await service._send_or_respond_ephemeral(
+    await service.send_or_respond_ephemeral(
         interaction_id=interaction_id,
         interaction_token=interaction_token,
         deferred=deferred,

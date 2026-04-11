@@ -804,7 +804,7 @@ async def handle_debug(
                 binding=None,
             )
         )
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             interaction_id, interaction_token, "\n".join(lines)
         )
         return
@@ -846,9 +846,7 @@ async def handle_debug(
         )
     )
 
-    await service._respond_ephemeral(
-        interaction_id, interaction_token, "\n".join(lines)
-    )
+    await service.respond_ephemeral(interaction_id, interaction_token, "\n".join(lines))
 
 
 async def handle_help(
@@ -858,7 +856,7 @@ async def handle_help(
 ) -> None:
     lines = build_discord_help_lines()
     content = format_discord_message("\n".join(lines))
-    await service._respond_ephemeral(interaction_id, interaction_token, content)
+    await service.respond_ephemeral(interaction_id, interaction_token, content)
 
 
 async def handle_ids(
@@ -909,9 +907,7 @@ async def handle_ids(
             ),
         ]
     )
-    await service._respond_ephemeral(
-        interaction_id, interaction_token, "\n".join(lines)
-    )
+    await service.respond_ephemeral(interaction_id, interaction_token, "\n".join(lines))
 
 
 def _status_model_label(binding: dict[str, Any]) -> str:

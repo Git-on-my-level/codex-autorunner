@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import ast
+import subprocess
+import sys
 from pathlib import Path
 
 DISCORD_DIR = (
@@ -30,8 +32,36 @@ LOW_LEVEL_RESPONSE_HELPERS = {
 }
 ALLOWED_LOW_LEVEL_RESPONSE_HELPER_MODULES = {
     "src/codex_autorunner/integrations/discord/effects.py",
-    "src/codex_autorunner/integrations/discord/interaction_runtime.py",
     "src/codex_autorunner/integrations/discord/service.py",
+}
+HANDLER_FACING_RUNTIME_MODULES = {
+    "src/codex_autorunner/integrations/discord/interaction_dispatch.py",
+    "src/codex_autorunner/integrations/discord/interaction_registry.py",
+    "src/codex_autorunner/integrations/discord/pma_commands.py",
+    "src/codex_autorunner/integrations/discord/workspace_commands.py",
+    *{
+        path.as_posix()
+        for path in (DISCORD_DIR / "car_handlers").glob("*.py")
+        if path.name != "__init__.py"
+    },
+}
+HANDLER_FACING_PRIVATE_RUNTIME_METHODS = {
+    "_respond_ephemeral",
+    "_respond_public",
+    "_respond_with_components",
+    "_respond_with_components_public",
+    "_respond_autocomplete",
+    "_defer_ephemeral",
+    "_defer_public",
+    "_defer_component_update",
+    "_send_or_respond_ephemeral",
+    "_send_or_respond_public",
+    "_send_or_respond_with_components_ephemeral",
+    "_send_or_respond_with_components_public",
+    "_send_or_update_component_message",
+    "_update_component_message",
+    "_send_followup_ephemeral",
+    "_send_followup_public",
 }
 
 
@@ -119,6 +149,36 @@ def test_contract_handler_modules_do_not_bypass_interaction_runtime_boundary() -
     }
 
     assert forbidden == {}
+
+
+def test_contract_handler_facing_modules_do_not_call_private_runtime_methods() -> None:
+    users = _attribute_call_users(HANDLER_FACING_PRIVATE_RUNTIME_METHODS)
+    forbidden = {
+        module: methods
+        for module, methods in users.items()
+        if module in HANDLER_FACING_RUNTIME_MODULES
+    }
+
+    assert forbidden == {}
+
+
+def test_contract_leaf_runtime_modules_import_without_discord_service_side_effects() -> (
+    None
+):
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import importlib; "
+                "importlib.import_module('codex_autorunner.integrations.discord.interaction_runtime'); "
+                "importlib.import_module('codex_autorunner.integrations.discord.interaction_session'); "
+                "importlib.import_module('codex_autorunner.integrations.discord.effects')"
+            ),
+        ],
+        check=True,
+        cwd=DISCORD_DIR.parents[3],
+    )
 
 
 def test_contract_legacy_normalized_interaction_path_is_removed() -> None:

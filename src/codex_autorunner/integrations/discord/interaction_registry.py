@@ -339,14 +339,14 @@ async def _handle_pma_route(
     }
     method_name = method_name_by_path.get(route.canonical_path)
     if method_name is None:
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             interaction_id,
             interaction_token,
             "Unknown PMA subcommand. Use on, off, or status.",
         )
         return
     if not service._config.pma_enabled:
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             interaction_id,
             interaction_token,
             "PMA is disabled in hub config. Set pma.enabled: true to enable.",
@@ -1480,7 +1480,7 @@ async def _handle_bind_page_component(service: Any, ctx: Any) -> None:
 
 async def _handle_bind_select_component(service: Any, ctx: Any) -> None:
     if not ctx.values:
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             ctx.interaction_id,
             ctx.interaction_token,
             "Please select a repository and try again.",
@@ -1497,7 +1497,7 @@ async def _handle_bind_select_component(service: Any, ctx: Any) -> None:
 
 async def _handle_flow_runs_select_component(service: Any, ctx: Any) -> None:
     if not ctx.values:
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             ctx.interaction_id,
             ctx.interaction_token,
             "Please select a run and try again.",
@@ -1522,7 +1522,7 @@ async def _handle_flow_runs_select_component(service: Any, ctx: Any) -> None:
 
 async def _handle_agent_select_component(service: Any, ctx: Any) -> None:
     if not ctx.values:
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             ctx.interaction_id,
             ctx.interaction_token,
             "Please select an agent and try again.",
@@ -1538,7 +1538,7 @@ async def _handle_agent_select_component(service: Any, ctx: Any) -> None:
 
 async def _handle_agent_profile_select_component(service: Any, ctx: Any) -> None:
     if not ctx.values:
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             ctx.interaction_id,
             ctx.interaction_token,
             "Please select a Hermes profile and try again.",
@@ -1554,7 +1554,7 @@ async def _handle_agent_profile_select_component(service: Any, ctx: Any) -> None
 
 async def _handle_model_select_component(service: Any, ctx: Any) -> None:
     if not ctx.values:
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             ctx.interaction_id,
             ctx.interaction_token,
             "Please select a model and try again.",
@@ -1571,7 +1571,7 @@ async def _handle_model_select_component(service: Any, ctx: Any) -> None:
 
 async def _handle_model_effort_select_component(service: Any, ctx: Any) -> None:
     if not ctx.values:
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             ctx.interaction_id,
             ctx.interaction_token,
             "Please select reasoning effort and try again.",
@@ -1588,7 +1588,7 @@ async def _handle_model_effort_select_component(service: Any, ctx: Any) -> None:
 
 async def _handle_session_resume_select_component(service: Any, ctx: Any) -> None:
     if not ctx.values:
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             ctx.interaction_id,
             ctx.interaction_token,
             "Please select a thread and try again.",
@@ -1604,7 +1604,7 @@ async def _handle_session_resume_select_component(service: Any, ctx: Any) -> Non
 
 async def _handle_update_target_select_component(service: Any, ctx: Any) -> None:
     if not ctx.values:
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             ctx.interaction_id,
             ctx.interaction_token,
             "Please select an update target and try again.",
@@ -1623,7 +1623,7 @@ async def _handle_update_confirm_component(service: Any, ctx: Any) -> None:
     custom_id = ctx.custom_id or ""
     raw_target = custom_id.split(":", 1)[1].strip()
     if not raw_target:
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             ctx.interaction_id,
             ctx.interaction_token,
             "Please select an update target and try again.",
@@ -1639,7 +1639,7 @@ async def _handle_update_confirm_component(service: Any, ctx: Any) -> None:
 
 
 async def _handle_update_cancel_component(service: Any, ctx: Any) -> None:
-    await service._update_component_message(
+    await service.update_component_message(
         interaction_id=ctx.interaction_id,
         interaction_token=ctx.interaction_token,
         text="Update cancelled.",
@@ -1662,7 +1662,7 @@ async def _handle_newt_hard_reset_component(service: Any, ctx: Any) -> None:
         custom_id, NEWT_HARD_RESET_CUSTOM_ID
     )
     if hard_reset_token is None:
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             ctx.interaction_id,
             ctx.interaction_token,
             "I could not identify this interaction action. Please retry.",
@@ -1680,7 +1680,7 @@ async def _handle_newt_cancel_component(service: Any, ctx: Any) -> None:
     custom_id = ctx.custom_id or ""
     cancel_token = _parse_newt_component_custom_id(custom_id, NEWT_CANCEL_CUSTOM_ID)
     if cancel_token is None:
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             ctx.interaction_id,
             ctx.interaction_token,
             "I could not identify this interaction action. Please retry.",
@@ -1695,7 +1695,7 @@ async def _handle_newt_cancel_component(service: Any, ctx: Any) -> None:
 
 async def _handle_review_commit_select_component(service: Any, ctx: Any) -> None:
     if not ctx.values:
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             ctx.interaction_id,
             ctx.interaction_token,
             "Please select a commit and try again.",
@@ -1721,14 +1721,14 @@ async def _handle_flow_action_select_component(service: Any, ctx: Any) -> None:
     custom_id = ctx.custom_id or ""
     action = custom_id.split(":", 1)[1].strip().lower()
     if not ctx.values:
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             ctx.interaction_id,
             ctx.interaction_token,
             "Please select a run and try again.",
         )
         return
     if action not in FLOW_ACTIONS_WITH_RUN_PICKER:
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             ctx.interaction_id,
             ctx.interaction_token,
             f"Unknown flow action picker: {action}",
@@ -1752,7 +1752,7 @@ async def _handle_flow_action_select_component(service: Any, ctx: Any) -> None:
         "reply": "_handle_flow_reply",
     }.get(action)
     if handler_name is None:
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             ctx.interaction_id,
             ctx.interaction_token,
             f"Unknown flow action picker: {action}",
@@ -1777,7 +1777,7 @@ async def _handle_flow_action_select_component(service: Any, ctx: Any) -> None:
                 ctx.interaction_id,
                 ctx.interaction_token,
             )
-            await service._send_or_respond_ephemeral(
+            await service.send_or_respond_ephemeral(
                 interaction_id=ctx.interaction_id,
                 interaction_token=ctx.interaction_token,
                 deferred=deferred,
@@ -1806,7 +1806,7 @@ async def _prepare_flow_button_component(service: Any, ctx: Any) -> bool:
     )
     if prepared:
         return True
-    await service._respond_ephemeral(
+    await service.respond_ephemeral(
         ctx.interaction_id,
         ctx.interaction_token,
         "Discord interaction did not acknowledge. Please retry.",
@@ -2274,7 +2274,7 @@ async def dispatch_slash_command(
     route = slash_command_route_for_path(command_path)
     if route is None:
         if command_path[:1] == ("pma",):
-            await service._respond_ephemeral(
+            await service.respond_ephemeral(
                 interaction_id,
                 interaction_token,
                 "Unknown PMA subcommand. Use on, off, or status.",
@@ -2282,13 +2282,13 @@ async def dispatch_slash_command(
             return False
         if command_path[:1] == ("car",):
             primary = command_path[1] if len(command_path) > 1 else ""
-            await service._respond_ephemeral(
+            await service.respond_ephemeral(
                 interaction_id,
                 interaction_token,
                 f"Unknown car subcommand: {primary}",
             )
             return False
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             interaction_id,
             interaction_token,
             "Command not implemented yet for Discord.",
@@ -2312,7 +2312,7 @@ async def dispatch_component_interaction(service: Any, ctx: Any) -> bool:
     custom_id = ctx.custom_id or ""
     route = component_route_for_custom_id(custom_id)
     if route is None:
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             ctx.interaction_id,
             ctx.interaction_token,
             f"Unknown component: {custom_id}",
@@ -2333,7 +2333,7 @@ async def dispatch_component_interaction(service: Any, ctx: Any) -> bool:
 async def dispatch_modal_submit(service: Any, ctx: Any) -> bool:
     route = modal_route_for_custom_id(ctx.custom_id or "")
     if route is None:
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             ctx.interaction_id,
             ctx.interaction_token,
             "Unknown modal submission.",
@@ -2356,7 +2356,7 @@ async def dispatch_autocomplete(
 ) -> bool:
     route = autocomplete_route_for(command_path, focused_name)
     if route is None:
-        await service._respond_autocomplete(
+        await service.respond_autocomplete(
             interaction_id,
             interaction_token,
             choices=[],
@@ -2373,7 +2373,7 @@ async def dispatch_autocomplete(
         choices = await choices_result
     else:
         choices = choices_result
-    await service._respond_autocomplete(
+    await service.respond_autocomplete(
         interaction_id,
         interaction_token,
         choices=choices,
