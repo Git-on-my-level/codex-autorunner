@@ -1997,6 +1997,64 @@ def _build_managed_thread_input_items(
     )
 
 
+async def _evict_cached_runtime_supervisors(
+    service: Any,
+    *,
+    agent_id: str,
+    profile: Optional[str],
+    workspace_root: Path,
+) -> int:
+    cache = getattr(service, "_agent_runtime_supervisors", None)
+    if not isinstance(cache, dict) or not cache:
+        return 0
+    try:
+        resolution = resolve_agent_runtime(agent_id, profile, context=service)
+    except (KeyError, ValueError, TypeError, RuntimeError):
+        return 0
+    runtime_agent_id = str(getattr(resolution, "runtime_agent_id", "") or "").strip()
+    runtime_profile = (
+        str(getattr(resolution, "runtime_profile", "") or "").strip().lower()
+    )
+    if not runtime_agent_id:
+        return 0
+
+    matching_keys = [
+        key
+        for key in list(cache.keys())
+        if isinstance(key, tuple)
+        and len(key) == 3
+        and str(key[1] or "").strip() == runtime_agent_id
+        and str(key[2] or "").strip().lower() == runtime_profile
+    ]
+    if not matching_keys:
+        return 0
+
+    supervisors = [cache.pop(key, None) for key in matching_keys]
+    evicted = 0
+    for supervisor in supervisors:
+        if supervisor is None:
+            continue
+        evicted += 1
+        if getattr(service, "hermes_supervisor", None) is supervisor:
+            with contextlib.suppress(AttributeError):
+                service.hermes_supervisor = None
+        close_workspace = getattr(supervisor, "close_workspace", None)
+        close_all = getattr(supervisor, "close_all", None)
+        try:
+            if callable(close_workspace):
+                await close_workspace(workspace_root)
+            elif callable(close_all):
+                await close_all()
+        except (RuntimeError, ConnectionError, OSError, ValueError, TypeError):
+            _logger.debug(
+                "Runtime supervisor eviction cleanup failed for agent=%s profile=%s",
+                runtime_agent_id,
+                runtime_profile or None,
+                exc_info=True,
+            )
+    return evicted
+
+
 def build_discord_thread_orchestration_service(service: Any) -> Any:
     cached = getattr(service, "_discord_thread_orchestration_service", None)
     if cached is None:
@@ -2605,6 +2663,12 @@ async def _run_discord_orchestrated_turn_for_message(
 
     async def _on_submission_error(exc: BaseException) -> DiscordMessageTurnResult:
         if isinstance(exc, asyncio.TimeoutError):
+            evicted_supervisors = await _evict_cached_runtime_supervisors(
+                service,
+                agent_id=logical_agent,
+                profile=agent_profile,
+                workspace_root=workspace_root,
+            )
             log_event(
                 service._logger,
                 logging.ERROR,
@@ -2615,6 +2679,8 @@ async def _run_discord_orchestrated_turn_for_message(
                 pma_enabled=pma_enabled,
                 workspace_root=str(workspace_root),
                 agent=logical_agent,
+                agent_profile=agent_profile,
+                evicted_runtime_supervisors=evicted_supervisors,
             )
             tracker.set_label("failed")
             tracker.note_error("Turn failed to start in time. Please retry.")

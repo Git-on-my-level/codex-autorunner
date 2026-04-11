@@ -18,6 +18,7 @@ from codex_autorunner.agents.registry import (
     wrap_requested_agent_context,
 )
 from codex_autorunner.core.config import AgentConfig, ResolvedAgentTarget
+from codex_autorunner.core.config_contract import ConfigError
 
 
 @pytest.fixture
@@ -551,6 +552,57 @@ class TestHermesHarness:
 
         assert validate_agent_id("hermes-m4-pma", Path("/tmp/repo")) == "hermes-m4-pma"
         assert calls == ["repo"]
+
+    def test_get_registered_agents_skips_warning_for_known_profile_style_id(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        class MockConfig:
+            agents = {
+                "hermes": AgentConfig(
+                    backend=None,
+                    binary="hermes",
+                    serve_command=None,
+                    base_url=None,
+                    subagent_models=None,
+                    profiles={"m4-pma": object()},
+                ),
+                "hermes-m4-pma": AgentConfig(
+                    backend=None,
+                    binary=None,
+                    serve_command=None,
+                    base_url=None,
+                    subagent_models=None,
+                ),
+            }
+
+            @staticmethod
+            def agent_binary(agent_id: str) -> str:
+                agent = MockConfig.agents[agent_id]
+                if not agent.binary:
+                    raise ConfigError(f"agents.{agent_id}.binary is required")
+                return agent.binary
+
+            @staticmethod
+            def agent_backend(agent_id: str) -> str:
+                if agent_id == "hermes-m4-pma":
+                    raise ConfigError(f"agents.{agent_id}.binary is required")
+                agent = MockConfig.agents[agent_id]
+                return str(agent.backend or agent_id)
+
+            @staticmethod
+            def agent_profiles(agent_id: str):
+                agent = MockConfig.agents.get(agent_id)
+                return dict(agent.profiles or {}) if agent is not None else {}
+
+        caplog.set_level("WARNING")
+
+        agents = get_registered_agents(MockConfig)
+
+        assert "hermes-m4-pma" not in agents
+        assert (
+            "Configured agent hermes-m4-pma references unknown backend"
+            not in caplog.text
+        )
 
     def test_wrap_requested_agent_context_preserves_profile(self):
         ctx = SimpleNamespace()

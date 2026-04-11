@@ -482,6 +482,37 @@ def _infer_backend_id_by_prefix(
     return None
 
 
+def _configured_profile_target(
+    config: Any,
+    agent_id: str,
+    base_agents: dict[str, AgentDescriptor],
+) -> Optional[tuple[str, str]]:
+    profile_getter = getattr(config, "agent_profiles", None)
+    if not callable(profile_getter):
+        return None
+    normalized_agent_id = str(agent_id or "").strip().lower()
+    if not normalized_agent_id:
+        return None
+    for backend_id, descriptor in base_agents.items():
+        runtime_kind = _agent_runtime_kind(backend_id, descriptor)
+        if runtime_kind != backend_id:
+            continue
+        derived_profile = _strip_runtime_kind_prefix(normalized_agent_id, runtime_kind)
+        if derived_profile == normalized_agent_id:
+            continue
+        try:
+            profiles = profile_getter(backend_id)
+        except (KeyError, AttributeError, TypeError, ValueError, RuntimeError):
+            continue
+        if not isinstance(profiles, dict):
+            continue
+        if derived_profile in {
+            str(profile_id or "").strip().lower() for profile_id in profiles
+        }:
+            return backend_id, derived_profile
+    return None
+
+
 def _build_config_alias_agents(context: Any) -> dict[str, AgentDescriptor]:
     config = _resolve_runtime_agent_config(context)
     if config is None:
@@ -498,8 +529,28 @@ def _build_config_alias_agents(context: Any) -> dict[str, AgentDescriptor]:
         if agent_id in base_agents:
             continue
         backend_id = agent_id
+        profile_target = _configured_profile_target(config, agent_id, base_agents)
         if callable(getattr(config, "agent_backend", None)):
-            backend_id = str(config.agent_backend(agent_id) or "").strip().lower()
+            try:
+                backend_id = str(config.agent_backend(agent_id) or "").strip().lower()
+            except (
+                ConfigError,
+                KeyError,
+                AttributeError,
+                TypeError,
+                ValueError,
+                RuntimeError,
+            ):
+                if profile_target is not None:
+                    resolved_backend_id, resolved_profile = profile_target
+                    _logger.debug(
+                        "Skipping config alias synthesis for %s; treated as %s profile %s",
+                        agent_id,
+                        resolved_backend_id,
+                        resolved_profile,
+                    )
+                    continue
+                raise
         if not backend_id:
             continue
         backend_descriptor = base_agents.get(backend_id)
@@ -514,6 +565,15 @@ def _build_config_alias_agents(context: Any) -> dict[str, AgentDescriptor]:
                 )
                 backend_id = inferred
                 backend_descriptor = base_agents.get(backend_id)
+        if backend_descriptor is None and profile_target is not None:
+            resolved_backend_id, resolved_profile = profile_target
+            _logger.debug(
+                "Skipping unresolved config alias %s; %s profile %s is configured canonically",
+                agent_id,
+                resolved_backend_id,
+                resolved_profile,
+            )
+            continue
         if backend_descriptor is None:
             _logger.warning(
                 "Configured agent %s references unknown backend %s",
