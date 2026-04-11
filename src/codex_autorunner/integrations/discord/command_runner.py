@@ -1,7 +1,8 @@
-"""Background command runner for Discord interactions.
+"""Background command runner for admitted Discord interactions.
 
-After ingress has acknowledged an interaction, the runner dispatches the
-interaction event off the gateway hot path while preserving arrival order.
+After runtime admission has normalized and, when required, acknowledged an
+interaction, the runner dispatches it off the gateway hot path while
+preserving arrival order.
 
 The runner maintains an internal FIFO queue drained by a single worker.
 Each queued event is dispatched through the service's existing dispatch
@@ -29,10 +30,11 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Deque, Optional, Sequence, Set
 
 from ...core.logging_utils import log_event
-from .ingress import IngressContext, IngressTiming
+from .ingress import IngressContext, IngressTiming, RuntimeInteractionEnvelope
 from .interaction_dispatch import (
     execute_ingressed_interaction,
 )
+from .interaction_registry import DiscordAckPolicy
 
 DEFAULT_HANDLER_TIMEOUT_SECONDS: Optional[float] = None
 DEFAULT_STALLED_WARNING_SECONDS: Optional[float] = 60.0
@@ -51,7 +53,7 @@ class ScheduledInteraction:
     ctx: IngressContext
     payload: dict[str, Any]
     schedule: InteractionSchedule
-    fast_ack: Optional[Callable[[IngressContext], Awaitable[bool]]] = None
+    queue_wait_ack_policy: Optional[DiscordAckPolicy] = None
     admitted: bool = False
     ready: Optional[asyncio.Future[None]] = None
 
@@ -108,7 +110,7 @@ class CommandRunner:
         *,
         resource_keys: Sequence[str] = (),
         conversation_id: Optional[str] = None,
-        fast_ack: Optional[Callable[[IngressContext], Awaitable[bool]]] = None,
+        queue_wait_ack_policy: Optional[DiscordAckPolicy] = None,
     ) -> None:
         schedule = InteractionSchedule(
             resource_keys=tuple(dict.fromkeys(resource_keys)),
@@ -118,7 +120,7 @@ class CommandRunner:
             ctx=ctx,
             payload=payload,
             schedule=schedule,
-            fast_ack=fast_ack,
+            queue_wait_ack_policy=queue_wait_ack_policy,
         )
         task = asyncio.create_task(
             self._run_scheduled_interaction(item),
@@ -253,8 +255,18 @@ class CommandRunner:
                 if admitted_immediately:
                     acquired_schedule = True
                 else:
-                    if item.fast_ack is not None:
-                        acknowledged = await item.fast_ack(item.ctx)
+                    if item.queue_wait_ack_policy not in (None, "immediate"):
+                        acknowledged = (
+                            await self._service._acknowledge_runtime_envelope(
+                                RuntimeInteractionEnvelope(
+                                    context=item.ctx,
+                                    conversation_id=item.schedule.conversation_id,
+                                    resource_keys=item.schedule.resource_keys,
+                                    queue_wait_ack_policy=item.queue_wait_ack_policy,
+                                ),
+                                stage="queue_wait",
+                            )
+                        )
                         if not acknowledged:
                             notify_idle = await self._remove_pending_schedule(item)
                             return

@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
-import json
 import logging
 import os
 import subprocess
@@ -129,7 +128,6 @@ from ...integrations.chat.collaboration_policy import (
 from ...integrations.chat.command_diagnostics import (
     ActiveFlowInfo,
 )
-from ...integrations.chat.command_ingress import canonicalize_command_ingress
 from ...integrations.chat.dispatcher import (
     ChatDispatcher,
     DispatchContext,
@@ -244,30 +242,32 @@ from .flow_watchers import (
 )
 from .flow_watchers import watch_ticket_flow_pauses, watch_ticket_flow_terminals
 from .gateway import DiscordGatewayClient
-from .ingress import IngressContext, InteractionIngress, InteractionKind
-from .interaction_dispatch import (
-    handle_component_interaction as _dispatch_component_interaction,
+from .ingress import (
+    IngressContext,
+    InteractionIngress,
+    InteractionKind,
+    RuntimeInteractionEnvelope,
 )
 from .interaction_dispatch import (
-    handle_normalized_interaction as _dispatch_normalized_interaction,
+    handle_component_interaction as _dispatch_component_interaction,
 )
 from .interaction_registry import (
     MODEL_EFFORT_SELECT_ID,
     TICKETS_MODAL_PREFIX,
     build_application_commands,
-    component_scheduler_ack_strategy,
+    component_admission_ack_policy,
     component_workspace_lock_policy,
     dispatch_autocomplete,
-    modal_scheduler_ack_strategy,
+    modal_admission_ack_policy,
     modal_workspace_lock_policy,
     normalize_discord_command_path,
-    slash_command_ack_metadata_for_path,
     slash_command_workspace_lock_policy,
 )
 from .interaction_session import (
     DiscordInteractionSession,
     InteractionSessionKind,
 )
+from .interactions import extract_interaction_id, extract_interaction_token
 from .message_turns import (
     DiscordMessageTurnResult,
     build_discord_thread_orchestration_service,
@@ -764,9 +764,14 @@ class DiscordBotService:
 
     async def _dispatch_chat_event(self, event: ChatEvent) -> None:
         if isinstance(event, ChatInteractionEvent):
-            prepared = await self._prepare_dispatched_interaction_event(event)
-            if not prepared:
-                return
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.interaction.dispatcher_path_ignored",
+                update_id=event.update_id,
+                interaction_id=event.interaction.interaction_id,
+            )
+            return
 
         async def _handle_dispatched_event(
             queued_event: ChatEvent, context: DispatchContext
@@ -783,39 +788,6 @@ class DiscordBotService:
             event, _handle_dispatched_event
         )
         await self._maybe_send_queued_notice(event, dispatch_result)
-
-    async def _prepare_dispatched_interaction_event(
-        self, event: ChatInteractionEvent
-    ) -> bool:
-        policy_result = self._evaluate_interaction_collaboration_policy(
-            channel_id=event.thread.chat_id,
-            guild_id=event.thread.thread_id,
-            user_id=event.from_user_id,
-        )
-        if not policy_result.command_allowed:
-            return True
-        payload_str = event.payload or "{}"
-        try:
-            payload_data = json.loads(payload_str)
-        except json.JSONDecodeError:
-            return True
-        if payload_data.get("type") != "command":
-            return True
-        interaction_token = payload_data.get("_discord_token")
-        if not isinstance(interaction_token, str) or not interaction_token.strip():
-            return True
-        ingress = canonicalize_command_ingress(
-            command=payload_data.get("command"),
-            options=payload_data.get("options"),
-        )
-        if ingress is None:
-            return True
-        return await self._prepare_command_interaction_or_abort(
-            interaction_id=event.interaction.interaction_id,
-            interaction_token=interaction_token,
-            command_path=self._normalize_discord_command_path(ingress.command_path),
-            timing="dispatch",
-        )
 
     def _evaluate_message_collaboration_policy(
         self,
@@ -1111,38 +1083,59 @@ class DiscordBotService:
             return None
         return self._workspace_scheduler_key(str(workspace_root))
 
-    async def _scheduler_fast_ack_component(self, ctx: IngressContext) -> bool:
-        acknowledged = await self._defer_component_update(
-            interaction_id=ctx.interaction_id,
-            interaction_token=ctx.interaction_token,
+    async def _acknowledge_runtime_envelope(
+        self,
+        envelope: RuntimeInteractionEnvelope,
+        *,
+        stage: str,
+    ) -> bool:
+        ctx = envelope.context
+        ack_policy = (
+            envelope.dispatch_ack_policy
+            if stage == "dispatch"
+            else envelope.queue_wait_ack_policy
         )
-        if acknowledged:
-            ctx.deferred = True
-        return acknowledged
-
-    async def _scheduler_fast_ack_modal_submit(self, ctx: IngressContext) -> bool:
-        if self._interaction_has_initial_response(ctx.interaction_token):
-            ctx.deferred = True
+        if ack_policy in (None, "immediate"):
             return True
-        acknowledged = await self._defer_ephemeral(
-            interaction_id=ctx.interaction_id,
-            interaction_token=ctx.interaction_token,
+        session = self._ensure_interaction_session(
+            ctx.interaction_id,
+            ctx.interaction_token,
+            kind=ctx.kind,
         )
+        if session.has_initial_response():
+            ctx.deferred = session.is_deferred()
+            return True
+        if ack_policy == "defer_public":
+            acknowledged = await self._defer_public(
+                interaction_id=ctx.interaction_id,
+                interaction_token=ctx.interaction_token,
+            )
+        elif ack_policy == "defer_component_update":
+            acknowledged = await self._defer_component_update(
+                interaction_id=ctx.interaction_id,
+                interaction_token=ctx.interaction_token,
+            )
+        else:
+            acknowledged = await self._defer_ephemeral(
+                interaction_id=ctx.interaction_id,
+                interaction_token=ctx.interaction_token,
+            )
         if acknowledged:
             ctx.deferred = True
+            ctx.timing = replace(
+                ctx.timing,
+                ack_finished_at=time.monotonic(),
+            )
         return acknowledged
 
-    async def _interaction_scheduler_submission(
+    async def _build_runtime_interaction_envelope(
         self,
         ctx: IngressContext,
-    ) -> tuple[
-        Optional[str],
-        tuple[str, ...],
-        Optional[Callable[[IngressContext], Awaitable[bool]]],
-    ]:
+    ) -> RuntimeInteractionEnvelope:
         conversation_id: Optional[str] = None
         resource_keys: list[str] = []
-        fast_ack: Optional[Callable[[IngressContext], Awaitable[bool]]] = None
+        dispatch_ack_policy = None
+        queue_wait_ack_policy = None
 
         if ctx.kind != InteractionKind.AUTOCOMPLETE:
             conversation_id, conversation_key = (
@@ -1153,24 +1146,29 @@ class DiscordBotService:
             )
             resource_keys.append(conversation_key)
 
-        if ctx.kind == InteractionKind.COMPONENT:
-            if (
-                component_scheduler_ack_strategy(str(ctx.custom_id or "").strip())
-                == "scheduler_component_update"
-            ):
-                fast_ack = self._scheduler_fast_ack_component
+        if ctx.kind == InteractionKind.SLASH_COMMAND and ctx.command_spec is not None:
+            if ctx.command_spec.ack_timing == "dispatch":
+                dispatch_ack_policy = ctx.command_spec.ack_policy
+        elif ctx.kind == InteractionKind.COMPONENT:
+            queue_wait_ack_policy = component_admission_ack_policy(
+                str(ctx.custom_id or "").strip()
+            )
         elif ctx.kind == InteractionKind.MODAL_SUBMIT:
-            if (
-                modal_scheduler_ack_strategy(str(ctx.custom_id or "").strip())
-                == "scheduler_ephemeral"
-            ):
-                fast_ack = self._scheduler_fast_ack_modal_submit
+            queue_wait_ack_policy = modal_admission_ack_policy(
+                str(ctx.custom_id or "").strip()
+            )
 
         workspace_key = await self._interaction_workspace_scheduler_key(ctx)
         if workspace_key is not None:
             resource_keys.append(workspace_key)
 
-        return conversation_id, tuple(resource_keys), fast_ack
+        return RuntimeInteractionEnvelope(
+            context=ctx,
+            conversation_id=conversation_id,
+            resource_keys=tuple(resource_keys),
+            dispatch_ack_policy=dispatch_ack_policy,
+            queue_wait_ack_policy=queue_wait_ack_policy,
+        )
 
     async def _wake_dispatcher_conversation(self, conversation_id: str) -> None:
         wake = getattr(self._dispatcher, "wake_conversation", None)
@@ -1266,9 +1264,6 @@ class DiscordBotService:
     async def _handle_chat_event(
         self, event: ChatEvent, context: DispatchContext
     ) -> None:
-        if isinstance(event, ChatInteractionEvent):
-            await self._handle_normalized_interaction(event, context)
-            return
         if isinstance(event, ChatMessageEvent):
             await self._run_with_typing_indicator(
                 channel_id=context.chat_id,
@@ -1443,11 +1438,6 @@ class DiscordBotService:
             )
             return not self._queues_command_after_dispatch_ack(command_path)
         return False
-
-    async def _handle_normalized_interaction(
-        self, event: ChatInteractionEvent, context: DispatchContext
-    ) -> None:
-        await _dispatch_normalized_interaction(self, event, context)
 
     async def _handle_message_event(
         self,
@@ -3431,17 +3421,46 @@ class DiscordBotService:
         if event_type == "INTERACTION_CREATE":
             ingress_result = await self._ingress.process_raw_payload(payload)
             if not ingress_result.accepted:
+                if ingress_result.rejection_reason == "normalization_failed":
+                    interaction_id = extract_interaction_id(payload)
+                    interaction_token = extract_interaction_token(payload)
+                    if interaction_id and interaction_token:
+                        await self._respond_ephemeral(
+                            interaction_id,
+                            interaction_token,
+                            "I could not parse this interaction. Please retry the command.",
+                        )
                 return
             if ingress_result.context is not None:
-                conversation_id, resource_keys, fast_ack = (
-                    await self._interaction_scheduler_submission(ingress_result.context)
+                envelope = await self._build_runtime_interaction_envelope(
+                    ingress_result.context
                 )
+                acked = await self._acknowledge_runtime_envelope(
+                    envelope,
+                    stage="dispatch",
+                )
+                if not acked and envelope.dispatch_ack_policy not in (
+                    None,
+                    "immediate",
+                ):
+                    await self._respond_ephemeral(
+                        ingress_result.context.interaction_id,
+                        ingress_result.context.interaction_token,
+                        "Discord interaction did not acknowledge. Please retry.",
+                    )
+                    ingress_result.context.timing = replace(
+                        ingress_result.context.timing,
+                        ack_finished_at=time.monotonic(),
+                        ingress_finished_at=time.monotonic(),
+                    )
+                    return
+                self._ingress.finalize_success(ingress_result.context)
                 self._command_runner.submit(
-                    ingress_result.context,
+                    envelope.context,
                     payload,
-                    resource_keys=resource_keys,
-                    conversation_id=conversation_id,
-                    fast_ack=fast_ack,
+                    resource_keys=envelope.resource_keys,
+                    conversation_id=envelope.conversation_id,
+                    queue_wait_ack_policy=envelope.queue_wait_ack_policy,
                 )
                 # Let the admitted interaction task start before the next gateway
                 # interaction is processed so deferred command ordering stays stable.
@@ -4532,78 +4551,6 @@ class DiscordBotService:
             "focused_value": ctx.focused_value,
             "message_id": ctx.message_id,
         }
-
-    async def _prepare_command_interaction(
-        self,
-        *,
-        interaction_id: str,
-        interaction_token: str,
-        command_path: tuple[str, ...],
-        timing: str = "dispatch",
-    ) -> bool:
-        ack_policy, ack_timing, _requires_workspace = (
-            slash_command_ack_metadata_for_path(command_path)
-        )
-        if ack_policy in (None, "immediate"):
-            return False
-        if ack_timing != timing:
-            return False
-        self._ensure_interaction_session(
-            interaction_id,
-            interaction_token,
-            kind=InteractionSessionKind.SLASH_COMMAND,
-        )
-        if ack_policy == "defer_public":
-            return await self._defer_public(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-            )
-        if ack_policy == "defer_component_update":
-            return await self._defer_component_update(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-            )
-        return await self._defer_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-        )
-
-    async def _prepare_command_interaction_or_abort(
-        self,
-        *,
-        interaction_id: str,
-        interaction_token: str,
-        command_path: tuple[str, ...],
-        timing: str = "dispatch",
-    ) -> bool:
-        session = self._ensure_interaction_session(
-            interaction_id,
-            interaction_token,
-            kind=InteractionSessionKind.SLASH_COMMAND,
-        )
-        if session.has_initial_response():
-            return True
-        ack_policy, ack_timing, _requires_workspace = (
-            slash_command_ack_metadata_for_path(command_path)
-        )
-        if ack_policy in (None, "immediate"):
-            return True
-        if ack_timing != timing:
-            return True
-        prepared = await self._prepare_command_interaction(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            command_path=command_path,
-            timing=timing,
-        )
-        if prepared:
-            return True
-        await self._respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            "Discord interaction did not acknowledge. Please retry.",
-        )
-        return False
 
     async def _bind_with_path(
         self,

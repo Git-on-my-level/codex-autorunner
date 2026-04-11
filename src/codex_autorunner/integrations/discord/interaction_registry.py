@@ -2202,6 +2202,15 @@ def component_scheduler_ack_strategy(custom_id: str) -> SchedulerAckStrategy:
     )
 
 
+def component_admission_ack_policy(custom_id: str) -> Optional[DiscordAckPolicy]:
+    strategy = component_scheduler_ack_strategy(custom_id)
+    if strategy == "scheduler_component_update":
+        return "defer_component_update"
+    if strategy == "scheduler_ephemeral":
+        return "defer_ephemeral"
+    return None
+
+
 def component_workspace_lock_policy(custom_id: str) -> WorkspaceLockPolicy:
     route = component_route_for_custom_id(custom_id)
     return route.workspace_lock_policy if route is not None else "none"
@@ -2210,6 +2219,15 @@ def component_workspace_lock_policy(custom_id: str) -> WorkspaceLockPolicy:
 def modal_scheduler_ack_strategy(custom_id: str) -> SchedulerAckStrategy:
     route = modal_route_for_custom_id(custom_id)
     return route.scheduler_ack_strategy if route is not None else "scheduler_ephemeral"
+
+
+def modal_admission_ack_policy(custom_id: str) -> Optional[DiscordAckPolicy]:
+    strategy = modal_scheduler_ack_strategy(custom_id)
+    if strategy == "scheduler_component_update":
+        return "defer_component_update"
+    if strategy == "scheduler_ephemeral":
+        return "defer_ephemeral"
+    return None
 
 
 def modal_workspace_lock_policy(custom_id: str) -> WorkspaceLockPolicy:

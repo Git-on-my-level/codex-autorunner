@@ -28,20 +28,19 @@ Runtime v2 does not change:
 - CAR business behavior for `/car`, `/pma`, flow actions, or ticket actions
 - the `DiscordRestClient` transport implementation in `rest.py`
 
-## Current Entry Points And Replacement Seams
+## Current Interaction Runtime
 
-The current repo already has most of the pieces of a split runtime, but they do
-not yet form a single lifecycle authority.
+The Discord gateway cutover now routes all admitted interaction kinds through a
+single runtime-owned admission and execution path.
 
 ### Current interaction entry points
 
 | Area | Current seam | Current role | Why it must change |
 | --- | --- | --- | --- |
-| Gateway ingress | `src/codex_autorunner/integrations/discord/service.py` via `_on_dispatch()` | Handles `INTERACTION_CREATE`, calls `InteractionIngress.process_raw_payload()`, then chooses `CommandRunner.submit()` or `submit_ingressed()` | Scheduling policy is split between service and runner instead of owned by one runtime authority. |
-| Raw normalization + authz + ack | `src/codex_autorunner/integrations/discord/ingress.py` via `InteractionIngress.process_raw_payload()` | Normalizes payloads, resolves command contract metadata, performs authz, performs ack/defer, records telemetry | Ingress currently owns ack side effects directly, which makes it both parser and responder. |
-| Background execution | `src/codex_autorunner/integrations/discord/command_runner.py` | Runs acked interactions off the hot path, preserves conversation order for slash commands, runs components/autocomplete directly | The runtime has two queueing modes and no durable lease model for restart recovery. |
-| Legacy dispatcher path | `src/codex_autorunner/integrations/discord/service.py` via `_handle_normalized_interaction()` to `src/codex_autorunner/integrations/discord/interaction_dispatch.py:handle_normalized_interaction()` | Executes `ChatInteractionEvent` through the shared chat dispatcher path | This duplicates authz, ack preparation, and routing logic that now also exists in ingress/runner. |
-| Post-ack execution path | `src/codex_autorunner/integrations/discord/interaction_dispatch.py:execute_ingressed_interaction()` | Executes already-acked interactions from `CommandRunner` | This is the correct direction for v2, but it still shares a module with the legacy path. |
+| Gateway ingress | `src/codex_autorunner/integrations/discord/service.py` via `_on_dispatch()` | Handles `INTERACTION_CREATE`, calls `InteractionIngress.process_raw_payload()`, builds one runtime admission envelope, applies any dispatch-time ack, then submits to `CommandRunner` | This is now the single gateway admission path. |
+| Raw normalization + authz | `src/codex_autorunner/integrations/discord/ingress.py` via `InteractionIngress.process_raw_payload()` | Normalizes payloads, resolves command contract metadata, performs authz, and records timing inputs | Ingress no longer mutates Discord ack state. |
+| Background execution | `src/codex_autorunner/integrations/discord/command_runner.py` | Runs admitted interactions off the hot path, preserves conversation order, and applies queue-wait ack policy from the runtime admission envelope when needed | Scheduling is now driven by the admitted envelope instead of service-specific fast-ack callbacks. |
+| Post-admission execution path | `src/codex_autorunner/integrations/discord/interaction_dispatch.py:execute_ingressed_interaction()` | Executes already-admitted interactions from `CommandRunner` | This is now the only interaction execution path. |
 | Command-family dispatch | `src/codex_autorunner/integrations/discord/car_command_dispatch.py` | Routes `/car ...` subcommands to service handlers | This can remain, but it must become a pure business dispatcher that does not influence ack or response state. |
 
 ### Current mutable response helpers
@@ -53,26 +52,20 @@ not yet form a single lifecycle authority.
 | Autocomplete | `src/codex_autorunner/integrations/discord/service.py:_respond_autocomplete()` | `create_interaction_response()` type `8` | Raw primitive is still directly exposed in service. |
 | Modal launch | `src/codex_autorunner/integrations/discord/service.py:_respond_modal()` | `create_interaction_response()` type `9` | Raw primitive is still directly exposed in service. |
 
-## Problems In The Current Runtime
+## Remaining Gaps
 
-The current code has improved ingress behavior, but the contract is still not
-frozen because ownership remains split:
+The admission-path cutover is now in place, but the broader v2 contract is not
+fully complete yet:
 
-- `service.py:_on_dispatch()` decides which queueing path to use.
-- `ingress.py` decides when to acknowledge and mutates live Discord state.
-- `command_runner.py` owns some ordering guarantees, but only in memory.
-- `interaction_dispatch.py` still contains both the legacy normalized path and
-  the post-ack execution path.
-- `response_helpers.py` tracks prepared-response policy by interaction token,
-  but that state disappears on restart.
+- `command_runner.py` still owns only in-memory scheduling and ordering.
+- `response_helpers.py` still tracks prepared-response policy by interaction
+  token, so restart durability is incomplete.
 - `service.py` still exposes raw response mutations for component update,
   autocomplete, and modal responses.
 
 The result is that the repo still has multiple effective lifecycle authorities:
 
-- more than one place can decide whether a command is "prepared"
 - more than one module can touch raw interaction callback primitives
-- more than one execution path can route a Discord interaction
 - ordering is conversation-aware only for part of the runtime
 - restart recovery is best-effort rather than modeled
 

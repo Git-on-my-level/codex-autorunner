@@ -430,7 +430,7 @@ async def test_chaos_duplicate_delivery_and_restart_keep_single_ack(
 
         assert duplicate.accepted is False
         assert duplicate.rejection_reason == "duplicate_interaction"
-        assert len(service.prepare_command_calls) == 1
+        assert len(service.prepare_command_calls) == 0
         assert len(harness.rest.interaction_responses) == 1
         assert len(harness.rest.followup_messages) == 1
         assert (

@@ -420,7 +420,7 @@ async def test_ingress_completes_within_ack_window() -> None:
 
 @pytest.mark.anyio
 async def test_ingress_timing_monotonically_increases() -> None:
-    """All IngressTiming timestamps must be monotonically increasing."""
+    """Ingress-owned timing inputs must be monotonically increasing."""
     service = _FakeIngressService()
     ingress = InteractionIngress(service, logger=service._logger)
     payload = _slash_payload()
@@ -432,12 +432,10 @@ async def test_ingress_timing_monotonically_increases() -> None:
     t = result.context.timing
     assert t.ingress_started_at is not None
     assert t.authz_finished_at is not None
-    assert t.ack_finished_at is not None
-    assert t.ingress_finished_at is not None
+    assert t.ack_finished_at is None
+    assert t.ingress_finished_at is None
 
     assert t.ingress_started_at <= t.authz_finished_at
-    assert t.authz_finished_at <= t.ack_finished_at
-    assert t.ack_finished_at <= t.ingress_finished_at
 
 
 @pytest.mark.anyio
@@ -875,7 +873,7 @@ async def test_runner_telemetry_emits_lifecycle_metrics() -> None:
 @pytest.mark.anyio
 async def test_ingress_timing_includes_snowflake_created_at() -> None:
     """Ingress timing must include the snowflake-derived created_at for
-    diagnosing ack misses."""
+    runtime-admission latency diagnostics."""
     service = _FakeIngressService()
     ingress = InteractionIngress(service, logger=service._logger)
 
@@ -889,13 +887,13 @@ async def test_ingress_timing_includes_snowflake_created_at() -> None:
     assert result.context is not None
     assert result.context.timing.interaction_created_at is not None
 
-    gateway_to_ingress_ms = (
-        result.context.timing.ingress_finished_at
+    gateway_to_authz_ms = (
+        result.context.timing.authz_finished_at
         - result.context.timing.interaction_created_at
-        if result.context.timing.ingress_finished_at
+        if result.context.timing.authz_finished_at
         else None
     )
-    assert gateway_to_ingress_ms is not None
+    assert gateway_to_authz_ms is not None
 
 
 @pytest.mark.anyio
@@ -982,20 +980,20 @@ async def test_ingress_rejection_records_timing() -> None:
 
 
 @pytest.mark.anyio
-async def test_ack_failure_records_timing() -> None:
-    """When ack fails, timing must still be captured for diagnosing the
-    failure."""
+async def test_ingress_leaves_ack_timing_to_runtime_admission() -> None:
+    """Ingress should stop before recording ack completion so the runtime
+    admission path remains the sole ack owner."""
     service = _FakeIngressService(ack_succeeds=False)
     ingress = InteractionIngress(service, logger=service._logger)
     payload = _slash_payload(command_name="car", subcommand_name="status")
 
     result = await ingress.process_raw_payload(payload)
-    assert result.accepted is False
-    assert result.rejection_reason == "ack_failed"
+    assert result.accepted is True
+    assert result.rejection_reason is None
     assert result.context is not None
     t = result.context.timing
     assert t.ingress_started_at is not None
-    assert t.ack_finished_at is not None
+    assert t.ack_finished_at is None
 
 
 @pytest.mark.anyio
@@ -1015,7 +1013,7 @@ async def test_duplicate_interaction_id_does_not_attempt_second_ack(
         assert first.accepted is True
         assert second.accepted is False
         assert second.rejection_reason == "duplicate_interaction"
-        assert len(service.prepare_command_calls) == 1
+        assert len(service.prepare_command_calls) == 0
 
         record = await store.get_interaction("inter-1")
         assert record is not None

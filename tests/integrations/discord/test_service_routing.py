@@ -1636,6 +1636,14 @@ def _normalized_component_event(
     )
 
 
+async def _dispatch_gateway_interaction(
+    service: DiscordBotService,
+    payload: dict[str, Any],
+) -> None:
+    await service._on_dispatch("INTERACTION_CREATE", payload)
+    await asyncio.wait_for(service._command_runner.shutdown(), timeout=1.0)
+
+
 def test_model_picker_items_are_deduplicated_and_labeled() -> None:
     payload = {
         "models": [
@@ -4479,9 +4487,10 @@ async def test_normalized_interaction_routes_car_agent_without_generic_fallback(
     )
 
     try:
-        event = _normalized_interaction_event(command="car:agent")
-        context = build_dispatch_context(event)
-        await service._handle_normalized_interaction(event, context)
+        await _dispatch_gateway_interaction(
+            service,
+            _interaction(name="agent", options=[]),
+        )
         assert len(rest.interaction_responses) == 1
         content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
         assert "not bound" in content
@@ -4529,9 +4538,10 @@ async def test_normalized_interaction_status_defers_before_reading_active_flow(
     service._read_status_rate_limits = _fake_read_status_rate_limits  # type: ignore[assignment]
 
     try:
-        event = _normalized_interaction_event(command="car:status")
-        context = build_dispatch_context(event)
-        await service._handle_normalized_interaction(event, context)
+        await _dispatch_gateway_interaction(
+            service,
+            _interaction(name="status", options=[]),
+        )
         assert len(rest.followup_messages) == 1
     finally:
         await store.close()
@@ -4630,12 +4640,13 @@ async def test_normalized_component_agent_select_updates_agent(tmp_path: Path) -
     )
 
     try:
-        event = _normalized_component_event(
-            component_id="agent_select",
-            values=["opencode"],
+        await _dispatch_gateway_interaction(
+            service,
+            _component_interaction(
+                custom_id="agent_select",
+                values=["opencode"],
+            ),
         )
-        context = build_dispatch_context(event)
-        await service._handle_normalized_interaction(event, context)
         binding = await store.get_binding(channel_id="channel-1")
         assert binding is not None
         assert binding.get("agent") == "opencode"
@@ -4678,12 +4689,13 @@ async def test_normalized_component_agent_select_prompts_for_hermes_profile(
     )
 
     try:
-        event = _normalized_component_event(
-            component_id="agent_select",
-            values=["hermes"],
+        await _dispatch_gateway_interaction(
+            service,
+            _component_interaction(
+                custom_id="agent_select",
+                values=["hermes"],
+            ),
         )
-        context = build_dispatch_context(event)
-        await service._handle_normalized_interaction(event, context)
         binding = await store.get_binding(channel_id="channel-1")
         assert binding is not None
         assert binding.get("agent") == "hermes"
@@ -4776,12 +4788,13 @@ async def test_normalized_component_model_select_prompts_effort_for_opencode(
     )
 
     try:
-        event = _normalized_component_event(
-            component_id="model_select",
-            values=["openai/gpt-4o"],
+        await _dispatch_gateway_interaction(
+            service,
+            _component_interaction(
+                custom_id="model_select",
+                values=["openai/gpt-4o"],
+            ),
         )
-        context = build_dispatch_context(event)
-        await service._handle_normalized_interaction(event, context)
         binding = await store.get_binding(channel_id="channel-1")
         assert binding is not None
         assert binding.get("model_override") is None
@@ -4849,9 +4862,10 @@ async def test_normalized_interaction_session_resume_without_thread_uses_picker(
     service._list_discord_thread_targets_for_picker = _fake_list_threads  # type: ignore[assignment]
 
     try:
-        event = _normalized_interaction_event(command="car:session:resume")
-        context = build_dispatch_context(event)
-        await service._handle_normalized_interaction(event, context)
+        await _dispatch_gateway_interaction(
+            service,
+            _interaction_path(command_path=("car", "session", "resume"), options=[]),
+        )
         assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 5
         assert len(rest.followup_messages) == 1
@@ -4948,9 +4962,10 @@ async def test_normalized_interaction_flow_restart_without_run_id_uses_picker(
     _fc.prompt_flow_action_picker = _fake_prompt  # type: ignore[assignment]
 
     try:
-        event = _normalized_interaction_event(command="car:flow:restart")
-        context = build_dispatch_context(event)
-        await service._handle_normalized_interaction(event, context)
+        await _dispatch_gateway_interaction(
+            service,
+            _interaction_path(command_path=("car", "flow", "restart"), options=[]),
+        )
         assert captured["action"] == "restart"
     finally:
         await store.close()
@@ -4998,12 +5013,13 @@ async def test_normalized_interaction_flow_reply_without_run_id_sets_pending_tex
     _fc.prompt_flow_action_picker = _fake_prompt  # type: ignore[assignment]
 
     try:
-        event = _normalized_interaction_event(
-            command="car:flow:reply",
-            options={"text": "reply via picker"},
+        await _dispatch_gateway_interaction(
+            service,
+            _interaction_path(
+                command_path=("car", "flow", "reply"),
+                options=[{"type": 3, "name": "text", "value": "reply via picker"}],
+            ),
         )
-        context = build_dispatch_context(event)
-        await service._handle_normalized_interaction(event, context)
         assert (
             service._pending_flow_reply_text["channel-1:user-1"] == "reply via picker"
         )
@@ -5512,12 +5528,10 @@ async def test_car_update_without_target_aborts_when_required_preflight_fails(
         outbox_manager=_FakeOutboxManager(),
     )
 
-    async def _skip_prepare_command_interaction(**_kwargs: Any) -> bool:
+    async def _skip_dispatch_ack(**_kwargs: Any) -> bool:
         return False
 
-    service._prepare_command_interaction = (  # type: ignore[assignment]
-        _skip_prepare_command_interaction
-    )
+    service._defer_ephemeral = _skip_dispatch_ack  # type: ignore[assignment]
 
     try:
         await service.run_forever()
@@ -5986,9 +6000,10 @@ async def test_normalized_component_empty_values_returns_error(
     )
 
     try:
-        event = _normalized_component_event(component_id=component_id, values=[])
-        context = build_dispatch_context(event)
-        await service._handle_normalized_interaction(event, context)
+        await _dispatch_gateway_interaction(
+            service,
+            _component_interaction(custom_id=component_id, values=[]),
+        )
         assert len(rest.interaction_responses) == 1
         content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
         assert expected in content
@@ -6052,9 +6067,10 @@ async def test_normalized_flow_refresh_component_defers_before_workspace_lookup(
     service._handle_flow_button = _fake_handle_flow_button  # type: ignore[assignment]
 
     try:
-        event = _normalized_component_event(component_id="flow:run-1:refresh")
-        context = build_dispatch_context(event)
-        await service._handle_normalized_interaction(event, context)
+        await _dispatch_gateway_interaction(
+            service,
+            _component_interaction(custom_id="flow:run-1:refresh"),
+        )
         assert captured["button_args"]["custom_id"] == "flow:run-1:refresh"
         assert captured["button_args"]["workspace_root"] == workspace
     finally:
@@ -6078,9 +6094,10 @@ async def test_normalized_flow_refresh_component_binding_error_uses_followup(
     )
 
     try:
-        event = _normalized_component_event(component_id="flow:run-1:refresh")
-        context = build_dispatch_context(event)
-        await service._handle_normalized_interaction(event, context)
+        await _dispatch_gateway_interaction(
+            service,
+            _component_interaction(custom_id="flow:run-1:refresh"),
+        )
 
         assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 6
@@ -6195,7 +6212,12 @@ async def test_on_dispatch_backgrounds_interaction_handling(
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
-    ("payload", "expected_conversation", "expected_resource_keys", "expected_fast_ack"),
+    (
+        "payload",
+        "expected_conversation",
+        "expected_resource_keys",
+        "expected_queue_wait_ack_policy",
+    ),
     [
         (
             _interaction_path(
@@ -6204,7 +6226,7 @@ async def test_on_dispatch_backgrounds_interaction_handling(
             ),
             "discord:channel-1:guild-1",
             ("conversation:discord:channel-1:guild-1",),
-            False,
+            None,
         ),
         (
             _component_interaction(
@@ -6213,7 +6235,7 @@ async def test_on_dispatch_backgrounds_interaction_handling(
             ),
             "discord:channel-1:guild-1",
             ("conversation:discord:channel-1:guild-1",),
-            True,
+            "defer_component_update",
         ),
         (
             {
@@ -6240,7 +6262,7 @@ async def test_on_dispatch_backgrounds_interaction_handling(
             },
             "discord:channel-1:guild-1",
             ("conversation:discord:channel-1:guild-1",),
-            True,
+            "defer_ephemeral",
         ),
         (
             _autocomplete_interaction_path(
@@ -6250,7 +6272,7 @@ async def test_on_dispatch_backgrounds_interaction_handling(
             ),
             None,
             (),
-            False,
+            None,
         ),
     ],
 )
@@ -6259,7 +6281,7 @@ async def test_on_dispatch_routes_interactions_through_scheduler(
     payload: dict[str, Any],
     expected_conversation: str | None,
     expected_resource_keys: tuple[str, ...],
-    expected_fast_ack: bool,
+    expected_queue_wait_ack_policy: str | None,
 ) -> None:
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
     await store.initialize()
@@ -6281,7 +6303,7 @@ async def test_on_dispatch_routes_interactions_through_scheduler(
         kwargs = submit.call_args.kwargs
         assert kwargs["conversation_id"] == expected_conversation
         assert kwargs["resource_keys"] == expected_resource_keys
-        assert (kwargs["fast_ack"] is not None) is expected_fast_ack
+        assert kwargs["queue_wait_ack_policy"] == expected_queue_wait_ack_policy
     finally:
         await service._shutdown()
         await store.close()

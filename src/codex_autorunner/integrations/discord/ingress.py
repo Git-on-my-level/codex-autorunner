@@ -1,14 +1,15 @@
 """Discord interaction ingress runtime.
 
 Single entry point for all Discord interaction types (slash commands, component
-interactions, modal submits, autocomplete requests).  Ingress owns:
+interactions, modal submits, autocomplete requests). Ingress owns:
 
 - interaction parsing and normalization
 - collaboration/authz checks
-- ack policy lookup and initial response/defer emission
-- timing telemetry for ingress and acknowledgement
+- route metadata extraction from the shared interaction registry
+- timing inputs for the runtime admission path
 
-Ingress must not run command business logic.
+Ingress must not acknowledge Discord interactions or run command business
+logic.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from ...core.logging_utils import log_event
+from ...integrations.chat.command_ingress import canonicalize_command_ingress
 from .interaction_registry import (
     DiscordAckPolicy,
     DiscordAckTiming,
@@ -91,6 +93,15 @@ class IngressContext:
     timing: IngressTiming = field(default_factory=IngressTiming)
 
 
+@dataclass(frozen=True)
+class RuntimeInteractionEnvelope:
+    context: IngressContext
+    conversation_id: Optional[str]
+    resource_keys: tuple[str, ...] = ()
+    dispatch_ack_policy: Optional[DiscordAckPolicy] = None
+    queue_wait_ack_policy: Optional[DiscordAckPolicy] = None
+
+
 @dataclass
 class IngressResult:
     accepted: bool
@@ -155,39 +166,6 @@ class InteractionIngress:
 
         if ctx.kind == InteractionKind.SLASH_COMMAND:
             self._resolve_command_spec(ctx)
-            ack_ok = await self._perform_ack(ctx)
-            if not ack_ok and ctx.command_spec is not None:
-                ack_policy = ctx.command_spec.ack_policy
-                if ack_policy is not None and ack_policy not in (
-                    "immediate",
-                    None,
-                ):
-                    await self._service._respond_ephemeral(
-                        ctx.interaction_id,
-                        ctx.interaction_token,
-                        "Discord interaction did not acknowledge. Please retry.",
-                    )
-                    ctx.timing = IngressTiming(
-                        interaction_created_at=ctx.timing.interaction_created_at,
-                        ingress_started_at=ctx.timing.ingress_started_at,
-                        authz_finished_at=ctx.timing.authz_finished_at,
-                        ack_finished_at=time.monotonic(),
-                        ingress_finished_at=time.monotonic(),
-                    )
-                    return IngressResult(
-                        accepted=False,
-                        context=ctx,
-                        rejection_reason="ack_failed",
-                    )
-
-        ctx.timing = IngressTiming(
-            interaction_created_at=ctx.timing.interaction_created_at,
-            ingress_started_at=ctx.timing.ingress_started_at,
-            authz_finished_at=ctx.timing.authz_finished_at,
-            ack_finished_at=ctx.timing.ack_finished_at or time.monotonic(),
-            ingress_finished_at=time.monotonic(),
-        )
-        self._record_telemetry(ctx)
         return IngressResult(accepted=True, context=ctx)
 
     def _normalize(self, payload: dict[str, Any]) -> Optional[IngressContext]:
@@ -246,6 +224,10 @@ class InteractionIngress:
                 focused_name,
                 focused_value,
             ) = extract_autocomplete_command_context(payload)
+            ingress = canonicalize_command_ingress(
+                command_path=command_path,
+                options=options,
+            )
             return IngressContext(
                 interaction_id=interaction_id,
                 interaction_token=interaction_token,
@@ -255,13 +237,13 @@ class InteractionIngress:
                 kind=InteractionKind.AUTOCOMPLETE,
                 command_spec=(
                     CommandSpec(
-                        path=command_path,
-                        options=options,
+                        path=ingress.command_path,
+                        options=ingress.options,
                         ack_policy=None,
                         ack_timing="dispatch",
                         requires_workspace=False,
                     )
-                    if command_path
+                    if ingress is not None
                     else None
                 ),
                 focused_name=focused_name,
@@ -270,6 +252,12 @@ class InteractionIngress:
             )
 
         command_path, options = extract_command_path_and_options(payload)
+        ingress = canonicalize_command_ingress(
+            command_path=command_path,
+            options=options,
+        )
+        if ingress is None:
+            return None
         return IngressContext(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
@@ -277,16 +265,12 @@ class InteractionIngress:
             guild_id=guild_id,
             user_id=user_id,
             kind=InteractionKind.SLASH_COMMAND,
-            command_spec=(
-                CommandSpec(
-                    path=command_path,
-                    options=options,
-                    ack_policy=None,
-                    ack_timing="dispatch",
-                    requires_workspace=False,
-                )
-                if command_path
-                else None
+            command_spec=CommandSpec(
+                path=ingress.command_path,
+                options=ingress.options,
+                ack_policy=None,
+                ack_timing="dispatch",
+                requires_workspace=False,
             ),
             timing=IngressTiming(interaction_created_at=created_at),
         )
@@ -338,31 +322,18 @@ class InteractionIngress:
             requires_workspace=requires_workspace,
         )
 
-    async def _perform_ack(self, ctx: IngressContext) -> bool:
-        if ctx.command_spec is None:
-            return True
-        session = self._service._ensure_interaction_session(
-            ctx.interaction_id,
-            ctx.interaction_token,
-            kind=ctx.kind,
+    def finalize_success(self, ctx: IngressContext) -> None:
+        now = time.monotonic()
+        ctx.timing = IngressTiming(
+            interaction_created_at=ctx.timing.interaction_created_at,
+            ingress_started_at=ctx.timing.ingress_started_at,
+            authz_finished_at=ctx.timing.authz_finished_at,
+            ack_finished_at=ctx.timing.ack_finished_at or now,
+            ingress_finished_at=now,
+            execution_started_at=ctx.timing.execution_started_at,
+            execution_finished_at=ctx.timing.execution_finished_at,
         )
-        policy = ctx.command_spec.ack_policy
-        if policy is None or policy == "immediate":
-            return True
-        if ctx.command_spec.ack_timing != "dispatch":
-            return True
-        if session.has_initial_response():
-            ctx.deferred = session.is_deferred()
-            return True
-        prepared: bool = await self._service._prepare_command_interaction(
-            interaction_id=ctx.interaction_id,
-            interaction_token=ctx.interaction_token,
-            command_path=ctx.command_spec.path,
-            timing="dispatch",
-        )
-        if prepared:
-            ctx.deferred = True
-        return prepared
+        self._record_telemetry(ctx)
 
     def _record_telemetry(self, ctx: IngressContext) -> None:
         t = ctx.timing

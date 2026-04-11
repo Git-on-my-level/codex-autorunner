@@ -74,6 +74,17 @@ def _low_level_response_helper_users() -> dict[str, set[str]]:
     return _attribute_call_users(LOW_LEVEL_RESPONSE_HELPERS)
 
 
+def _module_function_names(relative_path: str) -> set[str]:
+    repo_root = DISCORD_DIR.parents[3]
+    path = repo_root / relative_path
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    return {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+
 def test_contract_only_boundary_modules_touch_raw_discord_response_primitives() -> None:
     users = _raw_response_users()
 
@@ -108,3 +119,12 @@ def test_contract_handler_modules_do_not_bypass_interaction_runtime_boundary() -
     }
 
     assert forbidden == {}
+
+
+def test_contract_legacy_normalized_interaction_path_is_removed() -> None:
+    assert "handle_normalized_interaction" not in _module_function_names(
+        "src/codex_autorunner/integrations/discord/interaction_dispatch.py"
+    )
+    assert "_handle_normalized_interaction" not in _module_function_names(
+        "src/codex_autorunner/integrations/discord/service.py"
+    )
