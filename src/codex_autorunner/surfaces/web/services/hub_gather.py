@@ -60,7 +60,8 @@ _hub_snapshot_cache: dict[tuple[int, str], _HubSnapshotCacheEntry] = {}
 
 @dataclass(frozen=True)
 class _HubSnapshotSettings:
-    include_action_queue: bool
+    include_inbox_queue_metadata: bool
+    include_full_action_queue_context: bool
     stale_threshold_seconds: int
     max_text_chars: int
     generated_at: str
@@ -274,7 +275,8 @@ def latest_dispatch(repo_root: Path, run_id: str, input_data: dict) -> Optional[
 def _build_snapshot_settings(
     context: HubAppContext, requested: set[str]
 ) -> _HubSnapshotSettings:
-    include_action_queue = bool(requested & {"inbox", "action_queue"})
+    include_inbox_queue_metadata = "inbox" in requested
+    include_full_action_queue_context = "action_queue" in requested
     pma_config = getattr(getattr(context, "config", None), "pma", None)
     stale_threshold_seconds = resolve_stale_threshold_seconds(
         getattr(pma_config, "freshness_stale_threshold_seconds", None)
@@ -285,7 +287,8 @@ def _build_snapshot_settings(
         else PMA_MAX_TEXT
     )
     return _HubSnapshotSettings(
-        include_action_queue=include_action_queue,
+        include_inbox_queue_metadata=include_inbox_queue_metadata,
+        include_full_action_queue_context=include_full_action_queue_context,
         stale_threshold_seconds=stale_threshold_seconds,
         max_text_chars=max_text_chars,
         generated_at=iso_now(),
@@ -607,7 +610,10 @@ def gather_hub_message_snapshot(
         ):
             return copy.deepcopy(cached.snapshot)
     inbox: list[dict[str, Any]] = []
-    if settings.include_action_queue:
+    if (
+        settings.include_inbox_queue_metadata
+        or settings.include_full_action_queue_context
+    ):
         inbox = _gather_inbox(
             context.supervisor,
             max_text_chars=settings.max_text_chars,
@@ -619,17 +625,20 @@ def gather_hub_message_snapshot(
     pma_threads: list[dict[str, Any]] = []
     automation = (
         _snapshot_pma_automation(context.supervisor)
-        if requested & {"automation"} or settings.include_action_queue
+        if requested & {"automation"} or settings.include_full_action_queue_context
         else {"items": [], "summary": {}}
     )
     if isinstance(hub_root, Path):
-        if requested & {"pma_files_detail"} or settings.include_action_queue:
+        if (
+            requested & {"pma_files_detail"}
+            or settings.include_full_action_queue_context
+        ):
             pma_files_detail = _collect_pma_files_detail(
                 hub_root,
                 generated_at=settings.generated_at,
                 stale_threshold_seconds=settings.stale_threshold_seconds,
             )
-        if requested & {"pma_threads"} or settings.include_action_queue:
+        if requested & {"pma_threads"} or settings.include_full_action_queue_context:
             pma_threads = _collect_pma_threads(
                 hub_root,
                 generated_at=settings.generated_at,
@@ -637,7 +646,10 @@ def gather_hub_message_snapshot(
             )
 
     action_queue: list[dict[str, Any]] = []
-    if settings.include_action_queue:
+    if (
+        settings.include_inbox_queue_metadata
+        or settings.include_full_action_queue_context
+    ):
         action_queue = build_pma_action_queue(
             inbox=inbox,
             pma_threads=pma_threads,

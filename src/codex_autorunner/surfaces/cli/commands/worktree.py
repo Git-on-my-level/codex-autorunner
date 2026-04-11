@@ -117,7 +117,7 @@ def register_worktree_commands(
         supervisor = build_supervisor(config)
         snapshots = [
             snapshot
-            for snapshot in supervisor.list_repos(use_cache=False)
+            for snapshot in supervisor.list_repos()
             if snapshot.kind == "worktree"
         ]
         payload = [

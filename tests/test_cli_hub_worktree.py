@@ -75,6 +75,33 @@ def test_cli_hub_worktree_list_filters_worktrees(tmp_path, monkeypatch) -> None:
     assert "cmd=car hub worktree archive base--feature" in result.output
 
 
+def test_cli_hub_worktree_list_uses_cached_repo_listing(tmp_path, monkeypatch) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    seed_hub_files(hub_root, force=True)
+
+    base = _snapshot(tmp_path, "base", kind="base")
+    worktree = _snapshot(
+        tmp_path, "base--feature", kind="worktree", worktree_of="base", branch="feature"
+    )
+    calls: list[bool] = []
+
+    def _fake_list(self, *, use_cache: bool = True):
+        calls.append(use_cache)
+        return [base, worktree]
+
+    monkeypatch.setattr(HubSupervisor, "list_repos", _fake_list)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["hub", "worktree", "list", "--path", str(hub_root), "--json"]
+    )
+    assert result.exit_code == 0
+    assert calls == [True]
+    payload = json.loads(result.output)
+    assert [item["id"] for item in payload["worktrees"]] == ["base--feature"]
+
+
 def test_cli_hub_worktree_scan_filters_worktrees_json(tmp_path, monkeypatch) -> None:
     hub_root = tmp_path / "hub"
     hub_root.mkdir()

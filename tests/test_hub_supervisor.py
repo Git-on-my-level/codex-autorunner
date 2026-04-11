@@ -309,6 +309,30 @@ def test_scan_writes_pma_threads_artifact(tmp_path: Path) -> None:
     assert payload["threads"][0]["name"] == "demo-thread"
 
 
+def test_list_repos_does_not_refresh_pma_threads_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    repo_dir = hub_root / "demo"
+    (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
+
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    calls: list[Path] = []
+
+    def _record_artifact_call(path: Path) -> None:
+        calls.append(path)
+
+    monkeypatch.setattr(hub_module, "_save_pma_threads_artifact", _record_artifact_call)
+    try:
+        supervisor.list_repos(use_cache=False)
+    finally:
+        supervisor.shutdown()
+
+    assert calls == []
+
+
 def test_hub_repos_sections_filter_excludes_unrequested_fields(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
@@ -426,6 +450,92 @@ def test_hub_supervisor_can_create_list_and_remove_agent_workspaces(tmp_path: Pa
     supervisor.remove_agent_workspace("zc-main")
     assert workspace.path.exists() is False
     assert supervisor.list_agent_workspaces(use_cache=False) == []
+
+
+def test_get_agent_workspace_snapshot_does_not_refresh_repo_listing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor.create_agent_workspace(
+        workspace_id="zc-main",
+        runtime="zeroclaw",
+        display_name="ZeroClaw Main",
+        enabled=False,
+    )
+
+    calls: list[bool] = []
+    original = supervisor.list_repos
+
+    def _wrapped(*, use_cache: bool = True):  # type: ignore[no-untyped-def]
+        calls.append(use_cache)
+        return original(use_cache=use_cache)
+
+    monkeypatch.setattr(supervisor, "list_repos", _wrapped)
+
+    snapshot = supervisor.get_agent_workspace_snapshot("zc-main")
+    assert snapshot.id == "zc-main"
+    assert calls == []
+
+
+def test_agent_workspace_mutations_refresh_startup_cached_state(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    repo_dir = hub_root / "demo"
+    (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
+
+    initial_supervisor = HubSupervisor(load_hub_config(hub_root))
+    try:
+        initial_supervisor.scan()
+    finally:
+        initial_supervisor.shutdown()
+
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    try:
+        supervisor.create_agent_workspace(
+            workspace_id="zc-main",
+            runtime="zeroclaw",
+            display_name="ZeroClaw Main",
+            enabled=False,
+        )
+    finally:
+        supervisor.shutdown()
+
+    restarted = HubSupervisor(load_hub_config(hub_root))
+    try:
+        listed = restarted.list_agent_workspaces()
+        assert [item.id for item in listed] == ["zc-main"]
+        assert listed[0].display_name == "ZeroClaw Main"
+    finally:
+        restarted.shutdown()
+
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    try:
+        supervisor.update_agent_workspace("zc-main", display_name="Renamed Workspace")
+        supervisor.set_agent_workspace_destination(
+            "zc-main",
+            {"kind": "docker", "image": "ghcr.io/acme/zeroclaw:latest"},
+        )
+    finally:
+        supervisor.shutdown()
+
+    restarted = HubSupervisor(load_hub_config(hub_root))
+    try:
+        listed = restarted.list_agent_workspaces()
+        assert [item.id for item in listed] == ["zc-main"]
+        assert listed[0].display_name == "Renamed Workspace"
+        assert listed[0].effective_destination == {
+            "kind": "docker",
+            "image": "ghcr.io/acme/zeroclaw:latest",
+        }
+    finally:
+        restarted.shutdown()
 
 
 def test_hub_supervisor_rejects_unknown_agent_workspace_runtime(tmp_path: Path) -> None:

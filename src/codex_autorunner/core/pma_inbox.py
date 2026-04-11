@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any, Optional, cast
 
 from ..flows.ticket_flow.runtime_helpers import ticket_flow_inbox_preflight
-from .config import load_repo_config
 from .flows.failure_diagnostics import get_terminal_failure_reason_code
 from .flows.models import FlowRunStatus
 from .flows.store import FlowStore
@@ -556,8 +555,7 @@ def _gather_inbox(
         if not db_path.exists():
             continue
         try:
-            config = load_repo_config(repo_root)
-            with FlowStore(db_path, durable=config.durable_writes) as store:
+            with FlowStore.connect_readonly(db_path) as store:
                 ctx = _inbox_load_repo_flow_context(
                     snap, store, str(snap.last_run_id or "")
                 )

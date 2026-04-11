@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -32,9 +33,9 @@ def snapshot_pma_threads(
         return []
 
     try:
-        store = PmaThreadStore(hub_root)
+        store = PmaThreadStore.connect_readonly(hub_root)
         threads = store.list_threads(limit=limit)
-    except (OSError, RuntimeError, ValueError) as exc:
+    except (OSError, RuntimeError, ValueError, sqlite3.OperationalError) as exc:
         _logger.warning("Could not load PMA managed threads: %s", exc)
         return []
     try:

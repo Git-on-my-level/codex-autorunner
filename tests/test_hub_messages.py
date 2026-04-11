@@ -25,6 +25,7 @@ from codex_autorunner.core.state import RunnerState, save_state
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web import app as web_app_module
 from codex_autorunner.surfaces.web import app_state as web_app_state_module
+from codex_autorunner.surfaces.web.services import hub_gather as hub_gather_service
 
 
 def _seed_paused_run(repo_root: Path, run_id: str) -> None:
@@ -1226,3 +1227,27 @@ def test_hub_messages_action_queue_sections_honor_dismissals(
         after = client.get("/hub/messages?sections=action_queue")
         assert after.status_code == 200
         assert after.json()["action_queue"] == []
+
+
+def test_hub_messages_default_inbox_avoids_full_action_queue_collectors(
+    hub_env, monkeypatch
+) -> None:
+    run_id = "71717171-7171-7171-7171-717171717171"
+    _seed_paused_run(hub_env.repo_root, run_id)
+    _write_dispatch_history(hub_env.repo_root, run_id, seq=1)
+
+    def _unexpected(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("unexpected full action-queue collector call")
+
+    monkeypatch.setattr(hub_gather_service, "_collect_pma_threads", _unexpected)
+    monkeypatch.setattr(hub_gather_service, "_collect_pma_files_detail", _unexpected)
+    monkeypatch.setattr(hub_gather_service, "_snapshot_pma_automation", _unexpected)
+
+    app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
+    with TestClient(app) as client:
+        res = client.get("/hub/messages")
+
+    assert res.status_code == 200
+    payload = res.json()
+    assert payload["items"][0]["run_id"] == run_id
+    assert payload["items"][0]["queue_source"] == "ticket_flow_inbox"

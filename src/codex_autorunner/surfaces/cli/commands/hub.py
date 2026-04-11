@@ -181,6 +181,22 @@ def register_hub_commands(
     ) -> dict[str, Any]:
         manifest, workspace = _resolve_agent_workspace_entry(config, workspace_id)
         snapshot = supervisor.get_agent_workspace_snapshot(workspace_id)
+        return _agent_workspace_payload_from_workspace(
+            config,
+            supervisor,
+            manifest,
+            workspace,
+            snapshot=snapshot,
+        )
+
+    def _agent_workspace_payload_from_workspace(
+        config: HubConfig,
+        supervisor: HubSupervisor,
+        manifest: Manifest,
+        workspace: Any,
+        *,
+        snapshot: Any,
+    ) -> dict[str, Any]:
         resolution = resolve_effective_agent_workspace_destination(workspace)
         payload: dict[str, Any] = {
             **snapshot.to_dict(config.root),
@@ -192,7 +208,7 @@ def register_hub_commands(
                 *list(resolution.issues or ()),
             ],
         }
-        readiness = supervisor.get_agent_workspace_runtime_readiness(workspace_id)
+        readiness = supervisor.get_agent_workspace_runtime_readiness(workspace.id)
         if readiness is not None:
             payload["readiness"] = readiness
         return payload
@@ -556,11 +572,26 @@ def register_hub_commands(
         """List managed agent workspaces."""
         config = require_hub_config(path)
         supervisor = build_supervisor(config)
-        snapshots = supervisor.list_agent_workspaces(use_cache=False)
-        payload = [
-            _agent_workspace_payload(config, supervisor, snapshot.id)
-            for snapshot in snapshots
-        ]
+        manifest = load_manifest(config.manifest_path, config.root)
+        workspaces_by_id = {
+            workspace.id: workspace for workspace in manifest.agent_workspaces
+        }
+        payload = []
+        for snapshot in supervisor.list_agent_workspaces():
+            workspace = workspaces_by_id.get(snapshot.id)
+            if workspace is None:
+                raise_exit(
+                    f"Agent workspace id not found in hub manifest: {snapshot.id}"
+                )
+            payload.append(
+                _agent_workspace_payload_from_workspace(
+                    config,
+                    supervisor,
+                    manifest,
+                    workspace,
+                    snapshot=snapshot,
+                )
+            )
         if output_json:
             typer.echo(json.dumps({"agent_workspaces": payload}, indent=2))
             return

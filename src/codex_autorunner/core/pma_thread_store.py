@@ -333,10 +333,12 @@ class PmaThreadStore:
         *,
         durable: bool = False,
         stale_running_threshold_seconds: Optional[int] = None,
+        bootstrap_on_init: bool = True,
     ) -> None:
         self._hub_root = hub_root
         self._path = default_pma_threads_db_path(hub_root)
         self._durable = durable
+        self._bootstrap_on_init = bool(bootstrap_on_init)
         self._stale_running_threshold_seconds = (
             _resolve_stale_running_threshold_seconds(
                 hub_root, override=stale_running_threshold_seconds
@@ -357,6 +359,21 @@ class PmaThreadStore:
         )
         self._initialize()
 
+    @classmethod
+    def connect_readonly(
+        cls,
+        hub_root: Path,
+        *,
+        durable: bool = False,
+        stale_running_threshold_seconds: Optional[int] = None,
+    ) -> "PmaThreadStore":
+        return cls(
+            hub_root,
+            durable=durable,
+            stale_running_threshold_seconds=stale_running_threshold_seconds,
+            bootstrap_on_init=False,
+        )
+
     @property
     def path(self) -> Path:
         return self._path
@@ -366,6 +383,8 @@ class PmaThreadStore:
         return self._hub_root
 
     def _initialize(self) -> None:
+        if not self._bootstrap_on_init:
+            return
         self._bootstrap.initialize()
 
     @contextmanager
