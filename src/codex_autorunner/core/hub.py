@@ -795,6 +795,7 @@ class HubSupervisor:
             raise ValueError(detail)
         target.mkdir(parents=True, exist_ok=True)
         save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
+        self.list_repos(use_cache=False)
         return self._snapshot_for_agent_workspace(normalized_workspace_id)
 
     def remove_agent_workspace(
@@ -866,6 +867,7 @@ class HubSupervisor:
             workspace.display_name = normalized_display_name
 
         save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
+        self.list_repos(use_cache=False)
         return self._snapshot_for_agent_workspace(workspace_id)
 
     def set_agent_workspace_destination(
@@ -878,6 +880,7 @@ class HubSupervisor:
             raise ValueError(f"Agent workspace {workspace_id} not found in manifest")
         workspace.destination = normalize_manifest_destination(destination)
         save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
+        self.list_repos(use_cache=False)
         return self._snapshot_for_agent_workspace(workspace_id)
 
     def _reconcile_startup(self) -> None:

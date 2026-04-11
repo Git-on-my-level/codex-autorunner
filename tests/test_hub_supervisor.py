@@ -481,6 +481,63 @@ def test_get_agent_workspace_snapshot_does_not_refresh_repo_listing(
     assert calls == []
 
 
+def test_agent_workspace_mutations_refresh_startup_cached_state(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    repo_dir = hub_root / "demo"
+    (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
+
+    initial_supervisor = HubSupervisor(load_hub_config(hub_root))
+    try:
+        initial_supervisor.scan()
+    finally:
+        initial_supervisor.shutdown()
+
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    try:
+        supervisor.create_agent_workspace(
+            workspace_id="zc-main",
+            runtime="zeroclaw",
+            display_name="ZeroClaw Main",
+            enabled=False,
+        )
+    finally:
+        supervisor.shutdown()
+
+    restarted = HubSupervisor(load_hub_config(hub_root))
+    try:
+        listed = restarted.list_agent_workspaces()
+        assert [item.id for item in listed] == ["zc-main"]
+        assert listed[0].display_name == "ZeroClaw Main"
+    finally:
+        restarted.shutdown()
+
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    try:
+        supervisor.update_agent_workspace("zc-main", display_name="Renamed Workspace")
+        supervisor.set_agent_workspace_destination(
+            "zc-main",
+            {"kind": "docker", "image": "ghcr.io/acme/zeroclaw:latest"},
+        )
+    finally:
+        supervisor.shutdown()
+
+    restarted = HubSupervisor(load_hub_config(hub_root))
+    try:
+        listed = restarted.list_agent_workspaces()
+        assert [item.id for item in listed] == ["zc-main"]
+        assert listed[0].display_name == "Renamed Workspace"
+        assert listed[0].effective_destination == {
+            "kind": "docker",
+            "image": "ghcr.io/acme/zeroclaw:latest",
+        }
+    finally:
+        restarted.shutdown()
+
+
 def test_hub_supervisor_rejects_unknown_agent_workspace_runtime(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
