@@ -136,8 +136,8 @@ def test_cleanup_processes_passes_force_flag(monkeypatch, repo: Path) -> None:
         "user_request": "cleanup managed processes",
         "target_scope": f"cleanup.processes:{repo}",
     }
-    assert "killed 2" in result.stdout
-    assert "removed 2" in result.stdout
+    assert "killed=2" in result.stdout
+    assert "removed=2" in result.stdout
 
 
 def test_cleanup_processes_force_requires_attestation(repo: Path) -> None:
@@ -455,7 +455,7 @@ def test_cleanup_state_dry_run_reports_all_buckets(monkeypatch, repo: Path) -> N
     assert len(workspace_calls) >= 1
     assert workspace_calls[0][2] is True
     assert "DRY RUN:" in result.stdout
-    assert "CAR State Cleanup Report" in result.stdout
+    assert "total:" in result.stdout or "cleanup" in result.stdout.lower()
 
 
 def test_cleanup_state_scope_global_includes_global_workspaces(

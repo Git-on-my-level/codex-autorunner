@@ -125,12 +125,12 @@ def test_describe_human_output_is_readable(repo):
 
     output = result.output
 
-    assert "CAR Version:" in output or "Codex Autorunner" in output
-    assert "Repo Root:" in output or "Repo Root:" in output
-    assert "Initialized:" in output
-    assert "Active Surfaces:" in output or "Surfaces:" in output
-    assert "Agents:" in output
-    assert "Template Apply:" in output
+    assert "car_version=" in output
+    assert "repo=" in output
+    assert "initialized=" in output
+    assert "surfaces:" in output
+    assert "agents:" in output
+    assert "template_apply:" in output
 
 
 def test_describe_schema_option(repo):
@@ -143,7 +143,7 @@ def test_describe_schema_option(repo):
 
     assert SCHEMA_ID in output
     assert SCHEMA_VERSION in output
-    assert "Schema Path:" in output or "Runtime Schema Path:" in output
+    assert "path=" in output
 
 
 def test_describe_without_repo_defaults_to_cwd(repo):

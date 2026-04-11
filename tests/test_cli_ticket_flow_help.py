@@ -153,7 +153,7 @@ def test_ticket_flow_start_stale_warning_uses_existing_cli_commands(
     result = CliRunner().invoke(ticket_flow_app, ["start"])
 
     assert result.exit_code == 0, result.output
-    assert "stale run(s) found" in result.output
+    assert "stale runs" in result.output
     assert f"car flow ticket_flow status --run-id {stale_run_id}" in result.output
     assert (
         f"car flow ticket_flow archive --run-id {stale_run_id} --force" in result.output

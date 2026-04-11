@@ -45,14 +45,9 @@ def test_status_without_json_outputs_human_readable(repo) -> None:
 
     output = result.output
 
-    assert "Repo:" in output
-    assert "Status:" in output
-    assert "Last run id:" in output
-    assert "Last exit code:" in output
-    assert "Last start:" in output
-    assert "Last finish:" in output
-    assert "Runner pid:" in output
-    assert "Recommended actions:" in output
+    assert "repo=" in output
+    assert "status=" in output
+    assert "actions:" in output
 
     assert str(repo) in output
 

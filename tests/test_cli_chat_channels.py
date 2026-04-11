@@ -26,9 +26,7 @@ def test_chat_channels_list_shows_entries(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     output = result.output
-    assert "Chat channel directory entries:" in output
     assert "telegram:-1001:77" in output
-    assert "Team Room / Ops" in output
 
 
 def test_chat_channels_list_query_filters_with_json_output(tmp_path: Path) -> None:

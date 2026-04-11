@@ -103,9 +103,7 @@ def register_worktree_commands(
             )
         except (RuntimeError, OSError, ValueError) as exc:
             raise_exit(str(exc), cause=exc)
-        typer.echo(
-            f"Created worktree {snapshot.id} (branch={snapshot.branch}) at {snapshot.path}"
-        )
+        typer.echo(f"created {snapshot.id} branch={snapshot.branch} at {snapshot.path}")
 
     @worktree_app.command("list")
     def hub_worktree_list(
@@ -130,16 +128,15 @@ def register_worktree_commands(
             typer.echo(json.dumps({"worktrees": payload}, indent=2))
             return
         if not payload:
-            typer.echo("No worktrees found.")
+            typer.echo("No worktrees.")
             return
         typer.echo(f"Worktrees ({len(payload)}):")
         for item in payload:
             typer.echo(
-                "  - {id} (base={worktree_of}, branch={branch}, status={status}, initialized={initialized}, exists={exists_on_disk}, path={path})".format(
+                "  {id} base={worktree_of} branch={branch} status={status}".format(
                     **item
                 )
             )
-            typer.echo(f"    recommended: {item['recommended_command']}")
 
     @worktree_app.command("scan")
     def hub_worktree_scan(
@@ -160,16 +157,15 @@ def register_worktree_commands(
             typer.echo(json.dumps({"worktrees": payload}, indent=2))
             return
         if not payload:
-            typer.echo("No worktrees found.")
+            typer.echo("No worktrees.")
             return
         typer.echo(f"Worktrees ({len(payload)}):")
         for item in payload:
             typer.echo(
-                "  - {id} (base={worktree_of}, branch={branch}, status={status}, initialized={initialized}, exists={exists_on_disk}, path={path})".format(
+                "  {id} base={worktree_of} branch={branch} status={status}".format(
                     **item
                 )
             )
-            typer.echo(f"    recommended: {item['recommended_command']}")
 
     @worktree_app.command("cleanup")
     def hub_worktree_cleanup(
@@ -360,10 +356,7 @@ def register_worktree_commands(
         elif commands:
             normalized_commands = [cmd.strip() for cmd in commands if cmd.strip()]
         else:
-            raise_exit(
-                "Provide commands as arguments or use --clear to remove them.\n"
-                "Example: car hub worktree setup my-repo 'make setup' 'pre-commit install'"
-            )
+            raise_exit("Provide commands or --clear.")
             return
         url = build_server_url(
             config, f"/hub/repos/{repo_id}/worktree-setup", base_path_override=base_path
@@ -382,6 +375,6 @@ def register_worktree_commands(
             )
         count = len(normalized_commands)
         if count:
-            typer.echo(f"Set {count} worktree setup command(s) for {repo_id}")
+            typer.echo(f"Set {count} setup cmd(s) for {repo_id}")
         else:
-            typer.echo(f"Cleared worktree setup commands for {repo_id}")
+            typer.echo(f"Cleared setup for {repo_id}")

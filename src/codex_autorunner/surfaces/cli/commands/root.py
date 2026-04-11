@@ -56,10 +56,10 @@ def _require_repo_config(repo: Optional[Path], hub: Optional[Path]) -> RuntimeCo
     except RepoNotFoundError as exc:
         if repo is None:
             _raise_exit(
-                "No .git directory found. Specify --repo <worktree-path> to resolve.",
+                "no .git; use --repo <path>",
                 cause=exc,
             )
-        _raise_exit("No .git directory found for repo commands.", cause=exc)
+        _raise_exit("no .git", cause=exc)
     try:
         config = load_repo_config(repo_root, hub_path=hub)
         return RuntimeContext(
@@ -230,9 +230,7 @@ def register_root_commands(app: typer.Typer) -> None:
                     ).strip() or f"exit {proc.returncode}"
                     _raise_exit(f"git init failed: {detail}")
             else:
-                _raise_exit(
-                    "No .git directory found; rerun with --git-init to create one"
-                )
+                _raise_exit("no .git; use --git-init")
 
         ca_dir = target_root / ".codex-autorunner"
         ca_dir.mkdir(parents=True, exist_ok=True)
@@ -328,28 +326,36 @@ def register_root_commands(app: typer.Typer) -> None:
             typer.echo(json.dumps(payload, indent=2))
             return
 
-        typer.echo(f"Repo: {engine.repo_root}")
-        typer.echo(f"Status: {state.status}")
-        typer.echo(f"Last run id: {state.last_run_id}")
-        typer.echo(f"Last exit code: {state.last_exit_code}")
-        typer.echo(f"Last start: {state.last_run_started_at}")
-        typer.echo(f"Last finish: {state.last_run_finished_at}")
-        typer.echo(f"Runner pid: {state.runner_pid}")
+        parts = [
+            f"repo={engine.repo_root}",
+            f"status={state.status}",
+        ]
+        if state.last_run_id is not None:
+            parts.append(f"run_id={state.last_run_id}")
+        if state.last_exit_code is not None:
+            parts.append(f"exit={state.last_exit_code}")
+        if state.last_run_started_at:
+            parts.append(f"started={state.last_run_started_at}")
+        if state.last_run_finished_at:
+            parts.append(f"finished={state.last_run_finished_at}")
+        if state.runner_pid:
+            parts.append(f"pid={state.runner_pid}")
+        typer.echo(" ".join(parts))
+        if session_id and session_record:
+            typer.echo(
+                f"codex={session_id} status={session_record.status} last_seen={session_record.last_seen_at}"
+            )
+        if (
+            opencode_session_id
+            and opencode_session_id != session_id
+            and opencode_record
+        ):
+            typer.echo(
+                f"opencode={opencode_session_id} status={opencode_record.status} last_seen={opencode_record.last_seen_at}"
+            )
         if not session_id and not opencode_session_id:
-            typer.echo("Terminal session: none")
-        if session_id:
-            detail = ""
-            if session_record:
-                detail = f" (status={session_record.status}, last_seen={session_record.last_seen_at})"
-            typer.echo(f"Terminal session (codex): {session_id}{detail}")
-        if opencode_session_id and opencode_session_id != session_id:
-            detail = ""
-            if opencode_record:
-                detail = f" (status={opencode_record.status}, last_seen={opencode_record.last_seen_at})"
-            typer.echo(f"Terminal session (opencode): {opencode_session_id}{detail}")
-        typer.echo("Recommended actions:")
-        for action in recommended_actions:
-            typer.echo(f"- {action}")
+            typer.echo("sessions: none")
+        typer.echo("actions: " + " ".join(recommended_actions))
 
     @app.command()
     def sessions(
@@ -404,7 +410,7 @@ def register_root_commands(app: typer.Typer) -> None:
         sessions_payload = (
             payload.get("sessions", []) if isinstance(payload, dict) else []
         )
-        typer.echo(f"Sessions ({source}): {len(sessions_payload)}")
+        typer.echo(f"sessions({len(sessions_payload)},{source}):")
         for entry in sessions_payload:
             if not isinstance(entry, dict):
                 continue
@@ -417,7 +423,7 @@ def register_root_commands(app: typer.Typer) -> None:
             alive = entry.get("alive")
             alive_text = "unknown" if alive is None else str(bool(alive))
             typer.echo(
-                f"- {session_id}: repo={repo_path} status={status} last_seen={last_seen} alive={alive_text}"
+                f"{session_id}: repo={repo_path} status={status} last_seen={last_seen} alive={alive_text}"
             )
 
     @app.command("stop-session")
@@ -552,19 +558,19 @@ def register_root_commands(app: typer.Typer) -> None:
                 typer.echo(json.dumps(payload, indent=2))
                 return
 
-            typer.echo(f"Hub: {config.root}")
-            typer.echo(f"CODEX_HOME: {codex_root}")
-            typer.echo(f"Repos: {len(per_repo)}")
+            typer.echo(
+                f"hub={config.root} codex_home={codex_root} repos={len(per_repo)}"
+            )
             for repo_id, summary in per_repo.items():
                 typer.echo(
-                    f"- {repo_id}: total={summary.totals.total_tokens} "
-                    f"(input={summary.totals.input_tokens}, cached={summary.totals.cached_input_tokens}, "
-                    f"output={summary.totals.output_tokens}, reasoning={summary.totals.reasoning_output_tokens}) "
+                    f"  {repo_id}: total={summary.totals.total_tokens} "
+                    f"(in={summary.totals.input_tokens},cached={summary.totals.cached_input_tokens},"
+                    f"out={summary.totals.output_tokens},reason={summary.totals.reasoning_output_tokens}) "
                     f"events={summary.events}"
                 )
             if unmatched.events or unmatched.totals.total_tokens:
                 typer.echo(
-                    f"- unmatched: total={unmatched.totals.total_tokens} events={unmatched.events}"
+                    f"  unmatched: total={unmatched.totals.total_tokens} events={unmatched.events}"
                 )
             return
 
@@ -587,14 +593,13 @@ def register_root_commands(app: typer.Typer) -> None:
             typer.echo(json.dumps(payload, indent=2))
             return
 
-        typer.echo(f"Repo: {engine.repo_root}")
-        typer.echo(f"CODEX_HOME: {codex_root}")
+        typer.echo(f"repo={engine.repo_root} codex_home={codex_root}")
         typer.echo(
-            f"Totals: total={summary.totals.total_tokens} "
-            f"(input={summary.totals.input_tokens}, cached={summary.totals.cached_input_tokens}, "
-            f"output={summary.totals.output_tokens}, reasoning={summary.totals.reasoning_output_tokens})"
+            f"tokens={summary.totals.total_tokens} "
+            f"(in={summary.totals.input_tokens},cached={summary.totals.cached_input_tokens},"
+            f"out={summary.totals.output_tokens},reason={summary.totals.reasoning_output_tokens})"
         )
-        typer.echo(f"Events counted: {summary.events}")
+        typer.echo(f"events={summary.events}")
         if isinstance(summary.latest_rate_limits, dict):
             primary = summary.latest_rate_limits.get("primary")
             secondary = summary.latest_rate_limits.get("secondary")
@@ -611,8 +616,8 @@ def register_root_commands(app: typer.Typer) -> None:
                 secondary.get("window_minutes") if isinstance(secondary, dict) else None
             )
             typer.echo(
-                f"Latest rate limits: primary_used={primary_used}%/{primary_window}m, "
-                f"secondary_used={secondary_used}%/{secondary_window}m"
+                f"rate_limits: primary={primary_used}%/{primary_window}m "
+                f"secondary={secondary_used}%/{secondary_window}m"
             )
 
     @app.command()
@@ -650,7 +655,7 @@ def register_root_commands(app: typer.Typer) -> None:
         if pid:
             typer.echo(f"Sent SIGTERM to pid {pid}")
         else:
-            typer.echo("No active autorunner process found; cleared stale lock if any.")
+            typer.echo("no process; lock cleared")
 
     @app.command()
     def resume(
@@ -691,11 +696,11 @@ def register_root_commands(app: typer.Typer) -> None:
             state = load_state(engine.state_path)
             last_id = state.last_run_id
             if last_id is None:
-                typer.echo("No runs recorded yet")
+                typer.echo("no runs")
                 return
             block = engine.read_run_block(last_id)
             if not block:
-                typer.echo("No run block found (log may have rotated)")
+                typer.echo("no run block (log rotated?)")
                 return
             typer.echo(block)
 
@@ -725,7 +730,7 @@ def register_root_commands(app: typer.Typer) -> None:
         editor_parts = shlex.split(editor)
         if not editor_parts:
             editor_parts = [editor]
-        typer.echo(f"Opening {path} with {' '.join(editor_parts)}")
+        typer.echo(f"editing {path}")
         subprocess.run([*editor_parts, str(path)])
 
     @app.command()

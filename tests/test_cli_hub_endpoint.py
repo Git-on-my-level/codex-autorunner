@@ -56,4 +56,4 @@ def test_hub_endpoint_reports_missing_or_stale_runtime(
     result = runner.invoke(app, ["hub", "endpoint", "--path", str(hub_root)])
 
     assert result.exit_code == 1
-    assert "Hub endpoint unavailable" in result.output
+    assert "Hub not running." in result.output

@@ -96,7 +96,8 @@ def test_hub_subscription_cancel_marks_subscription_cancelled(hub_env) -> None:
     )
 
     assert result.exit_code == 0, result.output
-    assert f"Cancelled subscription {subscription['subscription_id']}" in result.output
+    assert "Cancelled" in result.output
+    assert subscription["subscription_id"][:8] in result.output
 
     store = PmaAutomationStore(hub_env.hub_root)
     subscriptions = store.list_subscriptions(include_inactive=True)

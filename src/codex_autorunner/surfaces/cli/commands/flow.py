@@ -150,12 +150,12 @@ def register_flow_commands(
     def _print_preflight_report(report: PreflightReport) -> None:
         for check in report.checks:
             status = check.status.upper()
-            typer.echo(f"- {status}: {check.message}")
+            parts = [f"{status}: {check.message}"]
             if check.details:
-                for detail in check.details:
-                    typer.echo(f"    {detail}")
+                parts.append(" ".join(check.details))
             if check.fix:
-                typer.echo(f"    Fix: {check.fix}")
+                parts.append(f"fix: {check.fix}")
+            typer.echo(" ".join(parts))
 
     def _ticket_lint_details(ticket_dir: Path) -> dict[str, list[str]]:
         policy = evaluate_ticket_start_policy(ticket_dir)
@@ -441,53 +441,55 @@ def register_flow_commands(
         }
 
     def _print_ticket_flow_status(payload: dict) -> None:
-        typer.echo(f"Run id: {payload.get('run_id')}")
-        typer.echo(f"Status: {payload.get('status')}")
         progress = payload.get("ticket_progress") or {}
+        tickets = ""
         if isinstance(progress, dict):
             done = progress.get("done")
             total = progress.get("total")
             if isinstance(done, int) and isinstance(total, int):
-                typer.echo(f"Tickets: {done}/{total}")
-        typer.echo(f"Current step: {payload.get('current_step')}")
-        typer.echo(f"Current ticket: {payload.get('current_ticket') or 'n/a'}")
-        typer.echo(f"Created at: {payload.get('created_at')}")
-        typer.echo(f"Started at: {payload.get('started_at')}")
-        typer.echo(f"Finished at: {payload.get('finished_at')}")
+                tickets = f" tickets={done}/{total}"
         typer.echo(
-            f"Last event: {payload.get('last_event_at')} (seq={payload.get('last_event_seq')})"
+            f"run_id={payload.get('run_id')} status={payload.get('status')}{tickets}"
         )
-        worker = payload.get("worker") or {}
+        step = payload.get("current_step")
+        ticket = payload.get("current_ticket") or "n/a"
+        typer.echo(f"step={step} ticket={ticket}")
+        typer.echo(
+            f"created={payload.get('created_at')} started={payload.get('started_at')} "
+            f"finished={payload.get('finished_at')}"
+        )
+        typer.echo(
+            f"last_event={payload.get('last_event_at')} seq={payload.get('last_event_seq')}"
+        )
         status = payload.get("status") or ""
         reason_summary = payload.get("reason_summary")
         if isinstance(reason_summary, str) and reason_summary.strip():
-            typer.echo(f"Summary: {reason_summary.strip()}")
+            typer.echo(f"summary: {reason_summary.strip()}")
         error_message = payload.get("error_message")
         if isinstance(error_message, str) and error_message.strip():
-            typer.echo(f"Error: {error_message.strip()}")
-        if worker and status not in {"completed", "failed", "stopped"}:
-            typer.echo(
-                f"Worker: {worker.get('status')} pid={worker.get('pid')} {worker.get('message') or ''}".rstrip()
-            )
-        elif worker and status in {"completed", "failed", "stopped"}:
-            worker_status = worker.get("status") or ""
-            worker_pid = worker.get("pid")
-            worker_msg = worker.get("message") or ""
-            if worker_status == "absent" or "missing" in worker_msg.lower():
-                typer.echo("Worker: exited")
-            elif worker_status == "dead" or "not running" in worker_msg.lower():
-                typer.echo(f"Worker: exited (pid={worker_pid})")
-            else:
+            typer.echo(f"error: {error_message.strip()}")
+        worker = payload.get("worker") or {}
+        if worker:
+            if status not in {"completed", "failed", "stopped"}:
                 typer.echo(
-                    f"Worker: {worker.get('status')} pid={worker.get('pid')} {worker.get('message') or ''}".rstrip()
+                    f"worker: {worker.get('status')} pid={worker.get('pid')}".rstrip()
                 )
-            if status == "failed":
-                exit_code = worker.get("exit_code")
-                stderr_tail = worker.get("stderr_tail")
-                if exit_code is not None:
-                    typer.echo(f"Worker exit code: {exit_code}")
-                if isinstance(stderr_tail, str) and stderr_tail.strip():
-                    typer.echo(f"Worker stderr tail: {stderr_tail.strip()}")
+            else:
+                worker_status = worker.get("status") or ""
+                worker_msg = worker.get("message") or ""
+                if worker_status == "absent" or "missing" in worker_msg.lower():
+                    typer.echo("worker: exited")
+                else:
+                    typer.echo(
+                        f"worker: {worker.get('status')} pid={worker.get('pid')}".rstrip()
+                    )
+                if status == "failed":
+                    exit_code = worker.get("exit_code")
+                    stderr_tail = worker.get("stderr_tail")
+                    if exit_code is not None:
+                        typer.echo(f"worker_exit={exit_code}")
+                    if isinstance(stderr_tail, str) and stderr_tail.strip():
+                        typer.echo(f"worker_stderr: {stderr_tail.strip()}")
 
     def _start_ticket_flow_worker(
         repo_root: Path, run_id: str, is_terminal: bool = False
@@ -581,7 +583,8 @@ def register_flow_commands(
             cleanup = reap_managed_processes(engine.repo_root)
             if cleanup.killed or cleanup.signaled or cleanup.removed:
                 typer.echo(
-                    f"Managed process cleanup: killed {cleanup.killed}, signaled {cleanup.signaled}, removed {cleanup.removed} records, skipped {cleanup.skipped}"
+                    f"cleanup: killed={cleanup.killed} signaled={cleanup.signaled} "
+                    f"removed={cleanup.removed} skipped={cleanup.skipped}"
                 )
         except (OSError, RuntimeError) as exc:
             typer.echo(f"Managed process cleanup failed: {exc}", err=True)
@@ -591,8 +594,6 @@ def register_flow_commands(
         worker_run_id: str = cast(str, normalized_run_id)
 
         db_path, artifacts_root, ticket_dir = _ticket_flow_paths(engine)
-
-        typer.echo(f"Starting flow worker for run {worker_run_id}")
 
         exit_code_holder = [0]
         _repo_root = engine.repo_root
@@ -620,9 +621,9 @@ def register_flow_commands(
         signal.signal(signal.SIGINT, _signal_handler)
 
         async def _run_worker():
-            typer.echo(f"Flow worker started for {worker_run_id}")
-            typer.echo(f"DB path: {db_path}")
-            typer.echo(f"Artifacts root: {artifacts_root}")
+            typer.echo(
+                f"worker: run={worker_run_id} db={db_path} artifacts={artifacts_root}"
+            )
 
             store = FlowStore(db_path, durable=engine.config.durable_writes)
             store.initialize()
@@ -813,9 +814,8 @@ def register_flow_commands(
                 _start_ticket_flow_worker(
                     engine.repo_root, existing_run.id, is_terminal=False
                 )
-                typer.echo(f"Reused active run: {existing_run.id}")
                 typer.echo(
-                    f"Next: car flow ticket_flow status --repo {engine.repo_root} --run-id {existing_run.id}"
+                    f"reused run={existing_run.id} | car flow ticket_flow status --run-id {existing_run.id}"
                 )
                 return
             elif existing_run and reason == "completed_pending":
@@ -825,24 +825,19 @@ def register_flow_commands(
                 )
                 if pending_count > 0:
                     typer.echo(
-                        f"Warning: Latest run {existing_run.id} is COMPLETED with {pending_count} pending ticket(s)."
-                    )
-                    typer.echo(
-                        "Use --force-new to start a fresh run (dispatch history will be reset)."
+                        f"run {existing_run.id} completed with {pending_count} pending tickets. "
+                        f"use --force-new to reset dispatch history."
                     )
                     raise_exit("Add --force-new to create a new run.")
 
         if stale_terminal:
+            stale_id = stale_terminal[0].id
             typer.echo(
-                f"Warning: {len(stale_terminal)} stale run(s) found (FAILED/STOPPED)."
+                f"warning: {len(stale_terminal)} stale runs (FAILED/STOPPED). "
+                f"inspect: car flow ticket_flow status --run-id {stale_id}. "
+                f"archive: car flow ticket_flow archive --run-id {stale_id} --force. "
+                f"use --force-new to suppress."
             )
-            typer.echo(
-                f"Inspect stale run state with 'car flow ticket_flow status --run-id {stale_terminal[0].id}'."
-            )
-            typer.echo(
-                f"Archive stale artifacts with 'car flow ticket_flow archive --run-id {stale_terminal[0].id} --force'."
-            )
-            typer.echo("Use --force-new to suppress this warning and start a new run.")
 
         existing_tickets = list_ticket_paths(ticket_dir)
         seeded = False
@@ -887,10 +882,7 @@ You are the first ticket in a new ticket_flow run.
             )
         )
 
-        typer.echo(f"Started ticket_flow run: {run_id}")
-        typer.echo(
-            f"Next: car flow ticket_flow status --repo {engine.repo_root} --run-id {run_id}"
-        )
+        typer.echo(f"run={run_id} | car flow ticket_flow status --run-id {run_id}")
 
     @ticket_flow_app.command("preflight")
     def ticket_flow_preflight(
@@ -957,9 +949,8 @@ You are the first ticket in a new ticket_flow run.
                 _start_ticket_flow_worker(
                     engine.repo_root, existing_run.id, is_terminal=False
                 )
-                typer.echo(f"Reused active run: {existing_run.id}")
                 typer.echo(
-                    f"Next: car flow ticket_flow status --repo {engine.repo_root} --run-id {existing_run.id}"
+                    f"reused run={existing_run.id} | car flow ticket_flow status --run-id {existing_run.id}"
                 )
                 return
             elif existing_run and reason == "completed_pending":
@@ -969,24 +960,19 @@ You are the first ticket in a new ticket_flow run.
                 )
                 if pending_count > 0:
                     typer.echo(
-                        f"Warning: Latest run {existing_run.id} is COMPLETED with {pending_count} pending ticket(s)."
-                    )
-                    typer.echo(
-                        "Use --force-new to start a fresh run (dispatch history will be reset)."
+                        f"run {existing_run.id} completed with {pending_count} pending tickets. "
+                        f"use --force-new to reset dispatch history."
                     )
                     raise_exit("Add --force-new to create a new run.")
 
         if stale_terminal:
+            stale_id = stale_terminal[0].id
             typer.echo(
-                f"Warning: {len(stale_terminal)} stale run(s) found (FAILED/STOPPED)."
+                f"warning: {len(stale_terminal)} stale runs (FAILED/STOPPED). "
+                f"inspect: car flow ticket_flow status --run-id {stale_id}. "
+                f"archive: car flow ticket_flow archive --run-id {stale_id} --force. "
+                f"use --force-new to suppress."
             )
-            typer.echo(
-                f"Inspect stale run state with 'car flow ticket_flow status --run-id {stale_terminal[0].id}'."
-            )
-            typer.echo(
-                f"Archive stale artifacts with 'car flow ticket_flow archive --run-id {stale_terminal[0].id} --force'."
-            )
-            typer.echo("Use --force-new to suppress this warning and start a new run.")
 
         report = _ticket_flow_preflight(engine, ticket_dir)
         if report.has_errors():
@@ -1006,10 +992,7 @@ You are the first ticket in a new ticket_flow run.
             )
         )
 
-        typer.echo(f"Started ticket_flow run: {run_id}")
-        typer.echo(
-            f"Next: car flow ticket_flow status --repo {engine.repo_root} --run-id {run_id}"
-        )
+        typer.echo(f"run={run_id} | car flow ticket_flow status --run-id {run_id}")
 
     @ticket_flow_app.command("status")
     def ticket_flow_status(
@@ -1202,14 +1185,10 @@ You are the first ticket in a new ticket_flow run.
                 if output_json:
                     typer.echo(json.dumps(payload, indent=2))
                 else:
-                    typer.echo("Dry-run telemetry export plan:")
-                    typer.echo(f"  Runs to export: {payload['runs_total']}")
-                    typer.echo(f"  Runs skipped: {payload['runs_skipped']}")
-                    typer.echo(f"  Events to export: {payload['events_to_export']}")
-                    typer.echo(f"  Events to prune: {payload['events_to_prune']}")
-                    typer.echo(f"  Events to retain: {payload['events_to_retain']}")
                     typer.echo(
-                        f"  Estimated archive size: {payload['estimated_bytes']:,} bytes"
+                        f"dry-run: runs={payload['runs_total']} skipped={payload['runs_skipped']} "
+                        f"export={payload['events_to_export']} prune={payload['events_to_prune']} "
+                        f"retain={payload['events_to_retain']} size={payload['estimated_bytes']:,}"
                     )
                 return
 
@@ -1246,17 +1225,15 @@ You are the first ticket in a new ticket_flow run.
                 typer.echo(json.dumps(export_payload, indent=2))
             else:
                 typer.echo(
-                    f"Exported {export_payload['runs_exported']} run(s), "
-                    f"{export_payload['total_exported_events']} events, "
-                    f"{export_payload['total_exported_bytes']:,} bytes"
-                )
-                typer.echo(
-                    f"Pruned {export_payload['total_pruned_events']} redundant events"
+                    f"exported {export_payload['runs_exported']} runs "
+                    f"{export_payload['total_exported_events']} events "
+                    f"{export_payload['total_exported_bytes']:,} bytes "
+                    f"pruned {export_payload['total_pruned_events']}"
                 )
                 for r in result.records:
                     if r.skipped:
                         typer.echo(
-                            f"  Skipped {r.run_id} ({r.run_status}): {r.skip_reason}"
+                            f"  skipped {r.run_id} ({r.run_status}): {r.skip_reason}"
                         )
                     else:
                         typer.echo(
@@ -1266,7 +1243,7 @@ You are the first ticket in a new ticket_flow run.
                         )
                 if result.errors:
                     for err in result.errors:
-                        typer.echo(f"  Error: {err}", err=True)
+                        typer.echo(f"  error: {err}", err=True)
         finally:
             store.close()
 
@@ -1365,20 +1342,12 @@ You are the first ticket in a new ticket_flow run.
                     typer.echo(json.dumps(payload, indent=2))
                 else:
                     typer.echo(
-                        f"DB: {hk_stats.db_path} ({hk_stats.db_size_bytes:,} bytes)"
+                        f"db={hk_stats.db_path} size={hk_stats.db_size_bytes:,} "
+                        f"runs={hk_stats.runs_total}(active={hk_stats.runs_active},"
+                        f"terminal={hk_stats.runs_terminal},expired={hk_stats.runs_expired}) "
+                        f"events={hk_stats.events_total}(telemetry={hk_stats.telemetry_total},wire={hk_stats.wire_events_total}) "
+                        f"retention={retention_config.retention_days}d"
                     )
-                    typer.echo(
-                        f"Runs: {hk_stats.runs_total} total, "
-                        f"{hk_stats.runs_active} active, "
-                        f"{hk_stats.runs_terminal} terminal, "
-                        f"{hk_stats.runs_expired} expired"
-                    )
-                    typer.echo(
-                        f"Events: {hk_stats.events_total} total, "
-                        f"{hk_stats.telemetry_total} telemetry, "
-                        f"{hk_stats.wire_events_total} wire events"
-                    )
-                    typer.echo(f"Retention: {retention_config.retention_days}d")
                     for r in hk_stats.run_details:
                         flags = []
                         if r.is_active:
@@ -1389,11 +1358,8 @@ You are the first ticket in a new ticket_flow run.
                             flags.append("expired")
                         flag_str = ",".join(flags) if flags else "other"
                         typer.echo(
-                            f"  {r.run_id}: status={r.run_status} "
-                            f"[{flag_str}] "
-                            f"events={r.events_total} "
-                            f"telemetry={r.telemetry_total} "
-                            f"wire={r.wire_events}"
+                            f"  {r.run_id}: {r.run_status} [{flag_str}] "
+                            f"events={r.events_total} telemetry={r.telemetry_total} wire={r.wire_events}"
                         )
                 return
 
@@ -1427,27 +1393,17 @@ You are the first ticket in a new ticket_flow run.
                 if output_json:
                     typer.echo(json.dumps(plan_payload, indent=2))
                 else:
-                    typer.echo("Dry-run housekeeping plan:")
-                    typer.echo(f"  Retention: {retention_config.retention_days}d")
-                    typer.echo(f"  Runs to process: {plan_payload['runs_to_process']}")
                     typer.echo(
-                        f"  Runs skipped (active): {plan_payload['runs_skipped_active']}"
+                        f"housekeep(dry-run) retention={retention_config.retention_days}d "
+                        f"process={plan_payload['runs_to_process']} "
+                        f"skip_active={plan_payload['runs_skipped_active']} "
+                        f"skip_not_expired={plan_payload['runs_skipped_not_expired']} "
+                        f"export={plan_payload['events_to_export']} prune={plan_payload['events_to_prune']} "
+                        f"size={plan_payload['estimated_export_bytes']:,} db={plan_payload['db_size_bytes']:,}"
                     )
-                    typer.echo(
-                        f"  Runs skipped (not expired): {plan_payload['runs_skipped_not_expired']}"
-                    )
-                    typer.echo(
-                        f"  Events to export: {plan_payload['events_to_export']}"
-                    )
-                    typer.echo(f"  Events to prune: {plan_payload['events_to_prune']}")
-                    typer.echo(
-                        f"  Estimated export size: {plan_payload['estimated_export_bytes']:,} bytes"
-                    )
-                    typer.echo(f"  DB size: {plan_payload['db_size_bytes']:,} bytes")
                     for r in hk_plan.runs_to_process:
                         typer.echo(
-                            f"    {r.run_id}: status={r.run_status} "
-                            f"finished={r.finished_at} "
+                            f"  {r.run_id}: {r.run_status} finished={r.finished_at} "
                             f"events={r.events_total} wire={r.wire_events}"
                         )
                 return
@@ -1465,21 +1421,17 @@ You are the first ticket in a new ticket_flow run.
                 typer.echo(json.dumps(result_payload, indent=2))
             else:
                 typer.echo(
-                    f"Housekeep complete: {hk_result.runs_processed} run(s) processed"
+                    f"housekeep: {hk_result.runs_processed} runs "
+                    f"exported={hk_result.events_exported}({hk_result.exported_bytes:,} bytes) "
+                    f"pruned={hk_result.events_pruned}"
                 )
-                typer.echo(
-                    f"  Exported: {hk_result.events_exported} events "
-                    f"({hk_result.exported_bytes:,} bytes)"
-                )
-                typer.echo(f"  Pruned: {hk_result.events_pruned} events")
                 if hk_result.vacuum_performed:
-                    typer.echo("  VACUUM: performed")
+                    typer.echo("  vacuum: performed")
                 typer.echo(
-                    f"  DB size: {hk_result.db_size_before_bytes:,} -> "
-                    f"{hk_result.db_size_after_bytes:,} bytes"
+                    f"  db: {hk_result.db_size_before_bytes:,} -> {hk_result.db_size_after_bytes:,}"
                 )
                 for err in hk_result.errors:
-                    typer.echo(f"  Error: {err}", err=True)
+                    typer.echo(f"  error: {err}", err=True)
         finally:
             store.close()
 

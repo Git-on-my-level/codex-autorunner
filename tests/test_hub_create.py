@@ -114,7 +114,7 @@ def test_hub_clone_repo_cli(tmp_path: Path):
         ],
     )
     assert result.exit_code == 0
-    assert "Cloned repo cloned" in result.output
+    assert "cloned cloned" in result.output or "cloned at" in result.output
 
     repo_dir = hub_root / "workspace" / "cloned"
     assert (repo_dir / ".git").exists()

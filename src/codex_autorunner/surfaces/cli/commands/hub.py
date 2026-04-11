@@ -293,12 +293,10 @@ def register_hub_commands(
         state: str = typer.Option(
             "all",
             "--state",
-            help="Filter subscriptions by state: active, cancelled, or all.",
+            help="State filter (active/cancelled/all)",
         ),
         path: Optional[Path] = typer.Option(None, "--path", help="Hub root path"),
-        output_json: bool = typer.Option(
-            False, "--json", help="Emit JSON payload for scripting"
-        ),
+        output_json: bool = typer.Option(False, "--json", help="JSON output"),
     ) -> None:
         config = require_hub_config(path)
         store = _subscription_store(config)
@@ -324,7 +322,7 @@ def register_hub_commands(
 
         typer.echo(f"Subscriptions ({len(subscriptions)}) state={state_filter}")
         if not subscriptions:
-            typer.echo("No subscriptions found.")
+            typer.echo("No subscriptions.")
             return
         for line in _render_subscription_table(subscriptions):
             typer.echo(line)
@@ -369,9 +367,9 @@ def register_hub_commands(
             typer.echo(json.dumps(payload, indent=2))
             return
         if changed:
-            typer.echo(f"Cancelled subscription {normalized_id}")
+            typer.echo(f"Cancelled {normalized_id}")
             return
-        typer.echo(f"Subscription {normalized_id} is already cancelled")
+        typer.echo(f"Already cancelled: {normalized_id}")
 
     @subscription_app.command(
         "purge",
@@ -417,7 +415,7 @@ def register_hub_commands(
         action = "Would purge" if dry_run else "Purged"
         typer.echo(f"{action} {len(removed)} subscription(s) with state={state_filter}")
         if not removed:
-            typer.echo("No subscriptions matched.")
+            typer.echo("No matches.")
             return
         for line in _render_subscription_table(removed):
             typer.echo(line)
@@ -430,14 +428,7 @@ def register_hub_commands(
             False, "--json", help="Emit JSON payload for scripting"
         ),
     ):
-        """Show effective execution destination for a repo.
-
-        Examples:
-        - Update destination config:
-          `car hub destination set --help`
-        - Deep docs:
-          `docs/configuration/destinations.md`
-        """
+        """Show repo destination."""
         config = require_hub_config(path)
         manifest, repos_by_id, repo = _resolve_repo_entry(config, repo_id)
         resolution = resolve_effective_repo_destination(repo, repos_by_id)
@@ -459,24 +450,17 @@ def register_hub_commands(
             typer.echo(json.dumps(payload, indent=2))
             return
 
-        typer.echo(f"Repo: {repo.id}")
-        typer.echo(f"Kind: {repo.kind}")
+        parts = [f"{repo.id} kind={repo.kind}"]
         if repo.worktree_of:
-            typer.echo(f"Worktree of: {repo.worktree_of}")
-        configured = (
-            json.dumps(repo.destination, sort_keys=True)
-            if isinstance(repo.destination, dict)
-            else "<none>"
-        )
-        typer.echo(f"Configured destination: {configured}")
-        typer.echo(f"Effective destination (source={resolution.source}):")
+            parts.append(f"worktree_of={repo.worktree_of}")
+        typer.echo(" ".join(parts))
+        typer.echo(f"destination source={resolution.source}:")
         typer.echo(
             json.dumps(payload["effective_destination"], indent=2, sort_keys=True)
         )
         if issues:
-            typer.echo("Validation issues:")
             for issue in issues:
-                typer.echo(f"- {issue}")
+                typer.echo(f"issue: {issue}")
 
     @destination_app.command("set")
     def hub_destination_set(
@@ -485,10 +469,7 @@ def register_hub_commands(
         image: Optional[str] = typer.Option(
             None,
             "--image",
-            help=(
-                "Docker image ref (required for docker kind; supports custom images "
-                "like ghcr.io/org/dev-image:tag)"
-            ),
+            help=("Docker image ref"),
         ),
         name: Optional[str] = typer.Option(
             None, "--name", help="Docker container name override"
@@ -496,45 +477,38 @@ def register_hub_commands(
         env: Optional[list[str]] = typer.Option(
             None,
             "--env",
-            help="Repeat to add env passthrough patterns (example: CAR_*)",
+            help="Env passthrough patterns",
         ),
         env_map: Optional[list[str]] = typer.Option(
             None,
             "--env-map",
-            help="Repeat explicit docker env entries using KEY=VALUE format",
+            help="KEY=VALUE env entries",
         ),
         mount: Optional[list[str]] = typer.Option(
             None,
             "--mount",
-            help="Repeat bind mount entries using source:target format",
+            help="Mount source:target",
         ),
         mount_ro: Optional[list[str]] = typer.Option(
             None,
             "--mount-ro",
-            help="Repeat read-only bind mount entries using source:target format",
+            help="Read-only mount source:target",
         ),
         profile: Optional[str] = typer.Option(
             None,
             "--profile",
-            help="Docker runtime profile (currently supported: full-dev)",
+            help="Docker profile (full-dev)",
         ),
-        workdir: Optional[str] = typer.Option(
-            None, "--workdir", help="Docker workdir override inside the container"
-        ),
+        workdir: Optional[str] = typer.Option(None, "--workdir", help="Docker workdir"),
         path: Optional[Path] = typer.Option(None, "--path", help="Hub root path"),
         output_json: bool = typer.Option(
             False, "--json", help="Emit JSON payload for scripting"
         ),
     ):
-        """Set repo execution destination.
+        """Set repo destination kind (local|docker).
 
-        Examples:
-        - Bring your own image:
-          `car hub destination set <repo_id> docker --image ghcr.io/org/dev-image:tag --path <hub_root>`
-        - Inspect advanced runtime flags:
-          `car hub destination set --help`
-        - Deep docs:
-          `docs/configuration/destinations.md`
+        Example:
+        `car hub destination set <repo_id> docker --image <image>`
         """
         config = require_hub_config(path)
         manifest, repos_by_id, repo = _resolve_repo_entry(config, repo_id)
@@ -571,8 +545,7 @@ def register_hub_commands(
             return
 
         typer.echo(
-            f"Updated destination for {repo.id} to "
-            f"{resolution.destination.kind} (source={resolution.source})"
+            f"destination: {repo.id} -> {resolution.destination.kind} (source={resolution.source})"
         )
 
     @agent_workspace_app.command("list")
@@ -592,7 +565,7 @@ def register_hub_commands(
             typer.echo(json.dumps({"agent_workspaces": payload}, indent=2))
             return
         if not payload:
-            typer.echo("No agent workspaces found.")
+            typer.echo("No workspaces.")
             return
         typer.echo(f"Agent workspaces ({len(payload)}):")
         for item in payload:
@@ -615,34 +588,25 @@ def register_hub_commands(
         if output_json:
             typer.echo(json.dumps(payload, indent=2))
             return
-        typer.echo(f"Agent workspace: {payload['id']}")
-        typer.echo(f"Runtime: {payload['runtime']}")
-        typer.echo(f"Display name: {payload['display_name']}")
-        typer.echo(f"Enabled: {payload['enabled']}")
-        typer.echo(f"Path: {payload['path']}")
-        typer.echo(f"Effective destination (source={payload['source']}):")
+        typer.echo(
+            f"{payload['id']} runtime={payload['runtime']} enabled={payload['enabled']}"
+        )
+        typer.echo(f"destination source={payload['source']}:")
         typer.echo(
             json.dumps(payload["effective_destination"], indent=2, sort_keys=True)
         )
         readiness = payload.get("readiness")
         if isinstance(readiness, dict):
-            typer.echo(
-                "Readiness: {status}{version}".format(
-                    status=str(readiness.get("status") or "unknown"),
-                    version=(
-                        f" (version={readiness['version']})"
-                        if readiness.get("version")
-                        else ""
-                    ),
-                )
-            )
+            status = str(readiness.get("status") or "unknown")
+            version = readiness.get("version")
+            ver_part = f" version={version}" if version else ""
+            typer.echo(f"readiness: {status}{ver_part}")
             message = str(readiness.get("message") or "").strip()
             if message:
-                typer.echo(f"Readiness detail: {message}")
+                typer.echo(f"  {message}")
         if payload["issues"]:
-            typer.echo("Validation issues:")
             for issue in payload["issues"]:
-                typer.echo(f"- {issue}")
+                typer.echo(f"issue: {issue}")
 
     @agent_workspace_app.command("create")
     def hub_agent_workspace_create(
@@ -681,7 +645,7 @@ def register_hub_commands(
             typer.echo(json.dumps(payload, indent=2))
             return
         typer.echo(
-            f"Created agent workspace {snapshot.id} (runtime={snapshot.runtime}, enabled={snapshot.enabled}) at {snapshot.path}"
+            f"created workspace {snapshot.id} runtime={snapshot.runtime} at {snapshot.path}"
         )
 
     @agent_workspace_app.command("update")
@@ -720,9 +684,7 @@ def register_hub_commands(
         if output_json:
             typer.echo(json.dumps(payload, indent=2))
             return
-        typer.echo(
-            f"Updated agent workspace {workspace_id} (enabled={payload['enabled']}, display_name={payload['display_name']})"
-        )
+        typer.echo(f"updated workspace {workspace_id} enabled={payload['enabled']}")
 
     @agent_workspace_app.command("remove")
     def hub_agent_workspace_remove(
@@ -730,7 +692,7 @@ def register_hub_commands(
         delete_files: bool = typer.Option(
             False,
             "--delete-files",
-            help="Also delete the workspace directory from disk.",
+            help="Delete files too",
         ),
         path: Optional[Path] = typer.Option(None, "--path", help="Hub root path"),
         output_json: bool = typer.Option(False, "--json", help="Emit JSON payload"),
@@ -758,8 +720,9 @@ def register_hub_commands(
         if output_json:
             typer.echo(json.dumps(payload, indent=2))
             return
-        action = "Removed and deleted files for" if delete_files else "Removed"
-        typer.echo(f"{action} agent workspace {workspace_id}")
+        typer.echo(
+            f"{'removed+deleted' if delete_files else 'removed'} workspace {workspace_id}"
+        )
 
     @agent_workspace_destination_app.command("show")
     def hub_agent_workspace_destination_show(
@@ -774,14 +737,7 @@ def register_hub_commands(
         if output_json:
             typer.echo(json.dumps(payload, indent=2))
             return
-        typer.echo(f"Agent workspace: {workspace_id}")
-        configured = (
-            json.dumps(payload["configured_destination"], sort_keys=True)
-            if isinstance(payload["configured_destination"], dict)
-            else "<none>"
-        )
-        typer.echo(f"Configured destination: {configured}")
-        typer.echo(f"Effective destination (source={payload['source']}):")
+        typer.echo(f"workspace={workspace_id} source={payload['source']}")
         typer.echo(
             json.dumps(payload["effective_destination"], indent=2, sort_keys=True)
         )
@@ -799,29 +755,27 @@ def register_hub_commands(
         env: Optional[list[str]] = typer.Option(
             None,
             "--env",
-            help="Repeat to add env passthrough patterns (example: CAR_*)",
+            help="Env passthrough patterns",
         ),
         env_map: Optional[list[str]] = typer.Option(
             None,
             "--env-map",
-            help="Repeat explicit docker env entries using KEY=VALUE format",
+            help="KEY=VALUE env entries",
         ),
         mount: Optional[list[str]] = typer.Option(
             None,
             "--mount",
-            help="Repeat bind mount entries using source:target format",
+            help="Mount source:target",
         ),
         mount_ro: Optional[list[str]] = typer.Option(
             None,
             "--mount-ro",
-            help="Repeat read-only bind mount entries using source:target format",
+            help="Read-only mount source:target",
         ),
         profile: Optional[str] = typer.Option(
-            None, "--profile", help="Docker runtime profile"
+            None, "--profile", help="Docker profile (full-dev)"
         ),
-        workdir: Optional[str] = typer.Option(
-            None, "--workdir", help="Docker workdir override inside the container"
-        ),
+        workdir: Optional[str] = typer.Option(None, "--workdir", help="Docker workdir"),
         path: Optional[Path] = typer.Option(None, "--path", help="Hub root path"),
         output_json: bool = typer.Option(False, "--json", help="Emit JSON payload"),
     ):
@@ -855,7 +809,7 @@ def register_hub_commands(
             typer.echo(json.dumps(payload, indent=2))
             return
         typer.echo(
-            f"Updated destination for {workspace_id} to {payload['effective_destination']['kind']} (source={payload['source']})"
+            f"destination: {workspace_id} -> {payload['effective_destination']['kind']} (source={payload['source']})"
         )
 
     @orchestration_app.command("verify")
@@ -865,15 +819,7 @@ def register_hub_commands(
             False, "--json", help="Emit JSON payload for scripting"
         ),
     ):
-        """Verify orchestration state migration parity between legacy stores and orchestration.sqlite3.
-
-        This command compares row counts, representative IDs, and content hashes
-        between legacy PMA stores and the new orchestration SQLite database.
-
-        Examples:
-        - `car hub orchestration verify --path <hub_root>`
-        - `car hub orchestration verify --path <hub_root> --json`
-        """
+        """Verify orchestration migration parity."""
         config = require_hub_config(path)
         try:
             with open_orchestration_sqlite(config.root, migrate=False) as conn:
@@ -883,47 +829,27 @@ def register_hub_commands(
         if output_json:
             typer.echo(json.dumps(summary.to_dict(), indent=2))
             return
-        typer.echo("Migration Verification Summary")
-        typer.echo("=" * 50)
-        typer.echo(f"Run ID: {summary.run_id}")
-        typer.echo(f"Status: {summary.status}")
-        typer.echo(f"Overall Passed: {summary.overall_passed}")
-        typer.echo(f"Rollback Available: {summary.rollback_available}")
-        typer.echo("")
-        typer.echo("Thread Parity:")
-        for check in summary.thread_parity:
-            status_icon = "✓" if check.status == "passed" else "✗"
-            typer.echo(f"  {status_icon} {check.check_name}: {check.message}")
-        typer.echo("")
-        typer.echo("Automation Parity:")
-        for check in summary.automation_parity:
-            status_icon = "✓" if check.status == "passed" else "✗"
-            typer.echo(f"  {status_icon} {check.check_name}: {check.message}")
-        typer.echo("")
-        typer.echo("Queue Parity:")
-        for check in summary.queue_parity:
-            status_icon = "✓" if check.status == "passed" else "✗"
-            typer.echo(f"  {status_icon} {check.check_name}: {check.message}")
-        typer.echo("")
+        typer.echo(
+            f"verify: {summary.status} passed={summary.overall_passed} run={summary.run_id}"
+        )
+        for check in (
+            summary.thread_parity
+            + summary.automation_parity
+            + summary.queue_parity
+            + summary.event_parity
+        ):
+            icon = "ok" if check.status == "passed" else "FAIL"
+            typer.echo(f"  {icon} {check.check_name}: {check.message}")
         tp = summary.transcript_parity
         if tp:
-            status_icon = "✓" if tp.status == "passed" else "✗"
-            typer.echo("Transcript Parity:")
-            typer.echo(f"  {status_icon} {tp.check_name}: {tp.message}")
-        typer.echo("")
-        typer.echo("Event Parity:")
-        for check in summary.event_parity:
-            status_icon = "✓" if check.status == "passed" else "✗"
-            typer.echo(f"  {status_icon} {check.check_name}: {check.message}")
-        typer.echo("")
+            icon = "ok" if tp.status == "passed" else "FAIL"
+            typer.echo(f"  {icon} {tp.check_name}: {tp.message}")
         ap = summary.audit_parity
-        status_icon = "✓" if ap.status == "passed" else "✗"
-        typer.echo("Audit Parity:")
-        typer.echo(f"  {status_icon} {ap.check_name}: {ap.message}")
-        typer.echo("")
-        typer.echo("Recommendations:")
-        for rec in summary.recommendations:
-            typer.echo(f"  - {rec}")
+        icon = "ok" if ap.status == "passed" else "FAIL"
+        typer.echo(f"  {icon} {ap.check_name}: {ap.message}")
+        if summary.recommendations:
+            for rec in summary.recommendations:
+                typer.echo(f"  rec: {rec}")
 
     @orchestration_app.command("status")
     def orchestration_status(
@@ -982,20 +908,11 @@ def register_hub_commands(
         if output_json:
             typer.echo(json.dumps(payload, indent=2))
             return
-        typer.echo("Orchestration Status")
-        typer.echo("=" * 50)
-        typer.echo(
-            f"Schema Version: {current_version} / {ORCHESTRATION_SCHEMA_VERSION}"
-        )
-        typer.echo("")
-        typer.echo("Table Counts:")
+        typer.echo(f"schema: {current_version}/{ORCHESTRATION_SCHEMA_VERSION}")
         for table, count in sorted(table_counts.items()):
             typer.echo(f"  {table}: {count}")
-        typer.echo("")
-        typer.echo("Legacy Stores Available:")
         for store, exists in legacy_status.items():
-            status = "yes" if exists else "no"
-            typer.echo(f"  {store}: {status}")
+            typer.echo(f"  legacy_{store}: {'yes' if exists else 'no'}")
 
     @hub_app.command("create")
     def hub_create(
@@ -1060,7 +977,7 @@ def register_hub_commands(
         ) as exc:  # intentional: top-level error handler
             raise_exit(str(exc), cause=exc)
         typer.echo(
-            f"Cloned repo {snapshot.id} at {snapshot.path} (status={snapshot.status.value})"
+            f"cloned {snapshot.id} at {snapshot.path} status={snapshot.status.value}"
         )
 
     @hub_app.command("serve")
@@ -1106,7 +1023,7 @@ def register_hub_commands(
         config = require_hub_config(path)
         endpoint = read_hub_endpoint(config.root)
         if endpoint is None:
-            raise_exit("Hub endpoint unavailable. Start `car hub serve` first.")
+            raise_exit("Hub not running.")
             return
         typer.echo(str(endpoint["url"]))
 
@@ -1118,16 +1035,14 @@ def register_hub_commands(
         config = require_hub_config(path)
         supervisor = build_supervisor(config)
         snapshots = supervisor.scan()
-        typer.echo(f"Scanned hub at {config.root} (repos_root={config.repos_root})")
+        typer.echo(f"scanned: {config.root}")
         for snap in snapshots:
             hint = (
                 _with_hub_path(f"car hub worktree archive {snap.id}", config.root)
                 if snap.kind == "worktree"
                 else _with_hub_path(f"car hub destination show {snap.id}", config.root)
             )
-            typer.echo(
-                f"- {snap.id}: {snap.status.value}, initialized={snap.initialized}, exists={snap.exists_on_disk}, recommended={hint}"
-            )
+            typer.echo(f"- {snap.id}: {snap.status.value} -> {hint}")
 
     @hub_app.command("cleanup")
     def hub_cleanup(
@@ -1341,14 +1256,10 @@ def register_hub_commands(
                     )
 
         if not repos_response and not messages_response and fetch_errors:
-            attempted = "\n".join(f"- {url}" for url in attempted_urls) or "- <none>"
+            error_msgs = "; ".join(error["error"] for error in fetch_errors)
             raise_exit(
-                "Failed to connect to hub server. Ensure 'car hub serve' is running.\n"
-                f"Timeout: {timeout_seconds:.1f}s\n"
-                f"Attempted:\n{attempted}\n"
-                "If the hub UI is served under a base path (commonly /car), either set "
-                "`server.base_path` in the hub config or pass `--base-path /car`.",
-                cause=RuntimeError("; ".join(error["error"] for error in fetch_errors)),
+                f"Hub server unreachable (timeout={timeout_seconds:.0f}s): {error_msgs}",
+                cause=RuntimeError(error_msgs),
             )
 
         repos_payload = repos_response if isinstance(repos_response, dict) else {}
@@ -1556,30 +1467,22 @@ def register_hub_commands(
             for repo in snapshot_repos:
                 if not isinstance(repo, dict):
                     continue
-                pr_url = repo.get("pr_url")
-                final_review_status = repo.get("final_review_status")
                 run_state: dict = {}
                 rs = repo.get("run_state")
                 if isinstance(rs, dict):
                     run_state = rs
                 typer.echo(
-                    f"- {repo.get('id')}: status={repo.get('status')}, "
-                    f"initialized={repo.get('initialized')}, exists={repo.get('exists_on_disk')}, "
-                    f"final_review={final_review_status}, pr_url={pr_url}, "
-                    f"run_state={run_state.get('state')}"
+                    f"- {repo.get('id')}: {repo.get('status')} run_state={run_state.get('state')}"
                 )
                 if run_state.get("blocking_reason"):
-                    typer.echo(f"  blocking_reason: {run_state.get('blocking_reason')}")
+                    typer.echo(f"  blocked: {run_state.get('blocking_reason')}")
                 if run_state.get("recommended_action"):
-                    typer.echo(
-                        f"  recommended_action: {run_state.get('recommended_action')}"
-                    )
+                    typer.echo(f"  action: {run_state.get('recommended_action')}")
                 freshness = repo.get("freshness")
                 if isinstance(freshness, dict) and freshness.get("basis_at"):
                     typer.echo(
-                        "  freshness: "
-                        f"{freshness.get('status')} basis={freshness.get('recency_basis')} "
-                        f"basis_at={freshness.get('basis_at')}"
+                        f"  freshness: {freshness.get('status')} basis={freshness.get('recency_basis')} "
+                        f"at={freshness.get('basis_at')}"
                     )
             for msg in snapshot_inbox:
                 if not isinstance(msg, dict):
@@ -1589,23 +1492,18 @@ def register_hub_commands(
                 if isinstance(rs, dict):
                     run_state_inbox = rs
                 typer.echo(
-                    f"- Inbox: repo={msg.get('repo_id')}, run_id={msg.get('run_id')}, "
-                    f"title={msg.get('dispatch', {}).get('title')}, state={run_state_inbox.get('state')}"
+                    f"- inbox: repo={msg.get('repo_id')} run={msg.get('run_id')} "
+                    f"title={msg.get('dispatch', {}).get('title')} state={run_state_inbox.get('state')}"
                 )
                 if run_state_inbox.get("blocking_reason"):
-                    typer.echo(
-                        f"  blocking_reason: {run_state_inbox.get('blocking_reason')}"
-                    )
+                    typer.echo(f"  blocked: {run_state_inbox.get('blocking_reason')}")
                 if run_state_inbox.get("recommended_action"):
-                    typer.echo(
-                        f"  recommended_action: {run_state_inbox.get('recommended_action')}"
-                    )
+                    typer.echo(f"  action: {run_state_inbox.get('recommended_action')}")
                 freshness = msg.get("freshness")
                 if isinstance(freshness, dict) and freshness.get("basis_at"):
                     typer.echo(
-                        "  freshness: "
-                        f"{freshness.get('status')} basis={freshness.get('recency_basis')} "
-                        f"basis_at={freshness.get('basis_at')}"
+                        f"  freshness: {freshness.get('status')} basis={freshness.get('recency_basis')} "
+                        f"at={freshness.get('basis_at')}"
                     )
             return
 
