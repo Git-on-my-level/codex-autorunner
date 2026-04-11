@@ -611,6 +611,84 @@ async def test_interaction_handler_concurrency_is_bounded() -> None:
 
 
 @pytest.mark.anyio
+async def test_queue_wait_ack_happens_before_waiting_for_handler_slot() -> None:
+    service = _FakeService()
+    slot_holder_started = asyncio.Event()
+    release_slot_holder = asyncio.Event()
+    queue_wait_acked = asyncio.Event()
+
+    async def blocking_handler(*args: Any, **_kwargs: Any) -> None:
+        interaction_id = str(args[0]) if args else ""
+        if interaction_id == "slot-holder":
+            slot_holder_started.set()
+            await release_slot_holder.wait()
+
+    async def _ack_envelope(envelope: Any, *, stage: str) -> bool:
+        if envelope.context.interaction_id == "waiter" and stage == "queue_wait":
+            queue_wait_acked.set()
+        return True
+
+    service._handle_car_command.side_effect = blocking_handler
+    service.acknowledge_runtime_envelope = AsyncMock(side_effect=_ack_envelope)
+
+    runner = CommandRunner(
+        service,
+        config=RunnerConfig(
+            timeout_seconds=None,
+            stalled_warning_seconds=None,
+            max_concurrent_interaction_handlers=1,
+        ),
+        logger=service._logger,
+    )
+
+    holder_ctx = _make_ctx(
+        interaction_id="slot-holder",
+        interaction_token="slot-token",
+        channel_id="chan-1",
+        guild_id="guild-1",
+    )
+    holder_payload = {
+        **_slash_payload(),
+        "id": "slot-holder",
+        "token": "slot-token",
+    }
+    runner.submit(
+        holder_ctx,
+        holder_payload,
+        resource_keys=("conversation:discord:chan-1:guild-1",),
+        conversation_id="discord:chan-1:guild-1",
+    )
+    await asyncio.wait_for(slot_holder_started.wait(), timeout=1.0)
+
+    waiter_ctx = _make_ctx(
+        interaction_id="waiter",
+        interaction_token="waiter-token",
+        channel_id="chan-2",
+        guild_id="guild-1",
+    )
+    waiter_payload = {
+        **_slash_payload(),
+        "id": "waiter",
+        "token": "waiter-token",
+    }
+    runner.submit(
+        waiter_ctx,
+        waiter_payload,
+        resource_keys=("conversation:discord:chan-2:guild-1",),
+        conversation_id="discord:chan-2:guild-1",
+        queue_wait_ack_policy="defer_ephemeral",
+    )
+
+    await asyncio.wait_for(queue_wait_acked.wait(), timeout=1.0)
+    # The waiter handler has not started yet because the global slot is still held.
+    assert service._handle_car_command.await_count == 1
+
+    release_slot_holder.set()
+    await runner.shutdown(grace_seconds=5.0)
+    assert service._handle_car_command.await_count == 2
+
+
+@pytest.mark.anyio
 async def test_submit_event_delegates_to_dispatch_chat_event() -> None:
     service = _FakeService()
     dispatch_event = AsyncMock()

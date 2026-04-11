@@ -344,6 +344,7 @@ class CommandRunner:
 
     async def _run_scheduled_interaction(self, item: ScheduledInteraction) -> None:
         acquired_schedule = False
+        queue_wait_ack_attempted = False
         notify_idle: set[str] = set()
         try:
             if item.schedule.resource_keys:
@@ -360,6 +361,7 @@ class CommandRunner:
                         scheduler_state="waiting_on_resources",
                     )
                     if item.queue_wait_ack_policy not in (None, "immediate"):
+                        queue_wait_ack_attempted = True
                         acknowledged = await self._service.acknowledge_runtime_envelope(
                             RuntimeInteractionEnvelope(
                                 context=item.ctx,
@@ -383,6 +385,24 @@ class CommandRunner:
                     item,
                     scheduler_state="scheduled",
                 )
+            if (
+                not queue_wait_ack_attempted
+                and item.queue_wait_ack_policy == "defer_ephemeral"
+            ):
+                # Queue-wait ACK must happen before waiting for a global handler
+                # slot; otherwise unrelated handler saturation can push ACK past
+                # Discord's callback window.
+                acknowledged = await self._service.acknowledge_runtime_envelope(
+                    RuntimeInteractionEnvelope(
+                        context=item.ctx,
+                        conversation_id=item.schedule.conversation_id,
+                        resource_keys=item.schedule.resource_keys,
+                        queue_wait_ack_policy=item.queue_wait_ack_policy,
+                    ),
+                    stage="queue_wait",
+                )
+                if not acknowledged:
+                    return
             async with self._interaction_handler_slots:
                 await self._run_with_lifecycle(
                     item.ctx,
