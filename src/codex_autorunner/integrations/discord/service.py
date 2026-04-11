@@ -311,7 +311,7 @@ from .rendering import (
     truncate_for_discord,
 )
 from .response_helpers import DiscordResponder
-from .rest import DiscordRestClient
+from .rest import DISCORD_INTERACTION_CALLBACK_TIMEOUT_SECONDS, DiscordRestClient
 from .service_normalization import (
     DiscordAttachmentAdapter,
     SavedDiscordAttachment,
@@ -680,11 +680,16 @@ class DiscordBotService:
             ),
         )
         self._ingress = InteractionIngress(self, logger=self._logger)
+        self._ingress_pre_ack_reservations: set[str] = set()
+        self._ingress_pre_ack_reservations_lock = asyncio.Lock()
         self._command_runner = _CommandRunner(
             self,
             config=_RunnerConfig(
                 timeout_seconds=config.dispatch.handler_timeout_seconds,
                 stalled_warning_seconds=config.dispatch.handler_stalled_warning_seconds,
+                max_concurrent_interaction_handlers=(
+                    config.dispatch.max_concurrent_interactions
+                ),
             ),
             logger=self._logger,
             on_scheduler_conversation_idle=self._wake_dispatcher_conversation,
@@ -765,19 +770,24 @@ class DiscordBotService:
             await self._shutdown()
 
     def _service_uptime_ms(self, *, now: Optional[float] = None) -> Optional[float]:
-        if self._service_started_at_monotonic is None:
+        started_at_raw = getattr(self, "_service_started_at_monotonic", None)
+        started_at = (
+            float(started_at_raw) if isinstance(started_at_raw, (int, float)) else None
+        )
+        if started_at is None:
             return None
         current = time.monotonic() if now is None else now
-        return round(max(0.0, (current - self._service_started_at_monotonic) * 1000), 1)
+        return round(max(0.0, (current - started_at) * 1000), 1)
 
     def _is_within_cold_start_window(self, *, now: Optional[float] = None) -> bool:
-        if self._service_started_at_monotonic is None:
+        started_at_raw = getattr(self, "_service_started_at_monotonic", None)
+        started_at = (
+            float(started_at_raw) if isinstance(started_at_raw, (int, float)) else None
+        )
+        if started_at is None:
             return False
         current = time.monotonic() if now is None else now
-        return (
-            current - self._service_started_at_monotonic
-            <= DISCORD_INTERACTION_COLD_START_WINDOW_SECONDS
-        )
+        return current - started_at <= DISCORD_INTERACTION_COLD_START_WINDOW_SECONDS
 
     def _interaction_telemetry_fields(
         self,
@@ -816,6 +826,27 @@ class DiscordBotService:
                 1,
             )
         return fields
+
+    def _initial_ack_budget_seconds(self) -> float:
+        dispatch_cfg = getattr(self._config, "dispatch", None)
+        budget_ms = getattr(dispatch_cfg, "ack_budget_ms", None)
+        if isinstance(budget_ms, int) and budget_ms > 0:
+            return float(
+                min(
+                    float(budget_ms) / 1000.0,
+                    DISCORD_INTERACTION_CALLBACK_TIMEOUT_SECONDS,
+                )
+            )
+        for attr_name in ("ack_budget_seconds", "ack_timeout_seconds"):
+            budget_seconds = getattr(dispatch_cfg, attr_name, None)
+            if isinstance(budget_seconds, (int, float)) and budget_seconds > 0:
+                return float(
+                    min(
+                        float(budget_seconds),
+                        DISCORD_INTERACTION_CALLBACK_TIMEOUT_SECONDS,
+                    )
+                )
+        return float(DISCORD_INTERACTION_CALLBACK_TIMEOUT_SECONDS)
 
     async def _run_dispatcher_loop(self) -> None:
         while True:
@@ -1167,11 +1198,14 @@ class DiscordBotService:
             ctx.interaction_token,
             kind=ctx.kind,
         )
+        budget_seconds = self._initial_ack_budget_seconds()
         durable_ack_mode = await self._load_interaction_ack_mode(ctx.interaction_id)
         if isinstance(durable_ack_mode, str) and durable_ack_mode.strip():
             session.restore_initial_response(durable_ack_mode)
         if session.has_initial_response():
             ctx.deferred = session.is_deferred()
+            finished_at = time.monotonic()
+            ctx.timing = replace(ctx.timing, ack_finished_at=finished_at)
             log_event(
                 self._logger,
                 logging.INFO,
@@ -1179,13 +1213,36 @@ class DiscordBotService:
                 stage=stage,
                 runtime_ack_policy=ack_policy,
                 durable_ack_mode=durable_ack_mode,
+                ack_latency_ms=round((finished_at - ack_started_at) * 1000, 1),
+                ack_budget_seconds=budget_seconds,
                 **self._interaction_telemetry_fields(
                     ctx,
-                    now=ack_started_at,
+                    now=finished_at,
                     envelope=envelope,
                 ),
             )
             return True
+        ingress_started_at = ctx.timing.ingress_started_at or ack_started_at
+        ack_deadline_at = ingress_started_at + budget_seconds
+        current_at = time.monotonic()
+        if current_at >= ack_deadline_at and ack_policy not in (None, "immediate"):
+            ctx.timing = replace(ctx.timing, ack_finished_at=current_at)
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.interaction.ack.expired_before_ack",
+                stage=stage,
+                runtime_ack_policy=ack_policy,
+                ack_budget_seconds=budget_seconds,
+                budget_overrun_ms=round((current_at - ack_deadline_at) * 1000, 1),
+                cause="deadline_exceeded_before_attempt",
+                **self._interaction_telemetry_fields(
+                    ctx,
+                    now=current_at,
+                    envelope=envelope,
+                ),
+            )
+            return False
         log_event(
             self._logger,
             logging.INFO,
@@ -1198,34 +1255,91 @@ class DiscordBotService:
                 envelope=envelope,
             ),
         )
-        await self._store.mark_interaction_scheduler_state(
-            ctx.interaction_id,
-            scheduler_state=(
-                "dispatch_ack_pending"
-                if stage == "dispatch"
-                else "queue_wait_ack_pending"
-            ),
-        )
-        if ack_policy == "defer_public":
-            acknowledged = await self._defer_public(
-                interaction_id=ctx.interaction_id,
-                interaction_token=ctx.interaction_token,
+        remaining_seconds = max(0.0, ack_deadline_at - time.monotonic())
+        try:
+            if ack_policy == "defer_public":
+                acknowledged = await asyncio.wait_for(
+                    self._defer_public(
+                        interaction_id=ctx.interaction_id,
+                        interaction_token=ctx.interaction_token,
+                    ),
+                    timeout=remaining_seconds,
+                )
+            elif ack_policy == "defer_component_update":
+                acknowledged = await asyncio.wait_for(
+                    self._defer_component_update(
+                        interaction_id=ctx.interaction_id,
+                        interaction_token=ctx.interaction_token,
+                    ),
+                    timeout=remaining_seconds,
+                )
+            else:
+                acknowledged = await asyncio.wait_for(
+                    self._defer_ephemeral(
+                        interaction_id=ctx.interaction_id,
+                        interaction_token=ctx.interaction_token,
+                    ),
+                    timeout=remaining_seconds,
+                )
+        except asyncio.TimeoutError:
+            acknowledged = False
+            current_at = time.monotonic()
+            ctx.timing = replace(ctx.timing, ack_finished_at=current_at)
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.interaction.ack.failed",
+                stage=stage,
+                runtime_ack_policy=ack_policy,
+                ack_latency_ms=round((current_at - ack_started_at) * 1000, 1),
+                ack_budget_seconds=budget_seconds,
+                budget_overrun_ms=round(
+                    max(0.0, current_at - ack_deadline_at) * 1000, 1
+                ),
+                expired_before_ack=True,
+                cause="deadline_exceeded_during_ack",
+                delivery_status=session.last_delivery_status,
+                delivery_error=session.last_delivery_error,
+                **self._interaction_telemetry_fields(
+                    ctx,
+                    now=current_at,
+                    envelope=envelope,
+                ),
             )
-        elif ack_policy == "defer_component_update":
-            acknowledged = await self._defer_component_update(
-                interaction_id=ctx.interaction_id,
-                interaction_token=ctx.interaction_token,
+            return False
+        except Exception as exc:
+            acknowledged = False
+            current_at = time.monotonic()
+            ctx.timing = replace(ctx.timing, ack_finished_at=current_at)
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.interaction.ack.failed",
+                stage=stage,
+                runtime_ack_policy=ack_policy,
+                ack_latency_ms=round((current_at - ack_started_at) * 1000, 1),
+                ack_budget_seconds=budget_seconds,
+                budget_overrun_ms=round(
+                    max(0.0, current_at - ack_deadline_at) * 1000, 1
+                ),
+                expired_before_ack=True,
+                cause="ack_error",
+                exc=exc,
+                delivery_status=session.last_delivery_status,
+                delivery_error=session.last_delivery_error,
+                **self._interaction_telemetry_fields(
+                    ctx,
+                    now=current_at,
+                    envelope=envelope,
+                ),
             )
-        else:
-            acknowledged = await self._defer_ephemeral(
-                interaction_id=ctx.interaction_id,
-                interaction_token=ctx.interaction_token,
-            )
+            return False
         if acknowledged:
+            finished_at = time.monotonic()
             ctx.deferred = True
             ctx.timing = replace(
                 ctx.timing,
-                ack_finished_at=time.monotonic(),
+                ack_finished_at=finished_at,
             )
             log_event(
                 self._logger,
@@ -1233,25 +1347,32 @@ class DiscordBotService:
                 "discord.interaction.ack.succeeded",
                 stage=stage,
                 runtime_ack_policy=ack_policy,
-                elapsed_ms=round((time.monotonic() - ack_started_at) * 1000, 1),
+                ack_latency_ms=round((finished_at - ack_started_at) * 1000, 1),
+                ack_budget_seconds=budget_seconds,
                 delivery_status=session.last_delivery_status,
                 **self._interaction_telemetry_fields(
                     ctx,
+                    now=finished_at,
                     envelope=envelope,
                 ),
             )
         else:
+            finished_at = time.monotonic()
+            ctx.timing = replace(ctx.timing, ack_finished_at=finished_at)
             log_event(
                 self._logger,
                 logging.WARNING,
                 "discord.interaction.ack.failed",
                 stage=stage,
                 runtime_ack_policy=ack_policy,
-                elapsed_ms=round((time.monotonic() - ack_started_at) * 1000, 1),
+                ack_latency_ms=round((finished_at - ack_started_at) * 1000, 1),
+                ack_budget_seconds=budget_seconds,
+                expired_before_ack=True,
                 delivery_status=session.last_delivery_status,
                 delivery_error=session.last_delivery_error,
                 **self._interaction_telemetry_fields(
                     ctx,
+                    now=finished_at,
                     envelope=envelope,
                 ),
             )
@@ -3859,92 +3980,95 @@ class DiscordBotService:
                         )
                 return
             if ingress_result.context is not None:
-                envelope = await self._build_runtime_interaction_envelope(
-                    ingress_result.context
-                )
-                log_event(
-                    self._logger,
-                    logging.INFO,
-                    "discord.interaction.admitted",
-                    **self._interaction_telemetry_fields(
-                        ingress_result.context,
-                        now=dispatch_started_at,
-                        envelope=envelope,
-                    ),
-                )
-                await self._persist_runtime_interaction(
-                    envelope,
-                    payload,
-                    scheduler_state="dispatch_ready",
-                )
-                acked = await self._acknowledge_runtime_envelope(
-                    envelope,
-                    stage="dispatch",
-                )
-                if not acked and envelope.dispatch_ack_policy not in (
-                    None,
-                    "immediate",
-                ):
-                    await self._store.mark_interaction_scheduler_state(
-                        ingress_result.context.interaction_id,
-                        scheduler_state="delivery_expired",
-                    )
+                ctx = ingress_result.context
+                try:
+                    envelope = await self._build_runtime_interaction_envelope(ctx)
                     log_event(
                         self._logger,
-                        logging.WARNING,
-                        "discord.interaction.delivery_expired_before_dispatch",
+                        logging.INFO,
+                        "discord.interaction.admitted",
                         **self._interaction_telemetry_fields(
-                            ingress_result.context,
+                            ctx,
+                            now=dispatch_started_at,
                             envelope=envelope,
                         ),
                     )
-                    await self._respond_ephemeral(
-                        ingress_result.context.interaction_id,
-                        ingress_result.context.interaction_token,
-                        "Discord interaction did not acknowledge. Please retry.",
+                    acked = await self._acknowledge_runtime_envelope(
+                        envelope,
+                        stage="dispatch",
                     )
-                    ingress_result.context.timing = replace(
-                        ingress_result.context.timing,
-                        ack_finished_at=time.monotonic(),
-                        ingress_finished_at=time.monotonic(),
+                    if not acked and envelope.dispatch_ack_policy not in (
+                        None,
+                        "immediate",
+                    ):
+                        log_event(
+                            self._logger,
+                            logging.WARNING,
+                            "discord.interaction.delivery_expired_before_dispatch",
+                            expired_before_ack=True,
+                            ack_budget_seconds=self._initial_ack_budget_seconds(),
+                            **self._interaction_telemetry_fields(
+                                ctx,
+                                envelope=envelope,
+                            ),
+                        )
+                        await self._respond_ephemeral(
+                            ctx.interaction_id,
+                            ctx.interaction_token,
+                            "Discord interaction did not acknowledge. Please retry.",
+                        )
+                        ctx.timing = replace(
+                            ctx.timing,
+                            ack_finished_at=time.monotonic(),
+                            ingress_finished_at=time.monotonic(),
+                        )
+                        return
+
+                    duplicate_after_ack = await self._register_interaction_ingress(ctx)
+                    if duplicate_after_ack:
+                        return
+                    await self._persist_runtime_interaction(
+                        envelope,
+                        payload,
+                        scheduler_state="acknowledged",
                     )
-                    return
-                self._ingress.finalize_success(ingress_result.context)
-                log_event(
-                    self._logger,
-                    logging.INFO,
-                    "discord.interaction.enqueued",
-                    ingress_elapsed_ms=(
-                        round(
-                            (
-                                ingress_result.context.timing.ingress_finished_at
-                                - ingress_result.context.timing.ingress_started_at
+                    self._ingress.finalize_success(ctx)
+                    log_event(
+                        self._logger,
+                        logging.INFO,
+                        "discord.interaction.enqueued",
+                        ingress_elapsed_ms=(
+                            round(
+                                (
+                                    ctx.timing.ingress_finished_at
+                                    - ctx.timing.ingress_started_at
+                                )
+                                * 1000,
+                                1,
                             )
-                            * 1000,
-                            1,
-                        )
-                        if (
-                            ingress_result.context.timing.ingress_started_at is not None
-                            and ingress_result.context.timing.ingress_finished_at
-                            is not None
-                        )
-                        else None
-                    ),
-                    **self._interaction_telemetry_fields(
-                        ingress_result.context,
-                        envelope=envelope,
-                    ),
-                )
-                self._command_runner.submit(
-                    envelope.context,
-                    payload,
-                    resource_keys=envelope.resource_keys,
-                    conversation_id=envelope.conversation_id,
-                    queue_wait_ack_policy=envelope.queue_wait_ack_policy,
-                )
-                # Let the admitted interaction task start before the next gateway
-                # interaction is processed so deferred command ordering stays stable.
-                await asyncio.sleep(0)
+                            if (
+                                ctx.timing.ingress_started_at is not None
+                                and ctx.timing.ingress_finished_at is not None
+                            )
+                            else None
+                        ),
+                        **self._interaction_telemetry_fields(
+                            ctx,
+                            envelope=envelope,
+                        ),
+                    )
+                    self._command_runner.submit(
+                        envelope.context,
+                        payload,
+                        resource_keys=envelope.resource_keys,
+                        conversation_id=envelope.conversation_id,
+                        queue_wait_ack_policy=envelope.queue_wait_ack_policy,
+                    )
+                    # Let the admitted interaction task start before the next gateway
+                    # interaction is processed so deferred command ordering stays stable.
+                    await asyncio.sleep(0)
+                finally:
+                    await self._release_interaction_ingress(ctx.interaction_id)
             return
         if event_type == "MESSAGE_CREATE":
             # Keep MESSAGE_CREATE handling off the gateway hot path. Channel/guild
@@ -5329,6 +5453,58 @@ class DiscordBotService:
             result=result,
         )
         return returned
+
+    async def _check_interaction_ingress_duplicate(self, ctx: IngressContext) -> bool:
+        reservations = getattr(self, "_ingress_pre_ack_reservations", None)
+        if not isinstance(reservations, set):
+            reservations = set()
+            self._ingress_pre_ack_reservations = reservations
+        reservation_lock = getattr(self, "_ingress_pre_ack_reservations_lock", None)
+        if reservation_lock is None:
+            reservation_lock = asyncio.Lock()
+            self._ingress_pre_ack_reservations_lock = reservation_lock
+        async with reservation_lock:
+            if ctx.interaction_id in reservations:
+                return True
+            reservations.add(ctx.interaction_id)
+        record = await self._store.get_interaction(ctx.interaction_id)
+        if record is None:
+            return False
+
+        has_pending_delivery = bool(
+            isinstance(record.delivery_cursor_json, dict)
+            and str(record.delivery_cursor_json.get("state") or "").strip()
+            in {"pending", "failed"}
+        )
+        if record.scheduler_state in {"completed", "delivery_expired", "abandoned"}:
+            await self._release_interaction_ingress(ctx.interaction_id)
+            return True
+        if (
+            record.execution_status in {"completed", "failed", "timeout", "cancelled"}
+            and not has_pending_delivery
+        ):
+            await self._release_interaction_ingress(ctx.interaction_id)
+            return True
+        log_event(
+            self._logger,
+            logging.INFO,
+            "discord.interaction.duplicate_resuming",
+            interaction_id=ctx.interaction_id,
+            scheduler_state=record.scheduler_state,
+            execution_status=record.execution_status,
+        )
+        return False
+
+    async def _release_interaction_ingress(self, interaction_id: str) -> None:
+        reservations = getattr(self, "_ingress_pre_ack_reservations", None)
+        if not isinstance(reservations, set):
+            return
+        reservation_lock = getattr(self, "_ingress_pre_ack_reservations_lock", None)
+        if reservation_lock is None:
+            reservation_lock = asyncio.Lock()
+            self._ingress_pre_ack_reservations_lock = reservation_lock
+        async with reservation_lock:
+            reservations.discard(interaction_id)
 
     async def _register_interaction_ingress(self, ctx: IngressContext) -> bool:
         registration = await self._store.register_interaction(

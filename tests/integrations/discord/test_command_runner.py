@@ -534,7 +534,10 @@ async def test_multiple_submits_concurrent() -> None:
 
     runner = CommandRunner(
         service,
-        config=RunnerConfig(timeout_seconds=5.0),
+        config=RunnerConfig(
+            timeout_seconds=5.0,
+            max_concurrent_interaction_handlers=5,
+        ),
         logger=service._logger,
     )
 
@@ -553,6 +556,58 @@ async def test_multiple_submits_concurrent() -> None:
         evt.set()
     await asyncio.sleep(0.05)
     assert runner.active_task_count == 0
+
+
+@pytest.mark.anyio
+async def test_interaction_handler_concurrency_is_bounded() -> None:
+    service = _FakeService()
+    started_interactions: list[str] = []
+    first_two_started = asyncio.Event()
+    release_handlers = asyncio.Event()
+
+    async def blocking_handler(*args: Any, **kwargs: Any) -> None:
+        interaction_id = str(args[0]) if args else ""
+        started_interactions.append(interaction_id)
+        if len(started_interactions) == 2:
+            first_two_started.set()
+        await release_handlers.wait()
+
+    service._handle_car_command.side_effect = blocking_handler
+
+    runner = CommandRunner(
+        service,
+        config=RunnerConfig(
+            timeout_seconds=None,
+            stalled_warning_seconds=None,
+            max_concurrent_interaction_handlers=2,
+        ),
+        logger=service._logger,
+    )
+
+    for i in range(4):
+        ctx = _make_ctx(
+            interaction_id=f"inter-{i}",
+            interaction_token=f"token-{i}",
+        )
+        payload = {
+            **_slash_payload(),
+            "id": ctx.interaction_id,
+            "token": ctx.interaction_token,
+        }
+        runner.submit(ctx, payload)
+
+    for _ in range(100):
+        if first_two_started.is_set():
+            break
+        await asyncio.sleep(0.01)
+
+    assert first_two_started.is_set()
+    assert len(started_interactions) == 2
+    assert service._handle_car_command.await_count == 2
+
+    release_handlers.set()
+    await runner.shutdown(grace_seconds=5.0)
+    assert service._handle_car_command.await_count == 4
 
 
 @pytest.mark.anyio

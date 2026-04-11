@@ -10,6 +10,7 @@ import random
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional
 
+from ...core.logging_utils import log_event
 from .constants import DISCORD_GATEWAY_URL
 from .errors import DiscordAPIError, DiscordPermanentError
 from .rest import DiscordRestClient
@@ -155,8 +156,22 @@ class DiscordGatewayClient:
             self._ready_in_connection = False
             try:
                 gateway_url = await self._resolve_gateway_url()
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "discord.gateway.transport.connect.start",
+                    reconnect_attempt=reconnect_attempt,
+                    gateway_url=gateway_url,
+                )
                 async with websockets.connect(gateway_url) as websocket:
                     self._websocket = websocket
+                    log_event(
+                        self._logger,
+                        logging.INFO,
+                        "discord.gateway.transport.connect.success",
+                        reconnect_attempt=reconnect_attempt,
+                        gateway_url=gateway_url,
+                    )
                     established_session = await self._run_connection(
                         websocket, on_dispatch
                     )
@@ -165,6 +180,15 @@ class DiscordGatewayClient:
             except DiscordPermanentError as exc:
                 fatal_failure = True
                 fatal_reason = str(exc)
+                log_event(
+                    self._logger,
+                    logging.ERROR,
+                    "discord.gateway.reconnect.failure",
+                    reconnect_attempt=reconnect_attempt,
+                    fatal=True,
+                    cause="permanent_error",
+                    error=str(exc),
+                )
                 self._logger.error(
                     "Discord gateway encountered permanent failure; halting reconnect loop: %s",
                     exc,
@@ -174,6 +198,16 @@ class DiscordGatewayClient:
                 if close_code in FATAL_GATEWAY_CLOSE_CODES:
                     fatal_failure = True
                     fatal_reason = f"gateway_close_code={close_code}"
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "discord.gateway.reconnect.failure",
+                    reconnect_attempt=reconnect_attempt,
+                    fatal=bool(fatal_failure),
+                    cause="connection_closed",
+                    close_code=close_code,
+                )
+                if close_code in FATAL_GATEWAY_CLOSE_CODES:
                     self._logger.error(
                         "Discord gateway closed with fatal code=%s; halting reconnect loop",
                         close_code,
@@ -183,11 +217,29 @@ class DiscordGatewayClient:
             except (
                 Exception
             ) as exc:  # intentional: reconnect loop catches all transient failures
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "discord.gateway.reconnect.failure",
+                    reconnect_attempt=reconnect_attempt,
+                    fatal=False,
+                    cause="unexpected_error",
+                    error=str(exc),
+                )
                 self._logger.warning("Discord gateway error; reconnecting: %s", exc)
             finally:
                 self._websocket = None
                 await self._cancel_heartbeat()
                 await self._cancel_dispatch_worker()
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "discord.gateway.transport.disconnect",
+                    reconnect_attempt=reconnect_attempt,
+                    established_session=established_session,
+                    ready_seen=self._ready_in_connection,
+                    fatal_failure=fatal_failure,
+                )
 
             if self._stop_event.is_set():
                 break
@@ -200,8 +252,24 @@ class DiscordGatewayClient:
                 await self._stop_event.wait()
                 break
             if established_session or self._ready_in_connection:
+                if reconnect_attempt > 0:
+                    log_event(
+                        self._logger,
+                        logging.INFO,
+                        "discord.gateway.reconnect.success",
+                        reconnect_attempt=reconnect_attempt,
+                        ready_seen=self._ready_in_connection,
+                        established_session=established_session,
+                    )
                 reconnect_attempt = 0
             backoff = calculate_reconnect_backoff(reconnect_attempt)
+            log_event(
+                self._logger,
+                logging.INFO,
+                "discord.gateway.reconnect.scheduled",
+                reconnect_attempt=reconnect_attempt,
+                backoff_seconds=backoff,
+            )
             reconnect_attempt += 1
             await asyncio.sleep(backoff)
 

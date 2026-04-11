@@ -208,6 +208,8 @@ def test_discord_bot_config_dispatch_defaults(tmp_path) -> None:
     cfg = DiscordBotConfig.from_raw(root=tmp_path, raw={"enabled": False})
     assert cfg.dispatch.handler_timeout_seconds is None
     assert cfg.dispatch.handler_stalled_warning_seconds == 60.0
+    assert cfg.dispatch.ack_budget_ms == 2500
+    assert cfg.dispatch.max_concurrent_interactions == 4
 
 
 def test_discord_bot_config_dispatch_overrides(tmp_path) -> None:
@@ -218,11 +220,15 @@ def test_discord_bot_config_dispatch_overrides(tmp_path) -> None:
             "dispatch": {
                 "handler_timeout_seconds": 45,
                 "handler_stalled_warning_seconds": 15,
+                "ack_budget_ms": 1800,
+                "max_concurrent_interactions": 3,
             },
         },
     )
     assert cfg.dispatch.handler_timeout_seconds == 45.0
     assert cfg.dispatch.handler_stalled_warning_seconds == 15.0
+    assert cfg.dispatch.ack_budget_ms == 1800
+    assert cfg.dispatch.max_concurrent_interactions == 3
 
 
 def test_discord_bot_config_dispatch_explicit_null_disables_timeout_and_warning(
@@ -235,11 +241,43 @@ def test_discord_bot_config_dispatch_explicit_null_disables_timeout_and_warning(
             "dispatch": {
                 "handler_timeout_seconds": None,
                 "handler_stalled_warning_seconds": None,
+                "ack_budget_ms": None,
+                "max_concurrent_interactions": None,
             },
         },
     )
     assert cfg.dispatch.handler_timeout_seconds is None
     assert cfg.dispatch.handler_stalled_warning_seconds is None
+    assert cfg.dispatch.ack_budget_ms == 2500
+    assert cfg.dispatch.max_concurrent_interactions == 4
+
+
+@pytest.mark.parametrize(
+    ("dispatch_overrides", "expected_message"),
+    [
+        ({"ack_budget_ms": 0}, "discord_bot.dispatch.ack_budget_ms"),
+        ({"ack_budget_ms": "2500"}, "discord_bot.dispatch.ack_budget_ms"),
+        (
+            {"max_concurrent_interactions": 0},
+            "discord_bot.dispatch.max_concurrent_interactions",
+        ),
+        (
+            {"max_concurrent_interactions": False},
+            "discord_bot.dispatch.max_concurrent_interactions",
+        ),
+    ],
+)
+def test_discord_bot_config_dispatch_invalid_new_knobs_raise(
+    tmp_path, dispatch_overrides: dict[str, object], expected_message: str
+) -> None:
+    with pytest.raises(DiscordBotConfigError, match=expected_message):
+        DiscordBotConfig.from_raw(
+            root=tmp_path,
+            raw={
+                "enabled": False,
+                "dispatch": dispatch_overrides,
+            },
+        )
 
 
 def test_discord_bot_config_builds_shared_collaboration_policy(
