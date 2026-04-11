@@ -370,33 +370,52 @@ def check_thresholds(
                 )
             )
 
+    run_notice_count = int(metrics.hot_row_count_by_family.get("run_notice", 0))
+    terminal_baseline = max(int(metrics.terminal_executions or 0), 1)
+    average_run_notice_rows = run_notice_count / terminal_baseline
     for family, count in metrics.hot_row_count_by_family.items():
-        if family == "run_notice" and count >= t.notice_amplification_error:
+        if (
+            family == "run_notice"
+            and average_run_notice_rows >= t.notice_amplification_error
+        ):
             breaches.append(
                 ExecutionHistoryThresholdBreach(
                     level="error",
                     metric="notice_amplification",
-                    value=count,
+                    value=round(average_run_notice_rows, 3),
                     threshold=t.notice_amplification_error,
                     message=(
-                        f"run_notice hot rows ({count}) exceeds error threshold "
+                        "Average run_notice hot rows per terminal execution "
+                        f"({average_run_notice_rows:.2f}) exceeds error threshold "
                         f"({t.notice_amplification_error}); possible notice amplification"
                     ),
-                    context={"event_family": family},
+                    context={
+                        "event_family": family,
+                        "run_notice_hot_rows": count,
+                        "terminal_executions": metrics.terminal_executions,
+                    },
                 )
             )
-        elif family == "run_notice" and count >= t.notice_amplification_warning:
+        elif (
+            family == "run_notice"
+            and average_run_notice_rows >= t.notice_amplification_warning
+        ):
             breaches.append(
                 ExecutionHistoryThresholdBreach(
                     level="warning",
                     metric="notice_amplification",
-                    value=count,
+                    value=round(average_run_notice_rows, 3),
                     threshold=t.notice_amplification_warning,
                     message=(
-                        f"run_notice hot rows ({count}) exceeds warning threshold "
+                        "Average run_notice hot rows per terminal execution "
+                        f"({average_run_notice_rows:.2f}) exceeds warning threshold "
                         f"({t.notice_amplification_warning}); possible notice amplification"
                     ),
-                    context={"event_family": family},
+                    context={
+                        "event_family": family,
+                        "run_notice_hot_rows": count,
+                        "terminal_executions": metrics.terminal_executions,
+                    },
                 )
             )
 
@@ -625,19 +644,19 @@ def log_compaction(
     rows_after: int,
     rows_deleted: int,
     cold_trace_preserved: bool,
+    dry_run: bool | None = None,
 ) -> None:
-    logger.info(
-        _json_dumps(
-            {
-                "event": "execution_history_compaction",
-                "execution_id": execution_id,
-                "rows_before": rows_before,
-                "rows_after": rows_after,
-                "rows_deleted": rows_deleted,
-                "cold_trace_preserved": cold_trace_preserved,
-            }
-        )
-    )
+    payload = {
+        "event": "execution_history_compaction",
+        "execution_id": execution_id,
+        "rows_before": rows_before,
+        "rows_after": rows_after,
+        "rows_deleted": rows_deleted,
+        "cold_trace_preserved": cold_trace_preserved,
+    }
+    if dry_run is not None:
+        payload["dry_run"] = dry_run
+    logger.info(_json_dumps(payload))
 
 
 def log_retention_prune(
@@ -646,18 +665,18 @@ def log_retention_prune(
     pruned_trace_ids: int,
     hot_rows_deleted: int,
     bytes_reclaimed: int,
+    dry_run: bool | None = None,
 ) -> None:
-    logger.info(
-        _json_dumps(
-            {
-                "event": "execution_history_retention_prune",
-                "pruned_executions": pruned_execution_ids,
-                "pruned_traces": pruned_trace_ids,
-                "hot_rows_deleted": hot_rows_deleted,
-                "bytes_reclaimed": bytes_reclaimed,
-            }
-        )
-    )
+    payload = {
+        "event": "execution_history_retention_prune",
+        "pruned_executions": pruned_execution_ids,
+        "pruned_traces": pruned_trace_ids,
+        "hot_rows_deleted": hot_rows_deleted,
+        "bytes_reclaimed": bytes_reclaimed,
+    }
+    if dry_run is not None:
+        payload["dry_run"] = dry_run
+    logger.info(_json_dumps(payload))
 
 
 def log_vacuum(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -200,6 +201,30 @@ class TestTraceEventsEndpoint:
         assert len(body2["events"]) == 2
         assert body2["has_more"] is False
 
+    def test_get_trace_events_uses_store_pagination_for_unfiltered_pages(
+        self, hub_env, monkeypatch
+    ) -> None:
+        execution_id = "exec-page-store-001"
+        _seed_trace_and_checkpoint(hub_env.hub_root, execution_id)
+        captured: dict[str, int | None] = {}
+        original = ColdTraceStore.read_events
+
+        def _capture(
+            self, execution_id_arg: str, *, offset: int = 0, limit: int | None = None
+        ):
+            captured["offset"] = offset
+            captured["limit"] = limit
+            return original(self, execution_id_arg, offset=offset, limit=limit)
+
+        monkeypatch.setattr(ColdTraceStore, "read_events", _capture)
+
+        with _make_hub_app(hub_env.hub_root) as client:
+            resp = client.get(f"/hub/pma/traces/events/{execution_id}?offset=1&limit=2")
+
+        assert resp.status_code == 200
+        assert captured == {"offset": 1, "limit": 2}
+        shutil.rmtree(hub_env.hub_root, ignore_errors=True)
+
     def test_get_trace_events_family_filter(self, hub_env) -> None:
         execution_id = "exec-filter-001"
         _seed_trace_and_checkpoint(hub_env.hub_root, execution_id)
@@ -256,6 +281,9 @@ class TestTraceCheckpointEndpoint:
         assert checkpoint["assistant_text_preview"] == "done"
         trace_manifest = body["trace_manifest"]
         assert trace_manifest["event_count"] == 4
+        assert trace_manifest["byte_count"] > 0
+        assert trace_manifest["checksum"].startswith("sha256:")
+        assert "tool_call" in trace_manifest["includes_families"]
 
     def test_get_trace_checkpoint_not_found(self, hub_env) -> None:
         _init_orchestration_db(hub_env.hub_root)

@@ -27,6 +27,7 @@ from ....core.orchestration import (
     vacuum_execution_history,
     verify_migration,
 )
+from ....core.orchestration.canary import run_execution_history_canary
 from ....core.orchestration.execution_history_maintenance import (
     prune_execution_history_retention,
 )
@@ -1148,6 +1149,73 @@ def register_hub_commands(
             "vacuum: "
             f"before={summary.size_before} after={summary.size_after} "
             + f"reclaimed={summary.reclaimed_bytes}"
+        )
+
+    @orchestration_app.command("canary")
+    def orchestration_canary(
+        path: Path = typer.Option(..., "--path", help="Disposable canary hub root"),
+        execution_count: int = typer.Option(
+            12,
+            "--executions",
+            min=1,
+            help="Number of completed historical executions to seed.",
+        ),
+        output_chunks: int = typer.Option(
+            60,
+            "--output-chunks",
+            min=1,
+            help="Assistant output deltas per completed execution.",
+        ),
+        notice_count: int = typer.Option(
+            24,
+            "--notice-count",
+            min=1,
+            help="Reasoning/progress notices per completed execution.",
+        ),
+        tool_call_count: int = typer.Option(
+            4,
+            "--tool-calls",
+            min=1,
+            help="Tool call/result pairs per completed execution.",
+        ),
+        output_json: bool = typer.Option(
+            False, "--json", help="Emit JSON payload for scripting"
+        ),
+    ) -> None:
+        """Seed a disposable hub, run migration/compaction, and verify recovery."""
+        summary = run_execution_history_canary(
+            path,
+            create_hub_app=create_hub_app,
+            execution_count=execution_count,
+            output_chunks=output_chunks,
+            notice_count=notice_count,
+            tool_call_count=tool_call_count,
+        )
+        if output_json:
+            typer.echo(json.dumps(summary, indent=2))
+            return
+        typer.echo(
+            "canary: "
+            f"hub_root={summary['hub_root']} "
+            f"seeded={len(summary['seed']['execution_ids'])} "
+            f"migrated={summary['migration']['candidate_executions']} "
+            f"compacted={summary['compaction']['compacted_executions']}"
+        )
+        typer.echo(
+            "  startup="
+            + f"{summary['startup']['duration_seconds']:.3f}s "
+            + "recovery="
+            + f"{summary['recovery']['duration_seconds']:.3f}s"
+        )
+        typer.echo(
+            "  hot_rows_before="
+            + str(summary["before"]["audit"]["timeline_rows"])
+            + " hot_rows_after="
+            + str(summary["after"]["audit"]["timeline_rows"])
+            + " sqlite_before="
+            + str(summary["before"]["sqlite_bytes"])
+            + " sqlite_after="
+            + str(summary["after"]["sqlite_bytes"])
         )
 
     @hub_app.command("create")

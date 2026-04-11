@@ -232,3 +232,29 @@ def test_persist_turn_timeline_appends_from_start_index(tmp_path: Path) -> None:
         "tool_result",
         "turn_completed",
     ]
+
+
+def test_persist_turn_timeline_raises_when_cold_trace_append_fails(
+    tmp_path: Path,
+) -> None:
+    class _FailingColdTraceWriter:
+        trace_id = "trace-fail"
+
+        def append(self, **_kwargs) -> None:
+            raise OSError("disk full")
+
+    with pytest.raises(RuntimeError, match="cold trace"):
+        persist_turn_timeline(
+            tmp_path,
+            execution_id="turn-cold-fail",
+            target_kind="thread_target",
+            target_id="thread-1",
+            events=[
+                RunNotice(
+                    timestamp="2026-03-19T00:00:00Z",
+                    kind="thinking",
+                    message="planning",
+                )
+            ],
+            cold_trace_writer=_FailingColdTraceWriter(),
+        )

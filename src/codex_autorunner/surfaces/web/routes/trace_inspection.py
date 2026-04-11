@@ -41,6 +41,25 @@ def _annotate_truncation_flags(event: dict[str, Any]) -> dict[str, Any]:
     return annotated
 
 
+def _scan_filtered_trace_page(
+    store: ColdTraceStore,
+    execution_id: str,
+    *,
+    family: str,
+    offset: int,
+    limit: int,
+) -> tuple[list[dict[str, Any]], int]:
+    page: list[dict[str, Any]] = []
+    total_count = 0
+    for event in store.iter_events(execution_id):
+        if not isinstance(event, dict) or event.get("event_family") != family:
+            continue
+        if total_count >= offset and len(page) < limit:
+            page.append(event)
+        total_count += 1
+    return page, total_count
+
+
 def build_trace_inspection_routes(router: APIRouter) -> None:
 
     @router.get("/traces/manifests/{execution_id}")
@@ -104,15 +123,17 @@ def build_trace_inspection_routes(router: APIRouter) -> None:
                 "storage_layer": "cold_trace",
                 "manifest_available": False,
             }
-        all_events = store.read_events(execution_id, offset=0, limit=None)
-        if family is not None:
-            all_events = [
-                e
-                for e in all_events
-                if isinstance(e, dict) and e.get("event_family") == family
-            ]
-        total_count = len(all_events)
-        page = all_events[offset : offset + limit]
+        if family is None:
+            page = store.read_events(execution_id, offset=offset, limit=limit)
+            total_count = int(manifest.event_count or 0)
+        else:
+            page, total_count = _scan_filtered_trace_page(
+                store,
+                execution_id,
+                family=family,
+                offset=offset,
+                limit=limit,
+            )
         annotated = [_annotate_truncation_flags(e) for e in page]
         return {
             "execution_id": execution_id,
@@ -147,11 +168,7 @@ def build_trace_inspection_routes(router: APIRouter) -> None:
             "storage_layer": "compact_checkpoint",
         }
         if manifest is not None:
-            result["trace_manifest"] = {
-                "trace_id": manifest.trace_id,
-                "status": manifest.status,
-                "event_count": manifest.event_count,
-            }
+            result["trace_manifest"] = manifest.to_dict()
             result["cold_trace_available"] = True
         else:
             result["cold_trace_available"] = False

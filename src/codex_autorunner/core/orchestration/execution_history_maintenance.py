@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import dataclasses
 import json
-import logging
 import shutil
 from collections import Counter
 from datetime import datetime, timedelta, timezone
@@ -21,8 +20,6 @@ from .execution_history import (
     ExecutionTraceManifest,
 )
 from .sqlite import open_orchestration_sqlite, resolve_orchestration_sqlite_path
-
-_maint_logger = logging.getLogger("codex_autorunner.execution_history_diagnostics")
 
 _TIMELINE_EVENT_FAMILY = "turn.timeline"
 _COMPACTION_SUMMARY_SUFFIX = ":compaction-summary"
@@ -201,6 +198,7 @@ def audit_execution_history(
         for checkpoint in checkpoints
         if isinstance(checkpoint.execution_id, str) and checkpoint.execution_id.strip()
     }
+    cold_cutoff = _iso_cutoff(resolved_policy.cold_trace_retention_days)
 
     missing_trace_artifact_ids: list[str] = []
     for manifest in manifests:
@@ -243,7 +241,13 @@ def audit_execution_history(
             continue
         terminal_execution_ids.append(execution_id)
         hot_rows = timeline_counts.get(execution_id, 0)
-        if hot_rows and execution_id not in manifest_by_execution:
+        finished_at = _execution_finished_at(row)
+        within_cold_retention = (
+            cold_cutoff is None
+            or not finished_at
+            or str(finished_at).strip() >= cold_cutoff
+        )
+        if within_cold_retention and execution_id not in manifest_by_execution:
             missing_manifest_execution_ids.append(execution_id)
         if execution_id not in checkpoint_ids:
             missing_checkpoint_execution_ids.append(execution_id)
@@ -295,50 +299,49 @@ def backfill_legacy_execution_history(
 
     with open_orchestration_sqlite(hub_root) as conn:
         execution_rows = _select_execution_rows(conn, execution_ids=target_ids)
-        for execution_row in execution_rows:
-            execution_id = str(execution_row["execution_id"] or "").strip()
-            if not execution_id or not _is_terminal_execution_row(execution_row):
-                continue
+    for execution_row in execution_rows:
+        execution_id = str(execution_row["execution_id"] or "").strip()
+        if not execution_id or not _is_terminal_execution_row(execution_row):
+            continue
+        with open_orchestration_sqlite(hub_root) as conn:
             timeline_rows = _load_timeline_rows(conn, execution_id)
-            if not timeline_rows and store.load_checkpoint(execution_id) is not None:
-                continue
-            existing_manifest = store.get_manifest(execution_id)
-            artifact_missing = (
-                existing_manifest is not None
-                and not _manifest_artifact_path(hub_root, existing_manifest).exists()
-            )
-            checkpoint = store.load_checkpoint(execution_id)
-            needs_manifest = bool(timeline_rows) and (
-                existing_manifest is None or artifact_missing
-            )
-            needs_checkpoint = checkpoint is None
-            if not needs_manifest and not needs_checkpoint:
-                continue
+        if not timeline_rows and store.load_checkpoint(execution_id) is not None:
+            continue
+        existing_manifest = store.get_manifest(execution_id)
+        artifact_missing = (
+            existing_manifest is not None
+            and not _manifest_artifact_path(hub_root, existing_manifest).exists()
+        )
+        checkpoint = store.load_checkpoint(execution_id)
+        needs_manifest = bool(timeline_rows) and (
+            existing_manifest is None or artifact_missing
+        )
+        needs_checkpoint = checkpoint is None
+        if not needs_manifest and not needs_checkpoint:
+            continue
 
-            processed_ids.append(execution_id)
-            manifest = existing_manifest
-            if needs_manifest and not dry_run:
-                manifest = _backfill_manifest_from_timeline_rows(
-                    hub_root,
-                    execution_row=execution_row,
-                    timeline_rows=timeline_rows,
-                )
-                manifests_created += 1
-            elif needs_manifest:
-                manifests_created += 1
+        processed_ids.append(execution_id)
+        manifest = existing_manifest
+        if needs_manifest and not dry_run:
+            manifest = _backfill_manifest_from_timeline_rows(
+                hub_root,
+                execution_row=execution_row,
+                timeline_rows=timeline_rows,
+            )
+            manifests_created += 1
+        elif needs_manifest:
+            manifests_created += 1
 
-            if needs_checkpoint and not dry_run:
-                checkpoint = _build_checkpoint_from_execution_row(
-                    execution_row,
-                    timeline_rows,
-                    trace_manifest_id=(
-                        manifest.trace_id if manifest is not None else None
-                    ),
-                )
-                store.save_checkpoint(checkpoint)
-                checkpoints_created += 1
-            elif needs_checkpoint:
-                checkpoints_created += 1
+        if needs_checkpoint and not dry_run:
+            checkpoint = _build_checkpoint_from_execution_row(
+                execution_row,
+                timeline_rows,
+                trace_manifest_id=(manifest.trace_id if manifest is not None else None),
+            )
+            store.save_checkpoint(checkpoint)
+            checkpoints_created += 1
+        elif needs_checkpoint:
+            checkpoints_created += 1
 
     return ExecutionHistoryMigrationSummary(
         dry_run=dry_run,
@@ -356,6 +359,8 @@ def compact_completed_execution_history(
     policy: ExecutionHistoryMaintenancePolicy | None = None,
     dry_run: bool = False,
 ) -> ExecutionHistoryCompactionSummary:
+    from .execution_history_diagnostics import log_compaction
+
     resolved_policy = policy or ExecutionHistoryMaintenancePolicy()
     store = ColdTraceStore(hub_root)
     target_ids = _normalized_execution_ids(execution_ids)
@@ -367,67 +372,72 @@ def compact_completed_execution_history(
 
     with open_orchestration_sqlite(hub_root) as conn:
         execution_rows = _select_execution_rows(conn, execution_ids=target_ids)
-        for execution_row in execution_rows:
-            execution_id = str(execution_row["execution_id"] or "").strip()
-            if not execution_id or not _is_terminal_execution_row(execution_row):
-                continue
+    for execution_row in execution_rows:
+        execution_id = str(execution_row["execution_id"] or "").strip()
+        if not execution_id or not _is_terminal_execution_row(execution_row):
+            continue
+        with open_orchestration_sqlite(hub_root) as conn:
             timeline_rows = _load_timeline_rows(conn, execution_id)
-            baseline_rows = [
-                row for row in timeline_rows if not _is_compaction_summary_row(row)
-            ]
-            if (
-                len(baseline_rows)
-                <= resolved_policy.max_hot_rows_per_completed_execution
-            ):
-                continue
+        baseline_rows = [
+            row for row in timeline_rows if not _is_compaction_summary_row(row)
+        ]
+        if len(baseline_rows) <= resolved_policy.max_hot_rows_per_completed_execution:
+            continue
 
-            compacted_ids.append(execution_id)
-            rows_before += len(baseline_rows)
+        compacted_ids.append(execution_id)
+        rows_before += len(baseline_rows)
 
-            manifest = store.get_manifest(execution_id)
-            artifact_missing = (
-                manifest is not None
-                and not _manifest_artifact_path(hub_root, manifest).exists()
-            )
-            if (manifest is None or artifact_missing) and baseline_rows and not dry_run:
-                manifest = _backfill_manifest_from_timeline_rows(
-                    hub_root,
-                    execution_row=execution_row,
-                    timeline_rows=baseline_rows,
-                )
-            checkpoint = store.load_checkpoint(execution_id)
-            if checkpoint is None and not dry_run:
-                checkpoint = _build_checkpoint_from_execution_row(
-                    execution_row,
-                    baseline_rows,
-                    trace_manifest_id=(
-                        manifest.trace_id if manifest is not None else None
-                    ),
-                )
-                store.save_checkpoint(checkpoint)
-
-            keep_rows = _select_compaction_keep_rows(
-                baseline_rows,
-                max_hot_rows=resolved_policy.max_hot_rows_per_completed_execution,
-            )
-            rows_after += len(keep_rows) + 1
-            rows_deleted += max(len(baseline_rows) - len(keep_rows), 0)
-            summary_rows_written += 1
-
-            if dry_run:
-                continue
-
-            summary_row = _build_compaction_summary_row(
+        manifest = store.get_manifest(execution_id)
+        artifact_missing = (
+            manifest is not None
+            and not _manifest_artifact_path(hub_root, manifest).exists()
+        )
+        if (manifest is None or artifact_missing) and baseline_rows and not dry_run:
+            manifest = _backfill_manifest_from_timeline_rows(
+                hub_root,
                 execution_row=execution_row,
-                keep_rows=keep_rows,
-                original_rows=baseline_rows,
-                trace_manifest_id=manifest.trace_id if manifest is not None else None,
+                timeline_rows=baseline_rows,
             )
-            keep_event_ids = {
-                str(row["event_id"])
-                for row in keep_rows
-                if isinstance(row.get("event_id"), str)
-            }
+        checkpoint = store.load_checkpoint(execution_id)
+        if checkpoint is None and not dry_run:
+            checkpoint = _build_checkpoint_from_execution_row(
+                execution_row,
+                baseline_rows,
+                trace_manifest_id=(manifest.trace_id if manifest is not None else None),
+            )
+            store.save_checkpoint(checkpoint)
+
+        keep_rows = _select_compaction_keep_rows(
+            baseline_rows,
+            max_hot_rows=resolved_policy.max_hot_rows_per_completed_execution,
+        )
+        rows_after += len(keep_rows) + 1
+        rows_deleted += max(len(baseline_rows) - len(keep_rows), 0)
+        summary_rows_written += 1
+
+        if dry_run:
+            log_compaction(
+                execution_id=execution_id,
+                rows_before=len(baseline_rows),
+                rows_after=len(keep_rows) + 1,
+                rows_deleted=max(len(baseline_rows) - len(keep_rows), 0),
+                cold_trace_preserved=manifest is not None,
+                dry_run=True,
+            )
+            continue
+
+        summary_row = _build_compaction_summary_row(
+            execution_row=execution_row,
+            keep_rows=keep_rows,
+            original_rows=baseline_rows,
+            trace_manifest_id=manifest.trace_id if manifest is not None else None,
+        )
+        keep_event_ids = {
+            str(row["event_id"])
+            for row in keep_rows
+            if isinstance(row.get("event_id"), str)
+        }
+        with open_orchestration_sqlite(hub_root) as conn:
             with conn:
                 conn.execute(
                     """
@@ -512,16 +522,29 @@ def compact_completed_execution_history(
                         1,
                     ),
                 )
-
-    for _eid in compacted_ids:
-        _maint_logger.info(
-            _json_dumps(
-                {
-                    "event": "execution_history_compaction",
-                    "execution_id": _eid,
-                    "dry_run": dry_run,
-                }
+        if checkpoint is not None:
+            current_hot_rows = [*keep_rows, _summary_row_to_timeline_row(summary_row)]
+            refreshed_hot_state = _merge_checkpoint_hot_state(
+                checkpoint.hot_projection_state,
+                _build_hot_projection_state_from_rows(current_hot_rows),
             )
+            checkpoint = dataclasses.replace(
+                checkpoint,
+                hot_projection_state=refreshed_hot_state,
+                trace_manifest_id=(
+                    manifest.trace_id
+                    if manifest is not None
+                    else checkpoint.trace_manifest_id
+                ),
+            )
+            store.save_checkpoint(checkpoint)
+        log_compaction(
+            execution_id=execution_id,
+            rows_before=len(baseline_rows),
+            rows_after=len(keep_rows) + 1,
+            rows_deleted=max(len(baseline_rows) - len(keep_rows), 0),
+            cold_trace_preserved=manifest is not None,
+            dry_run=False,
         )
 
     return ExecutionHistoryCompactionSummary(
@@ -542,6 +565,8 @@ def prune_execution_history_retention(
     policy: ExecutionHistoryMaintenancePolicy,
     dry_run: bool = False,
 ) -> ExecutionHistoryRetentionSummary:
+    from .execution_history_diagnostics import log_retention_prune
+
     hot_cutoff = _iso_cutoff(policy.hot_history_retention_days)
     cold_cutoff = _iso_cutoff(policy.cold_trace_retention_days)
     store = ColdTraceStore(hub_root)
@@ -631,6 +656,18 @@ def prune_execution_history_retention(
                     bytes_reclaimed += file_bytes
                 if dry_run:
                     continue
+                affected_checkpoints = [
+                    checkpoint
+                    for checkpoint in store.list_checkpoints(limit=10_000)
+                    if checkpoint.trace_manifest_id == manifest.trace_id
+                ]
+                for checkpoint in affected_checkpoints:
+                    store.save_checkpoint(
+                        dataclasses.replace(
+                            checkpoint,
+                            trace_manifest_id=None,
+                        )
+                    )
                 with conn:
                     conn.execute(
                         """
@@ -638,15 +675,6 @@ def prune_execution_history_retention(
                          WHERE trace_id = ?
                         """,
                         (manifest.trace_id,),
-                    )
-                    conn.execute(
-                        """
-                        UPDATE orch_execution_checkpoints
-                           SET trace_manifest_id = NULL,
-                               updated_at = ?
-                         WHERE trace_manifest_id = ?
-                        """,
-                        (now_iso(), manifest.trace_id),
                     )
                 if artifact_path.exists():
                     try:
@@ -658,17 +686,12 @@ def prune_execution_history_retention(
                     resolve_hub_traces_root(hub_root),
                 )
 
-    _maint_logger.info(
-        _json_dumps(
-            {
-                "event": "execution_history_retention_prune",
-                "pruned_executions": len(pruned_execution_ids),
-                "pruned_traces": len(pruned_trace_ids),
-                "hot_rows_deleted": hot_rows_deleted,
-                "bytes_reclaimed": bytes_reclaimed,
-                "dry_run": dry_run,
-            }
-        )
+    log_retention_prune(
+        pruned_execution_ids=len(pruned_execution_ids),
+        pruned_trace_ids=len(pruned_trace_ids),
+        hot_rows_deleted=hot_rows_deleted,
+        bytes_reclaimed=bytes_reclaimed,
+        dry_run=dry_run,
     )
 
     return ExecutionHistoryRetentionSummary(
@@ -768,22 +791,19 @@ def export_execution_history_bundle(
 
 
 def vacuum_execution_history(hub_root: Path) -> ExecutionHistoryVacuumSummary:
+    from .execution_history_diagnostics import log_vacuum
+
     db_path = resolve_orchestration_sqlite_path(hub_root)
     size_before = db_path.stat().st_size if db_path.exists() else 0
     with open_orchestration_sqlite(hub_root) as conn:
         conn.execute("VACUUM")
     size_after = db_path.stat().st_size if db_path.exists() else 0
     reclaimed = max(size_before - size_after, 0)
-    _maint_logger.info(
-        _json_dumps(
-            {
-                "event": "execution_history_vacuum",
-                "database_path": str(db_path),
-                "size_before": size_before,
-                "size_after": size_after,
-                "reclaimed_bytes": reclaimed,
-            }
-        )
+    log_vacuum(
+        database_path=str(db_path),
+        size_before=size_before,
+        size_after=size_after,
+        reclaimed_bytes=reclaimed,
     )
     return ExecutionHistoryVacuumSummary(
         database_path=str(db_path),
@@ -996,18 +1016,11 @@ def _build_checkpoint_from_execution_row(
         default=0,
     )
     terminal_signals = _extract_terminal_signals(timeline_rows)
-    hot_state: dict[str, Any] = {
-        "family_hot_rows": dict(
-            sorted(
-                Counter(
-                    _infer_trace_event_family(row["event_type"], row["payload"])
-                    for row in timeline_rows
-                ).items()
-            )
-        )
-    }
+    hot_state = _build_hot_projection_state_from_rows(timeline_rows)
     if progress_kind and progress_preview:
-        hot_state["last_notice_by_kind"] = {progress_kind: progress_preview}
+        latest_notice_by_kind = dict(hot_state.get("last_notice_by_kind") or {})
+        latest_notice_by_kind[progress_kind] = progress_preview
+        hot_state["last_notice_by_kind"] = dict(sorted(latest_notice_by_kind.items()))
     output_preview = _last_output_preview_by_type(timeline_rows)
     if output_preview:
         hot_state["last_output_by_type"] = output_preview
@@ -1169,6 +1182,59 @@ def _coerce_event_index(payload: Any) -> Optional[int]:
         return None
 
 
+def _build_hot_projection_state_from_rows(
+    timeline_rows: Sequence[dict[str, Any]],
+) -> dict[str, Any]:
+    family_counts: Counter[str] = Counter()
+    latest_notice_by_kind: dict[str, str] = {}
+    latest_output_by_type: dict[str, str] = {}
+    for row in timeline_rows:
+        event_type = str(row.get("event_type") or "").strip()
+        family = _infer_trace_event_family(event_type, row.get("payload") or {})
+        family_counts[family] += 1
+        event = row.get("payload", {}).get("event")
+        if not isinstance(event, dict):
+            continue
+        if event_type == "run_notice":
+            kind = str(event.get("kind") or "").strip()
+            if kind:
+                latest_notice_by_kind[kind] = _truncate_text(
+                    str(event.get("message") or ""),
+                    512,
+                    suffix="",
+                )
+        elif event_type == "output_delta":
+            delta_type = str(event.get("delta_type") or "").strip()
+            if delta_type:
+                latest_output_by_type[delta_type] = _truncate_text(
+                    str(event.get("content") or ""),
+                    512,
+                    suffix="",
+                )
+    hot_state: dict[str, Any] = {"family_hot_rows": dict(sorted(family_counts.items()))}
+    if latest_notice_by_kind:
+        hot_state["last_notice_by_kind"] = dict(sorted(latest_notice_by_kind.items()))
+    if latest_output_by_type:
+        hot_state["last_output_by_type"] = dict(sorted(latest_output_by_type.items()))
+    return hot_state
+
+
+def _merge_checkpoint_hot_state(
+    existing_hot_state: Any,
+    refreshed_hot_state: dict[str, Any],
+) -> dict[str, Any]:
+    merged = dict(existing_hot_state) if isinstance(existing_hot_state, dict) else {}
+    for key in (
+        "deduped_counts",
+        "spilled_counts",
+        "spilled_without_cold_trace_counts",
+    ):
+        value = merged.get(key)
+        if isinstance(value, dict):
+            refreshed_hot_state[key] = dict(sorted(value.items()))
+    return refreshed_hot_state
+
+
 def _select_compaction_keep_rows(
     timeline_rows: Sequence[dict[str, Any]],
     *,
@@ -1178,15 +1244,30 @@ def _select_compaction_keep_rows(
     if limit <= 0:
         return []
 
-    keep_ids: set[str] = set()
+    selected: list[dict[str, Any]] = []
+    selected_ids: set[str] = set()
 
     def _mark(row: Optional[dict[str, Any]]) -> None:
         if row is None:
             return
+        if len(selected) >= limit:
+            return
         event_id = str(row.get("event_id") or "").strip()
-        if event_id:
-            keep_ids.add(event_id)
+        if not event_id or event_id in selected_ids:
+            return
+        selected_ids.add(event_id)
+        selected.append(row)
 
+    _mark(
+        next(
+            (
+                row
+                for row in reversed(timeline_rows)
+                if row["event_type"] in _TERMINAL_EVENT_TYPES
+            ),
+            None,
+        )
+    )
     _mark(
         next(
             (row for row in timeline_rows if row["event_type"] == "turn_started"),
@@ -1204,10 +1285,6 @@ def _select_compaction_keep_rows(
         )
     )
 
-    for row in timeline_rows:
-        if row["event_type"] in _TERMINAL_EVENT_TYPES:
-            _mark(row)
-
     latest_notice_by_kind: dict[str, dict[str, Any]] = {}
     latest_output_by_type: dict[str, dict[str, Any]] = {}
     for row in timeline_rows:
@@ -1223,53 +1300,49 @@ def _select_compaction_keep_rows(
             if delta_type:
                 latest_output_by_type[delta_type] = row
 
-    for row in latest_notice_by_kind.values():
+    for row in sorted(
+        latest_notice_by_kind.values(),
+        key=lambda candidate: (
+            str(candidate.get("timestamp") or ""),
+            str(candidate.get("event_id") or ""),
+        ),
+        reverse=True,
+    ):
         _mark(row)
-    for row in latest_output_by_type.values():
+    for row in sorted(
+        latest_output_by_type.values(),
+        key=lambda candidate: (
+            str(candidate.get("timestamp") or ""),
+            str(candidate.get("event_id") or ""),
+        ),
+        reverse=True,
+    ):
         _mark(row)
 
-    tool_rows = [
+    prioritized_recent_rows = [
         row
         for row in reversed(timeline_rows)
-        if row["event_type"] in {"tool_call", "tool_result"}
-    ]
-    for row in tool_rows:
-        if len(keep_ids) >= limit:
-            break
-        _mark(row)
-
-    prioritized_rows = []
-    for row in timeline_rows:
-        event_id = str(row.get("event_id") or "")
-        if event_id in keep_ids:
-            prioritized_rows.append(row)
-
-    if len(prioritized_rows) <= limit:
-        return prioritized_rows
-
-    critical_ids = {
-        str(row.get("event_id") or "")
-        for row in prioritized_rows
         if row["event_type"]
-        in {"turn_started", "turn_completed", "turn_failed", "token_usage"}
-    }
-    reduced: list[dict[str, Any]] = [
-        row for row in prioritized_rows if row["event_id"] in critical_ids
+        in {"tool_call", "tool_result", "run_notice", "output_delta"}
     ]
-    overflow_candidates = [
-        row for row in reversed(prioritized_rows) if row["event_id"] not in critical_ids
-    ]
-    for row in overflow_candidates:
-        if len(reduced) >= limit:
-            break
-        reduced.append(row)
+    for row in prioritized_recent_rows:
+        _mark(row)
     return sorted(
-        reduced,
+        selected,
         key=lambda row: (
             str(row.get("timestamp") or ""),
             str(row.get("event_id") or ""),
         ),
     )
+
+
+def _summary_row_to_timeline_row(summary_row: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "event_id": str(summary_row.get("event_id") or ""),
+        "event_type": str(summary_row.get("event_type") or ""),
+        "timestamp": str(summary_row.get("timestamp") or ""),
+        "payload": dict(summary_row.get("payload") or {}),
+    }
 
 
 def _build_compaction_summary_row(

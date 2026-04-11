@@ -413,8 +413,8 @@ def test_check_thresholds_hot_row_count_error() -> None:
 
 def test_check_thresholds_notice_amplification_warning() -> None:
     metrics = ExecutionHistoryMetrics(
-        total_executions=10,
-        terminal_executions=5,
+        total_executions=1,
+        terminal_executions=1,
         timeline_rows=100,
         checkpoints=5,
         finalized_manifests=5,
@@ -436,8 +436,8 @@ def test_check_thresholds_notice_amplification_warning() -> None:
 
 def test_check_thresholds_notice_amplification_error() -> None:
     metrics = ExecutionHistoryMetrics(
-        total_executions=10,
-        terminal_executions=5,
+        total_executions=1,
+        terminal_executions=1,
         timeline_rows=250,
         checkpoints=5,
         finalized_manifests=5,
@@ -482,8 +482,8 @@ def test_check_thresholds_oversized_execution() -> None:
 
 def test_check_thresholds_custom_thresholds() -> None:
     metrics = ExecutionHistoryMetrics(
-        total_executions=10,
-        terminal_executions=5,
+        total_executions=1,
+        terminal_executions=1,
         timeline_rows=100,
         checkpoints=5,
         finalized_manifests=5,

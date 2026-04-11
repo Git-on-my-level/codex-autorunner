@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -194,3 +195,29 @@ def test_hub_orchestration_audit_and_compaction_commands(tmp_path: Path) -> None
     assert compact_payload["compacted_executions"] == 1
     assert compact_payload["rows_before"] == 20
     assert compact_payload["rows_after"] <= 16
+
+
+def test_hub_orchestration_canary_command(tmp_path: Path) -> None:
+    hub_root = tmp_path / "canary"
+
+    result = runner.invoke(
+        app,
+        [
+            "hub",
+            "orchestration",
+            "canary",
+            "--path",
+            str(hub_root),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["migration"]["candidate_executions"] >= 1
+    assert payload["compaction"]["compacted_executions"] >= 1
+    assert payload["startup"]["status_code"] == 200
+    assert payload["recovery"]["pma_checkpoint_restore"]["backend_turn_id"]
+    assert payload["recovery"]["discord_bound_checkpoint_restore"]["backend_turn_id"]
+    assert "tool_call" in payload["trace_validation"]["families"]
+    shutil.rmtree(hub_root, ignore_errors=True)

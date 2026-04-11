@@ -379,6 +379,41 @@ class TestExecutionCheckpoint:
         assert loaded is not None
         assert loaded.execution_id == "exec-t2"
 
+    def test_load_latest_checkpoint_for_thread_breaks_timestamp_ties_by_row_order(
+        self, store: ColdTraceStore
+    ) -> None:
+        from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
+
+        _init_orchestration_db(store._hub_root)
+        store.save_checkpoint(
+            ExecutionCheckpoint(
+                status="completed",
+                execution_id="exec-tie-1",
+                thread_target_id="thread-tie",
+            )
+        )
+        store.save_checkpoint(
+            ExecutionCheckpoint(
+                status="running",
+                execution_id="exec-tie-2",
+                thread_target_id="thread-tie",
+            )
+        )
+        with open_orchestration_sqlite(store._hub_root) as conn:
+            with conn:
+                conn.execute(
+                    """
+                    UPDATE orch_execution_checkpoints
+                       SET updated_at = '2026-04-12T00:00:00Z',
+                           created_at = '2026-04-12T00:00:00Z'
+                     WHERE thread_target_id = 'thread-tie'
+                    """
+                )
+
+        loaded = store.load_latest_checkpoint_for_thread("thread-tie")
+        assert loaded is not None
+        assert loaded.execution_id == "exec-tie-2"
+
     def test_list_checkpoints(self, store: ColdTraceStore) -> None:
         _init_orchestration_db(store._hub_root)
         store.save_checkpoint(

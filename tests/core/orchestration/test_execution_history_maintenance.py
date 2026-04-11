@@ -7,6 +7,7 @@ from codex_autorunner.core.orchestration.cold_trace_store import ColdTraceStore
 from codex_autorunner.core.orchestration.execution_history import ExecutionCheckpoint
 from codex_autorunner.core.orchestration.execution_history_maintenance import (
     ExecutionHistoryMaintenancePolicy,
+    audit_execution_history,
     backfill_legacy_execution_history,
     compact_completed_execution_history,
     export_execution_history_bundle,
@@ -16,6 +17,8 @@ from codex_autorunner.core.orchestration.sqlite import (
     initialize_orchestration_sqlite,
     open_orchestration_sqlite,
 )
+from codex_autorunner.core.orchestration.turn_timeline import persist_turn_timeline
+from codex_autorunner.core.ports.run_event import RunNotice
 
 
 def _seed_execution(
@@ -435,6 +438,217 @@ def test_prune_execution_history_retention_removes_old_hot_rows_and_traces(
     assert store.load_checkpoint("exec-old") is None
     assert not old_artifact.exists()
     assert store.get_manifest("exec-new") is not None
+
+
+def test_prune_execution_history_retention_clears_checkpoint_trace_manifest_json(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    _seed_execution(
+        hub_root,
+        execution_id="exec-old-json",
+        started_at="2000-01-01T00:00:00Z",
+        finished_at="2000-01-01T00:05:00Z",
+        output_chunks=2,
+    )
+    backfill_legacy_execution_history(hub_root)
+
+    store = ColdTraceStore(hub_root)
+    manifest = store.get_manifest("exec-old-json")
+    assert manifest is not None
+
+    with open_orchestration_sqlite(hub_root, durable=False) as conn:
+        with conn:
+            conn.execute(
+                """
+                UPDATE orch_cold_trace_manifests
+                   SET started_at = '2000-01-01T00:00:00Z',
+                       finished_at = '2000-01-01T00:05:00Z'
+                 WHERE execution_id = 'exec-old-json'
+                """
+            )
+
+    prune_execution_history_retention(
+        hub_root,
+        policy=ExecutionHistoryMaintenancePolicy(
+            max_hot_rows_per_completed_execution=16,
+            hot_history_retention_days=10_000,
+            cold_trace_retention_days=1,
+        ),
+    )
+
+    checkpoint = store.load_checkpoint("exec-old-json")
+    assert checkpoint is not None
+    assert checkpoint.trace_manifest_id is None
+
+
+def test_compaction_never_keeps_more_than_policy_limit(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    _seed_execution(hub_root, execution_id="exec-tight-limit", output_chunks=20)
+
+    summary = compact_completed_execution_history(
+        hub_root,
+        policy=ExecutionHistoryMaintenancePolicy(
+            max_hot_rows_per_completed_execution=4,
+            hot_history_retention_days=30,
+            cold_trace_retention_days=90,
+        ),
+    )
+
+    assert summary.compacted_executions == 1
+    with open_orchestration_sqlite(hub_root, durable=False) as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS cnt
+              FROM orch_event_projections
+             WHERE event_family = 'turn.timeline'
+               AND execution_id = 'exec-tight-limit'
+            """
+        ).fetchone()
+    assert int(row["cnt"] or 0) <= 4
+
+
+def test_compaction_refreshes_checkpoint_hot_state_after_reducing_hot_rows(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    _seed_execution(hub_root, execution_id="exec-refresh-state", output_chunks=20)
+
+    compact_completed_execution_history(
+        hub_root,
+        policy=ExecutionHistoryMaintenancePolicy(
+            max_hot_rows_per_completed_execution=8,
+            hot_history_retention_days=30,
+            cold_trace_retention_days=90,
+        ),
+    )
+
+    checkpoint = ColdTraceStore(hub_root).load_checkpoint("exec-refresh-state")
+    assert checkpoint is not None
+    assert checkpoint.hot_projection_state is not None
+    assert sum(checkpoint.hot_projection_state["family_hot_rows"].values()) <= 8
+
+    persist_turn_timeline(
+        hub_root,
+        execution_id="exec-refresh-state",
+        target_kind="thread_target",
+        target_id="thread-1",
+        events=[
+            RunNotice(
+                timestamp="2026-04-12T00:06:00Z",
+                kind="progress",
+                message="follow-up after compaction",
+            )
+        ],
+        start_index=999,
+    )
+
+    with open_orchestration_sqlite(hub_root, durable=False) as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS cnt
+              FROM orch_event_projections
+             WHERE event_family = 'turn.timeline'
+               AND execution_id = 'exec-refresh-state'
+            """
+        ).fetchone()
+    assert int(row["cnt"] or 0) <= 9
+
+
+def test_audit_flags_recent_terminal_execution_without_manifest_even_with_zero_hot_rows(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    initialize_orchestration_sqlite(hub_root, durable=False)
+    with open_orchestration_sqlite(hub_root, durable=False) as conn:
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO orch_thread_targets (
+                    thread_target_id,
+                    agent_id,
+                    backend_thread_id,
+                    repo_id,
+                    resource_kind,
+                    resource_id,
+                    workspace_root,
+                    display_name,
+                    lifecycle_status,
+                    runtime_status,
+                    created_at,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "thread-zero-hot",
+                    "codex",
+                    "backend-thread-zero-hot",
+                    "repo-1",
+                    "repo",
+                    "repo-1",
+                    str(hub_root / "workspace"),
+                    "Zero hot",
+                    "active",
+                    "completed",
+                    "2026-04-12T00:00:00Z",
+                    "2026-04-12T00:05:00Z",
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO orch_thread_executions (
+                    execution_id,
+                    thread_target_id,
+                    client_request_id,
+                    request_kind,
+                    prompt_text,
+                    status,
+                    backend_turn_id,
+                    assistant_text,
+                    error_text,
+                    model_id,
+                    reasoning_level,
+                    transcript_mirror_id,
+                    started_at,
+                    finished_at,
+                    created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "exec-zero-hot",
+                    "thread-zero-hot",
+                    "client-zero-hot",
+                    "message",
+                    "Summarize",
+                    "completed",
+                    "backend-turn-zero-hot",
+                    "done",
+                    None,
+                    "gpt-test",
+                    "high",
+                    None,
+                    "2026-04-12T00:00:00Z",
+                    "2026-04-12T00:05:00Z",
+                    "2026-04-12T00:00:00Z",
+                ),
+            )
+
+    summary = audit_execution_history(
+        hub_root,
+        policy=ExecutionHistoryMaintenancePolicy(
+            max_hot_rows_per_completed_execution=16,
+            hot_history_retention_days=30,
+            cold_trace_retention_days=90,
+        ),
+    )
+
+    assert "exec-zero-hot" in summary.missing_manifest_execution_ids
 
 
 def test_export_execution_history_bundle_copies_traces_and_metadata(

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import logging
 from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
@@ -29,9 +28,12 @@ from .execution_history import (
     build_hot_projection_envelope,
     route_run_event,
 )
+from .execution_history_diagnostics import (
+    log_dedupe,
+    log_spill_to_cold,
+    log_truncation,
+)
 from .sqlite import open_orchestration_sqlite
-
-_timeline_logger = logging.getLogger("codex_autorunner.execution_history_diagnostics")
 
 _EVENT_FAMILY = "turn.timeline"
 _CHECKPOINT_PREVIEW_CHARS = 240
@@ -501,6 +503,90 @@ def _maybe_coalesce_hot_event(
     return event, metadata
 
 
+def _log_hot_projection_truncation(
+    *,
+    execution_id: str,
+    event_family: str,
+    event: RunEvent,
+    hot_event_payload: dict[str, Any],
+    contract: str,
+) -> None:
+    if hot_event_payload.get("content_truncated") and isinstance(event, OutputDelta):
+        log_truncation(
+            execution_id=execution_id,
+            event_family=event_family,
+            original_chars=int(
+                hot_event_payload.get("content_chars") or len(event.content)
+            ),
+            truncated_chars=len(str(hot_event_payload.get("content") or "")),
+            contract=contract,
+        )
+    if hot_event_payload.get("final_message_truncated") and isinstance(
+        event, Completed
+    ):
+        log_truncation(
+            execution_id=execution_id,
+            event_family=event_family,
+            original_chars=int(
+                hot_event_payload.get("final_message_chars") or len(event.final_message)
+            ),
+            truncated_chars=len(str(hot_event_payload.get("final_message") or "")),
+            contract=contract,
+        )
+    if hot_event_payload.get("error_message_truncated") and isinstance(event, Failed):
+        log_truncation(
+            execution_id=execution_id,
+            event_family=event_family,
+            original_chars=int(
+                hot_event_payload.get("error_message_chars") or len(event.error_message)
+            ),
+            truncated_chars=len(str(hot_event_payload.get("error_message") or "")),
+            contract=contract,
+        )
+    if hot_event_payload.get("tool_input_truncated") and isinstance(event, ToolCall):
+        log_truncation(
+            execution_id=execution_id,
+            event_family=event_family,
+            original_chars=len(str(event.tool_input)),
+            truncated_chars=len(str(hot_event_payload.get("tool_input_preview") or "")),
+            contract=contract,
+        )
+    if hot_event_payload.get("result_truncated") and isinstance(event, ToolResult):
+        log_truncation(
+            execution_id=execution_id,
+            event_family=event_family,
+            original_chars=len(str(event.result)),
+            truncated_chars=len(str(hot_event_payload.get("result_preview") or "")),
+            contract=contract,
+        )
+    if hot_event_payload.get("error_truncated") and isinstance(event, ToolResult):
+        log_truncation(
+            execution_id=execution_id,
+            event_family=event_family,
+            original_chars=len(str(event.error)),
+            truncated_chars=len(str(hot_event_payload.get("error_preview") or "")),
+            contract=contract,
+        )
+    if hot_event_payload.get("message_truncated") and isinstance(event, RunNotice):
+        log_truncation(
+            execution_id=execution_id,
+            event_family=event_family,
+            original_chars=int(
+                hot_event_payload.get("message_chars") or len(event.message)
+            ),
+            truncated_chars=len(str(hot_event_payload.get("message") or "")),
+            contract=contract,
+        )
+    if hot_event_payload.get("data_truncated") and isinstance(event, RunNotice):
+        log_truncation(
+            execution_id=execution_id,
+            event_family=event_family,
+            original_chars=len(str(event.data)),
+            truncated_chars=len(str(hot_event_payload.get("data_preview") or "")),
+            contract=contract,
+        )
+
+
 def persist_turn_timeline(
     hub_root,
     *,
@@ -560,8 +646,10 @@ def persist_turn_timeline(
                         event_type=event_type,
                         payload=asdict(event),
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    raise RuntimeError(
+                        "Failed to append execution event to the cold trace"
+                    ) from exc
 
             count += 1
             if not routing.persist_hot_projection:
@@ -570,18 +658,11 @@ def persist_turn_timeline(
             hot_event, event_metadata = _maybe_coalesce_hot_event(event, hot_state)
             if hot_event is None:
                 if event_metadata.get("hot_duplicate_notice"):
-                    _timeline_logger.debug(
-                        json.dumps(
-                            {
-                                "event": "hot_projection_dedupe",
-                                "execution_id": normalized_execution_id,
-                                "event_family": family,
-                                "dedupe_reason": "duplicate_notice",
-                                "deduped_count": hot_state.deduped_counts.get(
-                                    family, 0
-                                ),
-                            }
-                        )
+                    log_dedupe(
+                        execution_id=normalized_execution_id,
+                        event_family=family,
+                        dedupe_reason="duplicate_notice",
+                        deduped_count=hot_state.deduped_counts.get(family, 0),
                     )
                 continue
             if not hot_state.allows_hot_persist(family):
@@ -591,22 +672,14 @@ def persist_turn_timeline(
                         cold_trace_writer is not None and routing.capture_cold_trace
                     ),
                 )
-                _timeline_logger.info(
-                    json.dumps(
-                        {
-                            "event": "hot_projection_spill_to_cold",
-                            "execution_id": normalized_execution_id,
-                            "event_family": family,
-                            "has_cold_trace": bool(
-                                cold_trace_writer is not None
-                                and routing.capture_cold_trace
-                            ),
-                            "hot_rows_so_far": hot_state.family_hot_rows.get(family, 0),
-                            "hot_limit": _HOT_FAMILY_ROW_LIMITS.get(family, 0),
-                            "warning": cold_trace_writer is None
-                            or not routing.capture_cold_trace,
-                        }
-                    )
+                log_spill_to_cold(
+                    execution_id=normalized_execution_id,
+                    event_family=family,
+                    has_cold_trace=bool(
+                        cold_trace_writer is not None and routing.capture_cold_trace
+                    ),
+                    hot_rows_so_far=hot_state.family_hot_rows.get(family, 0),
+                    hot_limit=_HOT_FAMILY_ROW_LIMITS.get(family, 0),
                 )
                 continue
             event_payload = build_hot_projection_envelope(
@@ -616,6 +689,18 @@ def persist_turn_timeline(
                 metadata={**base_metadata, **event_metadata},
                 routing=routing,
             ).to_payload()
+            hot_event_payload = event_payload.get("event")
+            if isinstance(hot_event_payload, dict):
+                _log_hot_projection_truncation(
+                    execution_id=normalized_execution_id,
+                    event_family=family,
+                    event=hot_event,
+                    hot_event_payload=hot_event_payload,
+                    contract=str(
+                        event_payload.get("hot_payload_contract")
+                        or routing.hot_payload_contract
+                    ),
+                )
             event_id = f"turn-timeline:{normalized_execution_id}:{index:04d}"
             event_timestamp = str(getattr(hot_event, "timestamp", "") or "").strip()
             if not event_timestamp:

@@ -466,7 +466,7 @@ class ColdTraceStore:
                 SELECT checkpoint_json
                   FROM orch_execution_checkpoints
                  WHERE thread_target_id = ?
-                 ORDER BY updated_at DESC
+                 ORDER BY updated_at DESC, rowid DESC
                  LIMIT 1
                 """,
                 (thread_target_id,),
@@ -499,7 +499,7 @@ class ColdTraceStore:
                 SELECT checkpoint_json
                   FROM orch_execution_checkpoints
                  {where}
-                 ORDER BY updated_at DESC
+                 ORDER BY updated_at DESC, rowid DESC
                  LIMIT ?
                 """,
                 (*params, limit),
