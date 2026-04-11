@@ -337,6 +337,14 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
     def get_queue_depth(self, thread_target_id: str) -> int:
         return self._store.get_queue_depth(thread_target_id)
 
+    def cancel_queued_execution(self, thread_target_id: str, execution_id: str) -> bool:
+        return self._store.cancel_queued_turn(thread_target_id, execution_id)
+
+    def promote_queued_execution(
+        self, thread_target_id: str, execution_id: str
+    ) -> bool:
+        return self._store.promote_queued_turn(thread_target_id, execution_id)
+
     def claim_next_queued_execution(
         self, thread_target_id: str
     ) -> Optional[tuple[ExecutionRecord, dict[str, Any]]]:
@@ -1212,7 +1220,12 @@ class _ThreadRecoveryHelper:
         )
         return interrupted
 
-    async def stop_thread(self, thread_target_id: str) -> ThreadStopOutcome:
+    async def stop_thread(
+        self,
+        thread_target_id: str,
+        *,
+        cancel_queued: bool = True,
+    ) -> ThreadStopOutcome:
         thread = self.get_thread_target(thread_target_id)
         if thread is None:
             raise KeyError(f"Unknown thread target '{thread_target_id}'")
@@ -1220,7 +1233,11 @@ class _ThreadRecoveryHelper:
             self.thread_store, thread_target_id
         )
 
-        cancelled_queued = self.thread_store.cancel_queued_executions(thread_target_id)
+        cancelled_queued = (
+            self.thread_store.cancel_queued_executions(thread_target_id)
+            if cancel_queued
+            else 0
+        )
         execution = self.get_running_execution(thread_target_id)
         if execution is None:
             return ThreadStopOutcome(
@@ -1817,8 +1834,16 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
     async def interrupt_thread(self, thread_target_id: str) -> ExecutionRecord:
         return await self._recovery_helper.interrupt_thread(thread_target_id)
 
-    async def stop_thread(self, thread_target_id: str) -> ThreadStopOutcome:
-        return await self._recovery_helper.stop_thread(thread_target_id)
+    async def stop_thread(
+        self,
+        thread_target_id: str,
+        *,
+        cancel_queued: bool = True,
+    ) -> ThreadStopOutcome:
+        return await self._recovery_helper.stop_thread(
+            thread_target_id,
+            cancel_queued=cancel_queued,
+        )
 
     def recover_running_execution_after_restart(
         self, thread_target_id: str
@@ -1845,6 +1870,20 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
 
     def get_queue_depth(self, thread_target_id: str) -> int:
         return self.thread_store.get_queue_depth(thread_target_id)
+
+    def cancel_queued_execution(self, thread_target_id: str, execution_id: str) -> bool:
+        return self.thread_store.cancel_queued_execution(
+            thread_target_id,
+            execution_id,
+        )
+
+    def promote_queued_execution(
+        self, thread_target_id: str, execution_id: str
+    ) -> bool:
+        return self.thread_store.promote_queued_execution(
+            thread_target_id,
+            execution_id,
+        )
 
     def record_execution_result(
         self,

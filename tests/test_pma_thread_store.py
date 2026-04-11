@@ -308,6 +308,73 @@ def test_claim_next_queued_turn_promotes_queued_execution(tmp_path: Path) -> Non
     assert store.get_queue_depth(thread["managed_thread_id"]) == 0
 
 
+def test_promote_queued_turn_moves_selected_execution_to_front(tmp_path: Path) -> None:
+    store = PmaThreadStore(tmp_path / "hub")
+    thread = store.create_thread("codex", tmp_path / "workspace")
+
+    running_turn = store.create_turn(thread["managed_thread_id"], prompt="first")
+    first_queued_turn = store.create_turn(
+        thread["managed_thread_id"],
+        prompt="second",
+        busy_policy="queue",
+        queue_payload={"request": {"message_text": "second"}},
+    )
+    promoted_queued_turn = store.create_turn(
+        thread["managed_thread_id"],
+        prompt="third",
+        busy_policy="queue",
+        queue_payload={"request": {"message_text": "third"}},
+    )
+
+    assert (
+        store.promote_queued_turn(
+            thread["managed_thread_id"],
+            promoted_queued_turn["managed_turn_id"],
+        )
+        is True
+    )
+    assert (
+        store.mark_turn_finished(running_turn["managed_turn_id"], status="ok") is True
+    )
+
+    claimed = store.claim_next_queued_turn(thread["managed_thread_id"])
+    assert claimed is not None
+    execution, _payload = claimed
+    assert execution["managed_turn_id"] == promoted_queued_turn["managed_turn_id"]
+    remaining = store.list_queued_turns(thread["managed_thread_id"])
+    assert remaining[0]["managed_turn_id"] == first_queued_turn["managed_turn_id"]
+
+
+def test_cancel_queued_turn_marks_selected_execution_interrupted(
+    tmp_path: Path,
+) -> None:
+    store = PmaThreadStore(tmp_path / "hub")
+    thread = store.create_thread("codex", tmp_path / "workspace")
+
+    store.create_turn(thread["managed_thread_id"], prompt="first")
+    queued_turn = store.create_turn(
+        thread["managed_thread_id"],
+        prompt="second",
+        busy_policy="queue",
+        queue_payload={"request": {"message_text": "second"}},
+    )
+
+    assert (
+        store.cancel_queued_turn(
+            thread["managed_thread_id"],
+            queued_turn["managed_turn_id"],
+        )
+        is True
+    )
+    cancelled_turn = store.get_turn(
+        thread["managed_thread_id"],
+        queued_turn["managed_turn_id"],
+    )
+    assert cancelled_turn is not None
+    assert cancelled_turn["status"] == "interrupted"
+    assert store.get_queue_depth(thread["managed_thread_id"]) == 0
+
+
 def test_cancel_queued_turns_marks_only_pending_queue_items_interrupted(
     tmp_path: Path,
 ) -> None:

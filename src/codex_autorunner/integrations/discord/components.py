@@ -552,6 +552,54 @@ def parse_cancel_turn_custom_id(custom_id: str) -> tuple[str | None, str | None]
     return normalized_thread_target_id, normalized_execution_id or None
 
 
+def build_cancel_queued_turn_custom_id(*, execution_id: str) -> str:
+    normalized_execution_id = str(execution_id or "").strip()
+    if not normalized_execution_id:
+        return "cancel_queued_turn"
+    candidate = f"qcancel:{normalized_execution_id}"
+    if len(candidate) <= 100:
+        return candidate
+    return "cancel_queued_turn"
+
+
+def parse_cancel_queued_turn_custom_id(custom_id: str) -> str | None:
+    normalized_custom_id = str(custom_id or "").strip()
+    if not normalized_custom_id.startswith("qcancel:"):
+        return None
+    execution_id = normalized_custom_id.split(":", 1)[1].strip()
+    return execution_id or None
+
+
+def build_queued_turn_interrupt_send_custom_id(
+    *,
+    execution_id: str,
+    source_message_id: str,
+) -> str:
+    normalized_execution_id = str(execution_id or "").strip()
+    normalized_source_message_id = str(source_message_id or "").strip()
+    if not normalized_execution_id or not normalized_source_message_id:
+        return "queued_turn_interrupt_send"
+    candidate = f"qis:{normalized_execution_id}:{normalized_source_message_id}"
+    if len(candidate) <= 100:
+        return candidate
+    return "queued_turn_interrupt_send"
+
+
+def parse_queued_turn_interrupt_send_custom_id(
+    custom_id: str,
+) -> tuple[str | None, str | None]:
+    normalized_custom_id = str(custom_id or "").strip()
+    if not normalized_custom_id.startswith("qis:"):
+        return None, None
+    payload = normalized_custom_id.split(":", 1)[1].strip()
+    if not payload:
+        return None, None
+    execution_id, separator, source_message_id = payload.partition(":")
+    normalized_execution_id = execution_id.strip() or None
+    normalized_source_message_id = source_message_id.strip() if separator else ""
+    return normalized_execution_id, normalized_source_message_id or None
+
+
 def build_queue_notice_buttons(
     source_message_id: str,
     *,
@@ -576,3 +624,27 @@ def build_queue_notice_buttons(
             )
         )
     return build_action_row(buttons)
+
+
+def build_queued_turn_progress_buttons(
+    *,
+    execution_id: str,
+    source_message_id: str,
+) -> dict[str, Any]:
+    return build_action_row(
+        [
+            build_button(
+                "Cancel",
+                build_cancel_queued_turn_custom_id(execution_id=execution_id),
+                style=DISCORD_BUTTON_STYLE_DANGER,
+            ),
+            build_button(
+                "Interrupt + Send",
+                build_queued_turn_interrupt_send_custom_id(
+                    execution_id=execution_id,
+                    source_message_id=source_message_id,
+                ),
+                style=DISCORD_BUTTON_STYLE_PRIMARY,
+            ),
+        ]
+    )

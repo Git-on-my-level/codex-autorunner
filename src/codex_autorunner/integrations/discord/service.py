@@ -8189,6 +8189,7 @@ class DiscordBotService:
         *,
         channel_id: str,
         active_turn_text: str = "Stopping current turn...",
+        cancel_queued: bool = True,
         thread_target_id: Optional[str] = None,
         execution_id: Optional[str] = None,
         progress_reuse_source_message_id: Optional[str] = None,
@@ -8207,6 +8208,7 @@ class DiscordBotService:
             interaction_token,
             channel_id=channel_id,
             active_turn_text=active_turn_text,
+            cancel_queued=cancel_queued,
             thread_target_id=thread_target_id,
             execution_id=execution_id,
             progress_reuse_source_message_id=progress_reuse_source_message_id,
@@ -8238,6 +8240,151 @@ class DiscordBotService:
             source="component",
             thread_target_id=thread_target_id,
             execution_id=execution_id,
+            source_custom_id=custom_id,
+            source_message_id=message_id,
+            source_user_id=user_id,
+        )
+
+    async def _handle_cancel_queued_turn_button(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+        custom_id: str,
+        message_id: Optional[str] = None,
+    ) -> None:
+        from .components import parse_cancel_queued_turn_custom_id
+        from .message_turns import clear_discord_turn_progress_leases
+
+        execution_id = parse_cancel_queued_turn_custom_id(custom_id)
+        if not execution_id:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Queued request is unavailable.",
+            )
+            return
+        binding = await self._store.get_binding(channel_id=channel_id)
+        pma_enabled = bool(binding.get("pma_enabled", False)) if binding else False
+        mode = "pma" if pma_enabled else "repo"
+        orchestration_service, _binding_row, current_thread = (
+            self._get_discord_thread_binding(channel_id=channel_id, mode=mode)
+        )
+        if current_thread is None:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Queued request is unavailable.",
+            )
+            return
+        cancelled = orchestration_service.cancel_queued_execution(
+            current_thread.thread_target_id,
+            execution_id,
+        )
+        if not cancelled:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Queued request is no longer pending.",
+            )
+            return
+        await clear_discord_turn_progress_leases(
+            self,
+            managed_thread_id=current_thread.thread_target_id,
+            execution_id=execution_id,
+        )
+        if message_id:
+            with contextlib.suppress(
+                DiscordAPIError,
+                RuntimeError,
+                ConnectionError,
+                OSError,
+                ValueError,
+            ):
+                await self._rest.edit_channel_message(
+                    channel_id=channel_id,
+                    message_id=message_id,
+                    payload={
+                        "content": "Queued request cancelled.",
+                        "components": [],
+                    },
+                )
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            "Queued request cancelled.",
+        )
+
+    async def _handle_queued_turn_interrupt_send_button(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+        custom_id: str,
+        user_id: Optional[str] = None,
+        message_id: Optional[str] = None,
+    ) -> None:
+        from .components import parse_queued_turn_interrupt_send_custom_id
+
+        execution_id, source_message_id = parse_queued_turn_interrupt_send_custom_id(
+            custom_id
+        )
+        if not execution_id or not source_message_id:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Queued request is unavailable.",
+            )
+            return
+        binding = await self._store.get_binding(channel_id=channel_id)
+        pma_enabled = bool(binding.get("pma_enabled", False)) if binding else False
+        mode = "pma" if pma_enabled else "repo"
+        orchestration_service, _binding_row, current_thread = (
+            self._get_discord_thread_binding(channel_id=channel_id, mode=mode)
+        )
+        if current_thread is None:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Queued request is unavailable.",
+            )
+            return
+        promoted = orchestration_service.promote_queued_execution(
+            current_thread.thread_target_id,
+            execution_id,
+        )
+        if not promoted:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Queued request is no longer pending.",
+            )
+            return
+        get_running_execution = getattr(
+            orchestration_service,
+            "get_running_execution",
+            None,
+        )
+        if callable(get_running_execution):
+            running_execution = get_running_execution(current_thread.thread_target_id)
+            if running_execution is None:
+                await self._respond_ephemeral(
+                    interaction_id,
+                    interaction_token,
+                    "Queued request moved to the front.",
+                )
+                return
+        await self._handle_car_interrupt(
+            interaction_id,
+            interaction_token,
+            channel_id=channel_id,
+            active_turn_text="Message received. Switching to it now...",
+            cancel_queued=False,
+            progress_reuse_source_message_id=source_message_id,
+            progress_reuse_acknowledgement="Message received. Switching to it now...",
+            source="component",
             source_custom_id=custom_id,
             source_message_id=message_id,
             source_user_id=user_id,

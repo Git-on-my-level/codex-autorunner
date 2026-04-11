@@ -94,7 +94,11 @@ from ..chat.turn_metrics import (
     _extract_context_usage_percent,
     compose_turn_response_with_footer,
 )
-from .components import build_cancel_turn_button, build_cancel_turn_custom_id
+from .components import (
+    build_cancel_turn_button,
+    build_cancel_turn_custom_id,
+    build_queued_turn_progress_buttons,
+)
 from .errors import DiscordTransientError
 from .rendering import (
     chunk_discord_message,
@@ -2416,6 +2420,13 @@ async def _run_discord_orchestrated_turn_for_message(
         payload: dict[str, Any] = {"content": content}
         if remove_components:
             payload["components"] = []
+        elif tracker.label == "queued" and progress_execution_id and source_message_id:
+            payload["components"] = [
+                build_queued_turn_progress_buttons(
+                    execution_id=progress_execution_id,
+                    source_message_id=source_message_id,
+                )
+            ]
         elif tracker.label in active_progress_labels:
             payload["components"] = [
                 build_cancel_turn_button(
@@ -2700,7 +2711,8 @@ async def _run_discord_orchestrated_turn_for_message(
         return DiscordMessageTurnResult(
             final_message="Queued (waiting for available worker...)",
             execution_id=progress_execution_id,
-            preserve_progress_lease=True,
+            send_final_message=progress_message_id is None,
+            preserve_progress_lease=progress_message_id is not None,
         )
 
     async def _on_finalized(

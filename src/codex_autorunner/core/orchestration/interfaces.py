@@ -225,6 +225,14 @@ class ThreadExecutionStore(Protocol):
 
     def get_queue_depth(self, thread_target_id: str) -> int: ...
 
+    def cancel_queued_execution(
+        self, thread_target_id: str, execution_id: str
+    ) -> bool: ...
+
+    def promote_queued_execution(
+        self, thread_target_id: str, execution_id: str
+    ) -> bool: ...
+
     def claim_next_queued_execution(
         self, thread_target_id: str
     ) -> Optional[tuple[ExecutionRecord, dict[str, Any]]]: ...
@@ -341,7 +349,12 @@ class OrchestrationThreadService(Protocol):
 
     async def interrupt_thread(self, thread_target_id: str) -> ExecutionRecord: ...
 
-    async def stop_thread(self, thread_target_id: str) -> ThreadStopOutcome: ...
+    async def stop_thread(
+        self,
+        thread_target_id: str,
+        *,
+        cancel_queued: bool = True,
+    ) -> ThreadStopOutcome: ...
 
     def get_execution(
         self, thread_target_id: str, execution_id: str
@@ -360,6 +373,14 @@ class OrchestrationThreadService(Protocol):
     ) -> list[ExecutionRecord]: ...
 
     def get_queue_depth(self, thread_target_id: str) -> int: ...
+
+    def cancel_queued_execution(
+        self, thread_target_id: str, execution_id: str
+    ) -> bool: ...
+
+    def promote_queued_execution(
+        self, thread_target_id: str, execution_id: str
+    ) -> bool: ...
 
     def record_execution_result(
         self,

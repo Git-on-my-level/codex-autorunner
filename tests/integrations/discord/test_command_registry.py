@@ -121,7 +121,9 @@ def test_registry_matches_high_risk_component_and_modal_patterns() -> None:
     assert component_route_for_custom_id("flow_runs_select") is not None
     assert component_route_for_custom_id("approval:req-1:approve") is not None
     assert component_route_for_custom_id("queue_cancel:message-1") is not None
+    assert component_route_for_custom_id("qcancel:turn-1") is not None
     assert component_route_for_custom_id("queue_interrupt_send:message-1") is not None
+    assert component_route_for_custom_id("qis:turn-1:message-1") is not None
     assert component_route_for_custom_id("newt_hard_reset:workspace-token") is not None
     assert component_route_for_custom_id("review_commit_select") is not None
     assert component_route_for_custom_id("flow_action_select:reply") is not None

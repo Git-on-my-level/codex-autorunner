@@ -1202,7 +1202,7 @@ async def test_orchestrated_turn_queued_updates_placeholder_skips_finalize(
     rest = _FakeRest()
     thread = SimpleNamespace(thread_target_id="thread-1")
     started_execution = SimpleNamespace(
-        execution=SimpleNamespace(status="queued"),
+        execution=SimpleNamespace(status="queued", execution_id="turn-2"),
         thread=thread,
     )
     queue_worker_calls = 0
@@ -1298,7 +1298,7 @@ async def test_orchestrated_turn_queued_updates_placeholder_skips_finalize(
             workspace_root=tmp_path,
             prompt_text="hi",
             input_items=None,
-            source_message_id=None,
+            source_message_id="m-2",
             agent="codex",
             model_override=None,
             reasoning_effort=None,
@@ -1322,8 +1322,15 @@ async def test_orchestrated_turn_queued_updates_placeholder_skips_finalize(
     assert not finalized_called
     assert queue_worker_calls == 1
     assert "Queued" in (result.final_message or "")
+    assert result.send_final_message is False
     assert rest.edited_channel_messages
     assert "queued" in rest.edited_channel_messages[-1]["payload"]["content"].lower()
+    buttons = rest.edited_channel_messages[-1]["payload"]["components"][0]["components"]
+    assert [button["label"] for button in buttons] == [
+        "Cancel",
+        "Interrupt + Send",
+    ]
+    assert buttons[1]["custom_id"].startswith("qis:")
 
 
 class _FailingChannelRest(_FakeRest):

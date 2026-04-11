@@ -1382,6 +1382,22 @@ class PmaThreadStore:
         with self._write_conn() as conn:
             return self._lifecycle.cancel_queued_turns(conn, managed_thread_id)
 
+    def cancel_queued_turn(self, managed_thread_id: str, execution_id: str) -> bool:
+        with self._write_conn() as conn:
+            return self._lifecycle.cancel_queued_turn(
+                conn,
+                managed_thread_id,
+                execution_id,
+            )
+
+    def promote_queued_turn(self, managed_thread_id: str, execution_id: str) -> bool:
+        with self._write_conn() as conn:
+            return self._lifecycle.promote_queued_turn(
+                conn,
+                managed_thread_id,
+                execution_id,
+            )
+
     def claim_next_queued_turn(
         self, managed_thread_id: str
     ) -> Optional[tuple[dict[str, Any], dict[str, Any]]]:

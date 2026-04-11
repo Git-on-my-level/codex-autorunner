@@ -1837,6 +1837,16 @@ async def _handle_queue_cancel_component(service: Any, ctx: Any) -> None:
     )
 
 
+async def _handle_cancel_queued_turn_component(service: Any, ctx: Any) -> None:
+    await service._handle_cancel_queued_turn_button(
+        ctx.interaction_id,
+        ctx.interaction_token,
+        channel_id=ctx.channel_id,
+        custom_id=ctx.custom_id or "",
+        message_id=ctx.message_id,
+    )
+
+
 async def _handle_queue_interrupt_send_component(service: Any, ctx: Any) -> None:
     await service._handle_queue_interrupt_send_button(
         ctx.interaction_id,
@@ -1846,6 +1856,17 @@ async def _handle_queue_interrupt_send_component(service: Any, ctx: Any) -> None
         message_id=ctx.message_id,
         guild_id=ctx.guild_id,
         user_id=ctx.user_id,
+    )
+
+
+async def _handle_queued_turn_interrupt_send_component(service: Any, ctx: Any) -> None:
+    await service._handle_queued_turn_interrupt_send_button(
+        ctx.interaction_id,
+        ctx.interaction_token,
+        channel_id=ctx.channel_id,
+        custom_id=ctx.custom_id or "",
+        user_id=ctx.user_id,
+        message_id=ctx.message_id,
     )
 
 
@@ -1985,9 +2006,19 @@ _COMPONENT_ROUTES: tuple[ComponentRoute, ...] = (
         handler=_handle_queue_cancel_component,
     ),
     ComponentRoute(
+        id="queued_turn.cancel",
+        custom_id_prefix="qcancel:",
+        handler=_handle_cancel_queued_turn_component,
+    ),
+    ComponentRoute(
         id="queue.interrupt_send",
         custom_id_prefix="queue_interrupt_send:",
         handler=_handle_queue_interrupt_send_component,
+    ),
+    ComponentRoute(
+        id="queued_turn.interrupt_send",
+        custom_id_prefix="qis:",
+        handler=_handle_queued_turn_interrupt_send_component,
     ),
     ComponentRoute(
         id="turn.cancel",

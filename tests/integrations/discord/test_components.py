@@ -13,18 +13,23 @@ from codex_autorunner.integrations.discord.components import (
     build_agent_profile_picker,
     build_bind_picker,
     build_button,
+    build_cancel_queued_turn_custom_id,
     build_cancel_turn_custom_id,
     build_flow_runs_picker,
     build_flow_status_buttons,
     build_model_effort_picker,
     build_model_picker,
     build_queue_notice_buttons,
+    build_queued_turn_interrupt_send_custom_id,
+    build_queued_turn_progress_buttons,
     build_review_commit_picker,
     build_select_menu,
     build_select_option,
     build_session_threads_picker,
     build_update_target_picker,
+    parse_cancel_queued_turn_custom_id,
     parse_cancel_turn_custom_id,
+    parse_queued_turn_interrupt_send_custom_id,
 )
 
 
@@ -71,6 +76,14 @@ class TestCancelTurnCustomId:
         assert execution_id == "turn-1"
 
 
+class TestCancelQueuedTurnCustomId:
+    def test_round_trips_execution_id(self) -> None:
+        custom_id = build_cancel_queued_turn_custom_id(execution_id="turn-1")
+
+        assert custom_id == "qcancel:turn-1"
+        assert parse_cancel_queued_turn_custom_id(custom_id) == "turn-1"
+
+
 class TestBuildQueueNoticeButtons:
     def test_includes_interrupt_button_by_default(self) -> None:
         row = build_queue_notice_buttons("message-1")
@@ -86,6 +99,35 @@ class TestBuildQueueNoticeButtons:
         assert [button["custom_id"] for button in row["components"]] == [
             "queue_cancel:message-1"
         ]
+
+
+class TestQueuedTurnInterruptSendCustomId:
+    def test_round_trips_execution_and_source_message(self) -> None:
+        custom_id = build_queued_turn_interrupt_send_custom_id(
+            execution_id="turn-1",
+            source_message_id="message-1",
+        )
+
+        assert custom_id == "qis:turn-1:message-1"
+        assert parse_queued_turn_interrupt_send_custom_id(custom_id) == (
+            "turn-1",
+            "message-1",
+        )
+
+
+class TestBuildQueuedTurnProgressButtons:
+    def test_includes_cancel_and_interrupt_send(self) -> None:
+        row = build_queued_turn_progress_buttons(
+            execution_id="turn-1",
+            source_message_id="message-1",
+        )
+
+        assert [button["label"] for button in row["components"]] == [
+            "Cancel",
+            "Interrupt + Send",
+        ]
+        assert row["components"][0]["custom_id"] == "qcancel:turn-1"
+        assert row["components"][1]["custom_id"] == "qis:turn-1:message-1"
 
 
 class TestBuildSelectMenu:

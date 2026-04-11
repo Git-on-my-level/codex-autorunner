@@ -1317,6 +1317,7 @@ async def handle_car_interrupt(
     *,
     channel_id: str,
     active_turn_text: str = "Stopping current turn...",
+    cancel_queued: bool = True,
     thread_target_id: Optional[str] = None,
     execution_id: Optional[str] = None,
     progress_reuse_source_message_id: Optional[str] = None,
@@ -1482,9 +1483,15 @@ async def handle_car_interrupt(
         )
         return
     try:
-        stop_outcome = await orchestration_service.stop_thread(
-            current_thread.thread_target_id
-        )
+        if cancel_queued:
+            stop_outcome = await orchestration_service.stop_thread(
+                current_thread.thread_target_id
+            )
+        else:
+            stop_outcome = await orchestration_service.stop_thread(
+                current_thread.thread_target_id,
+                cancel_queued=False,
+            )
         interrupted_active = bool(getattr(stop_outcome, "interrupted_active", False))
         recovered_lost_backend = bool(
             getattr(stop_outcome, "recovered_lost_backend", False)

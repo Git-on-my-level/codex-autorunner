@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional
 
 from .freshness import parse_iso_datetime
@@ -248,6 +248,146 @@ class PmaThreadStoreLifecycle:
                 ),
             )
         return len(execution_ids)
+
+    def cancel_queued_turn(
+        self,
+        conn: Any,
+        managed_thread_id: str,
+        execution_id: str,
+    ) -> bool:
+        cancelled_at = now_iso()
+        row = conn.execute(
+            """
+            SELECT e.execution_id
+              FROM orch_queue_items AS q
+              JOIN orch_thread_executions AS e
+                ON e.execution_id = q.source_key
+             WHERE q.source_kind = 'thread_execution'
+               AND q.lane_id = ?
+               AND e.thread_target_id = ?
+               AND e.execution_id = ?
+               AND e.status = 'queued'
+               AND q.state IN ('pending', 'queued', 'waiting')
+             LIMIT 1
+            """,
+            (
+                thread_queue_lane_id(managed_thread_id),
+                managed_thread_id,
+                execution_id,
+            ),
+        ).fetchone()
+        if row is None:
+            return False
+        with conn:
+            execution_cursor = conn.execute(
+                """
+                UPDATE orch_thread_executions
+                   SET status = 'interrupted',
+                       error_text = COALESCE(error_text, 'interrupted'),
+                       finished_at = ?
+                 WHERE execution_id = ?
+                   AND status = 'queued'
+                """,
+                (cancelled_at, execution_id),
+            )
+            conn.execute(
+                """
+                UPDATE orch_queue_items
+                   SET state = 'failed',
+                       completed_at = ?,
+                       updated_at = ?,
+                       error_text = COALESCE(error_text, 'interrupted'),
+                       result_json = ?
+                 WHERE source_kind = 'thread_execution'
+                   AND lane_id = ?
+                   AND source_key = ?
+                   AND state IN ('pending', 'queued', 'waiting')
+                """,
+                (
+                    cancelled_at,
+                    cancelled_at,
+                    _json_dumps({"status": "interrupted"}),
+                    thread_queue_lane_id(managed_thread_id),
+                    execution_id,
+                ),
+            )
+        return bool(execution_cursor.rowcount)
+
+    def promote_queued_turn(
+        self,
+        conn: Any,
+        managed_thread_id: str,
+        execution_id: str,
+    ) -> bool:
+        rows = conn.execute(
+            """
+            SELECT
+                q.queue_item_id,
+                COALESCE(q.visible_at, q.created_at) AS scheduled_at
+              FROM orch_queue_items AS q
+              JOIN orch_thread_executions AS e
+                ON e.execution_id = q.source_key
+             WHERE q.source_kind = 'thread_execution'
+               AND q.lane_id = ?
+               AND e.thread_target_id = ?
+               AND e.status = 'queued'
+               AND q.state IN ('pending', 'queued', 'waiting')
+             ORDER BY COALESCE(q.visible_at, q.created_at) ASC, q.rowid ASC
+            """,
+            (
+                thread_queue_lane_id(managed_thread_id),
+                managed_thread_id,
+            ),
+        ).fetchall()
+        if not rows:
+            return False
+
+        queue_order = [str(row["queue_item_id"]) for row in rows]
+        target_row = conn.execute(
+            """
+            SELECT q.queue_item_id
+              FROM orch_queue_items AS q
+              JOIN orch_thread_executions AS e
+                ON e.execution_id = q.source_key
+             WHERE q.source_kind = 'thread_execution'
+               AND q.lane_id = ?
+               AND e.thread_target_id = ?
+               AND e.execution_id = ?
+               AND e.status = 'queued'
+               AND q.state IN ('pending', 'queued', 'waiting')
+             LIMIT 1
+            """,
+            (
+                thread_queue_lane_id(managed_thread_id),
+                managed_thread_id,
+                execution_id,
+            ),
+        ).fetchone()
+        if target_row is None:
+            return False
+
+        target_queue_item_id = str(target_row["queue_item_id"])
+        if queue_order and queue_order[0] == target_queue_item_id:
+            return True
+
+        scheduled_at_raw = str(rows[0]["scheduled_at"] or "").strip()
+        scheduled_at = parse_iso_datetime(scheduled_at_raw)
+        if scheduled_at is None:
+            scheduled_at = datetime.now(timezone.utc)
+        promoted_visible_at = (scheduled_at - timedelta(microseconds=1)).isoformat()
+        updated_at = now_iso()
+        with conn:
+            cursor = conn.execute(
+                """
+                UPDATE orch_queue_items
+                   SET visible_at = ?,
+                       updated_at = ?
+                 WHERE queue_item_id = ?
+                   AND state IN ('pending', 'queued', 'waiting')
+                """,
+                (promoted_visible_at, updated_at, target_queue_item_id),
+            )
+        return bool(cursor.rowcount)
 
     def claim_next_queued_turn(
         self, conn: Any, managed_thread_id: str

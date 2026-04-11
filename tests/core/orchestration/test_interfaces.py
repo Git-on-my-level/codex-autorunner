@@ -127,6 +127,16 @@ class _FakeStore:
         _ = thread_target_id
         return 0
 
+    def cancel_queued_execution(self, thread_target_id: str, execution_id: str) -> bool:
+        _ = thread_target_id, execution_id
+        return False
+
+    def promote_queued_execution(
+        self, thread_target_id: str, execution_id: str
+    ) -> bool:
+        _ = thread_target_id, execution_id
+        return False
+
     def claim_next_queued_execution(
         self, thread_target_id: str
     ) -> Optional[tuple[ExecutionRecord, dict[str, Any]]]:
@@ -389,7 +399,13 @@ class _FakeService:
     async def interrupt_thread(self, thread_target_id: str) -> ExecutionRecord:
         return self.store.execution
 
-    async def stop_thread(self, thread_target_id: str) -> ThreadStopOutcome:
+    async def stop_thread(
+        self,
+        thread_target_id: str,
+        *,
+        cancel_queued: bool = True,
+    ) -> ThreadStopOutcome:
+        _ = cancel_queued
         return ThreadStopOutcome(
             thread_target_id=thread_target_id,
             execution=self.store.execution,
@@ -415,6 +431,16 @@ class _FakeService:
     def get_queue_depth(self, thread_target_id: str) -> int:
         _ = thread_target_id
         return 0
+
+    def cancel_queued_execution(self, thread_target_id: str, execution_id: str) -> bool:
+        _ = thread_target_id, execution_id
+        return False
+
+    def promote_queued_execution(
+        self, thread_target_id: str, execution_id: str
+    ) -> bool:
+        _ = thread_target_id, execution_id
+        return False
 
     def cancel_queued_executions(self, thread_target_id: str) -> int:
         _ = thread_target_id
