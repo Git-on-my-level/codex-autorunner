@@ -658,6 +658,65 @@ def test_hub_agent_workspace_crud_routes_support_remove_and_delete(
     )
     assert recreate_resp.status_code == 200
 
+
+def test_hub_agent_workspace_destination_route_accepts_mounts(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    client = TestClient(create_hub_app(hub_root))
+    create_resp = client.post(
+        "/hub/agent-workspaces",
+        json={"id": "zc-main", "runtime": "zeroclaw"},
+    )
+    assert create_resp.status_code == 200
+    workspace_path = (
+        hub_root / ".codex-autorunner" / "runtimes" / "zeroclaw" / "zc-main"
+    )
+
+    destination_resp = client.post(
+        "/hub/agent-workspaces/zc-main/destination",
+        json={
+            "kind": "docker",
+            "image": "ghcr.io/acme/zeroclaw:latest",
+            "mounts": [
+                {"source": "/tmp/src", "target": "/workspace/src"},
+                {
+                    "source": "/tmp/cache",
+                    "target": "/workspace/cache",
+                    "readOnly": True,
+                },
+            ],
+        },
+    )
+
+    assert destination_resp.status_code == 200
+    destination_payload = destination_resp.json()
+    assert destination_payload["configured_destination"] == {
+        "kind": "docker",
+        "image": "ghcr.io/acme/zeroclaw:latest",
+        "mounts": [
+            {"source": "/tmp/src", "target": "/workspace/src"},
+            {
+                "source": "/tmp/cache",
+                "target": "/workspace/cache",
+                "read_only": True,
+            },
+        ],
+    }
+    assert destination_payload["effective_destination"] == {
+        "kind": "docker",
+        "image": "ghcr.io/acme/zeroclaw:latest",
+        "mounts": [
+            {"source": "/tmp/src", "target": "/workspace/src"},
+            {
+                "source": "/tmp/cache",
+                "target": "/workspace/cache",
+                "read_only": True,
+            },
+        ],
+    }
+
     delete_resp = client.post("/hub/agent-workspaces/zc-main/delete", json={})
     assert delete_resp.status_code == 200
     assert delete_resp.json() == {
