@@ -35,6 +35,7 @@ from codex_autorunner.core.orchestration.service import (
 )
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.orchestration.transcript_mirror import TranscriptMirrorStore
+from codex_autorunner.core.pma_automation_store import PmaAutomationStore
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 
 FIXTURE_PATH = Path(__file__).resolve().parents[2] / "fixtures" / "fake_acp_server.py"
@@ -1083,6 +1084,122 @@ async def test_send_review_preserves_request_kind_through_queue_claim_and_result
         ).fetchone()
     assert row is not None
     assert row["request_kind"] == "review"
+
+
+@pytest.mark.parametrize(
+    ("result_status", "result_error", "expected_to_state", "expected_event_type"),
+    [
+        ("ok", None, "completed", "managed_thread_completed"),
+        ("error", "managed thread failed", "failed", "managed_thread_failed"),
+    ],
+)
+async def test_record_execution_result_notifies_managed_thread_subscriptions(
+    tmp_path: Path,
+    result_status: str,
+    result_error: Optional[str],
+    expected_to_state: str,
+    expected_event_type: str,
+) -> None:
+    harness = _FakeHarness()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target(
+        "codex",
+        workspace_root,
+        repo_id="repo-automation",
+    )
+
+    automation_store = PmaAutomationStore(tmp_path / "hub")
+    automation_store.create_subscription(
+        {
+            "event_types": [expected_event_type],
+            "thread_id": thread.thread_target_id,
+            "from_state": "running",
+            "to_state": expected_to_state,
+            "lane_id": "pma:lane-next",
+            "idempotency_key": f"subscription:{expected_event_type}",
+        }
+    )
+
+    running = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="trigger transition",
+        )
+    )
+
+    finalized = service.record_execution_result(
+        thread.thread_target_id,
+        running.execution_id,
+        status=result_status,
+        assistant_text="" if result_status == "error" else "done",
+        error=result_error,
+    )
+    assert finalized.status == result_status
+
+    pending = automation_store.list_pending_wakeups(limit=10)
+    assert len(pending) == 1
+    wakeup = pending[0]
+    assert wakeup["source"] == "transition"
+    assert wakeup["thread_id"] == thread.thread_target_id
+    assert wakeup["repo_id"] == "repo-automation"
+    assert wakeup["from_state"] == "running"
+    assert wakeup["to_state"] == expected_to_state
+    assert wakeup["event_type"] == expected_event_type
+    assert wakeup["lane_id"] == "pma:lane-next"
+
+
+async def test_record_execution_interrupted_notifies_managed_thread_subscriptions(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target(
+        "codex",
+        workspace_root,
+        repo_id="repo-automation",
+    )
+
+    automation_store = PmaAutomationStore(tmp_path / "hub")
+    automation_store.create_subscription(
+        {
+            "event_types": ["managed_thread_interrupted"],
+            "thread_id": thread.thread_target_id,
+            "from_state": "running",
+            "to_state": "interrupted",
+            "lane_id": "pma:lane-next",
+            "idempotency_key": "subscription:managed_thread_interrupted",
+        }
+    )
+
+    running = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="trigger interruption",
+        )
+    )
+
+    finalized = service.record_execution_interrupted(
+        thread.thread_target_id,
+        running.execution_id,
+    )
+    assert finalized.status == "interrupted"
+
+    pending = automation_store.list_pending_wakeups(limit=10)
+    assert len(pending) == 1
+    wakeup = pending[0]
+    assert wakeup["source"] == "transition"
+    assert wakeup["thread_id"] == thread.thread_target_id
+    assert wakeup["repo_id"] == "repo-automation"
+    assert wakeup["from_state"] == "running"
+    assert wakeup["to_state"] == "interrupted"
+    assert wakeup["event_type"] == "managed_thread_interrupted"
+    assert wakeup["lane_id"] == "pma:lane-next"
 
 
 async def test_send_message_interrupts_busy_thread_when_requested(

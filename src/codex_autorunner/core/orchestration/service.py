@@ -9,8 +9,10 @@ from typing import Any, Awaitable, Callable, Mapping, Optional, cast
 
 from ..car_context import CarContextProfile, normalize_car_context_profile
 from ..logging_utils import log_event
+from ..pma_automation_store import PmaAutomationStore
 from ..pma_thread_store import PmaThreadStore
 from ..text_utils import _truncate_text
+from ..time_utils import now_iso
 from .bindings import ActiveWorkSummary, OrchestrationBindingStore
 from .catalog import MappingAgentDefinitionCatalog, RuntimeAgentDescriptor
 from .events import OrchestrationEvent
@@ -359,6 +361,73 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
     ) -> None:
         self._store.set_turn_backend_turn_id(execution_id, backend_turn_id)
 
+    def _notify_terminal_transition(
+        self,
+        *,
+        thread_target_id: str,
+        execution_id: str,
+        status: Optional[str],
+        error: Optional[str] = None,
+    ) -> None:
+        normalized_status = str(status or "").strip().lower()
+        if normalized_status == "ok":
+            to_state = "completed"
+            reason = "managed_turn_completed"
+        elif normalized_status == "interrupted":
+            to_state = "interrupted"
+            reason = "managed_turn_interrupted"
+        else:
+            to_state = "failed"
+            reason = str(error or "").strip() or "managed_turn_failed"
+
+        thread = self.get_thread_target(thread_target_id)
+        payload: dict[str, Any] = {
+            "thread_id": thread_target_id,
+            "from_state": "running",
+            "to_state": to_state,
+            "reason": reason,
+            "timestamp": now_iso(),
+            "event_type": f"managed_thread_{to_state}",
+            "transition_id": f"managed_turn:{execution_id}:{to_state}",
+            "idempotency_key": f"managed_turn:{execution_id}:{to_state}",
+            "managed_thread_id": thread_target_id,
+            "managed_turn_id": execution_id,
+        }
+        if thread is not None:
+            if thread.repo_id:
+                payload["repo_id"] = thread.repo_id
+            if thread.resource_kind:
+                payload["resource_kind"] = thread.resource_kind
+            if thread.resource_id:
+                payload["resource_id"] = thread.resource_id
+            payload["agent"] = thread.agent_id
+
+        try:
+            result = PmaAutomationStore(self._store.hub_root).notify_transition(payload)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            logger.exception(
+                "Failed to notify PMA automation for terminal managed-thread transition "
+                "(thread_target_id=%s, execution_id=%s, to_state=%s)",
+                thread_target_id,
+                execution_id,
+                to_state,
+            )
+            return
+
+        try:
+            created = int(result.get("created") or 0)
+        except (TypeError, ValueError):
+            created = 0
+        if created > 0:
+            logger.info(
+                "Managed-thread PMA transition enqueued wakeups "
+                "(thread_target_id=%s, execution_id=%s, event_type=%s, created=%s)",
+                thread_target_id,
+                execution_id,
+                payload["event_type"],
+                created,
+            )
+
     def record_execution_result(
         self,
         thread_target_id: str,
@@ -385,6 +454,12 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
             raise KeyError(
                 f"Execution '{execution_id}' is missing after result recording"
             )
+        self._notify_terminal_transition(
+            thread_target_id=thread_target_id,
+            execution_id=execution_id,
+            status=execution.status,
+            error=execution.error,
+        )
         return execution
 
     def record_execution_interrupted(
@@ -398,6 +473,12 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
             raise KeyError(
                 f"Execution '{execution_id}' is missing after interrupt recording"
             )
+        self._notify_terminal_transition(
+            thread_target_id=thread_target_id,
+            execution_id=execution_id,
+            status=execution.status,
+            error=execution.error,
+        )
         return execution
 
     def cancel_queued_executions(self, thread_target_id: str) -> int:
