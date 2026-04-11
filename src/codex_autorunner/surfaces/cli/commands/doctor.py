@@ -539,3 +539,70 @@ def register_doctor_commands(
             with open(output_path, "w") as f:
                 json.dump(payload, f, indent=2)
             typer.echo(f"saved: {output_path}")
+
+    @doctor_app.command("execution-history")
+    def doctor_execution_history(
+        repo: Optional[Path] = typer.Option(None, "--repo", help="Repo or hub path"),
+        json_output: bool = typer.Option(False, "--json", help="Output JSON"),
+        top_n: int = typer.Option(10, "--top", help="Top N heavy executions to show"),
+    ):
+        """Report execution-history growth, recovery costs, and trace spill behavior."""
+        from ....core.orchestration.execution_history_diagnostics import (
+            ExecutionHistoryThresholds,
+            run_execution_history_diagnostics,
+        )
+
+        try:
+            start_path = repo or Path.cwd()
+            hub_config = load_hub_config(start_path)
+        except ConfigError:
+            raise_exit("No hub config found")
+
+        thresholds = ExecutionHistoryThresholds(top_n_heavy_executions=top_n)
+        report = run_execution_history_diagnostics(
+            hub_config.root,
+            thresholds=thresholds,
+        )
+
+        if json_output:
+            typer.echo(json.dumps(report.to_dict(), indent=2))
+            return
+
+        m = report.metrics
+        typer.echo(
+            f"executions: total={m.total_executions} terminal={m.terminal_executions}"
+        )
+        typer.echo(f"hot: timeline_rows={m.timeline_rows} checkpoints={m.checkpoints}")
+        typer.echo(
+            f"cold: finalized_manifests={m.finalized_manifests} "
+            f"archived_manifests={m.archived_manifests} "
+            f"total_trace_bytes={m.total_trace_bytes}"
+        )
+        if m.oversized_execution_ids:
+            typer.echo(f"oversized_executions: {len(m.oversized_execution_ids)}")
+        for fam, cnt in sorted(m.hot_row_count_by_family.items()):
+            typer.echo(f"  hot family={fam} rows={cnt}")
+
+        if report.top_n.top_heavy_executions:
+            typer.echo(f"top {top_n} heavy executions (hot rows):")
+            for entry in report.top_n.top_heavy_executions:
+                typer.echo(f"  {entry['execution_id']}: {entry['hot_rows']} hot rows")
+
+        if report.top_n.top_cold_trace_by_bytes:
+            typer.echo(f"top {top_n} cold traces (bytes):")
+            for entry in report.top_n.top_cold_trace_by_bytes:
+                typer.echo(
+                    f"  {entry['execution_id']}: {entry['cold_trace_bytes']} bytes"
+                )
+
+        if report.threshold_breaches:
+            typer.echo(f"threshold breaches: {len(report.threshold_breaches)}")
+            for breach in report.threshold_breaches:
+                typer.echo(f"  {breach.level.upper()}: {breach.message}")
+        else:
+            typer.echo("threshold breaches: none")
+
+        if report.startup_recovery_duration_seconds is not None:
+            typer.echo(
+                f"scan_duration: {report.startup_recovery_duration_seconds:.3f}s"
+            )

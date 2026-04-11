@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import logging
 import shutil
 from collections import Counter
 from datetime import datetime, timedelta, timezone
@@ -20,6 +21,8 @@ from .execution_history import (
     ExecutionTraceManifest,
 )
 from .sqlite import open_orchestration_sqlite, resolve_orchestration_sqlite_path
+
+_maint_logger = logging.getLogger("codex_autorunner.execution_history_diagnostics")
 
 _TIMELINE_EVENT_FAMILY = "turn.timeline"
 _COMPACTION_SUMMARY_SUFFIX = ":compaction-summary"
@@ -510,6 +513,17 @@ def compact_completed_execution_history(
                     ),
                 )
 
+    for _eid in compacted_ids:
+        _maint_logger.info(
+            _json_dumps(
+                {
+                    "event": "execution_history_compaction",
+                    "execution_id": _eid,
+                    "dry_run": dry_run,
+                }
+            )
+        )
+
     return ExecutionHistoryCompactionSummary(
         dry_run=dry_run,
         candidate_executions=len(compacted_ids),
@@ -644,6 +658,19 @@ def prune_execution_history_retention(
                     resolve_hub_traces_root(hub_root),
                 )
 
+    _maint_logger.info(
+        _json_dumps(
+            {
+                "event": "execution_history_retention_prune",
+                "pruned_executions": len(pruned_execution_ids),
+                "pruned_traces": len(pruned_trace_ids),
+                "hot_rows_deleted": hot_rows_deleted,
+                "bytes_reclaimed": bytes_reclaimed,
+                "dry_run": dry_run,
+            }
+        )
+    )
+
     return ExecutionHistoryRetentionSummary(
         dry_run=dry_run,
         pruned_execution_ids=tuple(pruned_execution_ids),
@@ -746,11 +773,23 @@ def vacuum_execution_history(hub_root: Path) -> ExecutionHistoryVacuumSummary:
     with open_orchestration_sqlite(hub_root) as conn:
         conn.execute("VACUUM")
     size_after = db_path.stat().st_size if db_path.exists() else 0
+    reclaimed = max(size_before - size_after, 0)
+    _maint_logger.info(
+        _json_dumps(
+            {
+                "event": "execution_history_vacuum",
+                "database_path": str(db_path),
+                "size_before": size_before,
+                "size_after": size_after,
+                "reclaimed_bytes": reclaimed,
+            }
+        )
+    )
     return ExecutionHistoryVacuumSummary(
         database_path=str(db_path),
         size_before=size_before,
         size_after=size_after,
-        reclaimed_bytes=max(size_before - size_after, 0),
+        reclaimed_bytes=reclaimed,
     )
 
 

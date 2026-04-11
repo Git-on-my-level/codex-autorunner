@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
@@ -29,6 +30,8 @@ from .execution_history import (
     route_run_event,
 )
 from .sqlite import open_orchestration_sqlite
+
+_timeline_logger = logging.getLogger("codex_autorunner.execution_history_diagnostics")
 
 _EVENT_FAMILY = "turn.timeline"
 _CHECKPOINT_PREVIEW_CHARS = 240
@@ -563,16 +566,47 @@ def persist_turn_timeline(
             count += 1
             if not routing.persist_hot_projection:
                 continue
+            family = routing.event_family
             hot_event, event_metadata = _maybe_coalesce_hot_event(event, hot_state)
             if hot_event is None:
+                if event_metadata.get("hot_duplicate_notice"):
+                    _timeline_logger.debug(
+                        json.dumps(
+                            {
+                                "event": "hot_projection_dedupe",
+                                "execution_id": normalized_execution_id,
+                                "event_family": family,
+                                "dedupe_reason": "duplicate_notice",
+                                "deduped_count": hot_state.deduped_counts.get(
+                                    family, 0
+                                ),
+                            }
+                        )
+                    )
                 continue
-            family = routing.event_family
             if not hot_state.allows_hot_persist(family):
                 hot_state.note_spilled(
                     family,
                     has_cold_trace=bool(
                         cold_trace_writer is not None and routing.capture_cold_trace
                     ),
+                )
+                _timeline_logger.info(
+                    json.dumps(
+                        {
+                            "event": "hot_projection_spill_to_cold",
+                            "execution_id": normalized_execution_id,
+                            "event_family": family,
+                            "has_cold_trace": bool(
+                                cold_trace_writer is not None
+                                and routing.capture_cold_trace
+                            ),
+                            "hot_rows_so_far": hot_state.family_hot_rows.get(family, 0),
+                            "hot_limit": _HOT_FAMILY_ROW_LIMITS.get(family, 0),
+                            "warning": cold_trace_writer is None
+                            or not routing.capture_cold_trace,
+                        }
+                    )
                 )
                 continue
             event_payload = build_hot_projection_envelope(
