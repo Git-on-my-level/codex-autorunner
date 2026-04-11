@@ -132,10 +132,12 @@ def register_worktree_commands(
             return
         typer.echo(f"Worktrees ({len(payload)}):")
         for item in payload:
+            cmd = item.get("recommended_command", "")
             typer.echo(
                 "  {id} base={worktree_of} branch={branch} status={status}".format(
                     **item
                 )
+                + (f" cmd={cmd}" if cmd else "")
             )
 
     @worktree_app.command("scan")
@@ -161,10 +163,12 @@ def register_worktree_commands(
             return
         typer.echo(f"Worktrees ({len(payload)}):")
         for item in payload:
+            cmd = item.get("recommended_command", "")
             typer.echo(
                 "  {id} base={worktree_of} branch={branch} status={status}".format(
                     **item
                 )
+                + (f" cmd={cmd}" if cmd else "")
             )
 
     @worktree_app.command("cleanup")

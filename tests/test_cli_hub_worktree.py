@@ -72,7 +72,7 @@ def test_cli_hub_worktree_list_filters_worktrees(tmp_path, monkeypatch) -> None:
 
     lines = [line for line in result.output.splitlines() if "base--feature" in line]
     assert len(lines) >= 1
-    assert "base--feature" in result.output
+    assert "cmd=car hub worktree archive base--feature" in result.output
 
 
 def test_cli_hub_worktree_scan_filters_worktrees_json(tmp_path, monkeypatch) -> None:
@@ -161,6 +161,7 @@ def test_cli_hub_scan_includes_recommended_commands(tmp_path, monkeypatch) -> No
     assert result.exit_code == 0
     assert "base" in result.output
     assert "base--feature" in result.output
+    assert "car hub worktree archive base--feature" in result.output
 
 
 def test_cli_hub_worktree_cleanup_calls_supervisor(tmp_path, monkeypatch) -> None:
