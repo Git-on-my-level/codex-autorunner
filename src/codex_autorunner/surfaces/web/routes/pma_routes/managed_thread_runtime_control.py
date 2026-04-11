@@ -15,6 +15,7 @@ from .....core.chat_bindings import (
     TELEGRAM_STATE_FILE_DEFAULT,
 )
 from .....core.orchestration import OrchestrationBindingStore
+from .....core.orchestration.cold_trace_store import ColdTraceStore
 from .....core.pma_thread_store import PmaThreadStore
 from .....core.time_utils import now_iso
 from .....integrations.app_server.event_buffer import AppServerEventBuffer
@@ -353,6 +354,7 @@ async def recover_orphaned_executions(
     build_service_for_app: Any,
 ) -> None:
     thread_store = PmaThreadStore(app.state.config.root)
+    checkpoint_store = ColdTraceStore(app.state.config.root)
     binding_store = OrchestrationBindingStore(app.state.config.root)
     service = build_service_for_app(
         app,
@@ -367,6 +369,34 @@ async def recover_orphaned_executions(
             execution = service.get_running_execution(managed_thread_id)
             if thread is None or execution is None:
                 continue
+            checkpoint = checkpoint_store.load_checkpoint(execution.execution_id)
+            if checkpoint is not None:
+                restored_backend_thread_id = normalize_optional_text(
+                    checkpoint.backend_thread_id
+                )
+                restored_backend_turn_id = normalize_optional_text(
+                    checkpoint.backend_turn_id
+                )
+                if (
+                    restored_backend_thread_id is not None
+                    and not normalize_optional_text(thread.backend_thread_id)
+                ):
+                    thread_store.set_thread_backend_id(
+                        managed_thread_id,
+                        restored_backend_thread_id,
+                    )
+                    thread = service.get_thread_target(managed_thread_id) or thread
+                if (
+                    restored_backend_turn_id is not None
+                    and not normalize_optional_text(execution.backend_id)
+                ):
+                    thread_store.set_turn_backend_turn_id(
+                        execution.execution_id,
+                        restored_backend_turn_id,
+                    )
+                    execution = (
+                        service.get_running_execution(managed_thread_id) or execution
+                    )
             if _has_bound_chat_surface(
                 binding_store, managed_thread_id
             ) and _is_chat_origin_running_execution(thread_store, managed_thread_id):

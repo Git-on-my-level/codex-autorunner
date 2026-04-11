@@ -38,18 +38,17 @@ class PmaThreadStoreLifecycle:
         running_rows = conn.execute(
             """
             SELECT
-                execution_id,
-                started_at,
-                created_at,
-                (
-                    SELECT MAX(ep.timestamp)
-                      FROM orch_event_projections AS ep
-                     WHERE ep.execution_id = orch_thread_executions.execution_id
-                ) AS last_event_at
-              FROM orch_thread_executions
-             WHERE thread_target_id = ?
-               AND status = 'running'
-             ORDER BY created_at ASC, execution_id ASC
+                orch_thread_executions.execution_id AS execution_id,
+                orch_thread_executions.started_at AS started_at,
+                orch_thread_executions.created_at AS created_at,
+                orch_execution_checkpoints.checkpoint_json AS checkpoint_json
+             FROM orch_thread_executions
+         LEFT JOIN orch_execution_checkpoints
+                ON orch_execution_checkpoints.execution_id = orch_thread_executions.execution_id
+             WHERE orch_thread_executions.thread_target_id = ?
+               AND orch_thread_executions.status = 'running'
+             ORDER BY orch_thread_executions.created_at ASC,
+                      orch_thread_executions.execution_id ASC
             """,
             (managed_thread_id,),
         ).fetchall()
@@ -88,8 +87,16 @@ class PmaThreadStoreLifecycle:
             if not include_status_turn_age_recovery and status_turn_id == execution_id:
                 continue
 
+            checkpoint = _json_loads_object(row["checkpoint_json"])
+            checkpoint_last_activity = None
+            if checkpoint:
+                checkpoint_last_activity = parse_iso_datetime(
+                    checkpoint.get("last_progress_at")
+                ) or parse_iso_datetime(
+                    checkpoint.get("transport_request_return_timestamp")
+                )
             last_activity_at = (
-                parse_iso_datetime(row["last_event_at"])
+                checkpoint_last_activity
                 or parse_iso_datetime(row["started_at"])
                 or parse_iso_datetime(row["created_at"])
             )

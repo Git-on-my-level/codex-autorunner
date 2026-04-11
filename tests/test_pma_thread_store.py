@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from codex_autorunner.core.orchestration import ColdTraceStore
+from codex_autorunner.core.orchestration.execution_history import ExecutionCheckpoint
 from codex_autorunner.core.orchestration.runtime_bindings import (
     clear_runtime_thread_binding,
 )
@@ -701,28 +703,14 @@ def test_create_turn_keeps_old_running_execution_with_recent_activity(
                 """,
                 (active_turn["managed_turn_id"],),
             )
-            conn.execute(
-                """
-                INSERT INTO orch_event_projections (
-                    event_id,
-                    event_family,
-                    event_type,
-                    execution_id,
-                    timestamp,
-                    status,
-                    payload_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    f"test-activity:{active_turn['managed_turn_id']}",
-                    "turn.timeline",
-                    "output_delta",
-                    active_turn["managed_turn_id"],
-                    "2999-01-01T00:00:00Z",
-                    "recorded",
-                    "{}",
-                ),
-            )
+    ColdTraceStore(store.hub_root).save_checkpoint(
+        ExecutionCheckpoint(
+            execution_id=active_turn["managed_turn_id"],
+            thread_target_id=thread["managed_thread_id"],
+            status="running",
+            last_progress_at="2999-01-01T00:00:00Z",
+        )
+    )
 
     with pytest.raises(ManagedThreadAlreadyHasRunningTurnError):
         store.create_turn(thread["managed_thread_id"], prompt="second")

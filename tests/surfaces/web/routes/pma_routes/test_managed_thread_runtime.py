@@ -11,7 +11,11 @@ from fastapi.testclient import TestClient
 from tests.conftest import write_test_config
 
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
-from codex_autorunner.core.orchestration import OrchestrationBindingStore
+from codex_autorunner.core.orchestration import (
+    ColdTraceStore,
+    OrchestrationBindingStore,
+)
+from codex_autorunner.core.orchestration.execution_history import ExecutionCheckpoint
 from codex_autorunner.core.orchestration.runtime_bindings import (
     clear_runtime_thread_binding,
 )
@@ -111,6 +115,49 @@ async def test_recover_orphaned_managed_thread_executions_unblocks_restart_queue
     assert claimed is not None
     claimed_turn, _queue_payload = claimed
     assert claimed_turn["managed_turn_id"] == queued["managed_turn_id"]
+
+
+@pytest.mark.anyio
+async def test_recover_orphaned_managed_thread_executions_restores_backend_ids_from_checkpoint(
+    hub_env,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    store = PmaThreadStore(hub_env.hub_root)
+    created = store.create_thread(
+        "codex",
+        hub_env.repo_root.resolve(),
+        repo_id=hub_env.repo_id,
+    )
+    managed_thread_id = str(created["managed_thread_id"])
+    running = store.create_turn(managed_thread_id, prompt="running")
+    store.set_thread_backend_id(managed_thread_id, None)
+    store.set_turn_backend_turn_id(running["managed_turn_id"], None)
+    ColdTraceStore(hub_env.hub_root).save_checkpoint(
+        ExecutionCheckpoint(
+            execution_id=running["managed_turn_id"],
+            thread_target_id=managed_thread_id,
+            status="running",
+            backend_thread_id="checkpoint-thread-1",
+            backend_turn_id="checkpoint-turn-1",
+            last_progress_at="2026-04-12T00:00:00Z",
+        )
+    )
+
+    async def _has_turn(thread_id: str, turn_id: str) -> bool:
+        return thread_id == "checkpoint-thread-1" and turn_id == "checkpoint-turn-1"
+
+    app.state.app_server_events = SimpleNamespace(has_turn=_has_turn)
+
+    await managed_thread_runtime.recover_orphaned_managed_thread_executions(app)
+
+    updated_running = store.get_turn(managed_thread_id, running["managed_turn_id"])
+    updated_binding = store.get_thread_runtime_binding(managed_thread_id)
+    assert updated_running is not None
+    assert updated_running["status"] == "running"
+    assert updated_running["backend_turn_id"] == "checkpoint-turn-1"
+    assert updated_binding is not None
+    assert updated_binding.backend_thread_id == "checkpoint-thread-1"
 
 
 @pytest.mark.anyio
