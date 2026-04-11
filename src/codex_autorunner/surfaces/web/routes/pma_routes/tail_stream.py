@@ -491,6 +491,76 @@ def _managed_thread_harness(service: Any, agent_id: str) -> Any:
         return None
 
 
+def _load_managed_thread_tail_store_state(
+    *,
+    hub_root: Path,
+    service: Any,
+    managed_thread_id: str,
+) -> tuple[Any, Any, list[dict[str, Any]], Any]:
+    thread = service.get_thread_target(managed_thread_id)
+    if thread is None:
+        return None, None, [], None
+    turn = service.get_running_execution(
+        managed_thread_id
+    ) or service.get_latest_execution(managed_thread_id)
+    if turn is None:
+        return thread, None, [], None
+    managed_turn_id = str(turn.execution_id or "")
+    persisted_timeline_entries = list_turn_timeline(
+        hub_root,
+        execution_id=managed_turn_id,
+    )
+    turn_record = None
+    if managed_turn_id:
+        turn_record = PmaThreadStore(hub_root).get_turn(
+            managed_thread_id,
+            managed_turn_id,
+        )
+    return thread, turn, persisted_timeline_entries, turn_record
+
+
+def _load_managed_thread_status_state(
+    *,
+    hub_root: Path,
+    service: Any,
+    managed_thread_id: str,
+    limit: int,
+) -> tuple[Any, dict[str, Any] | None, list[dict[str, Any]], int]:
+    thread = service.get_thread_target(managed_thread_id)
+    if thread is None:
+        return None, None, [], 0
+    serialized_thread = _attach_latest_execution_fields(
+        _serialize_thread_target(thread),
+        service=service,
+        managed_thread_id=managed_thread_id,
+    )
+    queue_store = PmaThreadStore(hub_root)
+    queued_turns = queue_store.list_pending_turn_queue_items(
+        managed_thread_id,
+        limit=min(limit, 50),
+    )
+    queue_depth = service.get_queue_depth(managed_thread_id)
+    return thread, serialized_thread, queued_turns, queue_depth
+
+
+def _poll_managed_thread_execution_state(
+    *,
+    service: Any,
+    managed_thread_id: str,
+    managed_turn_id: str,
+) -> tuple[Any, str, Any]:
+    turn = service.get_execution(managed_thread_id, managed_turn_id)
+    status = str((turn.status if turn is not None else "") or "").strip().lower()
+    refreshed_thread = (
+        service.get_thread_target(managed_thread_id) if status == "running" else None
+    )
+    return turn, status, refreshed_thread
+
+
+async def _build_managed_thread_orchestration_service_async(request: Request) -> Any:
+    return await asyncio.to_thread(build_managed_thread_orchestration_service, request)
+
+
 def _runtime_raw_payload(raw_event: Any) -> dict[str, Any]:
     if isinstance(raw_event, dict):
         return dict(raw_event)
@@ -835,12 +905,14 @@ async def _build_managed_thread_tail_snapshot(
     since_ms: Optional[int],
     resume_after: Optional[int],
 ) -> dict[str, Any]:
-    thread = service.get_thread_target(managed_thread_id)
+    thread, turn, persisted_timeline_entries, turn_record = await asyncio.to_thread(
+        _load_managed_thread_tail_store_state,
+        hub_root=request.app.state.config.root,
+        service=service,
+        managed_thread_id=managed_thread_id,
+    )
     if thread is None:
         raise HTTPException(status_code=404, detail="Managed thread not found")
-    turn = service.get_running_execution(
-        managed_thread_id
-    ) or service.get_latest_execution(managed_thread_id)
     if turn is None:
         return {
             "managed_thread_id": managed_thread_id,
@@ -889,10 +961,6 @@ async def _build_managed_thread_tail_snapshot(
     )
     tail_events: list[dict[str, Any]] = []
     raw_last_activity_at: Optional[str] = None
-    persisted_timeline_entries = list_turn_timeline(
-        request.app.state.config.root,
-        execution_id=managed_turn_id,
-    )
     tail_events, raw_last_activity_at = _serialize_persisted_timeline_tail_events(
         persisted_timeline_entries,
         level=level,
@@ -989,8 +1057,6 @@ async def _build_managed_thread_tail_snapshot(
         events=tail_events,
         idle_seconds=idle_seconds,
     )
-    turn_store = PmaThreadStore(request.app.state.config.root)
-    turn_record = turn_store.get_turn(managed_thread_id, managed_turn_id)
     snapshot: dict[str, Any] = {
         "managed_thread_id": managed_thread_id,
         "managed_turn_id": managed_turn_id,
@@ -1039,7 +1105,7 @@ def build_managed_thread_tail_routes(
     ) -> dict[str, Any]:
         if limit <= 0:
             raise HTTPException(status_code=400, detail="limit must be greater than 0")
-        service = build_managed_thread_orchestration_service(request)
+        service = await _build_managed_thread_orchestration_service_async(request)
         snapshot = await _build_managed_thread_tail_snapshot(
             request=request,
             service=service,
@@ -1049,18 +1115,15 @@ def build_managed_thread_tail_routes(
             since_ms=since_ms_from_duration(since),
             resume_after=resolve_resume_after(request, since_event_id),
         )
-        thread = service.get_thread_target(managed_thread_id)
-        if thread is None:
-            raise HTTPException(status_code=404, detail="Managed thread not found")
-        serialized_thread = _attach_latest_execution_fields(
-            _serialize_thread_target(thread),
+        thread, serialized_thread, queued_turns, queue_depth = await asyncio.to_thread(
+            _load_managed_thread_status_state,
+            hub_root=request.app.state.config.root,
             service=service,
             managed_thread_id=managed_thread_id,
+            limit=limit,
         )
-        queue_store = PmaThreadStore(request.app.state.config.root)
-        queued_turns = queue_store.list_pending_turn_queue_items(
-            managed_thread_id, limit=min(limit, 50)
-        )
+        if thread is None or serialized_thread is None:
+            raise HTTPException(status_code=404, detail="Managed thread not found")
         turn_status = str(snapshot.get("turn_status") or "")
         return {
             "managed_thread_id": managed_thread_id,
@@ -1094,7 +1157,7 @@ def build_managed_thread_tail_routes(
                 "finished_at": snapshot.get("finished_at"),
                 "lifecycle_events": snapshot.get("lifecycle_events"),
             },
-            "queue_depth": service.get_queue_depth(managed_thread_id),
+            "queue_depth": queue_depth,
             "queued_turns": [
                 {
                     "managed_turn_id": item.get("managed_turn_id"),
@@ -1125,7 +1188,7 @@ def build_managed_thread_tail_routes(
     ) -> dict[str, Any]:
         if limit <= 0:
             raise HTTPException(status_code=400, detail="limit must be greater than 0")
-        service = build_managed_thread_orchestration_service(request)
+        service = await _build_managed_thread_orchestration_service_async(request)
         return await _build_managed_thread_tail_snapshot(
             request=request,
             service=service,
@@ -1149,8 +1212,11 @@ def build_managed_thread_tail_routes(
             raise HTTPException(status_code=400, detail="limit must be greater than 0")
         normalized_level = normalize_tail_level(level)
         since_ms = since_ms_from_duration(since)
-        service = build_managed_thread_orchestration_service(request)
-        thread_target = service.get_thread_target(managed_thread_id)
+        service = await _build_managed_thread_orchestration_service_async(request)
+        thread_target = await asyncio.to_thread(
+            service.get_thread_target,
+            managed_thread_id,
+        )
         harness = None
         if thread_target is not None:
             harness = _managed_thread_harness(
@@ -1189,14 +1255,11 @@ def build_managed_thread_tail_routes(
             if not snapshot.get("stream_available"):
                 while True:
                     await asyncio.sleep(5.0)
-                    turn = service.get_execution(
-                        managed_thread_id,
-                        str(snapshot.get("managed_turn_id") or ""),
-                    )
-                    status = (
-                        str((turn.status if turn is not None else "") or "")
-                        .strip()
-                        .lower()
+                    turn, status, refreshed_thread = await asyncio.to_thread(
+                        _poll_managed_thread_execution_state,
+                        service=service,
+                        managed_thread_id=managed_thread_id,
+                        managed_turn_id=str(snapshot.get("managed_turn_id") or ""),
                     )
                     if status != "running":
                         yield (
@@ -1205,7 +1268,6 @@ def build_managed_thread_tail_routes(
                         )
                         return
 
-                    refreshed_thread = service.get_thread_target(managed_thread_id)
                     refreshed_backend_thread_id = (
                         normalize_optional_text(
                             getattr(refreshed_thread, "backend_thread_id", None)

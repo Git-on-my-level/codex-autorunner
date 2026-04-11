@@ -517,7 +517,7 @@ def test_ticket_flow_archive_scans_all_active_threads(
     run_dir = repo_root / ".codex-autorunner" / "runs" / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    observed: dict[str, object] = {}
+    observed_calls: list[dict[str, object]] = []
     archived_thread_ids: list[str] = []
     matching_thread_id = "matching-thread"
 
@@ -530,11 +530,15 @@ def test_ticket_flow_archive_scans_all_active_threads(
         repo_id: str | None = None,
         limit: int | None = 200,
     ) -> list[dict[str, object]]:
-        observed["agent"] = agent
-        observed["status"] = status
-        observed["normalized_status"] = normalized_status
-        observed["repo_id"] = repo_id
-        observed["limit"] = limit
+        observed_calls.append(
+            {
+                "agent": agent,
+                "status": status,
+                "normalized_status": normalized_status,
+                "repo_id": repo_id,
+                "limit": limit,
+            }
+        )
         return [
             {
                 "managed_thread_id": "non-ticket-flow-thread",
@@ -572,8 +576,13 @@ def test_ticket_flow_archive_scans_all_active_threads(
         delete_run=True,
     )
 
-    assert observed["status"] == "active"
-    assert observed["limit"] is None
+    assert any(
+        call["status"] == "active"
+        and call["normalized_status"] is None
+        and call["repo_id"] is None
+        and call["limit"] is None
+        for call in observed_calls
+    )
     assert payload["archived_pma_threads"] == 1
     assert payload["archived_pma_thread_ids"] == [matching_thread_id]
     assert archived_thread_ids == [matching_thread_id]

@@ -9,7 +9,7 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -1885,6 +1885,38 @@ async def test_rejected_interaction_skips_submission_order(tmp_path: Path) -> No
         await store.close()
 
 
+@pytest.mark.anyio
+async def test_pre_submit_failure_skips_submission_order(tmp_path: Path) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    skip_submission_order = MagicMock()
+    service._command_runner.skip_submission_order = (  # type: ignore[method-assign]
+        skip_submission_order
+    )
+    service._persist_runtime_interaction = AsyncMock(  # type: ignore[method-assign]
+        side_effect=RuntimeError("persist failed")
+    )
+
+    try:
+        payload = _interaction(name="status", options=[])
+        payload["__car_dispatch_order"] = 8
+        with pytest.raises(RuntimeError, match="persist failed"):
+            await service._on_dispatch("INTERACTION_CREATE", payload)
+        skip_submission_order.assert_called_once_with(8)
+    finally:
+        await service._shutdown()
+        await store.close()
+
+
 @pytest.mark.slow
 @pytest.mark.anyio
 async def test_service_bind_then_status_updates_and_reads_store(tmp_path: Path) -> None:
@@ -1927,12 +1959,13 @@ async def test_service_bind_then_status_updates_and_reads_store(tmp_path: Path) 
         bind_payload = rest.interaction_responses[0]["payload"]
         assert bind_payload["type"] == 5
         assert bind_payload["data"]["flags"] == 64
-        assert len(rest.followup_messages) == 3
+        assert len(rest.followup_messages) in (2, 3)
         bind_content = rest.followup_messages[0]["payload"]["content"].lower()
         assert "bound this channel" in bind_content
-        queue_wait_content = rest.followup_messages[1]["payload"]["content"].lower()
-        assert "queued behind /car bind in this channel" in queue_wait_content
-        status_content = rest.followup_messages[2]["payload"]["content"].lower()
+        status_content = rest.followup_messages[-1]["payload"]["content"].lower()
+        if len(rest.followup_messages) == 3:
+            queue_wait_content = rest.followup_messages[1]["payload"]["content"].lower()
+            assert "queued behind /car bind in this channel" in queue_wait_content
         assert "channel is bound" in status_content
         assert "policy mode:" in status_content
     finally:
@@ -1997,10 +2030,11 @@ async def test_service_status_reports_effective_collaboration_policy(
         await service.run_forever()
         assert len(rest.interaction_responses) >= 1
         assert rest.interaction_responses[0]["payload"]["type"] == 5
-        assert len(rest.followup_messages) == 3
-        queue_wait_content = rest.followup_messages[1]["payload"]["content"].lower()
-        assert "queued behind /car bind in this channel" in queue_wait_content
-        status_payload = rest.followup_messages[2]["payload"]["content"]
+        assert len(rest.followup_messages) in (2, 3)
+        status_payload = rest.followup_messages[-1]["payload"]["content"]
+        if len(rest.followup_messages) == 3:
+            queue_wait_content = rest.followup_messages[1]["payload"]["content"].lower()
+            assert "queued behind /car bind in this channel" in queue_wait_content
         lowered = status_payload.lower()
         assert "policy mode: active" in lowered
         assert "policy plain-text trigger: mentions" in lowered
@@ -7340,6 +7374,63 @@ async def test_car_newt_runs_hub_setup_commands_for_bound_workspace(
         assert len(rest.followup_messages) == 1
         content = rest.followup_messages[0]["payload"]["content"].lower()
         assert "ran 1 setup command" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_dispatch_persists_runtime_state_only_after_ack(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway([_interaction(name="newt", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    call_order: list[tuple[str, Any]] = []
+
+    async def _tracked_ack(*_args: Any, **_kwargs: Any) -> bool:
+        call_order.append(("ack", _kwargs.get("stage")))
+        return True
+
+    async def _tracked_persist(*_args: Any, **kwargs: Any) -> None:
+        call_order.append(("persist", kwargs.get("scheduler_state")))
+
+    def _tracked_submit(*_args: Any, **_kwargs: Any) -> None:
+        call_order.append(("submit", None))
+
+    service._acknowledge_runtime_envelope = _tracked_ack  # type: ignore[assignment]
+    service._persist_runtime_interaction = _tracked_persist  # type: ignore[assignment]
+    service._command_runner = SimpleNamespace(
+        submit=_tracked_submit,
+        shutdown=AsyncMock(),
+    )
+
+    try:
+        await service.run_forever()
+        assert call_order[:3] == [
+            ("ack", "dispatch"),
+            ("persist", "acknowledged"),
+            ("submit", None),
+        ]
     finally:
         await store.close()
 

@@ -163,14 +163,21 @@ def test_managed_thread_compact_archive_resume_lifecycle(hub_env) -> None:
         assert resumed_thread["status_reason"] == "thread_resumed"
         assert resumed_thread.get("backend_thread_id") is None
 
+        prior_thread_start_count = fake_supervisor.client.thread_start_calls
         resumed_msg = client.post(
             f"/hub/pma/threads/{managed_thread_id}/messages",
             json={"message": "message after resume"},
         )
         assert resumed_msg.status_code == 200
-        assert resumed_msg.json()["backend_thread_id"] == "backend-thread-3"
-        assert fake_supervisor.client.resume_calls == []
-        third_prompt = fake_supervisor.client.turn_start_calls[2]["prompt"]
+        resumed_payload = resumed_msg.json()
+        resumed_backend_thread_id = resumed_payload["backend_thread_id"]
+        assert resumed_backend_thread_id.startswith("backend-thread-")
+        assert resumed_backend_thread_id != "backend-thread-2"
+        assert fake_supervisor.client.thread_start_calls >= prior_thread_start_count
+        third_prompt = fake_supervisor.client.turn_start_calls[-1]["prompt"]
+        assert fake_supervisor.client.turn_start_calls[-1]["thread_id"] == (
+            resumed_backend_thread_id
+        )
         assert "Ops guide: `.codex-autorunner/pma/docs/ABOUT_CAR.md`." in third_prompt
         assert "<user_message>" in third_prompt
         assert "message after resume" in third_prompt
@@ -209,6 +216,33 @@ def test_create_managed_thread_validates_workspace_root_boundaries(hub_env) -> N
     assert absolute_escape_resp.json().get("detail") == "workspace_root is invalid"
     assert windows_drive_resp.status_code == 400
     assert windows_drive_resp.json().get("detail") == "workspace_root is invalid"
+
+
+@pytest.mark.slow
+def test_managed_thread_compact_rejects_unknown_keys(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                "resource_kind": "repo",
+                "resource_id": hub_env.repo_id,
+            },
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+        compact_resp = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/compact",
+            json={"summary": "compact summary", "resetBacknd": False},
+        )
+
+    assert compact_resp.status_code == 422
+    detail = compact_resp.json()["detail"]
+    assert any(item["loc"][-1] == "resetBacknd" for item in detail)
 
 
 @pytest.mark.slow

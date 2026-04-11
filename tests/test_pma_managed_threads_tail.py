@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Optional
 
 import pytest
@@ -717,6 +719,87 @@ def test_managed_thread_tail_snapshot_stream_available_when_backend_binding_appe
     assert after["backend_turn_id"] == "opencode-turn-bind"
 
 
+def test_managed_thread_tail_snapshot_offloads_store_reads(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    event_loop_thread_id = threading.get_ident()
+    observed_thread_ids: list[tuple[str, int]] = []
+    thread = SimpleNamespace(
+        agent_id="codex",
+        backend_thread_id="backend-thread-1",
+    )
+    turn = SimpleNamespace(
+        execution_id="managed-turn-1",
+        status="running",
+        started_at="2026-04-06T10:00:00Z",
+        finished_at=None,
+        backend_id="backend-turn-1",
+    )
+
+    class _FakeService:
+        def get_thread_target(self, managed_thread_id: str):
+            _ = managed_thread_id
+            observed_thread_ids.append(("get_thread_target", threading.get_ident()))
+            return thread
+
+        def get_running_execution(self, managed_thread_id: str):
+            _ = managed_thread_id
+            observed_thread_ids.append(("get_running_execution", threading.get_ident()))
+            return turn
+
+        def get_latest_execution(self, managed_thread_id: str):
+            _ = managed_thread_id
+            observed_thread_ids.append(("get_latest_execution", threading.get_ident()))
+            return None
+
+    class _FakeTurnStore:
+        def __init__(self, hub_root: Path) -> None:
+            _ = hub_root
+            observed_thread_ids.append(("store_init", threading.get_ident()))
+
+        def get_turn(self, managed_thread_id: str, managed_turn_id: str):
+            _ = managed_thread_id, managed_turn_id
+            observed_thread_ids.append(("get_turn", threading.get_ident()))
+            return None
+
+    def _fake_list_turn_timeline(hub_root: Path, *, execution_id: str):
+        _ = hub_root, execution_id
+        observed_thread_ids.append(("list_turn_timeline", threading.get_ident()))
+        return []
+
+    monkeypatch.setattr(tail_stream, "PmaThreadStore", _FakeTurnStore)
+    monkeypatch.setattr(tail_stream, "list_turn_timeline", _fake_list_turn_timeline)
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                config=SimpleNamespace(root=tmp_path),
+            )
+        )
+    )
+
+    import asyncio
+
+    snapshot = asyncio.run(
+        tail_stream._build_managed_thread_tail_snapshot(
+            request=request,
+            service=_FakeService(),
+            managed_thread_id="managed-thread-1",
+            limit=20,
+            level="info",
+            since_ms=None,
+            resume_after=None,
+        )
+    )
+
+    assert snapshot["managed_thread_id"] == "managed-thread-1"
+    assert snapshot["managed_turn_id"] == "managed-turn-1"
+    assert observed_thread_ids
+    assert all(
+        thread_id != event_loop_thread_id for _label, thread_id in observed_thread_ids
+    )
+
+
 def test_managed_thread_status_aggregates_thread_turn_and_progress(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
@@ -790,6 +873,30 @@ def test_managed_thread_status_aggregates_thread_turn_and_progress(hub_env) -> N
             payload["thread"]["latest_assistant_text"] == "completed assistant output"
         )
         assert payload["thread"]["latest_turn_status"] == "ok"
+
+
+def test_managed_thread_status_route_offloads_blocking_reads(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    managed_thread_id, _ = _seed_managed_thread_with_events(hub_env, app)
+    original_to_thread = tail_stream.asyncio.to_thread
+    offloaded_calls: list[str] = []
+
+    async def _recording_to_thread(func, /, *args, **kwargs):
+        offloaded_calls.append(getattr(func, "__name__", repr(func)))
+        return await original_to_thread(func, *args, **kwargs)
+
+    monkeypatch.setattr(tail_stream.asyncio, "to_thread", _recording_to_thread)
+
+    with TestClient(app) as client:
+        resp = client.get(f"/hub/pma/threads/{managed_thread_id}/status")
+
+    assert resp.status_code == 200
+    assert "build_managed_thread_orchestration_service" in offloaded_calls
+    assert "_load_managed_thread_tail_store_state" in offloaded_calls
+    assert "_load_managed_thread_status_state" in offloaded_calls
 
 
 def test_managed_thread_status_surfaces_attention_required_separately_from_failure(

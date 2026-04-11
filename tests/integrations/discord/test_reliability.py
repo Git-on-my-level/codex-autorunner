@@ -23,17 +23,21 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from codex_autorunner.integrations.chat.dispatcher import conversation_id_for
 from codex_autorunner.integrations.discord.command_runner import (
     CommandRunner,
     RunnerConfig,
 )
+from codex_autorunner.integrations.discord.gateway import DiscordGatewayClient
 from codex_autorunner.integrations.discord.ingress import (
     CommandSpec,
     IngressTiming,
     InteractionIngress,
     InteractionKind,
+    RuntimeInteractionEnvelope,
 )
 from codex_autorunner.integrations.discord.response_helpers import DiscordResponder
+from codex_autorunner.integrations.discord.service import DiscordBotService
 from codex_autorunner.integrations.discord.state import DiscordStateStore
 
 DISCORD_ACK_WINDOW_SECONDS = 3.0
@@ -1056,6 +1060,162 @@ async def test_ingress_leaves_ack_timing_to_runtime_admission() -> None:
 
 
 @pytest.mark.anyio
+async def test_ack_budget_expiry_stops_execution_and_logs_expired_before_ack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time as _time
+
+    service = DiscordBotService.__new__(DiscordBotService)
+    service._logger = logging.getLogger("test.reliability.ack_budget")
+    service._config = SimpleNamespace(dispatch=SimpleNamespace(ack_budget_ms=10))
+    service._store = SimpleNamespace(
+        get_interaction=AsyncMock(return_value=None),
+        mark_interaction_scheduler_state=AsyncMock(),
+    )
+
+    class _Session:
+        last_delivery_status = None
+        last_delivery_error = None
+
+        def has_initial_response(self) -> bool:
+            return False
+
+        def is_deferred(self) -> bool:
+            return False
+
+        def restore_initial_response(self, _ack_mode: str) -> None:
+            return None
+
+    service._ensure_interaction_session = lambda *_args, **_kwargs: _Session()  # type: ignore[assignment]
+    service._load_interaction_ack_mode = AsyncMock(return_value=None)
+
+    async def _slow_defer(**_kwargs: Any) -> bool:
+        await asyncio.sleep(0.05)
+        return True
+
+    service._defer_ephemeral = _slow_defer  # type: ignore[assignment]
+    service._defer_public = _slow_defer  # type: ignore[assignment]
+    service._defer_component_update = _slow_defer  # type: ignore[assignment]
+
+    log_events: list[dict[str, Any]] = []
+    original_log = service._logger.log
+
+    def capture_log(level: int, msg: str, *args_log: Any, **kwargs_log: Any) -> None:
+        try:
+            parsed = json.loads(msg)
+            if parsed.get("event") == "discord.interaction.ack.failed":
+                log_events.append(parsed)
+        except (json.JSONDecodeError, TypeError):
+            pass
+        original_log(level, msg, *args_log, **kwargs_log)
+
+    service._logger.log = capture_log  # type: ignore[assignment]
+
+    ctx = _make_ctx(interaction_id="ack-budget-1", interaction_token="token-ack-1")
+    ctx.timing = IngressTiming(ingress_started_at=_time.monotonic())
+    envelope = RuntimeInteractionEnvelope(
+        context=ctx,
+        conversation_id="conversation:discord:chan-1",
+        resource_keys=("conversation:discord:chan-1",),
+        dispatch_ack_policy="defer_ephemeral",
+    )
+
+    acked = await service._acknowledge_runtime_envelope(
+        envelope,
+        stage="dispatch",
+    )
+
+    assert acked is False
+    assert service._store.mark_interaction_scheduler_state.await_count == 0
+    assert ctx.timing.ack_finished_at is not None
+    assert log_events
+    assert log_events[0]["expired_before_ack"] is True
+    assert log_events[0]["budget_overrun_ms"] is not None
+
+
+@pytest.mark.anyio
+async def test_gateway_emits_reconnect_lifecycle_logs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from codex_autorunner.integrations.discord import gateway as gateway_module
+
+    client = DiscordGatewayClient(
+        bot_token="token",
+        intents=1,
+        logger=logging.getLogger("test.reliability.gateway"),
+        gateway_url="wss://example.invalid",
+    )
+
+    events: list[dict[str, Any]] = []
+    original_log = client._logger.log
+
+    def capture_log(level: int, msg: str, *args_log: Any, **kwargs_log: Any) -> None:
+        try:
+            parsed = json.loads(msg)
+            if str(parsed.get("event", "")).startswith("discord.gateway."):
+                events.append(parsed)
+        except (json.JSONDecodeError, TypeError):
+            pass
+        original_log(level, msg, *args_log, **kwargs_log)
+
+    client._logger.log = capture_log  # type: ignore[assignment]
+
+    class _DummyWebsocket:
+        async def close(self) -> None:
+            return None
+
+    class _DummyConnect:
+        async def __aenter__(self) -> _DummyWebsocket:
+            return _DummyWebsocket()
+
+        async def __aexit__(self, *_exc_info: object) -> None:
+            return None
+
+    monkeypatch.setattr(
+        gateway_module,
+        "websockets",
+        SimpleNamespace(connect=lambda *_args, **_kwargs: _DummyConnect()),
+    )
+
+    sleep_calls = 0
+
+    async def _sleep(_seconds: float) -> None:
+        nonlocal sleep_calls
+        sleep_calls += 1
+        if sleep_calls >= 2:
+            client._stop_event.set()
+
+    monkeypatch.setattr(gateway_module.asyncio, "sleep", _sleep)
+
+    calls = 0
+
+    async def _run_connection(_websocket: Any, _on_dispatch: Any) -> bool:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("temporary disconnect")
+        return True
+
+    async def _resolve_gateway_url() -> str:
+        return "wss://example.invalid"
+
+    monkeypatch.setattr(client, "_run_connection", _run_connection)
+    monkeypatch.setattr(client, "_resolve_gateway_url", _resolve_gateway_url)
+
+    await client.run(lambda *_args, **_kwargs: None)
+
+    assert any(
+        event["event"] == "discord.gateway.reconnect.failure" for event in events
+    )
+    assert any(
+        event["event"] == "discord.gateway.reconnect.success" for event in events
+    )
+    assert any(
+        event["event"] == "discord.gateway.transport.connect.start" for event in events
+    )
+
+
+@pytest.mark.anyio
 async def test_duplicate_interaction_id_does_not_attempt_second_ack(
     tmp_path: Path,
 ) -> None:
@@ -1122,6 +1282,106 @@ async def test_runner_skips_duplicate_execution_for_same_interaction_id(
         assert record.execution_status == "completed"
     finally:
         await store.close()
+
+
+@pytest.mark.anyio
+async def test_queue_wait_ack_happens_while_handler_slots_are_exhausted() -> None:
+    service = _FakeService()
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    queue_wait_acked = asyncio.Event()
+    ack_calls: list[tuple[str, str]] = []
+
+    async def blocking_handler(*args: Any, **_kwargs: Any) -> None:
+        interaction_id = str(args[0]) if args else ""
+        if interaction_id == "slot-holder":
+            first_started.set()
+            await release_first.wait()
+
+    async def acknowledge_runtime_envelope(envelope: Any, *, stage: str) -> bool:
+        ack_calls.append((envelope.context.interaction_id, stage))
+        if envelope.context.interaction_id == "queue-wait-2" and stage == "queue_wait":
+            queue_wait_acked.set()
+        return True
+
+    service._handle_car_command.side_effect = blocking_handler
+    service.acknowledge_runtime_envelope = AsyncMock(
+        side_effect=acknowledge_runtime_envelope
+    )
+
+    runner = CommandRunner(
+        service,
+        config=RunnerConfig(
+            timeout_seconds=None,
+            stalled_warning_seconds=None,
+            max_concurrent_interaction_handlers=1,
+        ),
+        logger=service._logger,
+    )
+
+    blocker_ctx = _make_ctx(
+        interaction_id="slot-holder",
+        interaction_token="slot-token",
+    )
+    blocker_payload = {
+        **_slash_payload(),
+        "id": "slot-holder",
+        "token": "slot-token",
+    }
+    runner.submit(blocker_ctx, blocker_payload)
+    await asyncio.wait_for(first_started.wait(), timeout=1.0)
+
+    conversation_id = conversation_id_for("discord", "chan-1", "guild-1")
+    resource_keys = (f"conversation:{conversation_id}",)
+
+    waiting_ctx = _make_ctx(
+        interaction_id="queue-wait-1",
+        interaction_token="queue-token-1",
+        channel_id="chan-1",
+        guild_id="guild-1",
+    )
+    waiting_payload = {
+        **_slash_payload(),
+        "id": "queue-wait-1",
+        "token": "queue-token-1",
+    }
+    runner.submit(
+        waiting_ctx,
+        waiting_payload,
+        resource_keys=resource_keys,
+        conversation_id=conversation_id,
+    )
+
+    for _ in range(100):
+        if runner.is_busy(conversation_id):
+            break
+        await asyncio.sleep(0.01)
+    assert runner.is_busy(conversation_id)
+
+    queued_ctx = _make_ctx(
+        interaction_id="queue-wait-2",
+        interaction_token="queue-token-2",
+        channel_id="chan-1",
+        guild_id="guild-1",
+    )
+    queued_payload = {
+        **_slash_payload(),
+        "id": "queue-wait-2",
+        "token": "queue-token-2",
+    }
+    runner.submit(
+        queued_ctx,
+        queued_payload,
+        resource_keys=resource_keys,
+        conversation_id=conversation_id,
+        queue_wait_ack_policy="defer_ephemeral",
+    )
+
+    await asyncio.wait_for(queue_wait_acked.wait(), timeout=1.0)
+    assert ack_calls == [("queue-wait-2", "queue_wait")]
+
+    release_first.set()
+    await runner.shutdown(grace_seconds=5.0)
 
 
 @pytest.mark.anyio

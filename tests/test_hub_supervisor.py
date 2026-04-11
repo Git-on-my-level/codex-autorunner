@@ -768,6 +768,65 @@ def test_hub_agent_workspace_crud_routes_support_remove_and_delete(
     )
     assert recreate_resp.status_code == 200
 
+
+def test_hub_agent_workspace_destination_route_accepts_mounts(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    client = TestClient(create_hub_app(hub_root))
+    create_resp = client.post(
+        "/hub/agent-workspaces",
+        json={"id": "zc-main", "runtime": "zeroclaw"},
+    )
+    assert create_resp.status_code == 200
+    workspace_path = (
+        hub_root / ".codex-autorunner" / "runtimes" / "zeroclaw" / "zc-main"
+    )
+
+    destination_resp = client.post(
+        "/hub/agent-workspaces/zc-main/destination",
+        json={
+            "kind": "docker",
+            "image": "ghcr.io/acme/zeroclaw:latest",
+            "mounts": [
+                {"source": "/tmp/src", "target": "/workspace/src"},
+                {
+                    "source": "/tmp/cache",
+                    "target": "/workspace/cache",
+                    "readOnly": True,
+                },
+            ],
+        },
+    )
+
+    assert destination_resp.status_code == 200
+    destination_payload = destination_resp.json()
+    assert destination_payload["configured_destination"] == {
+        "kind": "docker",
+        "image": "ghcr.io/acme/zeroclaw:latest",
+        "mounts": [
+            {"source": "/tmp/src", "target": "/workspace/src"},
+            {
+                "source": "/tmp/cache",
+                "target": "/workspace/cache",
+                "read_only": True,
+            },
+        ],
+    }
+    assert destination_payload["effective_destination"] == {
+        "kind": "docker",
+        "image": "ghcr.io/acme/zeroclaw:latest",
+        "mounts": [
+            {"source": "/tmp/src", "target": "/workspace/src"},
+            {
+                "source": "/tmp/cache",
+                "target": "/workspace/cache",
+                "read_only": True,
+            },
+        ],
+    }
+
     delete_resp = client.post("/hub/agent-workspaces/zc-main/delete", json={})
     assert delete_resp.status_code == 200
     assert delete_resp.json() == {
@@ -776,6 +835,53 @@ def test_hub_agent_workspace_crud_routes_support_remove_and_delete(
         "delete_dir": True,
     }
     assert not workspace_path.exists()
+
+
+def test_hub_agent_workspace_create_route_rejects_unknown_keys(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    client = TestClient(create_hub_app(hub_root))
+    response = client.post(
+        "/hub/agent-workspaces",
+        json={
+            "id": "zc-main",
+            "runtime": "zeroclaw",
+            "display_name": "ZeroClaw Main",
+            "unexpected": "value",
+        },
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert any(item["loc"][-1] == "unexpected" for item in detail)
+
+
+def test_hub_agent_workspace_update_route_rejects_unknown_keys(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    client = TestClient(create_hub_app(hub_root))
+    create_resp = client.post(
+        "/hub/agent-workspaces",
+        json={"id": "zc-main", "runtime": "zeroclaw"},
+    )
+    assert create_resp.status_code == 200
+
+    response = client.patch(
+        "/hub/agent-workspaces/zc-main",
+        json={"enabled": False, "unexpected": "value"},
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert any(item["loc"][-1] == "unexpected" for item in detail)
 
 
 def test_hub_agent_workspace_job_routes_submit_expected_kinds(
@@ -1297,10 +1403,10 @@ def test_hub_pin_parent_repo_endpoint_persists(tmp_path: Path):
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
     cfg_path = hub_root / CONFIG_FILENAME
     write_test_config(cfg_path, cfg)
-    repo_dir = hub_root / "demo"
-    (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
 
     app = create_hub_app(hub_root)
+    repo_dir = Path(app.state.hub_supervisor.create_repo("demo").path)
+    (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
     client = TestClient(app)
 
     pin_resp = client.post("/hub/repos/demo/pin", json={"pinned": True})
@@ -1318,6 +1424,23 @@ def test_hub_pin_parent_repo_endpoint_persists(tmp_path: Path):
     unpin_resp = client.post("/hub/repos/demo/pin", json={"pinned": False})
     assert unpin_resp.status_code == 200
     assert "demo" not in unpin_resp.json()["pinned_parent_repo_ids"]
+
+
+def test_hub_pin_parent_repo_rejects_unknown_keys(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    app = create_hub_app(hub_root)
+    repo_dir = Path(app.state.hub_supervisor.create_repo("demo").path)
+    (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
+    client = TestClient(app)
+
+    response = client.post("/hub/repos/demo/pin", json={"pinnned": False})
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert any(item["loc"][-1] == "pinnned" for item in detail)
 
 
 def test_hub_api_cleanup_repo_threads_archives_only_unbound_threads(
@@ -1965,6 +2088,21 @@ def test_hub_clone_repo_endpoint(tmp_path: Path):
     assert (repo_dir / ".codex-autorunner" / "state.sqlite3").exists()
 
 
+def test_hub_create_repo_route_rejects_unknown_keys(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg_path = hub_root / CONFIG_FILENAME
+    write_test_config(cfg_path, cfg)
+
+    app = create_hub_app(hub_root)
+    client = TestClient(app)
+    response = client.post("/hub/repos", json={"id": "demo", "unexpected": "value"})
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert any(item["loc"][-1] == "unexpected" for item in detail)
+
+
 @pytest.mark.slow
 def test_hub_remove_repo_with_worktrees(tmp_path: Path):
     hub_root = tmp_path / "hub"
@@ -2059,6 +2197,53 @@ def test_hub_remove_repo_route_forwards_force_attestation(
             "target_scope": "hub.remove_repo:base",
         },
     }
+
+
+def test_hub_remove_repo_route_rejects_unknown_keys(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    app = create_hub_app(hub_root)
+    client = TestClient(app)
+    response = client.post(
+        "/hub/repos/base/remove",
+        json={"force": True, "unexpected": "value"},
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert any(item["loc"][-1] == "unexpected" for item in detail)
+
+
+def test_hub_create_worktree_route_rejects_unknown_keys(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+
+    client = TestClient(create_hub_app(hub_root))
+    response = client.post(
+        "/hub/worktrees/create",
+        json={
+            "base_repo_id": "base",
+            "branch": "feature/strict-body",
+            "start_point": "HEAD",
+            "unexpected": "value",
+        },
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert any(item["loc"][-1] == "unexpected" for item in detail)
 
 
 def test_hub_repo_job_routes_submit_expected_kinds(
@@ -3156,6 +3341,30 @@ def test_set_worktree_setup_commands_route_accepts_legacy_array_payload(tmp_path
     assert resp.status_code == 200
     payload = resp.json()
     assert payload["worktree_setup_commands"] == ["make setup", "pre-commit install"]
+
+
+def test_set_worktree_setup_commands_route_rejects_unknown_keys(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    supervisor.create_repo("base")
+    app = create_hub_app(hub_root)
+    client = TestClient(app)
+
+    resp = client.post(
+        "/hub/repos/base/worktree-setup",
+        json={"commands": ["make setup"], "unexpected": "value"},
+    )
+    assert resp.status_code == 400
+    assert "Unsupported worktree setup keys" in resp.json()["detail"]
+    assert "unexpected" in resp.json()["detail"]
 
 
 def _make_supervisor(hub_root: Path) -> HubSupervisor:

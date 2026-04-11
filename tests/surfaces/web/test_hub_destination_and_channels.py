@@ -671,10 +671,9 @@ def test_hub_destination_set_route_rejects_invalid_input(tmp_path: Path) -> None
             ],
         },
     )
-    assert bad_mount_read_only.status_code == 400
-    assert (
-        "mounts[0].read_only must be a boolean" in bad_mount_read_only.json()["detail"]
-    )
+    assert bad_mount_read_only.status_code == 422
+    detail = bad_mount_read_only.json()["detail"]
+    assert any(item["loc"][-1] == "read_only" for item in detail)
 
     bad_env = client.post(
         "/hub/repos/base/destination",
@@ -697,6 +696,54 @@ def test_hub_destination_set_route_rejects_invalid_input(tmp_path: Path) -> None
     )
     assert bad_profile.status_code == 400
     assert "unsupported docker profile 'full_deev'" in bad_profile.json()["detail"]
+
+
+def test_hub_destination_set_route_rejects_unknown_top_level_keys(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    supervisor = _create_hub_supervisor(hub_root)
+    supervisor.create_repo("base")
+    client = TestClient(create_hub_app(hub_root))
+
+    response = client.post(
+        "/hub/repos/base/destination",
+        json={
+            "kind": "docker",
+            "image": "busybox:latest",
+            "unexpected": "value",
+        },
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert any(item["loc"][-1] == "unexpected" for item in detail)
+
+
+def test_hub_destination_set_route_rejects_unknown_mount_keys(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    supervisor = _create_hub_supervisor(hub_root)
+    supervisor.create_repo("base")
+    client = TestClient(create_hub_app(hub_root))
+
+    response = client.post(
+        "/hub/repos/base/destination",
+        json={
+            "kind": "docker",
+            "image": "busybox:latest",
+            "mounts": [
+                {
+                    "source": "/tmp/src",
+                    "target": "/workspace/src",
+                    "mode": "rw",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert any(item["loc"][-1] == "mode" for item in detail)
 
     unknown_repo = client.post(
         "/hub/repos/missing-repo/destination",

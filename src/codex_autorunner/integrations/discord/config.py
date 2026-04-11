@@ -27,6 +27,8 @@ DEFAULT_SHELL_MAX_OUTPUT_CHARS = 3800
 DEFAULT_MEDIA_MAX_VOICE_BYTES = 10 * 1024 * 1024
 DEFAULT_DISPATCH_HANDLER_TIMEOUT_SECONDS: Optional[float] = None
 DEFAULT_DISPATCH_HANDLER_STALLED_WARNING_SECONDS: Optional[float] = 60.0
+DEFAULT_DISPATCH_ACK_BUDGET_MS = 2500
+DEFAULT_DISPATCH_MAX_CONCURRENT_INTERACTIONS = 4
 DEFAULT_INTENTS = (
     DISCORD_INTENT_GUILDS
     | DISCORD_INTENT_GUILD_MESSAGES
@@ -69,6 +71,8 @@ class DiscordBotDispatchConfig:
     handler_stalled_warning_seconds: Optional[float] = (
         DEFAULT_DISPATCH_HANDLER_STALLED_WARNING_SECONDS
     )
+    ack_budget_ms: int = DEFAULT_DISPATCH_ACK_BUDGET_MS
+    max_concurrent_interactions: int = DEFAULT_DISPATCH_MAX_CONCURRENT_INTERACTIONS
 
 
 @dataclass(frozen=True)
@@ -228,6 +232,16 @@ class DiscordBotConfig:
                 default=DEFAULT_DISPATCH_HANDLER_STALLED_WARNING_SECONDS,
                 key="discord_bot.dispatch.handler_stalled_warning_seconds",
             ),
+            ack_budget_ms=_parse_strict_positive_int_or_default(
+                dispatch_cfg.get("ack_budget_ms", _MISSING),
+                default=DEFAULT_DISPATCH_ACK_BUDGET_MS,
+                key="discord_bot.dispatch.ack_budget_ms",
+            ),
+            max_concurrent_interactions=_parse_strict_positive_int_or_default(
+                dispatch_cfg.get("max_concurrent_interactions", _MISSING),
+                default=DEFAULT_DISPATCH_MAX_CONCURRENT_INTERACTIONS,
+                key="discord_bot.dispatch.max_concurrent_interactions",
+            ),
         )
 
         if enabled:
@@ -306,6 +320,21 @@ def _parse_positive_int_or_default(value: Any, *, default: int, key: str) -> int
     if parsed <= 0:
         return default
     return parsed
+
+
+def _parse_strict_positive_int_or_default(
+    value: Any,
+    *,
+    default: int,
+    key: str,
+) -> int:
+    if value is _MISSING or value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise DiscordBotConfigError(f"{key} must be a positive integer or null")
+    if value <= 0:
+        raise DiscordBotConfigError(f"{key} must be a positive integer or null")
+    return int(value)
 
 
 def _parse_optional_positive_float(

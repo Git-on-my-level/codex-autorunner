@@ -100,7 +100,12 @@ class HubAgentWorkspaceService:
         return destination
 
     def _normalize_mount_payload(self, item: Any) -> dict[str, Any]:
-        raw_item = item if isinstance(item, dict) else {}
+        if isinstance(item, dict):
+            raw_item = item
+        elif hasattr(item, "model_dump"):
+            raw_item = item.model_dump(exclude_none=True)
+        else:
+            raw_item = {}
         mount_payload: dict[str, Any] = {
             "source": str(raw_item.get("source") or ""),
             "target": str(raw_item.get("target") or ""),

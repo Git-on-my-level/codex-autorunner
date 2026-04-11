@@ -36,3 +36,18 @@ def test_contextspace_get_includes_catalog(tmp_path: Path) -> None:
     assert res.status_code == 200
     payload = res.json()
     assert [entry["kind"] for entry in payload["kinds"]] == list(CONTEXTSPACE_DOC_KINDS)
+
+
+def test_contextspace_put_rejects_unknown_keys(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    client = _client_for_repo(repo_root)
+
+    res = client.put(
+        "/api/contextspace/active_context",
+        json={"contnet": "updated"},
+    )
+
+    assert res.status_code == 422
+    detail = res.json()["detail"]
+    assert any(item["loc"][-1] == "contnet" for item in detail)
