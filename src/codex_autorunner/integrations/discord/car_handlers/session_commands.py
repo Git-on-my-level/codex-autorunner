@@ -1318,6 +1318,7 @@ async def handle_car_interrupt(
     channel_id: str,
     active_turn_text: str = "Stopping current turn...",
     cancel_queued: bool = True,
+    allow_promoted_no_active_success: bool = False,
     thread_target_id: Optional[str] = None,
     execution_id: Optional[str] = None,
     progress_reuse_source_message_id: Optional[str] = None,
@@ -1528,6 +1529,15 @@ async def handle_car_interrupt(
             and not recovered_lost_backend
             and not cancelled_queued
         ):
+            if allow_promoted_no_active_success:
+                text = format_discord_message("Queued request moved to the front.")
+                await service.send_or_respond_ephemeral(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    deferred=deferred,
+                    text=text,
+                )
+                return
             get_execution = getattr(orchestration_service, "get_execution", None)
             get_latest_execution = getattr(
                 orchestration_service, "get_latest_execution", None

@@ -8369,6 +8369,88 @@ async def test_car_interrupt_recovers_missing_backend_thread(tmp_path: Path) -> 
 
 
 @pytest.mark.anyio
+async def test_car_interrupt_treats_promoted_no_active_as_success(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+
+    rest = _FakeRest()
+    rest.fetched_channel_messages[("channel-1", "preview-1")] = {
+        "id": "preview-1",
+        "content": "Queued (waiting for available worker...)",
+    }
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    class _FakeThreadService:
+        def get_binding(self, *, surface_kind: str, surface_key: str) -> Any:
+            assert surface_kind == "discord"
+            assert surface_key == "channel-1"
+            return SimpleNamespace(thread_target_id="thread-1", mode="repo")
+
+        def get_thread_target(self, thread_target_id: str) -> Any:
+            assert thread_target_id == "thread-1"
+            return SimpleNamespace(thread_target_id="thread-1")
+
+        def get_running_execution(self, thread_target_id: str) -> Any:
+            assert thread_target_id == "thread-1"
+            return SimpleNamespace(execution_id="turn-1", status="running")
+
+        async def stop_thread(self, thread_target_id: str, **kwargs: Any) -> Any:
+            assert thread_target_id == "thread-1"
+            assert kwargs == {"cancel_queued": False}
+            return SimpleNamespace(
+                interrupted_active=False,
+                recovered_lost_backend=False,
+                cancelled_queued=0,
+                execution=None,
+            )
+
+    service._discord_thread_service = lambda: _FakeThreadService()  # type: ignore[assignment]
+
+    try:
+        await service._handle_car_interrupt(
+            "interaction-1",
+            "token-1",
+            channel_id="channel-1",
+            active_turn_text="Message received. Switching to it now...",
+            cancel_queued=False,
+            allow_promoted_no_active_success=True,
+            source_message_id="preview-1",
+            progress_reuse_source_message_id="m-2",
+            progress_reuse_acknowledgement="Message received. Switching to it now...",
+        )
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        assert (
+            rest.followup_messages[0]["payload"]["content"]
+            == "Queued request moved to the front."
+        )
+        assert rest.edited_channel_messages == []
+        assert service._discord_turn_progress_reuse_requests == {}
+        assert service._discord_reusable_progress_messages == {}
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_cancel_turn_button_stale_execution_does_not_interrupt_newer_turn(
     tmp_path: Path,
 ) -> None:
