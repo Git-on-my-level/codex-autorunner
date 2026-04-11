@@ -116,7 +116,6 @@ from ...integrations.chat.agents import (
     resolve_chat_runtime_agent,
     valid_chat_agent_values,
 )
-from ...integrations.chat.bootstrap import ChatBootstrapStep, run_chat_bootstrap_steps
 from ...integrations.chat.channel_directory import ChannelDirectoryStore
 from ...integrations.chat.collaboration_policy import (
     CollaborationEvaluationContext,
@@ -339,6 +338,7 @@ DISCORD_TURN_PROGRESS_HEARTBEAT_INTERVAL_SECONDS = 2.0
 DISCORD_TURN_PROGRESS_MAX_ACTIONS = 12
 DISCORD_TYPING_HEARTBEAT_INTERVAL_SECONDS = 5.0
 DISCORD_BACKGROUND_TASK_SHUTDOWN_GRACE_SECONDS = 10.0
+DISCORD_INTERACTION_COLD_START_WINDOW_SECONDS = 120.0
 SHELL_OUTPUT_TRUNCATION_SUFFIX = "\n...[truncated]..."
 DISCORD_ATTACHMENT_MAX_BYTES = 100_000_000
 THREAD_LIST_MAX_PAGES = 5
@@ -689,23 +689,15 @@ class DiscordBotService:
             logger=self._logger,
             on_scheduler_conversation_idle=self._wake_dispatcher_conversation,
         )
+        self._service_started_at_monotonic: Optional[float] = None
 
     async def run_forever(self) -> None:
+        self._service_started_at_monotonic = time.monotonic()
         self._reap_managed_processes(stage="startup")
         await self._store.initialize()
         await self._reconcile_discord_progress_leases_on_startup()
         await self._resume_interaction_recovery()
-        await run_chat_bootstrap_steps(
-            platform="discord",
-            logger=self._logger,
-            steps=(
-                ChatBootstrapStep(
-                    name="sync_application_commands",
-                    action=self._sync_application_commands_on_startup,
-                    required=True,
-                ),
-            ),
-        )
+        self._validate_command_sync_config()
         self._outbox.start()
         outbox_task = asyncio.create_task(self._outbox.run_loop())
         self._opencode_prune_task = asyncio.create_task(self._run_opencode_prune_loop())
@@ -717,12 +709,17 @@ class DiscordBotService:
         pause_watch_task = asyncio.create_task(self._watch_ticket_flow_pauses())
         terminal_watch_task = asyncio.create_task(self._watch_ticket_flow_terminals())
         dispatcher_loop_task = asyncio.create_task(self._run_dispatcher_loop())
+        startup_command_sync_task = self._spawn_task(
+            self._run_startup_command_sync_background(),
+            await_on_shutdown=True,
+        )
         try:
             log_event(
                 self._logger,
                 logging.INFO,
                 "discord.bot.starting",
                 state_file=str(self._config.state_file),
+                command_sync_mode="background",
             )
             try:
                 await self._update_status_notifier.maybe_send_notice()
@@ -740,6 +737,8 @@ class DiscordBotService:
                 await self._dispatcher.wait_idle()
             with contextlib.suppress(Exception):  # intentional: shutdown cleanup
                 await self._dispatcher.close()
+            with contextlib.suppress(Exception):  # intentional: shutdown cleanup
+                await startup_command_sync_task
             dispatcher_loop_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await dispatcher_loop_task
@@ -766,6 +765,59 @@ class DiscordBotService:
             with contextlib.suppress(asyncio.CancelledError):
                 await outbox_task
             await self._shutdown()
+
+    def _service_uptime_ms(self, *, now: Optional[float] = None) -> Optional[float]:
+        if self._service_started_at_monotonic is None:
+            return None
+        current = time.monotonic() if now is None else now
+        return round(max(0.0, (current - self._service_started_at_monotonic) * 1000), 1)
+
+    def _is_within_cold_start_window(self, *, now: Optional[float] = None) -> bool:
+        if self._service_started_at_monotonic is None:
+            return False
+        current = time.monotonic() if now is None else now
+        return (
+            current - self._service_started_at_monotonic
+            <= DISCORD_INTERACTION_COLD_START_WINDOW_SECONDS
+        )
+
+    def _interaction_telemetry_fields(
+        self,
+        ctx: IngressContext,
+        *,
+        now: Optional[float] = None,
+        envelope: Optional[RuntimeInteractionEnvelope] = None,
+    ) -> dict[str, Any]:
+        current = time.monotonic() if now is None else now
+        route_key = self._interaction_route_key(ctx)
+        handler_id = self._interaction_handler_id(ctx)
+        fields: dict[str, Any] = {
+            "interaction_id": ctx.interaction_id,
+            "kind": ctx.kind.value,
+            "channel_id": ctx.channel_id,
+            "guild_id": ctx.guild_id,
+            "user_id": ctx.user_id,
+            "route_key": route_key,
+            "handler_id": handler_id,
+            "service_uptime_ms": self._service_uptime_ms(now=current),
+            "cold_start_window": self._is_within_cold_start_window(now=current),
+        }
+        if ctx.command_spec is not None:
+            fields["command_path"] = list(ctx.command_spec.path)
+            fields["command"] = "/" + " ".join(ctx.command_spec.path)
+            fields["ack_policy"] = ctx.command_spec.ack_policy
+            fields["ack_timing"] = ctx.command_spec.ack_timing
+        if envelope is not None:
+            fields["dispatch_ack_policy"] = envelope.dispatch_ack_policy
+            fields["queue_wait_ack_policy"] = envelope.queue_wait_ack_policy
+            fields["resource_keys"] = list(envelope.resource_keys)
+            fields["conversation_id"] = envelope.conversation_id
+        if ctx.timing.interaction_created_at is not None:
+            fields["gateway_age_ms"] = round(
+                max(0.0, (time.time() - ctx.timing.interaction_created_at) * 1000),
+                1,
+            )
+        return fields
 
     async def _run_dispatcher_loop(self) -> None:
         while True:
@@ -1111,6 +1163,7 @@ class DiscordBotService:
         )
         if ack_policy in (None, "immediate"):
             return True
+        ack_started_at = time.monotonic()
         session = self._ensure_interaction_session(
             ctx.interaction_id,
             ctx.interaction_token,
@@ -1121,7 +1174,32 @@ class DiscordBotService:
             session.restore_initial_response(durable_ack_mode)
         if session.has_initial_response():
             ctx.deferred = session.is_deferred()
+            log_event(
+                self._logger,
+                logging.INFO,
+                "discord.interaction.ack.reused",
+                stage=stage,
+                runtime_ack_policy=ack_policy,
+                durable_ack_mode=durable_ack_mode,
+                **self._interaction_telemetry_fields(
+                    ctx,
+                    now=ack_started_at,
+                    envelope=envelope,
+                ),
+            )
             return True
+        log_event(
+            self._logger,
+            logging.INFO,
+            "discord.interaction.ack.start",
+            stage=stage,
+            runtime_ack_policy=ack_policy,
+            **self._interaction_telemetry_fields(
+                ctx,
+                now=ack_started_at,
+                envelope=envelope,
+            ),
+        )
         await self._store.mark_interaction_scheduler_state(
             ctx.interaction_id,
             scheduler_state=(
@@ -1150,6 +1228,34 @@ class DiscordBotService:
             ctx.timing = replace(
                 ctx.timing,
                 ack_finished_at=time.monotonic(),
+            )
+            log_event(
+                self._logger,
+                logging.INFO,
+                "discord.interaction.ack.succeeded",
+                stage=stage,
+                runtime_ack_policy=ack_policy,
+                elapsed_ms=round((time.monotonic() - ack_started_at) * 1000, 1),
+                delivery_status=session.last_delivery_status,
+                **self._interaction_telemetry_fields(
+                    ctx,
+                    envelope=envelope,
+                ),
+            )
+        else:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.interaction.ack.failed",
+                stage=stage,
+                runtime_ack_policy=ack_policy,
+                elapsed_ms=round((time.monotonic() - ack_started_at) * 1000, 1),
+                delivery_status=session.last_delivery_status,
+                delivery_error=session.last_delivery_error,
+                **self._interaction_telemetry_fields(
+                    ctx,
+                    envelope=envelope,
+                ),
             )
         return acknowledged
 
@@ -2539,6 +2645,15 @@ class DiscordBotService:
                 logger=self._logger,
             )
             self._app_server_supervisors[key] = supervisor
+            log_event(
+                self._logger,
+                logging.INFO,
+                "discord.app_server.supervisor.created",
+                workspace_path=str(workspace_root),
+                command=command,
+                service_uptime_ms=self._service_uptime_ms(),
+                cold_start_window=self._is_within_cold_start_window(),
+            )
             return supervisor
 
     async def _client_for_workspace(
@@ -2555,12 +2670,25 @@ class DiscordBotService:
         delay = APP_SERVER_START_BACKOFF_INITIAL_SECONDS
         timeout = 30.0
         started_at = time.monotonic()
+        attempts = 0
         while True:
             try:
+                attempts += 1
                 supervisor = await self._app_server_supervisor_for_workspace(
                     workspace_root
                 )
-                return await supervisor.get_client(workspace_root)
+                client = await supervisor.get_client(workspace_root)
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "discord.app_server.client.ready",
+                    workspace_path=str(workspace_root),
+                    attempts=attempts,
+                    elapsed_ms=round((time.monotonic() - started_at) * 1000, 1),
+                    service_uptime_ms=self._service_uptime_ms(),
+                    cold_start_window=self._is_within_cold_start_window(),
+                )
+                return client
             except ConfigError:
                 return None
             except (RuntimeError, ConnectionError, OSError) as exc:
@@ -2569,6 +2697,10 @@ class DiscordBotService:
                     logging.WARNING,
                     "discord.app_server.start_failed",
                     workspace_path=str(workspace_root),
+                    attempts=attempts,
+                    elapsed_ms=round((time.monotonic() - started_at) * 1000, 1),
+                    service_uptime_ms=self._service_uptime_ms(),
+                    cold_start_window=self._is_within_cold_start_window(),
                     exc=exc,
                 )
                 elapsed = time.monotonic() - started_at
@@ -3245,6 +3377,17 @@ class DiscordBotService:
             options=options,
         )
 
+    def _validate_command_sync_config(self) -> None:
+        registration = self._config.command_registration
+        if not registration.enabled:
+            return
+
+        application_id = (self._config.application_id or "").strip()
+        if not application_id:
+            raise ValueError("missing Discord application id for command sync")
+        if registration.scope == "guild" and not registration.guild_ids:
+            raise ValueError("guild scope requires at least one guild_id")
+
     async def _sync_application_commands_on_startup(self) -> None:
         registration = self._config.command_registration
         if not registration.enabled:
@@ -3255,12 +3398,9 @@ class DiscordBotService:
             )
             return
 
-        application_id = (self._config.application_id or "").strip()
-        if not application_id:
-            raise ValueError("missing Discord application id for command sync")
-        if registration.scope == "guild" and not registration.guild_ids:
-            raise ValueError("guild scope requires at least one guild_id")
+        self._validate_command_sync_config()
 
+        application_id = (self._config.application_id or "").strip()
         commands = build_application_commands(self)
         try:
             await sync_commands(
@@ -3282,6 +3422,35 @@ class DiscordBotService:
                 command_count=len(commands),
                 exc=exc,
             )
+
+    async def _run_startup_command_sync_background(self) -> None:
+        started_at = time.monotonic()
+        log_event(
+            self._logger,
+            logging.INFO,
+            "discord.commands.sync.startup_scheduled",
+            service_uptime_ms=self._service_uptime_ms(now=started_at),
+        )
+        try:
+            await self._sync_application_commands_on_startup()
+        except Exception as exc:  # intentional: background startup sync is best-effort
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.commands.sync.startup_background_failed",
+                elapsed_ms=round((time.monotonic() - started_at) * 1000, 1),
+                service_uptime_ms=self._service_uptime_ms(),
+                exc=exc,
+            )
+            return
+        finished_at = time.monotonic()
+        log_event(
+            self._logger,
+            logging.INFO,
+            "discord.commands.sync.startup_finished",
+            elapsed_ms=round((finished_at - started_at) * 1000, 1),
+            service_uptime_ms=self._service_uptime_ms(now=finished_at),
+        )
 
     async def _shutdown(self) -> None:
         shutdown_deadline = (
@@ -3650,8 +3819,20 @@ class DiscordBotService:
 
     async def _on_dispatch(self, event_type: str, payload: dict[str, Any]) -> None:
         if event_type == "INTERACTION_CREATE":
+            dispatch_started_at = time.monotonic()
             ingress_result = await self._ingress.process_raw_payload(payload)
             if not ingress_result.accepted:
+                if ingress_result.context is not None:
+                    log_event(
+                        self._logger,
+                        logging.INFO,
+                        "discord.interaction.rejected",
+                        rejection_reason=ingress_result.rejection_reason,
+                        **self._interaction_telemetry_fields(
+                            ingress_result.context,
+                            now=dispatch_started_at,
+                        ),
+                    )
                 if ingress_result.rejection_reason == "normalization_failed":
                     interaction_id = extract_interaction_id(payload)
                     interaction_token = extract_interaction_token(payload)
@@ -3683,6 +3864,16 @@ class DiscordBotService:
                 envelope = await self._build_runtime_interaction_envelope(
                     ingress_result.context
                 )
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "discord.interaction.admitted",
+                    **self._interaction_telemetry_fields(
+                        ingress_result.context,
+                        now=dispatch_started_at,
+                        envelope=envelope,
+                    ),
+                )
                 await self._persist_runtime_interaction(
                     envelope,
                     payload,
@@ -3700,6 +3891,15 @@ class DiscordBotService:
                         ingress_result.context.interaction_id,
                         scheduler_state="delivery_expired",
                     )
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "discord.interaction.delivery_expired_before_dispatch",
+                        **self._interaction_telemetry_fields(
+                            ingress_result.context,
+                            envelope=envelope,
+                        ),
+                    )
                     await self._respond_ephemeral(
                         ingress_result.context.interaction_id,
                         ingress_result.context.interaction_token,
@@ -3712,6 +3912,31 @@ class DiscordBotService:
                     )
                     return
                 self._ingress.finalize_success(ingress_result.context)
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "discord.interaction.enqueued",
+                    ingress_elapsed_ms=(
+                        round(
+                            (
+                                ingress_result.context.timing.ingress_finished_at
+                                - ingress_result.context.timing.ingress_started_at
+                            )
+                            * 1000,
+                            1,
+                        )
+                        if (
+                            ingress_result.context.timing.ingress_started_at is not None
+                            and ingress_result.context.timing.ingress_finished_at
+                            is not None
+                        )
+                        else None
+                    ),
+                    **self._interaction_telemetry_fields(
+                        ingress_result.context,
+                        envelope=envelope,
+                    ),
+                )
                 self._command_runner.submit(
                     envelope.context,
                     payload,

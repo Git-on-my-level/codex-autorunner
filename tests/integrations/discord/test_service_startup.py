@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from types import SimpleNamespace
@@ -98,14 +99,16 @@ async def test_service_startup_reaps_managed_processes(
 
 
 @pytest.mark.anyio
-async def test_service_startup_syncs_commands_before_gateway_loop(
+async def test_service_startup_starts_gateway_before_command_sync_finishes(
     tmp_path: Path,
 ) -> None:
     order: list[str] = []
+    sync_started = asyncio.Event()
 
     class _OrderedGateway(_FakeGateway):
         async def run(self, _on_dispatch) -> None:
             order.append("gateway")
+            await sync_started.wait()
             await super().run(_on_dispatch)
 
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
@@ -122,6 +125,7 @@ async def test_service_startup_syncs_commands_before_gateway_loop(
 
     async def _fake_sync_commands() -> None:
         order.append("sync")
+        sync_started.set()
 
     service._sync_application_commands_on_startup = (  # type: ignore[method-assign]
         _fake_sync_commands
@@ -129,7 +133,7 @@ async def test_service_startup_syncs_commands_before_gateway_loop(
 
     try:
         await service.run_forever()
-        assert order == ["sync", "gateway"]
+        assert order == ["gateway", "sync"]
         assert gateway.ran is True
     finally:
         await store.close()
