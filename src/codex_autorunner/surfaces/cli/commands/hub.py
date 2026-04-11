@@ -18,7 +18,18 @@ from ....core.destinations import (
 )
 from ....core.hub import HubSupervisor
 from ....core.hub_diagnostics import read_hub_endpoint
-from ....core.orchestration import verify_migration
+from ....core.orchestration import (
+    audit_execution_history,
+    backfill_legacy_execution_history,
+    compact_completed_execution_history,
+    export_execution_history_bundle,
+    resolve_execution_history_maintenance_policy,
+    vacuum_execution_history,
+    verify_migration,
+)
+from ....core.orchestration.execution_history_maintenance import (
+    prune_execution_history_retention,
+)
 from ....core.orchestration.sqlite import open_orchestration_sqlite
 from ....core.pma_automation_store import PmaAutomationStore
 from ....manifest import Manifest, load_manifest, save_manifest
@@ -944,6 +955,200 @@ def register_hub_commands(
             typer.echo(f"  {table}: {count}")
         for store, exists in legacy_status.items():
             typer.echo(f"  legacy_{store}: {'yes' if exists else 'no'}")
+
+    @orchestration_app.command("audit")
+    def orchestration_audit(
+        path: Optional[Path] = typer.Option(None, "--path", help="Hub root path"),
+        output_json: bool = typer.Option(
+            False, "--json", help="Emit JSON payload for scripting"
+        ),
+        limit: int = typer.Option(
+            50,
+            "--limit",
+            min=1,
+            help="Max sample execution ids to include in audit output.",
+        ),
+    ) -> None:
+        """Audit hot/cold orchestration execution history health."""
+        config = require_hub_config(path)
+        summary = audit_execution_history(
+            config.root,
+            policy=resolve_execution_history_maintenance_policy(config.pma),
+            limit=limit,
+        )
+        if output_json:
+            typer.echo(json.dumps(summary.to_dict(), indent=2))
+            return
+        typer.echo(
+            "execution-history: "
+            f"executions={summary.total_executions} terminal={summary.terminal_executions} "
+            f"hot_rows={summary.timeline_rows} checkpoints={summary.checkpoints} "
+            f"manifests={summary.finalized_manifests}/{summary.archived_manifests}"
+        )
+        typer.echo(f"  missing_manifest: {len(summary.missing_manifest_execution_ids)}")
+        typer.echo(
+            f"  missing_checkpoint: {len(summary.missing_checkpoint_execution_ids)}"
+        )
+        typer.echo(f"  oversized: {len(summary.oversized_execution_ids)}")
+        typer.echo(
+            f"  missing_trace_artifact: {len(summary.missing_trace_artifact_ids)}"
+        )
+
+    @orchestration_app.command("migrate-history")
+    def orchestration_migrate_history(
+        path: Optional[Path] = typer.Option(None, "--path", help="Hub root path"),
+        execution_id: list[str] = typer.Option(
+            None,
+            "--execution-id",
+            help="Restrict migration to one or more execution ids.",
+        ),
+        dry_run: bool = typer.Option(
+            False,
+            "--dry-run",
+            help="Preview legacy backfill without writing manifests/checkpoints.",
+        ),
+        output_json: bool = typer.Option(
+            False, "--json", help="Emit JSON payload for scripting"
+        ),
+    ) -> None:
+        """Backfill cold trace manifests and checkpoints from legacy hot timelines."""
+        config = require_hub_config(path)
+        summary = backfill_legacy_execution_history(
+            config.root,
+            execution_ids=execution_id or None,
+            dry_run=dry_run,
+        )
+        if output_json:
+            typer.echo(json.dumps(summary.to_dict(), indent=2))
+            return
+        prefix = "dry-run: " if dry_run else ""
+        typer.echo(
+            prefix
+            + "legacy-history: "
+            + f"candidates={summary.candidate_executions} "
+            + f"manifests_created={summary.manifests_created} "
+            + f"checkpoints_created={summary.checkpoints_created}"
+        )
+
+    @orchestration_app.command("compact-history")
+    def orchestration_compact_history(
+        path: Optional[Path] = typer.Option(None, "--path", help="Hub root path"),
+        execution_id: list[str] = typer.Option(
+            None,
+            "--execution-id",
+            help="Restrict compaction to one or more execution ids.",
+        ),
+        dry_run: bool = typer.Option(
+            False,
+            "--dry-run",
+            help="Preview compaction without deleting hot timeline rows.",
+        ),
+        output_json: bool = typer.Option(
+            False, "--json", help="Emit JSON payload for scripting"
+        ),
+    ) -> None:
+        """Compact completed execution timelines down to bounded hot summaries."""
+        config = require_hub_config(path)
+        summary = compact_completed_execution_history(
+            config.root,
+            execution_ids=execution_id or None,
+            policy=resolve_execution_history_maintenance_policy(config.pma),
+            dry_run=dry_run,
+        )
+        if output_json:
+            typer.echo(json.dumps(summary.to_dict(), indent=2))
+            return
+        prefix = "dry-run: " if dry_run else ""
+        typer.echo(
+            prefix
+            + "compaction: "
+            + f"executions={summary.compacted_executions} "
+            + f"rows_before={summary.rows_before} rows_after={summary.rows_after} "
+            + f"rows_deleted={summary.rows_deleted}"
+        )
+
+    @orchestration_app.command("retention")
+    def orchestration_retention(
+        path: Optional[Path] = typer.Option(None, "--path", help="Hub root path"),
+        dry_run: bool = typer.Option(
+            False,
+            "--dry-run",
+            help="Preview retention pruning without deleting traces or hot rows.",
+        ),
+        output_json: bool = typer.Option(
+            False, "--json", help="Emit JSON payload for scripting"
+        ),
+    ) -> None:
+        """Enforce configured retention for execution-history hot rows and cold traces."""
+        config = require_hub_config(path)
+        summary = prune_execution_history_retention(
+            config.root,
+            policy=resolve_execution_history_maintenance_policy(config.pma),
+            dry_run=dry_run,
+        )
+        if output_json:
+            typer.echo(json.dumps(summary.to_dict(), indent=2))
+            return
+        prefix = "dry-run: " if dry_run else ""
+        typer.echo(
+            prefix
+            + "retention: "
+            + f"executions={len(summary.pruned_execution_ids)} "
+            + f"trace_ids={len(summary.pruned_trace_ids)} "
+            + f"hot_rows_deleted={summary.hot_rows_deleted} "
+            + f"checkpoints_deleted={summary.checkpoints_deleted} "
+            + f"manifests_deleted={summary.manifests_deleted} "
+            + f"bytes_reclaimed={summary.bytes_reclaimed}"
+        )
+
+    @orchestration_app.command("export-history")
+    def orchestration_export_history(
+        export_root: Path = typer.Argument(..., help="Destination directory"),
+        path: Optional[Path] = typer.Option(None, "--path", help="Hub root path"),
+        execution_id: list[str] = typer.Option(
+            None,
+            "--execution-id",
+            help="Restrict export to one or more execution ids.",
+        ),
+        output_json: bool = typer.Option(
+            False, "--json", help="Emit JSON payload for scripting"
+        ),
+    ) -> None:
+        """Export cold trace artifacts plus manifest/checkpoint metadata."""
+        config = require_hub_config(path)
+        summary = export_execution_history_bundle(
+            config.root,
+            export_root=export_root,
+            execution_ids=execution_id or None,
+        )
+        if output_json:
+            typer.echo(json.dumps(summary.to_dict(), indent=2))
+            return
+        typer.echo(
+            "export-history: "
+            f"executions={summary.execution_count} manifests={summary.manifest_count} "
+            + f"checkpoints={summary.checkpoint_count} traces={summary.trace_file_count} "
+            + f"dest={summary.export_root}"
+        )
+
+    @orchestration_app.command("vacuum")
+    def orchestration_vacuum(
+        path: Optional[Path] = typer.Option(None, "--path", help="Hub root path"),
+        output_json: bool = typer.Option(
+            False, "--json", help="Emit JSON payload for scripting"
+        ),
+    ) -> None:
+        """Vacuum orchestration.sqlite3 after migration/compaction cleanup."""
+        config = require_hub_config(path)
+        summary = vacuum_execution_history(config.root)
+        if output_json:
+            typer.echo(json.dumps(summary.to_dict(), indent=2))
+            return
+        typer.echo(
+            "vacuum: "
+            f"before={summary.size_before} after={summary.size_after} "
+            + f"reclaimed={summary.reclaimed_bytes}"
+        )
 
     @hub_app.command("create")
     def hub_create(

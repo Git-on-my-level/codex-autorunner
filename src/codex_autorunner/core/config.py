@@ -854,6 +854,9 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         "run_archive_max_entries": 200,
         "run_archive_max_age_days": 30,
         "run_archive_max_total_bytes": 1_000_000_000,
+        "orchestration_compaction_max_hot_rows": 16,
+        "orchestration_hot_history_retention_days": 30,
+        "orchestration_cold_trace_retention_days": 90,
     },
     "templates": {
         "enabled": True,
@@ -1047,6 +1050,9 @@ class PmaConfig:
     run_archive_max_entries: int = 200
     run_archive_max_age_days: int = 30
     run_archive_max_total_bytes: int = 1_000_000_000
+    orchestration_compaction_max_hot_rows: int = 16
+    orchestration_hot_history_retention_days: int = 30
+    orchestration_cold_trace_retention_days: int = 90
 
 
 @dataclasses.dataclass
@@ -2304,6 +2310,20 @@ def _parse_pma_config(
     run_archive_max_total_bytes = _parse_nonnegative_int(
         "run_archive_max_total_bytes", 1_000_000_000
     )
+    orchestration_compaction_max_hot_rows = _parse_nonnegative_int(
+        "orchestration_compaction_max_hot_rows",
+        16,
+    )
+    if orchestration_compaction_max_hot_rows <= 0:
+        orchestration_compaction_max_hot_rows = 16
+    orchestration_hot_history_retention_days = _parse_nonnegative_int(
+        "orchestration_hot_history_retention_days",
+        30,
+    )
+    orchestration_cold_trace_retention_days = _parse_nonnegative_int(
+        "orchestration_cold_trace_retention_days",
+        90,
+    )
     return PmaConfig(
         enabled=enabled,
         default_agent=default_agent,
@@ -2339,6 +2359,9 @@ def _parse_pma_config(
         run_archive_max_entries=run_archive_max_entries,
         run_archive_max_age_days=run_archive_max_age_days,
         run_archive_max_total_bytes=run_archive_max_total_bytes,
+        orchestration_compaction_max_hot_rows=orchestration_compaction_max_hot_rows,
+        orchestration_hot_history_retention_days=orchestration_hot_history_retention_days,
+        orchestration_cold_trace_retention_days=orchestration_cold_trace_retention_days,
     )
 
 
