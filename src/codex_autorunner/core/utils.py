@@ -8,6 +8,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import tempfile
 from functools import lru_cache
 from pathlib import Path
 from typing import (
@@ -157,8 +158,15 @@ def is_within(*, root: Path, target: Path) -> bool:
 
 def atomic_write(path: Path, content: str, durable: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    with tmp_path.open("w", encoding="utf-8") as f:
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        dir=path.parent,
+        prefix=f"{path.name}.",
+        suffix=".tmp",
+        delete=False,
+    ) as f:
+        tmp_path = Path(f.name)
         f.write(content)
         if durable:
             f.flush()

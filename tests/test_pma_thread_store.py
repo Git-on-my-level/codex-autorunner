@@ -148,6 +148,34 @@ def test_backend_thread_binding_can_be_cleared_across_restart(tmp_path: Path) ->
     assert row["backend_thread_id"] is None
 
 
+def test_connect_readonly_skips_bootstrap_initialize(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hub_root = tmp_path / "hub"
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+
+    created = PmaThreadStore(hub_root).create_thread("codex", workspace_root)
+    initialize_calls: list[str] = []
+
+    def _record_initialize(self) -> None:  # type: ignore[no-untyped-def]
+        initialize_calls.append("called")
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.pma_thread_store.PmaThreadStoreBootstrap.initialize",
+        _record_initialize,
+    )
+
+    store = PmaThreadStore.connect_readonly(hub_root)
+    listed = store.list_threads(agent="codex")
+
+    assert initialize_calls == []
+    assert [thread["managed_thread_id"] for thread in listed] == [
+        created["managed_thread_id"]
+    ]
+
+
 def test_create_finish_turn_and_query(tmp_path: Path) -> None:
     store = PmaThreadStore(tmp_path / "hub")
     thread = store.create_thread("codex", tmp_path / "workspace")

@@ -6,6 +6,7 @@ from typer.testing import CliRunner
 
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.cli import app
+from codex_autorunner.core.hub import HubSupervisor
 
 runner = CliRunner()
 
@@ -126,6 +127,55 @@ def test_hub_agent_workspace_show_reports_runtime_readiness(
     payload = json.loads(show_result.output)
     assert payload["readiness"]["status"] == "incompatible"
     assert payload["readiness"]["version"] == "0.2.0"
+
+
+def test_hub_agent_workspace_list_uses_cached_listing(
+    tmp_path: Path, monkeypatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    seed_hub_files(hub_root, force=True)
+
+    runner.invoke(
+        app,
+        [
+            "hub",
+            "agent-workspace",
+            "create",
+            "zc-main",
+            "--runtime",
+            "zeroclaw",
+            "--disabled",
+            "--path",
+            str(hub_root),
+        ],
+        catch_exceptions=False,
+    )
+
+    calls: list[bool] = []
+    original = HubSupervisor.list_agent_workspaces
+
+    def _wrapped(self, *, use_cache: bool = True):  # type: ignore[no-untyped-def]
+        calls.append(use_cache)
+        return original(self, use_cache=use_cache)
+
+    monkeypatch.setattr(HubSupervisor, "list_agent_workspaces", _wrapped)
+
+    result = runner.invoke(
+        app,
+        [
+            "hub",
+            "agent-workspace",
+            "list",
+            "--json",
+            "--path",
+            str(hub_root),
+        ],
+    )
+    assert result.exit_code == 0
+    assert calls == [True]
+    payload = json.loads(result.output)
+    assert payload["agent_workspaces"][0]["id"] == "zc-main"
 
 
 def test_hub_agent_workspace_create_fails_on_incompatible_preflight(

@@ -1,5 +1,7 @@
 """Tests for durable writes mode."""
 
+import concurrent.futures
+import threading
 from pathlib import Path
 
 from codex_autorunner.core.config import (
@@ -33,6 +35,26 @@ def test_atomic_write_with_durable(tmp_path: Path) -> None:
     atomic_write(file_path, content, durable=True)
     assert file_path.exists()
     assert file_path.read_text() == content
+
+
+def test_atomic_write_allows_concurrent_writers(tmp_path: Path) -> None:
+    file_path = tmp_path / "test.txt"
+    writer_count = 8
+    barrier = threading.Barrier(writer_count)
+
+    def _write(index: int) -> None:
+        barrier.wait(timeout=5)
+        atomic_write(file_path, f"content-{index}", durable=False)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=writer_count) as executor:
+        futures = [executor.submit(_write, index) for index in range(writer_count)]
+        for future in futures:
+            future.result(timeout=5)
+
+    assert file_path.exists()
+    assert file_path.read_text() in {
+        f"content-{index}" for index in range(writer_count)
+    }
 
 
 def test_connect_sqlite_without_durable(tmp_path: Path) -> None:

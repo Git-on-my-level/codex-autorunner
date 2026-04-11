@@ -454,13 +454,20 @@ def load_hub_state(state_path: Path, hub_root: Path) -> HubState:
     )
 
 
-def save_hub_state(state_path: Path, state: HubState, hub_root: Path) -> None:
+def save_hub_state(
+    state_path: Path,
+    state: HubState,
+    hub_root: Path,
+    *,
+    refresh_pma_threads_artifact: bool = True,
+) -> None:
     payload = state.to_dict(hub_root)
     atomic_write(state_path, json.dumps(payload, indent=2) + "\n")
-    try:
-        _save_pma_threads_artifact(hub_root)
-    except (OSError, ValueError, TypeError) as exc:
-        logger.warning("Failed to write PMA thread snapshot artifact: %s", exc)
+    if refresh_pma_threads_artifact:
+        try:
+            _save_pma_threads_artifact(hub_root)
+        except (OSError, ValueError, TypeError) as exc:
+            logger.warning("Failed to write PMA thread snapshot artifact: %s", exc)
 
 
 def _save_pma_threads_artifact(hub_root: Path) -> None:
@@ -682,7 +689,12 @@ class HubSupervisor:
                 agent_workspaces=agent_workspaces,
                 pinned_parent_repo_ids=pinned_parent_repo_ids,
             )
-            save_hub_state(self.state_path, self.state, self.hub_config.root)
+            save_hub_state(
+                self.state_path,
+                self.state,
+                self.hub_config.root,
+                refresh_pma_threads_artifact=False,
+            )
             self._list_cache = snapshots
             self._list_cache_at = time.monotonic()
             return snapshots
@@ -714,7 +726,12 @@ class HubSupervisor:
                 agent_workspaces=self.state.agent_workspaces,
                 pinned_parent_repo_ids=_normalize_pinned_parent_repo_ids(current),
             )
-            save_hub_state(self.state_path, self.state, self.hub_config.root)
+            save_hub_state(
+                self.state_path,
+                self.state,
+                self.hub_config.root,
+                refresh_pma_threads_artifact=False,
+            )
             return list(self.state.pinned_parent_repo_ids)
 
     def create_agent_workspace(
@@ -1546,9 +1563,7 @@ class HubSupervisor:
         workspace = manifest.get_agent_workspace(workspace_id)
         if not workspace:
             raise ValueError(f"Agent workspace {workspace_id} not found in manifest")
-        snapshot = self._snapshot_from_agent_workspace(workspace)
-        self.list_repos(use_cache=False)
-        return snapshot
+        return self._snapshot_from_agent_workspace(workspace)
 
     def _invalidate_list_cache(self) -> None:
         with self._list_lock:
