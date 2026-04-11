@@ -797,6 +797,9 @@ class DiscordBotService:
         )
         await self._maybe_send_queued_notice(event, dispatch_result)
 
+    async def dispatch_chat_event(self, event: ChatEvent) -> None:
+        await self._dispatch_chat_event(event)
+
     def _evaluate_message_collaboration_policy(
         self,
         event: ChatMessageEvent,
@@ -1146,6 +1149,14 @@ class DiscordBotService:
                 ack_finished_at=time.monotonic(),
             )
         return acknowledged
+
+    async def acknowledge_runtime_envelope(
+        self,
+        envelope: RuntimeInteractionEnvelope,
+        *,
+        stage: str,
+    ) -> bool:
+        return await self._acknowledge_runtime_envelope(envelope, stage=stage)
 
     async def _build_runtime_interaction_envelope(
         self,
@@ -4636,6 +4647,19 @@ class DiscordBotService:
             increment_attempt_count=increment_attempt_count,
         )
 
+    async def mark_interaction_scheduler_state(
+        self,
+        ctx: IngressContext,
+        *,
+        scheduler_state: str,
+        increment_attempt_count: bool = False,
+    ) -> None:
+        await self._mark_interaction_scheduler_state(
+            ctx,
+            scheduler_state=scheduler_state,
+            increment_attempt_count=increment_attempt_count,
+        )
+
     def _envelope_from_ledger_record(
         self,
         record: InteractionLedgerRecord,
@@ -4867,6 +4891,9 @@ class DiscordBotService:
         )
         return True
 
+    async def begin_interaction_recovery_execution(self, ctx: IngressContext) -> bool:
+        return await self._begin_interaction_recovery_execution(ctx)
+
     async def _replay_interaction_delivery(self, ctx: IngressContext) -> None:
         record = await self._store.get_interaction(ctx.interaction_id)
         if record is None or not isinstance(record.delivery_cursor_json, dict):
@@ -4898,6 +4925,9 @@ class DiscordBotService:
                 reason="unsupported_delivery_cursor",
                 log_level=logging.ERROR,
             )
+
+    async def replay_interaction_delivery(self, ctx: IngressContext) -> None:
+        await self._replay_interaction_delivery(ctx)
 
     async def _apply_discord_effect(
         self,
@@ -5002,6 +5032,9 @@ class DiscordBotService:
     async def _begin_interaction_execution(self, ctx: IngressContext) -> bool:
         return await self._store.claim_interaction_execution(ctx.interaction_id)
 
+    async def begin_interaction_execution(self, ctx: IngressContext) -> bool:
+        return await self._begin_interaction_execution(ctx)
+
     async def _finish_interaction_execution(
         self,
         ctx: IngressContext,
@@ -5011,6 +5044,19 @@ class DiscordBotService:
     ) -> None:
         await self._store.mark_interaction_execution(
             ctx.interaction_id,
+            execution_status=execution_status,
+            execution_error=execution_error,
+        )
+
+    async def finish_interaction_execution(
+        self,
+        ctx: IngressContext,
+        *,
+        execution_status: str,
+        execution_error: Optional[str] = None,
+    ) -> None:
+        await self._finish_interaction_execution(
+            ctx,
             execution_status=execution_status,
             execution_error=execution_error,
         )

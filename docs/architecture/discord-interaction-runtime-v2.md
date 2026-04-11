@@ -1,9 +1,9 @@
 # Discord Interaction Runtime v2 Contract
 
-This document freezes the target runtime contract for Discord interactions in
-CAR before the refactor lands. The goal is to collapse the current mixed
+This document records the implemented runtime v2 contract for Discord
+interactions in CAR. The goal of the refactor was to collapse the mixed
 interaction lifecycle into one authority for acknowledgement, execution,
-delivery, and recovery.
+delivery, and recovery, and the current branch now reflects that replacement.
 
 This is an adapter-layer contract. It must remain consistent with
 `docs/ARCHITECTURE_BOUNDARIES.md`: Discord stays in
@@ -20,7 +20,6 @@ Runtime v2 covers:
 - post-ack scheduling and execution
 - followup delivery and component-message updates
 - idempotency and restart recovery
-- temporary coexistence with the current runtime behind a feature flag
 
 Runtime v2 does not change:
 
@@ -43,31 +42,28 @@ single runtime-owned admission and execution path.
 | Post-admission execution path | `src/codex_autorunner/integrations/discord/interaction_dispatch.py:execute_ingressed_interaction()` | Executes already-admitted interactions from `CommandRunner` | This is now the only interaction execution path. |
 | Command-family dispatch | `src/codex_autorunner/integrations/discord/car_command_dispatch.py` | Routes `/car ...` subcommands to service handlers | This can remain, but it must become a pure business dispatcher that does not influence ack or response state. |
 
-### Current mutable response helpers
+### Current response-state owners
 
-| Area | Current seam | Raw Discord primitive touched today | Why it must change |
-| --- | --- | --- | --- |
-| Token policy cache + primary/followup response | `src/codex_autorunner/integrations/discord/response_helpers.py:DiscordResponder` | `create_interaction_response()`, `create_followup_message()`, `edit_original_interaction_response()` | Response state lives in an in-memory token cache with no durable recovery record. |
-| Component defer/update | `src/codex_autorunner/integrations/discord/service.py` via `_defer_component_update()` and `_update_component_message()` | `create_interaction_response()` type `6` and `7` | Component response mutation is split between service and `response_helpers.py`. |
-| Autocomplete | `src/codex_autorunner/integrations/discord/service.py:_respond_autocomplete()` | `create_interaction_response()` type `8` | Raw primitive is still directly exposed in service. |
-| Modal launch | `src/codex_autorunner/integrations/discord/service.py:_respond_modal()` | `create_interaction_response()` type `9` | Raw primitive is still directly exposed in service. |
+| Area | Current seam | Current ownership |
+| --- | --- | --- |
+| Ack + response session | `src/codex_autorunner/integrations/discord/interaction_session.py` plus `src/codex_autorunner/integrations/discord/response_helpers.py:DiscordResponder` | The responder/session pair owns initial callbacks, followups, original edits, component updates, autocomplete, and modal opens. |
+| Handler-facing runtime boundary | `src/codex_autorunner/integrations/discord/interaction_runtime.py` plus `src/codex_autorunner/integrations/discord/effects.py:DiscordEffectServiceProxy` | Handler-facing modules route through typed runtime helpers and effect buffering instead of touching raw Discord primitives directly. |
+| Composition root | `src/codex_autorunner/integrations/discord/service.py` | Service wires ingress, scheduler, ledger, responder, and effect sink together, while raw callback mutations are delegated through the responder/effect path. |
 
-## Remaining Gaps
+## Follow-up Hardening
 
-The admission-path cutover is now in place, but the broader v2 contract is not
-fully complete yet:
+The original correctness problem is materially fixed. The remaining work is
+cleanup and hardening rather than another runtime replacement:
 
-- `command_runner.py` still owns only in-memory scheduling and ordering.
-- `response_helpers.py` still tracks prepared-response policy by interaction
-  token, so restart durability is incomplete.
-- `service.py` still exposes raw response mutations for component update,
-  autocomplete, and modal responses.
-
-The result is that the repo still has multiple effective lifecycle authorities:
-
-- more than one module can touch raw interaction callback primitives
-- ordering is conversation-aware only for part of the runtime
-- restart recovery is best-effort rather than modeled
+- Keep this document and the module docstrings aligned with the implemented
+  runtime rather than the earlier cutover plan.
+- Split `interaction_registry.py` by route family before it becomes the next
+  brittle center of control.
+- Continue moving handler-facing modules away from private service wrappers and
+  onto typed runtime/proxy methods.
+- The durable ledger is strong for single-process restart recovery. If CAR
+  later supports overlapping Discord workers, add owner/expiry execution leases
+  on top of the current recovery model.
 
 ## Target Invariants
 
@@ -341,7 +337,7 @@ and scheduler state (`dispatch_ready`, `waiting_on_resources`,
 | --- | --- |
 | `ingress.py` | normalize payload, authz, derive route key and normalized envelope; no raw Discord response calls |
 | `command_runner.py` | single scheduler authority with durable interaction leases, resource-key locking, and restart resume |
-| `interaction_dispatch.py` | post-ack runtime executor only; legacy normalized-dispatch path removed after cutover |
+| `interaction_dispatch.py` | post-ack runtime executor only; legacy normalized-dispatch path removed |
 | `car_command_dispatch.py` | pure business router for `/car` commands; no ack or response-state decisions |
 | `response_helpers.py` | replaced or narrowed into runtime responder/state machine owner |
 | `service.py` | composition root only; wires gateway, runtime, outbox, and store, but does not call raw interaction callback primitives |
@@ -352,46 +348,25 @@ This is the required migration map for the named seams in the ticket.
 
 | Current module | Current seam | v2 destination |
 | --- | --- | --- |
-| `ingress.py` | `InteractionIngress.process_raw_payload()` does normalization, authz, and ack | Split into envelope creation plus registry lookup. Ack side effects move to the runtime responder. |
-| `command_runner.py` | `submit()`, `submit_ingressed()`, per-conversation queues | Collapse into one scheduler API that accepts runtime envelopes, applies resource keys, persists leases, and resumes on restart. |
-| `interaction_dispatch.py` | `handle_normalized_interaction()` and `execute_ingressed_interaction()` coexist | Keep only the post-ack executor shape. Route admission, authz, and ack are removed from this module. |
+| `ingress.py` | `InteractionIngress.process_raw_payload()` now performs normalization and authz only | Return the normalized envelope and timing inputs. Ack side effects stay in the runtime responder/admission path. |
+| `command_runner.py` | `submit()`, per-conversation/resource scheduling, replay modes | Accept the admitted runtime envelope, apply resource keys, persist scheduler state, and resume execution or delivery from ledger-backed recovery. |
+| `interaction_dispatch.py` | `execute_ingressed_interaction()` | Keep only the post-ack executor shape. Route admission, authz, and ack are removed from this module. |
 | `car_command_dispatch.py` | Service-driven subcommand fanout | Keep as business dispatch only. It may depend on normalized runtime context, never on raw Discord callback state. |
-| `response_helpers.py` | Prepared token cache and response helpers | Replace with a durable responder/state machine owner. No response policy inferred from transient in-memory cache. |
-| `service.py` | `_on_dispatch()` chooses queues; `_defer_component_update()`, `_respond_autocomplete()`, `_respond_modal()`, `_update_component_message()` touch raw primitives | `service.py` becomes a wiring layer. Those raw response methods move behind the runtime responder. Queue policy moves to the scheduler. |
+| `response_helpers.py` | Runtime responder plus delivery cursor replay | Own durable response-state restoration and the raw transport calls behind the session/effect path. |
+| `service.py` | `_on_dispatch()` admits runtime envelopes and wires scheduler/responder/store together | `service.py` is a wiring layer. Queue policy lives in the scheduler and response delivery lives behind the responder/effect path. |
 
-## Feature Flag And Cutover Plan
+## Post-Cutover Priorities
 
-Old and new paths must coexist temporarily.
+The remaining priorities are follow-up hardening, not runtime coexistence:
 
-### Flag shape
-
-Introduce a runtime flag under Discord config:
-
-- `discord_bot.interaction_runtime_v2.enabled`
-
-Recommended temporary supporting flags:
-
-- `discord_bot.interaction_runtime_v2.shadow_compare`
-- `discord_bot.interaction_runtime_v2.route_allowlist`
-
-### Cutover stages
-
-1. Implement the runtime registry, responder, and durable lease record behind
-   the disabled feature flag.
-2. Run the v2 ingress path in shadow mode from `service.py:_on_dispatch()`:
-   build the same normalized envelope, resolve route keys, and log differences
-   against the current runtime without changing behavior.
-3. Cut slash-command traffic to v2 first, because it already uses ingress plus
-   `CommandRunner.submit_ingressed()`.
-4. Cut component, modal, and autocomplete traffic to v2 after the runtime
-   responder absorbs `_defer_component_update()`,
-   `_respond_autocomplete()`, `_respond_modal()`, and
-   `_update_component_message()`.
-5. Delete the legacy dispatcher entry point
-   `interaction_dispatch.handle_normalized_interaction()` after all Discord
-   interaction kinds run through the v2 executor.
-6. Remove shadow flags and obsolete service wrappers only after restart-recovery
-   characterization passes.
+1. Keep the runtime contract docs, module docstrings, and boundary tests aligned
+   with the code as the v2 branch settles.
+2. Continue narrowing handler-facing code onto typed runtime helpers and effect
+   proxies so private service hooks do not creep back into new work.
+3. Split registry construction by route family before adding another large
+   interaction surface.
+4. Add true owner/expiry execution leases only if the Discord runtime ever
+   needs active-active execution rather than single-process restart recovery.
 
 ## Logging And Observability Expectations
 

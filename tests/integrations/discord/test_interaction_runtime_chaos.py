@@ -373,6 +373,61 @@ class _RunnerService:
         self._handle_ticket_modal_submit = AsyncMock()
         self._respond_ephemeral = AsyncMock()
         self._send_or_respond_ephemeral = AsyncMock()
+        self._dispatch_chat_event = AsyncMock()
+
+    async def dispatch_chat_event(self, event: Any) -> None:
+        await self._dispatch_chat_event(event)
+
+    async def acknowledge_runtime_envelope(
+        self,
+        _envelope: Any,
+        *,
+        stage: str,
+    ) -> bool:
+        _ = stage
+        return True
+
+    async def mark_interaction_scheduler_state(
+        self,
+        _ctx: Any,
+        *,
+        scheduler_state: str,
+        increment_attempt_count: bool = False,
+    ) -> None:
+        _ = scheduler_state, increment_attempt_count
+
+    async def begin_interaction_execution(self, _ctx: Any) -> bool:
+        return True
+
+    async def begin_interaction_recovery_execution(self, _ctx: Any) -> bool:
+        return True
+
+    async def replay_interaction_delivery(self, _ctx: Any) -> None:
+        return None
+
+    async def finish_interaction_execution(
+        self,
+        _ctx: Any,
+        *,
+        execution_status: str,
+        execution_error: Optional[str] = None,
+    ) -> None:
+        _ = execution_status, execution_error
+
+    async def send_or_respond_ephemeral(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+        deferred: bool,
+        text: str,
+    ) -> None:
+        await self._send_or_respond_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text=text,
+        )
 
 
 def _build_recovery_service(

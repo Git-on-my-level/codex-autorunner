@@ -27,7 +27,7 @@ import logging
 import time
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Deque, Optional, Sequence, Set
+from typing import Any, Awaitable, Callable, Deque, Optional, Protocol, Sequence, Set
 
 from ...core.logging_utils import log_event
 from .ingress import IngressContext, IngressTiming, RuntimeInteractionEnvelope
@@ -40,6 +40,50 @@ DEFAULT_HANDLER_TIMEOUT_SECONDS: Optional[float] = None
 DEFAULT_STALLED_WARNING_SECONDS: Optional[float] = 60.0
 
 _DRAIN_SENTINEL: object = object()
+
+
+class DiscordRunnerService(Protocol):
+    async def dispatch_chat_event(self, event: Any) -> None: ...
+
+    async def acknowledge_runtime_envelope(
+        self,
+        envelope: RuntimeInteractionEnvelope,
+        *,
+        stage: str,
+    ) -> bool: ...
+
+    async def mark_interaction_scheduler_state(
+        self,
+        ctx: IngressContext,
+        *,
+        scheduler_state: str,
+        increment_attempt_count: bool = False,
+    ) -> None: ...
+
+    async def begin_interaction_execution(self, ctx: IngressContext) -> bool: ...
+
+    async def begin_interaction_recovery_execution(
+        self, ctx: IngressContext
+    ) -> bool: ...
+
+    async def replay_interaction_delivery(self, ctx: IngressContext) -> None: ...
+
+    async def finish_interaction_execution(
+        self,
+        ctx: IngressContext,
+        *,
+        execution_status: str,
+        execution_error: Optional[str] = None,
+    ) -> None: ...
+
+    async def send_or_respond_ephemeral(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+        deferred: bool,
+        text: str,
+    ) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -68,7 +112,7 @@ class RunnerConfig:
 class CommandRunner:
     def __init__(
         self,
-        service: Any,
+        service: DiscordRunnerService,
         *,
         config: RunnerConfig,
         logger: logging.Logger,
@@ -195,10 +239,7 @@ class CommandRunner:
         scheduler_state: str,
         increment_attempt_count: bool = False,
     ) -> None:
-        mark_state = getattr(self._service, "_mark_interaction_scheduler_state", None)
-        if not callable(mark_state):
-            return
-        await mark_state(
+        await self._service.mark_interaction_scheduler_state(
             item.ctx,
             scheduler_state=scheduler_state,
             increment_attempt_count=increment_attempt_count,
@@ -270,7 +311,7 @@ class CommandRunner:
                         logging.DEBUG,
                         "discord.runner.dispatch.start",
                     )
-                    await self._service._dispatch_chat_event(item)
+                    await self._service.dispatch_chat_event(item)
                 except Exception as exc:
                     log_event(
                         self._logger,
@@ -308,16 +349,14 @@ class CommandRunner:
                         scheduler_state="waiting_on_resources",
                     )
                     if item.queue_wait_ack_policy not in (None, "immediate"):
-                        acknowledged = (
-                            await self._service._acknowledge_runtime_envelope(
-                                RuntimeInteractionEnvelope(
-                                    context=item.ctx,
-                                    conversation_id=item.schedule.conversation_id,
-                                    resource_keys=item.schedule.resource_keys,
-                                    queue_wait_ack_policy=item.queue_wait_ack_policy,
-                                ),
-                                stage="queue_wait",
-                            )
+                        acknowledged = await self._service.acknowledge_runtime_envelope(
+                            RuntimeInteractionEnvelope(
+                                context=item.ctx,
+                                conversation_id=item.schedule.conversation_id,
+                                resource_keys=item.schedule.resource_keys,
+                                queue_wait_ack_policy=item.queue_wait_ack_policy,
+                            ),
+                            stage="queue_wait",
                         )
                         if not acknowledged:
                             notify_idle = await self._remove_pending_schedule(item)
@@ -499,28 +538,18 @@ class CommandRunner:
         *,
         replay_mode: str = "normal",
     ) -> None:
-        begin_execution = getattr(self._service, "_begin_interaction_execution", None)
-        begin_recovery_execution = getattr(
-            self._service, "_begin_interaction_recovery_execution", None
-        )
-        replay_delivery = getattr(self._service, "_replay_interaction_delivery", None)
-        finish_execution = getattr(self._service, "_finish_interaction_execution", None)
         if replay_mode == "delivery_replay":
-            if callable(replay_delivery):
-                await replay_delivery(ctx)
-            else:
-                log_event(
-                    self._logger,
-                    logging.ERROR,
-                    "discord.runner.delivery_replay.unsupported",
-                    interaction_id=ctx.interaction_id,
-                )
+            await self._service.replay_interaction_delivery(ctx)
             return
         claimed_execution = True
-        if replay_mode == "execution_replay" and callable(begin_recovery_execution):
-            claimed_execution = bool(await begin_recovery_execution(ctx))
-        elif callable(begin_execution):
-            claimed_execution = bool(await begin_execution(ctx))
+        if replay_mode == "execution_replay":
+            claimed_execution = bool(
+                await self._service.begin_interaction_recovery_execution(ctx)
+            )
+        else:
+            claimed_execution = bool(
+                await self._service.begin_interaction_execution(ctx)
+            )
         if not claimed_execution:
             log_event(
                 self._logger,
@@ -630,12 +659,11 @@ class CommandRunner:
                     ctx, finished_at
                 ),
             )
-            if callable(finish_execution):
-                await finish_execution(
-                    ctx,
-                    execution_status=execution_status,
-                    execution_error=execution_error,
-                )
+            await self._service.finish_interaction_execution(
+                ctx,
+                execution_status=execution_status,
+                execution_error=execution_error,
+            )
 
     async def _execute_body(
         self,
@@ -702,7 +730,7 @@ class CommandRunner:
 
     async def _send_timeout_followup(self, ctx: IngressContext) -> None:
         try:
-            await self._service._send_or_respond_ephemeral(
+            await self._service.send_or_respond_ephemeral(
                 interaction_id=ctx.interaction_id,
                 interaction_token=ctx.interaction_token,
                 deferred=ctx.deferred,
@@ -719,7 +747,7 @@ class CommandRunner:
 
     async def _send_error_followup(self, ctx: IngressContext) -> None:
         try:
-            await self._service._send_or_respond_ephemeral(
+            await self._service.send_or_respond_ephemeral(
                 interaction_id=ctx.interaction_id,
                 interaction_token=ctx.interaction_token,
                 deferred=ctx.deferred,

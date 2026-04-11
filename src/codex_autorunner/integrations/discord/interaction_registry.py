@@ -1,3 +1,11 @@
+"""Discord runtime routing registry.
+
+This module remains the single source of truth for slash-command, component,
+modal, and autocomplete routing metadata. As new route families are added, the
+family-specific builders should be split out before this file turns into the
+next brittle dispatcher center.
+"""
+
 from __future__ import annotations
 
 import inspect
