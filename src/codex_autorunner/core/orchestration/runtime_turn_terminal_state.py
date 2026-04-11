@@ -36,6 +36,7 @@ _SUCCESSFUL_COMPLETION_STATUSES = frozenset(
 _INTERRUPTED_COMPLETION_STATUSES = frozenset(
     {"interrupted", "cancelled", "canceled", "aborted"}
 )
+_DEFAULT_INTERRUPTED_ERROR = "Runtime thread interrupted"
 
 
 @dataclass(frozen=True)
@@ -229,14 +230,26 @@ class RuntimeTurnTerminalStateMachine:
         assistant_text = self.last_assistant_text
         detail = next(iter(self.transport_errors), "") or self.failure_cause or None
         successful_transport = status in _SUCCESSFUL_COMPLETION_STATUSES
+        interrupted_transport = status in _INTERRUPTED_COMPLETION_STATUSES
+        failed_transport = (
+            bool(status) and not successful_transport and not interrupted_transport
+        )
         successful_terminal = self._saw_successful_terminal_signal()
+        latest_terminal = self._latest_terminal_signal()
 
         if self.transport_request_return_timestamp is None:
-            if successful_terminal:
+            if latest_terminal is not None and latest_terminal.status == "ok":
                 return self._build_outcome(
                     status="ok",
                     assistant_text=assistant_text,
                     error=None,
+                    completion_source="stream_terminal_event",
+                )
+            if latest_terminal is not None and latest_terminal.status == "interrupted":
+                return self._build_outcome(
+                    status="interrupted",
+                    assistant_text="",
+                    error=detail or _DEFAULT_INTERRUPTED_ERROR,
                     completion_source="stream_terminal_event",
                 )
             return self._build_outcome(
@@ -247,6 +260,13 @@ class RuntimeTurnTerminalStateMachine:
             )
 
         if self.transport_errors:
+            if interrupted_transport:
+                return self._build_outcome(
+                    status="interrupted",
+                    assistant_text="",
+                    error=detail or _DEFAULT_INTERRUPTED_ERROR,
+                    completion_source="prompt_return",
+                )
             if successful_terminal and assistant_text.strip():
                 return self._build_outcome(
                     status="ok",
@@ -257,6 +277,13 @@ class RuntimeTurnTerminalStateMachine:
                         if not successful_transport
                         else "prompt_return"
                     ),
+                )
+            if failed_transport:
+                return self._build_outcome(
+                    status="error",
+                    assistant_text="",
+                    error=detail or execution_error_message,
+                    completion_source="prompt_return",
                 )
             if assistant_text.strip():
                 return self._build_outcome(
@@ -272,14 +299,14 @@ class RuntimeTurnTerminalStateMachine:
                 completion_source="prompt_return",
             )
 
-        if status in _INTERRUPTED_COMPLETION_STATUSES:
+        if interrupted_transport:
             return self._build_outcome(
                 status="interrupted",
                 assistant_text="",
                 error=self.failure_cause,
                 completion_source="interrupt",
             )
-        if status and not successful_transport:
+        if failed_transport:
             return self._build_outcome(
                 status="error",
                 assistant_text="",
@@ -295,6 +322,11 @@ class RuntimeTurnTerminalStateMachine:
 
     def _saw_successful_terminal_signal(self) -> bool:
         return any(signal.status == "ok" for signal in self.terminal_signals)
+
+    def _latest_terminal_signal(self) -> Optional[RuntimeThreadTerminalSignal]:
+        if not self.terminal_signals:
+            return None
+        return self.terminal_signals[-1]
 
     def _note_terminal_signal(self, signal: RuntimeThreadTerminalSignal) -> None:
         key = (signal.source, signal.status)
@@ -393,8 +425,11 @@ def _inspect_raw_event(
             status=lifecycle.runtime_terminal_status,
             timestamp=timestamp,
         )
-        if lifecycle.runtime_terminal_status == "error":
-            failure_message = lifecycle.error_message or _extract_error_message(params)
+        if lifecycle.runtime_terminal_status in {"error", "interrupted"}:
+            failure_message = lifecycle.error_message or _extract_error_message(
+                params,
+                default="",
+            )
     elif method in {"turn/failed", "turn/error", "error"}:
         failure_message = _extract_error_message(params)
         terminal_signal = RuntimeThreadTerminalSignal(

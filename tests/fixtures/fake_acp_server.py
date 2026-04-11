@@ -370,6 +370,32 @@ class FakeACPServer:
         )
         if self._scenario == "official_prompt_hang":
             return
+        if self._scenario == "official_cancelled_before_return":
+            self.send(
+                {
+                    "method": "prompt/cancelled",
+                    "params": {
+                        "sessionId": session_id,
+                        "turnId": turn_id,
+                        "status": "cancelled",
+                        "message": "request cancelled",
+                    },
+                }
+            )
+            return
+        if self._scenario == "official_failed_before_return":
+            self.send(
+                {
+                    "method": "prompt/failed",
+                    "params": {
+                        "sessionId": session_id,
+                        "turnId": turn_id,
+                        "status": "failed",
+                        "message": "permission denied",
+                    },
+                }
+            )
+            return
         if self._scenario == "official_terminal_before_return":
             self.send(
                 {

@@ -1103,6 +1103,252 @@ async def test_runtime_thread_stream_terminal_event_uses_final_output_payload(
     assert harness.wait_cancelled.is_set()
 
 
+async def test_runtime_thread_prompt_cancelled_terminal_event_finishes_before_wait_return(
+    tmp_path: Path,
+) -> None:
+    @dataclass
+    class _HarnessWithPromptCancelledStream(_HarnessWithBlockingWait):
+        capabilities: frozenset[str] = frozenset(
+            ["durable_threads", "message_turns", "interrupt", "event_streaming"]
+        )
+
+        async def stream_events(
+            self, workspace_root: Path, conversation_id: str, turn_id: str
+        ):
+            _ = workspace_root, conversation_id, turn_id
+            yield {
+                "message": {"method": "prompt/delta", "params": {"delta": "partial"}}
+            }
+            yield {
+                "message": {
+                    "method": "prompt/cancelled",
+                    "params": {
+                        "status": "cancelled",
+                        "message": "request cancelled",
+                    },
+                }
+            }
+            await asyncio.Future()
+
+    harness = _HarnessWithPromptCancelledStream()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+
+    started = await begin_runtime_thread_execution(
+        service,
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="user-visible prompt",
+        ),
+    )
+    outcome = await asyncio.wait_for(
+        await_runtime_thread_outcome(
+            started,
+            interrupt_event=None,
+            timeout_seconds=5,
+            execution_error_message="Managed thread execution failed",
+        ),
+        timeout=1,
+    )
+
+    assert outcome.status == "interrupted"
+    assert outcome.assistant_text == ""
+    assert outcome.error == "request cancelled"
+    assert outcome.completion_source == "stream_terminal_event"
+    assert outcome.transport_request_return_timestamp is None
+    assert outcome.terminal_signals
+    assert outcome.terminal_signals[0].source == "prompt/cancelled"
+    assert harness.interrupt_calls == []
+    assert harness.wait_cancelled.is_set()
+
+
+async def test_runtime_thread_turn_cancelled_terminal_event_finishes_before_wait_return(
+    tmp_path: Path,
+) -> None:
+    @dataclass
+    class _HarnessWithTurnCancelledStream(_HarnessWithBlockingWait):
+        capabilities: frozenset[str] = frozenset(
+            ["durable_threads", "message_turns", "interrupt", "event_streaming"]
+        )
+
+        async def stream_events(
+            self, workspace_root: Path, conversation_id: str, turn_id: str
+        ):
+            _ = workspace_root, conversation_id, turn_id
+            yield {
+                "message": {"method": "turn/progress", "params": {"delta": "partial"}}
+            }
+            yield {
+                "message": {
+                    "method": "turn/cancelled",
+                    "params": {"status": "cancelled"},
+                }
+            }
+            await asyncio.Future()
+
+    harness = _HarnessWithTurnCancelledStream()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+
+    started = await begin_runtime_thread_execution(
+        service,
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="user-visible prompt",
+        ),
+    )
+    outcome = await asyncio.wait_for(
+        await_runtime_thread_outcome(
+            started,
+            interrupt_event=None,
+            timeout_seconds=5,
+            execution_error_message="Managed thread execution failed",
+        ),
+        timeout=1,
+    )
+
+    assert outcome.status == "interrupted"
+    assert outcome.assistant_text == ""
+    assert outcome.error == "Runtime thread interrupted"
+    assert outcome.completion_source == "stream_terminal_event"
+    assert outcome.transport_request_return_timestamp is None
+    assert outcome.terminal_signals
+    assert outcome.terminal_signals[0].source == "turn/cancelled"
+    assert harness.interrupt_calls == []
+    assert harness.wait_cancelled.is_set()
+
+
+async def test_runtime_thread_prompt_failed_terminal_event_finishes_before_wait_return(
+    tmp_path: Path,
+) -> None:
+    @dataclass
+    class _HarnessWithPromptFailedStream(_HarnessWithBlockingWait):
+        capabilities: frozenset[str] = frozenset(
+            ["durable_threads", "message_turns", "interrupt", "event_streaming"]
+        )
+
+        async def stream_events(
+            self, workspace_root: Path, conversation_id: str, turn_id: str
+        ):
+            _ = workspace_root, conversation_id, turn_id
+            yield {
+                "message": {"method": "prompt/delta", "params": {"delta": "partial"}}
+            }
+            yield {
+                "message": {
+                    "method": "prompt/failed",
+                    "params": {
+                        "status": "failed",
+                        "message": "permission denied",
+                    },
+                }
+            }
+            await asyncio.Future()
+
+    harness = _HarnessWithPromptFailedStream()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+
+    started = await begin_runtime_thread_execution(
+        service,
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="user-visible prompt",
+        ),
+    )
+    outcome = await asyncio.wait_for(
+        await_runtime_thread_outcome(
+            started,
+            interrupt_event=None,
+            timeout_seconds=5,
+            execution_error_message="Managed thread execution failed",
+        ),
+        timeout=1,
+    )
+
+    assert outcome.status == "error"
+    assert outcome.assistant_text == ""
+    assert outcome.error == "permission denied"
+    assert outcome.failure_cause == "permission denied"
+    assert outcome.completion_source == "stream_terminal_event"
+    assert outcome.transport_request_return_timestamp is None
+    assert outcome.terminal_signals
+    assert outcome.terminal_signals[0].source == "prompt/failed"
+    assert harness.interrupt_calls == []
+    assert harness.wait_cancelled.is_set()
+
+
+async def test_runtime_thread_prompt_completed_without_final_payload_uses_prior_output_delta(
+    tmp_path: Path,
+) -> None:
+    @dataclass
+    class _HarnessWithPromptCompletedDeltaOnly(_HarnessWithBlockingWait):
+        capabilities: frozenset[str] = frozenset(
+            ["durable_threads", "message_turns", "interrupt", "event_streaming"]
+        )
+
+        async def stream_events(
+            self, workspace_root: Path, conversation_id: str, turn_id: str
+        ):
+            _ = workspace_root, conversation_id, turn_id
+            yield {
+                "message": {
+                    "method": "prompt/delta",
+                    "params": {"delta": "delta-only completion"},
+                }
+            }
+            yield {
+                "message": {
+                    "method": "prompt/completed",
+                    "params": {"status": "completed"},
+                }
+            }
+            await asyncio.Future()
+
+    harness = _HarnessWithPromptCompletedDeltaOnly()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+
+    started = await begin_runtime_thread_execution(
+        service,
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="user-visible prompt",
+        ),
+    )
+    outcome = await asyncio.wait_for(
+        await_runtime_thread_outcome(
+            started,
+            interrupt_event=None,
+            timeout_seconds=5,
+            execution_error_message="Managed thread execution failed",
+        ),
+        timeout=1,
+    )
+
+    assert outcome.status == "ok"
+    assert outcome.assistant_text == "delta-only completion"
+    assert outcome.error is None
+    assert outcome.completion_source == "stream_terminal_event"
+    assert outcome.transport_request_return_timestamp is None
+    assert outcome.terminal_signals
+    assert outcome.terminal_signals[0].source == "prompt/completed"
+    assert harness.interrupt_calls == []
+    assert harness.wait_cancelled.is_set()
+
+
 async def test_runtime_threads_prompt_return_tracks_completion_metadata(
     tmp_path: Path,
 ) -> None:

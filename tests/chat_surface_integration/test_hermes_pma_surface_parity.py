@@ -33,6 +33,7 @@ class SurfaceParityCase:
     expected_reply_substrings: dict[str, str]
     expected_progress_state: dict[str, str]
     expect_progress_retired: bool
+    expected_detail_substrings: Optional[dict[str, str]] = None
     harness_timeout_seconds: float = 2.0
     use_short_runtime_timeout: bool = False
     approval_mode: Optional[str] = None
@@ -135,6 +136,46 @@ CASES = (
         expect_progress_retired=True,
         harness_timeout_seconds=8.0,
         use_short_runtime_timeout=True,
+    ),
+    SurfaceParityCase(
+        case_id="interrupted_before_return",
+        runtime_scenario="official_cancelled_before_return",
+        prompt="echo hello world",
+        expected_status="interrupted",
+        expected_completion_source="interrupt",
+        expected_reply_substrings={
+            "discord": "Discord PMA turn interrupted",
+            "telegram": "Telegram PMA turn interrupted",
+        },
+        expected_detail_substrings={
+            "discord": "Discord PMA turn interrupted",
+            "telegram": "Telegram PMA turn interrupted",
+        },
+        expected_progress_state={
+            "discord": "failed",
+            "telegram": "retired",
+        },
+        expect_progress_retired=True,
+    ),
+    SurfaceParityCase(
+        case_id="failed_before_return",
+        runtime_scenario="official_failed_before_return",
+        prompt="echo hello world",
+        expected_status="error",
+        expected_completion_source="prompt_return",
+        expected_reply_substrings={
+            "discord": "permission denied",
+            "telegram": "permission denied",
+        },
+        expected_detail_substrings={
+            "discord": "permission denied",
+            "telegram": "permission denied",
+        },
+        expected_progress_state={
+            "discord": "failed",
+            "telegram": "retired",
+        },
+        expect_progress_retired=True,
     ),
     SurfaceParityCase(
         case_id="delivery_cleanup_failure_after_completion",
@@ -345,6 +386,13 @@ async def test_hermes_official_surface_parity_matrix(
             surface_name,
             snapshot,
         )
+        if case.expected_detail_substrings is not None:
+            assert snapshot.detail is not None, (case.case_id, surface_name, snapshot)
+            assert case.expected_detail_substrings[surface_name] in snapshot.detail, (
+                case.case_id,
+                surface_name,
+                snapshot,
+            )
         assert snapshot.progress_retired is case.expect_progress_retired, (
             case.case_id,
             surface_name,
