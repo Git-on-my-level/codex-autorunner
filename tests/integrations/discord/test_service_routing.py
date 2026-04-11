@@ -1818,6 +1818,43 @@ async def test_service_enforces_allowlist_and_denies_command(tmp_path: Path) -> 
 
 @pytest.mark.slow
 @pytest.mark.anyio
+async def test_service_enforces_allowlist_and_denies_autocomplete_with_empty_choices(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service._on_dispatch(
+            "INTERACTION_CREATE",
+            _autocomplete_interaction_path(
+                command_path=("car", "bind"),
+                focused_name="workspace",
+                focused_value="codex",
+                user_id="unauthorized",
+            ),
+        )
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"] == {
+            "type": 8,
+            "data": {"choices": []},
+        }
+    finally:
+        await service._shutdown()
+        await store.close()
+
+
+@pytest.mark.slow
+@pytest.mark.anyio
 async def test_service_bind_then_status_updates_and_reads_store(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -6214,6 +6251,7 @@ async def test_on_dispatch_backgrounds_interaction_handling(
 @pytest.mark.parametrize(
     (
         "payload",
+        "expected_dispatch_ack_policy",
         "expected_conversation",
         "expected_resource_keys",
         "expected_queue_wait_ack_policy",
@@ -6224,6 +6262,7 @@ async def test_on_dispatch_backgrounds_interaction_handling(
                 command_path=("car", "session", "compact"),
                 options=[],
             ),
+            None,
             "discord:channel-1:guild-1",
             ("conversation:discord:channel-1:guild-1",),
             None,
@@ -6233,6 +6272,17 @@ async def test_on_dispatch_backgrounds_interaction_handling(
                 custom_id="approval:abc:approve",
                 values=None,
             ),
+            None,
+            "discord:channel-1:guild-1",
+            ("conversation:discord:channel-1:guild-1",),
+            "defer_component_update",
+        ),
+        (
+            _component_interaction(
+                custom_id="flow:run-1:restart",
+                values=None,
+            ),
+            "defer_component_update",
             "discord:channel-1:guild-1",
             ("conversation:discord:channel-1:guild-1",),
             "defer_component_update",
@@ -6260,6 +6310,7 @@ async def test_on_dispatch_backgrounds_interaction_handling(
                     ],
                 },
             },
+            None,
             "discord:channel-1:guild-1",
             ("conversation:discord:channel-1:guild-1",),
             "defer_ephemeral",
@@ -6271,6 +6322,7 @@ async def test_on_dispatch_backgrounds_interaction_handling(
                 focused_value="codex",
             ),
             None,
+            None,
             (),
             None,
         ),
@@ -6279,6 +6331,7 @@ async def test_on_dispatch_backgrounds_interaction_handling(
 async def test_on_dispatch_routes_interactions_through_scheduler(
     tmp_path: Path,
     payload: dict[str, Any],
+    expected_dispatch_ack_policy: str | None,
     expected_conversation: str | None,
     expected_resource_keys: tuple[str, ...],
     expected_queue_wait_ack_policy: str | None,
@@ -6304,6 +6357,9 @@ async def test_on_dispatch_routes_interactions_through_scheduler(
         assert kwargs["conversation_id"] == expected_conversation
         assert kwargs["resource_keys"] == expected_resource_keys
         assert kwargs["queue_wait_ack_policy"] == expected_queue_wait_ack_policy
+        if expected_dispatch_ack_policy is not None:
+            assert len(rest.interaction_responses) == 1
+            assert rest.interaction_responses[0]["payload"]["type"] == 6
     finally:
         await service._shutdown()
         await store.close()

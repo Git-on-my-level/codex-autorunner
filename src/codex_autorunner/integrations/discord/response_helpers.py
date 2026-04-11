@@ -158,6 +158,9 @@ class DiscordResponder:
     ) -> None:
         if self._record_delivery_cursor is None:
             return
+        if state == "completed":
+            await self._clear_delivery_attempt(interaction_id)
+            return
         cursor: dict[str, Any] = {
             "state": state,
             "operation": operation,

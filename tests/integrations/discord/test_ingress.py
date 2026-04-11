@@ -342,7 +342,7 @@ async def test_normalization_returns_none_for_missing_ids() -> None:
 
 
 @pytest.mark.anyio
-async def test_authz_rejection_sends_ephemeral() -> None:
+async def test_authz_rejection_does_not_send_from_ingress() -> None:
     service = _FakeService(command_allowed=False)
     ingress = InteractionIngress(service, logger=service._logger)
     payload = _slash_command_payload()
@@ -351,14 +351,11 @@ async def test_authz_rejection_sends_ephemeral() -> None:
     assert result.accepted is False
     assert result.rejection_reason == "unauthorized"
     assert result.context is not None
-    assert len(service.respond_ephemeral_calls) == 1
-    call = service.respond_ephemeral_calls[0]
-    assert call["interaction_id"] == "inter-1"
-    assert "not authorized" in call["text"]
+    assert service.respond_ephemeral_calls == []
 
 
 @pytest.mark.anyio
-async def test_authz_rejection_autocomplete_sends_empty_choices() -> None:
+async def test_authz_rejection_autocomplete_does_not_send_from_ingress() -> None:
     service = _FakeService(command_allowed=False)
     ingress = InteractionIngress(service, logger=service._logger)
     payload = _autocomplete_payload()
@@ -366,13 +363,12 @@ async def test_authz_rejection_autocomplete_sends_empty_choices() -> None:
 
     assert result.accepted is False
     assert result.rejection_reason == "unauthorized"
-    assert len(service.respond_autocomplete_calls) == 1
-    assert service.respond_autocomplete_calls[0]["choices"] == []
+    assert service.respond_autocomplete_calls == []
     assert len(service.respond_ephemeral_calls) == 0
 
 
 @pytest.mark.anyio
-async def test_authz_rejection_component_sends_ephemeral() -> None:
+async def test_authz_rejection_component_does_not_send_from_ingress() -> None:
     service = _FakeService(command_allowed=False)
     ingress = InteractionIngress(service, logger=service._logger)
     payload = _component_payload()
@@ -380,7 +376,7 @@ async def test_authz_rejection_component_sends_ephemeral() -> None:
 
     assert result.accepted is False
     assert result.rejection_reason == "unauthorized"
-    assert len(service.respond_ephemeral_calls) == 1
+    assert service.respond_ephemeral_calls == []
 
 
 @pytest.mark.anyio

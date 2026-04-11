@@ -16,7 +16,6 @@ from ..chat.model_selection import (
     reasoning_effort_description,
 )
 from .interaction_runtime import (
-    ensure_component_response_deferred,
     ensure_ephemeral_response_deferred,
 )
 
@@ -65,7 +64,7 @@ TICKETS_MODAL_PREFIX = "tickets_modal"
 NEWT_HARD_RESET_CUSTOM_ID = "newt_hard_reset"
 NEWT_CANCEL_CUSTOM_ID = "newt_cancel"
 
-FLOW_COMPONENT_PREPARE_ACTIONS = frozenset(
+FLOW_COMPONENT_DISPATCH_ACK_ACTIONS = frozenset(
     {
         "archive",
         "archive_cancel",
@@ -1793,27 +1792,6 @@ async def _handle_flow_action_select_component(service: Any, ctx: Any) -> None:
     )
 
 
-async def _prepare_flow_button_component(service: Any, ctx: Any) -> bool:
-    custom_id = ctx.custom_id or ""
-    flow_parts = custom_id.split(":")
-    flow_action = flow_parts[2].strip().lower() if len(flow_parts) >= 3 else ""
-    if flow_action not in FLOW_COMPONENT_PREPARE_ACTIONS:
-        return True
-    prepared = await ensure_component_response_deferred(
-        service,
-        ctx.interaction_id,
-        ctx.interaction_token,
-    )
-    if prepared:
-        return True
-    await service.respond_ephemeral(
-        ctx.interaction_id,
-        ctx.interaction_token,
-        "Discord interaction did not acknowledge. Please retry.",
-    )
-    return False
-
-
 async def _handle_flow_button_component(service: Any, ctx: Any) -> None:
     workspace_root = await service._require_bound_workspace(
         ctx.interaction_id,
@@ -1986,7 +1964,6 @@ _COMPONENT_ROUTES: tuple[ComponentRoute, ...] = (
         custom_id_prefix="flow:",
         handler=_handle_flow_button_component,
         workspace_lock_policy="bound_workspace",
-        prepare=_prepare_flow_button_component,
     ),
     ComponentRoute(
         id="approval.component",
@@ -2200,6 +2177,16 @@ def component_scheduler_ack_strategy(custom_id: str) -> SchedulerAckStrategy:
         if route is not None
         else "scheduler_component_update"
     )
+
+
+def component_dispatch_ack_policy(custom_id: str) -> Optional[DiscordAckPolicy]:
+    if not custom_id.startswith("flow:"):
+        return None
+    flow_parts = custom_id.split(":")
+    flow_action = flow_parts[2].strip().lower() if len(flow_parts) >= 3 else ""
+    if flow_action in FLOW_COMPONENT_DISPATCH_ACK_ACTIONS:
+        return "defer_component_update"
+    return None
 
 
 def component_admission_ack_policy(custom_id: str) -> Optional[DiscordAckPolicy]:

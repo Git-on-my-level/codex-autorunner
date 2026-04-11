@@ -187,9 +187,42 @@ async def test_interaction_ledger_round_trip_persists_ack_and_delivery(
         )
         assert registration.inserted is True
 
+        await store.persist_interaction_runtime(
+            "inter-1",
+            route_key="slash:car/status",
+            handler_id="car.status",
+            conversation_id="discord:chan-1:guild-1",
+            scheduler_state="dispatch_ready",
+            resource_keys=("conversation:discord:chan-1:guild-1", "workspace:/tmp/ws"),
+            payload_json={"id": "inter-1", "token": "token-1"},
+            envelope_json={
+                "interaction_id": "inter-1",
+                "interaction_token": "token-1",
+                "channel_id": "chan-1",
+                "guild_id": "guild-1",
+                "user_id": "user-1",
+                "kind": "slash_command",
+                "resource_keys": [
+                    "conversation:discord:chan-1:guild-1",
+                    "workspace:/tmp/ws",
+                ],
+                "dispatch_ack_policy": "defer_ephemeral",
+                "queue_wait_ack_policy": None,
+            },
+        )
         await store.mark_interaction_acknowledged(
             "inter-1",
             ack_mode="defer_ephemeral",
+        )
+        await store.update_interaction_delivery_cursor(
+            "inter-1",
+            delivery_cursor_json={
+                "state": "pending",
+                "operation": "send_followup",
+                "payload": {"content": "queued"},
+            },
+            scheduler_state="delivery_pending",
+            increment_attempt_count=True,
         )
         await store.record_interaction_delivery(
             "inter-1",
@@ -207,6 +240,22 @@ async def test_interaction_ledger_round_trip_persists_ack_and_delivery(
         assert record.ack_completed_at is not None
         assert record.execution_status == "acknowledged"
         assert record.final_delivery_status == "ack_deferred_ephemeral"
+        assert record.route_key == "slash:car/status"
+        assert record.handler_id == "car.status"
+        assert record.conversation_id == "discord:chan-1:guild-1"
+        assert record.resource_keys == (
+            "conversation:discord:chan-1:guild-1",
+            "workspace:/tmp/ws",
+        )
+        assert record.payload_json == {"id": "inter-1", "token": "token-1"}
+        assert record.envelope_json is not None
+        assert record.envelope_json["dispatch_ack_policy"] == "defer_ephemeral"
+        assert record.delivery_cursor_json == {
+            "state": "pending",
+            "operation": "send_followup",
+            "payload": {"content": "queued"},
+        }
+        assert record.attempt_count == 1
 
         assert await reopened.claim_interaction_execution("inter-1") is True
         await reopened.mark_interaction_execution(

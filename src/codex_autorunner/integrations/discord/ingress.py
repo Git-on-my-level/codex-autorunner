@@ -157,7 +157,6 @@ class InteractionIngress:
             authz_finished_at=time.monotonic(),
         )
         if not authz_ok:
-            await self._send_authz_rejection(ctx)
             return IngressResult(
                 accepted=False,
                 context=ctx,
@@ -291,20 +290,6 @@ class InteractionIngress:
             )
             return False
         return True
-
-    async def _send_authz_rejection(self, ctx: IngressContext) -> None:
-        if ctx.kind == InteractionKind.AUTOCOMPLETE:
-            await self._service._respond_autocomplete(
-                ctx.interaction_id,
-                ctx.interaction_token,
-                choices=[],
-            )
-            return
-        await self._service._respond_ephemeral(
-            ctx.interaction_id,
-            ctx.interaction_token,
-            "This Discord command is not authorized for this channel/user/guild.",
-        )
 
     def _resolve_command_spec(self, ctx: IngressContext) -> None:
         if ctx.command_spec is None:

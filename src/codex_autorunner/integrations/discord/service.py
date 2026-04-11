@@ -258,6 +258,7 @@ from .interaction_registry import (
     TICKETS_MODAL_PREFIX,
     build_application_commands,
     component_admission_ack_policy,
+    component_dispatch_ack_policy,
     component_route_for_custom_id,
     component_workspace_lock_policy,
     dispatch_autocomplete,
@@ -1168,6 +1169,9 @@ class DiscordBotService:
             if ctx.command_spec.ack_timing == "dispatch":
                 dispatch_ack_policy = ctx.command_spec.ack_policy
         elif ctx.kind == InteractionKind.COMPONENT:
+            dispatch_ack_policy = component_dispatch_ack_policy(
+                str(ctx.custom_id or "").strip()
+            )
             queue_wait_ack_policy = component_admission_ack_policy(
                 str(ctx.custom_id or "").strip()
             )
@@ -3533,6 +3537,23 @@ class DiscordBotService:
                             interaction_token,
                             "I could not parse this interaction. Please retry the command.",
                         )
+                elif (
+                    ingress_result.rejection_reason == "unauthorized"
+                    and ingress_result.context is not None
+                ):
+                    ctx = ingress_result.context
+                    if ctx.kind == InteractionKind.AUTOCOMPLETE:
+                        await self.respond_autocomplete(
+                            ctx.interaction_id,
+                            ctx.interaction_token,
+                            choices=[],
+                        )
+                    else:
+                        await self.respond_ephemeral(
+                            ctx.interaction_id,
+                            ctx.interaction_token,
+                            "This Discord command is not authorized for this channel/user/guild.",
+                        )
                 return
             if ingress_result.context is not None:
                 envelope = await self._build_runtime_interaction_envelope(
@@ -4768,12 +4789,26 @@ class DiscordBotService:
                 if isinstance(cursor, dict)
                 else ""
             )
+            cursor_operation = (
+                str(cursor.get("operation") or "").strip()
+                if isinstance(cursor, dict)
+                else ""
+            )
             has_pending_delivery = cursor_state in {"pending", "failed"}
             ack_mode_hint = (
                 cursor.get("ack_mode_hint")
                 if isinstance(cursor.get("ack_mode_hint"), str)
                 else None
             )
+            if (
+                record.execution_status == "received"
+                and cursor_state == "pending"
+                and cursor_operation
+                in {"defer_ephemeral", "defer_public", "defer_component_update"}
+                and ack_mode_hint
+                in {"defer_ephemeral", "defer_public", "defer_component_update"}
+            ):
+                has_pending_delivery = False
             if (
                 has_pending_delivery
                 and ack_mode_hint
@@ -4802,7 +4837,16 @@ class DiscordBotService:
                     replay_mode="delivery_replay",
                 )
                 continue
-            if record.execution_status in {"acknowledged", "running"}:
+            should_replay_execution = record.execution_status in {
+                "acknowledged",
+                "running",
+            } or (
+                record.execution_status == "received"
+                and cursor_state == "pending"
+                and ack_mode_hint
+                in {"defer_ephemeral", "defer_public", "defer_component_update"}
+            )
+            if should_replay_execution:
                 await self._store.mark_interaction_scheduler_state(
                     record.interaction_id,
                     scheduler_state="recovery_scheduled",
