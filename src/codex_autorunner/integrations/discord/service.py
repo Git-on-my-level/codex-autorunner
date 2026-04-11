@@ -3593,9 +3593,27 @@ class DiscordBotService:
         content = payload.get("content")
         if isinstance(content, str):
             payload["content"] = sanitize_discord_outbound_text(content)
-        return await self._rest.create_channel_message(
+        content_len = len(payload.get("content", "") or "")
+        log_event(
+            self._logger,
+            logging.DEBUG,
+            "discord.channel_message.sending",
+            channel_id=channel_id,
+            content_len=content_len,
+        )
+        response = await self._rest.create_channel_message(
             channel_id=channel_id, payload=payload
         )
+        message_id = response.get("id") if isinstance(response, dict) else None
+        log_event(
+            self._logger,
+            logging.DEBUG,
+            "discord.channel_message.sent",
+            channel_id=channel_id,
+            content_len=content_len,
+            message_id=message_id,
+        )
+        return response
 
     async def _delete_channel_message(self, channel_id: str, message_id: str) -> None:
         await self._rest.delete_channel_message(

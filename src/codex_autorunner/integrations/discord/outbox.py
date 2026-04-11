@@ -12,6 +12,7 @@ import httpx
 from ...core.config import ConfigError, load_repo_config
 from ...core.flows import FlowStore
 from ...core.flows.archive_helpers import flow_run_archive_root
+from .rendering import DISCORD_MAX_MESSAGE_LENGTH, chunk_discord_message
 from .state import DiscordStateStore, OutboxRecord
 
 OUTBOX_RETRY_INTERVAL_SECONDS = 5.0
@@ -187,13 +188,47 @@ class DiscordOutboxManager:
         try:
             delivered_message_id: Optional[str] = None
             if current.operation == "send":
-                response = await self._send_message(
-                    current.channel_id, current.payload_json
+                payload_content = (
+                    current.payload_json.get("content")
+                    if isinstance(current.payload_json, dict)
+                    else None
                 )
-                message_id = response.get("id") if isinstance(response, dict) else None
-                delivered_message_id = (
-                    message_id if isinstance(message_id, str) else None
-                )
+                if (
+                    isinstance(payload_content, str)
+                    and len(payload_content) > DISCORD_MAX_MESSAGE_LENGTH
+                ):
+                    chunks = chunk_discord_message(
+                        payload_content,
+                        max_len=DISCORD_MAX_MESSAGE_LENGTH,
+                        with_numbering=False,
+                    )
+                    if not chunks:
+                        chunks = [payload_content[:DISCORD_MAX_MESSAGE_LENGTH]]
+                    last_response: dict[str, Any] = {}
+                    for chunk in chunks:
+                        chunk_payload = dict(current.payload_json)
+                        chunk_payload["content"] = chunk
+                        last_response = await self._send_message(
+                            current.channel_id, chunk_payload
+                        )
+                    message_id = (
+                        last_response.get("id")
+                        if isinstance(last_response, dict)
+                        else None
+                    )
+                    delivered_message_id = (
+                        message_id if isinstance(message_id, str) else None
+                    )
+                else:
+                    response = await self._send_message(
+                        current.channel_id, current.payload_json
+                    )
+                    message_id = (
+                        response.get("id") if isinstance(response, dict) else None
+                    )
+                    delivered_message_id = (
+                        message_id if isinstance(message_id, str) else None
+                    )
             elif current.operation == "delete":
                 if (
                     self._delete_message is None

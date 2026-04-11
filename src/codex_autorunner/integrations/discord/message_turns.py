@@ -101,6 +101,7 @@ from .components import (
 )
 from .errors import DiscordTransientError
 from .rendering import (
+    DISCORD_MAX_MESSAGE_LENGTH,
     chunk_discord_message,
     format_discord_message,
     sanitize_discord_outbound_text,
@@ -2302,18 +2303,26 @@ def _build_discord_runner_hooks(
     async def _deliver_result(finalized: ManagedThreadFinalizationResult) -> None:
         if finalized.status == "ok":
             assistant_text = finalized.assistant_text.strip()
-            message = (
+            formatted = (
                 format_discord_message(assistant_text)
                 if assistant_text
                 else "(No response text returned.)"
             )
-            await service._send_channel_message_safe(
-                channel_id,
-                {"content": message},
-                record_id=(
-                    f"discord-queued:{managed_thread_id}:{finalized.managed_turn_id}"
-                ),
+            chunks = chunk_discord_message(
+                formatted,
+                max_len=DISCORD_MAX_MESSAGE_LENGTH,
+                with_numbering=False,
             )
+            if not chunks:
+                chunks = [formatted]
+            for chunk in chunks:
+                await service._send_channel_message_safe(
+                    channel_id,
+                    {"content": chunk},
+                    record_id=(
+                        f"discord-queued:{managed_thread_id}:{finalized.managed_turn_id}"
+                    ),
+                )
             return
         await service._send_channel_message_safe(
             channel_id,
