@@ -1,91 +1,62 @@
 """Discord integration: gateway, ingress, command runner, and turn execution."""
 
-from .adapter import DiscordChatAdapter, DiscordTextRenderer
-from .allowlist import DiscordAllowlist, allowlist_allows
-from .chat_state_store import (
-    DiscordChatStateStore,
-    discord_conversation_key,
-    parse_discord_conversation_key,
-)
-from .command_registry import sync_commands
-from .commands import build_application_commands
-from .config import (
-    DEFAULT_STATE_FILE,
-    DiscordBotConfig,
-    DiscordBotConfigError,
-    DiscordBotMediaConfig,
-    DiscordCommandRegistration,
-)
-from .constants import (
-    DISCORD_API_BASE_URL,
-    DISCORD_GATEWAY_URL,
-    DISCORD_INTENT_GUILD_MESSAGES,
-    DISCORD_INTENT_GUILDS,
-    DISCORD_INTENT_MESSAGE_CONTENT,
-    DISCORD_MAX_MESSAGE_LENGTH,
-)
-from .doctor import discord_doctor_checks
-from .errors import DiscordAPIError, DiscordConfigError, DiscordError
-from .gateway import (
-    DiscordGatewayClient,
-    GatewayFrame,
-    build_identify_payload,
-    calculate_reconnect_backoff,
-    parse_gateway_frame,
-)
-from .interactions import (
-    extract_channel_id,
-    extract_command_path_and_options,
-    extract_guild_id,
-    extract_interaction_id,
-    extract_interaction_token,
-    extract_user_id,
-)
-from .outbox import DiscordOutboxManager
-from .rest import DiscordRestClient
-from .service import DiscordBotService, create_discord_bot_service
-from .state import DiscordStateStore, OutboxRecord
+from __future__ import annotations
 
-__all__ = [
-    "DEFAULT_STATE_FILE",
-    "DISCORD_API_BASE_URL",
-    "DISCORD_GATEWAY_URL",
-    "DISCORD_INTENT_GUILDS",
-    "DISCORD_INTENT_GUILD_MESSAGES",
-    "DISCORD_INTENT_MESSAGE_CONTENT",
-    "DISCORD_MAX_MESSAGE_LENGTH",
-    "DiscordAPIError",
-    "DiscordAllowlist",
-    "DiscordBotConfig",
-    "DiscordBotConfigError",
-    "DiscordBotMediaConfig",
-    "DiscordBotService",
-    "DiscordChatAdapter",
-    "DiscordChatStateStore",
-    "DiscordCommandRegistration",
-    "DiscordConfigError",
-    "DiscordError",
-    "DiscordGatewayClient",
-    "DiscordOutboxManager",
-    "DiscordRestClient",
-    "DiscordStateStore",
-    "DiscordTextRenderer",
-    "GatewayFrame",
-    "OutboxRecord",
-    "allowlist_allows",
-    "build_application_commands",
-    "build_identify_payload",
-    "calculate_reconnect_backoff",
-    "create_discord_bot_service",
-    "discord_conversation_key",
-    "discord_doctor_checks",
-    "extract_channel_id",
-    "extract_command_path_and_options",
-    "extract_guild_id",
-    "extract_interaction_id",
-    "extract_interaction_token",
-    "extract_user_id",
-    "parse_discord_conversation_key",
-    "parse_gateway_frame",
-    "sync_commands",
-]
+from importlib import import_module
+
+_LAZY_EXPORTS = {
+    "DEFAULT_STATE_FILE": (".config", "DEFAULT_STATE_FILE"),
+    "DISCORD_API_BASE_URL": (".constants", "DISCORD_API_BASE_URL"),
+    "DISCORD_GATEWAY_URL": (".constants", "DISCORD_GATEWAY_URL"),
+    "DISCORD_INTENT_GUILDS": (".constants", "DISCORD_INTENT_GUILDS"),
+    "DISCORD_INTENT_GUILD_MESSAGES": (".constants", "DISCORD_INTENT_GUILD_MESSAGES"),
+    "DISCORD_INTENT_MESSAGE_CONTENT": (
+        ".constants",
+        "DISCORD_INTENT_MESSAGE_CONTENT",
+    ),
+    "DISCORD_MAX_MESSAGE_LENGTH": (".constants", "DISCORD_MAX_MESSAGE_LENGTH"),
+    "DiscordAPIError": (".errors", "DiscordAPIError"),
+    "DiscordAllowlist": (".allowlist", "DiscordAllowlist"),
+    "DiscordBotConfig": (".config", "DiscordBotConfig"),
+    "DiscordBotConfigError": (".config", "DiscordBotConfigError"),
+    "DiscordBotMediaConfig": (".config", "DiscordBotMediaConfig"),
+    "DiscordBotService": (".service", "DiscordBotService"),
+    "DiscordChatAdapter": (".adapter", "DiscordChatAdapter"),
+    "DiscordCommandRegistration": (".config", "DiscordCommandRegistration"),
+    "DiscordError": (".errors", "DiscordError"),
+    "DiscordGatewayClient": (".gateway", "DiscordGatewayClient"),
+    "DiscordOutboxManager": (".outbox", "DiscordOutboxManager"),
+    "DiscordRestClient": (".rest", "DiscordRestClient"),
+    "DiscordStateStore": (".state", "DiscordStateStore"),
+    "DiscordTextRenderer": (".adapter", "DiscordTextRenderer"),
+    "GatewayFrame": (".gateway", "GatewayFrame"),
+    "OutboxRecord": (".state", "OutboxRecord"),
+    "allowlist_allows": (".allowlist", "allowlist_allows"),
+    "build_application_commands": (".commands", "build_application_commands"),
+    "build_identify_payload": (".gateway", "build_identify_payload"),
+    "calculate_reconnect_backoff": (".gateway", "calculate_reconnect_backoff"),
+    "create_discord_bot_service": (".service", "create_discord_bot_service"),
+    "discord_doctor_checks": (".doctor", "discord_doctor_checks"),
+    "extract_channel_id": (".interactions", "extract_channel_id"),
+    "extract_command_path_and_options": (
+        ".interactions",
+        "extract_command_path_and_options",
+    ),
+    "extract_guild_id": (".interactions", "extract_guild_id"),
+    "extract_interaction_id": (".interactions", "extract_interaction_id"),
+    "extract_interaction_token": (".interactions", "extract_interaction_token"),
+    "extract_user_id": (".interactions", "extract_user_id"),
+    "parse_gateway_frame": (".gateway", "parse_gateway_frame"),
+    "sync_commands": (".command_registry", "sync_commands"),
+}
+
+__all__ = sorted(_LAZY_EXPORTS)
+
+
+def __getattr__(name: str):
+    target = _LAZY_EXPORTS.get(name)
+    if target is None:
+        raise AttributeError(name)
+    module_name, attr_name = target
+    module = import_module(module_name, __name__)
+    return getattr(module, attr_name)

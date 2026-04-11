@@ -81,7 +81,9 @@ async def test_status_bound_channel_includes_shared_and_discord_specific_details
     service = object.__new__(DiscordBotService)
     sent_messages: list[str] = []
     service._store = _StoreStub(binding)
-    service._respond_ephemeral = AsyncMock(side_effect=_capture_message(sent_messages))
+    service.respond_ephemeral = AsyncMock(side_effect=_capture_message(sent_messages))
+    service.interaction_has_initial_response = lambda _interaction_token: False
+    service.interaction_is_deferred = lambda _interaction_token: False
     service._evaluate_channel_collaboration_summary = lambda **_kwargs: (
         _collaboration_result(),
         _collaboration_result(),
@@ -131,7 +133,9 @@ async def test_status_unbound_channel_keeps_flow_hint() -> None:
     service = object.__new__(DiscordBotService)
     sent_messages: list[str] = []
     service._store = _StoreStub(None)
-    service._respond_ephemeral = AsyncMock(side_effect=_capture_message(sent_messages))
+    service.respond_ephemeral = AsyncMock(side_effect=_capture_message(sent_messages))
+    service.interaction_has_initial_response = lambda _interaction_token: False
+    service.interaction_is_deferred = lambda _interaction_token: False
     service._evaluate_channel_collaboration_summary = lambda **_kwargs: (
         _collaboration_result(),
         _collaboration_result(),

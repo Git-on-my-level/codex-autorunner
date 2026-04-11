@@ -16,6 +16,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Optional
 from unittest.mock import AsyncMock
 
@@ -31,6 +33,8 @@ from codex_autorunner.integrations.discord.ingress import (
     InteractionIngress,
     InteractionKind,
 )
+from codex_autorunner.integrations.discord.response_helpers import DiscordResponder
+from codex_autorunner.integrations.discord.state import DiscordStateStore
 
 DISCORD_ACK_WINDOW_SECONDS = 3.0
 
@@ -85,7 +89,7 @@ def _make_ctx(
 
 
 class _FakeService:
-    def __init__(self) -> None:
+    def __init__(self, *, store: Optional[DiscordStateStore] = None) -> None:
         self._logger = logging.getLogger("test.reliability")
         self._handle_car_command = AsyncMock()
         self._handle_pma_command = AsyncMock()
@@ -93,6 +97,86 @@ class _FakeService:
         self._handle_ticket_modal_submit = AsyncMock()
         self._respond_ephemeral = AsyncMock()
         self._send_or_respond_ephemeral = AsyncMock()
+        self._store = store
+        self._dispatch_chat_event = AsyncMock()
+
+    async def dispatch_chat_event(self, event: Any) -> None:
+        await self._dispatch_chat_event(event)
+
+    async def acknowledge_runtime_envelope(
+        self,
+        _envelope: Any,
+        *,
+        stage: str,
+    ) -> bool:
+        _ = stage
+        return True
+
+    async def mark_interaction_scheduler_state(
+        self,
+        _ctx: Any,
+        *,
+        scheduler_state: str,
+        increment_attempt_count: bool = False,
+    ) -> None:
+        _ = scheduler_state, increment_attempt_count
+
+    async def begin_interaction_execution(self, ctx: Any) -> bool:
+        return await self._begin_interaction_execution(ctx)
+
+    async def begin_interaction_recovery_execution(self, ctx: Any) -> bool:
+        return await self._begin_interaction_execution(ctx)
+
+    async def replay_interaction_delivery(self, _ctx: Any) -> None:
+        return None
+
+    async def finish_interaction_execution(
+        self,
+        ctx: Any,
+        *,
+        execution_status: str,
+        execution_error: Optional[str] = None,
+    ) -> None:
+        await self._finish_interaction_execution(
+            ctx,
+            execution_status=execution_status,
+            execution_error=execution_error,
+        )
+
+    async def send_or_respond_ephemeral(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+        deferred: bool,
+        text: str,
+    ) -> None:
+        await self._send_or_respond_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text=text,
+        )
+
+    async def _begin_interaction_execution(self, ctx: Any) -> bool:
+        if self._store is None:
+            return True
+        return await self._store.claim_interaction_execution(ctx.interaction_id)
+
+    async def _finish_interaction_execution(
+        self,
+        ctx: Any,
+        *,
+        execution_status: str,
+        execution_error: Optional[str] = None,
+    ) -> None:
+        if self._store is None:
+            return
+        await self._store.mark_interaction_execution(
+            ctx.interaction_id,
+            execution_status=execution_status,
+            execution_error=execution_error,
+        )
 
 
 def _slash_payload(
@@ -120,14 +204,17 @@ class _FakeIngressService:
         command_allowed: bool = True,
         prepared_policy: Optional[str] = None,
         ack_succeeds: bool = True,
+        store: Optional[DiscordStateStore] = None,
     ) -> None:
         self._command_allowed = command_allowed
         self._prepared_policy = prepared_policy
         self._ack_succeeds = ack_succeeds
+        self._store = store
         self._logger = logging.getLogger("test.reliability.ingress")
         self.respond_ephemeral_calls: list[dict[str, Any]] = []
         self.respond_autocomplete_calls: list[dict[str, Any]] = []
         self.prepare_command_calls: list[dict[str, Any]] = []
+        self.sessions: dict[str, _FakeSession] = {}
 
     def _evaluate_interaction_collaboration_policy(
         self,
@@ -195,8 +282,22 @@ class _FakeIngressService:
             }
         )
 
-    def _prepared_interaction_policy(self, token: str) -> Optional[str]:
-        return self._prepared_policy
+    def _ensure_interaction_session(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        kind: Any = None,
+    ) -> "_FakeSession":
+        session = self.sessions.get(interaction_token)
+        if session is None:
+            session = _FakeSession(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                prepared_policy=self._prepared_policy,
+            )
+            self.sessions[interaction_token] = session
+        return session
 
     async def _prepare_command_interaction(
         self,
@@ -216,6 +317,27 @@ class _FakeIngressService:
         )
         return self._ack_succeeds
 
+    async def _register_interaction_ingress(self, ctx: Any) -> bool:
+        if self._store is None:
+            return False
+        registration = await self._store.register_interaction(
+            interaction_id=ctx.interaction_id,
+            interaction_token=ctx.interaction_token,
+            interaction_kind=ctx.kind.value,
+            channel_id=ctx.channel_id,
+            guild_id=ctx.guild_id,
+            user_id=ctx.user_id,
+            metadata_json={
+                "kind": ctx.kind.value,
+                "command_path": (
+                    list(ctx.command_spec.path)
+                    if ctx.command_spec is not None
+                    else None
+                ),
+            },
+        )
+        return not registration.inserted
+
     @staticmethod
     def _normalize_discord_command_path(
         command_path: tuple[str, ...],
@@ -226,6 +348,79 @@ class _FakeIngressService:
 
 
 DISCORD_ACK_WINDOW_SECONDS = 3.0
+
+
+class _FakeSession:
+    def __init__(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+        prepared_policy: Optional[str] = None,
+    ) -> None:
+        self.interaction_id = interaction_id
+        self.interaction_token = interaction_token
+        self._prepared_policy = prepared_policy
+
+    def has_initial_response(self) -> bool:
+        return self._prepared_policy is not None
+
+    def is_deferred(self) -> bool:
+        return self._prepared_policy is not None
+
+
+class _FakeRest:
+    def __init__(self) -> None:
+        self.interaction_responses: list[dict[str, Any]] = []
+        self.followup_messages: list[dict[str, Any]] = []
+        self.edited_original_interaction_responses: list[dict[str, Any]] = []
+
+    async def create_interaction_response(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+        payload: dict[str, Any],
+    ) -> None:
+        self.interaction_responses.append(
+            {
+                "interaction_id": interaction_id,
+                "interaction_token": interaction_token,
+                "payload": payload,
+            }
+        )
+
+    async def create_followup_message(
+        self,
+        *,
+        application_id: str,
+        interaction_token: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        self.followup_messages.append(
+            {
+                "application_id": application_id,
+                "interaction_token": interaction_token,
+                "payload": payload,
+            }
+        )
+        return {"id": f"followup-{len(self.followup_messages)}"}
+
+    async def edit_original_interaction_response(
+        self,
+        *,
+        application_id: str,
+        interaction_token: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        self.edited_original_interaction_responses.append(
+            {
+                "application_id": application_id,
+                "interaction_token": interaction_token,
+                "payload": payload,
+            }
+        )
+        return {"id": "@original"}
 
 
 def _make_ctx_with_timing(
@@ -284,7 +479,7 @@ async def test_ingress_completes_within_ack_window() -> None:
 
 @pytest.mark.anyio
 async def test_ingress_timing_monotonically_increases() -> None:
-    """All IngressTiming timestamps must be monotonically increasing."""
+    """Ingress-owned timing inputs must be monotonically increasing."""
     service = _FakeIngressService()
     ingress = InteractionIngress(service, logger=service._logger)
     payload = _slash_payload()
@@ -296,12 +491,10 @@ async def test_ingress_timing_monotonically_increases() -> None:
     t = result.context.timing
     assert t.ingress_started_at is not None
     assert t.authz_finished_at is not None
-    assert t.ack_finished_at is not None
-    assert t.ingress_finished_at is not None
+    assert t.ack_finished_at is None
+    assert t.ingress_finished_at is None
 
     assert t.ingress_started_at <= t.authz_finished_at
-    assert t.authz_finished_at <= t.ack_finished_at
-    assert t.ack_finished_at <= t.ingress_finished_at
 
 
 @pytest.mark.anyio
@@ -721,7 +914,10 @@ async def test_runner_telemetry_emits_lifecycle_metrics() -> None:
     ctx, payload = _make_ctx_with_timing(interaction_created_at=created_at)
 
     runner.submit(ctx, payload)
-    await asyncio.sleep(0.05)
+    for _ in range(100):
+        if done_events:
+            break
+        await asyncio.sleep(0.01)
 
     assert len(done_events) >= 1
     event = done_events[0]
@@ -730,12 +926,13 @@ async def test_runner_telemetry_emits_lifecycle_metrics() -> None:
     assert event["total_lifecycle_ms"] > 0
     assert "gateway_to_completion_ms" in event
     assert event["gateway_to_completion_ms"] is not None
+    await runner.shutdown(grace_seconds=1.0)
 
 
 @pytest.mark.anyio
 async def test_ingress_timing_includes_snowflake_created_at() -> None:
     """Ingress timing must include the snowflake-derived created_at for
-    diagnosing ack misses."""
+    runtime-admission latency diagnostics."""
     service = _FakeIngressService()
     ingress = InteractionIngress(service, logger=service._logger)
 
@@ -749,13 +946,13 @@ async def test_ingress_timing_includes_snowflake_created_at() -> None:
     assert result.context is not None
     assert result.context.timing.interaction_created_at is not None
 
-    gateway_to_ingress_ms = (
-        result.context.timing.ingress_finished_at
+    gateway_to_authz_ms = (
+        result.context.timing.authz_finished_at
         - result.context.timing.interaction_created_at
-        if result.context.timing.ingress_finished_at
+        if result.context.timing.authz_finished_at
         else None
     )
-    assert gateway_to_ingress_ms is not None
+    assert gateway_to_authz_ms is not None
 
 
 @pytest.mark.anyio
@@ -842,20 +1039,275 @@ async def test_ingress_rejection_records_timing() -> None:
 
 
 @pytest.mark.anyio
-async def test_ack_failure_records_timing() -> None:
-    """When ack fails, timing must still be captured for diagnosing the
-    failure."""
+async def test_ingress_leaves_ack_timing_to_runtime_admission() -> None:
+    """Ingress should stop before recording ack completion so the runtime
+    admission path remains the sole ack owner."""
     service = _FakeIngressService(ack_succeeds=False)
     ingress = InteractionIngress(service, logger=service._logger)
     payload = _slash_payload(command_name="car", subcommand_name="status")
 
     result = await ingress.process_raw_payload(payload)
-    assert result.accepted is False
-    assert result.rejection_reason == "ack_failed"
+    assert result.accepted is True
+    assert result.rejection_reason is None
     assert result.context is not None
     t = result.context.timing
     assert t.ingress_started_at is not None
-    assert t.ack_finished_at is not None
+    assert t.ack_finished_at is None
+
+
+@pytest.mark.anyio
+async def test_duplicate_interaction_id_does_not_attempt_second_ack(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    try:
+        await store.initialize()
+        service = _FakeIngressService(store=store)
+        ingress = InteractionIngress(service, logger=service._logger)
+        payload = _slash_payload(command_name="car", subcommand_name="status")
+
+        first = await ingress.process_raw_payload(payload)
+        second = await ingress.process_raw_payload(payload)
+
+        assert first.accepted is True
+        assert second.accepted is False
+        assert second.rejection_reason == "duplicate_interaction"
+        assert len(service.prepare_command_calls) == 0
+
+        record = await store.get_interaction("inter-1")
+        assert record is not None
+        assert record.execution_status == "received"
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_runner_skips_duplicate_execution_for_same_interaction_id(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    try:
+        await store.initialize()
+        await store.register_interaction(
+            interaction_id="dup-runner",
+            interaction_token="token-dup",
+            interaction_kind="slash_command",
+            channel_id="chan-1",
+            guild_id="guild-1",
+            user_id="user-1",
+            metadata_json={"command_path": ["car", "status"]},
+        )
+        await store.mark_interaction_acknowledged(
+            "dup-runner",
+            ack_mode="defer_ephemeral",
+        )
+        service = _FakeService(store=store)
+        runner = CommandRunner(
+            service,
+            config=RunnerConfig(timeout_seconds=5.0, stalled_warning_seconds=None),
+            logger=service._logger,
+        )
+        ctx, payload = _make_ctx_with_timing(
+            interaction_id="dup-runner",
+            interaction_token="token-dup",
+        )
+
+        runner.submit(ctx, payload)
+        runner.submit(ctx, payload)
+        await asyncio.sleep(0.1)
+
+        service._handle_car_command.assert_awaited_once()
+        record = await store.get_interaction("dup-runner")
+        assert record is not None
+        assert record.execution_status == "completed"
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_deferred_interaction_recovers_after_simulated_restart(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    rest = _FakeRest()
+    logger = logging.getLogger("test.reliability.restart")
+    config = SimpleNamespace(application_id="app-1", max_message_length=2000)
+    try:
+        await store.initialize()
+        await store.register_interaction(
+            interaction_id="restart-1",
+            interaction_token="token-restart",
+            interaction_kind="slash_command",
+            channel_id="chan-1",
+            guild_id="guild-1",
+            user_id="user-1",
+            metadata_json={"command_path": ["car", "status"]},
+        )
+
+        async def load_ack_mode(interaction_id: str) -> Optional[str]:
+            record = await store.get_interaction(interaction_id)
+            return record.ack_mode if record is not None else None
+
+        async def record_ack(
+            interaction_id: str,
+            interaction_token: str,
+            ack_mode: str,
+            original_response_message_id: Optional[str],
+        ) -> None:
+            await store.mark_interaction_acknowledged(
+                interaction_id,
+                ack_mode=ack_mode,
+                original_response_message_id=original_response_message_id,
+            )
+
+        async def record_delivery(
+            interaction_id: str,
+            delivery_status: str,
+            delivery_error: Optional[str],
+            original_response_message_id: Optional[str],
+        ) -> None:
+            await store.record_interaction_delivery(
+                interaction_id,
+                delivery_status=delivery_status,
+                delivery_error=delivery_error,
+                original_response_message_id=original_response_message_id,
+            )
+
+        responder = DiscordResponder(
+            rest=rest,
+            config=config,
+            logger=logger,
+            hydrate_ack_mode=load_ack_mode,
+            record_ack=record_ack,
+            record_delivery=record_delivery,
+        )
+        deferred = await responder.defer(
+            interaction_id="restart-1",
+            interaction_token="token-restart",
+            ephemeral=True,
+        )
+
+        restarted = DiscordResponder(
+            rest=rest,
+            config=config,
+            logger=logger,
+            hydrate_ack_mode=load_ack_mode,
+            record_ack=record_ack,
+            record_delivery=record_delivery,
+        )
+        redeferred = await restarted.defer(
+            interaction_id="restart-1",
+            interaction_token="token-restart",
+            ephemeral=True,
+        )
+        await restarted.send_or_respond(
+            interaction_id="restart-1",
+            interaction_token="token-restart",
+            deferred=True,
+            text="Recovered after restart.",
+            ephemeral=True,
+        )
+
+        assert deferred is True
+        assert redeferred is True
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"] == {
+            "type": 5,
+            "data": {"flags": 64},
+        }
+        assert len(rest.followup_messages) == 1
+        assert rest.followup_messages[0]["payload"]["content"] == (
+            "Recovered after restart."
+        )
+        assert rest.followup_messages[0]["payload"]["flags"] == 64
+
+        record = await store.get_interaction("restart-1")
+        assert record is not None
+        assert record.ack_mode == "defer_ephemeral"
+        assert record.final_delivery_status == "followup_sent"
+        assert record.original_response_message_id == "followup-1"
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_send_or_respond_persists_initial_response_state(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    rest = _FakeRest()
+    logger = logging.getLogger("test.reliability.send_or_respond")
+    config = SimpleNamespace(application_id="app-1", max_message_length=2000)
+    try:
+        await store.initialize()
+        await store.register_interaction(
+            interaction_id="persist-1",
+            interaction_token="token-persist",
+            interaction_kind="slash_command",
+            channel_id="chan-1",
+            guild_id="guild-1",
+            user_id="user-1",
+            metadata_json={"command_path": ["car", "status"]},
+        )
+
+        async def load_ack_mode(interaction_id: str) -> Optional[str]:
+            record = await store.get_interaction(interaction_id)
+            return record.ack_mode if record is not None else None
+
+        async def record_ack(
+            interaction_id: str,
+            interaction_token: str,
+            ack_mode: str,
+            original_response_message_id: Optional[str],
+        ) -> None:
+            await store.mark_interaction_acknowledged(
+                interaction_id,
+                ack_mode=ack_mode,
+                original_response_message_id=original_response_message_id,
+            )
+
+        async def record_delivery(
+            interaction_id: str,
+            delivery_status: str,
+            delivery_error: Optional[str],
+            original_response_message_id: Optional[str],
+        ) -> None:
+            await store.record_interaction_delivery(
+                interaction_id,
+                delivery_status=delivery_status,
+                delivery_error=delivery_error,
+                original_response_message_id=original_response_message_id,
+            )
+
+        responder = DiscordResponder(
+            rest=rest,
+            config=config,
+            logger=logger,
+            hydrate_ack_mode=load_ack_mode,
+            record_ack=record_ack,
+            record_delivery=record_delivery,
+        )
+
+        await responder.send_or_respond(
+            interaction_id="persist-1",
+            interaction_token="token-persist",
+            deferred=False,
+            text="Immediate reply.",
+            ephemeral=True,
+        )
+
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"] == {
+            "type": 4,
+            "data": {"content": "Immediate reply.", "flags": 64},
+        }
+        record = await store.get_interaction("persist-1")
+        assert record is not None
+        assert record.ack_mode == "immediate_message"
+        assert record.final_delivery_status == "initial_response_sent"
+        assert record.original_response_message_id is None
+    finally:
+        await store.close()
 
 
 @pytest.mark.anyio

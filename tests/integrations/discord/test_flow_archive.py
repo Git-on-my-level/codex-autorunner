@@ -194,11 +194,9 @@ async def _prepare_flow_archive_interaction(
     interaction_id: str,
     interaction_token: str,
 ) -> None:
-    prepared = await service._prepare_command_interaction(
+    prepared = await service._defer_ephemeral(
         interaction_id=interaction_id,
         interaction_token=interaction_token,
-        command_path=("car", "flow", "archive"),
-        timing="dispatch",
     )
     assert prepared is True
 

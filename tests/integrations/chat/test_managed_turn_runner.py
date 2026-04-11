@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -180,6 +181,41 @@ async def test_run_managed_surface_turn_does_not_treat_finalize_callback_errors_
 
     assert submission_error_calls == []
     assert after_completion_calls == [True]
+
+
+@pytest.mark.anyio
+async def test_run_managed_surface_turn_reraises_cancelled_submission(
+    tmp_path: Path,
+) -> None:
+    started = _build_started_execution(tmp_path)
+    submission_error_calls: list[str] = []
+    after_completion_calls: list[bool] = []
+
+    async def _submit_execution(
+        *args: Any, **kwargs: Any
+    ) -> ManagedThreadSubmissionResult:
+        _ = args, kwargs
+        raise asyncio.CancelledError()
+
+    with pytest.raises(asyncio.CancelledError):
+        await managed_turn_runner_module.run_managed_surface_turn(
+            started.request,
+            config=managed_turn_runner_module.ManagedSurfaceRunnerConfig[None](
+                coordinator=SimpleNamespace(
+                    submit_execution=_submit_execution,
+                    ensure_queue_worker=lambda **kwargs: None,
+                ),
+                client_request_id="req-1",
+                sandbox_policy=None,
+                on_submission_error=lambda exc: submission_error_calls.append(str(exc)),
+                after_completion=lambda flow: after_completion_calls.append(
+                    flow is not None
+                ),
+            ),
+        )
+
+    assert submission_error_calls == []
+    assert after_completion_calls == [False]
 
 
 @pytest.mark.anyio

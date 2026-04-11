@@ -34,11 +34,16 @@ from .components import (
     build_bind_picker,
     build_button,
 )
+from .interaction_registry import BIND_PAGE_CUSTOM_ID_PREFIX
+from .interaction_runtime import (
+    ensure_component_response_deferred,
+    send_runtime_components_ephemeral,
+    send_runtime_ephemeral,
+    update_runtime_component_message,
+)
 from .rendering import format_discord_message
 
 _logger = logging.getLogger(__name__)
-
-BIND_PAGE_CUSTOM_ID_PREFIX = "bind_page"
 
 
 def _list_manifest_repos(
@@ -366,7 +371,8 @@ async def handle_bind(
 
     candidates = _list_bind_workspace_candidates(service)
     if not candidates:
-        await service._respond_ephemeral(
+        await send_runtime_ephemeral(
+            service,
             interaction_id,
             interaction_token,
             "No workspaces found. Use /car bind workspace:<workspace> to bind manually.",
@@ -376,7 +382,8 @@ async def handle_bind(
     prompt, components = _build_bind_page_prompt_and_components(
         service, candidates, page=0
     )
-    await service._respond_with_components(
+    await send_runtime_components_ephemeral(
+        service,
         interaction_id,
         interaction_token,
         prompt,
@@ -416,7 +423,8 @@ async def _bind_with_path(
                 )
                 in filtered_values
             ]
-            await service._respond_with_components(
+            await send_runtime_components_ephemeral(
+                service,
                 interaction_id,
                 interaction_token,
                 (
@@ -465,7 +473,8 @@ async def _bind_with_path(
     workspace = canonicalize_path(candidate)
 
     if not workspace.exists() or not workspace.is_dir():
-        await service._respond_ephemeral(
+        await send_runtime_ephemeral(
+            service,
             interaction_id,
             interaction_token,
             f"Workspace path does not exist: {workspace}",
@@ -494,15 +503,14 @@ async def _bind_to_workspace_candidate(
     selected_resource_kind: Optional[str],
     selected_resource_id: Optional[str],
     workspace_path: str,
-    deferred_component: bool = False,
 ) -> None:
     workspace = canonicalize_path(Path(workspace_path))
     if not workspace.exists() or not workspace.is_dir():
-        await service._send_or_respond_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            deferred=deferred_component,
-            text=f"Workspace path does not exist: {workspace}",
+        await send_runtime_ephemeral(
+            service,
+            interaction_id,
+            interaction_token,
+            f"Workspace path does not exist: {workspace}",
         )
         return
 
@@ -525,11 +533,11 @@ async def _bind_to_workspace_candidate(
         message = f"Bound this channel to: {selected_resource_id} ({workspace})"
     else:
         message = f"Bound this channel to workspace: {workspace}"
-    await service._send_or_respond_ephemeral(
-        interaction_id=interaction_id,
-        interaction_token=interaction_token,
-        deferred=deferred_component,
-        text=message,
+    await send_runtime_ephemeral(
+        service,
+        interaction_id,
+        interaction_token,
+        message,
     )
 
 
@@ -543,7 +551,8 @@ async def handle_bind_selection(
     selected_workspace_value: str,
 ) -> None:
     if selected_workspace_value == "none":
-        await service._respond_ephemeral(
+        await send_runtime_ephemeral(
+            service,
             interaction_id,
             interaction_token,
             "No workspace selected.",
@@ -556,24 +565,19 @@ async def handle_bind_selection(
         candidates,
     )
     if resolved_workspace is None:
-        await service._respond_ephemeral(
+        await send_runtime_ephemeral(
+            service,
             interaction_id,
             interaction_token,
             f"Workspace not found: {selected_workspace_value}",
         )
         return
-    deferred_component = await service._defer_component_update(
-        interaction_id=interaction_id,
-        interaction_token=interaction_token,
-    )
-    if not deferred_component:
-        await service._respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            "Discord interaction did not acknowledge. Please retry.",
-        )
-        return
 
+    await ensure_component_response_deferred(
+        service,
+        interaction_id,
+        interaction_token,
+    )
     await _bind_to_workspace_candidate(
         service,
         interaction_id,
@@ -583,7 +587,6 @@ async def handle_bind_selection(
         selected_resource_kind=resolved_workspace[0],
         selected_resource_id=resolved_workspace[1],
         workspace_path=resolved_workspace[2],
-        deferred_component=True,
     )
 
 
@@ -595,7 +598,8 @@ async def handle_bind_page_component(
     page_token: str,
 ) -> None:
     if page_token == "noop":
-        await service._respond_ephemeral(
+        await send_runtime_ephemeral(
+            service,
             interaction_id,
             interaction_token,
             "Already on this page.",
@@ -604,7 +608,8 @@ async def handle_bind_page_component(
     try:
         requested_page = int(page_token)
     except (TypeError, ValueError):
-        await service._respond_ephemeral(
+        await send_runtime_ephemeral(
+            service,
             interaction_id,
             interaction_token,
             "Invalid bind page selection.",
@@ -613,7 +618,8 @@ async def handle_bind_page_component(
 
     candidates = _list_bind_workspace_candidates(service)
     if not candidates:
-        await service._respond_ephemeral(
+        await send_runtime_ephemeral(
+            service,
             interaction_id,
             interaction_token,
             "No workspaces available to bind.",
@@ -623,21 +629,16 @@ async def handle_bind_page_component(
     prompt, components = _build_bind_page_prompt_and_components(
         service, candidates, page=requested_page
     )
-    deferred_component = await service._defer_component_update(
-        interaction_id=interaction_id,
-        interaction_token=interaction_token,
+    await ensure_component_response_deferred(
+        service,
+        interaction_id,
+        interaction_token,
     )
-    if not deferred_component:
-        await service._respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            "Discord interaction did not acknowledge. Please retry.",
-        )
-        return
-    await service._update_component_message(
-        interaction_id=interaction_id,
-        interaction_token=interaction_token,
-        text=prompt,
+    await update_runtime_component_message(
+        service,
+        interaction_id,
+        interaction_token,
+        prompt,
         components=components,
     )
 
@@ -681,8 +682,11 @@ async def handle_status(
         include_flow_hint=False,
     )
     if binding is None:
-        await service._respond_ephemeral(
-            interaction_id, interaction_token, "\n".join(lines)
+        await send_runtime_ephemeral(
+            service,
+            interaction_id,
+            interaction_token,
+            "\n".join(lines),
         )
         return
 
@@ -735,8 +739,11 @@ async def handle_status(
     )
     lines.extend(build_status_block_lines(status_block))
     lines.append("Use /flow status for ticket flow details.")
-    await service._respond_ephemeral(
-        interaction_id, interaction_token, "\n".join(lines)
+    await send_runtime_ephemeral(
+        service,
+        interaction_id,
+        interaction_token,
+        "\n".join(lines),
     )
 
 
@@ -797,7 +804,7 @@ async def handle_debug(
                 binding=None,
             )
         )
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             interaction_id, interaction_token, "\n".join(lines)
         )
         return
@@ -839,9 +846,7 @@ async def handle_debug(
         )
     )
 
-    await service._respond_ephemeral(
-        interaction_id, interaction_token, "\n".join(lines)
-    )
+    await service.respond_ephemeral(interaction_id, interaction_token, "\n".join(lines))
 
 
 async def handle_help(
@@ -851,7 +856,7 @@ async def handle_help(
 ) -> None:
     lines = build_discord_help_lines()
     content = format_discord_message("\n".join(lines))
-    await service._respond_ephemeral(interaction_id, interaction_token, content)
+    await service.respond_ephemeral(interaction_id, interaction_token, content)
 
 
 async def handle_ids(
@@ -902,9 +907,7 @@ async def handle_ids(
             ),
         ]
     )
-    await service._respond_ephemeral(
-        interaction_id, interaction_token, "\n".join(lines)
-    )
+    await service.respond_ephemeral(interaction_id, interaction_token, "\n".join(lines))
 
 
 def _status_model_label(binding: dict[str, Any]) -> str:

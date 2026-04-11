@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from codex_autorunner.integrations.chat.dispatcher import conversation_id_for
 from codex_autorunner.integrations.discord.command_runner import (
     CommandRunner,
     RunnerConfig,
@@ -73,8 +74,64 @@ class _FakeService:
         self._handle_pma_command = AsyncMock()
         self._handle_command_autocomplete = AsyncMock()
         self._handle_ticket_modal_submit = AsyncMock()
-        self._respond_ephemeral = AsyncMock()
+        self.respond_ephemeral = AsyncMock()
+        self._respond_ephemeral = self.respond_ephemeral
         self._send_or_respond_ephemeral = AsyncMock()
+        self._dispatch_chat_event = AsyncMock()
+
+    async def dispatch_chat_event(self, event: Any) -> None:
+        await self._dispatch_chat_event(event)
+
+    async def acknowledge_runtime_envelope(
+        self,
+        _envelope: Any,
+        *,
+        stage: str,
+    ) -> bool:
+        _ = stage
+        return True
+
+    async def mark_interaction_scheduler_state(
+        self,
+        _ctx: Any,
+        *,
+        scheduler_state: str,
+        increment_attempt_count: bool = False,
+    ) -> None:
+        _ = scheduler_state, increment_attempt_count
+
+    async def begin_interaction_execution(self, _ctx: Any) -> bool:
+        return True
+
+    async def begin_interaction_recovery_execution(self, _ctx: Any) -> bool:
+        return True
+
+    async def replay_interaction_delivery(self, _ctx: Any) -> None:
+        return None
+
+    async def finish_interaction_execution(
+        self,
+        _ctx: Any,
+        *,
+        execution_status: str,
+        execution_error: Optional[str] = None,
+    ) -> None:
+        _ = execution_status, execution_error
+
+    async def send_or_respond_ephemeral(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+        deferred: bool,
+        text: str,
+    ) -> None:
+        await self._send_or_respond_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text=text,
+        )
 
 
 def _slash_payload(
@@ -202,6 +259,44 @@ async def test_timeout_sends_user_message() -> None:
     call_kwargs = service._send_or_respond_ephemeral.call_args[1]
     assert "timed out" in call_kwargs["text"].lower()
     assert call_kwargs["interaction_id"] == "inter-1"
+
+
+@pytest.mark.anyio
+async def test_shutdown_waits_for_timeout_followup_tasks() -> None:
+    service = _FakeService()
+    followup_started = asyncio.Event()
+    followup_cancelled = asyncio.Event()
+
+    async def slow_handler(*args: Any, **kwargs: Any) -> None:
+        await asyncio.sleep(60)
+
+    async def blocked_followup(**kwargs: Any) -> None:
+        followup_started.set()
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            followup_cancelled.set()
+            raise
+
+    service._handle_car_command.side_effect = slow_handler
+    service._send_or_respond_ephemeral.side_effect = blocked_followup
+
+    runner = CommandRunner(
+        service,
+        config=RunnerConfig(timeout_seconds=0.05, stalled_warning_seconds=None),
+        logger=service._logger,
+    )
+    ctx = _make_ctx()
+    payload = _slash_payload()
+
+    runner.submit(ctx, payload)
+    shutdown_task = asyncio.create_task(runner.shutdown(grace_seconds=0.2))
+
+    await asyncio.wait_for(followup_started.wait(), timeout=1.0)
+    await shutdown_task
+
+    assert followup_cancelled.is_set()
+    assert runner.active_task_count == 0
 
 
 @pytest.mark.anyio
@@ -500,7 +595,7 @@ async def test_submit_event_preserves_arrival_order() -> None:
 
 
 @pytest.mark.anyio
-async def test_submit_ingressed_preserves_fifo_within_conversation() -> None:
+async def test_submit_serializes_fifo_within_conversation() -> None:
     service = _FakeService()
     started_ids: list[str] = []
     first_started = asyncio.Event()
@@ -533,9 +628,21 @@ async def test_submit_ingressed_preserves_fifo_within_conversation() -> None:
         channel_id="chan-1",
         guild_id="guild-1",
     )
+    conversation_id = conversation_id_for("discord", "chan-1", "guild-1")
+    resource_keys = (f"conversation:{conversation_id}",)
 
-    runner.submit_ingressed(ctx_first, _slash_payload())
-    runner.submit_ingressed(ctx_second, _slash_payload())
+    runner.submit(
+        ctx_first,
+        _slash_payload(),
+        resource_keys=resource_keys,
+        conversation_id=conversation_id,
+    )
+    runner.submit(
+        ctx_second,
+        _slash_payload(),
+        resource_keys=resource_keys,
+        conversation_id=conversation_id,
+    )
 
     await asyncio.wait_for(first_started.wait(), timeout=1.0)
     await asyncio.sleep(0.05)
@@ -547,7 +654,7 @@ async def test_submit_ingressed_preserves_fifo_within_conversation() -> None:
 
 
 @pytest.mark.anyio
-async def test_submit_ingressed_does_not_block_other_conversations() -> None:
+async def test_submit_allows_other_conversations_to_run() -> None:
     service = _FakeService()
     first_started = asyncio.Event()
     second_started = asyncio.Event()
@@ -582,11 +689,23 @@ async def test_submit_ingressed_does_not_block_other_conversations() -> None:
         channel_id="chan-2",
         guild_id="guild-1",
     )
+    conversation_id_first = conversation_id_for("discord", "chan-1", "guild-1")
+    conversation_id_second = conversation_id_for("discord", "chan-2", "guild-1")
 
-    runner.submit_ingressed(ctx_first, _slash_payload())
+    runner.submit(
+        ctx_first,
+        _slash_payload(),
+        resource_keys=(f"conversation:{conversation_id_first}",),
+        conversation_id=conversation_id_first,
+    )
     await asyncio.wait_for(first_started.wait(), timeout=1.0)
 
-    runner.submit_ingressed(ctx_second, _slash_payload())
+    runner.submit(
+        ctx_second,
+        _slash_payload(),
+        resource_keys=(f"conversation:{conversation_id_second}",),
+        conversation_id=conversation_id_second,
+    )
     await asyncio.wait_for(second_started.wait(), timeout=1.0)
 
     release_first.set()

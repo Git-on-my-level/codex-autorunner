@@ -50,5 +50,13 @@ jobs:
       - name: Check import boundaries
         run: python scripts/check_import_boundaries.py
 
+      - name: Run Discord interaction stress coverage
+        run: >
+          python -m pytest
+          tests/integrations/discord/test_reliability.py
+          tests/integrations/discord/test_interaction_runtime_chaos.py
+          tests/integrations/discord/test_interaction_runtime_contracts.py
+          -q
+
       - name: Run checks
         run: ./scripts/check.sh

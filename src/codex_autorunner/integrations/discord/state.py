@@ -14,7 +14,8 @@ from ...core.sqlite_utils import connect_sqlite
 from ...core.state import now_iso
 from ..chat.agents import normalize_hermes_profile
 
-DISCORD_STATE_SCHEMA_VERSION = 10
+DISCORD_STATE_SCHEMA_VERSION = 12
+DISCORD_INTERACTION_LEDGER_RETENTION_DAYS = 14
 _UNSET = object()
 _logger = logging.getLogger(__name__)
 
@@ -44,6 +45,44 @@ class DiscordTurnProgressLease:
     progress_label: Optional[str]
     created_at: str
     updated_at: str
+
+
+@dataclass(frozen=True)
+class InteractionLedgerRecord:
+    interaction_id: str
+    interaction_token: str
+    interaction_kind: str
+    channel_id: str
+    guild_id: Optional[str]
+    user_id: Optional[str]
+    metadata_json: dict[str, Any]
+    route_key: Optional[str] = None
+    handler_id: Optional[str] = None
+    conversation_id: Optional[str] = None
+    scheduler_state: str = "received"
+    resource_keys: tuple[str, ...] = ()
+    payload_json: Optional[dict[str, Any]] = None
+    envelope_json: Optional[dict[str, Any]] = None
+    delivery_cursor_json: Optional[dict[str, Any]] = None
+    attempt_count: int = 0
+    ack_mode: Optional[str] = None
+    ack_completed_at: Optional[str] = None
+    execution_status: str = "received"
+    execution_started_at: Optional[str] = None
+    execution_finished_at: Optional[str] = None
+    execution_error: Optional[str] = None
+    final_delivery_status: Optional[str] = None
+    final_delivery_error: Optional[str] = None
+    original_response_message_id: Optional[str] = None
+    created_at: str = ""
+    updated_at: str = ""
+    last_seen_at: str = ""
+
+
+@dataclass(frozen=True)
+class InteractionLedgerRegistration:
+    record: InteractionLedgerRecord
+    inserted: bool
 
 
 class DiscordStateStore:
@@ -340,6 +379,148 @@ class DiscordStateStore:
             self._record_outbox_failure_sync, record_id, error, retry_after_seconds
         )
 
+    async def register_interaction(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+        interaction_kind: str,
+        channel_id: str,
+        guild_id: Optional[str],
+        user_id: Optional[str],
+        metadata_json: dict[str, Any],
+    ) -> InteractionLedgerRegistration:
+        return cast(
+            InteractionLedgerRegistration,
+            await self._run(
+                self._register_interaction_sync,
+                interaction_id,
+                interaction_token,
+                interaction_kind,
+                channel_id,
+                guild_id,
+                user_id,
+                metadata_json,
+            ),
+        )
+
+    async def get_interaction(
+        self,
+        interaction_id: str,
+    ) -> Optional[InteractionLedgerRecord]:
+        return await self._run(self._get_interaction_sync, interaction_id)  # type: ignore[no-any-return]
+
+    async def persist_interaction_runtime(
+        self,
+        interaction_id: str,
+        *,
+        route_key: Optional[str],
+        handler_id: Optional[str],
+        conversation_id: Optional[str],
+        scheduler_state: str,
+        resource_keys: tuple[str, ...],
+        payload_json: dict[str, Any],
+        envelope_json: dict[str, Any],
+    ) -> None:
+        await self._run(
+            self._persist_interaction_runtime_sync,
+            interaction_id,
+            route_key,
+            handler_id,
+            conversation_id,
+            scheduler_state,
+            resource_keys,
+            payload_json,
+            envelope_json,
+        )
+
+    async def mark_interaction_scheduler_state(
+        self,
+        interaction_id: str,
+        *,
+        scheduler_state: str,
+        increment_attempt_count: bool = False,
+    ) -> None:
+        await self._run(
+            self._mark_interaction_scheduler_state_sync,
+            interaction_id,
+            scheduler_state,
+            increment_attempt_count,
+        )
+
+    async def update_interaction_delivery_cursor(
+        self,
+        interaction_id: str,
+        *,
+        delivery_cursor_json: Optional[dict[str, Any]],
+        scheduler_state: Optional[str] = None,
+        increment_attempt_count: bool = False,
+    ) -> None:
+        await self._run(
+            self._update_interaction_delivery_cursor_sync,
+            interaction_id,
+            delivery_cursor_json,
+            scheduler_state,
+            increment_attempt_count,
+        )
+
+    async def list_recoverable_interactions(self) -> list[InteractionLedgerRecord]:
+        return await self._run(self._list_recoverable_interactions_sync)  # type: ignore[no-any-return]
+
+    async def claim_interaction_execution(self, interaction_id: str) -> bool:
+        return await self._run(self._claim_interaction_execution_sync, interaction_id)  # type: ignore[no-any-return]
+
+    async def mark_interaction_acknowledged(
+        self,
+        interaction_id: str,
+        *,
+        ack_mode: str,
+        original_response_message_id: Optional[str] = None,
+    ) -> None:
+        await self._run(
+            self._mark_interaction_acknowledged_sync,
+            interaction_id,
+            ack_mode,
+            original_response_message_id,
+        )
+
+    async def mark_interaction_execution(
+        self,
+        interaction_id: str,
+        *,
+        execution_status: str,
+        execution_error: Optional[str] = None,
+    ) -> None:
+        await self._run(
+            self._mark_interaction_execution_sync,
+            interaction_id,
+            execution_status,
+            execution_error,
+        )
+
+    async def record_interaction_delivery(
+        self,
+        interaction_id: str,
+        *,
+        delivery_status: str,
+        delivery_error: Optional[str] = None,
+        original_response_message_id: Optional[str] = None,
+    ) -> None:
+        await self._run(
+            self._record_interaction_delivery_sync,
+            interaction_id,
+            delivery_status,
+            delivery_error,
+            original_response_message_id,
+        )
+
+    async def prune_interactions(
+        self,
+        *,
+        retention_days: int = DISCORD_INTERACTION_LEDGER_RETENTION_DAYS,
+    ) -> int:
+        return await self._run(self._prune_interactions_sync, retention_days)  # type: ignore[no-any-return]
+
     async def _run(self, func: Callable[..., Any], *args: Any) -> Any:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(self._executor, func, *args)
@@ -352,6 +533,7 @@ class DiscordStateStore:
 
     def _ensure_initialized_sync(self) -> None:
         self._connection_sync()
+        self._prune_interactions_sync(DISCORD_INTERACTION_LEDGER_RETENTION_DAYS)
 
     def _close_sync(self) -> None:
         if self._connection is not None:
@@ -439,6 +621,40 @@ class DiscordStateStore:
             )
             conn.execute(
                 """
+                CREATE TABLE IF NOT EXISTS interaction_ledger (
+                    interaction_id TEXT PRIMARY KEY,
+                    interaction_token TEXT NOT NULL,
+                    interaction_kind TEXT NOT NULL,
+                    channel_id TEXT NOT NULL,
+                    guild_id TEXT,
+                    user_id TEXT,
+                    metadata_json TEXT NOT NULL,
+                    route_key TEXT,
+                    handler_id TEXT,
+                    conversation_id TEXT,
+                    scheduler_state TEXT NOT NULL DEFAULT 'received',
+                    resource_keys_json TEXT,
+                    payload_json TEXT,
+                    envelope_json TEXT,
+                    delivery_cursor_json TEXT,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    ack_mode TEXT,
+                    ack_completed_at TEXT,
+                    execution_status TEXT NOT NULL,
+                    execution_started_at TEXT,
+                    execution_finished_at TEXT,
+                    execution_error TEXT,
+                    final_delivery_status TEXT,
+                    final_delivery_error TEXT,
+                    original_response_message_id TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    last_seen_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_discord_turn_progress_thread_exec
                     ON turn_progress_leases(managed_thread_id, execution_id, updated_at)
                 """
@@ -449,7 +665,26 @@ class DiscordStateStore:
                     ON turn_progress_leases(channel_id, message_id, updated_at)
                 """
             )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_discord_interaction_ledger_last_seen
+                    ON interaction_ledger(last_seen_at)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_discord_interaction_ledger_execution_status
+                    ON interaction_ledger(execution_status)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_discord_interaction_ledger_scheduler_state
+                    ON interaction_ledger(scheduler_state)
+                """
+            )
             self._ensure_channel_binding_columns(conn)
+            self._ensure_interaction_ledger_columns(conn)
             if current_version < DISCORD_STATE_SCHEMA_VERSION:
                 conn.execute(
                     "UPDATE schema_info SET version = ?",
@@ -528,6 +763,56 @@ class DiscordStateStore:
         if "pending_compact_session_key" not in names:
             conn.execute(
                 "ALTER TABLE channel_bindings ADD COLUMN pending_compact_session_key TEXT"
+            )
+
+    def _ensure_interaction_ledger_columns(self, conn: sqlite3.Connection) -> None:
+        rows = conn.execute("PRAGMA table_info(interaction_ledger)").fetchall()
+        names = {str(row["name"]) for row in rows}
+        if not names:
+            return
+        if "route_key" not in names:
+            conn.execute("ALTER TABLE interaction_ledger ADD COLUMN route_key TEXT")
+        if "handler_id" not in names:
+            conn.execute("ALTER TABLE interaction_ledger ADD COLUMN handler_id TEXT")
+        if "conversation_id" not in names:
+            conn.execute(
+                "ALTER TABLE interaction_ledger ADD COLUMN conversation_id TEXT"
+            )
+        if "scheduler_state" not in names:
+            conn.execute(
+                "ALTER TABLE interaction_ledger ADD COLUMN scheduler_state TEXT NOT NULL DEFAULT 'received'"
+            )
+        if "resource_keys_json" not in names:
+            conn.execute(
+                "ALTER TABLE interaction_ledger ADD COLUMN resource_keys_json TEXT"
+            )
+        if "payload_json" not in names:
+            conn.execute("ALTER TABLE interaction_ledger ADD COLUMN payload_json TEXT")
+        if "envelope_json" not in names:
+            conn.execute("ALTER TABLE interaction_ledger ADD COLUMN envelope_json TEXT")
+        if "delivery_cursor_json" not in names:
+            conn.execute(
+                "ALTER TABLE interaction_ledger ADD COLUMN delivery_cursor_json TEXT"
+            )
+        if "attempt_count" not in names:
+            conn.execute(
+                "ALTER TABLE interaction_ledger ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0"
+            )
+        if "execution_error" not in names:
+            conn.execute(
+                "ALTER TABLE interaction_ledger ADD COLUMN execution_error TEXT"
+            )
+        if "final_delivery_status" not in names:
+            conn.execute(
+                "ALTER TABLE interaction_ledger ADD COLUMN final_delivery_status TEXT"
+            )
+        if "final_delivery_error" not in names:
+            conn.execute(
+                "ALTER TABLE interaction_ledger ADD COLUMN final_delivery_error TEXT"
+            )
+        if "original_response_message_id" not in names:
+            conn.execute(
+                "ALTER TABLE interaction_ledger ADD COLUMN original_response_message_id TEXT"
             )
 
     def _upsert_binding_sync(
@@ -1122,6 +1407,196 @@ class DiscordStateStore:
             updated_at=str(row["updated_at"]),
         )
 
+    def _register_interaction_sync(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        interaction_kind: str,
+        channel_id: str,
+        guild_id: Optional[str],
+        user_id: Optional[str],
+        metadata_json: dict[str, Any],
+    ) -> InteractionLedgerRegistration:
+        conn = self._connection_sync()
+        row = conn.execute(
+            "SELECT * FROM interaction_ledger WHERE interaction_id = ?",
+            (interaction_id,),
+        ).fetchone()
+        now = now_iso()
+        inserted = row is None
+        metadata_blob = json.dumps(metadata_json, sort_keys=True)
+        with conn:
+            if inserted:
+                conn.execute(
+                    """
+                    INSERT INTO interaction_ledger (
+                        interaction_id,
+                        interaction_token,
+                        interaction_kind,
+                        channel_id,
+                        guild_id,
+                        user_id,
+                        metadata_json,
+                        scheduler_state,
+                        execution_status,
+                        created_at,
+                        updated_at,
+                        last_seen_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        interaction_id,
+                        interaction_token,
+                        interaction_kind,
+                        channel_id,
+                        guild_id,
+                        user_id,
+                        metadata_blob,
+                        "received",
+                        "received",
+                        now,
+                        now,
+                        now,
+                    ),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE interaction_ledger
+                    SET interaction_token = ?,
+                        interaction_kind = ?,
+                        channel_id = ?,
+                        guild_id = ?,
+                        user_id = ?,
+                        metadata_json = ?,
+                        updated_at = ?,
+                        last_seen_at = ?
+                    WHERE interaction_id = ?
+                    """,
+                    (
+                        interaction_token,
+                        interaction_kind,
+                        channel_id,
+                        guild_id,
+                        user_id,
+                        metadata_blob,
+                        now,
+                        now,
+                        interaction_id,
+                    ),
+                )
+        stored = conn.execute(
+            "SELECT * FROM interaction_ledger WHERE interaction_id = ?",
+            (interaction_id,),
+        ).fetchone()
+        if stored is None:
+            raise RuntimeError(
+                f"interaction ledger missing after registration: {interaction_id}"
+            )
+        return InteractionLedgerRegistration(
+            record=self._interaction_from_row(stored),
+            inserted=inserted,
+        )
+
+    @staticmethod
+    def _decode_json_object(raw_value: Any) -> dict[str, Any]:
+        if not isinstance(raw_value, str) or not raw_value:
+            return {}
+        try:
+            parsed = json.loads(raw_value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    @staticmethod
+    def _decode_json_string_tuple(raw_value: Any) -> tuple[str, ...]:
+        if not isinstance(raw_value, str) or not raw_value:
+            return ()
+        try:
+            parsed = json.loads(raw_value)
+        except json.JSONDecodeError:
+            return ()
+        if not isinstance(parsed, list):
+            return ()
+        values = [item for item in parsed if isinstance(item, str) and item.strip()]
+        return tuple(values)
+
+    def _interaction_from_row(self, row: sqlite3.Row) -> InteractionLedgerRecord:
+        metadata = self._decode_json_object(row["metadata_json"])
+        payload_json = self._decode_json_object(row["payload_json"])
+        envelope_json = self._decode_json_object(row["envelope_json"])
+        delivery_cursor_json = self._decode_json_object(row["delivery_cursor_json"])
+        resource_keys = self._decode_json_string_tuple(row["resource_keys_json"])
+        return InteractionLedgerRecord(
+            interaction_id=str(row["interaction_id"]),
+            interaction_token=str(row["interaction_token"]),
+            interaction_kind=str(row["interaction_kind"]),
+            channel_id=str(row["channel_id"]),
+            guild_id=row["guild_id"] if isinstance(row["guild_id"], str) else None,
+            user_id=row["user_id"] if isinstance(row["user_id"], str) else None,
+            metadata_json=metadata,
+            route_key=row["route_key"] if isinstance(row["route_key"], str) else None,
+            handler_id=(
+                row["handler_id"] if isinstance(row["handler_id"], str) else None
+            ),
+            conversation_id=(
+                row["conversation_id"]
+                if isinstance(row["conversation_id"], str)
+                else None
+            ),
+            scheduler_state=(
+                str(row["scheduler_state"])
+                if row["scheduler_state"] is not None
+                else "received"
+            ),
+            resource_keys=resource_keys,
+            payload_json=payload_json or None,
+            envelope_json=envelope_json or None,
+            delivery_cursor_json=delivery_cursor_json or None,
+            attempt_count=int(row["attempt_count"] or 0),
+            ack_mode=row["ack_mode"] if isinstance(row["ack_mode"], str) else None,
+            ack_completed_at=(
+                row["ack_completed_at"]
+                if isinstance(row["ack_completed_at"], str)
+                else None
+            ),
+            execution_status=str(row["execution_status"]),
+            execution_started_at=(
+                row["execution_started_at"]
+                if isinstance(row["execution_started_at"], str)
+                else None
+            ),
+            execution_finished_at=(
+                row["execution_finished_at"]
+                if isinstance(row["execution_finished_at"], str)
+                else None
+            ),
+            execution_error=(
+                row["execution_error"]
+                if isinstance(row["execution_error"], str)
+                else None
+            ),
+            final_delivery_status=(
+                row["final_delivery_status"]
+                if isinstance(row["final_delivery_status"], str)
+                else None
+            ),
+            final_delivery_error=(
+                row["final_delivery_error"]
+                if isinstance(row["final_delivery_error"], str)
+                else None
+            ),
+            original_response_message_id=(
+                row["original_response_message_id"]
+                if isinstance(row["original_response_message_id"], str)
+                else None
+            ),
+            created_at=str(row["created_at"]),
+            updated_at=str(row["updated_at"]),
+            last_seen_at=str(row["last_seen_at"]),
+        )
+
     def _upsert_turn_progress_lease_sync(
         self,
         lease_id: str,
@@ -1306,3 +1781,307 @@ class DiscordStateStore:
                 "DELETE FROM turn_progress_leases WHERE lease_id = ?",
                 (normalized_lease_id,),
             )
+
+    def _get_interaction_sync(
+        self,
+        interaction_id: str,
+    ) -> Optional[InteractionLedgerRecord]:
+        conn = self._connection_sync()
+        row = conn.execute(
+            "SELECT * FROM interaction_ledger WHERE interaction_id = ?",
+            (interaction_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return self._interaction_from_row(row)
+
+    def _persist_interaction_runtime_sync(
+        self,
+        interaction_id: str,
+        route_key: Optional[str],
+        handler_id: Optional[str],
+        conversation_id: Optional[str],
+        scheduler_state: str,
+        resource_keys: tuple[str, ...],
+        payload_json: dict[str, Any],
+        envelope_json: dict[str, Any],
+    ) -> None:
+        conn = self._connection_sync()
+        now = now_iso()
+        with conn:
+            conn.execute(
+                """
+                UPDATE interaction_ledger
+                SET route_key = ?,
+                    handler_id = ?,
+                    conversation_id = ?,
+                    scheduler_state = ?,
+                    resource_keys_json = ?,
+                    payload_json = ?,
+                    envelope_json = ?,
+                    updated_at = ?,
+                    last_seen_at = ?
+                WHERE interaction_id = ?
+                """,
+                (
+                    route_key,
+                    handler_id,
+                    conversation_id,
+                    scheduler_state,
+                    json.dumps(list(resource_keys), sort_keys=True),
+                    json.dumps(payload_json, sort_keys=True),
+                    json.dumps(envelope_json, sort_keys=True),
+                    now,
+                    now,
+                    interaction_id,
+                ),
+            )
+
+    def _mark_interaction_scheduler_state_sync(
+        self,
+        interaction_id: str,
+        scheduler_state: str,
+        increment_attempt_count: bool,
+    ) -> None:
+        conn = self._connection_sync()
+        now = now_iso()
+        with conn:
+            conn.execute(
+                """
+                UPDATE interaction_ledger
+                SET scheduler_state = ?,
+                    attempt_count = attempt_count + ?,
+                    updated_at = ?,
+                    last_seen_at = ?
+                WHERE interaction_id = ?
+                """,
+                (
+                    scheduler_state,
+                    1 if increment_attempt_count else 0,
+                    now,
+                    now,
+                    interaction_id,
+                ),
+            )
+
+    def _update_interaction_delivery_cursor_sync(
+        self,
+        interaction_id: str,
+        delivery_cursor_json: Optional[dict[str, Any]],
+        scheduler_state: Optional[str],
+        increment_attempt_count: bool,
+    ) -> None:
+        conn = self._connection_sync()
+        now = now_iso()
+        with conn:
+            conn.execute(
+                """
+                UPDATE interaction_ledger
+                SET delivery_cursor_json = ?,
+                    scheduler_state = COALESCE(?, scheduler_state),
+                    attempt_count = attempt_count + ?,
+                    updated_at = ?,
+                    last_seen_at = ?
+                WHERE interaction_id = ?
+                """,
+                (
+                    (
+                        json.dumps(delivery_cursor_json, sort_keys=True)
+                        if delivery_cursor_json is not None
+                        else None
+                    ),
+                    scheduler_state,
+                    1 if increment_attempt_count else 0,
+                    now,
+                    now,
+                    interaction_id,
+                ),
+            )
+
+    def _list_recoverable_interactions_sync(self) -> list[InteractionLedgerRecord]:
+        conn = self._connection_sync()
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM interaction_ledger
+            WHERE scheduler_state NOT IN ('completed', 'delivery_expired', 'abandoned')
+              AND execution_status NOT IN ('failed', 'timeout', 'cancelled')
+            ORDER BY created_at ASC
+            """
+        ).fetchall()
+        return [self._interaction_from_row(row) for row in rows]
+
+    def _claim_interaction_execution_sync(self, interaction_id: str) -> bool:
+        conn = self._connection_sync()
+        now = now_iso()
+        with conn:
+            cursor = conn.execute(
+                """
+                UPDATE interaction_ledger
+                SET execution_status = 'running',
+                    scheduler_state = 'executing',
+                    delivery_cursor_json = NULL,
+                    execution_started_at = COALESCE(execution_started_at, ?),
+                    attempt_count = attempt_count + 1,
+                    updated_at = ?,
+                    last_seen_at = ?
+                WHERE interaction_id = ?
+                  AND execution_status IN ('received', 'acknowledged')
+                """,
+                (now, now, now, interaction_id),
+            )
+        return cursor.rowcount > 0
+
+    def _mark_interaction_acknowledged_sync(
+        self,
+        interaction_id: str,
+        ack_mode: str,
+        original_response_message_id: Optional[str],
+    ) -> None:
+        conn = self._connection_sync()
+        now = now_iso()
+        with conn:
+            conn.execute(
+                """
+                UPDATE interaction_ledger
+                SET ack_mode = COALESCE(ack_mode, ?),
+                    ack_completed_at = COALESCE(ack_completed_at, ?),
+                    scheduler_state = CASE
+                        WHEN scheduler_state IN (
+                            'received',
+                            'dispatch_ready',
+                            'dispatch_ack_pending',
+                            'queue_wait_ack_pending'
+                        )
+                        THEN 'acknowledged'
+                        ELSE scheduler_state
+                    END,
+                    execution_status = CASE
+                        WHEN execution_status = 'received' THEN 'acknowledged'
+                        ELSE execution_status
+                    END,
+                    original_response_message_id = COALESCE(?, original_response_message_id),
+                    updated_at = ?,
+                    last_seen_at = ?
+                WHERE interaction_id = ?
+                """,
+                (
+                    ack_mode,
+                    now,
+                    original_response_message_id,
+                    now,
+                    now,
+                    interaction_id,
+                ),
+            )
+
+    def _mark_interaction_execution_sync(
+        self,
+        interaction_id: str,
+        execution_status: str,
+        execution_error: Optional[str],
+    ) -> None:
+        conn = self._connection_sync()
+        now = now_iso()
+        error_text = str(execution_error)[:500] if execution_error is not None else None
+        if execution_status == "running":
+            with conn:
+                conn.execute(
+                    """
+                    UPDATE interaction_ledger
+                    SET execution_status = ?,
+                        execution_started_at = COALESCE(execution_started_at, ?),
+                        execution_error = ?,
+                        updated_at = ?,
+                        last_seen_at = ?
+                    WHERE interaction_id = ?
+                    """,
+                    (
+                        execution_status,
+                        now,
+                        error_text,
+                        now,
+                        now,
+                        interaction_id,
+                    ),
+                )
+            return
+        with conn:
+            conn.execute(
+                """
+                UPDATE interaction_ledger
+                SET execution_status = ?,
+                    scheduler_state = CASE
+                        WHEN ? = 'completed' AND delivery_cursor_json IS NULL
+                        THEN 'completed'
+                        WHEN ? = 'completed'
+                        THEN 'delivery_pending'
+                        ELSE scheduler_state
+                    END,
+                    execution_finished_at = ?,
+                    execution_error = ?,
+                    updated_at = ?,
+                    last_seen_at = ?
+                WHERE interaction_id = ?
+                """,
+                (
+                    execution_status,
+                    execution_status,
+                    execution_status,
+                    now,
+                    error_text,
+                    now,
+                    now,
+                    interaction_id,
+                ),
+            )
+
+    def _record_interaction_delivery_sync(
+        self,
+        interaction_id: str,
+        delivery_status: str,
+        delivery_error: Optional[str],
+        original_response_message_id: Optional[str],
+    ) -> None:
+        conn = self._connection_sync()
+        now = now_iso()
+        error_text = str(delivery_error)[:500] if delivery_error is not None else None
+        with conn:
+            conn.execute(
+                """
+                UPDATE interaction_ledger
+                SET final_delivery_status = ?,
+                    final_delivery_error = ?,
+                    scheduler_state = CASE
+                        WHEN delivery_cursor_json IS NOT NULL THEN scheduler_state
+                        WHEN execution_status = 'completed' THEN 'completed'
+                        ELSE scheduler_state
+                    END,
+                    original_response_message_id = COALESCE(?, original_response_message_id),
+                    updated_at = ?,
+                    last_seen_at = ?
+                WHERE interaction_id = ?
+                """,
+                (
+                    delivery_status,
+                    error_text,
+                    original_response_message_id,
+                    now,
+                    now,
+                    interaction_id,
+                ),
+            )
+
+    def _prune_interactions_sync(self, retention_days: int) -> int:
+        if retention_days <= 0:
+            return 0
+        conn = self._connection_sync()
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=int(retention_days))
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with conn:
+            cursor = conn.execute(
+                "DELETE FROM interaction_ledger WHERE last_seen_at < ?",
+                (cutoff,),
+            )
+        return int(cursor.rowcount or 0)

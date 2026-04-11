@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
-import json
 import logging
 import os
 import subprocess
@@ -40,7 +39,6 @@ from ...core.config import (
     load_repo_config,
     resolve_env_for_root,
 )
-from ...core.exceptions import CircuitOpenError
 from ...core.filebox import (
     delete_regular_files,
     inbox_dir,
@@ -127,11 +125,9 @@ from ...integrations.chat.collaboration_policy import (
     evaluate_collaboration_admission,
     evaluate_collaboration_policy,
 )
-from ...integrations.chat.command_contract import command_contract_entry_for_path
 from ...integrations.chat.command_diagnostics import (
     ActiveFlowInfo,
 )
-from ...integrations.chat.command_ingress import canonicalize_command_ingress
 from ...integrations.chat.dispatcher import (
     ChatDispatcher,
     DispatchContext,
@@ -192,9 +188,6 @@ from ...voice.service import VoiceTransientError
 from ..telegram.constants import DEFAULT_SKILLS_LIST_LIMIT
 from ..telegram.helpers import _format_skills_list
 from .adapter import DiscordChatAdapter
-from .car_autocomplete import (
-    handle_command_autocomplete as handle_car_command_autocomplete,
-)
 from .car_command_dispatch import handle_car_command as dispatch_car_command
 from .collaboration_helpers import (
     collaboration_probe_text,
@@ -202,7 +195,6 @@ from .collaboration_helpers import (
 from .command_registry import sync_commands
 from .command_runner import CommandRunner as _CommandRunner
 from .command_runner import RunnerConfig as _RunnerConfig
-from .commands import build_application_commands
 from .components import (
     DISCORD_SELECT_OPTION_MAX_OPTIONS,
     build_model_effort_picker,
@@ -210,6 +202,20 @@ from .components import (
     build_ticket_picker,
 )
 from .config import DiscordBotConfig
+from .effects import (
+    DiscordAutocompleteEffect,
+    DiscordComponentResponseEffect,
+    DiscordComponentUpdateEffect,
+    DiscordDeferEffect,
+    DiscordEffect,
+    DiscordEffectServiceProxy,
+    DiscordEffectSink,
+    DiscordFollowupEffect,
+    DiscordHandlerResult,
+    DiscordModalEffect,
+    DiscordOriginalMessageEditEffect,
+    DiscordResponseEffect,
+)
 from .errors import DiscordAPIError
 from .flow_commands import (
     build_flow_archive_confirmation_components,
@@ -236,13 +242,38 @@ from .flow_watchers import (
 )
 from .flow_watchers import watch_ticket_flow_pauses, watch_ticket_flow_terminals
 from .gateway import DiscordGatewayClient
-from .ingress import InteractionIngress, InteractionKind
+from .ingress import (
+    CommandSpec,
+    IngressContext,
+    IngressTiming,
+    InteractionIngress,
+    InteractionKind,
+    RuntimeInteractionEnvelope,
+)
 from .interaction_dispatch import (
     handle_component_interaction as _dispatch_component_interaction,
 )
-from .interaction_dispatch import (
-    handle_normalized_interaction as _dispatch_normalized_interaction,
+from .interaction_registry import (
+    MODEL_EFFORT_SELECT_ID,
+    TICKETS_MODAL_PREFIX,
+    build_application_commands,
+    component_admission_ack_policy,
+    component_dispatch_ack_policy,
+    component_route_for_custom_id,
+    component_workspace_lock_policy,
+    dispatch_autocomplete,
+    modal_admission_ack_policy,
+    modal_route_for_custom_id,
+    modal_workspace_lock_policy,
+    normalize_discord_command_path,
+    slash_command_route_for_path,
+    slash_command_workspace_lock_policy,
 )
+from .interaction_session import (
+    DiscordInteractionSession,
+    InteractionSessionKind,
+)
+from .interactions import extract_interaction_id, extract_interaction_token
 from .message_turns import (
     DiscordMessageTurnResult,
     bind_discord_progress_task_context,
@@ -290,7 +321,7 @@ from .service_normalization import (
     build_discord_queue_notice_message,
     format_hub_flow_overview_line,
 )
-from .state import DiscordStateStore, OutboxRecord
+from .state import DiscordStateStore, InteractionLedgerRecord, OutboxRecord
 from .workspace_commands import (
     handle_bind,
     handle_bind_page_component,
@@ -322,17 +353,7 @@ DISCORD_WHISPER_TRANSCRIPT_DISCLAIMER = (
     "Note: transcribed from user voice. If confusing or possibly inaccurate and you "
     "cannot infer the intention please clarify before proceeding."
 )
-SESSION_RESUME_SELECT_ID = "session_resume_select"
-AGENT_PROFILE_SELECT_ID = "agent_profile_select"
-UPDATE_TARGET_SELECT_ID = "update_target_select"
-UPDATE_CONFIRM_PREFIX = "update_confirm"
-UPDATE_CANCEL_PREFIX = "update_cancel"
-REVIEW_COMMIT_SELECT_ID = "review_commit_select"
-MODEL_EFFORT_SELECT_ID = "model_effort_select"
 TICKET_PICKER_TOKEN_PREFIX = "ticket@"
-TICKETS_FILTER_SELECT_ID = "tickets_filter_select"
-TICKETS_SELECT_ID = "tickets_select"
-TICKETS_MODAL_PREFIX = "tickets_modal"
 TICKETS_BODY_INPUT_ID = "ticket_body"
 
 
@@ -628,7 +649,12 @@ class DiscordBotService:
             rest=self._rest,
             config=self._config,
             logger=self._logger,
+            hydrate_ack_mode=self._load_interaction_ack_mode,
+            record_ack=self._record_interaction_ack,
+            record_delivery=self._record_interaction_delivery,
+            record_delivery_cursor=self._record_interaction_delivery_cursor,
         )
+        self._effect_sink = DiscordEffectSink(self)
         self._queued_notice_messages: dict[tuple[str, str], str] = {}
         self._discord_turn_progress_reuse_requests: dict[str, Any] = {}
         self._discord_reusable_progress_messages: dict[str, Any] = {}
@@ -661,13 +687,14 @@ class DiscordBotService:
                 stalled_warning_seconds=config.dispatch.handler_stalled_warning_seconds,
             ),
             logger=self._logger,
-            on_ingressed_conversation_idle=self._wake_dispatcher_conversation,
+            on_scheduler_conversation_idle=self._wake_dispatcher_conversation,
         )
 
     async def run_forever(self) -> None:
         self._reap_managed_processes(stage="startup")
         await self._store.initialize()
         await self._reconcile_discord_progress_leases_on_startup()
+        await self._resume_interaction_recovery()
         await run_chat_bootstrap_steps(
             platform="discord",
             logger=self._logger,
@@ -748,9 +775,14 @@ class DiscordBotService:
 
     async def _dispatch_chat_event(self, event: ChatEvent) -> None:
         if isinstance(event, ChatInteractionEvent):
-            prepared = await self._prepare_dispatched_interaction_event(event)
-            if not prepared:
-                return
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.interaction.dispatcher_path_ignored",
+                update_id=event.update_id,
+                interaction_id=event.interaction.interaction_id,
+            )
+            return
 
         async def _handle_dispatched_event(
             queued_event: ChatEvent, context: DispatchContext
@@ -768,38 +800,8 @@ class DiscordBotService:
         )
         await self._maybe_send_queued_notice(event, dispatch_result)
 
-    async def _prepare_dispatched_interaction_event(
-        self, event: ChatInteractionEvent
-    ) -> bool:
-        policy_result = self._evaluate_interaction_collaboration_policy(
-            channel_id=event.thread.chat_id,
-            guild_id=event.thread.thread_id,
-            user_id=event.from_user_id,
-        )
-        if not policy_result.command_allowed:
-            return True
-        payload_str = event.payload or "{}"
-        try:
-            payload_data = json.loads(payload_str)
-        except json.JSONDecodeError:
-            return True
-        if payload_data.get("type") != "command":
-            return True
-        interaction_token = payload_data.get("_discord_token")
-        if not isinstance(interaction_token, str) or not interaction_token.strip():
-            return True
-        ingress = canonicalize_command_ingress(
-            command=payload_data.get("command"),
-            options=payload_data.get("options"),
-        )
-        if ingress is None:
-            return True
-        return await self._prepare_command_interaction_or_abort(
-            interaction_id=event.interaction.interaction_id,
-            interaction_token=interaction_token,
-            command_path=self._normalize_discord_command_path(ingress.command_path),
-            timing="dispatch",
-        )
+    async def dispatch_chat_event(self, event: ChatEvent) -> None:
+        await self._dispatch_chat_event(event)
 
     def _evaluate_message_collaboration_policy(
         self,
@@ -850,7 +852,7 @@ class DiscordBotService:
             return False
         if not self._is_message_turn_candidate_shape(event):
             return False
-        return self._command_runner.is_ingressed_busy(context.conversation_id)
+        return self._command_runner.is_busy(context.conversation_id)
 
     def _build_plain_text_turn_context(
         self,
@@ -1001,6 +1003,294 @@ class DiscordBotService:
     ) -> str:
         return conversation_id_for("discord", channel_id, guild_id)
 
+    def _interaction_conversation_scheduler_key(
+        self,
+        *,
+        channel_id: str,
+        guild_id: Optional[str],
+    ) -> tuple[str, str]:
+        conversation_id = self._dispatcher_conversation_id(
+            channel_id=channel_id,
+            guild_id=guild_id,
+        )
+        return conversation_id, f"conversation:{conversation_id}"
+
+    @staticmethod
+    def _workspace_scheduler_key(workspace_path: str) -> str:
+        return f"workspace:{canonicalize_path(Path(workspace_path))}"
+
+    async def _scheduler_bound_workspace_root(
+        self, *, channel_id: str
+    ) -> Optional[Path]:
+        _binding, workspace_root = await resolve_bound_workspace_root(
+            self,
+            channel_id=channel_id,
+        )
+        return workspace_root
+
+    async def _scheduler_bind_target_workspace_root(self, token: Any) -> Optional[Path]:
+        if not isinstance(token, str) or not token.strip():
+            return None
+        normalized = token.strip()
+        resolved = self._resolve_workspace_from_token(
+            normalized,
+            self._list_bind_workspace_candidates(),
+        )
+        if resolved is not None:
+            candidate = canonicalize_path(Path(resolved[2]))
+            return candidate if candidate.exists() and candidate.is_dir() else None
+        candidate = Path(normalized)
+        if not candidate.is_absolute():
+            candidate = self._config.root / candidate
+        workspace_root = canonicalize_path(candidate)
+        return (
+            workspace_root
+            if workspace_root.exists() and workspace_root.is_dir()
+            else None
+        )
+
+    def _interaction_requires_workspace_lock(self, ctx: IngressContext) -> bool:
+        if ctx.kind == InteractionKind.MODAL_SUBMIT:
+            custom_id = str(ctx.custom_id or "").strip()
+            return modal_workspace_lock_policy(custom_id) != "none"
+        if ctx.kind == InteractionKind.COMPONENT:
+            custom_id = str(ctx.custom_id or "").strip()
+            return component_workspace_lock_policy(custom_id) != "none"
+        if ctx.kind != InteractionKind.SLASH_COMMAND or ctx.command_spec is None:
+            return False
+        command_path = self._normalize_discord_command_path(ctx.command_spec.path)
+        return slash_command_workspace_lock_policy(command_path) != "none"
+
+    async def _interaction_workspace_scheduler_key(
+        self, ctx: IngressContext
+    ) -> Optional[str]:
+        if not self._interaction_requires_workspace_lock(ctx):
+            return None
+        workspace_root: Optional[Path] = None
+        if ctx.kind == InteractionKind.SLASH_COMMAND and ctx.command_spec is not None:
+            command_path = self._normalize_discord_command_path(ctx.command_spec.path)
+            if (
+                slash_command_workspace_lock_policy(command_path)
+                == "bind_target_workspace"
+            ):
+                workspace_root = await self._scheduler_bind_target_workspace_root(
+                    ctx.command_spec.options.get("workspace")
+                )
+            else:
+                workspace_root = await self._scheduler_bound_workspace_root(
+                    channel_id=ctx.channel_id
+                )
+        elif (
+            ctx.kind == InteractionKind.COMPONENT
+            and component_workspace_lock_policy(str(ctx.custom_id or "").strip())
+            == "bind_target_workspace"
+        ):
+            selected_value = ctx.values[0] if ctx.values else None
+            workspace_root = await self._scheduler_bind_target_workspace_root(
+                selected_value
+            )
+        else:
+            workspace_root = await self._scheduler_bound_workspace_root(
+                channel_id=ctx.channel_id
+            )
+        if workspace_root is None:
+            return None
+        return self._workspace_scheduler_key(str(workspace_root))
+
+    async def _acknowledge_runtime_envelope(
+        self,
+        envelope: RuntimeInteractionEnvelope,
+        *,
+        stage: str,
+    ) -> bool:
+        ctx = envelope.context
+        ack_policy = (
+            envelope.dispatch_ack_policy
+            if stage == "dispatch"
+            else envelope.queue_wait_ack_policy
+        )
+        if ack_policy in (None, "immediate"):
+            return True
+        session = self._ensure_interaction_session(
+            ctx.interaction_id,
+            ctx.interaction_token,
+            kind=ctx.kind,
+        )
+        durable_ack_mode = await self._load_interaction_ack_mode(ctx.interaction_id)
+        if isinstance(durable_ack_mode, str) and durable_ack_mode.strip():
+            session.restore_initial_response(durable_ack_mode)
+        if session.has_initial_response():
+            ctx.deferred = session.is_deferred()
+            return True
+        await self._store.mark_interaction_scheduler_state(
+            ctx.interaction_id,
+            scheduler_state=(
+                "dispatch_ack_pending"
+                if stage == "dispatch"
+                else "queue_wait_ack_pending"
+            ),
+        )
+        if ack_policy == "defer_public":
+            acknowledged = await self._defer_public(
+                interaction_id=ctx.interaction_id,
+                interaction_token=ctx.interaction_token,
+            )
+        elif ack_policy == "defer_component_update":
+            acknowledged = await self._defer_component_update(
+                interaction_id=ctx.interaction_id,
+                interaction_token=ctx.interaction_token,
+            )
+        else:
+            acknowledged = await self._defer_ephemeral(
+                interaction_id=ctx.interaction_id,
+                interaction_token=ctx.interaction_token,
+            )
+        if acknowledged:
+            ctx.deferred = True
+            ctx.timing = replace(
+                ctx.timing,
+                ack_finished_at=time.monotonic(),
+            )
+        return acknowledged
+
+    async def acknowledge_runtime_envelope(
+        self,
+        envelope: RuntimeInteractionEnvelope,
+        *,
+        stage: str,
+    ) -> bool:
+        return await self._acknowledge_runtime_envelope(envelope, stage=stage)
+
+    async def _build_runtime_interaction_envelope(
+        self,
+        ctx: IngressContext,
+    ) -> RuntimeInteractionEnvelope:
+        conversation_id: Optional[str] = None
+        resource_keys: list[str] = []
+        dispatch_ack_policy = None
+        queue_wait_ack_policy = None
+
+        if ctx.kind != InteractionKind.AUTOCOMPLETE:
+            conversation_id, conversation_key = (
+                self._interaction_conversation_scheduler_key(
+                    channel_id=ctx.channel_id,
+                    guild_id=ctx.guild_id,
+                )
+            )
+            resource_keys.append(conversation_key)
+
+        if ctx.kind == InteractionKind.SLASH_COMMAND and ctx.command_spec is not None:
+            if ctx.command_spec.ack_timing == "dispatch":
+                dispatch_ack_policy = ctx.command_spec.ack_policy
+        elif ctx.kind == InteractionKind.COMPONENT:
+            dispatch_ack_policy = component_dispatch_ack_policy(
+                str(ctx.custom_id or "").strip()
+            )
+            queue_wait_ack_policy = component_admission_ack_policy(
+                str(ctx.custom_id or "").strip()
+            )
+        elif ctx.kind == InteractionKind.MODAL_SUBMIT:
+            queue_wait_ack_policy = modal_admission_ack_policy(
+                str(ctx.custom_id or "").strip()
+            )
+
+        workspace_key = await self._interaction_workspace_scheduler_key(ctx)
+        if workspace_key is not None:
+            resource_keys.append(workspace_key)
+
+        return RuntimeInteractionEnvelope(
+            context=ctx,
+            conversation_id=conversation_id,
+            resource_keys=tuple(resource_keys),
+            dispatch_ack_policy=dispatch_ack_policy,
+            queue_wait_ack_policy=queue_wait_ack_policy,
+        )
+
+    def _interaction_route_key(self, ctx: IngressContext) -> Optional[str]:
+        if ctx.kind == InteractionKind.SLASH_COMMAND and ctx.command_spec is not None:
+            return "/".join(ctx.command_spec.path)
+        if ctx.kind == InteractionKind.COMPONENT and ctx.custom_id:
+            return str(ctx.custom_id)
+        if ctx.kind == InteractionKind.MODAL_SUBMIT and ctx.custom_id:
+            return str(ctx.custom_id)
+        if ctx.kind == InteractionKind.AUTOCOMPLETE and ctx.command_spec is not None:
+            return "/".join(ctx.command_spec.path)
+        return None
+
+    def _interaction_handler_id(self, ctx: IngressContext) -> Optional[str]:
+        if ctx.kind == InteractionKind.SLASH_COMMAND and ctx.command_spec is not None:
+            slash_route = slash_command_route_for_path(ctx.command_spec.path)
+            return (
+                slash_route.id
+                if slash_route is not None
+                else self._interaction_route_key(ctx)
+            )
+        if ctx.kind == InteractionKind.COMPONENT and ctx.custom_id:
+            component_route = component_route_for_custom_id(str(ctx.custom_id))
+            return (
+                component_route.id
+                if component_route is not None
+                else str(ctx.custom_id)
+            )
+        if ctx.kind == InteractionKind.MODAL_SUBMIT and ctx.custom_id:
+            modal_route = modal_route_for_custom_id(str(ctx.custom_id))
+            return modal_route.id if modal_route is not None else str(ctx.custom_id)
+        return self._interaction_route_key(ctx)
+
+    def _serialize_runtime_envelope(
+        self,
+        envelope: RuntimeInteractionEnvelope,
+    ) -> dict[str, Any]:
+        ctx = envelope.context
+        return {
+            "interaction_id": ctx.interaction_id,
+            "interaction_token": ctx.interaction_token,
+            "channel_id": ctx.channel_id,
+            "guild_id": ctx.guild_id,
+            "user_id": ctx.user_id,
+            "kind": ctx.kind.value,
+            "deferred": ctx.deferred,
+            "command_spec": (
+                {
+                    "path": list(ctx.command_spec.path),
+                    "options": ctx.command_spec.options,
+                    "ack_policy": ctx.command_spec.ack_policy,
+                    "ack_timing": ctx.command_spec.ack_timing,
+                    "requires_workspace": ctx.command_spec.requires_workspace,
+                }
+                if ctx.command_spec is not None
+                else None
+            ),
+            "custom_id": ctx.custom_id,
+            "values": ctx.values,
+            "modal_values": ctx.modal_values,
+            "focused_name": ctx.focused_name,
+            "focused_value": ctx.focused_value,
+            "message_id": ctx.message_id,
+            "conversation_id": envelope.conversation_id,
+            "resource_keys": list(envelope.resource_keys),
+            "dispatch_ack_policy": envelope.dispatch_ack_policy,
+            "queue_wait_ack_policy": envelope.queue_wait_ack_policy,
+        }
+
+    async def _persist_runtime_interaction(
+        self,
+        envelope: RuntimeInteractionEnvelope,
+        payload: dict[str, Any],
+        *,
+        scheduler_state: str,
+    ) -> None:
+        await self._store.persist_interaction_runtime(
+            envelope.context.interaction_id,
+            route_key=self._interaction_route_key(envelope.context),
+            handler_id=self._interaction_handler_id(envelope.context),
+            conversation_id=envelope.conversation_id,
+            scheduler_state=scheduler_state,
+            resource_keys=envelope.resource_keys,
+            payload_json=payload,
+            envelope_json=self._serialize_runtime_envelope(envelope),
+        )
+
     async def _wake_dispatcher_conversation(self, conversation_id: str) -> None:
         wake = getattr(self._dispatcher, "wake_conversation", None)
         if callable(wake):
@@ -1026,7 +1316,7 @@ class DiscordBotService:
     async def _queued_notice_config_for_conversation(
         self, conversation_id: str
     ) -> tuple[Optional[str], bool]:
-        describe_busy = getattr(self._command_runner, "describe_ingressed_busy", None)
+        describe_busy = getattr(self._command_runner, "describe_busy", None)
         if not callable(describe_busy):
             return None, True
         command_label = describe_busy(conversation_id)
@@ -1095,9 +1385,6 @@ class DiscordBotService:
     async def _handle_chat_event(
         self, event: ChatEvent, context: DispatchContext
     ) -> None:
-        if isinstance(event, ChatInteractionEvent):
-            await self._handle_normalized_interaction(event, context)
-            return
         if isinstance(event, ChatMessageEvent):
             await self._run_with_typing_indicator(
                 channel_id=context.chat_id,
@@ -1272,11 +1559,6 @@ class DiscordBotService:
             )
             return not self._queues_command_after_dispatch_ack(command_path)
         return False
-
-    async def _handle_normalized_interaction(
-        self, event: ChatInteractionEvent, context: DispatchContext
-    ) -> None:
-        await _dispatch_normalized_interaction(self, event, context)
 
     async def _handle_message_event(
         self,
@@ -3370,24 +3652,76 @@ class DiscordBotService:
         if event_type == "INTERACTION_CREATE":
             ingress_result = await self._ingress.process_raw_payload(payload)
             if not ingress_result.accepted:
+                if ingress_result.rejection_reason == "normalization_failed":
+                    interaction_id = extract_interaction_id(payload)
+                    interaction_token = extract_interaction_token(payload)
+                    if interaction_id and interaction_token:
+                        await self._respond_ephemeral(
+                            interaction_id,
+                            interaction_token,
+                            "I could not parse this interaction. Please retry the command.",
+                        )
+                elif (
+                    ingress_result.rejection_reason == "unauthorized"
+                    and ingress_result.context is not None
+                ):
+                    ctx = ingress_result.context
+                    if ctx.kind == InteractionKind.AUTOCOMPLETE:
+                        await self.respond_autocomplete(
+                            ctx.interaction_id,
+                            ctx.interaction_token,
+                            choices=[],
+                        )
+                    else:
+                        await self.respond_ephemeral(
+                            ctx.interaction_id,
+                            ctx.interaction_token,
+                            "This Discord command is not authorized for this channel/user/guild.",
+                        )
                 return
             if ingress_result.context is not None:
-                # Components, modal submits, and autocomplete have a hard
-                # initial-response deadline, so they skip the shared FIFO.
-                if ingress_result.context.kind in (
-                    InteractionKind.COMPONENT,
-                    InteractionKind.MODAL_SUBMIT,
-                    InteractionKind.AUTOCOMPLETE,
+                envelope = await self._build_runtime_interaction_envelope(
+                    ingress_result.context
+                )
+                await self._persist_runtime_interaction(
+                    envelope,
+                    payload,
+                    scheduler_state="dispatch_ready",
+                )
+                acked = await self._acknowledge_runtime_envelope(
+                    envelope,
+                    stage="dispatch",
+                )
+                if not acked and envelope.dispatch_ack_policy not in (
+                    None,
+                    "immediate",
                 ):
-                    self._command_runner.submit(
-                        ingress_result.context,
-                        payload,
+                    await self._store.mark_interaction_scheduler_state(
+                        ingress_result.context.interaction_id,
+                        scheduler_state="delivery_expired",
                     )
-                else:
-                    self._command_runner.submit_ingressed(
-                        ingress_result.context,
-                        payload,
+                    await self._respond_ephemeral(
+                        ingress_result.context.interaction_id,
+                        ingress_result.context.interaction_token,
+                        "Discord interaction did not acknowledge. Please retry.",
                     )
+                    ingress_result.context.timing = replace(
+                        ingress_result.context.timing,
+                        ack_finished_at=time.monotonic(),
+                        ingress_finished_at=time.monotonic(),
+                    )
+                    return
+                self._ingress.finalize_success(ingress_result.context)
+                self._command_runner.submit(
+                    envelope.context,
+                    payload,
+                    resource_keys=envelope.resource_keys,
+                    conversation_id=envelope.conversation_id,
+                    queue_wait_ack_policy=envelope.queue_wait_ack_policy,
+                )
+                # Let the admitted interaction task start before the next gateway
+                # interaction is processed so deferred command ordering stays stable.
+                await asyncio.sleep(0)
             return
         if event_type == "MESSAGE_CREATE":
             # Keep MESSAGE_CREATE handling off the gateway hot path. Channel/guild
@@ -3585,8 +3919,8 @@ class DiscordBotService:
         guild_id: Optional[str],
         options: dict[str, Any],
     ) -> None:
-        await handle_bind(
-            self,
+        await self._run_effectful_handler(
+            handle_bind,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -3995,8 +4329,8 @@ class DiscordBotService:
         workspace_root: Path,
         options: dict[str, Any],
     ) -> None:
-        await handle_tickets(
-            self,
+        await self._run_effectful_handler(
+            handle_tickets,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -4266,9 +4600,8 @@ class DiscordBotService:
         focused_name: Optional[str],
         focused_value: str,
     ) -> None:
-        command_path = self._normalize_discord_command_path(command_path)
-        await handle_car_command_autocomplete(
-            self,
+        await self._run_effectful_handler(
+            dispatch_autocomplete,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -4282,98 +4615,582 @@ class DiscordBotService:
     def _normalize_discord_command_path(
         command_path: tuple[str, ...],
     ) -> tuple[str, ...]:
-        if command_path[:1] == ("flow",):
-            return ("car", "flow", *command_path[1:])
-        if len(command_path) == 3 and command_path[:2] == ("car", "admin"):
-            admin_aliases = {
-                "help",
-                "debug",
-                "ids",
-                "mcp",
-                "init",
-                "repos",
-                "experimental",
-                "rollout",
-                "feedback",
-            }
-            if command_path[2] in admin_aliases:
-                return ("car", command_path[2])
-        return command_path
+        return normalize_discord_command_path(command_path)
 
-    def _prepared_interaction_policy(
+    def _interaction_session_kind(
         self,
+        kind: InteractionKind | InteractionSessionKind | str | None,
+    ) -> InteractionSessionKind:
+        if isinstance(kind, InteractionSessionKind):
+            return kind
+        if isinstance(kind, InteractionKind):
+            return InteractionSessionKind(kind.value)
+        if isinstance(kind, str):
+            try:
+                return InteractionSessionKind(kind)
+            except ValueError:
+                return InteractionSessionKind.UNKNOWN
+        return InteractionSessionKind.UNKNOWN
+
+    def _ensure_interaction_session(
+        self,
+        interaction_id: str,
         interaction_token: str,
-    ) -> Optional[str]:
-        return self._responder.prepared_interaction_policy(interaction_token)
-
-    def _remember_prepared_interaction_policy(
-        self,
         *,
+        kind: InteractionKind | InteractionSessionKind | str | None = None,
+    ) -> DiscordInteractionSession:
+        return self._responder.start_session(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            kind=self._interaction_session_kind(kind),
+        )
+
+    def _get_interaction_session(
+        self,
         interaction_token: str,
-        policy: str,
+    ) -> Optional[DiscordInteractionSession]:
+        return self._responder.get_session(interaction_token)
+
+    def interaction_has_initial_response(
+        self,
+        interaction_token: str,
+    ) -> bool:
+        session = self._get_interaction_session(interaction_token)
+        return bool(session and session.has_initial_response())
+
+    def interaction_is_deferred(
+        self,
+        interaction_token: str,
+    ) -> bool:
+        session = self._get_interaction_session(interaction_token)
+        return bool(session and session.is_deferred())
+
+    def _interaction_has_initial_response(
+        self,
+        interaction_token: str,
+    ) -> bool:
+        return self.interaction_has_initial_response(interaction_token)
+
+    def _interaction_is_deferred(
+        self,
+        interaction_token: str,
+    ) -> bool:
+        return self.interaction_is_deferred(interaction_token)
+
+    async def _load_interaction_ack_mode(self, interaction_id: str) -> Optional[str]:
+        record = await self._store.get_interaction(interaction_id)
+        if record is None:
+            return None
+        if isinstance(record.ack_mode, str) and record.ack_mode.strip():
+            return record.ack_mode
+        cursor = record.delivery_cursor_json or {}
+        if not isinstance(cursor, dict):
+            return None
+        hint = cursor.get("ack_mode_hint")
+        return hint if isinstance(hint, str) and hint.strip() else None
+
+    async def _record_interaction_ack(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        ack_mode: str,
+        original_response_message_id: Optional[str],
     ) -> None:
-        self._responder.remember_prepared_interaction_policy(
-            interaction_token=interaction_token,
-            policy=policy,
-        )
-
-    async def _prepare_command_interaction(
-        self,
-        *,
-        interaction_id: str,
-        interaction_token: str,
-        command_path: tuple[str, ...],
-        timing: str = "dispatch",
-    ) -> bool:
-        entry = command_contract_entry_for_path(command_path)
-        if entry is None or entry.discord_ack_policy in (None, "immediate"):
-            return False
-        if entry.discord_ack_timing != timing:
-            return False
-        if entry.discord_ack_policy == "defer_public":
-            return await self._defer_public(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-            )
-        if entry.discord_ack_policy == "defer_component_update":
-            return await self._defer_component_update(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-            )
-        return await self._defer_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-        )
-
-    async def _prepare_command_interaction_or_abort(
-        self,
-        *,
-        interaction_id: str,
-        interaction_token: str,
-        command_path: tuple[str, ...],
-        timing: str = "dispatch",
-    ) -> bool:
-        if self._prepared_interaction_policy(interaction_token) is not None:
-            return True
-        entry = command_contract_entry_for_path(command_path)
-        if entry is None or entry.discord_ack_policy in (None, "immediate"):
-            return True
-        if entry.discord_ack_timing != timing:
-            return True
-        prepared = await self._prepare_command_interaction(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            command_path=command_path,
-            timing=timing,
-        )
-        if prepared:
-            return True
-        await self._respond_ephemeral(
+        await self._store.mark_interaction_acknowledged(
             interaction_id,
-            interaction_token,
-            "Discord interaction did not acknowledge. Please retry.",
+            ack_mode=ack_mode,
+            original_response_message_id=original_response_message_id,
+        )
+
+    async def _record_interaction_delivery(
+        self,
+        interaction_id: str,
+        delivery_status: str,
+        delivery_error: Optional[str],
+        original_response_message_id: Optional[str],
+    ) -> None:
+        await self._store.record_interaction_delivery(
+            interaction_id,
+            delivery_status=delivery_status,
+            delivery_error=delivery_error,
+            original_response_message_id=original_response_message_id,
+        )
+
+    async def _record_interaction_delivery_cursor(
+        self,
+        interaction_id: str,
+        cursor: Optional[dict[str, Any]],
+    ) -> None:
+        scheduler_state = None
+        if isinstance(cursor, dict):
+            state = str(cursor.get("state") or "").strip()
+            if state == "pending":
+                scheduler_state = "delivery_pending"
+            elif state == "failed":
+                scheduler_state = "delivery_pending"
+            elif state == "completed":
+                record = await self._store.get_interaction(interaction_id)
+                if record is not None and record.execution_status == "completed":
+                    scheduler_state = "completed"
+        elif cursor is None:
+            record = await self._store.get_interaction(interaction_id)
+            if (
+                record is not None
+                and record.execution_status == "completed"
+                and record.scheduler_state
+                not in {"completed", "delivery_expired", "abandoned"}
+            ):
+                scheduler_state = "completed"
+        await self._store.update_interaction_delivery_cursor(
+            interaction_id,
+            delivery_cursor_json=cursor,
+            scheduler_state=scheduler_state,
+        )
+
+    async def _mark_interaction_scheduler_state(
+        self,
+        ctx: IngressContext,
+        *,
+        scheduler_state: str,
+        increment_attempt_count: bool = False,
+    ) -> None:
+        await self._store.mark_interaction_scheduler_state(
+            ctx.interaction_id,
+            scheduler_state=scheduler_state,
+            increment_attempt_count=increment_attempt_count,
+        )
+
+    async def mark_interaction_scheduler_state(
+        self,
+        ctx: IngressContext,
+        *,
+        scheduler_state: str,
+        increment_attempt_count: bool = False,
+    ) -> None:
+        await self._mark_interaction_scheduler_state(
+            ctx,
+            scheduler_state=scheduler_state,
+            increment_attempt_count=increment_attempt_count,
+        )
+
+    def _envelope_from_ledger_record(
+        self,
+        record: InteractionLedgerRecord,
+    ) -> Optional[RuntimeInteractionEnvelope]:
+        envelope_json = record.envelope_json or {}
+        if not envelope_json:
+            return None
+        raw_kind = str(envelope_json.get("kind") or record.interaction_kind).strip()
+        try:
+            kind = InteractionKind(raw_kind)
+        except ValueError:
+            return None
+        ack_mode = record.ack_mode
+        if ack_mode is None and isinstance(record.delivery_cursor_json, dict):
+            hint = record.delivery_cursor_json.get("ack_mode_hint")
+            if isinstance(hint, str) and hint.strip():
+                ack_mode = hint
+        command_spec = None
+        raw_command_spec = envelope_json.get("command_spec")
+        if isinstance(raw_command_spec, dict):
+            raw_path = raw_command_spec.get("path")
+            raw_options = raw_command_spec.get("options")
+            if isinstance(raw_path, list) and all(
+                isinstance(item, str) and item.strip() for item in raw_path
+            ):
+                command_spec = CommandSpec(
+                    path=tuple(raw_path),
+                    options=raw_options if isinstance(raw_options, dict) else {},
+                    ack_policy=(
+                        raw_command_spec.get("ack_policy")
+                        if isinstance(raw_command_spec.get("ack_policy"), str)
+                        else None
+                    ),
+                    ack_timing=cast(
+                        Any,
+                        raw_command_spec.get("ack_timing") or "dispatch",
+                    ),
+                    requires_workspace=bool(
+                        raw_command_spec.get("requires_workspace", False)
+                    ),
+                )
+        ctx = IngressContext(
+            interaction_id=record.interaction_id,
+            interaction_token=record.interaction_token,
+            channel_id=str(envelope_json.get("channel_id") or record.channel_id),
+            guild_id=(
+                envelope_json.get("guild_id")
+                if isinstance(envelope_json.get("guild_id"), str)
+                else record.guild_id
+            ),
+            user_id=(
+                envelope_json.get("user_id")
+                if isinstance(envelope_json.get("user_id"), str)
+                else record.user_id
+            ),
+            kind=kind,
+            deferred=bool(
+                ack_mode
+                in {"defer_public", "defer_ephemeral", "defer_component_update"}
+            ),
+            command_spec=command_spec,
+            custom_id=(
+                envelope_json.get("custom_id")
+                if isinstance(envelope_json.get("custom_id"), str)
+                else None
+            ),
+            values=(
+                envelope_json.get("values")
+                if isinstance(envelope_json.get("values"), list)
+                else None
+            ),
+            modal_values=(
+                envelope_json.get("modal_values")
+                if isinstance(envelope_json.get("modal_values"), dict)
+                else None
+            ),
+            focused_name=(
+                envelope_json.get("focused_name")
+                if isinstance(envelope_json.get("focused_name"), str)
+                else None
+            ),
+            focused_value=(
+                envelope_json.get("focused_value")
+                if isinstance(envelope_json.get("focused_value"), str)
+                else None
+            ),
+            message_id=(
+                envelope_json.get("message_id")
+                if isinstance(envelope_json.get("message_id"), str)
+                else None
+            ),
+            timing=IngressTiming(),
+        )
+        return RuntimeInteractionEnvelope(
+            context=ctx,
+            conversation_id=(
+                envelope_json.get("conversation_id")
+                if isinstance(envelope_json.get("conversation_id"), str)
+                else record.conversation_id
+            ),
+            resource_keys=record.resource_keys,
+            dispatch_ack_policy=(
+                envelope_json.get("dispatch_ack_policy")
+                if isinstance(envelope_json.get("dispatch_ack_policy"), str)
+                else None
+            ),
+            queue_wait_ack_policy=(
+                envelope_json.get("queue_wait_ack_policy")
+                if isinstance(envelope_json.get("queue_wait_ack_policy"), str)
+                else None
+            ),
+        )
+
+    async def _mark_interaction_recovery_terminal(
+        self,
+        record: InteractionLedgerRecord,
+        *,
+        scheduler_state: str,
+        reason: str,
+        log_level: int = logging.WARNING,
+    ) -> None:
+        await self._store.mark_interaction_scheduler_state(
+            record.interaction_id,
+            scheduler_state=scheduler_state,
+        )
+        log_event(
+            self._logger,
+            log_level,
+            "discord.interaction.recovery.abandoned",
+            interaction_id=record.interaction_id,
+            scheduler_state=scheduler_state,
+            execution_status=record.execution_status,
+            reason=reason,
+        )
+
+    async def _resume_interaction_recovery(self) -> None:
+        records = await self._store.list_recoverable_interactions()
+        for record in records:
+            envelope = self._envelope_from_ledger_record(record)
+            if envelope is None or record.payload_json is None:
+                await self._mark_interaction_recovery_terminal(
+                    record,
+                    scheduler_state="abandoned",
+                    reason="missing_runtime_envelope",
+                    log_level=logging.ERROR,
+                )
+                continue
+            cursor = record.delivery_cursor_json or {}
+            cursor_state = (
+                str(cursor.get("state") or "").strip()
+                if isinstance(cursor, dict)
+                else ""
+            )
+            cursor_operation = (
+                str(cursor.get("operation") or "").strip()
+                if isinstance(cursor, dict)
+                else ""
+            )
+            has_pending_delivery = cursor_state in {"pending", "failed"}
+            ack_mode_hint = (
+                cursor.get("ack_mode_hint")
+                if isinstance(cursor.get("ack_mode_hint"), str)
+                else None
+            )
+            if (
+                record.execution_status == "received"
+                and cursor_state == "pending"
+                and cursor_operation
+                in {"defer_ephemeral", "defer_public", "defer_component_update"}
+                and ack_mode_hint
+                in {"defer_ephemeral", "defer_public", "defer_component_update"}
+            ):
+                has_pending_delivery = False
+            if (
+                has_pending_delivery
+                and ack_mode_hint
+                and record.execution_status != "completed"
+            ):
+                has_pending_delivery = False
+            durable_ack_mode = record.ack_mode or ack_mode_hint
+            if not durable_ack_mode and not has_pending_delivery:
+                await self._mark_interaction_recovery_terminal(
+                    record,
+                    scheduler_state="delivery_expired",
+                    reason="initial_ack_not_durable",
+                )
+                continue
+            if has_pending_delivery:
+                await self._store.mark_interaction_scheduler_state(
+                    record.interaction_id,
+                    scheduler_state="delivery_replaying",
+                    increment_attempt_count=True,
+                )
+                self._command_runner.submit_recovery(
+                    envelope.context,
+                    record.payload_json,
+                    resource_keys=envelope.resource_keys,
+                    conversation_id=envelope.conversation_id,
+                    replay_mode="delivery_replay",
+                )
+                continue
+            should_replay_execution = record.execution_status in {
+                "acknowledged",
+                "running",
+            } or (
+                record.execution_status == "received"
+                and cursor_state == "pending"
+                and ack_mode_hint
+                in {"defer_ephemeral", "defer_public", "defer_component_update"}
+            )
+            if should_replay_execution:
+                await self._store.mark_interaction_scheduler_state(
+                    record.interaction_id,
+                    scheduler_state="recovery_scheduled",
+                    increment_attempt_count=True,
+                )
+                self._command_runner.submit_recovery(
+                    envelope.context,
+                    record.payload_json,
+                    resource_keys=envelope.resource_keys,
+                    conversation_id=envelope.conversation_id,
+                    replay_mode="execution_replay",
+                )
+
+    async def _begin_interaction_recovery_execution(self, ctx: IngressContext) -> bool:
+        await self._store.mark_interaction_scheduler_state(
+            ctx.interaction_id,
+            scheduler_state="executing",
+        )
+        return True
+
+    async def begin_interaction_recovery_execution(self, ctx: IngressContext) -> bool:
+        return await self._begin_interaction_recovery_execution(ctx)
+
+    async def _replay_interaction_delivery(self, ctx: IngressContext) -> None:
+        record = await self._store.get_interaction(ctx.interaction_id)
+        if record is None or not isinstance(record.delivery_cursor_json, dict):
+            await self._mark_interaction_recovery_terminal(
+                record
+                or InteractionLedgerRecord(
+                    interaction_id=ctx.interaction_id,
+                    interaction_token=ctx.interaction_token,
+                    interaction_kind=ctx.kind.value,
+                    channel_id=ctx.channel_id,
+                    guild_id=ctx.guild_id,
+                    user_id=ctx.user_id,
+                    metadata_json={},
+                ),
+                scheduler_state="abandoned",
+                reason="missing_delivery_cursor",
+                log_level=logging.ERROR,
+            )
+            return
+        replayed = await self._responder.replay_delivery_cursor(
+            interaction_id=ctx.interaction_id,
+            interaction_token=ctx.interaction_token,
+            cursor=record.delivery_cursor_json,
+        )
+        if not replayed:
+            await self._mark_interaction_recovery_terminal(
+                record,
+                scheduler_state="abandoned",
+                reason="unsupported_delivery_cursor",
+                log_level=logging.ERROR,
+            )
+
+    async def replay_interaction_delivery(self, ctx: IngressContext) -> None:
+        await self._replay_interaction_delivery(ctx)
+
+    async def _apply_discord_effect(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+        effect: DiscordEffect,
+    ) -> None:
+        await self._effect_sink.apply(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            effect=effect,
+        )
+
+    async def _apply_discord_result(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+        result: DiscordHandlerResult,
+    ) -> None:
+        await self._effect_sink.apply_result(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            result=result,
+        )
+
+    async def _run_effectful_handler(
+        self,
+        handler: Callable[..., Awaitable[object | None]],
+        interaction_id: str,
+        interaction_token: str,
+        *args: object,
+        **kwargs: object,
+    ) -> object | None:
+        if not hasattr(self, "_responder") or not hasattr(self, "_effect_sink"):
+            return await handler(
+                self,
+                *args,
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                **kwargs,
+            )
+        proxy = DiscordEffectServiceProxy(
+            self,
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
+        returned = await handler(
+            proxy,
+            *args,
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            **kwargs,
+        )
+        result = proxy.result
+        if isinstance(returned, DiscordHandlerResult):
+            result.extend(returned.effects)
+        await DiscordBotService._apply_discord_result(
+            self,
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            result=result,
+        )
+        return returned
+
+    async def _register_interaction_ingress(self, ctx: IngressContext) -> bool:
+        registration = await self._store.register_interaction(
+            interaction_id=ctx.interaction_id,
+            interaction_token=ctx.interaction_token,
+            interaction_kind=ctx.kind.value,
+            channel_id=ctx.channel_id,
+            guild_id=ctx.guild_id,
+            user_id=ctx.user_id,
+            metadata_json=self._interaction_ledger_metadata(ctx),
+        )
+        if registration.inserted:
+            return False
+        record = registration.record
+        has_pending_delivery = bool(
+            isinstance(record.delivery_cursor_json, dict)
+            and str(record.delivery_cursor_json.get("state") or "").strip()
+            in {"pending", "failed"}
+        )
+        if record.scheduler_state in {"completed", "delivery_expired", "abandoned"}:
+            return True
+        if (
+            record.execution_status in {"completed", "failed", "timeout", "cancelled"}
+            and not has_pending_delivery
+        ):
+            return True
+        log_event(
+            self._logger,
+            logging.INFO,
+            "discord.interaction.duplicate_resuming",
+            interaction_id=ctx.interaction_id,
+            scheduler_state=record.scheduler_state,
+            execution_status=record.execution_status,
         )
         return False
+
+    async def _begin_interaction_execution(self, ctx: IngressContext) -> bool:
+        return await self._store.claim_interaction_execution(ctx.interaction_id)
+
+    async def begin_interaction_execution(self, ctx: IngressContext) -> bool:
+        return await self._begin_interaction_execution(ctx)
+
+    async def _finish_interaction_execution(
+        self,
+        ctx: IngressContext,
+        *,
+        execution_status: str,
+        execution_error: Optional[str] = None,
+    ) -> None:
+        await self._store.mark_interaction_execution(
+            ctx.interaction_id,
+            execution_status=execution_status,
+            execution_error=execution_error,
+        )
+
+    async def finish_interaction_execution(
+        self,
+        ctx: IngressContext,
+        *,
+        execution_status: str,
+        execution_error: Optional[str] = None,
+    ) -> None:
+        await self._finish_interaction_execution(
+            ctx,
+            execution_status=execution_status,
+            execution_error=execution_error,
+        )
+
+    def _interaction_ledger_metadata(self, ctx: IngressContext) -> dict[str, Any]:
+        command_path = list(ctx.command_spec.path) if ctx.command_spec else None
+        command_options = ctx.command_spec.options if ctx.command_spec else None
+        return {
+            "kind": ctx.kind.value,
+            "channel_id": ctx.channel_id,
+            "guild_id": ctx.guild_id,
+            "user_id": ctx.user_id,
+            "command_path": command_path,
+            "command_options": command_options,
+            "custom_id": ctx.custom_id,
+            "values": ctx.values,
+            "modal_values": ctx.modal_values,
+            "focused_name": ctx.focused_name,
+            "focused_value": ctx.focused_value,
+            "message_id": ctx.message_id,
+        }
 
     async def _bind_with_path(
         self,
@@ -4386,8 +5203,8 @@ class DiscordBotService:
     ) -> None:
         from .workspace_commands import _bind_with_path as _impl
 
-        await _impl(
-            self,
+        await self._run_effectful_handler(
+            _impl,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -4404,8 +5221,9 @@ class DiscordBotService:
         guild_id: Optional[str] = None,
         user_id: Optional[str] = None,
     ) -> None:
-        await handle_status(
+        await DiscordBotService._run_effectful_handler(
             self,
+            handle_status,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -4429,8 +5247,8 @@ class DiscordBotService:
         guild_id: Optional[str] = None,
         user_id: Optional[str] = None,
     ) -> None:
-        await handle_debug(
-            self,
+        await self._run_effectful_handler(
+            handle_debug,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -4443,7 +5261,11 @@ class DiscordBotService:
         interaction_id: str,
         interaction_token: str,
     ) -> None:
-        await handle_help(self, interaction_id, interaction_token)
+        await self._run_effectful_handler(
+            handle_help,
+            interaction_id,
+            interaction_token,
+        )
 
     async def _handle_ids(
         self,
@@ -4454,8 +5276,8 @@ class DiscordBotService:
         guild_id: Optional[str] = None,
         user_id: Optional[str] = None,
     ) -> None:
-        await handle_ids(
-            self,
+        await self._run_effectful_handler(
+            handle_ids,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -4484,10 +5306,16 @@ class DiscordBotService:
             except (OSError, ValueError):
                 cwd = workspace_root
 
-        deferred = await self._defer_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
+        session = self._ensure_interaction_session(
+            interaction_id,
+            interaction_token,
         )
+        deferred = session.has_initial_response()
+        if not deferred:
+            deferred = await self._defer_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+            )
         git_check = ["git", "rev-parse", "--is-inside-work-tree"]
         try:
             result = await asyncio.to_thread(
@@ -4759,12 +5587,14 @@ class DiscordBotService:
         field_label: str,
         field_value: str,
     ) -> None:
-        payload = {
-            "type": 9,
-            "data": {
-                "custom_id": custom_id[:100],
-                "title": title[:45],
-                "components": [
+        await self._apply_discord_effect(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            effect=DiscordModalEffect(
+                kind=InteractionSessionKind.COMPONENT,
+                custom_id=custom_id,
+                title=title,
+                components=[
                     {
                         "type": 18,
                         "label": field_label[:45],
@@ -4778,20 +5608,8 @@ class DiscordBotService:
                         },
                     },
                 ],
-            },
-        }
-        try:
-            await self._rest.create_interaction_response(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                payload=payload,
-            )
-        except (DiscordAPIError, CircuitOpenError) as exc:
-            self._logger.error(
-                "Failed to send modal response: %s (interaction_id=%s)",
-                exc,
-                interaction_id,
-            )
+            ),
+        )
 
     async def _handle_mcp(
         self,
@@ -4930,10 +5748,16 @@ class DiscordBotService:
         *,
         channel_id: str,
     ) -> None:
-        deferred = await self._defer_public(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
+        session = self._ensure_interaction_session(
+            interaction_id,
+            interaction_token,
         )
+        deferred = session.has_initial_response()
+        if not deferred:
+            deferred = await self._defer_public(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+            )
         binding = await self._store.get_binding(channel_id=channel_id)
         if binding is None:
             text = format_discord_message(
@@ -5058,8 +5882,8 @@ class DiscordBotService:
     ) -> None:
         from .car_handlers.session_commands import handle_car_newt
 
-        await handle_car_newt(
-            self,
+        await self._run_effectful_handler(
+            handle_car_newt,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -5076,8 +5900,8 @@ class DiscordBotService:
     ) -> None:
         from .car_handlers.session_commands import handle_car_newt_hard_reset
 
-        await handle_car_newt_hard_reset(
-            self,
+        await self._run_effectful_handler(
+            handle_car_newt_hard_reset,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -5093,8 +5917,8 @@ class DiscordBotService:
     ) -> None:
         from .car_handlers.session_commands import handle_car_newt_cancel
 
-        await handle_car_newt_cancel(
-            self,
+        await self._run_effectful_handler(
+            handle_car_newt_cancel,
             interaction_id,
             interaction_token,
             expected_workspace_token=expected_workspace_token,
@@ -5110,8 +5934,8 @@ class DiscordBotService:
     ) -> None:
         from .car_handlers.session_commands import handle_car_resume
 
-        await handle_car_resume(
-            self,
+        await self._run_effectful_handler(
+            handle_car_resume,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -5129,8 +5953,8 @@ class DiscordBotService:
     ) -> None:
         from .car_handlers.system_commands import handle_car_update
 
-        await handle_car_update(
-            self,
+        await self._run_effectful_handler(
+            handle_car_update,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -5253,8 +6077,8 @@ class DiscordBotService:
     ) -> None:
         from .car_handlers.system_commands import handle_car_update_status
 
-        await handle_car_update_status(
-            self,
+        await self._run_effectful_handler(
+            handle_car_update_status,
             interaction_id=interaction_id,
             interaction_token=interaction_token,
             component_response=component_response,
@@ -5308,8 +6132,8 @@ class DiscordBotService:
     ) -> None:
         from .car_handlers.agent_commands import handle_car_agent
 
-        await handle_car_agent(
-            self,
+        await self._run_effectful_handler(
+            handle_car_agent,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -5364,8 +6188,8 @@ class DiscordBotService:
     ) -> None:
         from .car_handlers.agent_commands import handle_car_model
 
-        await handle_car_model(
-            self,
+        await self._run_effectful_handler(
+            handle_car_model,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -5656,7 +6480,11 @@ class DiscordBotService:
         *,
         channel_id: str,
     ) -> Optional[Path]:
-        deferred = self._prepared_interaction_policy(interaction_token) is not None
+        session = self._ensure_interaction_session(
+            interaction_id,
+            interaction_token,
+        )
+        deferred = session.is_deferred()
         binding = await self._store.get_binding(channel_id=channel_id)
         if binding is None:
             text = format_discord_message(
@@ -5743,8 +6571,8 @@ class DiscordBotService:
         guild_id: Optional[str] = None,
         update_message: bool = False,
     ) -> None:
-        await handle_flow_status(
-            self,
+        await self._run_effectful_handler(
+            handle_flow_status,
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
@@ -5762,8 +6590,8 @@ class DiscordBotService:
         workspace_root: Path,
         options: dict[str, Any],
     ) -> None:
-        await handle_flow_runs(
-            self,
+        await self._run_effectful_handler(
+            handle_flow_runs,
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
@@ -5780,8 +6608,8 @@ class DiscordBotService:
         channel_id: Optional[str] = None,
         guild_id: Optional[str] = None,
     ) -> None:
-        await handle_flow_issue(
-            self,
+        await self._run_effectful_handler(
+            handle_flow_issue,
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
@@ -5800,8 +6628,8 @@ class DiscordBotService:
         channel_id: Optional[str] = None,
         guild_id: Optional[str] = None,
     ) -> None:
-        await handle_flow_plan(
-            self,
+        await self._run_effectful_handler(
+            handle_flow_plan,
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
@@ -5819,8 +6647,8 @@ class DiscordBotService:
         options: dict[str, Any],
         deferred_public: Optional[bool] = None,
     ) -> None:
-        await handle_flow_start(
-            self,
+        await self._run_effectful_handler(
+            handle_flow_start,
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
@@ -5837,8 +6665,8 @@ class DiscordBotService:
         options: dict[str, Any],
         deferred_public: Optional[bool] = None,
     ) -> None:
-        await handle_flow_restart(
-            self,
+        await self._run_effectful_handler(
+            handle_flow_restart,
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
@@ -5854,8 +6682,8 @@ class DiscordBotService:
         workspace_root: Path,
         options: dict[str, Any],
     ) -> None:
-        await handle_flow_recover(
-            self,
+        await self._run_effectful_handler(
+            handle_flow_recover,
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
@@ -5872,8 +6700,8 @@ class DiscordBotService:
         channel_id: Optional[str] = None,
         guild_id: Optional[str] = None,
     ) -> None:
-        await handle_flow_resume(
-            self,
+        await self._run_effectful_handler(
+            handle_flow_resume,
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
@@ -5892,8 +6720,8 @@ class DiscordBotService:
         channel_id: Optional[str] = None,
         guild_id: Optional[str] = None,
     ) -> None:
-        await handle_flow_stop(
-            self,
+        await self._run_effectful_handler(
+            handle_flow_stop,
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
@@ -5912,8 +6740,8 @@ class DiscordBotService:
         channel_id: Optional[str] = None,
         guild_id: Optional[str] = None,
     ) -> None:
-        await handle_flow_archive(
-            self,
+        await self._run_effectful_handler(
+            handle_flow_archive,
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
@@ -5933,8 +6761,8 @@ class DiscordBotService:
         guild_id: Optional[str] = None,
         user_id: Optional[str] = None,
     ) -> None:
-        await handle_flow_reply(
-            self,
+        await self._run_effectful_handler(
+            handle_flow_reply,
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
@@ -6260,8 +7088,8 @@ class DiscordBotService:
         channel_id: str,
         guild_id: Optional[str],
     ) -> None:
-        await handle_pma_on(
-            self,
+        await self._run_effectful_handler(
+            handle_pma_on,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -6275,8 +7103,8 @@ class DiscordBotService:
         *,
         channel_id: str,
     ) -> None:
-        await handle_pma_off(
-            self,
+        await self._run_effectful_handler(
+            handle_pma_off,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -6289,12 +7117,338 @@ class DiscordBotService:
         *,
         channel_id: str,
     ) -> None:
-        await handle_pma_status(
-            self,
+        await self._run_effectful_handler(
+            handle_pma_status,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
         )
+
+    async def respond_ephemeral(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        text: str,
+    ) -> None:
+        await self._apply_discord_effect(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            effect=DiscordResponseEffect(
+                text=text,
+                ephemeral=True,
+                prefer_followup=False,
+            ),
+        )
+
+    async def defer_ephemeral(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+    ) -> bool:
+        try:
+            await self._apply_discord_effect(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                effect=DiscordDeferEffect(mode="ephemeral"),
+            )
+        except Exception:
+            return False
+        return True
+
+    async def defer_component_update(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+    ) -> bool:
+        session = self._ensure_interaction_session(
+            interaction_id,
+            interaction_token,
+            kind=InteractionSessionKind.COMPONENT,
+        )
+        if session.has_initial_response():
+            return True
+        try:
+            await self._apply_discord_effect(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                effect=DiscordDeferEffect(mode="component_update"),
+            )
+        except Exception:
+            return False
+        return True
+
+    async def send_or_respond_ephemeral(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+        deferred: bool,
+        text: str,
+    ) -> None:
+        _ = deferred
+        await self._apply_discord_effect(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            effect=DiscordResponseEffect(
+                text=text,
+                ephemeral=True,
+                prefer_followup=True,
+            ),
+        )
+
+    async def send_or_respond_ephemeral_with_components(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+        deferred: bool,
+        text: str,
+        components: list[dict[str, Any]],
+    ) -> None:
+        _ = deferred
+        await self._apply_discord_effect(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            effect=DiscordResponseEffect(
+                text=text,
+                ephemeral=True,
+                components=components,
+                prefer_followup=True,
+            ),
+        )
+
+    async def send_or_update_component_message(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+        deferred: bool,
+        text: str,
+        components: Optional[list[dict[str, Any]]] = None,
+    ) -> None:
+        await self._apply_discord_effect(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            effect=DiscordComponentResponseEffect(
+                text=truncate_for_discord(
+                    text,
+                    max_len=max(int(self._config.max_message_length), 32),
+                ),
+                deferred=deferred,
+                components=components,
+            ),
+        )
+
+    async def respond_ephemeral_with_components(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        text: str,
+        components: list[dict[str, Any]],
+    ) -> None:
+        await self._apply_discord_effect(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            effect=DiscordResponseEffect(
+                text=text,
+                ephemeral=True,
+                components=components,
+                prefer_followup=False,
+            ),
+        )
+
+    async def respond_autocomplete(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        choices: list[dict[str, str]],
+    ) -> None:
+        await self._apply_discord_effect(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            effect=DiscordAutocompleteEffect(choices=choices),
+        )
+
+    async def respond_modal(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        kind: InteractionSessionKind,
+        custom_id: str,
+        title: str,
+        components: list[dict[str, Any]],
+    ) -> None:
+        await self._apply_discord_effect(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            effect=DiscordModalEffect(
+                kind=kind,
+                custom_id=custom_id,
+                title=title,
+                components=components,
+            ),
+        )
+
+    async def update_component_message(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+        text: str,
+        components: list[dict[str, Any]],
+    ) -> None:
+        await self._apply_discord_effect(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            effect=DiscordComponentUpdateEffect(text=text, components=components),
+        )
+
+    async def edit_original_component_message(
+        self,
+        *,
+        interaction_token: str,
+        text: str,
+        components: Optional[list[dict[str, Any]]] = None,
+    ) -> bool:
+        session = self._responder.get_session(interaction_token)
+        await self._apply_discord_effect(
+            interaction_id=session.interaction_id if session is not None else "",
+            interaction_token=interaction_token,
+            effect=DiscordOriginalMessageEditEffect(text=text, components=components),
+        )
+        return True
+
+    async def send_followup_ephemeral(
+        self,
+        *,
+        interaction_token: str,
+        content: str,
+        components: Optional[list[dict[str, Any]]] = None,
+    ) -> bool:
+        session = self._responder.get_session(interaction_token)
+        await self._apply_discord_effect(
+            interaction_id=session.interaction_id if session is not None else "",
+            interaction_token=interaction_token,
+            effect=DiscordFollowupEffect(
+                content=content,
+                ephemeral=True,
+                components=components,
+            ),
+        )
+        return True
+
+    async def respond_public(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        text: str,
+    ) -> None:
+        await self._apply_discord_effect(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            effect=DiscordResponseEffect(
+                text=text,
+                ephemeral=False,
+                prefer_followup=False,
+            ),
+        )
+
+    async def defer_public(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+    ) -> bool:
+        try:
+            await self._apply_discord_effect(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                effect=DiscordDeferEffect(mode="public"),
+            )
+        except Exception:
+            return False
+        return True
+
+    async def send_or_respond_public(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+        deferred: bool,
+        text: str,
+    ) -> None:
+        _ = deferred
+        await self._apply_discord_effect(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            effect=DiscordResponseEffect(
+                text=text,
+                ephemeral=False,
+                prefer_followup=True,
+            ),
+        )
+
+    async def send_or_respond_public_with_components(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+        deferred: bool,
+        text: str,
+        components: list[dict[str, Any]],
+    ) -> None:
+        _ = deferred
+        await self._apply_discord_effect(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            effect=DiscordResponseEffect(
+                text=text,
+                ephemeral=False,
+                components=components,
+                prefer_followup=True,
+            ),
+        )
+
+    async def respond_public_with_components(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        text: str,
+        components: list[dict[str, Any]],
+    ) -> None:
+        await self._apply_discord_effect(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            effect=DiscordResponseEffect(
+                text=text,
+                ephemeral=False,
+                components=components,
+                prefer_followup=False,
+            ),
+        )
+
+    async def send_followup_public(
+        self,
+        *,
+        interaction_token: str,
+        content: str,
+        components: Optional[list[dict[str, Any]]] = None,
+    ) -> bool:
+        session = self._responder.get_session(interaction_token)
+        await self._apply_discord_effect(
+            interaction_id=session.interaction_id if session is not None else "",
+            interaction_token=interaction_token,
+            effect=DiscordFollowupEffect(
+                content=content,
+                ephemeral=False,
+                components=components,
+            ),
+        )
+        return True
 
     async def _respond_ephemeral(
         self,
@@ -6302,9 +7456,7 @@ class DiscordBotService:
         interaction_token: str,
         text: str,
     ) -> None:
-        await self._responder.respond(
-            interaction_id, interaction_token, text, ephemeral=True
-        )
+        await self.respond_ephemeral(interaction_id, interaction_token, text)
 
     async def _defer_ephemeral(
         self,
@@ -6312,10 +7464,9 @@ class DiscordBotService:
         interaction_id: str,
         interaction_token: str,
     ) -> bool:
-        return await self._responder.defer(
+        return await self.defer_ephemeral(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
-            ephemeral=True,
         )
 
     async def _defer_component_update(
@@ -6324,26 +7475,10 @@ class DiscordBotService:
         interaction_id: str,
         interaction_token: str,
     ) -> bool:
-        if self._prepared_interaction_policy(interaction_token) is not None:
-            return True
-        try:
-            await self._rest.create_interaction_response(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                payload={"type": 6},
-            )
-        except (DiscordAPIError, CircuitOpenError) as exc:
-            self._logger.warning(
-                "Failed to defer component update: %s (interaction_id=%s)",
-                exc,
-                interaction_id,
-            )
-            return False
-        self._remember_prepared_interaction_policy(
+        return await self.defer_component_update(
+            interaction_id=interaction_id,
             interaction_token=interaction_token,
-            policy="defer_component_update",
         )
-        return True
 
     async def _send_or_respond_ephemeral(
         self,
@@ -6353,12 +7488,11 @@ class DiscordBotService:
         deferred: bool,
         text: str,
     ) -> None:
-        await self._responder.send_or_respond(
+        await self.send_or_respond_ephemeral(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
             deferred=deferred,
             text=text,
-            ephemeral=True,
         )
 
     async def _send_or_respond_with_components_ephemeral(
@@ -6370,13 +7504,12 @@ class DiscordBotService:
         text: str,
         components: list[dict[str, Any]],
     ) -> None:
-        await self._responder.send_or_respond_with_components(
+        await self.send_or_respond_ephemeral_with_components(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
             deferred=deferred,
             text=text,
             components=components,
-            ephemeral=True,
         )
 
     async def _send_or_update_component_message(
@@ -6388,29 +7521,12 @@ class DiscordBotService:
         text: str,
         components: Optional[list[dict[str, Any]]] = None,
     ) -> None:
-        if deferred:
-            updated = await self._responder.edit_original_component_message(
-                interaction_token=interaction_token,
-                text=text,
-                components=components,
-            )
-            if updated:
-                return
-            max_len = max(int(self._config.max_message_length), 32)
-            sent = await self._responder.send_followup(
-                interaction_token=interaction_token,
-                content=truncate_for_discord(text, max_len=max_len),
-                components=components,
-                ephemeral=True,
-            )
-            if sent:
-                return
-            return
-        await self._update_component_message(
+        await self.send_or_update_component_message(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
+            deferred=deferred,
             text=text,
-            components=components or [],
+            components=components,
         )
 
     async def _respond_with_components(
@@ -6420,12 +7536,11 @@ class DiscordBotService:
         text: str,
         components: list[dict[str, Any]],
     ) -> None:
-        await self._responder.respond_with_components(
+        await self.respond_ephemeral_with_components(
             interaction_id,
             interaction_token,
             text,
             components,
-            ephemeral=True,
         )
 
     async def _respond_autocomplete(
@@ -6435,35 +7550,11 @@ class DiscordBotService:
         *,
         choices: list[dict[str, str]],
     ) -> None:
-        sanitized_choices: list[dict[str, str]] = []
-        for choice in choices[:DISCORD_SELECT_OPTION_MAX_OPTIONS]:
-            name = choice.get("name", "")
-            value = choice.get("value", "")
-            if not isinstance(name, str) or not isinstance(value, str):
-                continue
-            normalized_name = name.strip()
-            normalized_value = value.strip()
-            if not normalized_name or not normalized_value:
-                continue
-            sanitized_choices.append(
-                {
-                    "name": normalized_name[:100],
-                    "value": normalized_value[:100],
-                }
-            )
-
-        try:
-            await self._rest.create_interaction_response(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                payload={"type": 8, "data": {"choices": sanitized_choices}},
-            )
-        except (DiscordAPIError, CircuitOpenError) as exc:
-            self._logger.error(
-                "Failed to send autocomplete response: %s (interaction_id=%s)",
-                exc,
-                interaction_id,
-            )
+        await self.respond_autocomplete(
+            interaction_id,
+            interaction_token,
+            choices=choices,
+        )
 
     async def _update_component_message(
         self,
@@ -6473,51 +7564,12 @@ class DiscordBotService:
         text: str,
         components: list[dict[str, Any]],
     ) -> None:
-        max_len = max(int(self._config.max_message_length), 32)
-        content = truncate_for_discord(text, max_len=max_len)
-        prepared_policy = self._prepared_interaction_policy(interaction_token)
-        if prepared_policy == "defer_component_update":
-            updated = await self._responder.edit_original_component_message(
-                interaction_token=interaction_token,
-                text=content,
-                components=components,
-            )
-            if updated:
-                return
-        if prepared_policy is not None:
-            sent_followup = await self._responder.send_followup(
-                interaction_token=interaction_token,
-                content=content,
-                components=components,
-                ephemeral=True,
-            )
-            if sent_followup:
-                return
-        try:
-            await self._rest.create_interaction_response(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                payload={
-                    "type": 7,
-                    "data": {
-                        "content": content,
-                        "components": components,
-                    },
-                },
-            )
-        except DiscordAPIError as exc:
-            sent_followup = await self._responder.send_followup(
-                interaction_token=interaction_token,
-                content=content,
-                components=components,
-                ephemeral=True,
-            )
-            if not sent_followup:
-                self._logger.error(
-                    "Failed to update component message: %s (interaction_id=%s)",
-                    exc,
-                    interaction_id,
-                )
+        await self.update_component_message(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            text=text,
+            components=components,
+        )
 
     async def _edit_original_component_message(
         self,
@@ -6526,7 +7578,7 @@ class DiscordBotService:
         text: str,
         components: Optional[list[dict[str, Any]]] = None,
     ) -> bool:
-        return await self._responder.edit_original_component_message(
+        return await self.edit_original_component_message(
             interaction_token=interaction_token,
             text=text,
             components=components,
@@ -6539,11 +7591,10 @@ class DiscordBotService:
         content: str,
         components: Optional[list[dict[str, Any]]] = None,
     ) -> bool:
-        return await self._responder.send_followup(
+        return await self.send_followup_ephemeral(
             interaction_token=interaction_token,
             content=content,
             components=components,
-            ephemeral=True,
         )
 
     async def _respond_public(
@@ -6552,9 +7603,7 @@ class DiscordBotService:
         interaction_token: str,
         text: str,
     ) -> None:
-        await self._responder.respond(
-            interaction_id, interaction_token, text, ephemeral=False
-        )
+        await self.respond_public(interaction_id, interaction_token, text)
 
     async def _defer_public(
         self,
@@ -6562,10 +7611,9 @@ class DiscordBotService:
         interaction_id: str,
         interaction_token: str,
     ) -> bool:
-        return await self._responder.defer(
+        return await self.defer_public(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
-            ephemeral=False,
         )
 
     async def _send_or_respond_public(
@@ -6576,12 +7624,11 @@ class DiscordBotService:
         deferred: bool,
         text: str,
     ) -> None:
-        await self._responder.send_or_respond(
+        await self.send_or_respond_public(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
             deferred=deferred,
             text=text,
-            ephemeral=False,
         )
 
     async def _send_or_respond_with_components_public(
@@ -6593,13 +7640,12 @@ class DiscordBotService:
         text: str,
         components: list[dict[str, Any]],
     ) -> None:
-        await self._responder.send_or_respond_with_components(
+        await self.send_or_respond_public_with_components(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
             deferred=deferred,
             text=text,
             components=components,
-            ephemeral=False,
         )
 
     async def _respond_with_components_public(
@@ -6609,12 +7655,11 @@ class DiscordBotService:
         text: str,
         components: list[dict[str, Any]],
     ) -> None:
-        await self._responder.respond_with_components(
+        await self.respond_public_with_components(
             interaction_id,
             interaction_token,
             text,
             components,
-            ephemeral=False,
         )
 
     async def _send_followup_public(
@@ -6624,11 +7669,10 @@ class DiscordBotService:
         content: str,
         components: Optional[list[dict[str, Any]]] = None,
     ) -> bool:
-        return await self._responder.send_followup(
+        return await self.send_followup_public(
             interaction_token=interaction_token,
             content=content,
             components=components,
-            ephemeral=False,
         )
 
     async def _handle_component_interaction_normalized(
@@ -6672,8 +7716,8 @@ class DiscordBotService:
     ) -> None:
         from .workspace_commands import _bind_to_workspace_candidate as _impl
 
-        await _impl(
-            self,
+        await self._run_effectful_handler(
+            _impl,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -6692,8 +7736,8 @@ class DiscordBotService:
         guild_id: Optional[str],
         selected_workspace_value: str,
     ) -> None:
-        await handle_bind_selection(
-            self,
+        await self._run_effectful_handler(
+            handle_bind_selection,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -6708,8 +7752,8 @@ class DiscordBotService:
         *,
         page_token: str,
     ) -> None:
-        await handle_bind_page_component(
-            self,
+        await self._run_effectful_handler(
+            handle_bind_page_component,
             interaction_id,
             interaction_token,
             page_token=page_token,
@@ -6725,8 +7769,8 @@ class DiscordBotService:
         channel_id: Optional[str] = None,
         guild_id: Optional[str] = None,
     ) -> None:
-        await handle_flow_button(
-            self,
+        await self._run_effectful_handler(
+            handle_flow_button,
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
@@ -6744,8 +7788,8 @@ class DiscordBotService:
     ) -> None:
         from .car_handlers.session_commands import handle_car_reset
 
-        await handle_car_reset(
-            self,
+        await self._run_effectful_handler(
+            handle_car_reset,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -6762,8 +7806,8 @@ class DiscordBotService:
     ) -> None:
         from .car_handlers.review_commands import handle_car_review
 
-        await handle_car_review(
-            self,
+        await self._run_effectful_handler(
+            handle_car_review,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -6781,8 +7825,9 @@ class DiscordBotService:
     ) -> None:
         from .car_handlers.review_commands import handle_car_approvals
 
-        await handle_car_approvals(
+        await DiscordBotService._run_effectful_handler(
             self,
+            handle_car_approvals,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -6799,8 +7844,8 @@ class DiscordBotService:
     ) -> None:
         from .car_handlers.system_commands import handle_car_mention
 
-        await handle_car_mention(
-            self,
+        await self._run_effectful_handler(
+            handle_car_mention,
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
@@ -6817,8 +7862,8 @@ class DiscordBotService:
     ) -> None:
         from .car_handlers.agent_commands import handle_car_experimental
 
-        await handle_car_experimental(
-            self,
+        await self._run_effectful_handler(
+            handle_car_experimental,
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
@@ -6839,8 +7884,8 @@ class DiscordBotService:
     ) -> None:
         from .car_handlers.compact_commands import handle_car_compact
 
-        await handle_car_compact(
-            self,
+        await self._run_effectful_handler(
+            handle_car_compact,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -6855,8 +7900,8 @@ class DiscordBotService:
     ) -> None:
         from .car_handlers.agent_commands import handle_car_rollout
 
-        await handle_car_rollout(
-            self,
+        await self._run_effectful_handler(
+            handle_car_rollout,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -6871,8 +7916,8 @@ class DiscordBotService:
     ) -> None:
         from .car_handlers.system_commands import handle_car_logout
 
-        await handle_car_logout(
-            self,
+        await self._run_effectful_handler(
+            handle_car_logout,
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
@@ -6889,8 +7934,8 @@ class DiscordBotService:
     ) -> None:
         from .car_handlers.system_commands import handle_car_feedback
 
-        await handle_car_feedback(
-            self,
+        await self._run_effectful_handler(
+            handle_car_feedback,
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
@@ -6907,8 +7952,8 @@ class DiscordBotService:
     ) -> None:
         from .car_handlers.session_commands import handle_car_archive
 
-        await handle_car_archive(
-            self,
+        await self._run_effectful_handler(
+            handle_car_archive,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -6933,8 +7978,8 @@ class DiscordBotService:
     ) -> None:
         from .car_handlers.session_commands import handle_car_interrupt
 
-        await handle_car_interrupt(
-            self,
+        await self._run_effectful_handler(
+            handle_car_interrupt,
             interaction_id,
             interaction_token,
             channel_id=channel_id,

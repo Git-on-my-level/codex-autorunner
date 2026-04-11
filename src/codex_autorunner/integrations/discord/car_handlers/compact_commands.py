@@ -11,9 +11,9 @@ from ....core.pma_thread_store import PmaThreadStore
 from ....core.utils import canonicalize_path
 from ...chat.compaction import build_compact_seed_prompt
 from ..errors import DiscordAPIError
+from ..interaction_runtime import ensure_ephemeral_response_deferred
 from ..rendering import (
     chunk_discord_message,
-    truncate_for_discord,
 )
 
 COMPACT_SUMMARY_PROMPT = (
@@ -52,21 +52,6 @@ def _build_fallback_compact_summary(
     )
 
 
-async def _interaction_deferred(
-    service: Any,
-    interaction_id: str,
-    interaction_token: str,
-) -> bool:
-    if service._prepared_interaction_policy(interaction_token) is not None:
-        return True
-    return bool(
-        await service._defer_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-        )
-    )
-
-
 async def handle_car_compact(
     service: Any,
     interaction_id: str,
@@ -77,30 +62,16 @@ async def handle_car_compact(
     from ..service import log_event
 
     async def _finish_compact_interaction(text: str) -> None:
-        if deferred:
-            updated = await service._edit_original_component_message(
-                interaction_token=interaction_token,
-                text=text,
-                components=[],
-            )
-            if updated:
-                return
-            max_len = max(int(service._config.max_message_length), 32)
-            sent = await service._send_followup_ephemeral(
-                interaction_token=interaction_token,
-                content=truncate_for_discord(text, max_len=max_len),
-            )
-            if sent:
-                return
-        await service._respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            text,
+        await service.send_or_respond_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text=text,
         )
 
     binding = await service._store.get_binding(channel_id=channel_id)
     if binding is None:
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             interaction_id,
             interaction_token,
             "Channel not bound. Use /car bind first.",
@@ -121,7 +92,7 @@ async def handle_car_compact(
             workspace_root = fallback
 
     if workspace_root is None:
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             interaction_id,
             interaction_token,
             "Binding is invalid. Run /car bind first.",
@@ -146,14 +117,18 @@ async def handle_car_compact(
         else ""
     )
     if current_thread is None or lifecycle_status != "active":
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             interaction_id,
             interaction_token,
             "No active session to compact. Send a message first to start a conversation.",
         )
         return
 
-    deferred = await _interaction_deferred(service, interaction_id, interaction_token)
+    deferred = await ensure_ephemeral_response_deferred(
+        service,
+        interaction_id,
+        interaction_token,
+    )
 
     interaction_text: Optional[str] = None
     previous_thread_id = current_thread.thread_target_id

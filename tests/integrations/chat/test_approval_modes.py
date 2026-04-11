@@ -84,7 +84,15 @@ class _DiscordApprovalsStub:
         self._store = _DiscordStoreStub()
         self.responses: list[str] = []
 
-    async def _respond_ephemeral(
+    def interaction_has_initial_response(self, interaction_token: str) -> bool:
+        assert interaction_token == "token-1"
+        return False
+
+    def interaction_is_deferred(self, interaction_token: str) -> bool:
+        assert interaction_token == "token-1"
+        return False
+
+    async def respond_ephemeral(
         self,
         interaction_id: str,
         interaction_token: str,

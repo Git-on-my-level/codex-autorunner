@@ -22,31 +22,17 @@ from ..components import (
     build_agent_profile_picker,
     build_model_picker,
 )
+from ..interaction_registry import AGENT_PROFILE_SELECT_ID
+from ..interaction_runtime import ensure_ephemeral_response_deferred
 from ..rendering import format_discord_message
 
 MODEL_SEARCH_FETCH_LIMIT = 200
-AGENT_PROFILE_SELECT_ID = "agent_profile_select"
 
 _VALID_REASONING_EFFORTS = REASONING_EFFORT_VALUES
 
 
 class _AppServerUnavailableError(Exception):
     pass
-
-
-async def _interaction_deferred(
-    service: Any,
-    interaction_id: str,
-    interaction_token: str,
-) -> bool:
-    if service._prepared_interaction_policy(interaction_token) is not None:
-        return True
-    return bool(
-        await service._defer_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-        )
-    )
 
 
 def _coerce_model_picker_items(
@@ -96,7 +82,7 @@ async def handle_car_agent(
         text = format_discord_message(
             "This channel is not bound. Run `/car bind path:<...>` first."
         )
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             interaction_id,
             interaction_token,
             text,
@@ -128,7 +114,7 @@ async def handle_car_agent(
         if current_agent == "hermes":
             lines.append(f"Hermes profile: {current_profile or '(default)'}")
         lines.extend(["", "Select an agent:"])
-        await service._respond_with_components(
+        await service.respond_ephemeral_with_components(
             interaction_id,
             interaction_token,
             format_discord_message("\n".join(lines)),
@@ -144,7 +130,7 @@ async def handle_car_agent(
         desired_agent = normalize_chat_agent(agent_name, context=service) or ""
     if not desired_agent:
         available = ", ".join(service._known_agent_values())
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             interaction_id,
             interaction_token,
             f"Invalid agent '{agent_name}'. Valid options: {available}",
@@ -154,7 +140,7 @@ async def handle_car_agent(
     desired_profile = current_profile if desired_agent == "hermes" else None
     if profile_name is not None:
         if desired_agent != "hermes":
-            await service._respond_ephemeral(
+            await service.respond_ephemeral(
                 interaction_id,
                 interaction_token,
                 "Hermes profiles can only be selected when the active agent is Hermes.",
@@ -174,7 +160,7 @@ async def handle_car_agent(
                     if available_profiles
                     else ""
                 )
-                await service._respond_ephemeral(
+                await service.respond_ephemeral(
                     interaction_id,
                     interaction_token,
                     f"Unknown Hermes profile '{profile_name}'.{suffix}",
@@ -182,7 +168,7 @@ async def handle_car_agent(
                 return
 
     if desired_agent == current_agent and desired_profile == current_profile:
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             interaction_id,
             interaction_token,
             (
@@ -224,7 +210,7 @@ async def handle_car_agent(
         and profile_name is None
         and chat_hermes_profile_options(service)
     ):
-        await service._respond_with_components(
+        await service.respond_ephemeral_with_components(
             interaction_id,
             interaction_token,
             format_discord_message(
@@ -243,7 +229,7 @@ async def handle_car_agent(
         )
         return
 
-    await service._respond_ephemeral(
+    await service.respond_ephemeral(
         interaction_id,
         interaction_token,
         f"Agent set to {selection_label}. Will apply on the next turn.",
@@ -266,7 +252,7 @@ async def handle_car_model(
         text = format_discord_message(
             "This channel is not bound. Run `/car bind path:<...>` first."
         )
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             interaction_id,
             interaction_token,
             text,
@@ -282,7 +268,7 @@ async def handle_car_model(
     effort = options.get("effort")
 
     if not model_name:
-        deferred = await _interaction_deferred(
+        deferred = await ensure_ephemeral_response_deferred(
             service,
             interaction_id,
             interaction_token,
@@ -313,26 +299,20 @@ async def handle_car_model(
             *,
             components: Optional[list[dict[str, Any]]] = None,
         ) -> None:
-            if deferred:
-                sent = await service._send_followup_ephemeral(
+            if components:
+                await service.send_or_respond_ephemeral_with_components(
+                    interaction_id=interaction_id,
                     interaction_token=interaction_token,
-                    content=text,
+                    deferred=deferred,
+                    text=text,
                     components=components,
                 )
-                if sent:
-                    return
-            if components:
-                await service._respond_with_components(
-                    interaction_id,
-                    interaction_token,
-                    text,
-                    components,
-                )
                 return
-            await service._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                text,
+            await service.send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=text,
             )
 
         supports_model_listing = service._agent_supports_capability(
@@ -469,7 +449,7 @@ async def handle_car_model(
     model_name = model_name.strip()
     if model_name.lower() in ("clear", "reset"):
         await service._store.update_model_state(channel_id=channel_id, clear_model=True)
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             interaction_id, interaction_token, "Model override cleared."
         )
         return
@@ -502,7 +482,7 @@ async def handle_car_model(
             ]
             if isinstance(current_effort, str) and current_effort.strip():
                 lines.insert(2, f"Reasoning effort: {current_effort}")
-            await service._respond_with_components(
+            await service.respond_ephemeral_with_components(
                 interaction_id,
                 interaction_token,
                 format_discord_message("\n".join(lines)),
@@ -525,7 +505,7 @@ async def handle_car_model(
         model_name = resolved_model_name
 
     if current_agent == "opencode" and not _is_valid_opencode_model_name(model_name):
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             interaction_id,
             interaction_token,
             "OpenCode model must be in `provider/model` format.",
@@ -534,7 +514,7 @@ async def handle_car_model(
 
     if effort:
         if not service._agent_supports_effort(current_agent):
-            await service._respond_ephemeral(
+            await service.respond_ephemeral(
                 interaction_id,
                 interaction_token,
                 f"Reasoning effort is not supported for {service._agent_display_name(current_agent)}.",
@@ -542,7 +522,7 @@ async def handle_car_model(
             return
         effort = effort.lower().strip()
         if effort not in _VALID_REASONING_EFFORTS:
-            await service._respond_ephemeral(
+            await service.respond_ephemeral(
                 interaction_id,
                 interaction_token,
                 f"Invalid effort '{effort}'. Valid options: {', '.join(_VALID_REASONING_EFFORTS)}",
@@ -555,7 +535,7 @@ async def handle_car_model(
         reasoning_effort=effort,
     )
 
-    await service._respond_ephemeral(
+    await service.respond_ephemeral(
         interaction_id,
         interaction_token,
         format_model_set_message(model_name, effort=effort),
@@ -589,7 +569,7 @@ async def handle_car_experimental(
     )
 
     if not action or action in ("list", "ls", "all"):
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             interaction_id,
             interaction_token,
             "Experimental features listing requires the app server client.\n\n"
@@ -599,13 +579,13 @@ async def handle_car_experimental(
 
     if action in ("enable", "on", "true"):
         if not feature:
-            await service._respond_ephemeral(
+            await service.respond_ephemeral(
                 interaction_id,
                 interaction_token,
                 f"Missing feature for `enable`.\n\n{usage_text}",
             )
             return
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             interaction_id,
             interaction_token,
             f"Feature `{feature}` enable requested.\n\n"
@@ -615,13 +595,13 @@ async def handle_car_experimental(
 
     if action in ("disable", "off", "false"):
         if not feature:
-            await service._respond_ephemeral(
+            await service.respond_ephemeral(
                 interaction_id,
                 interaction_token,
                 f"Missing feature for `disable`.\n\n{usage_text}",
             )
             return
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             interaction_id,
             interaction_token,
             f"Feature `{feature}` disable requested.\n\n"
@@ -629,7 +609,7 @@ async def handle_car_experimental(
         )
         return
 
-    await service._respond_ephemeral(
+    await service.respond_ephemeral(
         interaction_id,
         interaction_token,
         f"Unknown action: {action}.\n\nValid actions: list, enable, disable.\n\n{usage_text}",
@@ -645,7 +625,7 @@ async def handle_car_rollout(
 ) -> None:
     binding = await service._store.get_binding(channel_id=channel_id)
     if binding is None:
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             interaction_id,
             interaction_token,
             "Channel not bound. Use /car bind first.",
@@ -656,13 +636,13 @@ async def handle_car_rollout(
     workspace_path = binding.get("workspace_path", "unknown")
 
     if rollout_path:
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             interaction_id,
             interaction_token,
             f"Rollout path: {rollout_path}\nWorkspace: {workspace_path}",
         )
     else:
-        await service._respond_ephemeral(
+        await service.respond_ephemeral(
             interaction_id,
             interaction_token,
             f"No rollout path available.\nWorkspace: {workspace_path}\n\n"

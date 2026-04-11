@@ -4,7 +4,6 @@ from typing import Any
 
 from codex_autorunner.integrations.chat.command_contract import (
     COMMAND_CONTRACT,
-    command_contract_entry_for_path,
     telegram_command_metadata_for_name,
     telegram_runtime_command_names_from_contract,
 )
@@ -69,6 +68,13 @@ def _telegram_registered_commands() -> set[str]:
     return {entry["command"] for entry in commands}
 
 
+def _contract_entry_for_path(path: tuple[str, ...]) -> Any:
+    for entry in COMMAND_CONTRACT:
+        if entry.path == path or path in entry.discord_paths:
+            return entry
+    return None
+
+
 def test_command_contract_has_unique_ids_and_paths() -> None:
     ids = [entry.id for entry in COMMAND_CONTRACT]
     paths = [entry.path for entry in COMMAND_CONTRACT]
@@ -91,7 +97,7 @@ def test_command_contract_discord_paths_are_unique() -> None:
 
 def test_command_contract_entry_resolves_discord_path_aliases() -> None:
     """Discord ``/car session resume`` uses a longer path than logical ``car.resume``."""
-    entry = command_contract_entry_for_path(("car", "session", "resume"))
+    entry = _contract_entry_for_path(("car", "session", "resume"))
     assert entry is not None
     assert entry.id == "car.resume"
     assert entry.discord_ack_policy == "defer_ephemeral"
@@ -105,7 +111,7 @@ def test_command_contract_discord_registered_paths_resolve_for_dispatch() -> Non
     """
     for raw_path in _discord_registered_paths():
         normalized = DiscordBotService._normalize_discord_command_path(raw_path)
-        assert command_contract_entry_for_path(normalized) is not None, (
+        assert _contract_entry_for_path(normalized) is not None, (
             f"no COMMAND_CONTRACT entry for Discord path {raw_path!r} "
             f"(normalized {normalized!r})"
         )

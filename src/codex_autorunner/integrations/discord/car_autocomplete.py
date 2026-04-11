@@ -5,7 +5,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Optional
 
-from ...core.flows import FLOW_ACTIONS_WITH_RUN_PICKER, FlowRunStatus
+from ...core.flows import FlowRunStatus
 from ...core.utils import canonicalize_path
 from ...integrations.chat.picker_filter import filter_picker_items
 from .components import DISCORD_SELECT_OPTION_MAX_OPTIONS
@@ -301,63 +301,3 @@ async def build_flow_run_autocomplete_choices(
         status = status_by_run_id.get(run_id, "")
         choices.append({"name": f"{run_id} [{status}]"[:100], "value": run_id[:100]})
     return choices
-
-
-async def handle_command_autocomplete(
-    service: Any,
-    interaction_id: str,
-    interaction_token: str,
-    *,
-    channel_id: str,
-    command_path: tuple[str, ...],
-    options: dict[str, Any],
-    focused_name: Optional[str],
-    focused_value: str,
-) -> None:
-    _ = options
-    if command_path[:1] == ("flow",):
-        command_path = ("car", "flow", *command_path[1:])
-    choices: list[dict[str, str]] = []
-    if command_path == ("car", "bind") and focused_name == "workspace":
-        choices = build_bind_autocomplete_choices(service, focused_value)
-    elif command_path == ("car", "model") and focused_name == "name":
-        choices = await build_model_autocomplete_choices(
-            service,
-            channel_id=channel_id,
-            query=focused_value,
-        )
-    elif command_path == ("car", "skills") and focused_name == "search":
-        choices = await build_skills_autocomplete_choices(
-            service,
-            channel_id=channel_id,
-            query=focused_value,
-        )
-    elif command_path == ("car", "tickets") and focused_name == "search":
-        choices = await build_ticket_autocomplete_choices(
-            service,
-            channel_id=channel_id,
-            query=focused_value,
-        )
-    elif command_path == ("car", "session", "resume") and focused_name == "thread_id":
-        choices = await build_session_resume_autocomplete_choices(
-            service,
-            channel_id=channel_id,
-            query=focused_value,
-        )
-    elif (
-        len(command_path) == 3
-        and command_path[:2] == ("car", "flow")
-        and command_path[2] in FLOW_ACTIONS_WITH_RUN_PICKER
-        and focused_name == "run_id"
-    ):
-        choices = await build_flow_run_autocomplete_choices(
-            service,
-            channel_id=channel_id,
-            action=command_path[2],
-            query=focused_value,
-        )
-    await service._respond_autocomplete(
-        interaction_id,
-        interaction_token,
-        choices=choices,
-    )

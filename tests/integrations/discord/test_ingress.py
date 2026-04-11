@@ -49,18 +49,14 @@ class _FakeService:
         self,
         *,
         command_allowed: bool = True,
-        prepared_policy: Optional[str] = None,
-        ack_succeeds: bool = True,
     ) -> None:
         self._command_allowed = command_allowed
-        self._prepared_policy = prepared_policy
-        self._ack_succeeds = ack_succeeds
         self._logger = logging.getLogger("test.ingress")
         self.respond_ephemeral_calls: list[dict[str, Any]] = []
         self.respond_autocomplete_calls: list[dict[str, Any]] = []
-        self.prepare_command_calls: list[dict[str, Any]] = []
         self.log_collaboration_calls: list[dict[str, Any]] = []
         self.normalize_path_calls: list[tuple[str, ...]] = []
+        self.sessions: dict[str, _FakeSession] = {}
 
     def _evaluate_interaction_collaboration_policy(
         self,
@@ -102,26 +98,21 @@ class _FakeService:
             }
         )
 
-    def _prepared_interaction_policy(self, token: str) -> Optional[str]:
-        return self._prepared_policy
-
-    async def _prepare_command_interaction(
+    def _ensure_interaction_session(
         self,
-        *,
         interaction_id: str,
         interaction_token: str,
-        command_path: tuple[str, ...],
-        timing: str,
-    ) -> bool:
-        self.prepare_command_calls.append(
-            {
-                "interaction_id": interaction_id,
-                "interaction_token": interaction_token,
-                "command_path": command_path,
-                "timing": timing,
-            }
-        )
-        return self._ack_succeeds
+        *,
+        kind: Any = None,
+    ) -> "_FakeSession":
+        session = self.sessions.get(interaction_token)
+        if session is None:
+            session = _FakeSession(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+            )
+            self.sessions[interaction_token] = session
+        return session
 
     @staticmethod
     def _normalize_discord_command_path(
@@ -159,6 +150,23 @@ def _slash_command_payload(
             ],
         },
     }
+
+
+class _FakeSession:
+    def __init__(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+    ) -> None:
+        self.interaction_id = interaction_id
+        self.interaction_token = interaction_token
+
+    def has_initial_response(self) -> bool:
+        return False
+
+    def is_deferred(self) -> bool:
+        return False
 
 
 def _component_payload(
@@ -334,7 +342,7 @@ async def test_normalization_returns_none_for_missing_ids() -> None:
 
 
 @pytest.mark.anyio
-async def test_authz_rejection_sends_ephemeral() -> None:
+async def test_authz_rejection_does_not_send_from_ingress() -> None:
     service = _FakeService(command_allowed=False)
     ingress = InteractionIngress(service, logger=service._logger)
     payload = _slash_command_payload()
@@ -343,14 +351,11 @@ async def test_authz_rejection_sends_ephemeral() -> None:
     assert result.accepted is False
     assert result.rejection_reason == "unauthorized"
     assert result.context is not None
-    assert len(service.respond_ephemeral_calls) == 1
-    call = service.respond_ephemeral_calls[0]
-    assert call["interaction_id"] == "inter-1"
-    assert "not authorized" in call["text"]
+    assert service.respond_ephemeral_calls == []
 
 
 @pytest.mark.anyio
-async def test_authz_rejection_autocomplete_sends_empty_choices() -> None:
+async def test_authz_rejection_autocomplete_does_not_send_from_ingress() -> None:
     service = _FakeService(command_allowed=False)
     ingress = InteractionIngress(service, logger=service._logger)
     payload = _autocomplete_payload()
@@ -358,13 +363,12 @@ async def test_authz_rejection_autocomplete_sends_empty_choices() -> None:
 
     assert result.accepted is False
     assert result.rejection_reason == "unauthorized"
-    assert len(service.respond_autocomplete_calls) == 1
-    assert service.respond_autocomplete_calls[0]["choices"] == []
+    assert service.respond_autocomplete_calls == []
     assert len(service.respond_ephemeral_calls) == 0
 
 
 @pytest.mark.anyio
-async def test_authz_rejection_component_sends_ephemeral() -> None:
+async def test_authz_rejection_component_does_not_send_from_ingress() -> None:
     service = _FakeService(command_allowed=False)
     ingress = InteractionIngress(service, logger=service._logger)
     payload = _component_payload()
@@ -372,7 +376,7 @@ async def test_authz_rejection_component_sends_ephemeral() -> None:
 
     assert result.accepted is False
     assert result.rejection_reason == "unauthorized"
-    assert len(service.respond_ephemeral_calls) == 1
+    assert service.respond_ephemeral_calls == []
 
 
 @pytest.mark.anyio
@@ -437,7 +441,7 @@ async def test_command_spec_none_for_unknown_command() -> None:
 
 
 @pytest.mark.anyio
-async def test_ack_performed_for_deferred_command() -> None:
+async def test_runtime_ack_is_not_performed_inside_ingress() -> None:
     service = _FakeService()
     ingress = InteractionIngress(service, logger=service._logger)
     payload = _slash_command_payload(command_name="car", subcommand_name="status")
@@ -445,11 +449,8 @@ async def test_ack_performed_for_deferred_command() -> None:
 
     assert result.accepted is True
     assert result.context is not None
-    assert result.context.deferred is True
-    assert len(service.prepare_command_calls) == 1
-    call = service.prepare_command_calls[0]
-    assert call["command_path"] == ("car", "status")
-    assert call["timing"] == "dispatch"
+    assert result.context.deferred is False
+    assert service.respond_ephemeral_calls == []
 
 
 @pytest.mark.anyio
@@ -475,11 +476,9 @@ async def test_flow_commands_ack_on_dispatch(
 
     assert result.accepted is True
     assert result.context is not None
-    assert result.context.deferred is True
-    assert len(service.prepare_command_calls) == 1
-    call = service.prepare_command_calls[0]
-    assert call["command_path"] == expected_path
-    assert call["timing"] == "dispatch"
+    assert result.context.deferred is False
+    assert result.context.command_spec is not None
+    assert result.context.command_spec.path == expected_path
 
 
 @pytest.mark.anyio
@@ -492,33 +491,37 @@ async def test_ack_skipped_for_immediate_command() -> None:
     assert result.accepted is True
     assert result.context is not None
     assert result.context.deferred is False
-    assert len(service.prepare_command_calls) == 0
 
 
 @pytest.mark.anyio
-async def test_ack_skipped_when_already_prepared() -> None:
-    service = _FakeService(prepared_policy="defer_ephemeral")
+async def test_existing_session_does_not_change_deferred_state_at_ingress() -> None:
+    service = _FakeService()
+    session = service._ensure_interaction_session(
+        "inter-1",
+        "token-1",
+        kind=InteractionKind.SLASH_COMMAND,
+    )
+    session.has_initial_response = lambda: True  # type: ignore[method-assign]
+    session.is_deferred = lambda: True  # type: ignore[method-assign]
     ingress = InteractionIngress(service, logger=service._logger)
     payload = _slash_command_payload(command_name="car", subcommand_name="status")
     result = await ingress.process_raw_payload(payload)
 
     assert result.accepted is True
     assert result.context is not None
-    assert result.context.deferred is True
-    assert len(service.prepare_command_calls) == 0
+    assert result.context.deferred is False
 
 
 @pytest.mark.anyio
-async def test_ack_failure_sends_retry_message() -> None:
-    service = _FakeService(ack_succeeds=False)
+async def test_ack_failure_is_not_observable_from_ingress() -> None:
+    service = _FakeService()
     ingress = InteractionIngress(service, logger=service._logger)
     payload = _slash_command_payload(command_name="car", subcommand_name="status")
     result = await ingress.process_raw_payload(payload)
 
-    assert result.accepted is False
-    assert result.rejection_reason == "ack_failed"
-    assert len(service.respond_ephemeral_calls) == 1
-    assert "retry" in service.respond_ephemeral_calls[0]["text"].lower()
+    assert result.accepted is True
+    assert result.rejection_reason is None
+    assert service.respond_ephemeral_calls == []
 
 
 @pytest.mark.anyio
@@ -531,7 +534,6 @@ async def test_no_ack_for_component() -> None:
     assert result.accepted is True
     assert result.context is not None
     assert result.context.deferred is False
-    assert len(service.prepare_command_calls) == 0
 
 
 @pytest.mark.anyio
@@ -544,7 +546,6 @@ async def test_no_ack_for_modal() -> None:
     assert result.accepted is True
     assert result.context is not None
     assert result.context.deferred is False
-    assert len(service.prepare_command_calls) == 0
 
 
 @pytest.mark.anyio
@@ -557,11 +558,10 @@ async def test_no_ack_for_autocomplete() -> None:
     assert result.accepted is True
     assert result.context is not None
     assert result.context.deferred is False
-    assert len(service.prepare_command_calls) == 0
 
 
 @pytest.mark.anyio
-async def test_timing_recorded_on_success() -> None:
+async def test_timing_inputs_recorded_before_runtime_admission_finishes() -> None:
     service = _FakeService()
     ingress = InteractionIngress(service, logger=service._logger)
     payload = _slash_command_payload()
@@ -572,9 +572,25 @@ async def test_timing_recorded_on_success() -> None:
     t = result.context.timing
     assert t.ingress_started_at is not None
     assert t.authz_finished_at is not None
+    assert t.ack_finished_at is None
+    assert t.ingress_finished_at is None
+    assert t.ingress_started_at <= t.authz_finished_at
+
+
+@pytest.mark.anyio
+async def test_finalize_success_records_runtime_completion_timing() -> None:
+    service = _FakeService()
+    ingress = InteractionIngress(service, logger=service._logger)
+    payload = _slash_command_payload()
+    result = await ingress.process_raw_payload(payload)
+
+    assert result.context is not None
+    ingress.finalize_success(result.context)
+
+    t = result.context.timing
     assert t.ack_finished_at is not None
     assert t.ingress_finished_at is not None
-    assert t.ingress_started_at <= t.authz_finished_at
+    assert t.authz_finished_at is not None
     assert t.authz_finished_at <= t.ack_finished_at
     assert t.ack_finished_at <= t.ingress_finished_at
 

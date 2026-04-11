@@ -52,6 +52,10 @@ from codex_autorunner.integrations.discord.errors import (
     DiscordAPIError,
     DiscordPermanentError,
 )
+from codex_autorunner.integrations.discord.interaction_session import (
+    InteractionInitialResponse,
+    InteractionSessionKind,
+)
 from codex_autorunner.integrations.discord.service import (
     DiscordBotService,
     DiscordMessageTurnResult,
@@ -1378,11 +1382,16 @@ def test_discord_thread_matches_agent_rejects_unknown_thread_agent_id(
 
 
 def _interaction(
-    *, name: str, options: list[dict[str, Any]], user_id: str = "user-1"
+    *,
+    name: str,
+    options: list[dict[str, Any]],
+    user_id: str = "user-1",
+    interaction_id: str = "inter-1",
+    interaction_token: str = "token-1",
 ) -> dict[str, Any]:
     return {
-        "id": "inter-1",
-        "token": "token-1",
+        "id": interaction_id,
+        "token": interaction_token,
         "channel_id": "channel-1",
         "guild_id": "guild-1",
         "member": {"user": {"id": user_id}},
@@ -1627,6 +1636,14 @@ def _normalized_component_event(
     )
 
 
+async def _dispatch_gateway_interaction(
+    service: DiscordBotService,
+    payload: dict[str, Any],
+) -> None:
+    await service._on_dispatch("INTERACTION_CREATE", payload)
+    await asyncio.wait_for(service._command_runner.shutdown(), timeout=1.0)
+
+
 def test_model_picker_items_are_deduplicated_and_labeled() -> None:
     payload = {
         "models": [
@@ -1801,6 +1818,43 @@ async def test_service_enforces_allowlist_and_denies_command(tmp_path: Path) -> 
 
 @pytest.mark.slow
 @pytest.mark.anyio
+async def test_service_enforces_allowlist_and_denies_autocomplete_with_empty_choices(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service._on_dispatch(
+            "INTERACTION_CREATE",
+            _autocomplete_interaction_path(
+                command_path=("car", "bind"),
+                focused_name="workspace",
+                focused_value="codex",
+                user_id="unauthorized",
+            ),
+        )
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"] == {
+            "type": 8,
+            "data": {"choices": []},
+        }
+    finally:
+        await service._shutdown()
+        await store.close()
+
+
+@pytest.mark.slow
+@pytest.mark.anyio
 async def test_service_bind_then_status_updates_and_reads_store(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -1814,7 +1868,12 @@ async def test_service_bind_then_status_updates_and_reads_store(tmp_path: Path) 
                 name="bind",
                 options=[{"type": 3, "name": "workspace", "value": str(workspace)}],
             ),
-            _interaction(name="status", options=[]),
+            _interaction(
+                name="status",
+                options=[],
+                interaction_id="inter-2",
+                interaction_token="token-2",
+            ),
         ]
     )
     service = DiscordBotService(
@@ -1863,7 +1922,12 @@ async def test_service_status_reports_effective_collaboration_policy(
                 name="bind",
                 options=[{"type": 3, "name": "workspace", "value": str(workspace)}],
             ),
-            _interaction(name="status", options=[]),
+            _interaction(
+                name="status",
+                options=[],
+                interaction_id="inter-2",
+                interaction_token="token-2",
+            ),
         ]
     )
     policy = build_discord_collaboration_policy(
@@ -3270,7 +3334,7 @@ async def test_queued_notice_keeps_interrupt_when_message_turn_active(
             guild_id="guild-1",
         )
 
-        service._command_runner.describe_ingressed_busy = (  # type: ignore[method-assign]
+        service._command_runner.describe_busy = (  # type: ignore[method-assign]
             lambda _conversation_id: "/car newt"
         )
 
@@ -3312,7 +3376,7 @@ async def test_queued_notice_hides_interrupt_when_only_ingressed_busy(
             guild_id="guild-1",
         )
 
-        service._command_runner.describe_ingressed_busy = (  # type: ignore[method-assign]
+        service._command_runner.describe_busy = (  # type: ignore[method-assign]
             lambda _conversation_id: "/car newt"
         )
 
@@ -4053,10 +4117,10 @@ async def test_car_session_resume_with_partial_thread_prompts_filtered_picker(
     try:
         await service.run_forever()
         assert rest.interaction_responses[0]["payload"]["type"] == 5
-        assert len(rest.followup_messages) == 2
+        assert len(rest.followup_messages) == 1
         content = rest.followup_messages[0]["payload"]["content"].lower()
         assert "matched 1 threads" in content
-        select = rest.followup_messages[1]["payload"]["components"][0]["components"][0]
+        select = rest.followup_messages[0]["payload"]["components"][0]["components"][0]
         values = [option["value"] for option in select["options"]]
         assert values == ["thread-def"]
     finally:
@@ -4469,9 +4533,10 @@ async def test_normalized_interaction_routes_car_agent_without_generic_fallback(
     )
 
     try:
-        event = _normalized_interaction_event(command="car:agent")
-        context = build_dispatch_context(event)
-        await service._handle_normalized_interaction(event, context)
+        await _dispatch_gateway_interaction(
+            service,
+            _interaction(name="agent", options=[]),
+        )
         assert len(rest.interaction_responses) == 1
         content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
         assert "not bound" in content
@@ -4519,9 +4584,10 @@ async def test_normalized_interaction_status_defers_before_reading_active_flow(
     service._read_status_rate_limits = _fake_read_status_rate_limits  # type: ignore[assignment]
 
     try:
-        event = _normalized_interaction_event(command="car:status")
-        context = build_dispatch_context(event)
-        await service._handle_normalized_interaction(event, context)
+        await _dispatch_gateway_interaction(
+            service,
+            _interaction(name="status", options=[]),
+        )
         assert len(rest.followup_messages) == 1
     finally:
         await store.close()
@@ -4620,12 +4686,13 @@ async def test_normalized_component_agent_select_updates_agent(tmp_path: Path) -
     )
 
     try:
-        event = _normalized_component_event(
-            component_id="agent_select",
-            values=["opencode"],
+        await _dispatch_gateway_interaction(
+            service,
+            _component_interaction(
+                custom_id="agent_select",
+                values=["opencode"],
+            ),
         )
-        context = build_dispatch_context(event)
-        await service._handle_normalized_interaction(event, context)
         binding = await store.get_binding(channel_id="channel-1")
         assert binding is not None
         assert binding.get("agent") == "opencode"
@@ -4668,12 +4735,13 @@ async def test_normalized_component_agent_select_prompts_for_hermes_profile(
     )
 
     try:
-        event = _normalized_component_event(
-            component_id="agent_select",
-            values=["hermes"],
+        await _dispatch_gateway_interaction(
+            service,
+            _component_interaction(
+                custom_id="agent_select",
+                values=["hermes"],
+            ),
         )
-        context = build_dispatch_context(event)
-        await service._handle_normalized_interaction(event, context)
         binding = await store.get_binding(channel_id="channel-1")
         assert binding is not None
         assert binding.get("agent") == "hermes"
@@ -4766,12 +4834,13 @@ async def test_normalized_component_model_select_prompts_effort_for_opencode(
     )
 
     try:
-        event = _normalized_component_event(
-            component_id="model_select",
-            values=["openai/gpt-4o"],
+        await _dispatch_gateway_interaction(
+            service,
+            _component_interaction(
+                custom_id="model_select",
+                values=["openai/gpt-4o"],
+            ),
         )
-        context = build_dispatch_context(event)
-        await service._handle_normalized_interaction(event, context)
         binding = await store.get_binding(channel_id="channel-1")
         assert binding is not None
         assert binding.get("model_override") is None
@@ -4839,13 +4908,14 @@ async def test_normalized_interaction_session_resume_without_thread_uses_picker(
     service._list_discord_thread_targets_for_picker = _fake_list_threads  # type: ignore[assignment]
 
     try:
-        event = _normalized_interaction_event(command="car:session:resume")
-        context = build_dispatch_context(event)
-        await service._handle_normalized_interaction(event, context)
+        await _dispatch_gateway_interaction(
+            service,
+            _interaction_path(command_path=("car", "session", "resume"), options=[]),
+        )
         assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 5
-        assert len(rest.followup_messages) == 2
-        picker_payload = rest.followup_messages[1]["payload"]
+        assert len(rest.followup_messages) == 1
+        picker_payload = rest.followup_messages[0]["payload"]
         components = picker_payload.get("components") or []
         assert components
         menu = components[0]["components"][0]
@@ -4938,9 +5008,10 @@ async def test_normalized_interaction_flow_restart_without_run_id_uses_picker(
     _fc.prompt_flow_action_picker = _fake_prompt  # type: ignore[assignment]
 
     try:
-        event = _normalized_interaction_event(command="car:flow:restart")
-        context = build_dispatch_context(event)
-        await service._handle_normalized_interaction(event, context)
+        await _dispatch_gateway_interaction(
+            service,
+            _interaction_path(command_path=("car", "flow", "restart"), options=[]),
+        )
         assert captured["action"] == "restart"
     finally:
         await store.close()
@@ -4988,12 +5059,13 @@ async def test_normalized_interaction_flow_reply_without_run_id_sets_pending_tex
     _fc.prompt_flow_action_picker = _fake_prompt  # type: ignore[assignment]
 
     try:
-        event = _normalized_interaction_event(
-            command="car:flow:reply",
-            options={"text": "reply via picker"},
+        await _dispatch_gateway_interaction(
+            service,
+            _interaction_path(
+                command_path=("car", "flow", "reply"),
+                options=[{"type": 3, "name": "text", "value": "reply via picker"}],
+            ),
         )
-        context = build_dispatch_context(event)
-        await service._handle_normalized_interaction(event, context)
         assert (
             service._pending_flow_reply_text["channel-1:user-1"] == "reply via picker"
         )
@@ -5334,10 +5406,12 @@ async def test_car_reset_uses_prepared_interaction_state(
         outbox_manager=_FakeOutboxManager(),
     )
 
-    service._remember_prepared_interaction_policy(
-        interaction_token="token-1",
-        policy="defer_ephemeral",
+    session = service._ensure_interaction_session(
+        "inter-1",
+        "token-1",
+        kind=InteractionSessionKind.SLASH_COMMAND,
     )
+    session.initial_response = InteractionInitialResponse.DEFER_EPHEMERAL
 
     async def _unexpected_defer(*_args: Any, **_kwargs: Any) -> bool:
         raise AssertionError("handler should use ingress-prepared interaction state")
@@ -5378,10 +5452,12 @@ async def test_car_update_status_uses_prepared_interaction_state(
         outbox_manager=_FakeOutboxManager(),
     )
 
-    service._remember_prepared_interaction_policy(
-        interaction_token="token-1",
-        policy="defer_ephemeral",
+    session = service._ensure_interaction_session(
+        "inter-1",
+        "token-1",
+        kind=InteractionSessionKind.SLASH_COMMAND,
     )
+    session.initial_response = InteractionInitialResponse.DEFER_EPHEMERAL
 
     async def _unexpected_defer(*_args: Any, **_kwargs: Any) -> bool:
         raise AssertionError("handler should use ingress-prepared interaction state")
@@ -5498,12 +5574,10 @@ async def test_car_update_without_target_aborts_when_required_preflight_fails(
         outbox_manager=_FakeOutboxManager(),
     )
 
-    async def _skip_prepare_command_interaction(**_kwargs: Any) -> bool:
+    async def _skip_dispatch_ack(**_kwargs: Any) -> bool:
         return False
 
-    service._prepare_command_interaction = (  # type: ignore[assignment]
-        _skip_prepare_command_interaction
-    )
+    service._defer_ephemeral = _skip_dispatch_ack  # type: ignore[assignment]
 
     try:
         await service.run_forever()
@@ -5972,9 +6046,10 @@ async def test_normalized_component_empty_values_returns_error(
     )
 
     try:
-        event = _normalized_component_event(component_id=component_id, values=[])
-        context = build_dispatch_context(event)
-        await service._handle_normalized_interaction(event, context)
+        await _dispatch_gateway_interaction(
+            service,
+            _component_interaction(custom_id=component_id, values=[]),
+        )
         assert len(rest.interaction_responses) == 1
         content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
         assert expected in content
@@ -6038,9 +6113,10 @@ async def test_normalized_flow_refresh_component_defers_before_workspace_lookup(
     service._handle_flow_button = _fake_handle_flow_button  # type: ignore[assignment]
 
     try:
-        event = _normalized_component_event(component_id="flow:run-1:refresh")
-        context = build_dispatch_context(event)
-        await service._handle_normalized_interaction(event, context)
+        await _dispatch_gateway_interaction(
+            service,
+            _component_interaction(custom_id="flow:run-1:refresh"),
+        )
         assert captured["button_args"]["custom_id"] == "flow:run-1:refresh"
         assert captured["button_args"]["workspace_root"] == workspace
     finally:
@@ -6064,9 +6140,10 @@ async def test_normalized_flow_refresh_component_binding_error_uses_followup(
     )
 
     try:
-        event = _normalized_component_event(component_id="flow:run-1:refresh")
-        context = build_dispatch_context(event)
-        await service._handle_normalized_interaction(event, context)
+        await _dispatch_gateway_interaction(
+            service,
+            _component_interaction(custom_id="flow:run-1:refresh"),
+        )
 
         assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 6
@@ -6181,21 +6258,43 @@ async def test_on_dispatch_backgrounds_interaction_handling(
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
-    ("payload", "expected_direct"),
+    (
+        "payload",
+        "expected_dispatch_ack_policy",
+        "expected_conversation",
+        "expected_resource_keys",
+        "expected_queue_wait_ack_policy",
+    ),
     [
         (
             _interaction_path(
                 command_path=("car", "session", "compact"),
                 options=[],
             ),
-            False,
+            None,
+            "discord:channel-1:guild-1",
+            ("conversation:discord:channel-1:guild-1",),
+            None,
         ),
         (
             _component_interaction(
                 custom_id="approval:abc:approve",
                 values=None,
             ),
-            True,
+            None,
+            "discord:channel-1:guild-1",
+            ("conversation:discord:channel-1:guild-1",),
+            "defer_component_update",
+        ),
+        (
+            _component_interaction(
+                custom_id="flow:run-1:restart",
+                values=None,
+            ),
+            "defer_component_update",
+            "discord:channel-1:guild-1",
+            ("conversation:discord:channel-1:guild-1",),
+            "defer_component_update",
         ),
         (
             {
@@ -6220,7 +6319,10 @@ async def test_on_dispatch_backgrounds_interaction_handling(
                     ],
                 },
             },
-            True,
+            None,
+            "discord:channel-1:guild-1",
+            ("conversation:discord:channel-1:guild-1",),
+            "defer_ephemeral",
         ),
         (
             _autocomplete_interaction_path(
@@ -6228,14 +6330,20 @@ async def test_on_dispatch_backgrounds_interaction_handling(
                 focused_name="workspace",
                 focused_value="codex",
             ),
-            True,
+            None,
+            None,
+            (),
+            None,
         ),
     ],
 )
-async def test_on_dispatch_routes_deadline_bound_interactions_directly(
+async def test_on_dispatch_routes_interactions_through_scheduler(
     tmp_path: Path,
     payload: dict[str, Any],
-    expected_direct: bool,
+    expected_dispatch_ack_policy: str | None,
+    expected_conversation: str | None,
+    expected_resource_keys: tuple[str, ...],
+    expected_queue_wait_ack_policy: str | None,
 ) -> None:
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
     await store.initialize()
@@ -6248,19 +6356,19 @@ async def test_on_dispatch_routes_deadline_bound_interactions_directly(
         state_store=store,
         outbox_manager=_FakeOutboxManager(),
     )
-    direct_submit = MagicMock()
-    queued_submit = MagicMock()
-    service._command_runner.submit = direct_submit  # type: ignore[method-assign]
-    service._command_runner.submit_ingressed = queued_submit  # type: ignore[method-assign]
+    submit = MagicMock()
+    service._command_runner.submit = submit  # type: ignore[method-assign]
 
     try:
         await service._on_dispatch("INTERACTION_CREATE", payload)
-        if expected_direct:
-            direct_submit.assert_called_once()
-            queued_submit.assert_not_called()
-        else:
-            queued_submit.assert_called_once()
-            direct_submit.assert_not_called()
+        submit.assert_called_once()
+        kwargs = submit.call_args.kwargs
+        assert kwargs["conversation_id"] == expected_conversation
+        assert kwargs["resource_keys"] == expected_resource_keys
+        assert kwargs["queue_wait_ack_policy"] == expected_queue_wait_ack_policy
+        if expected_dispatch_ack_policy is not None:
+            assert len(rest.interaction_responses) == 1
+            assert rest.interaction_responses[0]["payload"]["type"] == 6
     finally:
         await service._shutdown()
         await store.close()
@@ -6314,6 +6422,97 @@ async def test_autocomplete_bypasses_busy_ingressed_fifo(
             ),
         )
         await asyncio.wait_for(autocomplete_started.wait(), timeout=1.0)
+    finally:
+        slash_release.set()
+        await service._shutdown()
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_scheduler_serializes_workspace_mutations_across_channels(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+    await store.upsert_binding(
+        channel_id="channel-2",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+
+    rest = _FakeRest()
+    config = replace(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        allowed_channel_ids=frozenset({"channel-1", "channel-2"}),
+    )
+    service = DiscordBotService(
+        config,
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    slash_started = asyncio.Event()
+    slash_release = asyncio.Event()
+    component_started = asyncio.Event()
+    start_order: list[str] = []
+
+    async def _slow_car_new(*_args: Any, **_kwargs: Any) -> None:
+        start_order.append("slash")
+        slash_started.set()
+        await slash_release.wait()
+
+    async def _flow_restart(*_args: Any, **_kwargs: Any) -> None:
+        start_order.append("component")
+        component_started.set()
+
+    service._handle_car_new = _slow_car_new  # type: ignore[assignment]
+    service._handle_flow_restart = _flow_restart  # type: ignore[assignment]
+
+    try:
+        await service._on_dispatch(
+            "INTERACTION_CREATE",
+            _interaction_path(
+                command_path=("car", "new"),
+                options=[],
+            ),
+        )
+        await asyncio.wait_for(slash_started.wait(), timeout=1.0)
+
+        await service._on_dispatch(
+            "INTERACTION_CREATE",
+            {
+                "id": "inter-component-2",
+                "token": "token-component-2",
+                "channel_id": "channel-2",
+                "guild_id": "guild-1",
+                "type": 3,
+                "member": {"user": {"id": "user-1"}},
+                "data": {
+                    "component_type": 3,
+                    "custom_id": "flow_action_select:restart",
+                    "values": ["run-1"],
+                },
+            },
+        )
+
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(component_started.wait(), timeout=0.1)
+
+        slash_release.set()
+        await asyncio.wait_for(component_started.wait(), timeout=1.0)
+        assert start_order == ["slash", "component"]
     finally:
         slash_release.set()
         await service._shutdown()
@@ -7097,6 +7296,77 @@ async def test_car_newt_hard_reset_button_discards_changes_and_retries(
         edited_payload = rest.edited_original_interaction_responses[0]["payload"]
         assert "reset branch" in edited_payload["content"].lower()
         assert "origin/master" in edited_payload["content"].lower()
+        assert edited_payload["components"] == []
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_newt_cancel_button_keeps_local_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+
+    rest = _FakeRest()
+    workspace_token = discord_session_commands_module._newt_workspace_token(
+        workspace.resolve()
+    )
+    gateway = _FakeGateway(
+        [
+            _interaction(name="newt", options=[]),
+            _component_interaction(
+                custom_id=f"{discord_session_commands_module.NEWT_CANCEL_CUSTOM_ID}:{workspace_token}"
+            ),
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    branch_calls: list[dict[str, Any]] = []
+
+    def _reset_branch(repo_root: Path, branch_name: str) -> str:
+        branch_calls.append({"repo_root": repo_root, "branch_name": branch_name})
+        raise discord_service_module.GitError(
+            "working tree has uncommitted changes; commit or stash before /newt"
+        )
+
+    monkeypatch.setattr(
+        discord_service_module, "reset_branch_from_origin_main", _reset_branch
+    )
+    monkeypatch.setattr(
+        discord_session_commands_module,
+        "describe_newt_reject_reasons",
+        lambda _repo_root: ["1 untracked path, including `.tmp/`"],
+    )
+
+    try:
+        await service.run_forever()
+        assert len(branch_calls) == 1
+        assert [item["payload"]["type"] for item in rest.interaction_responses] == [
+            5,
+            6,
+        ]
+        assert len(rest.followup_messages) == 1
+        assert len(rest.edited_original_interaction_responses) == 1
+        edited_payload = rest.edited_original_interaction_responses[0]["payload"]
+        assert "cancelled `/car newt`" in edited_payload["content"].lower()
+        assert "kept local changes" in edited_payload["content"].lower()
         assert edited_payload["components"] == []
     finally:
         await store.close()

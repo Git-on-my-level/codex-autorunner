@@ -131,6 +131,8 @@ async def run_managed_surface_turn(
             else:
                 submission = await submit_coro
         except BaseException as exc:
+            if isinstance(exc, asyncio.CancelledError):
+                raise
             if config.on_submission_error is None:
                 raise
             return cast(

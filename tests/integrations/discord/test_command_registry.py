@@ -5,6 +5,18 @@ import logging
 import pytest
 
 from codex_autorunner.integrations.discord.command_registry import sync_commands
+from codex_autorunner.integrations.discord.commands import (
+    SUB_COMMAND,
+    SUB_COMMAND_GROUP,
+    build_application_commands,
+)
+from codex_autorunner.integrations.discord.interaction_registry import (
+    autocomplete_route_for,
+    component_route_for_custom_id,
+    modal_route_for_custom_id,
+    normalize_discord_command_path,
+    slash_command_route_for_path,
+)
 
 
 class _FakeRest:
@@ -77,3 +89,58 @@ async def test_sync_commands_guild_scope_requires_guild_ids() -> None:
             guild_ids=(),
             logger=logging.getLogger("test"),
         )
+
+
+def _registered_paths() -> set[tuple[str, ...]]:
+    paths: set[tuple[str, ...]] = set()
+    for command in build_application_commands():
+        root = command["name"]
+        for option in command.get("options", []):
+            if option.get("type") == SUB_COMMAND:
+                paths.add((root, option["name"]))
+                continue
+            if option.get("type") != SUB_COMMAND_GROUP:
+                continue
+            for subcommand in option.get("options", []):
+                if subcommand.get("type") == SUB_COMMAND:
+                    paths.add((root, option["name"], subcommand["name"]))
+    return paths
+
+
+def test_registered_slash_payloads_resolve_to_runtime_routes() -> None:
+    for raw_path in _registered_paths():
+        normalized = normalize_discord_command_path(raw_path)
+        route = slash_command_route_for_path(normalized)
+        assert route is not None, raw_path
+        assert route.registered_path == raw_path
+
+
+def test_registry_matches_high_risk_component_and_modal_patterns() -> None:
+    assert component_route_for_custom_id("bind_page:next") is not None
+    assert component_route_for_custom_id("bind_select") is not None
+    assert component_route_for_custom_id("flow_runs_select") is not None
+    assert component_route_for_custom_id("approval:req-1:approve") is not None
+    assert component_route_for_custom_id("queue_cancel:message-1") is not None
+    assert component_route_for_custom_id("queue_interrupt_send:message-1") is not None
+    assert component_route_for_custom_id("newt_hard_reset:workspace-token") is not None
+    assert component_route_for_custom_id("review_commit_select") is not None
+    assert component_route_for_custom_id("flow_action_select:reply") is not None
+    assert component_route_for_custom_id("update_confirm:discord") is not None
+    assert component_route_for_custom_id("update_cancel:discord") is not None
+    assert component_route_for_custom_id("tickets_select") is not None
+    assert component_route_for_custom_id("tickets_filter_select") is not None
+    assert modal_route_for_custom_id("tickets_modal:abc123") is not None
+
+
+def test_registry_matches_autocomplete_routes_for_registered_paths() -> None:
+    bind_route = autocomplete_route_for(("car", "bind"), "workspace")
+    assert bind_route is not None
+    assert bind_route.id == "car.bind.workspace"
+
+    tickets_route = autocomplete_route_for(("car", "tickets"), "search")
+    assert tickets_route is not None
+    assert tickets_route.id == "car.tickets.search"
+
+    flow_route = autocomplete_route_for(("flow", "status"), "run_id")
+    assert flow_route is not None
+    assert flow_route.id == "car.flow.status.run_id"

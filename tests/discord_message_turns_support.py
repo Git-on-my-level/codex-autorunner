@@ -1233,6 +1233,7 @@ async def test_orchestrated_turn_queued_updates_placeholder_skips_finalize(
             self._rest = rest
             self._logger = logging.getLogger(__name__)
             self._spawn_task = asyncio.create_task
+            self._logger = logging.getLogger(__name__)
 
         async def _send_channel_message(
             self, channel_id: str, payload: dict[str, Any]
@@ -1388,6 +1389,14 @@ class _FlakyEditProgressRest(_FakeRest):
             message_id=message_id,
             payload=payload,
         )
+
+
+def _latest_interaction_completion_payload(rest: _FakeRest) -> dict[str, Any]:
+    if rest.original_interaction_edits:
+        return rest.original_interaction_edits[-1]["payload"]
+    if rest.followup_messages:
+        return rest.followup_messages[-1]["payload"]
+    raise AssertionError("expected an interaction completion payload")
 
 
 class _FakeGateway:
@@ -1923,10 +1932,9 @@ async def test_car_session_compact_finishes_interaction_when_finalize_fails(
             "token-1",
             channel_id="channel-1",
         )
-        assert rest.original_interaction_edits
-        assert (
-            rest.original_interaction_edits[-1]["payload"]["content"]
-            == "Compaction summary posted, but finalizing the fresh thread failed."
+        payload = _latest_interaction_completion_payload(rest)
+        assert payload["content"] == (
+            "Compaction summary posted, but finalizing the fresh thread failed."
         )
         assert rest.channel_messages
         assert (
@@ -2027,10 +2035,9 @@ async def test_car_session_compact_restores_previous_thread_when_seed_save_fails
             "token-1",
             channel_id="channel-1",
         )
-        assert rest.original_interaction_edits
-        assert (
-            rest.original_interaction_edits[-1]["payload"]["content"]
-            == "Compaction summary generated, but saving the compacted context failed. Restored the previous thread; please retry."
+        payload = _latest_interaction_completion_payload(rest)
+        assert payload["content"] == (
+            "Compaction summary generated, but saving the compacted context failed. Restored the previous thread; please retry."
         )
         assert rest.channel_messages
         assert (
@@ -2145,10 +2152,9 @@ async def test_car_session_compact_keeps_previous_thread_when_summary_is_blank(
             "token-1",
             channel_id="channel-1",
         )
-        assert rest.original_interaction_edits
-        assert (
-            rest.original_interaction_edits[-1]["payload"]["content"]
-            == "Compaction returned an empty summary. Kept the current session active; please retry."
+        payload = _latest_interaction_completion_payload(rest)
+        assert payload["content"] == (
+            "Compaction returned an empty summary. Kept the current session active; please retry."
         )
         assert rest.channel_messages
         assert (
@@ -2285,10 +2291,9 @@ async def test_car_session_compact_uses_transcript_fallback_when_summary_is_blan
             "token-1",
             channel_id="channel-1",
         )
-        assert rest.original_interaction_edits
-        assert (
-            rest.original_interaction_edits[-1]["payload"]["content"]
-            == "Compaction complete. Summary posted in the channel. Send your next message to continue this session."
+        payload = _latest_interaction_completion_payload(rest)
+        assert payload["content"] == (
+            "Compaction complete. Summary posted in the channel. Send your next message to continue this session."
         )
         binding = await store.get_binding(channel_id="channel-1")
         assert binding is not None
@@ -9245,10 +9250,9 @@ async def test_car_session_compact_reuses_preview_without_part_numbering(
             "token-1",
             channel_id="channel-1",
         )
-        assert rest.original_interaction_edits
-        assert (
-            rest.original_interaction_edits[-1]["payload"]["content"]
-            == "Compaction complete. Summary posted in the channel. Send your next message to continue this session."
+        payload = _latest_interaction_completion_payload(rest)
+        assert payload["content"] == (
+            "Compaction complete. Summary posted in the channel. Send your next message to continue this session."
         )
         assert rest.edited_channel_messages
         compact_preview_edit = rest.edited_channel_messages[-1]
@@ -9438,10 +9442,9 @@ async def test_car_session_compact_places_continue_button_on_last_chunk_without_
             "token-1",
             channel_id="channel-1",
         )
-        assert rest.original_interaction_edits
-        assert (
-            rest.original_interaction_edits[-1]["payload"]["content"]
-            == "Compaction complete. Summary posted in the channel. Send your next message to continue this session."
+        payload = _latest_interaction_completion_payload(rest)
+        assert payload["content"] == (
+            "Compaction complete. Summary posted in the channel. Send your next message to continue this session."
         )
         assert not rest.edited_channel_messages
         assert len(rest.channel_messages) > 1

@@ -10,25 +10,13 @@ from ..components import (
     DISCORD_SELECT_OPTION_MAX_OPTIONS,
     build_review_commit_picker,
 )
+from ..interaction_registry import REVIEW_COMMIT_SELECT_ID
+from ..interaction_runtime import (
+    ensure_ephemeral_response_deferred,
+    send_runtime_ephemeral,
+)
 from ..message_turns import DiscordMessageTurnResult
 from ..rendering import chunk_discord_message
-
-REVIEW_COMMIT_SELECT_ID = "review_commit_select"
-
-
-async def _interaction_deferred(
-    service: Any,
-    interaction_id: str,
-    interaction_token: str,
-) -> bool:
-    if service._prepared_interaction_policy(interaction_token) is not None:
-        return True
-    return bool(
-        await service._defer_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-        )
-    )
 
 
 async def handle_car_review(
@@ -44,7 +32,8 @@ async def handle_car_review(
 
     binding = await service._store.get_binding(channel_id=channel_id)
     if binding is None:
-        await service._respond_ephemeral(
+        await send_runtime_ephemeral(
+            service,
             interaction_id,
             interaction_token,
             "Channel binding not found.",
@@ -61,14 +50,19 @@ async def handle_car_review(
             if supported_agents
             else ""
         )
-        await service._respond_ephemeral(
+        await send_runtime_ephemeral(
+            service,
             interaction_id,
             interaction_token,
             f"{service._agent_display_name(current_agent)} does not support code review in Discord.{supported_hint}",
         )
         return
 
-    deferred = await _interaction_deferred(service, interaction_id, interaction_token)
+    deferred = await ensure_ephemeral_response_deferred(
+        service,
+        interaction_id,
+        interaction_token,
+    )
     target_arg = options.get("target", "")
     target_type = "uncommittedChanges"
     target_value: Optional[str] = None
@@ -103,7 +97,7 @@ async def handle_car_review(
                         (commit_sha, commit_subjects.get(commit_sha, ""))
                         for commit_sha, _label in filtered_search_items
                     ]
-                    await service._send_or_respond_with_components_ephemeral(
+                    await service.send_or_respond_ephemeral_with_components(
                         interaction_id=interaction_id,
                         interaction_token=interaction_token,
                         deferred=deferred,
@@ -139,7 +133,7 @@ async def handle_car_review(
         elif target_lower in ("uncommitted", ""):
             pass
         elif target_lower == "custom":
-            await service._send_or_respond_ephemeral(
+            await service.send_or_respond_ephemeral(
                 interaction_id=interaction_id,
                 interaction_token=interaction_token,
                 deferred=deferred,
@@ -152,7 +146,7 @@ async def handle_car_review(
         elif target_lower.startswith("custom "):
             custom_instructions = target_text[7:].strip()
             if not custom_instructions:
-                await service._send_or_respond_ephemeral(
+                await service.send_or_respond_ephemeral(
                     interaction_id=interaction_id,
                     interaction_token=interaction_token,
                     deferred=deferred,
@@ -171,14 +165,14 @@ async def handle_car_review(
     if prompt_commit_picker:
         commits = await service._list_recent_commits_for_picker(workspace_root)
         if not commits:
-            await service._send_or_respond_ephemeral(
+            await service.send_or_respond_ephemeral(
                 interaction_id=interaction_id,
                 interaction_token=interaction_token,
                 deferred=deferred,
                 text="No recent commits found. Use `/car review target:commit <sha>`.",
             )
             return
-        await service._send_or_respond_with_components_ephemeral(
+        await service.send_or_respond_ephemeral_with_components(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
             deferred=deferred,
@@ -340,7 +334,8 @@ async def handle_car_approvals(
 
     binding = await service._store.get_binding(channel_id=channel_id)
     if binding is None:
-        await service._respond_ephemeral(
+        await send_runtime_ephemeral(
+            service,
             interaction_id,
             interaction_token,
             "Channel not bound. Use /car bind first.",
@@ -352,7 +347,8 @@ async def handle_car_approvals(
         approval_policy = binding.get("approval_policy", "default")
         sandbox_policy = binding.get("sandbox_policy", "default")
 
-        await service._respond_ephemeral(
+        await send_runtime_ephemeral(
+            service,
             interaction_id,
             interaction_token,
             "\n".join(
@@ -369,7 +365,8 @@ async def handle_car_approvals(
 
     new_mode = normalize_approval_mode(mode, include_command_aliases=True)
     if new_mode is None:
-        await service._respond_ephemeral(
+        await send_runtime_ephemeral(
+            service,
             interaction_id,
             interaction_token,
             f"Unknown mode: {mode}. Valid options: {APPROVAL_MODE_USAGE}",
@@ -377,7 +374,8 @@ async def handle_car_approvals(
         return
 
     await service._store.update_approval_mode(channel_id=channel_id, mode=new_mode)
-    await service._respond_ephemeral(
+    await send_runtime_ephemeral(
+        service,
         interaction_id,
         interaction_token,
         f"Approval mode set to {new_mode}.",
