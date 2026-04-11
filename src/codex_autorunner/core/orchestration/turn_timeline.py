@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
 
@@ -17,6 +18,7 @@ from ..ports.run_event import (
     ToolResult,
 )
 from ..text_utils import _json_dumps
+from .cold_trace_store import ColdTraceWriter
 from .execution_history import build_hot_projection_envelope, route_run_event
 from .sqlite import open_orchestration_sqlite
 
@@ -71,12 +73,15 @@ def persist_turn_timeline(
     metadata: Optional[dict[str, Any]] = None,
     events: Iterable[RunEvent],
     start_index: int = 1,
+    cold_trace_writer: Optional[ColdTraceWriter] = None,
 ) -> int:
     normalized_execution_id = str(execution_id or "").strip()
     if not normalized_execution_id:
         return 0
 
     base_metadata = dict(metadata or {})
+    if cold_trace_writer is not None:
+        base_metadata["trace_manifest_id"] = cold_trace_writer.trace_id
     count = 0
     next_index = max(int(start_index or 1), 1)
     with open_orchestration_sqlite(hub_root) as conn:
@@ -84,6 +89,17 @@ def persist_turn_timeline(
             index = next_index + count
             event_type, status = _event_type_and_status(event)
             routing = route_run_event(event)
+
+            if cold_trace_writer is not None and routing.capture_cold_trace:
+                try:
+                    cold_trace_writer.append(
+                        event_family=routing.event_family,
+                        event_type=event_type,
+                        payload=asdict(event),
+                    )
+                except Exception:
+                    pass
+
             if not routing.persist_hot_projection:
                 continue
             event_payload = build_hot_projection_envelope(

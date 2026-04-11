@@ -34,6 +34,11 @@ HotProjectionPayloadContract = Literal[
 CheckpointSignalStatus = Literal["ok", "error", "interrupted"]
 ExecutionTraceManifestStatus = Literal["open", "finalized", "archived"]
 
+_HOT_TOOL_INPUT_MAX_CHARS = 2048
+_HOT_TOOL_RESULT_MAX_CHARS = 2048
+_HOT_TEXT_PREVIEW_CHARS = 240
+_HOT_NOTICE_DATA_MAX_CHARS = 1024
+
 
 @dataclass(frozen=True)
 class ExecutionRetentionRule:
@@ -328,6 +333,74 @@ def provider_raw_trace_routing(
     )
 
 
+def truncate_hot_event_payload(
+    event: RunEvent,
+    contract: HotProjectionPayloadContract,
+) -> dict[str, Any]:
+    if contract == "none":
+        return {}
+    raw = asdict(event)
+    if contract == "terminal_summary":
+        bounded: dict[str, Any] = {}
+        if "timestamp" in raw:
+            bounded["timestamp"] = raw["timestamp"]
+        if "final_message" in raw:
+            text = str(raw["final_message"] or "")
+            bounded["final_message"] = text[:_HOT_TEXT_PREVIEW_CHARS]
+            if len(text) > _HOT_TEXT_PREVIEW_CHARS:
+                bounded["final_message_truncated"] = True
+                bounded["final_message_chars"] = len(text)
+        if "error_message" in raw:
+            text = str(raw["error_message"] or "")
+            bounded["error_message"] = text[:_HOT_TEXT_PREVIEW_CHARS]
+            if len(text) > _HOT_TEXT_PREVIEW_CHARS:
+                bounded["error_message_truncated"] = True
+                bounded["error_message_chars"] = len(text)
+        return bounded
+    if contract == "delta_only":
+        bounded = {}
+        for key in ("timestamp", "delta_type"):
+            if key in raw:
+                bounded[key] = raw[key]
+        content = str(raw.get("content", "") or "")
+        bounded["content"] = content
+        bounded["content_chars"] = len(content)
+        return bounded
+    bounded = dict(raw)
+    if isinstance(event, ToolCall):
+        tool_input = raw.get("tool_input")
+        if isinstance(tool_input, dict):
+            serialized = str(tool_input)
+            if len(serialized) > _HOT_TOOL_INPUT_MAX_CHARS:
+                bounded["tool_input_preview"] = serialized[:_HOT_TOOL_INPUT_MAX_CHARS]
+                bounded["tool_input_truncated"] = True
+                del bounded["tool_input"]
+    elif isinstance(event, ToolResult):
+        result = raw.get("result")
+        if result is not None:
+            serialized = str(result)
+            if len(serialized) > _HOT_TOOL_RESULT_MAX_CHARS:
+                bounded["result_preview"] = serialized[:_HOT_TOOL_RESULT_MAX_CHARS]
+                bounded["result_truncated"] = True
+                del bounded["result"]
+        error = raw.get("error")
+        if error is not None:
+            serialized = str(error)
+            if len(serialized) > _HOT_TOOL_RESULT_MAX_CHARS:
+                bounded["error_preview"] = serialized[:_HOT_TOOL_RESULT_MAX_CHARS]
+                bounded["error_truncated"] = True
+                del bounded["error"]
+    elif isinstance(event, RunNotice):
+        data = raw.get("data")
+        if isinstance(data, dict) and data:
+            serialized = str(data)
+            if len(serialized) > _HOT_NOTICE_DATA_MAX_CHARS:
+                bounded["data_preview"] = serialized[:_HOT_NOTICE_DATA_MAX_CHARS]
+                bounded["data_truncated"] = True
+                del bounded["data"]
+    return bounded
+
+
 def build_hot_projection_envelope(
     *,
     event_index: int,
@@ -341,7 +414,7 @@ def build_hot_projection_envelope(
         event_index=event_index,
         event_type=event_type,
         event_family=resolved_routing.event_family,
-        event=asdict(event),
+        event=truncate_hot_event_payload(event, resolved_routing.hot_payload_contract),
         metadata=dict(metadata or {}),
         hot_payload_contract=resolved_routing.hot_payload_contract,
         captures_cold_trace=resolved_routing.capture_cold_trace,
@@ -366,4 +439,5 @@ __all__ = [
     "classify_run_event_family",
     "provider_raw_trace_routing",
     "route_run_event",
+    "truncate_hot_event_payload",
 ]

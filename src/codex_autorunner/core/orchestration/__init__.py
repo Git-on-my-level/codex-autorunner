@@ -32,6 +32,7 @@ from .execution_history import (
     classify_run_event_family,
     provider_raw_trace_routing,
     route_run_event,
+    truncate_hot_event_payload,
 )
 from .flows import (
     PausedFlowTarget,
@@ -207,6 +208,7 @@ __all__ = [
     "resolve_orchestration_sqlite_path",
     "route_run_event",
     "stream_runtime_thread_events",
+    "truncate_hot_event_payload",
     "verify_audit_parity",
     "verify_automation_parity",
     "verify_event_parity",

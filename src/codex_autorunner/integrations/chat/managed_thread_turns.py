@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import inspect
 import logging
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Literal, Mapping, Optional, Protocol
 
@@ -13,6 +13,8 @@ from ...agents.base import (
     harness_supports_progress_event_stream,
 )
 from ...core.logging_utils import log_event
+from ...core.orchestration.cold_trace_store import ColdTraceWriter
+from ...core.orchestration.execution_history import route_run_event
 from ...core.orchestration.models import MessageRequest
 from ...core.orchestration.runtime_thread_events import (
     RuntimeThreadRunEventState,
@@ -886,8 +888,7 @@ def ensure_managed_thread_queue_worker(
                     raise
             else:
                 logger.exception(
-                    "Managed-thread queued execution failed "
-                    "(thread=%s execution=%s)",
+                    "Managed-thread queued execution failed (thread=%s execution=%s)",
                     started_execution.thread.thread_target_id,
                     started_execution.execution.execution_id,
                 )
@@ -1133,6 +1134,23 @@ async def finalize_managed_thread_execution(
     live_timeline_count = 0
     live_timeline_error_logged = False
 
+    cold_trace_writer: Optional[ColdTraceWriter] = None
+    try:
+        cold_trace_writer = ColdTraceWriter(
+            hub_root=state_root,
+            execution_id=managed_turn_id,
+            backend_thread_id=current_backend_thread_id or None,
+            backend_turn_id=started.execution.backend_id,
+        ).open()
+    except Exception:
+        logger.warning(
+            "%s Failed to open cold trace writer (thread=%s turn=%s)",
+            surface.log_label,
+            managed_thread_id,
+            managed_turn_id,
+            exc_info=True,
+        )
+
     log_event(
         logger,
         logging.INFO,
@@ -1176,6 +1194,7 @@ async def finalize_managed_thread_execution(
                 ),
                 events=events,
                 start_index=live_timeline_count + 1,
+                cold_trace_writer=cold_trace_writer,
             )
         except Exception:
             if not live_timeline_error_logged:
@@ -1434,6 +1453,40 @@ async def finalize_managed_thread_execution(
             logger.debug(
                 "%s terminal progress event failed",
                 surface.log_label,
+                exc_info=True,
+            )
+
+    if cold_trace_writer is not None:
+        try:
+            terminal_routing = route_run_event(terminal_event)
+            if terminal_routing.capture_cold_trace:
+                et = (
+                    "turn_completed"
+                    if isinstance(terminal_event, Completed)
+                    else "turn_failed"
+                )
+                cold_trace_writer.append(
+                    event_family=terminal_routing.event_family,
+                    event_type=et,
+                    payload=asdict(terminal_event),
+                )
+        except Exception:
+            logger.warning(
+                "%s Failed to write terminal event to cold trace (thread=%s turn=%s)",
+                surface.log_label,
+                managed_thread_id,
+                managed_turn_id,
+                exc_info=True,
+            )
+        try:
+            cold_trace_writer.finalize()
+            cold_trace_writer = None
+        except Exception:
+            logger.warning(
+                "%s Failed to finalize cold trace (thread=%s turn=%s)",
+                surface.log_label,
+                managed_thread_id,
+                managed_turn_id,
                 exc_info=True,
             )
 
