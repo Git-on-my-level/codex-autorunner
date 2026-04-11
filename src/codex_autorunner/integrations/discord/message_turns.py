@@ -88,6 +88,7 @@ from ..chat.turn_metrics import (
     compose_turn_response_with_footer,
 )
 from .components import build_cancel_turn_button, build_cancel_turn_custom_id
+from .errors import DiscordTransientError
 from .rendering import (
     chunk_discord_message,
     format_discord_message,
@@ -186,6 +187,20 @@ class _DiscordMessageTurnDispatch:
 
 
 _sanitize_runtime_thread_result_error = sanitize_runtime_thread_error
+
+
+def _discord_surface_error_messages(*, pma_enabled: bool) -> tuple[str, str, str]:
+    if pma_enabled:
+        return (
+            DISCORD_PMA_PUBLIC_EXECUTION_ERROR,
+            "Discord PMA turn timed out",
+            "Discord PMA turn interrupted",
+        )
+    return (
+        DISCORD_REPO_PUBLIC_EXECUTION_ERROR,
+        "Discord turn timed out",
+        "Discord turn interrupted",
+    )
 
 
 def _get_discord_progress_reuse_requests(
@@ -402,7 +417,7 @@ async def _acknowledge_discord_progress_reuse(
                 "components": [],
             },
         )
-    except (RuntimeError, ConnectionError, OSError):
+    except (DiscordTransientError, RuntimeError, ConnectionError, OSError):
         return False
     return True
 
@@ -662,6 +677,50 @@ async def _submit_discord_thread_message(
         managed_thread_surface_key=managed_thread_surface_key,
         pma_enabled=request.pma_enabled,
     )
+    thread_target_id: Optional[str] = None
+
+    async def _cleanup_background_failure(exc: Exception) -> None:
+        public_error, timeout_error, interrupted_error = (
+            _discord_surface_error_messages(pma_enabled=dispatch.effective_pma_enabled)
+        )
+        failure_message = _sanitize_runtime_thread_result_error(
+            exc,
+            public_error=public_error,
+            timeout_error=timeout_error,
+            interrupted_error=interrupted_error,
+        )
+        dispatch.log_event_fn(
+            dispatch.service._logger,
+            logging.WARNING,
+            "discord.turn.background_failed",
+            channel_id=dispatch.channel_id,
+            conversation_id=dispatch.context.conversation_id,
+            workspace_root=str(dispatch.workspace_root),
+            agent=dispatch.agent,
+            exc=exc,
+        )
+        if thread_target_id:
+            clear_discord_turn_progress_reuse(
+                dispatch.service,
+                thread_target_id=thread_target_id,
+            )
+        if progress_message_id:
+            await dispatch.service._delete_channel_message_safe(
+                channel_id=dispatch.channel_id,
+                message_id=progress_message_id,
+                record_id=(
+                    "turn:background_cleanup:"
+                    f"{dispatch.session_key}:{uuid.uuid4().hex[:8]}"
+                ),
+            )
+        await dispatch.service._send_channel_message_safe(
+            dispatch.channel_id,
+            {"content": f"Turn failed: {failure_message}"},
+            record_id=(
+                f"turn:background_failure:{dispatch.session_key}:"
+                f"{uuid.uuid4().hex[:8]}"
+            ),
+        )
 
     async def _send_initial_progress_placeholder() -> Optional[str]:
         initial_content = "Received. Preparing turn..."
@@ -723,38 +782,48 @@ async def _submit_discord_thread_message(
         return thread_target_id or None
 
     async def _run_in_background() -> None:
-        turn_result = await _execute_discord_thread_message(
-            request,
-            dispatch=dispatch,
-            initial_progress_message_id=progress_message_id,
-            managed_thread_surface_key=managed_thread_surface_key,
-        )
-        await _deliver_discord_turn_result(
-            dispatch,
-            workspace_root=request.workspace_root,
-            turn_result=turn_result,
-        )
+        try:
+            turn_result = await _execute_discord_thread_message(
+                request,
+                dispatch=dispatch,
+                initial_progress_message_id=progress_message_id,
+                managed_thread_surface_key=managed_thread_surface_key,
+            )
+            await _deliver_discord_turn_result(
+                dispatch,
+                workspace_root=request.workspace_root,
+                turn_result=turn_result,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # intentional: background task must clean up visibly
+            await _cleanup_background_failure(exc)
 
     progress_message_id = await _send_initial_progress_placeholder()
-    if (
-        progress_message_id is not None
-        and isinstance(dispatch.event.message.message_id, str)
-        and dispatch.event.message.message_id
-    ):
-        thread_target_id = await _resolve_managed_thread_id()
-        if thread_target_id:
-            _stash_discord_reusable_progress_message(
-                dispatch.service,
-                thread_target_id=thread_target_id,
-                source_message_id=dispatch.event.message.message_id,
-                channel_id=dispatch.channel_id,
-                message_id=progress_message_id,
-            )
-    _spawn_discord_background_task(
-        dispatch.service,
-        _run_in_background(),
-        await_on_shutdown=True,
-    )
+    try:
+        if (
+            progress_message_id is not None
+            and isinstance(dispatch.event.message.message_id, str)
+            and dispatch.event.message.message_id
+        ):
+            thread_target_id = await _resolve_managed_thread_id()
+            if thread_target_id:
+                _stash_discord_reusable_progress_message(
+                    dispatch.service,
+                    thread_target_id=thread_target_id,
+                    source_message_id=dispatch.event.message.message_id,
+                    channel_id=dispatch.channel_id,
+                    message_id=progress_message_id,
+                )
+        _spawn_discord_background_task(
+            dispatch.service,
+            _run_in_background(),
+            await_on_shutdown=True,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        await _cleanup_background_failure(exc)
     return DiscordMessageTurnResult(
         final_message="",
         send_final_message=False,
@@ -1078,14 +1147,27 @@ async def _deliver_discord_turn_result(
             attachment_filename="final-response.md",
             attachment_caption="Final response too long; attached as final-response.md.",
         )
-    if dispatch.pending_compact_seed is not None:
-        await dispatch.service._store.clear_pending_compact_seed(
-            channel_id=dispatch.channel_id
-        )
-    if send_final_message:
-        await dispatch.service._flush_outbox_files(
-            workspace_root=workspace_root,
+    try:
+        if dispatch.pending_compact_seed is not None:
+            await dispatch.service._store.clear_pending_compact_seed(
+                channel_id=dispatch.channel_id
+            )
+        if send_final_message:
+            await dispatch.service._flush_outbox_files(
+                workspace_root=workspace_root,
+                channel_id=dispatch.channel_id,
+            )
+    except Exception as exc:  # intentional: do not surface cleanup failures after reply
+        log_event(
+            dispatch.service._logger,
+            logging.WARNING,
+            "discord.turn.delivery_cleanup_failed",
             channel_id=dispatch.channel_id,
+            session_key=dispatch.session_key,
+            workspace_root=str(workspace_root),
+            send_final_message=send_final_message,
+            agent=dispatch.agent,
+            exc=exc,
         )
     log_event(
         dispatch.service._logger,
@@ -1661,7 +1743,7 @@ async def _run_discord_orchestrated_turn_for_message(
                 message_id=progress_message_id,
                 payload=payload,
             )
-        except (RuntimeError, ConnectionError, OSError):
+        except (DiscordTransientError, RuntimeError, ConnectionError, OSError):
             _logger.debug(
                 "Discord progress edit failed for message=%s",
                 progress_message_id,
@@ -1761,7 +1843,7 @@ async def _run_discord_orchestrated_turn_for_message(
                 progress_rendered = initial_content
                 progress_last_updated = time.monotonic()
                 progress_heartbeat_task = asyncio.create_task(_progress_heartbeat())
-    except (RuntimeError, ConnectionError, OSError):
+    except (DiscordTransientError, RuntimeError, ConnectionError, OSError):
         service._logger.warning(
             "Discord progress placeholder send failed for channel=%s",
             channel_id,

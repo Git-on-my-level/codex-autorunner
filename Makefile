@@ -99,6 +99,7 @@ test-managed-thread-cutover:
 		tests/test_telegram_status_rate_limits.py \
 		tests/integrations/discord/test_service_routing.py \
 		tests/integrations/discord/test_message_turns.py \
+		tests/integrations/discord/test_message_turns_transient_progress.py \
 		tests/test_redaction.py
 
 test-integration:

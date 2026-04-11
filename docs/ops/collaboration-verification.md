@@ -33,6 +33,7 @@ Or run the collaboration-specific subset:
   tests/test_telegram_bot_integration.py \
   tests/test_doctor_checks.py \
   tests/integrations/discord/test_message_turns.py \
+  tests/integrations/discord/test_message_turns_transient_progress.py \
   tests/integrations/discord/test_service_routing.py \
   tests/integrations/discord/test_doctor_checks.py \
   tests/integrations/discord/test_config.py \

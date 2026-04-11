@@ -170,6 +170,36 @@ async def test_client_official_prompt_stays_non_terminal_until_request_returns(
 
 
 @pytest.mark.asyncio
+async def test_client_official_prompt_hang_tracks_last_session_update_state(
+    tmp_path: Path,
+) -> None:
+    client = ACPClient(fixture_command("official_prompt_hang"), cwd=tmp_path)
+    try:
+        created = await client.create_session(cwd=str(tmp_path))
+        handle = await client.start_prompt(created.session_id, "Reply with exactly OK.")
+        for _ in range(20):
+            state = client._prompts.get(handle.turn_id)
+            if (
+                state is not None
+                and state.last_session_update_kind == "agent_message_chunk"
+            ):
+                break
+            await asyncio.sleep(0.01)
+
+        state = client._prompts[handle.turn_id]
+
+        assert client._session_active_turns[created.session_id] == handle.turn_id
+        assert state.last_session_update_kind == "agent_message_chunk"
+        assert state.last_session_update_excerpt == "fixture reply"
+        assert state.last_session_update_content_kind == "dict"
+        assert state.last_session_update_part_types == ()
+        assert state.last_session_update_text_length == len("fixture reply")
+        assert state.last_session_update_at is not None
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
 async def test_client_logs_official_prompt_lifecycle_trace(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,

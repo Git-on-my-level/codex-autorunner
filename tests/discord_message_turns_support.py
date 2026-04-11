@@ -387,7 +387,6 @@ async def test_orchestrated_turn_interrupt_send_hands_off_progress_message(
             self._store = _Store()
             self._rest = rest
             self._logger = logging.getLogger(__name__)
-            self._logger = logging.getLogger(__name__)
             self._spawn_task = asyncio.create_task
 
         async def _send_channel_message(
@@ -514,7 +513,6 @@ async def test_orchestrated_turn_interrupt_send_reuses_existing_progress_message
             self._config = _config(tmp_path)
             self._store = _Store()
             self._rest = rest
-            self._logger = logging.getLogger(__name__)
             self._logger = logging.getLogger(__name__)
             self._spawn_task = asyncio.create_task
 
@@ -1233,6 +1231,7 @@ async def test_orchestrated_turn_queued_updates_placeholder_skips_finalize(
             self._config = _config(tmp_path)
             self._store = _Store()
             self._rest = rest
+            self._logger = logging.getLogger(__name__)
             self._spawn_task = asyncio.create_task
             self._logger = logging.getLogger(__name__)
 
@@ -2418,7 +2417,6 @@ async def test_message_event_submits_through_surface_orchestration_ingress(
         await store.close()
 
 
-@pytest.mark.anyio
 async def test_message_create_after_compact_uses_pending_seed_and_clears_it(
     tmp_path: Path,
 ) -> None:
