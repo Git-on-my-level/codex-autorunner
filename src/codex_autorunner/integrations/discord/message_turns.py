@@ -2315,13 +2315,19 @@ def _build_discord_runner_hooks(
             )
             if not chunks:
                 chunks = [formatted]
-            for chunk in chunks:
+            base_record_id = (
+                f"discord-queued:{managed_thread_id}:{finalized.managed_turn_id}"
+            )
+            for chunk_index, chunk in enumerate(chunks, start=1):
+                record_id = (
+                    f"{base_record_id}:chunk:{chunk_index}"
+                    if len(chunks) > 1
+                    else base_record_id
+                )
                 await service._send_channel_message_safe(
                     channel_id,
                     {"content": chunk},
-                    record_id=(
-                        f"discord-queued:{managed_thread_id}:{finalized.managed_turn_id}"
-                    ),
+                    record_id=record_id,
                 )
             return
         await service._send_channel_message_safe(
