@@ -1079,6 +1079,7 @@ class ACPClient:
                 )
             params: dict[str, Any] = {
                 "sessionId": state.session_id,
+                "messageId": state.turn_id,
                 "prompt": [{"type": "text", "text": prompt}],
             }
             if metadata:

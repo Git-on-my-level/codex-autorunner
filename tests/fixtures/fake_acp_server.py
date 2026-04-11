@@ -350,7 +350,10 @@ class FakeACPServer:
             while not cancel_event.wait(0.02):
                 pass
             cancel_event.clear()
-            self._send_result(request_id, {"stopReason": "cancelled"})
+            self._send_result(
+                request_id,
+                {"stopReason": "cancelled", "userMessageId": turn_id},
+            )
             return
         time.sleep(0.05)
         self.send(
@@ -381,7 +384,10 @@ class FakeACPServer:
             )
             time.sleep(0.05)
             cancel_event.clear()
-            self._send_result(request_id, {"stopReason": "end_turn"})
+            self._send_result(
+                request_id,
+                {"stopReason": "end_turn", "userMessageId": turn_id},
+            )
             return
         if self._scenario == "official_terminal_without_turn_id":
             self.send(
@@ -396,7 +402,10 @@ class FakeACPServer:
             )
             time.sleep(0.05)
             cancel_event.clear()
-            self._send_result(request_id, {"stopReason": "end_turn"})
+            self._send_result(
+                request_id,
+                {"stopReason": "end_turn", "userMessageId": turn_id},
+            )
             return
         if self._scenario == "official_session_status_idle_before_return":
             self.send(
@@ -410,7 +419,10 @@ class FakeACPServer:
             )
             time.sleep(0.05)
             cancel_event.clear()
-            self._send_result(request_id, {"stopReason": "end_turn"})
+            self._send_result(
+                request_id,
+                {"stopReason": "end_turn", "userMessageId": turn_id},
+            )
             return
         if self._scenario == "official_request_return_after_terminal":
             self.send(
@@ -426,10 +438,29 @@ class FakeACPServer:
             )
             time.sleep(0.2)
             cancel_event.clear()
-            self._send_result(request_id, {"stopReason": "end_turn"})
+            self._send_result(
+                request_id,
+                {"stopReason": "end_turn", "userMessageId": turn_id},
+            )
+            return
+        if self._scenario == "official_terminal_without_request_return":
+            self.send(
+                {
+                    "method": "prompt/completed",
+                    "params": {
+                        "sessionId": session_id,
+                        "turnId": turn_id,
+                        "status": "completed",
+                        "finalOutput": "fixture reply",
+                    },
+                }
+            )
             return
         cancel_event.clear()
-        self._send_result(request_id, {"stopReason": "end_turn"})
+        self._send_result(
+            request_id,
+            {"stopReason": "end_turn", "userMessageId": turn_id},
+        )
 
     def _handle_request(self, message: dict[str, Any]) -> None:
         request_id = message.get("id")
@@ -529,8 +560,10 @@ class FakeACPServer:
             if session_id not in self._sessions:
                 self._send_error(request_id, -32004, "session not found")
                 return
-            turn_id = f"turn-{self._next_official_turn}"
-            self._next_official_turn += 1
+            turn_id = str(params.get("messageId") or "").strip()
+            if not turn_id:
+                turn_id = f"turn-{self._next_official_turn}"
+                self._next_official_turn += 1
             prompt_items = params.get("prompt")
             prompt_text = ""
             if isinstance(prompt_items, list):

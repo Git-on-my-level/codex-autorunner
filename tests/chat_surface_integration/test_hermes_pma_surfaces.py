@@ -181,6 +181,108 @@ async def test_discord_hermes_pma_handles_terminal_event_before_official_return(
 
 
 @pytest.mark.anyio
+async def test_telegram_hermes_pma_handles_terminal_event_before_official_return(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = HermesFixtureRuntime(
+        "official_terminal_before_return",
+        logger_name="test.chat_surface_integration.telegram",
+    )
+    patch_hermes_runtime(monkeypatch, runtime)
+    harness = TelegramSurfaceHarness(tmp_path / "telegram")
+    await harness.setup(agent="hermes")
+    try:
+        bot = await harness.run_message("echo hello world")
+
+        assert bot.execution_status == "ok"
+        assert bot.placeholder_deleted is True
+        assert any(
+            record.get("event") == "acp.prompt.terminal_recorded"
+            and record.get("completion_source") == "terminal_event"
+            for record in bot.log_records
+        )
+        assert any(
+            record.get("event") == "chat.managed_thread.turn_finalized"
+            and record.get("last_runtime_method") == "prompt/completed"
+            for record in bot.log_records
+        )
+    finally:
+        await harness.close()
+        await runtime.close()
+
+
+@pytest.mark.anyio
+async def test_discord_hermes_pma_handles_terminal_event_without_official_return(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = HermesFixtureRuntime(
+        "official_terminal_without_request_return",
+        logger_name="test.chat_surface_integration.discord",
+    )
+    patch_hermes_runtime(monkeypatch, runtime)
+    harness = DiscordSurfaceHarness(tmp_path / "discord")
+    await harness.setup(agent="hermes")
+    try:
+        rest = await harness.run_message("echo hello world")
+
+        assert rest.execution_status == "ok"
+        assert rest.preview_deleted is True
+        assert any(
+            op["op"] == "send"
+            and "fixture reply" in str(op["payload"].get("content", ""))
+            for op in rest.message_ops
+        )
+        assert any(
+            record.get("event") == "acp.prompt.terminal_recorded"
+            and record.get("completion_source") == "terminal_event"
+            for record in rest.log_records
+        )
+        assert not any(
+            record.get("event") == "acp.prompt.request_returned"
+            for record in rest.log_records
+        )
+    finally:
+        await harness.close()
+        await runtime.close()
+
+
+@pytest.mark.anyio
+async def test_telegram_hermes_pma_handles_terminal_event_without_official_return(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = HermesFixtureRuntime(
+        "official_terminal_without_request_return",
+        logger_name="test.chat_surface_integration.telegram",
+    )
+    patch_hermes_runtime(monkeypatch, runtime)
+    harness = TelegramSurfaceHarness(tmp_path / "telegram")
+    await harness.setup(agent="hermes")
+    try:
+        bot = await harness.run_message("echo hello world")
+
+        assert bot.execution_status == "ok"
+        assert bot.placeholder_deleted is True
+        sent_texts = [str(item["text"]) for item in bot.messages]
+        assert sent_texts[0] == "Working..."
+        assert any("fixture reply" in text for text in sent_texts[1:])
+        assert any(
+            record.get("event") == "acp.prompt.terminal_recorded"
+            and record.get("completion_source") == "terminal_event"
+            for record in bot.log_records
+        )
+        assert not any(
+            record.get("event") == "acp.prompt.request_returned"
+            for record in bot.log_records
+        )
+    finally:
+        await harness.close()
+        await runtime.close()
+
+
+@pytest.mark.anyio
 async def test_discord_hermes_pma_characterizes_stale_preview_when_delivery_cleanup_fails(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
