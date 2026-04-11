@@ -144,5 +144,5 @@ class ManagedThreadAutomationClient:
             raise
 
         if isinstance(created, dict) and "subscription" in created:
-            return created
-        return {"subscription": created}
+            return {"mode": "terminal", **created}
+        return {"mode": "terminal", "subscription": created}

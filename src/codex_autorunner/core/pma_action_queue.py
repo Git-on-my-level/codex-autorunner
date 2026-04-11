@@ -125,9 +125,9 @@ def _thread_followup_semantics(entry: Mapping[str, Any]) -> dict[str, Any]:
             "operator_need": "normal",
             "recommended_action": "resume_managed_thread",
             "why_selected": "Managed thread is paused and likely waiting for the next turn",
-            "recommended_detail_template": (
-                'car pma thread send --id {managed_thread_id} --message "..." --watch --path <hub_root>'
-            ),
+                "recommended_detail_template": (
+                    'car pma thread send --id {managed_thread_id} --message "..." --path <hub_root>'
+                ),
         }
     if status in {"completed", "interrupted"}:
         if is_stale:
@@ -158,7 +158,7 @@ def _thread_followup_semantics(entry: Mapping[str, Any]) -> dict[str, Any]:
                 "recommended_detail_template": (
                     "Review before cleanup: car pma thread archive --id "
                     "{managed_thread_id} --path <hub_root> if dormant, or reuse it with "
-                    'car pma thread send --id {managed_thread_id} --message "..." --watch --path <hub_root>'
+                    'car pma thread send --id {managed_thread_id} --message "..." --path <hub_root>'
                 ),
             }
         return {
@@ -171,7 +171,7 @@ def _thread_followup_semantics(entry: Mapping[str, Any]) -> dict[str, Any]:
             ),
             "recommended_detail_template": (
                 "Optional reuse: car pma thread send --id {managed_thread_id} "
-                '--message "..." --watch --path <hub_root>'
+                '--message "..." --path <hub_root>'
             ),
         }
     if status == "idle":
@@ -190,7 +190,7 @@ def _thread_followup_semantics(entry: Mapping[str, Any]) -> dict[str, Any]:
                 ),
                 "recommended_detail_template": (
                     "Optional reuse: car pma thread send --id {managed_thread_id} "
-                    '--message "..." --watch --path <hub_root>'
+                    '--message "..." --path <hub_root>'
                 ),
             }
         if is_stale:
@@ -221,7 +221,7 @@ def _thread_followup_semantics(entry: Mapping[str, Any]) -> dict[str, Any]:
                 "recommended_detail_template": (
                     "Review before cleanup: car pma thread archive --id "
                     "{managed_thread_id} --path <hub_root> if dormant, or reuse it with "
-                    'car pma thread send --id {managed_thread_id} --message "..." --watch --path <hub_root>'
+                    'car pma thread send --id {managed_thread_id} --message "..." --path <hub_root>'
                 ),
             }
         return {
@@ -234,7 +234,7 @@ def _thread_followup_semantics(entry: Mapping[str, Any]) -> dict[str, Any]:
             ),
             "recommended_detail_template": (
                 "Optional reuse: car pma thread send --id {managed_thread_id} "
-                '--message "..." --watch --path <hub_root>'
+                '--message "..." --path <hub_root>'
             ),
         }
     return {
@@ -244,7 +244,7 @@ def _thread_followup_semantics(entry: Mapping[str, Any]) -> dict[str, Any]:
         "why_selected": "Managed thread can accept another turn if PMA needs it",
         "recommended_detail_template": (
             "Optional reuse: car pma thread send --id {managed_thread_id} "
-            '--message "..." --watch --path <hub_root>'
+            '--message "..." --path <hub_root>'
         ),
     }
 

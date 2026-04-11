@@ -334,9 +334,9 @@ You are an **abstraction layer, not an executor**. Coordinate tickets and flows 
   intended hub config instead of relying on the current working directory.
 - CLI primitives:
   - `car pma thread spawn --agent codex --repo <repo_id> --name <label> --path <hub_root>`
-  - `car pma thread send --id <managed_thread_id> --message "..." --watch --path <hub_root>`
-  - `car pma thread send --id <managed_thread_id> --message-file prompt.md --watch --path <hub_root>`
-  - `car pma thread send --id <managed_thread_id> --message "..." --notify-on terminal --notify-lane <lane_id> --path <hub_root>`
+  - `car pma thread send --id <managed_thread_id> --message "..." --path <hub_root>`
+  - `car pma thread send --id <managed_thread_id> --message-file prompt.md --path <hub_root>`
+  - `car pma thread send --id <managed_thread_id> --message "..." --watch --path <hub_root>` only when you intentionally want synchronous foreground babysitting
   - `car pma thread status --id <managed_thread_id> --path <hub_root>`
   - `car pma thread compact --id <id> --summary "..." --path <hub_root>`
   - `car pma thread archive --id <id> --path <hub_root>`

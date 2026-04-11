@@ -13,7 +13,6 @@ from .....core.car_context import (
     normalize_car_context_profile,
     render_injected_car_context,
 )
-from .....core.config import PMA_DEFAULT_MAX_TEXT_CHARS
 from .....core.orchestration.runtime_threads import (
     RUNTIME_THREAD_INTERRUPTED_ERROR,
     RUNTIME_THREAD_TIMEOUT_ERROR,
@@ -22,6 +21,7 @@ from .....core.pma_context import format_pma_discoverability_preamble
 from .....core.pma_thread_store import ManagedThreadNotActiveError
 from .....integrations.chat.approval_modes import resolve_approval_mode_policies
 from ...schemas import PmaManagedThreadMessageRequest
+from ...services.pma.common import pma_config_from_raw as shared_pma_config_from_raw
 from .automation_adapter import normalize_optional_text
 
 MANAGED_THREAD_PUBLIC_EXECUTION_ERROR = "Managed thread execution failed"
@@ -46,23 +46,9 @@ class ManagedThreadMessageOptions:
     execution_prompt: str
     delivery_payload: dict[str, Any]
 
-
-def pma_config_from_raw(raw: dict[str, Any]) -> dict[str, Any]:
-    defaults: dict[str, Any] = {
-        "enabled": True,
-        "max_text_chars": PMA_DEFAULT_MAX_TEXT_CHARS,
-    }
-    if not isinstance(raw, dict):
-        return defaults
-    pma = raw.get("pma")
-    if not isinstance(pma, dict):
-        return defaults
-    return {**defaults, **pma}
-
-
 def get_pma_route_config(request: Request) -> dict[str, Any]:
     raw = getattr(request.app.state.config, "raw", {})
-    return pma_config_from_raw(raw)
+    return shared_pma_config_from_raw(raw)
 
 
 def _resolve_managed_thread_policies(
@@ -204,6 +190,8 @@ def resolve_managed_thread_message_options(
         )
 
     notify_on = normalize_optional_text(payload.notify_on)
+    if not notify_on and bool(defaults.get("managed_thread_terminal_followup_default")):
+        notify_on = "terminal"
     if notify_on and notify_on != "terminal":
         raise HTTPException(
             status_code=400, detail="notify_on must be 'terminal' when provided"
@@ -340,8 +328,8 @@ def build_running_turn_exists_payload(
         "reason": "running_turn_exists",
         "detail": f"Managed thread {managed_thread_id} already has a running turn",
         "next_step": (
-            "Wait for the running turn to finish, use --watch, "
-            "or subscribe with --notify-on terminal."
+            "Wait for the running turn to finish or let the default terminal "
+            "wakeup fire; use --watch only for foreground babysitting."
         ),
         "managed_thread_id": managed_thread_id,
         "managed_turn_id": str((running_turn or {}).get("managed_turn_id") or "")

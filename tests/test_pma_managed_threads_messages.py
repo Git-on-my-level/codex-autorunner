@@ -33,6 +33,7 @@ def _enable_pma(
     model: str | None = None,
     reasoning: str | None = None,
     max_text_chars: int | None = None,
+    managed_thread_terminal_followup_default: bool | None = None,
 ) -> None:
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
     cfg.setdefault("pma", {})
@@ -43,6 +44,10 @@ def _enable_pma(
         cfg["pma"]["reasoning"] = reasoning
     if max_text_chars is not None:
         cfg["pma"]["max_text_chars"] = max_text_chars
+    if managed_thread_terminal_followup_default is not None:
+        cfg["pma"]["managed_thread_terminal_followup_default"] = (
+            managed_thread_terminal_followup_default
+        )
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
 
@@ -278,7 +283,9 @@ def test_send_message_persists_turns_and_reuses_backend_thread(hub_env) -> None:
 async def test_send_message_enqueues_assistant_output_to_bound_chat_outboxes(
     hub_env,
 ) -> None:
-    _enable_pma(hub_env.hub_root)
+    _enable_pma(
+        hub_env.hub_root, managed_thread_terminal_followup_default=False
+    )
     app = create_hub_app(hub_env.hub_root)
 
     class FakeTurnHandle:
@@ -1139,9 +1146,17 @@ def test_send_message_notifies_automation_on_completion(hub_env) -> None:
     class FakeAutomationStore:
         def __init__(self) -> None:
             self.transitions: list[dict[str, object]] = []
+            self.subscriptions: list[dict[str, object]] = []
 
         def notify_transition(self, payload: dict[str, object]) -> None:
             self.transitions.append(dict(payload))
+
+        def create_subscription(self, payload: dict[str, object]) -> dict[str, object]:
+            subscription = dict(payload)
+            subscription.setdefault("subscription_id", "sub-1")
+            subscription.setdefault("thread_id", payload.get("thread_id"))
+            self.subscriptions.append(subscription)
+            return {"subscription": subscription}
 
     class FakeTurnHandle:
         turn_id = "backend-turn-1"
@@ -1883,6 +1898,83 @@ def test_send_message_notify_on_terminal_auto_subscribes_once(hub_env) -> None:
         subscription = notification.get("subscription") or {}
         assert subscription.get("thread_id") == managed_thread_id
         assert subscription.get("lane_id") == "pma:auto-lane"
+
+    automation_store = app.state.hub_supervisor.get_pma_automation_store()
+    active_subs = automation_store.list_subscriptions(thread_id=managed_thread_id)
+    assert active_subs == []
+    all_subs = automation_store.list_subscriptions(
+        include_inactive=True, thread_id=managed_thread_id
+    )
+    assert all_subs
+    assert all_subs[0].get("state") == "cancelled"
+    assert all_subs[0].get("match_count") == 1
+
+
+def test_send_message_defaults_to_terminal_followup_subscription(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    class FakeTurnHandle:
+        turn_id = "backend-turn-1"
+
+        async def wait(self, timeout=None):
+            _ = timeout
+            return type(
+                "Result",
+                (),
+                {
+                    "agent_messages": ["assistant-output"],
+                    "raw_events": [],
+                    "errors": [],
+                },
+            )()
+
+    class FakeClient:
+        async def thread_start(self, root: str) -> dict:
+            _ = root
+            return {"id": "backend-thread-1"}
+
+        async def turn_start(
+            self,
+            thread_id: str,
+            prompt: str,
+            approval_policy: str,
+            sandbox_policy: str,
+            **turn_kwargs,
+        ):
+            _ = thread_id, prompt, approval_policy, sandbox_policy, turn_kwargs
+            return FakeTurnHandle()
+
+    class FakeSupervisor:
+        async def get_client(self, hub_root: Path):
+            _ = hub_root
+            return FakeClient()
+
+    app.state.app_server_supervisor = FakeSupervisor()
+    app.state.app_server_events = object()
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", **_repo_owner(hub_env)},
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+        message_resp = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={
+                "message": "trigger completion",
+            },
+        )
+        assert message_resp.status_code == 200
+        payload = message_resp.json()
+        assert payload["status"] == "ok"
+        assert payload["send_state"] == "accepted"
+        notification = payload.get("notification") or {}
+        subscription = notification.get("subscription") or {}
+        assert notification.get("mode") == "terminal"
+        assert subscription.get("thread_id") == managed_thread_id
 
     automation_store = app.state.hub_supervisor.get_pma_automation_store()
     active_subs = automation_store.list_subscriptions(thread_id=managed_thread_id)

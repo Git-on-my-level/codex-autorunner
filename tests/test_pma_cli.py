@@ -414,6 +414,10 @@ def test_pma_thread_send_request_and_response_helpers() -> None:
             "active_managed_turn_id": "turn-1",
             "queue_depth": "1",
             "delivered_message": "follow up",
+            "notification": {
+                "mode": "terminal",
+                "subscription": {"lane_id": "lane-1"},
+            },
         },
         default_message="fallback",
     )
@@ -431,7 +435,8 @@ def test_pma_thread_send_request_and_response_helpers() -> None:
     assert response.is_ok is True
     assert response.accepted_line() == (
         "send_state=accepted managed_turn_id=turn-2 "
-        "active_managed_turn_id=turn-1 queue_depth=1"
+        "active_managed_turn_id=turn-1 queue_depth=1 "
+        "wakeup=terminal lane=lane-1"
     )
     assert response.delivered_message == "follow up"
     assert error_response.is_ok is False
@@ -1081,6 +1086,10 @@ def test_pma_cli_thread_send_reports_queued_busy_thread(
                 "queue_depth": 1,
                 "delivered_message": "follow up",
                 "assistant_text": "",
+                "notification": {
+                    "mode": "terminal",
+                    "subscription": {"lane_id": "pma:default"},
+                },
             },
         )
 
@@ -1107,12 +1116,16 @@ def test_pma_cli_thread_send_reports_queued_busy_thread(
     assert "send_state=accepted managed_turn_id=turn-2" in result.stdout
     assert "active_managed_turn_id=turn-1" in result.stdout
     assert "queue_depth=1" in result.stdout
+    assert "wakeup=terminal lane=pma:default" in result.stdout
     assert "delivered message:\nfollow up\n" in result.stdout
     assert captured["url"] == "http://127.0.0.1:4321/hub/pma/threads/thread-1/messages"
     assert captured["payload"] == {
         "message": "follow up",
         "busy_policy": "queue",
         "defer_execution": True,
+        "notify_on": "terminal",
+        "notify_lane": None,
+        "notify_once": True,
     }
 
 
@@ -1178,6 +1191,9 @@ def test_pma_cli_thread_send_reads_message_from_file(
         "message": "literal `glm-5-turbo`\nsecond line\n",
         "busy_policy": "queue",
         "defer_execution": True,
+        "notify_on": "terminal",
+        "notify_lane": None,
+        "notify_once": True,
     }
     assert "delivered message:\nliteral `glm-5-turbo`\nsecond line\n" in result.stdout
     assert "\nassistant:\n" not in result.stdout
@@ -1243,6 +1259,9 @@ def test_pma_cli_thread_send_reads_message_from_stdin(
         "message": "stdin payload with backticks `glm-5-turbo`\n",
         "busy_policy": "queue",
         "defer_execution": True,
+        "notify_on": "terminal",
+        "notify_lane": None,
+        "notify_once": True,
     }
     assert (
         "delivered message:\nstdin payload with backticks `glm-5-turbo`\n"
