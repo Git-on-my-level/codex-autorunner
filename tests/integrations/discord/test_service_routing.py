@@ -538,6 +538,75 @@ async def test_discord_message_turns_delete_immediate_placeholder_when_backgroun
 
 
 @pytest.mark.anyio
+async def test_discord_managed_thread_delivery_uses_unique_record_ids_per_chunk() -> (
+    None
+):
+    sent_messages: list[dict[str, object]] = []
+
+    class _ServiceStub:
+        async def _send_channel_message_safe(
+            self,
+            channel_id: str,
+            payload: dict[str, object],
+            *,
+            record_id: str,
+        ) -> None:
+            sent_messages.append(
+                {
+                    "channel_id": channel_id,
+                    "payload": dict(payload),
+                    "record_id": record_id,
+                }
+            )
+
+        async def _run_with_typing_indicator(
+            self, *, channel_id: str, work: Any
+        ) -> None:
+            _ = channel_id
+            await work()
+
+        def _register_discord_turn_approval_context(self, **_kwargs: object) -> None:
+            return
+
+        def _clear_discord_turn_approval_context(self, **_kwargs: object) -> None:
+            return
+
+    hooks = discord_message_turns._build_discord_runner_hooks(
+        _ServiceStub(),
+        channel_id="channel-1",
+        managed_thread_id="thread-1",
+        public_execution_error="Discord turn failed",
+    )
+    content = ("a" * 1500) + "\n" + ("b" * 1500)
+    expected_chunks = discord_message_turns.chunk_discord_message(
+        content,
+        max_len=discord_message_turns.DISCORD_MAX_MESSAGE_LENGTH,
+        with_numbering=False,
+    )
+    assert len(expected_chunks) == 2
+
+    await hooks.deliver_result(
+        discord_message_turns.ManagedThreadFinalizationResult(
+            status="ok",
+            assistant_text=content,
+            error=None,
+            managed_thread_id="thread-1",
+            managed_turn_id="turn-1",
+            backend_thread_id=None,
+        )
+    )
+
+    assert [message["record_id"] for message in sent_messages] == [
+        "discord-queued:thread-1:turn-1:chunk:1",
+        "discord-queued:thread-1:turn-1:chunk:2",
+    ]
+    assert [message["payload"] for message in sent_messages] == [
+        {"content": expected_chunks[0]},
+        {"content": expected_chunks[1]},
+    ]
+
+
+@pytest.mark.anyio
 async def test_discord_message_turns_show_busy_placeholder_for_attachment_prep(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

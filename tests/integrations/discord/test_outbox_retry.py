@@ -11,6 +11,10 @@ from codex_autorunner.core.flows import FlowStore
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.state import now_iso
 from codex_autorunner.integrations.discord.outbox import DiscordOutboxManager
+from codex_autorunner.integrations.discord.rendering import (
+    DISCORD_MAX_MESSAGE_LENGTH,
+    chunk_discord_message,
+)
 from codex_autorunner.integrations.discord.state import DiscordStateStore, OutboxRecord
 
 
@@ -208,6 +212,60 @@ async def test_outbox_drops_record_after_exhausting_attempts(tmp_path: Path) -> 
         assert delivered is False
         assert calls["count"] == 2
         assert await store.get_outbox("drop-1") is None
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_outbox_retry_resumes_from_first_unsent_chunk(tmp_path: Path) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    clock = _Clock()
+    sent_chunks: list[str] = []
+
+    async def send_message(_channel_id: str, payload: dict) -> dict:
+        content = payload.get("content")
+        assert isinstance(content, str)
+        sent_chunks.append(content)
+        if len(sent_chunks) == 2:
+            raise _RetryAfterError(1.0)
+        return {"id": f"msg-{len(sent_chunks)}"}
+
+    manager = DiscordOutboxManager(
+        store,
+        send_message=send_message,
+        logger=logging.getLogger("test"),
+        immediate_retry_delays=(0.0,),
+        now_fn=clock.now,
+        sleep_fn=clock.sleep,
+    )
+
+    try:
+        await store.initialize()
+        manager.start()
+        content = ("a" * 1500) + "\n" + ("b" * 1500)
+        chunks = chunk_discord_message(
+            content,
+            max_len=DISCORD_MAX_MESSAGE_LENGTH,
+            with_numbering=False,
+        )
+        assert len(chunks) == 2
+
+        delivered = await manager.send_with_outbox(
+            OutboxRecord(
+                record_id="chunked-1",
+                channel_id="chan-1",
+                message_id=None,
+                operation="send",
+                payload_json={"content": content},
+                created_at=now_iso(),
+            )
+        )
+
+        assert delivered is True
+        assert sent_chunks == [chunks[0], chunks[1], chunks[1]]
+        assert sent_chunks.count(chunks[0]) == 1
+        assert any(delay >= 0.9 for delay in clock.sleeps)
+        assert await store.get_outbox("chunked-1") is None
     finally:
         await store.close()
 

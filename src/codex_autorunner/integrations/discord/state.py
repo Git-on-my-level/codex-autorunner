@@ -374,9 +374,14 @@ class DiscordStateStore:
         *,
         error: str,
         retry_after_seconds: float | None,
+        payload_json: Optional[dict[str, Any]] = None,
     ) -> None:
         await self._run(
-            self._record_outbox_failure_sync, record_id, error, retry_after_seconds
+            self._record_outbox_failure_sync,
+            record_id,
+            error,
+            retry_after_seconds,
+            payload_json,
         )
 
     async def register_interaction(
@@ -1350,7 +1355,11 @@ class DiscordStateStore:
             conn.execute("DELETE FROM outbox WHERE record_id = ?", (record_id,))
 
     def _record_outbox_failure_sync(
-        self, record_id: str, error: str, retry_after_seconds: Optional[float]
+        self,
+        record_id: str,
+        error: str,
+        retry_after_seconds: Optional[float],
+        payload_json: Optional[dict[str, Any]] = None,
     ) -> None:
         conn = self._connection_sync()
         row = conn.execute(
@@ -1372,10 +1381,21 @@ class DiscordStateStore:
                 UPDATE outbox
                 SET attempts = ?,
                     next_attempt_at = ?,
-                    last_error = ?
+                    last_error = ?,
+                    payload_json = COALESCE(?, payload_json)
                 WHERE record_id = ?
                 """,
-                (attempts, next_attempt_at, str(error)[:500], record_id),
+                (
+                    attempts,
+                    next_attempt_at,
+                    str(error)[:500],
+                    (
+                        json.dumps(payload_json, sort_keys=True)
+                        if payload_json is not None
+                        else None
+                    ),
+                    record_id,
+                ),
             )
 
     def _turn_progress_lease_from_row(

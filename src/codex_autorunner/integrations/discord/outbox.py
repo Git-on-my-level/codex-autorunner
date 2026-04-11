@@ -12,11 +12,14 @@ import httpx
 from ...core.config import ConfigError, load_repo_config
 from ...core.flows import FlowStore
 from ...core.flows.archive_helpers import flow_run_archive_root
+from .rendering import DISCORD_MAX_MESSAGE_LENGTH, chunk_discord_message
 from .state import DiscordStateStore, OutboxRecord
 
 OUTBOX_RETRY_INTERVAL_SECONDS = 5.0
 OUTBOX_MAX_ATTEMPTS = 5
 OUTBOX_IMMEDIATE_RETRY_DELAYS = (0.0, 1.0, 2.0)
+_OUTBOX_PROGRESS_KEY = "_codex_autorunner_outbox"
+_OUTBOX_PROGRESS_CHUNK_INDEX = "discord_chunk_start_index"
 
 SendMessageFn = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 DeleteMessageFn = Callable[[str, str], Awaitable[None]]
@@ -49,6 +52,36 @@ def _extract_retry_after_seconds(exc: Exception) -> Optional[float]:
                     pass
         current = current.__cause__ or current.__context__
     return None
+
+
+def _discord_chunk_start_index(payload_json: dict[str, Any]) -> int:
+    raw_progress = payload_json.get(_OUTBOX_PROGRESS_KEY)
+    if not isinstance(raw_progress, dict):
+        return 0
+    raw_index = raw_progress.get(_OUTBOX_PROGRESS_CHUNK_INDEX)
+    if not isinstance(raw_index, int):
+        return 0
+    return max(raw_index, 0)
+
+
+def _with_discord_chunk_start_index(
+    payload_json: dict[str, Any], start_index: int
+) -> dict[str, Any]:
+    next_payload = dict(payload_json)
+    if start_index <= 0:
+        next_payload.pop(_OUTBOX_PROGRESS_KEY, None)
+        return next_payload
+    raw_progress = next_payload.get(_OUTBOX_PROGRESS_KEY)
+    progress = dict(raw_progress) if isinstance(raw_progress, dict) else {}
+    progress[_OUTBOX_PROGRESS_CHUNK_INDEX] = start_index
+    next_payload[_OUTBOX_PROGRESS_KEY] = progress
+    return next_payload
+
+
+def _discord_send_payload(payload_json: dict[str, Any]) -> dict[str, Any]:
+    send_payload = dict(payload_json)
+    send_payload.pop(_OUTBOX_PROGRESS_KEY, None)
+    return send_payload
 
 
 def _terminal_run_id(record_id: str) -> Optional[str]:
@@ -186,14 +219,57 @@ class DiscordOutboxManager:
             return False
         try:
             delivered_message_id: Optional[str] = None
+            failure_payload_json = current.payload_json
             if current.operation == "send":
-                response = await self._send_message(
-                    current.channel_id, current.payload_json
+                send_payload = _discord_send_payload(current.payload_json)
+                payload_content = (
+                    send_payload.get("content")
+                    if isinstance(send_payload, dict)
+                    else None
                 )
-                message_id = response.get("id") if isinstance(response, dict) else None
-                delivered_message_id = (
-                    message_id if isinstance(message_id, str) else None
-                )
+                if (
+                    isinstance(payload_content, str)
+                    and len(payload_content) > DISCORD_MAX_MESSAGE_LENGTH
+                ):
+                    chunk_start_index = _discord_chunk_start_index(current.payload_json)
+                    chunks = chunk_discord_message(
+                        payload_content,
+                        max_len=DISCORD_MAX_MESSAGE_LENGTH,
+                        with_numbering=False,
+                    )
+                    if not chunks:
+                        chunks = [payload_content[:DISCORD_MAX_MESSAGE_LENGTH]]
+                    if chunk_start_index >= len(chunks):
+                        chunk_start_index = max(len(chunks) - 1, 0)
+                    last_response: dict[str, Any] = {}
+                    for chunk_index in range(chunk_start_index, len(chunks)):
+                        chunk_payload = dict(send_payload)
+                        chunk = chunks[chunk_index]
+                        chunk_payload["content"] = chunk
+                        last_response = await self._send_message(
+                            current.channel_id, chunk_payload
+                        )
+                        failure_payload_json = _with_discord_chunk_start_index(
+                            current.payload_json, chunk_index + 1
+                        )
+                    message_id = (
+                        last_response.get("id")
+                        if isinstance(last_response, dict)
+                        else None
+                    )
+                    delivered_message_id = (
+                        message_id if isinstance(message_id, str) else None
+                    )
+                else:
+                    response = await self._send_message(
+                        current.channel_id, send_payload
+                    )
+                    message_id = (
+                        response.get("id") if isinstance(response, dict) else None
+                    )
+                    delivered_message_id = (
+                        message_id if isinstance(message_id, str) else None
+                    )
             elif current.operation == "delete":
                 if (
                     self._delete_message is None
@@ -223,6 +299,7 @@ class DiscordOutboxManager:
                 current.record_id,
                 error=str(exc),
                 retry_after_seconds=retry_after,
+                payload_json=failure_payload_json,
             )
             self._logger.warning(
                 "discord.outbox.send_failed record_id=%s attempts=%s retry_after=%s error=%s",
