@@ -79,6 +79,7 @@ class HermesSupervisor:
         if not command:
             raise ValueError("Hermes command must not be empty")
         self._logger = logger or logging.getLogger(__name__)
+        self._command = tuple(str(part) for part in command)
         self._approval_handler = approval_handler
         self._default_approval_decision = _normalize_approval_decision(
             default_approval_decision,
@@ -100,8 +101,28 @@ class HermesSupervisor:
         self._session_turns: dict[tuple[str, str], str] = {}
         self._lock = asyncio.Lock()
 
+    @property
+    def launch_command(self) -> tuple[str, ...]:
+        return self._command
+
     async def ensure_ready(self, workspace_root: Path) -> None:
+        started_at = time.monotonic()
+        log_event(
+            self._logger,
+            logging.INFO,
+            "hermes.runtime.ensure_ready_requested",
+            workspace_root=_workspace_key(workspace_root),
+            launch_command=list(self._command),
+        )
         await self._acp.get_client(workspace_root)
+        log_event(
+            self._logger,
+            logging.INFO,
+            "hermes.runtime.ready",
+            workspace_root=_workspace_key(workspace_root),
+            launch_command=list(self._command),
+            elapsed_ms=_elapsed_ms(started_at),
+        )
 
     async def create_session(
         self,
@@ -111,6 +132,14 @@ class HermesSupervisor:
         metadata: Optional[dict[str, Any]] = None,
     ) -> HermesSessionHandle:
         started_at = time.monotonic()
+        log_event(
+            self._logger,
+            logging.INFO,
+            "hermes.session.create_requested",
+            workspace_root=_workspace_key(workspace_root),
+            title=title,
+            launch_command=list(self._command),
+        )
         session = await self._acp.create_session(
             workspace_root,
             title=title,
@@ -123,6 +152,7 @@ class HermesSupervisor:
             workspace_root=_workspace_key(workspace_root),
             session_id=session.session_id,
             title=title,
+            launch_command=list(self._command),
             elapsed_ms=_elapsed_ms(started_at),
         )
         return HermesSessionHandle(
@@ -137,6 +167,14 @@ class HermesSupervisor:
         session_id: str,
     ) -> HermesSessionHandle:
         started_at = time.monotonic()
+        log_event(
+            self._logger,
+            logging.INFO,
+            "hermes.session.resume_requested",
+            workspace_root=_workspace_key(workspace_root),
+            session_id=session_id,
+            launch_command=list(self._command),
+        )
         session = await self._acp.load_session(workspace_root, session_id)
         log_event(
             self._logger,
@@ -144,6 +182,7 @@ class HermesSupervisor:
             "hermes.session.resumed",
             workspace_root=_workspace_key(workspace_root),
             session_id=session.session_id,
+            launch_command=list(self._command),
             elapsed_ms=_elapsed_ms(started_at),
         )
         return HermesSessionHandle(
@@ -174,6 +213,16 @@ class HermesSupervisor:
     ) -> str:
         workspace = _workspace_key(workspace_root)
         started_at = time.monotonic()
+        log_event(
+            self._logger,
+            logging.INFO,
+            "hermes.turn.start_requested",
+            workspace_root=workspace,
+            session_id=session_id,
+            approval_mode=_normalize_optional_text(approval_mode),
+            model=_normalize_optional_text(model),
+            launch_command=list(self._command),
+        )
         handle = await self._acp.start_prompt(
             workspace_root,
             session_id,
@@ -217,6 +266,7 @@ class HermesSupervisor:
             turn_id=handle.turn_id,
             approval_mode=_normalize_optional_text(approval_mode),
             model=_normalize_optional_text(model),
+            launch_command=list(self._command),
             elapsed_ms=_elapsed_ms(started_at),
         )
         return handle.turn_id
