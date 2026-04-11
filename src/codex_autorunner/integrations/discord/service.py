@@ -709,7 +709,7 @@ class DiscordBotService:
         pause_watch_task = asyncio.create_task(self._watch_ticket_flow_pauses())
         terminal_watch_task = asyncio.create_task(self._watch_ticket_flow_terminals())
         dispatcher_loop_task = asyncio.create_task(self._run_dispatcher_loop())
-        startup_command_sync_task = self._spawn_task(
+        self._spawn_task(
             self._run_startup_command_sync_background(),
             await_on_shutdown=True,
         )
@@ -737,8 +737,6 @@ class DiscordBotService:
                 await self._dispatcher.wait_idle()
             with contextlib.suppress(Exception):  # intentional: shutdown cleanup
                 await self._dispatcher.close()
-            with contextlib.suppress(Exception):  # intentional: shutdown cleanup
-                await startup_command_sync_task
             dispatcher_loop_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await dispatcher_loop_task
