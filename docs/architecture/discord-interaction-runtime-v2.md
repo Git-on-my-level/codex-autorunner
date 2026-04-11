@@ -282,26 +282,45 @@ Each interaction lease record must persist at least:
 - `interaction_token`
 - `route_key`
 - `interaction_kind`
-- `ack_state`
+- `handler_id`
+- `conversation_id`
+- `ack_mode`
 - `scheduler_state`
 - `resource_keys`
 - `payload_json`
-- `handler_id`
-- `delivery_cursor` or equivalent followup/edit status
+- `envelope_json`
+- `delivery_cursor` with the pending/completed Discord callback payload
 - `attempt_count`
 - `updated_at`
 
+In the current implementation this lease lives in
+`interaction_ledger` inside
+`src/codex_autorunner/integrations/discord/state.py` and carries both
+execution state (`received`, `acknowledged`, `running`, `completed`, etc.)
+and scheduler state (`dispatch_ready`, `waiting_on_resources`,
+`executing`, `delivery_pending`, `delivery_replaying`, `completed`,
+`delivery_expired`, `abandoned`).
+
 ### Recovery rules
 
-- On startup, the runtime scans for interaction rows in `ACKED_*`,
-  `SCHEDULED`, `EXECUTING`, or `DELIVERING`.
-- If the interaction never reached `EXECUTING`, it may be rescheduled without a
-  second ack.
-- If execution finished but delivery did not, recovery resumes delivery only.
-- If Discord rejects the stored token or edit target during recovery, the row
-  transitions to `EXPIRED` and the runtime logs an operator-visible event.
-- Recovery must never rerun a completed business mutation unless the handler is
-  explicitly declared replay-safe.
+- The runtime writes `payload_json` and `envelope_json` before any ack/defer
+  side effect. Duplicate deliveries and restart recovery decide from disk, not
+  from process-local memory.
+- On startup, the runtime scans non-terminal ledger rows. The scan reconstructs
+  the runtime envelope directly from the stored lease row.
+- If the row has a durable ack marker but no business execution, startup
+  resubmits execution in replay mode and restores the session state without a
+  second Discord ack.
+- If the row has a pending delivery cursor, startup replays only that Discord
+  callback and does not re-enter handler business logic.
+- Duplicate `INTERACTION_CREATE` deliveries for an already completed row are
+  rejected. Duplicates for a recoverable row are allowed back into the runtime
+  so the durable lease can resume work after a post-ack crash.
+- If a row never reached a durable ack state, recovery transitions it to
+  `delivery_expired` because Discord no longer guarantees the initial callback
+  window.
+- If required recovery material is missing or malformed, recovery transitions
+  the row to `abandoned` and emits an operator-visible log event.
 
 ## Before/After Module Map
 

@@ -50,6 +50,35 @@ High-signal telemetry for the interaction lifecycle:
 | `discord.runner.timeout` | Handler cancelled after timeout |
 | `discord.runner.execute.done` | Handler completed (includes `total_lifecycle_ms`, `gateway_to_completion_ms`) |
 
+### Recovery and operator checks
+
+Discord restart recovery is driven from the durable
+`interaction_ledger` row in `.codex-autorunner/discord_state.sqlite3`.
+Important fields when diagnosing a stuck interaction:
+
+- `scheduler_state`: current runtime phase such as `dispatch_ready`,
+  `waiting_on_resources`, `executing`, `delivery_pending`,
+  `delivery_replaying`, `completed`, `delivery_expired`, or `abandoned`
+- `execution_status`: coarse execution phase (`received`, `acknowledged`,
+  `running`, `completed`, etc.)
+- `route_key`, `handler_id`, `conversation_id`, `resource_keys_json`
+- `payload_json` and `envelope_json` for replay/debugging context
+- `delivery_cursor_json` for the exact Discord callback that was pending or
+  replayed
+- `attempt_count`, `updated_at`, `last_seen_at`
+
+Operational expectations:
+
+- A post-ack crash before handler execution should restart in execution replay
+  mode without sending a second initial response.
+- A crash after handler completion but before the final Discord callback should
+  restart in delivery replay mode without rerunning business logic.
+- A duplicate delivery for a completed interaction should be rejected and must
+  not re-ack or rerun the handler.
+- Rows that never reached a durable ack become `delivery_expired`.
+- Rows missing the stored envelope or delivery cursor required for safe replay
+  become `abandoned` and emit `discord.interaction.recovery.abandoned`.
+
 ---
 
 ## Instructions for the Agent

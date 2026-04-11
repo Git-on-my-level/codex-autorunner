@@ -14,7 +14,7 @@ from ...core.sqlite_utils import connect_sqlite
 from ...core.state import now_iso
 from ..chat.agents import normalize_hermes_profile
 
-DISCORD_STATE_SCHEMA_VERSION = 10
+DISCORD_STATE_SCHEMA_VERSION = 11
 DISCORD_INTERACTION_LEDGER_RETENTION_DAYS = 14
 _UNSET = object()
 _logger = logging.getLogger(__name__)
@@ -42,6 +42,15 @@ class InteractionLedgerRecord:
     guild_id: Optional[str]
     user_id: Optional[str]
     metadata_json: dict[str, Any]
+    route_key: Optional[str] = None
+    handler_id: Optional[str] = None
+    conversation_id: Optional[str] = None
+    scheduler_state: str = "received"
+    resource_keys: tuple[str, ...] = ()
+    payload_json: Optional[dict[str, Any]] = None
+    envelope_json: Optional[dict[str, Any]] = None
+    delivery_cursor_json: Optional[dict[str, Any]] = None
+    attempt_count: int = 0
     ack_mode: Optional[str] = None
     ack_completed_at: Optional[str] = None
     execution_status: str = "received"
@@ -306,6 +315,63 @@ class DiscordStateStore:
     ) -> Optional[InteractionLedgerRecord]:
         return await self._run(self._get_interaction_sync, interaction_id)  # type: ignore[no-any-return]
 
+    async def persist_interaction_runtime(
+        self,
+        interaction_id: str,
+        *,
+        route_key: Optional[str],
+        handler_id: Optional[str],
+        conversation_id: Optional[str],
+        scheduler_state: str,
+        resource_keys: tuple[str, ...],
+        payload_json: dict[str, Any],
+        envelope_json: dict[str, Any],
+    ) -> None:
+        await self._run(
+            self._persist_interaction_runtime_sync,
+            interaction_id,
+            route_key,
+            handler_id,
+            conversation_id,
+            scheduler_state,
+            resource_keys,
+            payload_json,
+            envelope_json,
+        )
+
+    async def mark_interaction_scheduler_state(
+        self,
+        interaction_id: str,
+        *,
+        scheduler_state: str,
+        increment_attempt_count: bool = False,
+    ) -> None:
+        await self._run(
+            self._mark_interaction_scheduler_state_sync,
+            interaction_id,
+            scheduler_state,
+            increment_attempt_count,
+        )
+
+    async def update_interaction_delivery_cursor(
+        self,
+        interaction_id: str,
+        *,
+        delivery_cursor_json: Optional[dict[str, Any]],
+        scheduler_state: Optional[str] = None,
+        increment_attempt_count: bool = False,
+    ) -> None:
+        await self._run(
+            self._update_interaction_delivery_cursor_sync,
+            interaction_id,
+            delivery_cursor_json,
+            scheduler_state,
+            increment_attempt_count,
+        )
+
+    async def list_recoverable_interactions(self) -> list[InteractionLedgerRecord]:
+        return await self._run(self._list_recoverable_interactions_sync)  # type: ignore[no-any-return]
+
     async def claim_interaction_execution(self, interaction_id: str) -> bool:
         return await self._run(self._claim_interaction_execution_sync, interaction_id)  # type: ignore[no-any-return]
 
@@ -452,6 +518,15 @@ class DiscordStateStore:
                     guild_id TEXT,
                     user_id TEXT,
                     metadata_json TEXT NOT NULL,
+                    route_key TEXT,
+                    handler_id TEXT,
+                    conversation_id TEXT,
+                    scheduler_state TEXT NOT NULL DEFAULT 'received',
+                    resource_keys_json TEXT,
+                    payload_json TEXT,
+                    envelope_json TEXT,
+                    delivery_cursor_json TEXT,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
                     ack_mode TEXT,
                     ack_completed_at TEXT,
                     execution_status TEXT NOT NULL,
@@ -477,6 +552,12 @@ class DiscordStateStore:
                 """
                 CREATE INDEX IF NOT EXISTS idx_discord_interaction_ledger_execution_status
                     ON interaction_ledger(execution_status)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_discord_interaction_ledger_scheduler_state
+                    ON interaction_ledger(scheduler_state)
                 """
             )
             self._ensure_channel_binding_columns(conn)
@@ -566,6 +647,34 @@ class DiscordStateStore:
         names = {str(row["name"]) for row in rows}
         if not names:
             return
+        if "route_key" not in names:
+            conn.execute("ALTER TABLE interaction_ledger ADD COLUMN route_key TEXT")
+        if "handler_id" not in names:
+            conn.execute("ALTER TABLE interaction_ledger ADD COLUMN handler_id TEXT")
+        if "conversation_id" not in names:
+            conn.execute(
+                "ALTER TABLE interaction_ledger ADD COLUMN conversation_id TEXT"
+            )
+        if "scheduler_state" not in names:
+            conn.execute(
+                "ALTER TABLE interaction_ledger ADD COLUMN scheduler_state TEXT NOT NULL DEFAULT 'received'"
+            )
+        if "resource_keys_json" not in names:
+            conn.execute(
+                "ALTER TABLE interaction_ledger ADD COLUMN resource_keys_json TEXT"
+            )
+        if "payload_json" not in names:
+            conn.execute("ALTER TABLE interaction_ledger ADD COLUMN payload_json TEXT")
+        if "envelope_json" not in names:
+            conn.execute("ALTER TABLE interaction_ledger ADD COLUMN envelope_json TEXT")
+        if "delivery_cursor_json" not in names:
+            conn.execute(
+                "ALTER TABLE interaction_ledger ADD COLUMN delivery_cursor_json TEXT"
+            )
+        if "attempt_count" not in names:
+            conn.execute(
+                "ALTER TABLE interaction_ledger ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0"
+            )
         if "execution_error" not in names:
             conn.execute(
                 "ALTER TABLE interaction_ledger ADD COLUMN execution_error TEXT"
@@ -1176,12 +1285,13 @@ class DiscordStateStore:
                         guild_id,
                         user_id,
                         metadata_json,
+                        scheduler_state,
                         execution_status,
                         created_at,
                         updated_at,
                         last_seen_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         interaction_id,
@@ -1191,6 +1301,7 @@ class DiscordStateStore:
                         guild_id,
                         user_id,
                         metadata_blob,
+                        "received",
                         "received",
                         now,
                         now,
@@ -1236,16 +1347,35 @@ class DiscordStateStore:
             inserted=inserted,
         )
 
+    @staticmethod
+    def _decode_json_object(raw_value: Any) -> dict[str, Any]:
+        if not isinstance(raw_value, str) or not raw_value:
+            return {}
+        try:
+            parsed = json.loads(raw_value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    @staticmethod
+    def _decode_json_string_tuple(raw_value: Any) -> tuple[str, ...]:
+        if not isinstance(raw_value, str) or not raw_value:
+            return ()
+        try:
+            parsed = json.loads(raw_value)
+        except json.JSONDecodeError:
+            return ()
+        if not isinstance(parsed, list):
+            return ()
+        values = [item for item in parsed if isinstance(item, str) and item.strip()]
+        return tuple(values)
+
     def _interaction_from_row(self, row: sqlite3.Row) -> InteractionLedgerRecord:
-        raw_metadata = row["metadata_json"]
-        metadata: dict[str, Any] = {}
-        if isinstance(raw_metadata, str) and raw_metadata:
-            try:
-                parsed = json.loads(raw_metadata)
-            except json.JSONDecodeError:
-                parsed = {}
-            if isinstance(parsed, dict):
-                metadata = parsed
+        metadata = self._decode_json_object(row["metadata_json"])
+        payload_json = self._decode_json_object(row["payload_json"])
+        envelope_json = self._decode_json_object(row["envelope_json"])
+        delivery_cursor_json = self._decode_json_object(row["delivery_cursor_json"])
+        resource_keys = self._decode_json_string_tuple(row["resource_keys_json"])
         return InteractionLedgerRecord(
             interaction_id=str(row["interaction_id"]),
             interaction_token=str(row["interaction_token"]),
@@ -1254,6 +1384,25 @@ class DiscordStateStore:
             guild_id=row["guild_id"] if isinstance(row["guild_id"], str) else None,
             user_id=row["user_id"] if isinstance(row["user_id"], str) else None,
             metadata_json=metadata,
+            route_key=row["route_key"] if isinstance(row["route_key"], str) else None,
+            handler_id=(
+                row["handler_id"] if isinstance(row["handler_id"], str) else None
+            ),
+            conversation_id=(
+                row["conversation_id"]
+                if isinstance(row["conversation_id"], str)
+                else None
+            ),
+            scheduler_state=(
+                str(row["scheduler_state"])
+                if row["scheduler_state"] is not None
+                else "received"
+            ),
+            resource_keys=resource_keys,
+            payload_json=payload_json or None,
+            envelope_json=envelope_json or None,
+            delivery_cursor_json=delivery_cursor_json or None,
+            attempt_count=int(row["attempt_count"] or 0),
             ack_mode=row["ack_mode"] if isinstance(row["ack_mode"], str) else None,
             ack_completed_at=(
                 row["ack_completed_at"]
@@ -1309,6 +1458,122 @@ class DiscordStateStore:
             return None
         return self._interaction_from_row(row)
 
+    def _persist_interaction_runtime_sync(
+        self,
+        interaction_id: str,
+        route_key: Optional[str],
+        handler_id: Optional[str],
+        conversation_id: Optional[str],
+        scheduler_state: str,
+        resource_keys: tuple[str, ...],
+        payload_json: dict[str, Any],
+        envelope_json: dict[str, Any],
+    ) -> None:
+        conn = self._connection_sync()
+        now = now_iso()
+        with conn:
+            conn.execute(
+                """
+                UPDATE interaction_ledger
+                SET route_key = ?,
+                    handler_id = ?,
+                    conversation_id = ?,
+                    scheduler_state = ?,
+                    resource_keys_json = ?,
+                    payload_json = ?,
+                    envelope_json = ?,
+                    updated_at = ?,
+                    last_seen_at = ?
+                WHERE interaction_id = ?
+                """,
+                (
+                    route_key,
+                    handler_id,
+                    conversation_id,
+                    scheduler_state,
+                    json.dumps(list(resource_keys), sort_keys=True),
+                    json.dumps(payload_json, sort_keys=True),
+                    json.dumps(envelope_json, sort_keys=True),
+                    now,
+                    now,
+                    interaction_id,
+                ),
+            )
+
+    def _mark_interaction_scheduler_state_sync(
+        self,
+        interaction_id: str,
+        scheduler_state: str,
+        increment_attempt_count: bool,
+    ) -> None:
+        conn = self._connection_sync()
+        now = now_iso()
+        with conn:
+            conn.execute(
+                """
+                UPDATE interaction_ledger
+                SET scheduler_state = ?,
+                    attempt_count = attempt_count + ?,
+                    updated_at = ?,
+                    last_seen_at = ?
+                WHERE interaction_id = ?
+                """,
+                (
+                    scheduler_state,
+                    1 if increment_attempt_count else 0,
+                    now,
+                    now,
+                    interaction_id,
+                ),
+            )
+
+    def _update_interaction_delivery_cursor_sync(
+        self,
+        interaction_id: str,
+        delivery_cursor_json: Optional[dict[str, Any]],
+        scheduler_state: Optional[str],
+        increment_attempt_count: bool,
+    ) -> None:
+        conn = self._connection_sync()
+        now = now_iso()
+        with conn:
+            conn.execute(
+                """
+                UPDATE interaction_ledger
+                SET delivery_cursor_json = ?,
+                    scheduler_state = COALESCE(?, scheduler_state),
+                    attempt_count = attempt_count + ?,
+                    updated_at = ?,
+                    last_seen_at = ?
+                WHERE interaction_id = ?
+                """,
+                (
+                    (
+                        json.dumps(delivery_cursor_json, sort_keys=True)
+                        if delivery_cursor_json is not None
+                        else None
+                    ),
+                    scheduler_state,
+                    1 if increment_attempt_count else 0,
+                    now,
+                    now,
+                    interaction_id,
+                ),
+            )
+
+    def _list_recoverable_interactions_sync(self) -> list[InteractionLedgerRecord]:
+        conn = self._connection_sync()
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM interaction_ledger
+            WHERE scheduler_state NOT IN ('completed', 'delivery_expired', 'abandoned')
+              AND execution_status NOT IN ('failed', 'timeout', 'cancelled')
+            ORDER BY created_at ASC
+            """
+        ).fetchall()
+        return [self._interaction_from_row(row) for row in rows]
+
     def _claim_interaction_execution_sync(self, interaction_id: str) -> bool:
         conn = self._connection_sync()
         now = now_iso()
@@ -1317,7 +1582,10 @@ class DiscordStateStore:
                 """
                 UPDATE interaction_ledger
                 SET execution_status = 'running',
+                    scheduler_state = 'executing',
+                    delivery_cursor_json = NULL,
                     execution_started_at = COALESCE(execution_started_at, ?),
+                    attempt_count = attempt_count + 1,
                     updated_at = ?,
                     last_seen_at = ?
                 WHERE interaction_id = ?
@@ -1341,6 +1609,16 @@ class DiscordStateStore:
                 UPDATE interaction_ledger
                 SET ack_mode = COALESCE(ack_mode, ?),
                     ack_completed_at = COALESCE(ack_completed_at, ?),
+                    scheduler_state = CASE
+                        WHEN scheduler_state IN (
+                            'received',
+                            'dispatch_ready',
+                            'dispatch_ack_pending',
+                            'queue_wait_ack_pending'
+                        )
+                        THEN 'acknowledged'
+                        ELSE scheduler_state
+                    END,
                     execution_status = CASE
                         WHEN execution_status = 'received' THEN 'acknowledged'
                         ELSE execution_status
@@ -1396,6 +1674,13 @@ class DiscordStateStore:
                 """
                 UPDATE interaction_ledger
                 SET execution_status = ?,
+                    scheduler_state = CASE
+                        WHEN ? = 'completed' AND delivery_cursor_json IS NULL
+                        THEN 'completed'
+                        WHEN ? = 'completed'
+                        THEN 'delivery_pending'
+                        ELSE scheduler_state
+                    END,
                     execution_finished_at = ?,
                     execution_error = ?,
                     updated_at = ?,
@@ -1403,6 +1688,8 @@ class DiscordStateStore:
                 WHERE interaction_id = ?
                 """,
                 (
+                    execution_status,
+                    execution_status,
                     execution_status,
                     now,
                     error_text,
@@ -1428,6 +1715,11 @@ class DiscordStateStore:
                 UPDATE interaction_ledger
                 SET final_delivery_status = ?,
                     final_delivery_error = ?,
+                    scheduler_state = CASE
+                        WHEN delivery_cursor_json IS NOT NULL THEN scheduler_state
+                        WHEN execution_status = 'completed' THEN 'completed'
+                        ELSE scheduler_state
+                    END,
                     original_response_message_id = COALESCE(?, original_response_message_id),
                     updated_at = ?,
                     last_seen_at = ?

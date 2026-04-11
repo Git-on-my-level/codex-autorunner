@@ -53,6 +53,7 @@ class ScheduledInteraction:
     ctx: IngressContext
     payload: dict[str, Any]
     schedule: InteractionSchedule
+    replay_mode: str = "normal"
     queue_wait_ack_policy: Optional[DiscordAckPolicy] = None
     admitted: bool = False
     ready: Optional[asyncio.Future[None]] = None
@@ -120,11 +121,38 @@ class CommandRunner:
             ctx=ctx,
             payload=payload,
             schedule=schedule,
+            replay_mode="normal",
             queue_wait_ack_policy=queue_wait_ack_policy,
         )
         task = asyncio.create_task(
             self._run_scheduled_interaction(item),
             name=f"discord-runner-{ctx.interaction_id}",
+        )
+        self._track_interaction_task(task)
+
+    def submit_recovery(
+        self,
+        ctx: IngressContext,
+        payload: dict[str, Any],
+        *,
+        resource_keys: Sequence[str] = (),
+        conversation_id: Optional[str] = None,
+        replay_mode: str,
+    ) -> None:
+        schedule = InteractionSchedule(
+            resource_keys=tuple(dict.fromkeys(resource_keys)),
+            conversation_id=conversation_id,
+        )
+        item = ScheduledInteraction(
+            ctx=ctx,
+            payload=payload,
+            schedule=schedule,
+            replay_mode=replay_mode,
+            queue_wait_ack_policy=None,
+        )
+        task = asyncio.create_task(
+            self._run_scheduled_interaction(item),
+            name=f"discord-runner-recovery-{ctx.interaction_id}",
         )
         self._track_interaction_task(task)
 
@@ -159,6 +187,22 @@ class CommandRunner:
             maybe_awaitable = self._on_scheduler_conversation_idle(conversation_id)
             if inspect.isawaitable(maybe_awaitable):
                 await maybe_awaitable
+
+    async def _mark_scheduler_state(
+        self,
+        item: ScheduledInteraction,
+        *,
+        scheduler_state: str,
+        increment_attempt_count: bool = False,
+    ) -> None:
+        mark_state = getattr(self._service, "_mark_interaction_scheduler_state", None)
+        if not callable(mark_state):
+            return
+        await mark_state(
+            item.ctx,
+            scheduler_state=scheduler_state,
+            increment_attempt_count=increment_attempt_count,
+        )
 
     async def shutdown(self, *, grace_seconds: float = 5.0) -> None:
         idle_conversations: set[str] = set()
@@ -253,8 +297,16 @@ class CommandRunner:
             if item.schedule.resource_keys:
                 admitted_immediately = await self._admit_or_enqueue_schedule(item)
                 if admitted_immediately:
+                    await self._mark_scheduler_state(
+                        item,
+                        scheduler_state="scheduled",
+                    )
                     acquired_schedule = True
                 else:
+                    await self._mark_scheduler_state(
+                        item,
+                        scheduler_state="waiting_on_resources",
+                    )
                     if item.queue_wait_ack_policy not in (None, "immediate"):
                         acknowledged = (
                             await self._service._acknowledge_runtime_envelope(
@@ -271,8 +323,21 @@ class CommandRunner:
                             notify_idle = await self._remove_pending_schedule(item)
                             return
                     await self._wait_for_schedule(item)
+                    await self._mark_scheduler_state(
+                        item,
+                        scheduler_state="scheduled",
+                    )
                     acquired_schedule = True
-            await self._run_with_lifecycle(item.ctx, item.payload)
+            else:
+                await self._mark_scheduler_state(
+                    item,
+                    scheduler_state="scheduled",
+                )
+            await self._run_with_lifecycle(
+                item.ctx,
+                item.payload,
+                replay_mode=item.replay_mode,
+            )
         except asyncio.CancelledError:
             return
         finally:
@@ -431,11 +496,30 @@ class CommandRunner:
         self,
         ctx: IngressContext,
         payload: dict[str, Any],
+        *,
+        replay_mode: str = "normal",
     ) -> None:
         begin_execution = getattr(self._service, "_begin_interaction_execution", None)
+        begin_recovery_execution = getattr(
+            self._service, "_begin_interaction_recovery_execution", None
+        )
+        replay_delivery = getattr(self._service, "_replay_interaction_delivery", None)
         finish_execution = getattr(self._service, "_finish_interaction_execution", None)
+        if replay_mode == "delivery_replay":
+            if callable(replay_delivery):
+                await replay_delivery(ctx)
+            else:
+                log_event(
+                    self._logger,
+                    logging.ERROR,
+                    "discord.runner.delivery_replay.unsupported",
+                    interaction_id=ctx.interaction_id,
+                )
+            return
         claimed_execution = True
-        if callable(begin_execution):
+        if replay_mode == "execution_replay" and callable(begin_recovery_execution):
+            claimed_execution = bool(await begin_recovery_execution(ctx))
+        elif callable(begin_execution):
             claimed_execution = bool(await begin_execution(ctx))
         if not claimed_execution:
             log_event(
