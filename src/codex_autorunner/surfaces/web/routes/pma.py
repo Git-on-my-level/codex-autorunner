@@ -30,6 +30,7 @@ from .pma_routes.chat_runtime import (
     _stop_all_lane_workers_for_app,
     _stop_lane_worker_for_app,
 )
+from .trace_inspection import build_trace_inspection_routes
 
 
 def _require_pma_enabled(request: Request) -> None:
@@ -58,6 +59,7 @@ def build_pma_routes() -> APIRouter:
     build_history_files_docs_router(router, _get_runtime_state)
     build_chat_runtime_router(router, _get_runtime_state)
     build_pma_meta_routes(router, _get_runtime_state)
+    build_trace_inspection_routes(router)
 
     async def _start_lane_worker(app, lane_id: str) -> None:
         await _ensure_lane_worker_for_app(runtime_state, app, lane_id)

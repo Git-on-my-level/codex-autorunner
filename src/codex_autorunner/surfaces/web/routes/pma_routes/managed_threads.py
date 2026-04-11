@@ -14,6 +14,7 @@ from .....agents.registry import (
 from .....core.chat_bindings import active_chat_binding_metadata_by_thread
 from .....core.orchestration import build_harness_backed_orchestration_service
 from .....core.orchestration.catalog import RuntimeAgentDescriptor
+from .....core.orchestration.cold_trace_store import ColdTraceStore
 from .....core.orchestration.turn_timeline import list_turn_timeline
 from .....core.pma_automation_store import PmaAutomationThreadNotFoundError
 from .....core.pma_thread_store import PmaThreadStore
@@ -584,7 +585,8 @@ def build_managed_thread_crud_routes(
         managed_turn_id: str,
         request: Request,
     ) -> dict[str, Any]:
-        store = PmaThreadStore(request.app.state.config.root)
+        hub_root = request.app.state.config.root
+        store = PmaThreadStore(hub_root)
         thread = store.get_thread(managed_thread_id)
         if thread is None:
             raise HTTPException(status_code=404, detail="Managed thread not found")
@@ -592,13 +594,59 @@ def build_managed_thread_crud_routes(
         turn = store.get_turn(managed_thread_id, managed_turn_id)
         if turn is None:
             raise HTTPException(status_code=404, detail="Managed turn not found")
-        return {
+
+        timeline = list_turn_timeline(
+            hub_root,
+            execution_id=managed_turn_id,
+        )
+
+        cold_store = ColdTraceStore(hub_root)
+        manifest = cold_store.get_manifest(managed_turn_id)
+        checkpoint = cold_store.load_checkpoint(managed_turn_id)
+
+        hot_truncated = False
+        hot_preview_only = False
+        for entry in timeline:
+            event = entry.get("event")
+            if not isinstance(event, dict):
+                continue
+            if event.get("details_in_cold_trace"):
+                hot_truncated = True
+                hot_preview_only = True
+            for flag in (
+                "tool_input_truncated",
+                "result_truncated",
+                "error_truncated",
+                "message_truncated",
+                "data_truncated",
+                "content_truncated",
+                "final_message_truncated",
+                "error_message_truncated",
+            ):
+                if event.get(flag):
+                    hot_truncated = True
+                    break
+
+        response: dict[str, Any] = {
             "turn": turn,
-            "timeline": list_turn_timeline(
-                request.app.state.config.root,
-                execution_id=managed_turn_id,
-            ),
+            "timeline": timeline,
+            "trace_metadata": {
+                "hot_timeline_entries": len(timeline),
+                "hot_preview_truncated": hot_truncated,
+                "hot_preview_only": hot_preview_only,
+                "cold_trace_available": manifest is not None,
+                "checkpoint_available": checkpoint is not None,
+            },
         }
+        if manifest is not None:
+            response["trace_metadata"]["cold_trace"] = {
+                "trace_id": manifest.trace_id,
+                "status": manifest.status,
+                "event_count": manifest.event_count,
+                "byte_count": manifest.byte_count,
+                "includes_families": list(manifest.includes_families),
+            }
+        return response
 
     @router.get("/bindings")
     def list_bindings(
