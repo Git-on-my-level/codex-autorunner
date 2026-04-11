@@ -69,7 +69,7 @@ def register_repos_commands(
         except OSError as exc:
             raise_exit(f"Failed to write hub config: {exc}", cause=exc)
 
-        typer.echo(f"Added template repo '{repo_id}' to hub config.")
+        typer.echo(f"Added repo {repo_id}")
 
     @repos_app.command("remove")
     def repos_remove(
@@ -90,7 +90,7 @@ def register_repos_commands(
         except OSError as exc:
             raise_exit(f"Failed to write hub config: {exc}", cause=exc)
 
-        typer.echo(f"Removed template repo '{repo_id}' from hub config.")
+        typer.echo(f"Removed repo {repo_id}")
 
     @repos_app.command("trust")
     def repos_trust(
@@ -111,7 +111,7 @@ def register_repos_commands(
         except OSError as exc:
             raise_exit(f"Failed to write hub config: {exc}", cause=exc)
 
-        typer.echo(f"Marked repo '{repo_id}' as trusted.")
+        typer.echo(f"Trusted {repo_id}")
 
     @repos_app.command("untrust")
     def repos_untrust(
@@ -132,4 +132,4 @@ def register_repos_commands(
         except OSError as exc:
             raise_exit(f"Failed to write hub config: {exc}", cause=exc)
 
-        typer.echo(f"Marked repo '{repo_id}' as untrusted.")
+        typer.echo(f"Untrusted {repo_id}")

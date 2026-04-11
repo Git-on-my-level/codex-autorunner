@@ -192,7 +192,7 @@ def register_protocol_commands(app: typer.Typer) -> None:
                 try:
                     with TemporaryDirectory() as tmp:
                         tmp_path = Path(tmp)
-                        typer.echo(f"Generating Codex schema from {codex_bin}...")
+                        typer.echo("Generating codex schema...")
                         schema = _generate_codex_schema(codex_bin, tmp_path)
                         output_path = codex_output_path
                         output_path.write_text(
@@ -215,7 +215,7 @@ def register_protocol_commands(app: typer.Typer) -> None:
                 has_errors = True
             else:
                 try:
-                    typer.echo("Starting OpenCode server to fetch OpenAPI spec...")
+                    typer.echo("Fetching opencode spec...")
                     spec = asyncio.run(_run_opencode_and_fetch(opencode_bin))
                     output_path = opencode_output_path
                     output_path.write_text(

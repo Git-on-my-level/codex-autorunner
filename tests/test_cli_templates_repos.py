@@ -83,7 +83,7 @@ def test_templates_repos_add(hub_env) -> None:
     )
 
     assert result.exit_code == 0
-    assert "Added template repo 'newrepo' to hub config." in result.stdout
+    assert "Added repo newrepo" in result.stdout
 
     import yaml
 
@@ -114,7 +114,7 @@ def test_templates_repos_add_with_trusted(hub_env) -> None:
     )
 
     assert result.exit_code == 0
-    assert "Added template repo 'trustedrepo' to hub config." in result.stdout
+    assert "Added repo trustedrepo" in result.stdout
 
     config_path = hub_env.hub_root / CONFIG_FILENAME
     data = _load_raw_hub_config(config_path)
@@ -213,7 +213,7 @@ def test_templates_repos_remove(hub_env) -> None:
     )
 
     assert result.exit_code == 0
-    assert "Removed template repo 'toremove' from hub config." in result.stdout
+    assert "Removed repo toremove" in result.stdout
 
     data_after = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert not any(
@@ -263,7 +263,7 @@ def test_templates_repos_trust(hub_env) -> None:
     )
 
     assert result.exit_code == 0
-    assert "Marked repo 'totrust' as trusted." in result.stdout
+    assert "Trusted totrust" in result.stdout
 
     data_after = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     repo = next(
@@ -322,7 +322,7 @@ def test_templates_repos_untrust(hub_env) -> None:
     )
 
     assert result.exit_code == 0
-    assert "Marked repo 'tountrust' as untrusted." in result.stdout
+    assert "Untrusted tountrust" in result.stdout
 
     data_after = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     repo = next(

@@ -98,10 +98,7 @@ def register_dispatch_commands(
             OSError,
         ) as exc:
             raise_exit(
-                "Failed to query run thread via hub server. Ensure 'car hub serve' is running.\n"
-                f"Attempted: {thread_url}\n"
-                "If the hub UI is served under a base path (commonly /car), either set "
-                "`server.base_path` in the hub config or pass `--base-path /car`.",
+                f"Failed to query run thread: {exc}\nURL: {thread_url}",
                 cause=exc,
             )
 
@@ -213,8 +210,7 @@ def register_dispatch_commands(
             return
 
         typer.echo(
-            f"Reply {'reused' if duplicate else 'posted'} for run {run_id}"
-            + (f" (seq={reply_seq})" if reply_seq else "")
+            f"reply {'reused' if duplicate else 'posted'} run={run_id}"
+            + (f" seq={reply_seq}" if reply_seq else "")
+            + (" resumed" if resumed else "")
         )
-        if resume:
-            typer.echo(f"Run resumed: status={resume_status or 'unknown'}")

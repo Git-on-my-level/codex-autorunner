@@ -108,9 +108,9 @@ def register_cleanup_commands(
             force=force,
             force_attestation=force_attestation_payload,
         )
-        prefix = "Dry run: " if dry_run else ""
+        prefix = "dry-run: " if dry_run else ""
         typer.echo(
-            f"{prefix}killed {summary.killed}, signaled {summary.signaled}, removed {summary.removed} records, skipped {summary.skipped}"
+            f"{prefix}killed={summary.killed} signaled={summary.signaled} removed={summary.removed} skipped={summary.skipped}"
         )
 
     @cleanup_app.command("reports")
@@ -139,9 +139,7 @@ def register_cleanup_commands(
             max_total_bytes=max_total_bytes,
         )
         typer.echo(
-            "Reports cleanup: "
-            f"kept={summary.kept} pruned={summary.pruned} "
-            f"bytes_before={summary.bytes_before} bytes_after={summary.bytes_after}"
+            f"reports: kept={summary.kept} pruned={summary.pruned} bytes={summary.bytes_after}/{summary.bytes_before}"
         )
 
     @cleanup_app.command("archives")
@@ -613,8 +611,7 @@ def register_cleanup_commands(
         aggregated = aggregate_cleanup_results(results)
         prefix = "DRY RUN: " if dry_run else ""
 
-        lines = [f"{prefix}CAR State Cleanup Report"]
-        lines.append("=" * 50)
+        lines = []
 
         family_scope_counts: dict[str, set[str]] = {}
         for result in results:
@@ -654,7 +651,6 @@ def register_cleanup_commands(
                 if blocked_count > 0:
                     lines.append(f"  blocked={blocked_count}")
 
-        lines.append("")
         total_count = (
             sum(result.plan.prune_count for result in results)
             if dry_run
@@ -665,12 +661,11 @@ def register_cleanup_commands(
             if dry_run
             else aggregated.total_deleted_bytes
         )
-        lines.append(f"Total: pruned={total_count} bytes={total_bytes}")
+        lines.append(f"{prefix}total: pruned={total_count} bytes={total_bytes}")
         if aggregated.has_errors:
-            lines.append("")
-            lines.append("Errors:")
+            lines.append("errors:")
             for error in aggregated.all_errors:
-                lines.append(f"  - {error}")
+                lines.append(f"  {error}")
 
         typer.echo("\n".join(lines))
 

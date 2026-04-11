@@ -63,9 +63,7 @@ def register_inbox_commands(
             resolved.get("resolved", {}) if isinstance(resolved, dict) else {}
         )
         typer.echo(
-            "Resolved inbox item: "
-            f"repo={resolved_payload.get('repo_id')} run={resolved_payload.get('run_id')} "
-            f"type={resolved_payload.get('item_type')} seq={resolved_payload.get('seq')}"
+            f"resolved: repo={resolved_payload.get('repo_id')} run={resolved_payload.get('run_id')}"
         )
 
     @app.command("resolve")
@@ -293,12 +291,12 @@ def register_inbox_commands(
             return
 
         typer.echo(
-            f"Inbox clear selected={result_payload['selected_count']} "
+            f"inbox clear: selected={result_payload['selected_count']} "
             f"resolved={len(result_payload['resolved'])} "
             f"errors={len(result_payload['errors'])} dry_run={dry_run}"
         )
         if result_payload["errors"]:
-            raise_exit("hub inbox clear encountered errors.")
+            raise_exit("inbox clear encountered errors.")
 
 
 def _filter_inbox_items_for_clear(

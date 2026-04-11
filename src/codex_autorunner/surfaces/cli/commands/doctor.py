@@ -332,13 +332,13 @@ def register_doctor_commands(
                 raise typer.Exit(code=1)
             return
         for check in report.checks:
-            line = f"- {check.status.upper()}: {check.message}"
+            line = f"{check.status.upper()}: {check.message}"
             if check.fix:
-                line = f"{line} Fix: {check.fix}"
+                line = f"{line} fix: {check.fix}"
             typer.echo(line)
         if report.has_errors():
             raise_exit("Doctor check failed")
-        typer.echo("Doctor check passed")
+        typer.echo("ok")
 
     @doctor_app.command("versions")
     def doctor_versions(
@@ -359,57 +359,40 @@ def register_doctor_commands(
         mismatch = payload.get("mismatch", {})
         process = hub.get("server_process", {}) if isinstance(hub, dict) else {}
 
-        typer.echo("CLI")
-        typer.echo(f"- version: {cli.get('version')}")
-        typer.echo(f"- argv0: {cli.get('argv0')}")
-        typer.echo(f"- resolved argv0: {cli.get('resolved_argv0') or 'n/a'}")
-        typer.echo(f"- car executable: {cli.get('car_executable') or 'n/a'}")
-
-        typer.echo("Python")
-        typer.echo(f"- executable: {python_info.get('executable')}")
-        typer.echo(f"- prefix: {python_info.get('prefix')}")
-        typer.echo(f"- base_prefix: {python_info.get('base_prefix')}")
+        typer.echo(
+            f"cli version={cli.get('version')} argv0={cli.get('argv0')} car={cli.get('car_executable') or 'n/a'}"
+        )
+        typer.echo(
+            f"python {python_info.get('executable')} prefix={python_info.get('prefix')}"
+        )
         site_packages = python_info.get("site_packages")
         if isinstance(site_packages, list) and site_packages:
-            typer.echo("- site-packages:")
-            for entry in site_packages:
-                typer.echo(f"  - {entry}")
-        else:
-            typer.echo("- site-packages: n/a")
-
-        typer.echo("Package")
-        typer.echo(f"- name: {package.get('name')}")
-        typer.echo(f"- version: {package.get('version')}")
-        typer.echo(f"- path: {package.get('path') or 'n/a'}")
-
-        typer.echo("Hub Server")
-        typer.echo(f"- hub root: {hub.get('root') or 'n/a'}")
-        typer.echo(f"- host: {hub.get('server_host') or 'n/a'}")
-        typer.echo(f"- port: {hub.get('server_port') or 'n/a'}")
-        typer.echo(f"- base path: {hub.get('server_base_path') or '/'}")
-        typer.echo(f"- running: {bool(process.get('running'))}")
-        if process.get("running"):
-            typer.echo(f"- pid: {process.get('pid')}")
-            typer.echo(f"- startup command: {process.get('startup_command')}")
-            typer.echo(f"- process version: {process.get('version')}")
-        elif hub.get("config_error"):
-            typer.echo(f"- config error: {hub.get('config_error')}")
-
-        typer.echo("Checkout")
-        if isinstance(checkout, dict) and checkout:
-            typer.echo(f"- root: {checkout.get('root')}")
-            typer.echo(f"- branch: {checkout.get('branch') or 'n/a'}")
-            typer.echo(f"- head: {checkout.get('head') or 'n/a'}")
-            typer.echo(f"- describe: {checkout.get('describe') or 'n/a'}")
-            typer.echo(f"- dirty: {bool(checkout.get('dirty'))}")
-        else:
-            typer.echo("- repo checkout: n/a")
-
-        typer.echo("Mismatch Detection")
+            typer.echo(f"  site-packages: {', '.join(site_packages)}")
         typer.echo(
-            f"- source matches checkout: {mismatch.get('source_matches_checkout')}"
+            f"package codex-autorunner {package.get('version')} {package.get('path') or 'n/a'}"
         )
-        typer.echo(f"- mismatch detected: {mismatch.get('detected')}")
+        typer.echo(
+            f"hub root={hub.get('root') or 'n/a'} host={hub.get('server_host') or 'n/a'} "
+            f"port={hub.get('server_port') or 'n/a'} base_path={hub.get('server_base_path') or '/'} "
+            f"running={bool(process.get('running'))}"
+        )
+        if process.get("running"):
+            typer.echo(
+                f"  pid={process.get('pid')} cmd={process.get('startup_command')}"
+            )
+        elif hub.get("config_error"):
+            typer.echo(f"  config_error={hub.get('config_error')}")
+        if isinstance(checkout, dict) and checkout:
+            typer.echo(
+                f"checkout root={checkout.get('root')} branch={checkout.get('branch') or 'n/a'} "
+                f"head={checkout.get('head') or 'n/a'} describe={checkout.get('describe') or 'n/a'} "
+                f"dirty={bool(checkout.get('dirty'))}"
+            )
+        else:
+            typer.echo("checkout: n/a")
+        typer.echo(
+            f"mismatch: source_matches={mismatch.get('source_matches_checkout')} detected={mismatch.get('detected')}"
+        )
 
     @doctor_app.command("processes")
     def doctor_processes(
@@ -475,95 +458,68 @@ def register_doctor_commands(
             typer.echo(json.dumps(payload, indent=2))
             return
 
-        typer.echo("Process Snapshot")
-        typer.echo(f"- collected at: {snapshot.collected_at}")
-
-        typer.echo(f"\nopencode processes: {snapshot.opencode_count}")
+        typer.echo(f"snapshot collected={snapshot.collected_at}")
+        typer.echo(f"opencode({snapshot.opencode_count}):")
         for proc in snapshot.opencode_processes[:top_n]:
-            mem_info = f" rss={proc.rss_kb}KB" if proc.rss_kb else ""
-            own_info = f" [{proc.ownership.value}]" if proc.ownership else ""
+            mem = f" rss={proc.rss_kb}KB" if proc.rss_kb else ""
+            own = f" [{proc.ownership.value}]" if proc.ownership else ""
             typer.echo(
-                f"  - pid={proc.pid} ppid={proc.ppid} pgid={proc.pgid}{mem_info}{own_info}: "
-                f"{proc.command[:80]}"
+                f"  pid={proc.pid} ppid={proc.ppid} pgid={proc.pgid}{mem}{own}: {proc.command[:80]}"
             )
-
-        typer.echo(f"\ncodex app-server processes: {snapshot.app_server_count}")
+        typer.echo(f"app_server({snapshot.app_server_count}):")
         for proc in snapshot.app_server_processes[:top_n]:
-            mem_info = f" rss={proc.rss_kb}KB" if proc.rss_kb else ""
-            own_info = f" [{proc.ownership.value}]" if proc.ownership else ""
+            mem = f" rss={proc.rss_kb}KB" if proc.rss_kb else ""
+            own = f" [{proc.ownership.value}]" if proc.ownership else ""
             typer.echo(
-                f"  - pid={proc.pid} ppid={proc.ppid} pgid={proc.pgid}{mem_info}{own_info}: "
-                f"{proc.command[:80]}"
+                f"  pid={proc.pid} ppid={proc.ppid} pgid={proc.pgid}{mem}{own}: {proc.command[:80]}"
             )
-
-        typer.echo("\nProcess Registry")
         if not registry_counts:
-            typer.echo("  - by kind: none")
-            typer.echo("  - records: none")
+            typer.echo("registry: none")
         else:
-            typer.echo("  - by kind:")
+            typer.echo("registry:")
             for kind in sorted(registry_counts):
-                typer.echo(f"    - {kind}: {registry_counts[kind]}")
-            typer.echo("  - records: owner_pid identifies CAR owner")
+                typer.echo(f"  {kind}: {registry_counts[kind]}")
             for record in registry_records:
                 typer.echo(
-                    "    - {kind} {key} pid={pid} owner_pid={owner_pid} "
-                    "base_url={base_url} path={path}".format(
+                    "  {kind} {key} pid={pid} owner={owner_pid} url={base_url}".format(
                         kind=record.get("kind"),
                         key=record.get("record_key"),
                         pid=record.get("pid"),
                         owner_pid=record.get("owner_pid"),
                         base_url=record.get("base_url") or "n/a",
-                        path=record.get("path"),
                     )
                 )
-
-        typer.echo("\nOpenCode Lifecycle")
         if not opencode_lifecycle:
-            typer.echo("  - unavailable")
+            typer.echo("lifecycle: unavailable")
         else:
             counts = opencode_lifecycle.get("counts") or {}
             typer.echo(
-                "  - server_scope={scope} active={active} stale={stale} "
-                "spawned_local={spawned} registry_reuse={reused}".format(
+                "lifecycle: scope={scope} active={active} stale={stale}".format(
                     scope=opencode_lifecycle.get("server_scope") or "workspace",
                     active=counts.get("active", 0),
                     stale=counts.get("stale", 0),
-                    spawned=counts.get("spawned_local", 0),
-                    reused=counts.get("registry_reuse", 0),
                 )
             )
-            external_base_url = opencode_lifecycle.get("external_base_url")
-            if external_base_url:
-                typer.echo(f"  - external_base_url={external_base_url}")
             for record in (opencode_lifecycle.get("managed_servers") or [])[:top_n]:
                 typer.echo(
-                    "  - workspace={workspace} pid={pid} status={status} "
-                    "origin={origin} attach={attach} base_url={base_url}".format(
+                    "  ws={workspace} pid={pid} status={status} origin={origin}".format(
                         workspace=record.get("workspace_id") or "pid-only",
                         pid=record.get("pid") or "n/a",
                         status=record.get("status") or "unknown",
                         origin=record.get("process_origin") or "unknown",
-                        attach=record.get("last_attach_mode") or "unknown",
-                        base_url=record.get("base_url") or "n/a",
                     )
                 )
             live_handles = opencode_lifecycle.get("live_handles") or []
             if live_handles:
-                typer.echo("  - live handles:")
                 for handle in live_handles[:top_n]:
                     typer.echo(
-                        "    - workspace={workspace} mode={mode} active_turns={active_turns} "
-                        "pid={pid} managed_pid={managed_pid} base_url={base_url}".format(
+                        "  live: ws={workspace} mode={mode} turns={turns} pid={pid}".format(
                             workspace=handle.get("workspace_id") or "unknown",
                             mode=handle.get("mode") or "unknown",
-                            active_turns=handle.get("active_turns") or 0,
+                            turns=handle.get("active_turns") or 0,
                             pid=handle.get("process_pid") or "n/a",
-                            managed_pid=handle.get("managed_pid") or "n/a",
-                            base_url=handle.get("base_url") or "n/a",
                         )
                     )
-
         if save and hub_config:
             output_path = (
                 hub_config.root
@@ -582,4 +538,4 @@ def register_doctor_commands(
             output_path.parent.mkdir(parents=True, exist_ok=True)
             with open(output_path, "w") as f:
                 json.dump(payload, f, indent=2)
-            typer.echo(f"\nSnapshot saved to: {output_path}")
+            typer.echo(f"saved: {output_path}")

@@ -915,7 +915,7 @@ class TestCleanupStateGlobalCleanup:
         assert result.exit_code == 0
         assert "update_cache:" in result.output
         assert "pruned=2 bytes=123" in result.output
-        assert "Total: pruned=2 bytes=123" in result.output
+        assert "total: pruned=2 bytes=123" in result.output
 
     def test_global_cleanup_uses_configured_update_cache_rule(
         self, monkeypatch, tmp_path: Path
@@ -1225,7 +1225,7 @@ class TestCleanupStateGlobalCleanup:
         assert captured["workspace_pruned"] is False
         assert "update_cache:" in result.output
         assert "pruned=1 bytes=64" in result.output
-        assert "Errors:" in result.output
+        assert "errors:" in result.output
         assert "Skipping global workspace cleanup:" in result.output
 
 
@@ -1318,7 +1318,7 @@ class TestCleanupStateByteAccounting:
         assert "filebox:" in result.output
         assert "worktree_archives:" in result.output
         assert "workspaces:" in result.output
-        assert "Total: pruned=6 bytes=1150" in result.output
+        assert "total: pruned=6 bytes=1150" in result.output
 
     def test_dry_run_does_not_delete_report_history_files(
         self, monkeypatch, tmp_path: Path

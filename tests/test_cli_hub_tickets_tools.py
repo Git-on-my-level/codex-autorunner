@@ -66,7 +66,7 @@ def test_hub_tickets_fmt_check_fails_on_drift(hub_env) -> None:
         ],
     )
     assert result.exit_code != 0
-    assert "drift" in result.output.lower()
+    assert "changed=1" in result.output
 
 
 def test_hub_tickets_setup_pack_creates_final_tickets(

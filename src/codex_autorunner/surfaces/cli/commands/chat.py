@@ -72,17 +72,8 @@ def register_chat_commands(
             typer.echo("No chat channel directory entries found.")
             return
 
-        lines = ["Chat channel directory entries:"]
         for row in rows:
-            key = row["key"]
-            display = row.get("display")
-            seen_at = row.get("seen_at")
-            label = display if isinstance(display, str) and display else key
-            if isinstance(seen_at, str) and seen_at:
-                lines.append(f"- {key} ({label}) seen={seen_at}")
-            else:
-                lines.append(f"- {key} ({label})")
-        typer.echo("\n".join(lines))
+            typer.echo(f"  {row['key']}")
 
     @queue_app.command("status")
     def chat_queue_status(
@@ -120,7 +111,7 @@ def register_chat_commands(
             return
 
         if not isinstance(snapshot, dict):
-            typer.echo(f"No queue state recorded for {conversation_id}.")
+            typer.echo(f"No queue state: {conversation_id}")
             return
 
         lines = [
@@ -179,6 +170,4 @@ def register_chat_commands(
             typer.echo(json.dumps({"status": "ok", "reset_request": request}, indent=2))
             return
 
-        typer.echo(
-            f"Reset requested for {conversation_id} at {request.get('requested_at')}."
-        )
+        typer.echo(f"Reset: {conversation_id}")

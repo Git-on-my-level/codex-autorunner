@@ -13,63 +13,40 @@ from ....core.self_describe import (
 
 
 def _format_human(data: dict[str, Any]) -> str:
-    """Format describe output as human-readable text."""
     lines = []
-
-    lines.append("Codex Autorunner (CAR) Description")
-    lines.append("=" * 40)
-    lines.append(f"CAR Version: {data.get('car_version', 'unknown')}")
-    lines.append(f"Repo Root: {data.get('repo_root', 'unknown')}")
-    lines.append(f"Initialized: {data.get('initialized', False)}")
-    lines.append("")
-
+    lines.append(f"car_version={data.get('car_version', 'unknown')}")
+    lines.append(
+        f"repo={data.get('repo_root', 'unknown')} initialized={data.get('initialized', False)}"
+    )
     surfaces = data.get("surfaces", {})
-    lines.append("Active Surfaces:")
-    for surface, active in surfaces.items():
-        status = "enabled" if active else "disabled"
-        lines.append(f"  - {surface}: {status}")
-    lines.append("")
-
+    parts = [f"{s}={'on' if a else 'off'}" for s, a in surfaces.items()]
+    if parts:
+        lines.append(f"surfaces: {', '.join(parts)}")
     agents = data.get("agents", {})
     if agents:
-        lines.append("Agents:")
-        for agent_name, agent_data in agents.items():
-            binary = agent_data.get("binary", "unknown")
-            enabled = agent_data.get("enabled", True)
-            status = "enabled" if enabled else "disabled"
-            lines.append(f"  - {agent_name}: binary={binary} ({status})")
-        lines.append("")
-
+        agent_parts = [
+            f"{n}=binary={d.get('binary', '?')} ({'enabled' if d.get('enabled', True) else 'disabled'})"
+            for n, d in agents.items()
+        ]
+        lines.append(f"agents: {', '.join(agent_parts)}")
     features = data.get("features", {})
     if features:
-        lines.append("Features:")
-        for feature, enabled in features.items():
-            status = "on" if enabled else "off"
-            lines.append(f"  - {feature}: {status}")
-        lines.append("")
-
+        feat_parts = [f"{f}={'on' if e else 'off'}" for f, e in features.items()]
+        lines.append(f"features: {', '.join(feat_parts)}")
     env_knobs = data.get("env_knobs", [])
     if env_knobs:
-        lines.append(f"Environment Variables ({len(env_knobs)}):")
-        for knob in env_knobs[:10]:
-            lines.append(f"  - {knob}")
-        if len(env_knobs) > 10:
-            lines.append(f"  ... and {len(env_knobs) - 10} more")
-        lines.append("")
-
+        knob_list = " ".join(env_knobs[:10])
+        suffix = f" +{len(env_knobs) - 10}" if len(env_knobs) > 10 else ""
+        lines.append(f"env_knobs({len(env_knobs)}): {knob_list}{suffix}")
     schema_path = data.get("schema_path")
     if schema_path:
-        lines.append(f"Schema: {schema_path}")
+        lines.append(f"schema={schema_path}")
     templates = data.get("templates", {})
     if isinstance(templates, dict):
         commands = templates.get("commands", {})
         apply_cmds = commands.get("apply", []) if isinstance(commands, dict) else []
         if apply_cmds:
-            lines.append("")
-            lines.append("Template Apply:")
-            for cmd in apply_cmds[:2]:
-                lines.append(f"  - {cmd}")
-
+            lines.append(f"template_apply: {', '.join(apply_cmds[:2])}")
     return "\n".join(lines)
 
 
@@ -93,13 +70,10 @@ def register_describe_commands(
 
         if schema:
             schema_path = default_runtime_schema_path(repo_root)
-            typer.echo(f"Schema ID: {SCHEMA_ID}")
-            typer.echo(f"Schema Version: {SCHEMA_VERSION}")
-            typer.echo(f"Runtime Schema Path: {schema_path}")
-            if schema_path.exists():
-                typer.echo("Schema Status: available")
-            else:
-                typer.echo("Schema Status: not found (run car init to generate)")
+            status = "available" if schema_path.exists() else "not found"
+            typer.echo(
+                f"schema_id={SCHEMA_ID} version={SCHEMA_VERSION} path={schema_path} status={status}"
+            )
             return
 
         try:

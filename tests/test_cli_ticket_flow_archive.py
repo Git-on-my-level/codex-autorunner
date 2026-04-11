@@ -742,8 +742,8 @@ def test_ticket_flow_status_outputs_human_readable_status(tmp_path: Path) -> Non
 
     assert result.exit_code == 0, result.output
     assert result.output.strip()
-    assert f"Run id: {run_id}" in result.output
-    assert "Status: running" in result.output
+    assert f"run_id={run_id}" in result.output
+    assert "status=running" in result.output
 
 
 def test_ticket_flow_status_outputs_json_payload(tmp_path: Path) -> None:

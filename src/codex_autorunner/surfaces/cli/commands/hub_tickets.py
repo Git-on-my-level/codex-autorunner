@@ -31,53 +31,26 @@ from .utils import (
 
 
 def _print_ticket_import_report(report) -> None:
-    typer.echo(f"Repo: {report.repo_id}")
-    typer.echo(f"Ticket dir: {report.ticket_dir}")
-    typer.echo(f"Zip: {report.zip_path}")
-    typer.echo(f"Dry run: {report.dry_run}")
+    parts = [f"repo={report.repo_id}", f"dry_run={report.dry_run}"]
     if report.renumber:
-        typer.echo(
-            f"Renumber: start={report.renumber.get('start')}, step={report.renumber.get('step')}"
+        parts.append(
+            f"renumber={report.renumber.get('start')}:{report.renumber.get('step')}"
         )
     if report.assign_agent:
-        typer.echo(f"Assign agent: {report.assign_agent}")
-    if report.clear_model_pin:
-        typer.echo("Clear model pin: true")
-    if report.apply_template:
-        typer.echo(f"Template: {report.apply_template}")
-    if getattr(report, "strip_depends_on", False):
-        typer.echo("Strip depends_on: true")
-    depends_summary = getattr(report, "depends_on_summary", None)
-    if isinstance(depends_summary, dict) and depends_summary.get("has_depends_on"):
-        typer.echo(
-            f"Depends_on: mode={depends_summary.get('reconcile_mode')} "
-            f"tickets={depends_summary.get('tickets_with_depends_on')} "
-            f"edges={depends_summary.get('dependency_edges')} "
-            f"reconciled={bool(depends_summary.get('reconciled'))}"
-        )
-        for warning in depends_summary.get("ordering_conflicts", []) or []:
-            typer.echo(f"  Ordering impact: {warning}")
-        for warning in depends_summary.get("ambiguous_reasons", []) or []:
-            typer.echo(f"  Depends_on warning: {warning}")
-    if report.lint:
-        typer.echo("Lint: enabled")
-    if report.errors:
-        typer.echo("Errors:")
-        for err in report.errors:
-            typer.echo(f"- {err}")
-    if report.lint_errors:
-        typer.echo("Lint errors:")
-        for err in report.lint_errors:
-            typer.echo(f"- {err}")
-    typer.echo(f"Tickets ready: {report.created}")
+        parts.append(f"agent={report.assign_agent}")
+    typer.echo(" ".join(parts))
     for item in report.items:
         status = item.status.upper()
         target = item.target or "-"
-        typer.echo(f"- {status}: {item.source} -> {target}")
+        typer.echo(f"  {status}: {item.source} -> {target}")
         for err in item.errors:
             typer.echo(f"    {err}")
-        for warning in getattr(item, "warnings", []) or []:
-            typer.echo(f"    Warning: {warning}")
+    if report.errors:
+        for err in report.errors:
+            typer.echo(f"error: {err}")
+    if report.lint_errors:
+        for err in report.lint_errors:
+            typer.echo(f"lint: {err}")
 
 
 def _append_setup_pack_final_tickets(
@@ -144,39 +117,23 @@ def _print_ticket_bulk_report(
     errors: list[str],
     lint_errors: list[str],
 ) -> None:
-    typer.echo(f"Repo: {repo_id}")
-    typer.echo(f"Ticket dir: {ticket_dir}")
-    typer.echo(f"Action: {action}")
-    typer.echo(f"Updated: {updated}")
-    typer.echo(f"Skipped: {skipped}")
+    typer.echo(f"{action}: repo={repo_id} updated={updated} skipped={skipped}")
     if errors:
-        typer.echo("Errors:")
         for err in errors:
-            typer.echo(f"- {err}")
+            typer.echo(f"error: {err}")
     if lint_errors:
-        typer.echo("Lint errors:")
         for err in lint_errors:
-            typer.echo(f"- {err}")
+            typer.echo(f"lint: {err}")
 
 
 def _print_ticket_doctor_report(action: str, report, *, check_mode: bool) -> None:
-    typer.echo(f"Action: {action}")
-    typer.echo(f"Checked: {report.checked}")
-    typer.echo(f"Changed: {report.changed}")
-    if report.changed_files:
-        typer.echo("Changed files:")
-        for rel in report.changed_files:
-            typer.echo(f"- {rel}")
+    typer.echo(f"{action}: checked={report.checked} changed={report.changed}")
     if report.warnings:
-        typer.echo("Warnings:")
         for warning in report.warnings:
-            typer.echo(f"- {warning}")
+            typer.echo(f"warning: {warning}")
     if report.errors:
-        typer.echo("Errors:")
         for err in report.errors:
-            typer.echo(f"- {err}")
-    if check_mode and report.changed:
-        typer.echo("Check mode detected formatting/doctor drift.")
+            typer.echo(f"error: {err}")
 
 
 def register_hub_tickets_commands(
@@ -573,14 +530,13 @@ def register_hub_tickets_commands(
             if output_json:
                 typer.echo(json.dumps(payload, indent=2))
             else:
-                typer.echo(f"Setup pack: repo_root={target_repo} zip={from_zip}")
-                typer.echo(f"Extracted files: {len(report.extracted_files)}")
-                typer.echo(f"Assigned files: {len(report.assigned_files)}")
+                typer.echo(
+                    f"setup-pack: repo={target_repo} extracted={len(report.extracted_files)} assigned={len(report.assigned_files)}"
+                )
                 if lint_errors:
-                    typer.echo("Lint errors:")
                     for err in lint_errors:
-                        typer.echo(f"- {err}")
-                typer.echo("Preflight:")
+                        typer.echo(f"lint: {err}")
+                typer.echo("preflight:")
                 print_preflight_report(preflight)
 
             if lint_errors or preflight.has_errors():
@@ -690,18 +646,15 @@ def register_hub_tickets_commands(
             typer.echo(json.dumps(payload, indent=2))
         else:
             typer.echo(
-                f"Setup pack: repo={repo_id} branch={branch} base={base_repo_id} zip={zip_path}"
+                f"setup-pack: repo={repo_id} branch={branch} base={base_repo_id}"
             )
             _print_ticket_import_report(import_report)
             if final_tickets:
-                typer.echo("Final tickets:")
-                for rel in final_tickets:
-                    typer.echo(f"- {rel}")
+                typer.echo(f"final: {', '.join(final_tickets)}")
             if lint_errors:
-                typer.echo("Lint errors:")
                 for err in lint_errors:
-                    typer.echo(f"- {err}")
-            typer.echo("Preflight:")
+                    typer.echo(f"lint: {err}")
+            typer.echo("preflight:")
             print_preflight_report(preflight)
 
         if (not import_report.ok()) or lint_errors or preflight.has_errors():

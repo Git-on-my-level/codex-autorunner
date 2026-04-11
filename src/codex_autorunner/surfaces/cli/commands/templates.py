@@ -68,7 +68,7 @@ def register_templates_commands(
         if out is not None:
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(fetched.content, encoding="utf-8")
-            typer.echo(f"Wrote template to {out}", err=True)
+            typer.echo(f"Wrote {out}", err=True)
 
         if output_json:
             payload = {
@@ -374,16 +374,13 @@ def register_template_index_commands(
             return
 
         if not templates:
-            typer.echo("No templates found.")
+            typer.echo("No templates.")
             return
 
-        typer.echo(f"Available templates ({len(templates)}):")
+        typer.echo(f"Templates ({len(templates)}):")
         for t in templates:
-            summary = t.summary[:50] + "..." if len(t.summary) > 50 else t.summary
-            typer.echo(f"  {t.repo_id}:{t.path}@{t.ref}")
-            typer.echo(f"    name: {t.name}")
-            typer.echo(f"    summary: {summary}")
-            typer.echo()
+            summary = t.summary[:60] + "..." if len(t.summary) > 60 else t.summary
+            typer.echo(f"  {t.repo_id}:{t.path}@{t.ref} | {t.name} | {summary}")
 
     @app.command("show")
     def templates_show(
@@ -422,10 +419,9 @@ def register_template_index_commands(
             typer.echo(json.dumps(payload, indent=2))
             return
 
-        typer.echo(f"Template: {template.repo_id}:{template.path}@{template.ref}")
-        typer.echo(f"Name: {template.name}")
-        typer.echo(f"Summary: {template.summary}")
-        typer.echo(f"Ref: {template.ref}")
+        typer.echo(
+            f"{template.repo_id}:{template.path}@{template.ref} | {template.name} | {template.summary}"
+        )
 
     @app.command("search")
     def templates_search(
@@ -465,13 +461,10 @@ def register_template_index_commands(
             return
 
         if not templates:
-            typer.echo(f"No templates found matching: {query}")
+            typer.echo(f"No templates: {query}")
             return
 
-        typer.echo(f"Search results for '{query}' ({len(templates)}):")
+        typer.echo(f"Templates matching '{query}' ({len(templates)}):")
         for t in templates:
-            summary = t.summary[:50] + "..." if len(t.summary) > 50 else t.summary
-            typer.echo(f"  {t.repo_id}:{t.path}@{t.ref}")
-            typer.echo(f"    name: {t.name}")
-            typer.echo(f"    summary: {summary}")
-            typer.echo()
+            summary = t.summary[:60] + "..." if len(t.summary) > 60 else t.summary
+            typer.echo(f"  {t.repo_id}:{t.path}@{t.ref} | {t.name} | {summary}")
