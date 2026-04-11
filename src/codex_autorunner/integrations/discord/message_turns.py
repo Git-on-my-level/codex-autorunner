@@ -126,6 +126,7 @@ class DiscordMessageTurnResult:
     elapsed_seconds: Optional[float] = None
     send_final_message: bool = True
     deferred_delivery: bool = False
+    preserve_progress_lease: bool = False
 
 
 @dataclass(frozen=True)
@@ -1666,6 +1667,7 @@ async def _deliver_discord_turn_result(
         preview_message_id = turn_result.preview_message_id
         execution_id = turn_result.execution_id
         send_final_message = turn_result.send_final_message
+        preserve_progress_lease = turn_result.preserve_progress_lease
         intermediate_text = (
             turn_result.intermediate_message.strip()
             if isinstance(turn_result.intermediate_message, str)
@@ -1684,6 +1686,7 @@ async def _deliver_discord_turn_result(
         preview_message_id = None
         execution_id = None
         send_final_message = True
+        preserve_progress_lease = False
 
     if supervision is not None:
         supervision.set_message_id(preview_message_id)
@@ -1732,7 +1735,7 @@ async def _deliver_discord_turn_result(
                     )
             if supervision is not None:
                 supervision.clear_progress_tracking()
-    elif isinstance(execution_id, str) and execution_id:
+    elif isinstance(execution_id, str) and execution_id and not preserve_progress_lease:
         for lease in await _list_discord_progress_leases(
             dispatch.service,
             execution_id=execution_id,
@@ -2688,6 +2691,7 @@ async def _run_discord_orchestrated_turn_for_message(
         return DiscordMessageTurnResult(
             final_message="Queued (waiting for available worker...)",
             execution_id=progress_execution_id,
+            preserve_progress_lease=True,
         )
 
     async def _on_finalized(

@@ -164,7 +164,13 @@ async def test_submit_runs_handler_in_background() -> None:
     payload = _slash_payload()
 
     runner.submit(ctx, payload)
-    await asyncio.sleep(0.05)
+    for _ in range(20):
+        if (
+            service._handle_car_command.await_count == 1
+            and runner.active_task_count == 0
+        ):
+            break
+        await asyncio.sleep(0.01)
 
     service._handle_car_command.assert_awaited_once()
     assert runner.active_task_count == 0

@@ -485,6 +485,66 @@ async def test_background_task_done_reconciles_progress_lease(
 
 
 @pytest.mark.anyio
+async def test_queued_delivery_preserves_progress_lease_until_terminal_delivery(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allowed_channel_ids=frozenset({"channel-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    await store.upsert_turn_progress_lease(
+        lease_id="lease-1",
+        managed_thread_id="thread-1",
+        execution_id="exec-1",
+        channel_id="channel-1",
+        message_id="progress-1",
+        state="active",
+        progress_label="queued",
+    )
+
+    dispatch = SimpleNamespace(
+        service=service,
+        channel_id="channel-1",
+        session_key="session-1",
+        pending_compact_seed=None,
+        agent="codex",
+        model_override=None,
+    )
+
+    try:
+        await discord_message_turns_module._deliver_discord_turn_result(
+            dispatch,
+            workspace_root=workspace,
+            turn_result=DiscordMessageTurnResult(
+                final_message="Queued (waiting for available worker...)",
+                execution_id="exec-1",
+                preserve_progress_lease=True,
+            ),
+        )
+
+        assert any(
+            message["payload"]["content"] == "Queued (waiting for available worker...)"
+            for message in rest.channel_messages
+        )
+        leases = await store.list_turn_progress_leases(
+            managed_thread_id="thread-1",
+            execution_id="exec-1",
+        )
+        assert [lease.lease_id for lease in leases] == ["lease-1"]
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_shutdown_timeout_reconciles_supervised_progress_leases(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

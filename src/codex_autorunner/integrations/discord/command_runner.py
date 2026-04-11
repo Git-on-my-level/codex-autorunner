@@ -143,6 +143,9 @@ class CommandRunner:
 
     @property
     def active_task_count(self) -> int:
+        self._interaction_tasks = {
+            task for task in self._interaction_tasks if not task.done()
+        }
         count = len(self._interaction_tasks)
         if self._drain_task is not None and not self._drain_task.done():
             count += 1
