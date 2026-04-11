@@ -7,6 +7,7 @@ import pytest
 
 from codex_autorunner.integrations.discord.errors import DiscordPermanentError
 from codex_autorunner.integrations.discord.gateway import (
+    DISCORD_DISPATCH_CALLBACK_MAX_IN_FLIGHT,
     DiscordGatewayClient,
     build_identify_payload,
     calculate_reconnect_backoff,
@@ -425,7 +426,7 @@ async def test_run_connection_reads_later_frames_while_dispatch_worker_is_busy()
     await asyncio.wait_for(first_started.wait(), timeout=1.0)
     await asyncio.wait_for(websocket.second_frame_read.wait(), timeout=1.0)
 
-    assert second_started.is_set() is False
+    await asyncio.wait_for(second_started.wait(), timeout=1.0)
 
     release_first.set()
     await asyncio.wait_for(run_task, timeout=1.0)
@@ -443,16 +444,19 @@ async def test_run_connection_backpressures_when_dispatch_queue_is_full() -> Non
 
     class _FakeWebSocket:
         def __init__(self) -> None:
-            self.third_frame_read = asyncio.Event()
-            self.fourth_frame_read = asyncio.Event()
+            self.last_frame_read = asyncio.Event()
+            total = DISCORD_DISPATCH_CALLBACK_MAX_IN_FLIGHT + 3
             self._frames = iter(
                 [
-                    {"op": 0, "t": "INTERACTION_CREATE", "d": {"id": "first"}},
-                    {"op": 0, "t": "INTERACTION_CREATE", "d": {"id": "second"}},
-                    {"op": 0, "t": "INTERACTION_CREATE", "d": {"id": "third"}},
-                    {"op": 0, "t": "INTERACTION_CREATE", "d": {"id": "fourth"}},
+                    {
+                        "op": 0,
+                        "t": "INTERACTION_CREATE",
+                        "d": {"id": f"frame-{index}"},
+                    }
+                    for index in range(1, total + 1)
                 ]
             )
+            self._last_frame_id = f"frame-{total}"
 
         async def recv(self) -> dict[str, object]:
             return {"op": 10, "d": {"heartbeat_interval": 1000}}
@@ -466,34 +470,41 @@ async def test_run_connection_backpressures_when_dispatch_queue_is_full() -> Non
         async def __anext__(self) -> dict[str, object]:
             try:
                 frame = next(self._frames)
-                if frame["d"]["id"] == "third":
-                    self.third_frame_read.set()
-                if frame["d"]["id"] == "fourth":
-                    self.fourth_frame_read.set()
+                if frame["d"]["id"] == self._last_frame_id:
+                    self.last_frame_read.set()
                 return frame
             except StopIteration as exc:
                 raise StopAsyncIteration from exc
 
-    release_first = asyncio.Event()
-    first_started = asyncio.Event()
+    release_blocked = asyncio.Event()
+    blocked_started = asyncio.Event()
+    started_ids: list[str] = []
+    blocked_frame_ids = {
+        f"frame-{index}"
+        for index in range(1, DISCORD_DISPATCH_CALLBACK_MAX_IN_FLIGHT + 1)
+    }
 
     async def _dispatch(_event_type: str, payload: dict[str, object]) -> None:
-        if payload["id"] == "first":
-            first_started.set()
-            await release_first.wait()
+        frame_id = str(payload["id"])
+        started_ids.append(frame_id)
+        if frame_id in blocked_frame_ids:
+            if len([value for value in started_ids if value in blocked_frame_ids]) == (
+                DISCORD_DISPATCH_CALLBACK_MAX_IN_FLIGHT
+            ):
+                blocked_started.set()
+            await release_blocked.wait()
 
     websocket = _FakeWebSocket()
     run_task = asyncio.create_task(client._run_connection(websocket, _dispatch))
-    await asyncio.wait_for(first_started.wait(), timeout=1.0)
-    await asyncio.wait_for(websocket.third_frame_read.wait(), timeout=1.0)
+    await asyncio.wait_for(blocked_started.wait(), timeout=1.0)
     await asyncio.sleep(0)
 
-    assert websocket.fourth_frame_read.is_set() is False
+    assert websocket.last_frame_read.is_set() is False
 
-    release_first.set()
-    await asyncio.wait_for(run_task, timeout=1.0)
+    release_blocked.set()
+    await asyncio.wait_for(run_task, timeout=2.0)
 
-    assert websocket.fourth_frame_read.is_set()
+    assert websocket.last_frame_read.is_set()
 
 
 @pytest.mark.anyio

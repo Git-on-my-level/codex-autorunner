@@ -40,6 +40,7 @@ DEFAULT_HANDLER_TIMEOUT_SECONDS: Optional[float] = None
 DEFAULT_STALLED_WARNING_SECONDS: Optional[float] = 60.0
 
 _DRAIN_SENTINEL: object = object()
+_SUBMISSION_SENTINEL: object = object()
 
 
 class DiscordRunnerService(Protocol):
@@ -85,6 +86,15 @@ class DiscordRunnerService(Protocol):
         text: str,
     ) -> None: ...
 
+    async def send_or_respond_public(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+        deferred: bool,
+        text: str,
+    ) -> None: ...
+
 
 @dataclass(frozen=True)
 class InteractionSchedule:
@@ -99,8 +109,17 @@ class ScheduledInteraction:
     schedule: InteractionSchedule
     replay_mode: str = "normal"
     queue_wait_ack_policy: Optional[DiscordAckPolicy] = None
+    submission_order: Optional[int] = None
     admitted: bool = False
     ready: Optional[asyncio.Future[None]] = None
+    queue_wait_notice: Optional["QueueWaitNotice"] = None
+
+
+@dataclass(frozen=True)
+class QueueWaitNotice:
+    scope: str
+    command_label: str
+    same_conversation: bool
 
 
 @dataclass(frozen=True)
@@ -125,10 +144,16 @@ class CommandRunner:
         self._logger = logger
         self._on_scheduler_conversation_idle = on_scheduler_conversation_idle
         self._queue: asyncio.Queue[Any] = asyncio.Queue()
+        self._submission_queue: asyncio.Queue[Any] = asyncio.Queue()
         self._drain_task: Optional[asyncio.Task[None]] = None
+        self._submission_task: Optional[asyncio.Task[None]] = None
         self._interaction_tasks: Set[asyncio.Task[None]] = set()
         self._pending_interactions: Deque[ScheduledInteraction] = deque()
+        self._pending_ordered_submissions: dict[int, ScheduledInteraction] = {}
+        self._skipped_submission_orders: set[int] = set()
+        self._next_submission_order = 1
         self._active_resource_keys: set[str] = set()
+        self._active_resource_owners: dict[str, ScheduledInteraction] = {}
         self._active_conversation_labels: dict[str, str] = {}
         self._scheduler_lock = asyncio.Lock()
         self._started = False
@@ -137,19 +162,21 @@ class CommandRunner:
         if self._started:
             return
         self._started = True
-        self._drain_task = asyncio.create_task(
-            self._drain_loop(), name="discord-runner-drain"
-        )
+        if self._drain_task is None or self._drain_task.done():
+            self._drain_task = asyncio.create_task(
+                self._drain_loop(), name="discord-runner-drain"
+            )
+        if self._submission_task is None or self._submission_task.done():
+            self._submission_task = asyncio.create_task(
+                self._submission_loop(), name="discord-runner-submissions"
+            )
 
     @property
     def active_task_count(self) -> int:
         self._interaction_tasks = {
             task for task in self._interaction_tasks if not task.done()
         }
-        count = len(self._interaction_tasks)
-        if self._drain_task is not None and not self._drain_task.done():
-            count += 1
-        return count
+        return len(self._interaction_tasks)
 
     def submit(
         self,
@@ -159,7 +186,9 @@ class CommandRunner:
         resource_keys: Sequence[str] = (),
         conversation_id: Optional[str] = None,
         queue_wait_ack_policy: Optional[DiscordAckPolicy] = None,
+        submission_order: Optional[int] = None,
     ) -> None:
+        self._ensure_submission_started()
         schedule = InteractionSchedule(
             resource_keys=tuple(dict.fromkeys(resource_keys)),
             conversation_id=conversation_id,
@@ -170,12 +199,9 @@ class CommandRunner:
             schedule=schedule,
             replay_mode="normal",
             queue_wait_ack_policy=queue_wait_ack_policy,
+            submission_order=submission_order,
         )
-        task = asyncio.create_task(
-            self._run_scheduled_interaction(item),
-            name=f"discord-runner-{ctx.interaction_id}",
-        )
-        self._track_interaction_task(task)
+        self._submission_queue.put_nowait(item)
 
     def submit_recovery(
         self,
@@ -186,6 +212,7 @@ class CommandRunner:
         conversation_id: Optional[str] = None,
         replay_mode: str,
     ) -> None:
+        self._ensure_submission_started()
         schedule = InteractionSchedule(
             resource_keys=tuple(dict.fromkeys(resource_keys)),
             conversation_id=conversation_id,
@@ -197,15 +224,23 @@ class CommandRunner:
             replay_mode=replay_mode,
             queue_wait_ack_policy=None,
         )
-        task = asyncio.create_task(
-            self._run_scheduled_interaction(item),
-            name=f"discord-runner-recovery-{ctx.interaction_id}",
-        )
-        self._track_interaction_task(task)
+        self._submission_queue.put_nowait(item)
 
     def submit_event(self, event: Any) -> None:
         self._ensure_started()
         self._queue.put_nowait(event)
+
+    def skip_submission_order(self, submission_order: Optional[int]) -> None:
+        if submission_order is None or submission_order < self._next_submission_order:
+            return
+        self._ensure_submission_started()
+        self._skipped_submission_orders.add(submission_order)
+        for scheduled in self._consume_ready_submission_items():
+            task = asyncio.create_task(
+                self._run_scheduled_interaction(scheduled),
+                name=f"discord-runner-{scheduled.ctx.interaction_id}",
+            )
+            self._track_interaction_task(task)
 
     def is_busy(self, conversation_id: str) -> bool:
         active = self._active_conversation_labels.get(conversation_id)
@@ -265,6 +300,20 @@ class CommandRunner:
             except asyncio.CancelledError:
                 pass
             self._drain_task = None
+        if self._submission_task is not None and not self._submission_task.done():
+            await self._submission_queue.put(_SUBMISSION_SENTINEL)
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(self._submission_task),
+                    timeout=max(0.0, deadline - time.monotonic()),
+                )
+            except asyncio.TimeoutError:
+                self._submission_task.cancel()
+                with contextlib_suppress(asyncio.CancelledError):
+                    await self._submission_task
+            except asyncio.CancelledError:
+                pass
+            self._submission_task = None
         if self._interaction_tasks:
             idle_conversations.update(self._active_conversation_labels)
             idle_conversations.update(
@@ -275,7 +324,11 @@ class CommandRunner:
             await self._drain_interaction_tasks(deadline=deadline)
         async with self._scheduler_lock:
             self._pending_interactions.clear()
+            self._pending_ordered_submissions.clear()
+            self._skipped_submission_orders.clear()
+            self._next_submission_order = 1
             self._active_resource_keys.clear()
+            self._active_resource_owners.clear()
             self._active_conversation_labels.clear()
         await self._notify_scheduler_conversations_idle(
             {
@@ -289,6 +342,12 @@ class CommandRunner:
     def _ensure_started(self) -> None:
         if not self._started:
             self.start()
+
+    def _ensure_submission_started(self) -> None:
+        if self._submission_task is None or self._submission_task.done():
+            self._submission_task = asyncio.create_task(
+                self._submission_loop(), name="discord-runner-submissions"
+            )
 
     @staticmethod
     def _format_command_label(ctx: IngressContext) -> str:
@@ -334,6 +393,51 @@ class CommandRunner:
         except asyncio.CancelledError:
             return
 
+    async def _submission_loop(self) -> None:
+        try:
+            while True:
+                item = await self._submission_queue.get()
+                if item is _SUBMISSION_SENTINEL:
+                    self._submission_queue.task_done()
+                    return
+                try:
+                    for scheduled in self._pop_ready_submission_items(item):
+                        task = asyncio.create_task(
+                            self._run_scheduled_interaction(scheduled),
+                            name=f"discord-runner-{scheduled.ctx.interaction_id}",
+                        )
+                        self._track_interaction_task(task)
+                finally:
+                    self._submission_queue.task_done()
+        except asyncio.CancelledError:
+            return
+
+    def _pop_ready_submission_items(
+        self, item: ScheduledInteraction
+    ) -> list[ScheduledInteraction]:
+        order = item.submission_order
+        if order is None:
+            return [item]
+        if order < self._next_submission_order:
+            return [item]
+        self._pending_ordered_submissions[order] = item
+        return self._consume_ready_submission_items()
+
+    def _consume_ready_submission_items(self) -> list[ScheduledInteraction]:
+        ready: list[ScheduledInteraction] = []
+        while True:
+            if self._next_submission_order in self._skipped_submission_orders:
+                self._skipped_submission_orders.remove(self._next_submission_order)
+                self._next_submission_order += 1
+                continue
+            if self._next_submission_order not in self._pending_ordered_submissions:
+                break
+            ready.append(
+                self._pending_ordered_submissions.pop(self._next_submission_order)
+            )
+            self._next_submission_order += 1
+        return ready
+
     async def _run_scheduled_interaction(self, item: ScheduledInteraction) -> None:
         acquired_schedule = False
         notify_idle: set[str] = set()
@@ -364,6 +468,7 @@ class CommandRunner:
                         if not acknowledged:
                             notify_idle = await self._remove_pending_schedule(item)
                             return
+                    await self._maybe_send_queue_wait_notice(item)
                     await self._wait_for_schedule(item)
                     await self._mark_scheduler_state(
                         item,
@@ -391,22 +496,105 @@ class CommandRunner:
     async def _admit_or_enqueue_schedule(self, item: ScheduledInteraction) -> bool:
         loop = asyncio.get_running_loop()
         async with self._scheduler_lock:
-            has_active_conflict = any(
-                key in self._active_resource_keys for key in item.schedule.resource_keys
-            )
-            has_pending_conflict = any(
-                any(
-                    key in pending.schedule.resource_keys
-                    for key in item.schedule.resource_keys
-                )
-                for pending in self._pending_interactions
-            )
-            if not has_active_conflict and not has_pending_conflict:
+            queue_wait_notice = self._find_queue_wait_notice_locked(item)
+            if queue_wait_notice is None:
                 self._admit_interaction_locked(item)
                 return True
             item.ready = loop.create_future()
+            item.queue_wait_notice = queue_wait_notice
             self._pending_interactions.append(item)
             return False
+
+    @staticmethod
+    def _resource_scope(resource_key: str) -> str:
+        if resource_key.startswith("conversation:"):
+            return "channel"
+        if resource_key.startswith("workspace:"):
+            return "workspace"
+        return "resource"
+
+    def _build_queue_wait_notice(
+        self,
+        *,
+        resource_key: str,
+        blocker: ScheduledInteraction,
+        item: ScheduledInteraction,
+    ) -> QueueWaitNotice:
+        return QueueWaitNotice(
+            scope=self._resource_scope(resource_key),
+            command_label=self._format_command_label(blocker.ctx),
+            same_conversation=(
+                blocker.schedule.conversation_id == item.schedule.conversation_id
+            ),
+        )
+
+    def _find_queue_wait_notice_locked(
+        self, item: ScheduledInteraction
+    ) -> Optional[QueueWaitNotice]:
+        for resource_key in item.schedule.resource_keys:
+            blocker = self._active_resource_owners.get(resource_key)
+            if blocker is not None:
+                return self._build_queue_wait_notice(
+                    resource_key=resource_key,
+                    blocker=blocker,
+                    item=item,
+                )
+        for pending in self._pending_interactions:
+            for resource_key in item.schedule.resource_keys:
+                if resource_key not in pending.schedule.resource_keys:
+                    continue
+                return self._build_queue_wait_notice(
+                    resource_key=resource_key,
+                    blocker=pending,
+                    item=item,
+                )
+        return None
+
+    @staticmethod
+    def _queue_wait_text(item: ScheduledInteraction) -> Optional[str]:
+        notice = item.queue_wait_notice
+        if notice is None:
+            return None
+        if notice.scope == "channel":
+            return (
+                f"Queued behind {notice.command_label} in this channel; "
+                "will run when it finishes."
+            )
+        if notice.scope == "workspace":
+            if notice.same_conversation:
+                return (
+                    f"Queued behind {notice.command_label} for this workspace; "
+                    "will run when it finishes."
+                )
+            return (
+                f"Queued behind {notice.command_label} in another channel bound "
+                "to the same workspace; will run when it finishes."
+            )
+        return f"Queued behind {notice.command_label}; will run when it finishes."
+
+    async def _maybe_send_queue_wait_notice(self, item: ScheduledInteraction) -> None:
+        if item.replay_mode != "normal":
+            return
+        if item.ctx.kind != item.ctx.kind.SLASH_COMMAND or not item.ctx.deferred:
+            return
+        text = self._queue_wait_text(item)
+        if not isinstance(text, str) or not text.strip():
+            return
+        ack_policy = item.ctx.command_spec.ack_policy if item.ctx.command_spec else None
+        if ack_policy == "defer_public":
+            await self._service.send_or_respond_public(
+                interaction_id=item.ctx.interaction_id,
+                interaction_token=item.ctx.interaction_token,
+                deferred=True,
+                text=text,
+            )
+            return
+        await self._service.send_or_respond_ephemeral(
+            interaction_id=item.ctx.interaction_id,
+            interaction_token=item.ctx.interaction_token,
+            deferred=True,
+            text=text,
+        )
 
     async def _wait_for_schedule(self, item: ScheduledInteraction) -> None:
         ready = item.ready
@@ -464,6 +652,8 @@ class CommandRunner:
 
     def _admit_interaction_locked(self, item: ScheduledInteraction) -> None:
         self._active_resource_keys.update(item.schedule.resource_keys)
+        for resource_key in item.schedule.resource_keys:
+            self._active_resource_owners[resource_key] = item
         item.admitted = True
         conversation_id = item.schedule.conversation_id
         if conversation_id:
@@ -478,6 +668,8 @@ class CommandRunner:
     def _release_schedule_locked(self, item: ScheduledInteraction) -> set[str]:
         for key in item.schedule.resource_keys:
             self._active_resource_keys.discard(key)
+            if self._active_resource_owners.get(key) is item:
+                self._active_resource_owners.pop(key, None)
         conversation_id = item.schedule.conversation_id
         if conversation_id:
             self._active_conversation_labels.pop(conversation_id, None)

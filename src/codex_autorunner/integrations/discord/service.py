@@ -3818,6 +3818,11 @@ class DiscordBotService:
     async def _on_dispatch(self, event_type: str, payload: dict[str, Any]) -> None:
         if event_type == "INTERACTION_CREATE":
             dispatch_started_at = time.monotonic()
+            submission_order = (
+                payload.get("__car_dispatch_order")
+                if isinstance(payload.get("__car_dispatch_order"), int)
+                else None
+            )
             ingress_result = await self._ingress.process_raw_payload(payload)
             if not ingress_result.accepted:
                 if ingress_result.context is not None:
@@ -3857,6 +3862,7 @@ class DiscordBotService:
                             ctx.interaction_token,
                             "This Discord command is not authorized for this channel/user/guild.",
                         )
+                self._command_runner.skip_submission_order(submission_order)
                 return
             if ingress_result.context is not None:
                 envelope = await self._build_runtime_interaction_envelope(
@@ -3908,6 +3914,7 @@ class DiscordBotService:
                         ack_finished_at=time.monotonic(),
                         ingress_finished_at=time.monotonic(),
                     )
+                    self._command_runner.skip_submission_order(submission_order)
                     return
                 self._ingress.finalize_success(ingress_result.context)
                 log_event(
@@ -3941,6 +3948,7 @@ class DiscordBotService:
                     resource_keys=envelope.resource_keys,
                     conversation_id=envelope.conversation_id,
                     queue_wait_ack_policy=envelope.queue_wait_ack_policy,
+                    submission_order=submission_order,
                 )
                 # Let the admitted interaction task start before the next gateway
                 # interaction is processed so deferred command ordering stays stable.

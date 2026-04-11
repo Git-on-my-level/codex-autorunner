@@ -28,6 +28,7 @@ def _make_ctx(
     kind: InteractionKind = InteractionKind.SLASH_COMMAND,
     deferred: bool = True,
     command_path: tuple[str, ...] = ("car", "status"),
+    ack_policy: str | None = "defer_ephemeral",
     guild_id: Optional[str] = None,
     user_id: Optional[str] = None,
     custom_id: Optional[str] = None,
@@ -41,7 +42,7 @@ def _make_ctx(
         CommandSpec(
             path=command_path,
             options={},
-            ack_policy="defer_ephemeral",
+            ack_policy=ack_policy,
             ack_timing="dispatch",
             requires_workspace=False,
         )
@@ -77,6 +78,7 @@ class _FakeService:
         self.respond_ephemeral = AsyncMock()
         self._respond_ephemeral = self.respond_ephemeral
         self._send_or_respond_ephemeral = AsyncMock()
+        self._send_or_respond_public = AsyncMock()
         self._dispatch_chat_event = AsyncMock()
 
     async def dispatch_chat_event(self, event: Any) -> None:
@@ -127,6 +129,21 @@ class _FakeService:
         text: str,
     ) -> None:
         await self._send_or_respond_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text=text,
+        )
+
+    async def send_or_respond_public(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+        deferred: bool,
+        text: str,
+    ) -> None:
+        await self._send_or_respond_public(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
             deferred=deferred,
@@ -215,6 +232,260 @@ async def test_slow_handler_does_not_block_new_interaction() -> None:
     slow_done.set()
     await asyncio.sleep(0.05)
     assert runner.active_task_count == 0
+
+
+@pytest.mark.anyio
+async def test_queued_workspace_slash_command_sends_public_queue_notice() -> None:
+    service = _FakeService()
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+
+    async def blocking_handler(*args: Any, **kwargs: Any) -> None:
+        interaction_id = str(args[0]) if args else ""
+        if interaction_id == "inter-1":
+            first_started.set()
+            await release_first.wait()
+
+    service._handle_car_command.side_effect = blocking_handler
+
+    runner = CommandRunner(
+        service,
+        config=RunnerConfig(timeout_seconds=None, stalled_warning_seconds=None),
+        logger=service._logger,
+    )
+
+    first_conversation_id = conversation_id_for("discord", "chan-1", "guild-1")
+    second_conversation_id = conversation_id_for("discord", "chan-2", "guild-1")
+    workspace_key = "workspace:/tmp/ws-a"
+
+    runner.submit(
+        _make_ctx(
+            interaction_id="inter-1",
+            interaction_token="token-1",
+            channel_id="chan-1",
+            guild_id="guild-1",
+            command_path=("car", "newt"),
+            ack_policy="defer_public",
+        ),
+        _slash_payload(command_name="car", subcommand_name="newt"),
+        resource_keys=(f"conversation:{first_conversation_id}", workspace_key),
+        conversation_id=first_conversation_id,
+    )
+    await asyncio.wait_for(first_started.wait(), timeout=1.0)
+
+    runner.submit(
+        _make_ctx(
+            interaction_id="inter-2",
+            interaction_token="token-2",
+            channel_id="chan-2",
+            guild_id="guild-1",
+            command_path=("car", "newt"),
+            ack_policy="defer_public",
+        ),
+        {
+            **_slash_payload(command_name="car", subcommand_name="newt"),
+            "id": "inter-2",
+            "token": "token-2",
+            "channel_id": "chan-2",
+        },
+        resource_keys=(f"conversation:{second_conversation_id}", workspace_key),
+        conversation_id=second_conversation_id,
+    )
+
+    await asyncio.sleep(0.05)
+    service._send_or_respond_public.assert_awaited_once()
+    assert service._send_or_respond_public.await_args.kwargs["text"] == (
+        "Queued behind /car newt in another channel bound to the same workspace; "
+        "will run when it finishes."
+    )
+
+    release_first.set()
+    await asyncio.wait_for(runner.shutdown(grace_seconds=5.0), timeout=6.0)
+
+
+@pytest.mark.anyio
+async def test_queued_same_channel_slash_command_sends_channel_queue_notice() -> None:
+    service = _FakeService()
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+
+    async def blocking_handler(*args: Any, **kwargs: Any) -> None:
+        interaction_id = str(args[0]) if args else ""
+        if interaction_id == "inter-1":
+            first_started.set()
+            await release_first.wait()
+
+    service._handle_car_command.side_effect = blocking_handler
+
+    runner = CommandRunner(
+        service,
+        config=RunnerConfig(timeout_seconds=None, stalled_warning_seconds=None),
+        logger=service._logger,
+    )
+
+    conversation_id = conversation_id_for("discord", "chan-1", "guild-1")
+    conversation_key = f"conversation:{conversation_id}"
+
+    runner.submit(
+        _make_ctx(
+            interaction_id="inter-1",
+            interaction_token="token-1",
+            channel_id="chan-1",
+            guild_id="guild-1",
+            command_path=("car", "status"),
+        ),
+        _slash_payload(command_name="car", subcommand_name="status"),
+        resource_keys=(conversation_key,),
+        conversation_id=conversation_id,
+    )
+    await asyncio.wait_for(first_started.wait(), timeout=1.0)
+
+    runner.submit(
+        _make_ctx(
+            interaction_id="inter-2",
+            interaction_token="token-2",
+            channel_id="chan-1",
+            guild_id="guild-1",
+            command_path=("car", "status"),
+        ),
+        {
+            **_slash_payload(command_name="car", subcommand_name="status"),
+            "id": "inter-2",
+            "token": "token-2",
+        },
+        resource_keys=(conversation_key,),
+        conversation_id=conversation_id,
+    )
+
+    await asyncio.sleep(0.05)
+    service._send_or_respond_ephemeral.assert_awaited()
+    assert service._send_or_respond_ephemeral.await_args.kwargs["text"] == (
+        "Queued behind /car status in this channel; will run when it finishes."
+    )
+
+    release_first.set()
+    await asyncio.wait_for(runner.shutdown(grace_seconds=5.0), timeout=6.0)
+
+
+@pytest.mark.anyio
+async def test_submit_preserves_explicit_submission_order_for_same_channel() -> None:
+    service = _FakeService()
+    release_first = asyncio.Event()
+    started_ids: list[str] = []
+
+    async def blocking_handler(*args: Any, **kwargs: Any) -> None:
+        interaction_id = str(args[0]) if args else ""
+        started_ids.append(interaction_id)
+        if interaction_id == "inter-1":
+            await release_first.wait()
+
+    service._handle_car_command.side_effect = blocking_handler
+
+    runner = CommandRunner(
+        service,
+        config=RunnerConfig(timeout_seconds=None, stalled_warning_seconds=None),
+        logger=service._logger,
+    )
+    conversation_id = conversation_id_for("discord", "chan-1", "guild-1")
+    conversation_key = f"conversation:{conversation_id}"
+
+    runner.submit(
+        _make_ctx(
+            interaction_id="inter-2",
+            interaction_token="token-2",
+            channel_id="chan-1",
+            guild_id="guild-1",
+        ),
+        {
+            **_slash_payload(command_name="car", subcommand_name="status"),
+            "id": "inter-2",
+            "token": "token-2",
+        },
+        resource_keys=(conversation_key,),
+        conversation_id=conversation_id,
+        submission_order=2,
+    )
+    runner.submit(
+        _make_ctx(
+            interaction_id="inter-1",
+            interaction_token="token-1",
+            channel_id="chan-1",
+            guild_id="guild-1",
+        ),
+        _slash_payload(command_name="car", subcommand_name="status"),
+        resource_keys=(conversation_key,),
+        conversation_id=conversation_id,
+        submission_order=1,
+    )
+
+    await asyncio.sleep(0.05)
+    assert started_ids == ["inter-1"]
+
+    release_first.set()
+    await asyncio.wait_for(runner.shutdown(grace_seconds=5.0), timeout=6.0)
+    assert started_ids == ["inter-1", "inter-2"]
+
+
+@pytest.mark.anyio
+async def test_skip_submission_order_releases_later_interaction() -> None:
+    service = _FakeService()
+    started = asyncio.Event()
+
+    async def handler(*args: Any, **kwargs: Any) -> None:
+        started.set()
+
+    service._handle_car_command.side_effect = handler
+
+    runner = CommandRunner(
+        service,
+        config=RunnerConfig(timeout_seconds=None, stalled_warning_seconds=None),
+        logger=service._logger,
+    )
+    conversation_id = conversation_id_for("discord", "chan-1", "guild-1")
+    conversation_key = f"conversation:{conversation_id}"
+
+    runner.submit(
+        _make_ctx(
+            interaction_id="inter-2",
+            interaction_token="token-2",
+            channel_id="chan-1",
+            guild_id="guild-1",
+        ),
+        {
+            **_slash_payload(command_name="car", subcommand_name="status"),
+            "id": "inter-2",
+            "token": "token-2",
+        },
+        resource_keys=(conversation_key,),
+        conversation_id=conversation_id,
+        submission_order=2,
+    )
+    await asyncio.sleep(0.05)
+    assert started.is_set() is False
+
+    runner.skip_submission_order(1)
+    await asyncio.wait_for(started.wait(), timeout=1.0)
+    await asyncio.wait_for(runner.shutdown(grace_seconds=5.0), timeout=6.0)
+
+
+@pytest.mark.anyio
+async def test_submit_event_after_submit_reuses_existing_submission_loop() -> None:
+    service = _FakeService()
+    runner = CommandRunner(
+        service,
+        config=RunnerConfig(timeout_seconds=None, stalled_warning_seconds=None),
+        logger=service._logger,
+    )
+
+    runner.submit(_make_ctx(), _slash_payload())
+    await asyncio.sleep(0.05)
+    submission_task = runner._submission_task
+
+    runner.submit_event({"kind": "message"})
+    await asyncio.sleep(0.05)
+
+    assert runner._submission_task is submission_task
+    await asyncio.wait_for(runner.shutdown(grace_seconds=5.0), timeout=6.0)
 
 
 @pytest.mark.anyio

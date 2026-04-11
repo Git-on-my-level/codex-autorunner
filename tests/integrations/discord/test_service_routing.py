@@ -1853,6 +1853,38 @@ async def test_service_enforces_allowlist_and_denies_autocomplete_with_empty_cho
         await store.close()
 
 
+@pytest.mark.anyio
+async def test_rejected_interaction_skips_submission_order(tmp_path: Path) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    skip_submission_order = MagicMock()
+    service._command_runner.skip_submission_order = (  # type: ignore[method-assign]
+        skip_submission_order
+    )
+
+    try:
+        payload = _interaction(
+            name="bind",
+            options=[{"type": 3, "name": "workspace", "value": str(tmp_path)}],
+            user_id="unauthorized",
+        )
+        payload["__car_dispatch_order"] = 7
+        await service._on_dispatch("INTERACTION_CREATE", payload)
+        skip_submission_order.assert_called_once_with(7)
+    finally:
+        await service._shutdown()
+        await store.close()
+
+
 @pytest.mark.slow
 @pytest.mark.anyio
 async def test_service_bind_then_status_updates_and_reads_store(tmp_path: Path) -> None:
