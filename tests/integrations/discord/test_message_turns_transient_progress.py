@@ -24,6 +24,83 @@ class _TransientEditProgressRest(support._FakeRest):
         raise DiscordTransientError("simulated transient progress edit failure")
 
 
+@pytest.mark.anyio
+async def test_reconcile_progress_lease_retries_when_retire_edit_fails(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = support.DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_turn_progress_lease(
+        lease_id="lease-1",
+        managed_thread_id="thread-1",
+        execution_id="exec-1",
+        channel_id="channel-1",
+        message_id="msg-1",
+        state="active",
+        progress_label="running",
+    )
+
+    fake_orchestration_service = SimpleNamespace(
+        get_thread_target=lambda _thread_id: SimpleNamespace(
+            thread_target_id="thread-1"
+        ),
+        get_latest_execution=lambda _thread_id: SimpleNamespace(
+            execution_id="exec-1",
+            status="ok",
+        ),
+        get_running_execution=lambda _thread_id: None,
+        get_execution=lambda _thread_id, _execution_id: SimpleNamespace(
+            execution_id="exec-1",
+            status="ok",
+        ),
+    )
+    monkeypatch.setattr(
+        support.discord_message_turns_module,
+        "build_discord_thread_orchestration_service",
+        lambda _service: fake_orchestration_service,
+    )
+
+    service = SimpleNamespace(
+        _store=store,
+        _rest=support._EditFailingProgressRest(),
+        _config=support._config(tmp_path),
+        _logger=logging.getLogger("test"),
+    )
+
+    try:
+        reconciled = await support.discord_message_turns_module.reconcile_discord_turn_progress_leases(
+            service,
+            lease_id="lease-1",
+        )
+        assert reconciled == 0
+
+        retained = await store.get_turn_progress_lease(lease_id="lease-1")
+        assert retained is not None
+        assert retained.state == "retiring"
+
+        service._rest = support._FakeRest()
+        reconciled = await support.discord_message_turns_module.reconcile_discord_turn_progress_leases(
+            service,
+            lease_id="lease-1",
+        )
+        assert reconciled == 1
+
+        retired = await store.get_turn_progress_lease(lease_id="lease-1")
+        assert retired is None
+        assert service._rest.edited_channel_messages == [
+            {
+                "channel_id": "channel-1",
+                "message_id": "msg-1",
+                "payload": {
+                    "content": "Status: this turn already completed.",
+                    "components": [],
+                },
+            }
+        ]
+    finally:
+        await store.close()
+
+
 @pytest.mark.asyncio
 async def test_orchestrated_turn_interrupt_send_falls_back_when_progress_ack_edit_is_transient(
     monkeypatch: pytest.MonkeyPatch,

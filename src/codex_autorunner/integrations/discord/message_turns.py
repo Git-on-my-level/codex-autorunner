@@ -564,12 +564,12 @@ async def _retire_discord_progress_message(
     channel_id: str,
     message_id: str,
     note: str,
-) -> None:
+) -> bool:
     normalized_channel_id = str(channel_id or "").strip()
     normalized_message_id = str(message_id or "").strip()
     normalized_note = str(note or "").strip()
     if not normalized_channel_id or not normalized_message_id or not normalized_note:
-        return
+        return False
     content = normalized_note
     fetch_message = getattr(service._rest, "get_channel_message", None)
     if callable(fetch_message):
@@ -609,7 +609,8 @@ async def _retire_discord_progress_message(
             },
         )
     except (DiscordTransientError, RuntimeError, ConnectionError, OSError):
-        return
+        return False
+    return True
 
 
 def _orphaned_progress_note(*, startup: bool) -> str:
@@ -786,14 +787,15 @@ async def reconcile_discord_turn_progress_leases(
             lease_id=current_lease_id,
             state="retiring",
         )
-        await _retire_discord_progress_message(
+        retired = await _retire_discord_progress_message(
             service,
             channel_id=current_channel_id,
             message_id=current_message_id,
             note=note,
         )
-        await _delete_discord_progress_lease(service, lease_id=current_lease_id)
-        reconciled += 1
+        if retired:
+            await _delete_discord_progress_lease(service, lease_id=current_lease_id)
+            reconciled += 1
     return reconciled
 
 
