@@ -3,105 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional, Union
 
-from ...core.text_utils import _normalize_optional_text
-
-
-def _coerce_mapping(value: Any) -> dict[str, Any]:
-    if isinstance(value, dict):
-        return dict(value)
-    return {}
-
-
-def _extract_identifier(payload: Mapping[str, Any], *keys: str) -> Optional[str]:
-    for key in keys:
-        value = payload.get(key)
-        normalized = _normalize_optional_text(value)
-        if normalized:
-            return normalized
-    return None
-
-
-def _extract_text(payload: Mapping[str, Any], *keys: str) -> Optional[str]:
-    for key in keys:
-        value = payload.get(key)
-        if isinstance(value, str):
-            return value
-    return None
-
-
-def _extract_text_content(value: Any) -> str:
-    if isinstance(value, str):
-        return value
-    if isinstance(value, Mapping):
-        text = _extract_text(value, "text", "message")
-        if text:
-            return text
-        return _extract_text_content(value.get("content"))
-    if isinstance(value, list):
-        text_parts: list[str] = []
-        for item in value:
-            if isinstance(item, str) and item:
-                text_parts.append(item)
-                continue
-            if not isinstance(item, Mapping):
-                continue
-            item_type = _normalize_optional_text(item.get("type"))
-            if item_type and item_type not in {"text", "output_text", "message"}:
-                continue
-            part_text = _extract_text_content(item)
-            if part_text:
-                text_parts.append(part_text)
-        return "".join(text_parts)
-    return ""
-
-
-def _session_update_kind(payload: Mapping[str, Any]) -> Optional[str]:
-    value = payload.get("sessionUpdate")
-    if value is None:
-        value = payload.get("session_update")
-    return _normalize_optional_text(value)
-
-
-def _permission_description(payload: Mapping[str, Any]) -> str:
-    description = _extract_text(payload, "description", "message")
-    if description:
-        return description
-    tool_call = payload.get("toolCall")
-    if not isinstance(tool_call, Mapping):
-        return ""
-    raw_input = tool_call.get("rawInput")
-    if isinstance(raw_input, Mapping):
-        command = raw_input.get("command")
-        if isinstance(command, list):
-            normalized = " ".join(str(part) for part in command).strip()
-            if normalized:
-                return normalized
-        if isinstance(command, str) and command.strip():
-            return command
-    kind = _normalize_optional_text(tool_call.get("kind"))
-    return kind or ""
-
-
-def _session_status_payload(payload: Mapping[str, Any]) -> Mapping[str, Any]:
-    status = payload.get("status")
-    if isinstance(status, Mapping):
-        return status
-    properties = payload.get("properties")
-    if isinstance(properties, Mapping):
-        nested_status = properties.get("status")
-        if isinstance(nested_status, Mapping):
-            return nested_status
-    return {}
-
-
-def _session_status_type(payload: Mapping[str, Any]) -> Optional[str]:
-    status = _session_status_payload(payload)
-    if status:
-        for key in ("type", "status", "state"):
-            normalized = _normalize_optional_text(status.get(key))
-            if normalized:
-                return normalized
-    return _normalize_optional_text(payload.get("status"))
+from ...core.acp_lifecycle import (
+    analyze_acp_lifecycle_message,
+)
+from ...core.acp_lifecycle import (
+    coerce_mapping as _coerce_mapping,
+)
+from ...core.acp_lifecycle import (
+    extract_identifier as _extract_identifier,
+)
 
 
 @dataclass(frozen=True)
@@ -179,23 +89,18 @@ ACPEvent = Union[
 
 def normalize_notification(message: Mapping[str, Any]) -> ACPEvent:
     raw_notification = dict(message)
-    method = _normalize_optional_text(message.get("method")) or ""
-    payload = _coerce_mapping(message.get("params"))
-    session_id = _extract_identifier(payload, "sessionId", "session_id")
-    turn_id = _extract_identifier(
-        payload,
-        "turnId",
-        "turn_id",
-        "promptId",
-        "prompt_id",
-    )
+    lifecycle = analyze_acp_lifecycle_message(message)
+    method = lifecycle.method
+    payload = lifecycle.payload
+    session_id = lifecycle.session_id
+    turn_id = lifecycle.turn_id
 
     if method in {"session/created", "session/loaded"}:
         session = (
             _coerce_mapping(payload.get("session")) if "session" in payload else payload
         )
         session_id = session_id or _extract_identifier(
-            session, "sessionId", "session_id", "id"
+            session, "sessionId", "session_id", "sessionID", "id"
         )
         action = method.rsplit("/", 1)[-1]
         return ACPSessionEvent(
@@ -209,7 +114,7 @@ def normalize_notification(message: Mapping[str, Any]) -> ACPEvent:
             session=session,
         )
 
-    if method == "session.idle":
+    if lifecycle.normalized_kind == "turn_terminal":
         return ACPTurnTerminalEvent(
             kind="turn_terminal",
             method=method,
@@ -217,29 +122,12 @@ def normalize_notification(message: Mapping[str, Any]) -> ACPEvent:
             turn_id=turn_id,
             payload=payload,
             raw_notification=raw_notification,
-            status="completed",
-            final_output=_extract_text(
-                payload, "finalOutput", "final_output", "message"
-            )
-            or "",
+            status=lifecycle.terminal_status or "",
+            final_output=lifecycle.assistant_text,
+            error_message=lifecycle.error_message,
         )
 
     if method in {"session.status", "session/status"}:
-        status_type = _session_status_type(payload)
-        if status_type == "idle":
-            return ACPTurnTerminalEvent(
-                kind="turn_terminal",
-                method=method,
-                session_id=session_id,
-                turn_id=turn_id,
-                payload=payload,
-                raw_notification=raw_notification,
-                status="completed",
-                final_output=_extract_text(
-                    payload, "finalOutput", "final_output", "message"
-                )
-                or "",
-            )
         return ACPProgressEvent(
             kind="progress",
             method=method,
@@ -247,16 +135,12 @@ def normalize_notification(message: Mapping[str, Any]) -> ACPEvent:
             turn_id=turn_id,
             payload=payload,
             raw_notification=raw_notification,
-            message=status_type or "",
+            message=lifecycle.progress_message,
         )
 
     if method == "session/update":
         update = _coerce_mapping(payload.get("update"))
-        update_kind = _session_update_kind(update) or ""
-        text = _extract_text_content(update.get("content")) or ""
-        if not text:
-            text = _extract_text(update, "message") or ""
-        if update_kind == "agent_message_chunk":
+        if lifecycle.normalized_kind == "output_delta":
             return ACPOutputDeltaEvent(
                 kind="output_delta",
                 method=method,
@@ -264,9 +148,9 @@ def normalize_notification(message: Mapping[str, Any]) -> ACPEvent:
                 turn_id=turn_id,
                 payload=payload,
                 raw_notification=raw_notification,
-                delta=text,
+                delta=lifecycle.output_delta,
             )
-        if update_kind == "agent_thought_chunk":
+        if lifecycle.normalized_kind == "progress":
             return ACPProgressEvent(
                 kind="progress",
                 method=method,
@@ -274,9 +158,9 @@ def normalize_notification(message: Mapping[str, Any]) -> ACPEvent:
                 turn_id=turn_id,
                 payload=payload,
                 raw_notification=raw_notification,
-                message=text,
+                message=lifecycle.progress_message,
             )
-        if update_kind == "usage_update":
+        if lifecycle.normalized_kind == "token_usage":
             return ACPTokenUsageEvent(
                 kind="token_usage",
                 method=method,
@@ -284,9 +168,9 @@ def normalize_notification(message: Mapping[str, Any]) -> ACPEvent:
                 turn_id=turn_id,
                 payload=payload,
                 raw_notification=raw_notification,
-                usage=update,
+                usage=lifecycle.usage,
             )
-        if update_kind == "session_info_update":
+        if lifecycle.normalized_kind == "session":
             return ACPSessionEvent(
                 kind="session",
                 method=method,
@@ -309,8 +193,7 @@ def normalize_notification(message: Mapping[str, Any]) -> ACPEvent:
         )
 
     if method in {"prompt/output", "prompt/delta", "prompt/progress", "turn/progress"}:
-        delta = _extract_text(payload, "delta", "textDelta", "text_delta")
-        if delta is not None:
+        if lifecycle.normalized_kind == "output_delta":
             return ACPOutputDeltaEvent(
                 kind="output_delta",
                 method=method,
@@ -318,10 +201,9 @@ def normalize_notification(message: Mapping[str, Any]) -> ACPEvent:
                 turn_id=turn_id,
                 payload=payload,
                 raw_notification=raw_notification,
-                delta=delta,
+                delta=lifecycle.output_delta,
             )
-        usage = _coerce_mapping(payload.get("usage"))
-        if usage:
+        if lifecycle.normalized_kind == "token_usage":
             return ACPTokenUsageEvent(
                 kind="token_usage",
                 method=method,
@@ -329,7 +211,7 @@ def normalize_notification(message: Mapping[str, Any]) -> ACPEvent:
                 turn_id=turn_id,
                 payload=payload,
                 raw_notification=raw_notification,
-                usage=usage,
+                usage=lifecycle.usage,
             )
         return ACPProgressEvent(
             kind="progress",
@@ -338,7 +220,7 @@ def normalize_notification(message: Mapping[str, Any]) -> ACPEvent:
             turn_id=turn_id,
             payload=payload,
             raw_notification=raw_notification,
-            message=_extract_text(payload, "message", "status") or "",
+            message=lifecycle.progress_message,
         )
 
     if method in {"prompt/message", "turn/message"}:
@@ -349,8 +231,7 @@ def normalize_notification(message: Mapping[str, Any]) -> ACPEvent:
             turn_id=turn_id,
             payload=payload,
             raw_notification=raw_notification,
-            message=_extract_text(payload, "message", "finalOutput", "final_output")
-            or "",
+            message=lifecycle.assistant_text,
         )
 
     if method in {"permission/requested", "session/request_permission"}:
@@ -368,49 +249,9 @@ def normalize_notification(message: Mapping[str, Any]) -> ACPEvent:
             turn_id=turn_id,
             payload=payload,
             raw_notification=raw_notification,
-            request_id=(
-                _extract_identifier(payload, "requestId", "request_id")
-                or _normalize_optional_text(raw_notification.get("id"))
-                or ""
-            ),
-            description=_permission_description(payload),
+            request_id=lifecycle.permission_request_id,
+            description=lifecycle.permission_description,
             context=context,
-        )
-
-    if method in {
-        "prompt/completed",
-        "prompt/cancelled",
-        "turn/completed",
-        "turn/cancelled",
-    }:
-        status = _normalize_optional_text(payload.get("status"))
-        if not status:
-            status = "cancelled" if method.endswith("cancelled") else "completed"
-        return ACPTurnTerminalEvent(
-            kind="turn_terminal",
-            method=method,
-            session_id=session_id,
-            turn_id=turn_id,
-            payload=payload,
-            raw_notification=raw_notification,
-            status=status,
-            final_output=_extract_text(
-                payload, "finalOutput", "final_output", "message"
-            )
-            or "",
-        )
-
-    if method in {"prompt/failed", "turn/failed"}:
-        return ACPTurnTerminalEvent(
-            kind="turn_terminal",
-            method=method,
-            session_id=session_id,
-            turn_id=turn_id,
-            payload=payload,
-            raw_notification=raw_notification,
-            status=_normalize_optional_text(payload.get("status")) or "failed",
-            final_output="",
-            error_message=_extract_text(payload, "error", "message"),
         )
 
     if method == "token/usage":
@@ -421,7 +262,7 @@ def normalize_notification(message: Mapping[str, Any]) -> ACPEvent:
             turn_id=turn_id,
             payload=payload,
             raw_notification=raw_notification,
-            usage=_coerce_mapping(payload.get("usage")) or payload,
+            usage=lifecycle.usage or payload,
         )
 
     return ACPUnknownEvent(

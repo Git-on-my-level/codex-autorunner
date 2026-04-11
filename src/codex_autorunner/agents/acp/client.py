@@ -10,6 +10,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable, Optional, Sequence
 
+from ...core.acp_lifecycle import (
+    coerce_mapping as _coerce_mapping,
+)
+from ...core.acp_lifecycle import (
+    session_update_content_summary as _session_update_content_summary,
+)
+from ...core.acp_lifecycle import (
+    should_map_missing_turn_id as _should_map_missing_turn_id,
+)
 from ...core.logging_utils import log_event
 from ...core.text_utils import _normalize_optional_text
 from .errors import (
@@ -75,25 +84,6 @@ _ACP_STDOUT_NOISE_PREFIXES = (
 )
 _ACP_STDOUT_BRACKETED_STATUS_RE = re.compile(r"^\[[^\]\s]{1,32}\]\s+(?![\[{])\S")
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
-# Hermes official ACP omits turn ids on these session-scoped updates, so CAR
-# binds them onto the active local turn for that session.
-_SESSION_TURN_ID_FALLBACK_METHODS = frozenset(
-    {
-        "session/update",
-        "session/request_permission",
-    }
-)
-_TERMINAL_TURN_ID_FALLBACK_METHODS = frozenset(
-    {
-        "prompt/completed",
-        "prompt/cancelled",
-        "prompt/failed",
-        "turn/completed",
-        "turn/cancelled",
-        "turn/failed",
-        "session.idle",
-    }
-)
 
 
 @dataclass(frozen=True)
@@ -128,12 +118,6 @@ class _PromptState:
     last_session_update_at: Optional[float] = None
 
 
-def _coerce_mapping(value: Any) -> dict[str, Any]:
-    if isinstance(value, dict):
-        return dict(value)
-    return {}
-
-
 def _text_excerpt(value: Any, *, limit: int = 120) -> Optional[str]:
     if not isinstance(value, str):
         return None
@@ -143,69 +127,6 @@ def _text_excerpt(value: Any, *, limit: int = 120) -> Optional[str]:
     if len(normalized) <= limit:
         return normalized
     return normalized[: limit - 3] + "..."
-
-
-def _extract_text_content(value: Any) -> str:
-    if isinstance(value, str):
-        return value
-    if isinstance(value, dict):
-        for key in ("text", "message"):
-            candidate = value.get(key)
-            if isinstance(candidate, str) and candidate:
-                return candidate
-        return _extract_text_content(value.get("content"))
-    if isinstance(value, list):
-        text_parts: list[str] = []
-        for item in value:
-            if isinstance(item, str) and item:
-                text_parts.append(item)
-                continue
-            if not isinstance(item, dict):
-                continue
-            item_type = _normalize_optional_text(item.get("type"))
-            if item_type and item_type not in {"text", "output_text", "message"}:
-                continue
-            text = _extract_text_content(item)
-            if text:
-                text_parts.append(text)
-        return "".join(text_parts)
-    return ""
-
-
-def _session_update_content_summary(update: dict[str, Any]) -> dict[str, Any]:
-    content = update.get("content")
-    part_types: list[str] = []
-    if isinstance(content, list):
-        for item in content:
-            if not isinstance(item, dict):
-                continue
-            item_type = _normalize_optional_text(item.get("type"))
-            if item_type:
-                part_types.append(item_type)
-    extracted_text = _extract_text_content(content)
-    if not extracted_text:
-        fallback_message = update.get("message")
-        if isinstance(fallback_message, str):
-            extracted_text = fallback_message
-    return {
-        "content_kind": type(content).__name__ if content is not None else "missing",
-        "content_part_types": tuple(part_types),
-        "text": extracted_text,
-    }
-
-
-def _session_status_type(payload: dict[str, Any]) -> Optional[str]:
-    status = payload.get("status")
-    if isinstance(status, dict):
-        for key in ("type", "status", "state"):
-            normalized = _normalize_optional_text(status.get(key))
-            if normalized:
-                return normalized.lower()
-        return None
-    normalized = _normalize_optional_text(status)
-    if normalized:
-        return normalized.lower()
-    return None
 
 
 def _stringify(value: Any) -> str:
@@ -1205,12 +1126,7 @@ class ACPClient:
         )
         if not session_id:
             return message
-        should_map = method in _SESSION_TURN_ID_FALLBACK_METHODS
-        if not should_map and method in _TERMINAL_TURN_ID_FALLBACK_METHODS:
-            should_map = True
-        if not should_map and method in {"session.status", "session/status"}:
-            should_map = _session_status_type(params) == "idle"
-        if not should_map:
+        if not _should_map_missing_turn_id(method or "", params):
             return message
         turn_id = self._session_active_turns.get(session_id)
         if not turn_id:

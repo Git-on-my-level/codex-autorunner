@@ -4,6 +4,27 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from ..acp_lifecycle import (
+    analyze_acp_lifecycle_message,
+)
+from ..acp_lifecycle import (
+    extract_error_message as _shared_acp_error_message,
+)
+from ..acp_lifecycle import (
+    extract_output_delta as _shared_acp_output_delta,
+)
+from ..acp_lifecycle import (
+    extract_progress_message as _shared_acp_progress_message,
+)
+from ..acp_lifecycle import (
+    extract_session_update as _shared_acp_session_update,
+)
+from ..acp_lifecycle import (
+    extract_session_update_kind as _shared_acp_session_update_kind,
+)
+from ..acp_lifecycle import (
+    status_indicates_successful_completion as _status_indicates_successful_completion,
+)
 from ..ports.run_event import (
     RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
     RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
@@ -253,6 +274,7 @@ def normalize_runtime_thread_message_payload(
             _coerce_dict(message.get("params")),
             state,
             timestamp=timestamp,
+            raw_message=message,
         )
     method = payload.get("method")
     params = payload.get("params")
@@ -262,6 +284,7 @@ def normalize_runtime_thread_message_payload(
             params,
             state,
             timestamp=timestamp,
+            raw_message=payload,
         )
     return []
 
@@ -308,33 +331,6 @@ def _public_terminal_error_message(outcome: RuntimeThreadOutcome) -> str:
     return "Runtime thread failed"
 
 
-def _extract_status_value(value: Any) -> Optional[str]:
-    if isinstance(value, str):
-        return value
-    if isinstance(value, dict):
-        for key in ("type", "status", "state"):
-            candidate = value.get(key)
-            if isinstance(candidate, str):
-                return candidate
-    return None
-
-
-def _status_indicates_successful_completion(
-    status: Any, *, assume_true_when_missing: bool
-) -> bool:
-    normalized = _extract_status_value(status)
-    if not isinstance(normalized, str):
-        return assume_true_when_missing
-    return normalized.lower() in {
-        "completed",
-        "complete",
-        "done",
-        "success",
-        "succeeded",
-        "idle",
-    }
-
-
 async def _parse_runtime_thread_sse(raw_event: str):
     async def _iter_lines() -> Any:
         for line in str(raw_event).splitlines():
@@ -360,12 +356,14 @@ def _normalize_sse_event(
                 _coerce_dict(message.get("params")),
                 state,
                 timestamp=timestamp,
+                raw_message=message,
             )
     return normalize_runtime_thread_message(
         sse_event.event,
         payload,
         state,
         timestamp=timestamp,
+        raw_message={"method": sse_event.event, "params": payload},
     )
 
 
@@ -374,6 +372,7 @@ def normalize_runtime_thread_message(
     params: dict[str, Any],
     state: RuntimeThreadRunEventState,
     *,
+    raw_message: Optional[dict[str, Any]] = None,
     timestamp: Optional[str] = None,
 ) -> list[RunEvent]:
     event_timestamp = timestamp or now_iso()
@@ -381,6 +380,9 @@ def normalize_runtime_thread_message(
     if not method:
         return []
     state.note_runtime_progress(method, timestamp=event_timestamp)
+    acp_lifecycle = analyze_acp_lifecycle_message(
+        raw_message or {"method": method, "params": params}
+    )
 
     if method == "item/reasoning/summaryTextDelta":
         delta = params.get("delta")
@@ -404,7 +406,7 @@ def normalize_runtime_thread_message(
         if usage is not None:
             state.token_usage = dict(usage)
             return [TokenUsage(timestamp=event_timestamp, usage=dict(usage))]
-        progress_message = _extract_acp_progress_message(params)
+        progress_message = acp_lifecycle.progress_message
         if progress_message:
             return [
                 RunNotice(
@@ -449,7 +451,7 @@ def normalize_runtime_thread_message(
         return []
 
     if method in {"prompt/message", "turn/message"}:
-        content = _extract_acp_final_message(params)
+        content = acp_lifecycle.assistant_text
         if not content:
             return []
         state.note_message_text(content)
@@ -462,9 +464,11 @@ def normalize_runtime_thread_message(
         ]
 
     if method in {"permission/requested", "session/request_permission"}:
-        request_id = _request_id_for_event(method, params)
+        request_id = acp_lifecycle.permission_request_id or _request_id_for_event(
+            method, params
+        )
         description = str(
-            params.get("description") or params.get("message") or "Approval requested"
+            acp_lifecycle.permission_description or "Approval requested"
         ).strip()
         context = _coerce_dict(params.get("context")) or dict(params)
         return [
@@ -506,9 +510,7 @@ def normalize_runtime_thread_message(
         return [TokenUsage(timestamp=event_timestamp, usage=dict(usage))]
 
     if method in {"prompt/failed", "turn/failed"}:
-        error_message = str(
-            params.get("error") or params.get("message") or "Turn error"
-        ).strip()
+        error_message = _shared_acp_error_message(params)
         state.last_error_message = error_message or "Turn error"
         return [
             Failed(
@@ -524,7 +526,7 @@ def normalize_runtime_thread_message(
         "turn/cancelled",
     }:
         events: list[RunEvent] = []
-        content = _extract_acp_final_message(params)
+        content = acp_lifecycle.assistant_text
         if content:
             state.note_message_text(content)
             events.append(
@@ -752,20 +754,10 @@ def normalize_runtime_thread_message(
         return []
 
     if method == "session.status":
-        status = _coerce_dict(params.get("status"))
-        if not status:
-            properties = _coerce_dict(params.get("properties"))
-            status = _coerce_dict(properties.get("status")) if properties else {}
-        if _status_indicates_successful_completion(
-            status, assume_true_when_missing=False
-        ):
+        if acp_lifecycle.session_status == "idle":
             state.completed_seen = True
             return []
-        status_type = ""
-        if isinstance(status, dict):
-            status_type = (
-                str(status.get("type") or status.get("status") or "").strip().lower()
-            )
+        status_type = acp_lifecycle.session_status or ""
         if status_type and status_type != "idle":
             return [
                 RunNotice(
@@ -925,15 +917,11 @@ def _extract_output_delta(params: dict[str, Any]) -> str:
 
 
 def _extract_session_update(params: dict[str, Any]) -> dict[str, Any]:
-    return _coerce_dict(params.get("update"))
+    return _shared_acp_session_update(params)
 
 
 def _extract_session_update_kind(update: dict[str, Any]) -> str:
-    for key in ("sessionUpdate", "session_update"):
-        value = update.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return ""
+    return _shared_acp_session_update_kind(update) or ""
 
 
 def _extract_session_update_message_params(update: dict[str, Any]) -> dict[str, Any]:
@@ -951,64 +939,11 @@ def _extract_session_update_message_params(update: dict[str, Any]) -> dict[str, 
 
 
 def _extract_session_update_text(update: dict[str, Any]) -> str:
-    content = update.get("content")
-    if isinstance(content, str) and content.strip():
-        return content
-    if isinstance(content, dict):
-        for key in ("text", "message", "status"):
-            value = content.get(key)
-            if isinstance(value, str) and value.strip():
-                return value
-        progress_message = _extract_acp_progress_message(content)
-        if progress_message:
-            return progress_message
-        output_delta = _extract_output_delta(content)
-        if output_delta:
-            return output_delta
-    if isinstance(content, list):
-        text_parts: list[str] = []
-        for entry in content:
-            if isinstance(entry, str) and entry:
-                text_parts.append(entry)
-                continue
-            if not isinstance(entry, dict):
-                continue
-            entry_type = entry.get("type")
-            if isinstance(entry_type, str) and entry_type not in (
-                "text",
-                "output_text",
-                "message",
-            ):
-                continue
-            entry_text = ""
-            message_text = entry.get("message")
-            if isinstance(message_text, str) and message_text:
-                entry_text = message_text
-            if not entry_text:
-                entry_text = _extract_output_delta(entry)
-            if not entry_text:
-                entry_text = _extract_acp_progress_message(entry)
-            if entry_text:
-                text_parts.append(entry_text)
-        if text_parts:
-            return "".join(text_parts)
-    return _extract_acp_progress_message(update)
+    return _extract_acp_progress_message(update) or _shared_acp_output_delta(update)
 
 
 def _extract_acp_progress_message(params: dict[str, Any]) -> str:
-    for key in ("message", "status"):
-        value = params.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return ""
-
-
-def _extract_acp_final_message(params: dict[str, Any]) -> str:
-    for key in ("finalOutput", "final_output", "message"):
-        value = params.get(key)
-        if isinstance(value, str) and value.strip():
-            return value
-    return ""
+    return _shared_acp_progress_message(params)
 
 
 def _extract_output_delta_only(params: dict[str, Any]) -> str:

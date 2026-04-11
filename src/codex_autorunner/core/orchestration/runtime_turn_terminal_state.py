@@ -5,6 +5,18 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Literal, Optional
 
+from ..acp_lifecycle import (
+    analyze_acp_lifecycle_message,
+)
+from ..acp_lifecycle import (
+    extract_error_message as _extract_error_message,
+)
+from ..acp_lifecycle import (
+    extract_message_text as _extract_message_text,
+)
+from ..acp_lifecycle import (
+    extract_output_delta as _extract_output_delta,
+)
 from ..time_utils import now_iso
 from .stream_text_merge import merge_assistant_stream_text
 
@@ -366,52 +378,30 @@ def _inspect_raw_event(
     failure_message = None
     terminal_signal = None
     method_lower = method.lower()
+    lifecycle = analyze_acp_lifecycle_message(payload)
 
     if method in {"message.completed", "message.updated"}:
         role = _extract_message_role(params)
         if role != "user":
             assistant_message_text = _extract_message_text(params)
     elif method in {"prompt/message", "turn/message"}:
-        assistant_message_text = _extract_message_text(params)
-    elif method in {"prompt/completed", "turn/completed"}:
-        assistant_message_text = _extract_message_text(params)
-        if _status_indicates_successful_completion(
-            params.get("status") or params.get("turn"),
-            assume_true_when_missing=True,
-        ):
-            terminal_signal = RuntimeThreadTerminalSignal(
-                source=method,
-                status="ok",
-                timestamp=timestamp,
-            )
-    elif method in {"prompt/cancelled", "turn/cancelled"}:
+        assistant_message_text = lifecycle.assistant_text
+    elif lifecycle.runtime_terminal_status is not None:
+        assistant_message_text = lifecycle.assistant_text or None
         terminal_signal = RuntimeThreadTerminalSignal(
             source=method,
-            status="interrupted",
+            status=lifecycle.runtime_terminal_status,
             timestamp=timestamp,
         )
-    elif method in {"prompt/failed", "turn/failed", "turn/error", "error"}:
+        if lifecycle.runtime_terminal_status == "error":
+            failure_message = lifecycle.error_message or _extract_error_message(params)
+    elif method in {"turn/failed", "turn/error", "error"}:
         failure_message = _extract_error_message(params)
         terminal_signal = RuntimeThreadTerminalSignal(
             source=method,
             status="error",
             timestamp=timestamp,
         )
-    elif method == "session.idle":
-        assistant_message_text = _extract_message_text(params)
-        terminal_signal = RuntimeThreadTerminalSignal(
-            source=method,
-            status="ok",
-            timestamp=timestamp,
-        )
-    elif method in {"session.status", "session/status"}:
-        assistant_message_text = _extract_message_text(params)
-        if _session_status_type(raw_event) == "idle":
-            terminal_signal = RuntimeThreadTerminalSignal(
-                source=method,
-                status="ok",
-                timestamp=timestamp,
-            )
     elif method == "item/completed":
         item = params.get("item")
         if (
@@ -438,9 +428,7 @@ def _inspect_raw_event(
     if assistant_stream_text is None and method == "session/update":
         update = params.get("update")
         if isinstance(update, dict):
-            update_kind = str(
-                update.get("sessionUpdate") or update.get("session_update") or ""
-            ).strip()
+            update_kind = str(lifecycle.session_update_kind or "").strip()
             if update_kind == "agent_message_chunk":
                 assistant_stream_text = _extract_output_delta(update)
 
@@ -450,51 +438,6 @@ def _inspect_raw_event(
         failure_message=failure_message,
         terminal_signal=terminal_signal,
     )
-
-
-def _session_status_type(raw_event: dict[str, Any]) -> str:
-    params = raw_event.get("params")
-    if not isinstance(params, dict):
-        message = raw_event.get("message")
-        if isinstance(message, dict):
-            params = message.get("params")
-    if not isinstance(params, dict):
-        return ""
-    status = params.get("status")
-    if isinstance(status, dict):
-        for key in ("type", "status", "state"):
-            value = str(status.get(key) or "").strip().lower()
-            if value:
-                return value
-    properties = params.get("properties")
-    if isinstance(properties, dict):
-        nested_status = properties.get("status")
-        if isinstance(nested_status, dict):
-            for key in ("type", "status", "state"):
-                value = str(nested_status.get(key) or "").strip().lower()
-                if value:
-                    return value
-    return str(params.get("status") or "").strip().lower()
-
-
-def _status_indicates_successful_completion(
-    status: Any, *, assume_true_when_missing: bool
-) -> bool:
-    normalized = _extract_status_value(status)
-    if not isinstance(normalized, str):
-        return assume_true_when_missing
-    return normalized.lower() in _SUCCESSFUL_COMPLETION_STATUSES
-
-
-def _extract_status_value(value: Any) -> Optional[str]:
-    if isinstance(value, str):
-        return value
-    if isinstance(value, dict):
-        for key in ("type", "status", "state"):
-            candidate = value.get(key)
-            if isinstance(candidate, str):
-                return candidate
-    return None
 
 
 def _extract_message_role(params: dict[str, Any]) -> str:
@@ -509,32 +452,6 @@ def _extract_message_role(params: dict[str, Any]) -> str:
     return ""
 
 
-def _extract_message_text(params: dict[str, Any]) -> Optional[str]:
-    for key in (
-        "text",
-        "content",
-        "message",
-        "final_message",
-        "finalOutput",
-        "final_output",
-    ):
-        value = params.get(key)
-        text = _string_from_value(value)
-        if text:
-            return text
-    output = params.get("output")
-    if isinstance(output, dict):
-        text = _string_from_value(output.get("text") or output.get("content"))
-        if text:
-            return text
-    item = params.get("item")
-    if isinstance(item, dict):
-        text = _extract_agent_message_text(item)
-        if text:
-            return text
-    return None
-
-
 def _extract_agent_message_text(item: dict[str, Any]) -> Optional[str]:
     for key in ("text", "message"):
         text = _string_from_value(item.get(key))
@@ -546,31 +463,6 @@ def _extract_agent_message_text(item: dict[str, Any]) -> Optional[str]:
         joined = "".join(part for part in parts if part)
         return joined or None
     return _string_from_value(content)
-
-
-def _extract_output_delta(params: dict[str, Any]) -> Optional[str]:
-    for key in ("delta", "text", "content"):
-        text = _string_from_value(params.get(key))
-        if text:
-            return text
-    output = params.get("output")
-    if isinstance(output, dict):
-        for key in ("delta", "text", "content"):
-            text = _string_from_value(output.get(key))
-            if text:
-                return text
-    return None
-
-
-def _extract_error_message(params: dict[str, Any]) -> str:
-    for key in ("message", "error", "reason"):
-        value = params.get(key)
-        if isinstance(value, dict):
-            value = value.get("message") or value.get("error")
-        text = _string_from_value(value)
-        if text:
-            return text
-    return "Turn error"
 
 
 def _string_from_value(value: Any) -> Optional[str]:

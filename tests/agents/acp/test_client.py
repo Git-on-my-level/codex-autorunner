@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from tests.acp_lifecycle_corpus import load_acp_lifecycle_corpus
 
 from codex_autorunner.agents.acp import (
     ACPClient,
@@ -47,67 +48,21 @@ def test_client_maps_session_scoped_official_events_without_turn_id(
 
 
 @pytest.mark.parametrize(
-    ("message", "expected_turn_id"),
-    (
-        (
-            {
-                "method": "prompt/completed",
-                "params": {"sessionId": "session-1", "status": "completed"},
-            },
-            "turn-2",
-        ),
-        (
-            {
-                "method": "prompt/failed",
-                "params": {"sessionId": "session-1", "status": "failed"},
-            },
-            "turn-2",
-        ),
-        (
-            {
-                "method": "prompt/cancelled",
-                "params": {"sessionId": "session-1", "status": "cancelled"},
-            },
-            "turn-2",
-        ),
-        (
-            {
-                "method": "session.idle",
-                "params": {"sessionId": "session-1"},
-            },
-            "turn-2",
-        ),
-        (
-            {
-                "method": "session.status",
-                "params": {
-                    "sessionId": "session-1",
-                    "status": {"type": "idle"},
-                },
-            },
-            "turn-2",
-        ),
-        (
-            {
-                "method": "session.status",
-                "params": {
-                    "sessionId": "session-1",
-                    "status": {"type": "busy"},
-                },
-            },
-            None,
-        ),
-    ),
+    ("case"),
+    load_acp_lifecycle_corpus(),
+    ids=[case["name"] for case in load_acp_lifecycle_corpus()],
 )
-def test_client_maps_only_explicit_terminal_official_events_without_turn_id(
-    message: dict[str, object],
-    expected_turn_id: str | None,
+def test_client_maps_shared_lifecycle_fixtures_without_turn_id(
+    case: dict[str, object],
 ) -> None:
     client = ACPClient(fixture_command("official"))
     client._session_active_turns["session-1"] = "turn-2"
+    message = dict(case["raw"])  # type: ignore[index]
+    expected = dict(case["expected"])  # type: ignore[index]
 
     mapped = client._message_with_mapped_turn_id(message)
 
+    expected_turn_id = "turn-2" if expected["uses_turn_id_fallback"] else None
     assert mapped.get("params", {}).get("turnId") == expected_turn_id
 
 

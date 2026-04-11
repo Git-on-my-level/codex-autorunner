@@ -1,0 +1,240 @@
+[
+  {
+    "name": "prompt_completed_missing_turn_id",
+    "raw": {
+      "method": "prompt/completed",
+      "params": {
+        "sessionId": "session-1",
+        "status": "completed",
+        "finalOutput": "fixture reply"
+      }
+    },
+    "expected": {
+      "normalized_kind": "turn_terminal",
+      "terminal_status": "completed",
+      "runtime_terminal_status": "ok",
+      "uses_turn_id_fallback": true,
+      "closes_turn_buffer": true,
+      "assistant_text": "fixture reply",
+      "output_delta": "",
+      "progress_message": "",
+      "error_message": null,
+      "session_status": null,
+      "session_update_kind": null
+    }
+  },
+  {
+    "name": "prompt_cancelled_missing_turn_id",
+    "raw": {
+      "method": "prompt/cancelled",
+      "params": {
+        "sessionId": "session-1",
+        "status": "cancelled"
+      }
+    },
+    "expected": {
+      "normalized_kind": "turn_terminal",
+      "terminal_status": "cancelled",
+      "runtime_terminal_status": "interrupted",
+      "uses_turn_id_fallback": true,
+      "closes_turn_buffer": true,
+      "assistant_text": "",
+      "output_delta": "",
+      "progress_message": "",
+      "error_message": null,
+      "session_status": null,
+      "session_update_kind": null
+    }
+  },
+  {
+    "name": "prompt_failed_missing_turn_id",
+    "raw": {
+      "method": "prompt/failed",
+      "params": {
+        "sessionId": "session-1",
+        "status": "failed",
+        "error": "boom"
+      }
+    },
+    "expected": {
+      "normalized_kind": "turn_terminal",
+      "terminal_status": "failed",
+      "runtime_terminal_status": "error",
+      "uses_turn_id_fallback": true,
+      "closes_turn_buffer": true,
+      "assistant_text": "",
+      "output_delta": "",
+      "progress_message": "",
+      "error_message": "boom",
+      "session_status": null,
+      "session_update_kind": null
+    }
+  },
+  {
+    "name": "session_idle_missing_turn_id",
+    "raw": {
+      "method": "session.idle",
+      "params": {
+        "sessionId": "session-1",
+        "finalOutput": "fixture reply"
+      }
+    },
+    "expected": {
+      "normalized_kind": "turn_terminal",
+      "terminal_status": "completed",
+      "runtime_terminal_status": "ok",
+      "uses_turn_id_fallback": true,
+      "closes_turn_buffer": false,
+      "assistant_text": "fixture reply",
+      "output_delta": "",
+      "progress_message": "",
+      "error_message": null,
+      "session_status": null,
+      "session_update_kind": null
+    }
+  },
+  {
+    "name": "session_status_idle_missing_turn_id",
+    "raw": {
+      "method": "session.status",
+      "params": {
+        "sessionId": "session-1",
+        "status": {
+          "type": "idle"
+        },
+        "finalOutput": "fixture reply"
+      }
+    },
+    "expected": {
+      "normalized_kind": "turn_terminal",
+      "terminal_status": "completed",
+      "runtime_terminal_status": "ok",
+      "uses_turn_id_fallback": true,
+      "closes_turn_buffer": false,
+      "assistant_text": "fixture reply",
+      "output_delta": "",
+      "progress_message": "",
+      "error_message": null,
+      "session_status": "idle",
+      "session_update_kind": null
+    }
+  },
+  {
+    "name": "session_status_running_missing_turn_id",
+    "raw": {
+      "method": "session.status",
+      "params": {
+        "sessionId": "session-1",
+        "status": {
+          "type": "running"
+        }
+      }
+    },
+    "expected": {
+      "normalized_kind": "progress",
+      "terminal_status": null,
+      "runtime_terminal_status": null,
+      "uses_turn_id_fallback": false,
+      "closes_turn_buffer": false,
+      "assistant_text": "",
+      "output_delta": "",
+      "progress_message": "running",
+      "error_message": null,
+      "session_status": "running",
+      "session_update_kind": null
+    }
+  },
+  {
+    "name": "session_update_message_chunk_missing_turn_id",
+    "raw": {
+      "method": "session/update",
+      "params": {
+        "sessionId": "session-1",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": [
+            {
+              "type": "text",
+              "text": "fixture"
+            },
+            {
+              "type": "output_text",
+              "text": " reply"
+            }
+          ]
+        }
+      }
+    },
+    "expected": {
+      "normalized_kind": "output_delta",
+      "terminal_status": null,
+      "runtime_terminal_status": null,
+      "uses_turn_id_fallback": true,
+      "closes_turn_buffer": false,
+      "assistant_text": "",
+      "output_delta": "fixture reply",
+      "progress_message": "",
+      "error_message": null,
+      "session_status": null,
+      "session_update_kind": "agent_message_chunk"
+    }
+  },
+  {
+    "name": "session_update_thought_chunk_missing_turn_id",
+    "raw": {
+      "method": "session/update",
+      "params": {
+        "sessionId": "session-1",
+        "update": {
+          "sessionUpdate": "agent_thought_chunk",
+          "content": "thinking hard"
+        }
+      }
+    },
+    "expected": {
+      "normalized_kind": "progress",
+      "terminal_status": null,
+      "runtime_terminal_status": null,
+      "uses_turn_id_fallback": true,
+      "closes_turn_buffer": false,
+      "assistant_text": "",
+      "output_delta": "",
+      "progress_message": "thinking hard",
+      "error_message": null,
+      "session_status": null,
+      "session_update_kind": "agent_thought_chunk"
+    }
+  },
+  {
+    "name": "session_request_permission_missing_turn_id",
+    "raw": {
+      "id": "perm-1",
+      "method": "session/request_permission",
+      "params": {
+        "sessionId": "session-1",
+        "description": "Need approval",
+        "context": {
+          "tool": "shell",
+          "command": [
+            "ls"
+          ]
+        }
+      }
+    },
+    "expected": {
+      "normalized_kind": "permission_requested",
+      "terminal_status": null,
+      "runtime_terminal_status": null,
+      "uses_turn_id_fallback": true,
+      "closes_turn_buffer": false,
+      "assistant_text": "",
+      "output_delta": "",
+      "progress_message": "",
+      "error_message": null,
+      "session_status": null,
+      "session_update_kind": null,
+      "permission_request_id": "perm-1",
+      "permission_description": "Need approval"
+    }
+  }
+]

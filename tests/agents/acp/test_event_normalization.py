@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import pytest
+from tests.acp_lifecycle_corpus import load_acp_lifecycle_corpus
+
 from codex_autorunner.agents.acp import (
     ACPOutputDeltaEvent,
     ACPPermissionRequestEvent,
@@ -7,6 +10,38 @@ from codex_autorunner.agents.acp import (
     ACPTurnTerminalEvent,
     normalize_notification,
 )
+
+
+@pytest.mark.parametrize(
+    ("case"),
+    load_acp_lifecycle_corpus(),
+    ids=[case["name"] for case in load_acp_lifecycle_corpus()],
+)
+def test_normalize_notification_shared_lifecycle_corpus(
+    case: dict[str, object],
+) -> None:
+    raw = dict(case["raw"])  # type: ignore[index]
+    expected = dict(case["expected"])  # type: ignore[index]
+
+    event = normalize_notification(raw)
+
+    assert event.kind == expected["normalized_kind"]
+    assert event.method == raw["method"]
+    if expected["normalized_kind"] == "turn_terminal":
+        assert isinstance(event, ACPTurnTerminalEvent)
+        assert event.status == expected["terminal_status"]
+        assert event.final_output == expected["assistant_text"]
+        assert event.error_message == expected["error_message"]
+    elif expected["normalized_kind"] == "output_delta":
+        assert isinstance(event, ACPOutputDeltaEvent)
+        assert event.delta == expected["output_delta"]
+    elif expected["normalized_kind"] == "progress":
+        assert isinstance(event, ACPProgressEvent)
+        assert event.message == expected["progress_message"]
+    elif expected["normalized_kind"] == "permission_requested":
+        assert isinstance(event, ACPPermissionRequestEvent)
+        assert event.request_id == expected["permission_request_id"]
+        assert event.description == expected["permission_description"]
 
 
 def test_normalize_notification_maps_output_delta() -> None:

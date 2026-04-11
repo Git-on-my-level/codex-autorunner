@@ -6,14 +6,17 @@ import sys
 from pathlib import Path
 
 import pytest
+from tests.acp_lifecycle_corpus import load_acp_lifecycle_corpus
 
 from codex_autorunner.agents.acp.errors import (
     ACPInitializationError,
     ACPProcessCrashedError,
 )
+from codex_autorunner.agents.acp.events import normalize_notification
 from codex_autorunner.agents.hermes.supervisor import (
     HermesSupervisor,
     HermesSupervisorError,
+    _should_close_turn_buffer,
     build_hermes_supervisor_from_config,
     hermes_runtime_preflight,
 )
@@ -187,6 +190,17 @@ async def test_hermes_supervisor_can_complete_from_idle_status_before_prompt_ret
         )
     finally:
         await supervisor.close_all()
+
+
+def test_hermes_supervisor_shared_lifecycle_fixture_buffer_closing() -> None:
+    for case in load_acp_lifecycle_corpus():
+        raw = dict(case["raw"])
+        expected = dict(case["expected"])
+        event = normalize_notification(raw)
+
+        if event.kind != "turn_terminal":
+            continue
+        assert _should_close_turn_buffer(event) is expected["closes_turn_buffer"]
 
 
 def test_hermes_runtime_preflight_accepts_plain_acp_help(

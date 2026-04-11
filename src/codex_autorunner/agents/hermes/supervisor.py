@@ -8,6 +8,9 @@ from os.path import basename
 from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable, Mapping, Optional, Sequence
 
+from ...core.acp_lifecycle import (
+    should_close_turn_buffer as _should_close_acp_turn_buffer,
+)
 from ...core.config import HubConfig, RepoConfig
 from ...core.logging_utils import log_event
 from ...core.orchestration.turn_event_buffer import TurnEventBuffer
@@ -29,9 +32,6 @@ _logger = logging.getLogger(__name__)
 HERMES_RUNTIME_ID = "hermes"
 HERMES_ACP_COMMAND = "acp"
 HERMES_APPROVAL_TIMEOUT_SECONDS = 300.0
-_HERMES_IDLE_TERMINAL_METHODS = frozenset(
-    {"session.idle", "session.status", "session/status"}
-)
 
 
 class HermesSupervisorError(RuntimeError):
@@ -676,9 +676,9 @@ def _build_surface_approval_request(
 
 
 def _should_close_turn_buffer(event: Any) -> bool:
-    return isinstance(event, ACPTurnTerminalEvent) and event.method not in (
-        _HERMES_IDLE_TERMINAL_METHODS
-    )
+    if not isinstance(event, ACPTurnTerminalEvent):
+        return False
+    return _should_close_acp_turn_buffer(event.method, event.payload)
 
 
 def _workspace_key(workspace_root: Path) -> str:
