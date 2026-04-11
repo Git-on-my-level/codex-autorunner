@@ -107,6 +107,9 @@ class ScheduledInteraction:
 class RunnerConfig:
     timeout_seconds: Optional[float] = DEFAULT_HANDLER_TIMEOUT_SECONDS
     stalled_warning_seconds: Optional[float] = DEFAULT_STALLED_WARNING_SECONDS
+    # Keep a finite cap so a burst of interactions cannot fan out into
+    # unbounded handler concurrency and starve the event loop.
+    max_concurrent_interaction_handlers: int = 4
 
 
 class CommandRunner:
@@ -124,12 +127,17 @@ class CommandRunner:
         self._config = config
         self._logger = logger
         self._on_scheduler_conversation_idle = on_scheduler_conversation_idle
+        if config.max_concurrent_interaction_handlers < 1:
+            raise ValueError("max_concurrent_interaction_handlers must be at least 1")
         self._queue: asyncio.Queue[Any] = asyncio.Queue()
         self._drain_task: Optional[asyncio.Task[None]] = None
         self._interaction_tasks: Set[asyncio.Task[None]] = set()
         self._pending_interactions: Deque[ScheduledInteraction] = deque()
         self._active_resource_keys: set[str] = set()
         self._active_conversation_labels: dict[str, str] = {}
+        self._interaction_handler_slots = asyncio.Semaphore(
+            config.max_concurrent_interaction_handlers
+        )
         self._scheduler_lock = asyncio.Lock()
         self._started = False
 
@@ -336,6 +344,7 @@ class CommandRunner:
 
     async def _run_scheduled_interaction(self, item: ScheduledInteraction) -> None:
         acquired_schedule = False
+        queue_wait_ack_attempted = False
         notify_idle: set[str] = set()
         try:
             if item.schedule.resource_keys:
@@ -352,6 +361,7 @@ class CommandRunner:
                         scheduler_state="waiting_on_resources",
                     )
                     if item.queue_wait_ack_policy not in (None, "immediate"):
+                        queue_wait_ack_attempted = True
                         acknowledged = await self._service.acknowledge_runtime_envelope(
                             RuntimeInteractionEnvelope(
                                 context=item.ctx,
@@ -375,11 +385,30 @@ class CommandRunner:
                     item,
                     scheduler_state="scheduled",
                 )
-            await self._run_with_lifecycle(
-                item.ctx,
-                item.payload,
-                replay_mode=item.replay_mode,
-            )
+            if (
+                not queue_wait_ack_attempted
+                and item.queue_wait_ack_policy == "defer_ephemeral"
+            ):
+                # Queue-wait ACK must happen before waiting for a global handler
+                # slot; otherwise unrelated handler saturation can push ACK past
+                # Discord's callback window.
+                acknowledged = await self._service.acknowledge_runtime_envelope(
+                    RuntimeInteractionEnvelope(
+                        context=item.ctx,
+                        conversation_id=item.schedule.conversation_id,
+                        resource_keys=item.schedule.resource_keys,
+                        queue_wait_ack_policy=item.queue_wait_ack_policy,
+                    ),
+                    stage="queue_wait",
+                )
+                if not acknowledged:
+                    return
+            async with self._interaction_handler_slots:
+                await self._run_with_lifecycle(
+                    item.ctx,
+                    item.payload,
+                    replay_mode=item.replay_mode,
+                )
         except asyncio.CancelledError:
             return
         finally:

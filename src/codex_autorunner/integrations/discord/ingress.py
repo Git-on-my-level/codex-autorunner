@@ -130,21 +130,30 @@ class InteractionIngress:
             ctx.interaction_token,
             kind=ctx.kind,
         )
-        register_interaction = getattr(
-            self._service, "_register_interaction_ingress", None
+        check_duplicate_interaction = getattr(
+            self._service, "_check_interaction_ingress_duplicate", None
         )
-        if callable(register_interaction):
-            is_duplicate = await register_interaction(ctx)
-            if is_duplicate:
-                self._logger.debug(
-                    "Skipping duplicate Discord interaction delivery: %s",
-                    ctx.interaction_id,
-                )
-                return IngressResult(
-                    accepted=False,
-                    context=ctx,
-                    rejection_reason="duplicate_interaction",
-                )
+        if callable(check_duplicate_interaction):
+            is_duplicate = await check_duplicate_interaction(ctx)
+        else:
+            register_interaction = getattr(
+                self._service, "_register_interaction_ingress", None
+            )
+            is_duplicate = (
+                await register_interaction(ctx)
+                if callable(register_interaction)
+                else False
+            )
+        if is_duplicate:
+            self._logger.debug(
+                "Skipping duplicate Discord interaction delivery: %s",
+                ctx.interaction_id,
+            )
+            return IngressResult(
+                accepted=False,
+                context=ctx,
+                rejection_reason="duplicate_interaction",
+            )
         ctx.timing = IngressTiming(
             interaction_created_at=ctx.timing.interaction_created_at,
             ingress_started_at=now,
@@ -157,6 +166,11 @@ class InteractionIngress:
             authz_finished_at=time.monotonic(),
         )
         if not authz_ok:
+            release_interaction = getattr(
+                self._service, "_release_interaction_ingress", None
+            )
+            if callable(release_interaction):
+                await release_interaction(ctx.interaction_id)
             return IngressResult(
                 accepted=False,
                 context=ctx,

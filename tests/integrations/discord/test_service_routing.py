@@ -9,7 +9,7 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -7304,6 +7304,63 @@ async def test_car_newt_runs_hub_setup_commands_for_bound_workspace(
         assert len(rest.followup_messages) == 1
         content = rest.followup_messages[0]["payload"]["content"].lower()
         assert "ran 1 setup command" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_dispatch_persists_runtime_state_only_after_ack(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway([_interaction(name="newt", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    call_order: list[tuple[str, Any]] = []
+
+    async def _tracked_ack(*_args: Any, **_kwargs: Any) -> bool:
+        call_order.append(("ack", _kwargs.get("stage")))
+        return True
+
+    async def _tracked_persist(*_args: Any, **kwargs: Any) -> None:
+        call_order.append(("persist", kwargs.get("scheduler_state")))
+
+    def _tracked_submit(*_args: Any, **_kwargs: Any) -> None:
+        call_order.append(("submit", None))
+
+    service._acknowledge_runtime_envelope = _tracked_ack  # type: ignore[assignment]
+    service._persist_runtime_interaction = _tracked_persist  # type: ignore[assignment]
+    service._command_runner = SimpleNamespace(
+        submit=_tracked_submit,
+        shutdown=AsyncMock(),
+    )
+
+    try:
+        await service.run_forever()
+        assert call_order[:3] == [
+            ("ack", "dispatch"),
+            ("persist", "acknowledged"),
+            ("submit", None),
+        ]
     finally:
         await store.close()
 
