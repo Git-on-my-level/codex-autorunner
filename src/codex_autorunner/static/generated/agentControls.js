@@ -240,6 +240,7 @@ function ensureProfileOptions(select, agentId) {
     if (!select)
         return;
     const profiles = agentProfiles(agentId);
+    select.classList.toggle("hidden", profiles.length === 0);
     select.innerHTML = "";
     if (!profiles.length) {
         const option = document.createElement("option");

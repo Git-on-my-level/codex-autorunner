@@ -5,6 +5,7 @@ import { JSDOM } from "jsdom";
 const dom = new JSDOM(
   `<!doctype html><html><body>
     <select id="agent"></select>
+    <select id="profile"></select>
     <select id="model"></select>
     <input id="model-input" class="hidden" type="text" />
     <select id="reasoning"></select>
@@ -123,4 +124,95 @@ test("Hermes uses manual model override mode without fetching a catalog", async 
   modelInput.dispatchEvent(new Event("input", { bubbles: true }));
 
   assert.equal(getSelectedModel("hermes"), "hermes/free-form-model");
+});
+
+test("profile picker only shows for agents that expose profiles", async () => {
+  __agentControlsTest.reset();
+  localStorage.clear();
+
+  globalThis.fetch = async (url) => {
+    const href = String(url);
+    if (href.endsWith("/hub/pma/agents")) {
+      return jsonResponse({
+        agents: [
+          {
+            id: "codex",
+            name: "Codex",
+            capabilities: ["model_listing", "message_turns"],
+          },
+          {
+            id: "hermes",
+            name: "Hermes",
+            capabilities: ["message_turns"],
+            profiles: [{ id: "m4-pma", display_name: "M4 PMA" }],
+          },
+          {
+            id: "custom-agent",
+            name: "Custom Agent",
+            capabilities: ["message_turns"],
+            profiles: [{ id: "fast", display_name: "Fast" }],
+          },
+        ],
+        default: "codex",
+      });
+    }
+    if (href.endsWith("/hub/pma/agents/codex/models")) {
+      return jsonResponse({
+        default_model: "gpt-5.4",
+        models: [
+          {
+            id: "gpt-5.4",
+            display_name: "GPT-5.4",
+            supports_reasoning: true,
+            reasoning_options: ["medium", "high"],
+          },
+        ],
+      });
+    }
+    throw new Error(`Unexpected fetch: ${href}`);
+  };
+
+  const agentSelect = document.getElementById("agent");
+  const profileSelect = document.getElementById("profile");
+  const modelSelect = document.getElementById("model");
+  const modelInput = document.getElementById("model-input");
+  const reasoningSelect = document.getElementById("reasoning");
+
+  initAgentControls({
+    agentSelect,
+    profileSelect,
+    modelSelect,
+    modelInput,
+    reasoningSelect,
+  });
+  await refreshAgentControls({ force: true, reason: "manual" });
+
+  assert.equal(profileSelect.classList.contains("hidden"), true);
+  assert.equal(profileSelect.disabled, true);
+
+  agentSelect.value = "hermes";
+  agentSelect.dispatchEvent(new Event("change", { bubbles: true }));
+  await waitForUi();
+  await waitForUi();
+
+  assert.equal(profileSelect.classList.contains("hidden"), false);
+  assert.equal(profileSelect.disabled, false);
+  assert.equal(profileSelect.value, "m4-pma");
+
+  agentSelect.value = "custom-agent";
+  agentSelect.dispatchEvent(new Event("change", { bubbles: true }));
+  await waitForUi();
+  await waitForUi();
+
+  assert.equal(profileSelect.classList.contains("hidden"), false);
+  assert.equal(profileSelect.disabled, false);
+  assert.equal(profileSelect.value, "fast");
+
+  agentSelect.value = "codex";
+  agentSelect.dispatchEvent(new Event("change", { bubbles: true }));
+  await waitForUi();
+  await waitForUi();
+
+  assert.equal(profileSelect.classList.contains("hidden"), true);
+  assert.equal(profileSelect.disabled, true);
 });
