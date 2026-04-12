@@ -1799,6 +1799,27 @@ def pma_agents(
             capability_str = ", ".join(sorted(capabilities)) if capabilities else "none"
             typer.echo(f"  - {agent_name} ({agent_id})")
             typer.echo(f"    Capabilities: {capability_str}")
+            session_controls = agent.get("session_controls", {})
+            if isinstance(session_controls, dict):
+                enabled_controls = [
+                    key for key, enabled in sorted(session_controls.items()) if enabled
+                ]
+                if enabled_controls:
+                    typer.echo("    Session controls: " + ", ".join(enabled_controls))
+            commands = agent.get("advertised_commands", [])
+            if isinstance(commands, list) and commands:
+                typer.echo("    Commands:")
+                for command in commands:
+                    if not isinstance(command, dict):
+                        continue
+                    name = str(command.get("name") or "").strip()
+                    if not name:
+                        continue
+                    description = str(command.get("description") or "").strip()
+                    if description:
+                        typer.echo(f"      {name}: {description}")
+                    else:
+                        typer.echo(f"      {name}")
 
 
 @pma_app.command("models")
@@ -2817,6 +2838,45 @@ def pma_thread_resume(
         typer.echo(json.dumps(data, indent=2))
     else:
         typer.echo(f"Resumed {managed_thread_id}")
+
+
+@thread_app.command("fork")
+def pma_thread_fork(
+    managed_thread_id: str = typer.Option(
+        ..., "--id", help="Managed PMA thread id", show_default=False
+    ),
+    name: Optional[str] = typer.Option(
+        None, "--name", help="Optional new thread label"
+    ),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+):
+    """Fork a managed PMA thread when the backend runtime supports it."""
+    hub_root = _resolve_hub_path(path)
+    try:
+        config = load_hub_config(hub_root)
+        data = _request_json(
+            "POST",
+            _build_pma_url(config, f"/threads/{managed_thread_id}/fork"),
+            {"name": name},
+            token_env=config.server_auth_token_env,
+        )
+    except httpx.HTTPError as exc:
+        typer.echo(f"HTTP error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    except (ValueError, OSError) as exc:  # intentional: top-level error handler
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+    if output_json:
+        typer.echo(json.dumps(data, indent=2))
+        return
+
+    thread = data.get("thread", {}) if isinstance(data, dict) else {}
+    if not isinstance(thread, dict) or not thread.get("managed_thread_id"):
+        typer.echo("Failed to fork managed thread", err=True)
+        raise typer.Exit(code=1) from None
+    typer.echo(str(thread.get("managed_thread_id")))
 
 
 @thread_app.command("archive")

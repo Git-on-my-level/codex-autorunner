@@ -264,6 +264,61 @@ def test_pma_agents_endpoint_advertises_hermes_active_thread_discovery(
     assert "active_thread_discovery" in agents["hermes"]["capabilities"]
 
 
+def test_pma_agents_endpoint_surfaces_hermes_optional_controls_and_commands(
+    hub_env,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    class _HermesSupervisor:
+        async def session_capabilities(self, workspace_root: Path):
+            _ = workspace_root
+            return type(
+                "Caps",
+                (),
+                {
+                    "list_sessions": True,
+                    "fork": True,
+                    "set_model": True,
+                    "set_mode": False,
+                },
+            )()
+
+        async def advertised_commands(self, workspace_root: Path):
+            _ = workspace_root
+            return [
+                type(
+                    "Command",
+                    (),
+                    {"name": "/fork", "description": "Fork the current session"},
+                )(),
+                type(
+                    "Command",
+                    (),
+                    {"name": "/model", "description": "Switch model"},
+                )(),
+            ]
+
+    app.state.hermes_supervisor = _HermesSupervisor()
+    with TestClient(app) as client:
+        resp = client.get("/hub/pma/agents")
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    agents = {agent["id"]: agent for agent in payload["agents"]}
+    hermes = agents["hermes"]
+    assert hermes["session_controls"] == {
+        "fork": True,
+        "set_model": True,
+        "set_mode": False,
+        "list_sessions": True,
+    }
+    assert hermes["advertised_commands"] == [
+        {"name": "/fork", "description": "Fork the current session"},
+        {"name": "/model", "description": "Switch model"},
+    ]
+
+
 def test_pma_chat_requires_message(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
@@ -1798,6 +1853,61 @@ def test_pma_new_creates_artifact(hub_env) -> None:
     assert payload.get("status") == "ok"
     artifact_path = Path(payload["artifact_path"])
     assert artifact_path.exists()
+
+
+def test_pma_new_forks_current_hermes_thread_when_runtime_supports_it(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    observed: dict[str, Any] = {}
+
+    class _HermesSupervisor:
+        async def fork_session(
+            self,
+            workspace_root: Path,
+            session_id: str,
+            *,
+            title: Optional[str] = None,
+            metadata: Optional[dict[str, Any]] = None,
+        ):
+            observed["fork"] = (workspace_root, session_id, title, metadata)
+            return type("Forked", (), {"session_id": "hermes-session-forked"})()
+
+    app.state.hermes_supervisor = _HermesSupervisor()
+
+    with TestClient(app) as client:
+        registry = app.state.app_server_threads
+        original_get_current_snapshot = (
+            chat_runtime.PmaRuntimeState.get_current_snapshot
+        )
+
+        async def _fake_get_current_snapshot(self) -> dict[str, Any]:
+            return {
+                "agent": "hermes",
+                "profile": None,
+                "thread_id": "hermes-session-source",
+            }
+
+        try:
+            chat_runtime.PmaRuntimeState.get_current_snapshot = (  # type: ignore[assignment]
+                _fake_get_current_snapshot
+            )
+            resp = client.post(
+                "/hub/pma/new",
+                json={"agent": "hermes", "lane_id": "pma:default"},
+            )
+        finally:
+            chat_runtime.PmaRuntimeState.get_current_snapshot = (  # type: ignore[assignment]
+                original_get_current_snapshot
+            )
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["details"]["forked"] is True
+    assert payload["details"]["source_thread_id"] == "hermes-session-source"
+    assert payload["details"]["thread_id"] == "hermes-session-forked"
+    assert observed["fork"][0] == hub_env.hub_root
+    assert observed["fork"][1] == "hermes-session-source"
+    assert registry.get_thread_id("pma.hermes") == "hermes-session-forked"
 
 
 @pytest.mark.parametrize(

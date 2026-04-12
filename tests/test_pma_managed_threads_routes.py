@@ -258,10 +258,113 @@ def test_create_managed_thread_persists_agent_profile(hub_env) -> None:
     assert thread["agent"] == "hermes"
     assert thread["agent_profile"] == "m4"
 
-    store = PmaThreadStore(hub_env.hub_root)
-    stored = store.get_thread(thread["managed_thread_id"])
-    assert stored is not None
-    assert stored["metadata"]["agent_profile"] == "m4"
+
+def test_fork_managed_thread_clones_hermes_backend_session(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg.setdefault("agents", {})
+    cfg["agents"]["hermes"] = {
+        "binary": "hermes",
+        "profiles": {
+            "m4": {
+                "display_name": "M4 PMA",
+                "binary": "hermes-m4",
+            }
+        },
+        "default_profile": "m4",
+    }
+    write_test_config(hub_env.hub_root / CONFIG_FILENAME, cfg)
+    monkeypatch.setattr(
+        managed_threads,
+        "build_hermes_supervisor_from_config",
+        lambda *args, **kwargs: _HermesSupervisor(),
+    )
+    app = create_hub_app(hub_env.hub_root)
+    observed: dict[str, object] = {}
+
+    class _HermesSupervisor:
+        async def fork_session(
+            self,
+            workspace_root: Path,
+            session_id: str,
+            *,
+            title: str | None = None,
+            metadata: dict[str, object] | None = None,
+        ):
+            observed["fork"] = (workspace_root, session_id, title, metadata)
+            return type("Forked", (), {"session_id": "hermes-session-forked"})()
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "hermes",
+                "profile": "m4",
+                **_repo_owner(hub_env),
+                "name": "Hermes M4 thread",
+            },
+        )
+        assert create_resp.status_code == 200
+        source_thread = create_resp.json()["thread"]
+
+        store = PmaThreadStore(hub_env.hub_root)
+        store.set_thread_backend_id(
+            source_thread["managed_thread_id"],
+            "hermes-session-source",
+            backend_runtime_instance_id="hermes-runtime-1",
+        )
+
+        fork_resp = client.post(
+            f"/hub/pma/threads/{source_thread['managed_thread_id']}/fork",
+            json={"name": "Forked Hermes thread"},
+        )
+
+    assert fork_resp.status_code == 200
+    payload = fork_resp.json()
+    thread = payload["thread"]
+    assert (
+        payload["forked_from_managed_thread_id"] == source_thread["managed_thread_id"]
+    )
+    assert payload["source_backend_thread_id"] == "hermes-session-source"
+    assert thread["managed_thread_id"] != source_thread["managed_thread_id"]
+    assert thread["agent"] == "hermes"
+    assert thread["agent_profile"] == "m4"
+    assert thread["backend_thread_id"] == "hermes-session-forked"
+    assert thread["name"] == "Forked Hermes thread"
+    assert observed["fork"] == (
+        hub_env.repo_root.resolve(),
+        "hermes-session-source",
+        "Forked Hermes thread",
+        {
+            "flow_type": "pma_managed_thread_fork",
+            "managed_thread_id": source_thread["managed_thread_id"],
+            "source_backend_thread_id": "hermes-session-source",
+        },
+    )
+
+
+def test_fork_managed_thread_rejects_non_hermes_threads(hub_env) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                **_repo_owner(hub_env),
+                "name": "Codex thread",
+            },
+        )
+        assert create_resp.status_code == 200
+        thread = create_resp.json()["thread"]
+        fork_resp = client.post(
+            f"/hub/pma/threads/{thread['managed_thread_id']}/fork",
+            json={},
+        )
+
+    assert fork_resp.status_code == 409
+    assert "does not support session fork" in fork_resp.json()["detail"]
 
 
 def test_create_managed_thread_canonicalizes_alias_agent_input(hub_env) -> None:

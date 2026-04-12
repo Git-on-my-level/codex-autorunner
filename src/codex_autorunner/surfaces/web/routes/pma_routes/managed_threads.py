@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Optional, cast
 
 from fastapi import APIRouter, Body, HTTPException, Request
 
+from .....agents.hermes.supervisor import build_hermes_supervisor_from_config
 from .....agents.registry import (
     get_registered_agents,
     resolve_agent_runtime,
@@ -25,6 +27,7 @@ from ...schemas import (
     PmaAutomationTimerTouchRequest,
     PmaManagedThreadCompactRequest,
     PmaManagedThreadCreateRequest,
+    PmaManagedThreadForkRequest,
     PmaManagedThreadResumeRequest,
 )
 from ...services.pma.managed_thread_followup import (
@@ -105,6 +108,17 @@ def build_managed_thread_orchestration_service(request: Request):
         descriptors=cast(dict[str, RuntimeAgentDescriptor], descriptors),
         harness_factory=_make_harness,
         pma_thread_store=PmaThreadStore(request.app.state.config.root),
+    )
+
+
+def _resolve_hermes_supervisor(request: Request, *, profile: Optional[str]):
+    if profile is None:
+        supervisor = getattr(request.app.state, "hermes_supervisor", None)
+        if supervisor is not None:
+            return supervisor
+    return build_hermes_supervisor_from_config(
+        request.app.state.config,
+        profile=profile,
     )
 
 
@@ -489,6 +503,117 @@ def build_managed_thread_crud_routes(
                 managed_thread_id=managed_thread_id,
                 binding_metadata_by_thread=binding_metadata,
             )
+        }
+
+    @router.post("/threads/{managed_thread_id}/fork")
+    async def fork_managed_thread(
+        managed_thread_id: str,
+        request: Request,
+        payload: PmaManagedThreadForkRequest,
+    ) -> dict[str, Any]:
+        service = build_managed_thread_orchestration_service(request)
+        source_thread = service.get_thread_target(managed_thread_id)
+        if source_thread is None:
+            raise HTTPException(status_code=404, detail="Managed thread not found")
+        if not source_thread.workspace_root:
+            raise HTTPException(
+                status_code=500,
+                detail="Managed thread is missing workspace_root",
+            )
+        runtime_resolution = resolve_agent_runtime(
+            source_thread.agent_id,
+            source_thread.agent_profile,
+            context=request.app.state,
+        )
+        if runtime_resolution.logical_agent_id != "hermes":
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Managed thread agent '{source_thread.agent_id}' does not "
+                    "support session fork"
+                ),
+            )
+        source_session_id = normalize_optional_text(source_thread.backend_thread_id)
+        if source_session_id is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Managed thread has no backend session to fork",
+            )
+        supervisor = _resolve_hermes_supervisor(
+            request,
+            profile=runtime_resolution.logical_profile,
+        )
+        if supervisor is None:
+            raise HTTPException(status_code=503, detail="Hermes runtime unavailable")
+        try:
+            forked_session = await supervisor.fork_session(
+                Path(source_thread.workspace_root),
+                source_session_id,
+                title=normalize_optional_text(payload.name)
+                or source_thread.display_name
+                or source_thread.thread_target_id,
+                metadata={
+                    "flow_type": "pma_managed_thread_fork",
+                    "managed_thread_id": managed_thread_id,
+                    "source_backend_thread_id": source_session_id,
+                },
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        if forked_session is None or not forked_session.session_id:
+            raise HTTPException(
+                status_code=409,
+                detail="Hermes runtime does not support session fork",
+            )
+
+        store = PmaThreadStore(request.app.state.config.root)
+        stored_source = store.get_thread(managed_thread_id)
+        metadata = dict((stored_source or {}).get("metadata") or {})
+        if source_thread.backend_runtime_instance_id:
+            metadata["backend_runtime_instance_id"] = (
+                source_thread.backend_runtime_instance_id
+            )
+        try:
+            forked_thread = service.create_thread_target(
+                source_thread.agent_id,
+                Path(source_thread.workspace_root),
+                repo_id=source_thread.repo_id,
+                resource_kind=source_thread.resource_kind,
+                resource_id=source_thread.resource_id,
+                display_name=normalize_optional_text(payload.name)
+                or source_thread.display_name,
+                backend_thread_id=forked_session.session_id,
+                metadata=metadata,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        refreshed_forked_thread = service.get_thread_target(
+            forked_thread.thread_target_id
+        )
+        if refreshed_forked_thread is not None:
+            forked_thread = refreshed_forked_thread
+        store.append_action(
+            "managed_thread_fork",
+            managed_thread_id=forked_thread.thread_target_id,
+            payload_json=json.dumps(
+                {
+                    "source_managed_thread_id": managed_thread_id,
+                    "source_backend_thread_id": source_session_id,
+                    "forked_backend_thread_id": forked_session.session_id,
+                },
+                ensure_ascii=True,
+            ),
+        )
+        binding_metadata = _load_chat_binding_metadata_by_thread(
+            request.app.state.config.root
+        )
+        return {
+            "thread": _serialize_thread_target(
+                forked_thread,
+                binding_metadata_by_thread=binding_metadata,
+            ),
+            "forked_from_managed_thread_id": managed_thread_id,
+            "source_backend_thread_id": source_session_id,
         }
 
     @router.post("/threads/{managed_thread_id}/resume")

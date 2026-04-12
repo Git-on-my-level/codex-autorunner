@@ -4,6 +4,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
+from .....agents.hermes.supervisor import build_hermes_supervisor_from_config
 from .....agents.registry import get_agent_descriptor, get_available_agents
 from ...services.pma.common import pma_config_from_raw
 from ..agents import _available_agents, _serialize_model_catalog
@@ -24,13 +25,72 @@ def build_pma_meta_routes(
         hub_root = request.app.state.config.root
         return runtime.get_safety_checker(hub_root, request)
 
+    def _resolve_hermes_supervisor(
+        request: Request,
+        *,
+        profile: str | None,
+    ):
+        if profile is None:
+            supervisor = getattr(request.app.state, "hermes_supervisor", None)
+            if supervisor is not None:
+                return supervisor
+        return build_hermes_supervisor_from_config(
+            request.app.state.config,
+            profile=profile,
+        )
+
     @router.get("/agents")
-    def list_pma_agents(request: Request) -> dict[str, Any]:
+    async def list_pma_agents(request: Request) -> dict[str, Any]:
         if not get_available_agents(request.app.state):
             raise HTTPException(status_code=404, detail="PMA unavailable")
         agents, default_agent = _available_agents(request)
         defaults = _get_pma_config(request)
+        default_profile = str(defaults.get("profile") or "").strip().lower() or None
+        enriched_agents: list[dict[str, Any]] = []
+        for agent in agents:
+            if not isinstance(agent, dict):
+                continue
+            agent_payload = dict(agent)
+            if str(agent_payload.get("id") or "").strip().lower() == "hermes":
+                metadata_profile = default_profile or (
+                    str(agent_payload.get("default_profile") or "").strip().lower()
+                    or None
+                )
+                supervisor = _resolve_hermes_supervisor(
+                    request,
+                    profile=metadata_profile,
+                )
+                if supervisor is not None:
+                    try:
+                        session_caps = await supervisor.session_capabilities(
+                            request.app.state.config.root
+                        )
+                        commands = await supervisor.advertised_commands(
+                            request.app.state.config.root
+                        )
+                    except Exception:  # intentional: optional runtime metadata
+                        session_caps = None
+                        commands = []
+                    if session_caps is not None:
+                        agent_payload["session_controls"] = {
+                            "fork": bool(session_caps.fork),
+                            "set_model": bool(session_caps.set_model),
+                            "set_mode": bool(session_caps.set_mode),
+                            "list_sessions": bool(session_caps.list_sessions),
+                        }
+                    if commands:
+                        agent_payload["advertised_commands"] = [
+                            {
+                                "name": command.name,
+                                "description": command.description,
+                            }
+                            for command in commands
+                        ]
+                    if metadata_profile:
+                        agent_payload["metadata_profile"] = metadata_profile
+            enriched_agents.append(agent_payload)
         payload: dict[str, Any] = {"agents": agents, "default": default_agent}
+        payload["agents"] = enriched_agents
         if (
             defaults.get("profile")
             or defaults.get("model")

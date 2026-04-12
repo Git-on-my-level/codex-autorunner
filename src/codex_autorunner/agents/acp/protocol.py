@@ -201,6 +201,32 @@ class ACPAdvertisedCommand:
     raw: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class ACPSessionCapabilities:
+    list_sessions: bool = False
+    fork: bool = False
+    set_model: bool = False
+    set_mode: bool = False
+    raw: dict[str, Any] = field(default_factory=dict)
+
+
+def extract_session_capabilities(
+    capabilities: dict[str, Any],
+) -> ACPSessionCapabilities:
+    if not isinstance(capabilities, dict):
+        return ACPSessionCapabilities()
+    session_caps = capabilities.get("sessionCapabilities")
+    if not isinstance(session_caps, dict):
+        return ACPSessionCapabilities()
+    return ACPSessionCapabilities(
+        list_sessions=("list" in session_caps),
+        fork=("fork" in session_caps),
+        set_model=("setModel" in session_caps or "set_model" in session_caps),
+        set_mode=("setMode" in session_caps or "set_mode" in session_caps),
+        raw=dict(session_caps),
+    )
+
+
 def extract_advertised_commands(
     capabilities: dict[str, Any],
 ) -> list[ACPAdvertisedCommand]:
@@ -239,10 +265,12 @@ __all__ = [
     "ACPInitializeResult",
     "ACPOptionalMethodResult",
     "ACPPromptDescriptor",
+    "ACPSessionCapabilities",
     "ACPSessionDescriptor",
     "ACPSessionForkResult",
     "ACPSetModeResult",
     "ACPSetModelResult",
     "coerce_session_list",
     "extract_advertised_commands",
+    "extract_session_capabilities",
 ]

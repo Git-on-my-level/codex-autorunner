@@ -1039,6 +1039,12 @@ class PmaManagedThreadResumeRequest(Payload):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
 
+class PmaManagedThreadForkRequest(Payload):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    name: Optional[str] = None
+
+
 class PmaChatRequest(Payload):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 

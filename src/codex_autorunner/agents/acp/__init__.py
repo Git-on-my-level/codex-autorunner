@@ -28,12 +28,14 @@ from .protocol import (
     ACPInitializeResult,
     ACPOptionalMethodResult,
     ACPPromptDescriptor,
+    ACPSessionCapabilities,
     ACPSessionDescriptor,
     ACPSessionForkResult,
     ACPSetModelResult,
     ACPSetModeResult,
     coerce_session_list,
     extract_advertised_commands,
+    extract_session_capabilities,
 )
 from .supervisor import ACPSubprocessSupervisor, ACPSupervisorHandleSnapshot
 
@@ -58,6 +60,7 @@ __all__ = [
     "ACPProgressEvent",
     "ACPProtocolError",
     "ACPResponseError",
+    "ACPSessionCapabilities",
     "ACPSessionDescriptor",
     "ACPSessionEvent",
     "ACPSessionForkResult",
@@ -72,5 +75,6 @@ __all__ = [
     "ACPUnknownEvent",
     "coerce_session_list",
     "extract_advertised_commands",
+    "extract_session_capabilities",
     "normalize_notification",
 ]

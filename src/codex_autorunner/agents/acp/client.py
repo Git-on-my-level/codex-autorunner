@@ -42,12 +42,14 @@ from .events import (
 from .protocol import (
     ACPAdvertisedCommand,
     ACPInitializeResult,
+    ACPSessionCapabilities,
     ACPSessionDescriptor,
     ACPSessionForkResult,
     ACPSetModelResult,
     ACPSetModeResult,
     coerce_session_list,
     extract_advertised_commands,
+    extract_session_capabilities,
 )
 
 NotificationHandler = Callable[[ACPEvent], Awaitable[None]]
@@ -313,6 +315,12 @@ class ACPClient:
         if self._initialize_result is None:
             return []
         return extract_advertised_commands(self._initialize_result.capabilities)
+
+    @property
+    def session_capabilities(self) -> ACPSessionCapabilities:
+        if self._initialize_result is None:
+            return ACPSessionCapabilities()
+        return extract_session_capabilities(self._initialize_result.capabilities)
 
     async def start(self) -> ACPInitializeResult:
         async with self._start_lock:

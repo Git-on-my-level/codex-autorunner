@@ -23,6 +23,7 @@ from codex_autorunner.agents.acp.protocol import (
     ACPSetModelResult,
     ACPSetModeResult,
     extract_advertised_commands,
+    extract_session_capabilities,
 )
 
 FIXTURE_PATH = Path(__file__).resolve().parents[2] / "fixtures" / "fake_acp_server.py"
@@ -762,3 +763,26 @@ def test_extract_advertised_commands_from_various_payloads() -> None:
 
     commands = extract_advertised_commands({"commands": [{"no_name": True}]})
     assert len(commands) == 0
+
+
+def test_extract_session_capabilities_from_various_payloads() -> None:
+    caps = extract_session_capabilities({})
+    assert caps.fork is False
+    assert caps.set_model is False
+    assert caps.set_mode is False
+    assert caps.list_sessions is False
+
+    caps = extract_session_capabilities(
+        {
+            "sessionCapabilities": {
+                "list": {},
+                "fork": {},
+                "setModel": {},
+                "setMode": {},
+            }
+        }
+    )
+    assert caps.list_sessions is True
+    assert caps.fork is True
+    assert caps.set_model is True
+    assert caps.set_mode is True

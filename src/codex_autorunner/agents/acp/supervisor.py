@@ -11,6 +11,7 @@ from .client import ACPClient, ACPPromptHandle
 from .events import ACPEvent, ACPPermissionRequestEvent
 from .protocol import (
     ACPAdvertisedCommand,
+    ACPSessionCapabilities,
     ACPSessionDescriptor,
     ACPSessionForkResult,
     ACPSetModelResult,
@@ -134,6 +135,13 @@ class ACPSubprocessSupervisor:
     ) -> list[ACPAdvertisedCommand]:
         client = await self.get_client(workspace_root)
         return client.advertised_commands
+
+    async def session_capabilities(
+        self,
+        workspace_root: Path,
+    ) -> ACPSessionCapabilities:
+        client = await self.get_client(workspace_root)
+        return client.session_capabilities
 
     async def start_prompt(
         self,

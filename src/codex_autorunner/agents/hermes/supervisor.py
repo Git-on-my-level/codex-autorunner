@@ -22,6 +22,7 @@ from ..acp import (
     ACPAdvertisedCommand,
     ACPPermissionRequestEvent,
     ACPPromptHandle,
+    ACPSessionCapabilities,
     ACPSubprocessSupervisor,
     ACPTurnTerminalEvent,
 )
@@ -326,6 +327,12 @@ class HermesSupervisor:
         workspace_root: Path,
     ) -> list[ACPAdvertisedCommand]:
         return await self._acp.advertised_commands(workspace_root)
+
+    async def session_capabilities(
+        self,
+        workspace_root: Path,
+    ) -> ACPSessionCapabilities:
+        return await self._acp.session_capabilities(workspace_root)
 
     async def start_turn(
         self,
