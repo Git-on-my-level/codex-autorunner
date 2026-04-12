@@ -234,6 +234,36 @@ def test_pma_agents_endpoint(hub_env) -> None:
     assert payload.get("default") in {agent.get("id") for agent in payload["agents"]}
 
 
+def test_pma_agents_endpoint_advertises_hermes_active_thread_discovery(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry.hermes_runtime_preflight",
+        lambda _config: type(
+            "Result",
+            (),
+            {
+                "status": "ready",
+                "version": "hermes 0.1.0",
+                "launch_mode": "binary",
+                "message": "ready",
+                "fix": None,
+            },
+        )(),
+    )
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    resp = client.get("/hub/pma/agents")
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    agents = {agent["id"]: agent for agent in payload["agents"]}
+    assert "hermes" in agents
+    assert "active_thread_discovery" in agents["hermes"]["capabilities"]
+
+
 def test_pma_chat_requires_message(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)

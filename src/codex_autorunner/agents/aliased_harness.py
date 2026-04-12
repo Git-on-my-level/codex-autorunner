@@ -30,6 +30,14 @@ class AliasedAgentHarness(AgentHarness):
         self.display_name = display_name
         self.capabilities = harness.capabilities
 
+    def _wrap_conversation(self, conversation: ConversationRef) -> ConversationRef:
+        return ConversationRef(
+            agent=self.agent_id,
+            id=conversation.id,
+            title=conversation.title,
+            summary=conversation.summary,
+        )
+
     async def ensure_ready(self, workspace_root: Path) -> None:
         await self._harness.ensure_ready(workspace_root)
 
@@ -45,13 +53,11 @@ class AliasedAgentHarness(AgentHarness):
         self, workspace_root: Path, title: Optional[str] = None
     ) -> ConversationRef:
         conversation = await self._harness.new_conversation(workspace_root, title=title)
-        return ConversationRef(agent=self.agent_id, id=conversation.id)
+        return self._wrap_conversation(conversation)
 
     async def list_conversations(self, workspace_root: Path) -> list[ConversationRef]:
         conversations = await self._harness.list_conversations(workspace_root)
-        return [
-            ConversationRef(agent=self.agent_id, id=conv.id) for conv in conversations
-        ]
+        return [self._wrap_conversation(conv) for conv in conversations]
 
     async def resume_conversation(
         self, workspace_root: Path, conversation_id: str
@@ -59,7 +65,7 @@ class AliasedAgentHarness(AgentHarness):
         conversation = await self._harness.resume_conversation(
             workspace_root, conversation_id
         )
-        return ConversationRef(agent=self.agent_id, id=conversation.id)
+        return self._wrap_conversation(conversation)
 
     async def start_turn(
         self,

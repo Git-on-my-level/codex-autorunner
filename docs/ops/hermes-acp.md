@@ -140,6 +140,7 @@ complete.
 Hermes currently supports:
 
 - Durable thread/session create and resume
+- Active thread discovery via Hermes session listing
 - Message turns
 - Interrupt
 - Event streaming
@@ -148,7 +149,6 @@ Hermes currently supports:
 
 Hermes currently does not support:
 
-- Active thread discovery on the current stable ACP surface
 - Review mode
 - Model catalog listing
 - Transcript history as a public CAR contract
@@ -183,6 +183,8 @@ Notes:
 
 - `car pma models hermes` is expected to fail because Hermes does not advertise
   `model_listing`.
+- Hermes session selectors can reuse existing Hermes sessions because
+  `active_thread_discovery` is now advertised through the harness.
 - Use `--model <value>` only when you want to pass a free-form Hermes model
   override on the next turn.
 

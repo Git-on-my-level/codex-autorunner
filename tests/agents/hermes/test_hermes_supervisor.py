@@ -99,6 +99,7 @@ async def test_hermes_supervisor_session_roundtrip_and_turn_streaming(
 
         assert created.session_id == resumed.session_id
         assert [session.session_id for session in listed] == [created.session_id]
+        assert [session.title for session in listed] == ["Fixture Session"]
         assert turn_id == "turn-1"
         assert result.status == "completed"
         assert result.assistant_text == "fixture reply"

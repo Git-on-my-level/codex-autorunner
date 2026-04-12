@@ -34,6 +34,14 @@ HERMES_ACP_COMMAND = "acp"
 HERMES_APPROVAL_TIMEOUT_SECONDS = 300.0
 
 
+def _extract_session_summary(payload: Mapping[str, Any]) -> Optional[str]:
+    for key in ("summary", "subtitle", "description"):
+        value = _normalize_optional_text(payload.get(key))
+        if value:
+            return value
+    return None
+
+
 class HermesSupervisorError(RuntimeError):
     pass
 
@@ -42,6 +50,7 @@ class HermesSupervisorError(RuntimeError):
 class HermesSessionHandle:
     session_id: str
     title: Optional[str] = None
+    summary: Optional[str] = None
     raw: dict[str, Any] = field(default_factory=dict)
 
 
@@ -158,6 +167,7 @@ class HermesSupervisor:
         return HermesSessionHandle(
             session_id=session.session_id,
             title=session.title,
+            summary=_extract_session_summary(session.raw),
             raw=dict(session.raw),
         )
 
@@ -188,6 +198,7 @@ class HermesSupervisor:
         return HermesSessionHandle(
             session_id=session.session_id,
             title=session.title,
+            summary=_extract_session_summary(session.raw),
             raw=dict(session.raw),
         )
 
@@ -197,6 +208,7 @@ class HermesSupervisor:
             HermesSessionHandle(
                 session_id=session.session_id,
                 title=session.title,
+                summary=_extract_session_summary(session.raw),
                 raw=dict(session.raw),
             )
             for session in sessions

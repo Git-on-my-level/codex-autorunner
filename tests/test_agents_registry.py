@@ -149,7 +149,7 @@ class TestHasCapability:
     def test_hermes_advertises_acp_capabilities(self):
         assert has_capability("hermes", "durable_threads") is True
         assert has_capability("hermes", "message_turns") is True
-        assert has_capability("hermes", "active_thread_discovery") is False
+        assert has_capability("hermes", "active_thread_discovery") is True
         assert has_capability("hermes", "event_streaming") is True
         assert has_capability("hermes", "interrupt") is True
         assert has_capability("hermes", "approvals") is True

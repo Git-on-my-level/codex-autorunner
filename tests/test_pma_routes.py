@@ -9,6 +9,7 @@ from tests.pma_routes_support import (
     test_pma_active_clears_on_prompt_build_error,
     test_pma_active_updates_during_running_turn,
     test_pma_agents_endpoint,
+    test_pma_agents_endpoint_advertises_hermes_active_thread_discovery,
     test_pma_chat_applies_model_reasoning_defaults,
     test_pma_chat_codex_ignores_global_profile_default_when_agent_has_no_profiles,
     test_pma_chat_codex_retries_with_fresh_conversation_after_stale_resume,
