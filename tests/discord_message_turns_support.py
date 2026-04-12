@@ -1428,6 +1428,37 @@ class _FakeOutboxManager:
         await asyncio.Event().wait()
 
 
+class _FakeCompactHubClient:
+    def __init__(
+        self,
+        orchestration_service: Any,
+        *,
+        transcript_entries: Optional[list[dict[str, str]]] = None,
+    ) -> None:
+        self._orchestration_service = orchestration_service
+        self._transcript_entries = list(transcript_entries or [])
+        self.transcript_requests: list[Any] = []
+        self.compact_seed_updates: list[Any] = []
+
+    async def get_transcript_history(self, request: Any) -> Any:
+        self.transcript_requests.append(request)
+        return SimpleNamespace(entries=list(self._transcript_entries))
+
+    async def update_thread_compact_seed(self, request: Any) -> Any:
+        self.compact_seed_updates.append(request)
+        thread_store = getattr(self._orchestration_service, "thread_store", None)
+        pma_store = getattr(thread_store, "_store", None)
+        if pma_store is not None:
+            pma_store.set_thread_compact_seed(
+                request.thread_target_id,
+                request.compact_seed,
+            )
+        return SimpleNamespace(
+            thread_target_id=request.thread_target_id,
+            compact_seed=request.compact_seed,
+        )
+
+
 class _StreamingFakeOrchestrator:
     def __init__(self, events: list[Any]) -> None:
         self._events = events
@@ -2206,7 +2237,6 @@ async def test_car_session_compact_keeps_previous_thread_when_summary_is_blank(
 @pytest.mark.anyio
 async def test_car_session_compact_uses_transcript_fallback_when_summary_is_blank(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -2269,26 +2299,12 @@ async def test_car_session_compact_uses_transcript_fallback_when_summary_is_blan
             preview_message_id=None,
         )
 
-    class _FakeTranscriptMirrorStore:
-        def __init__(self, _root: Path) -> None:
-            pass
-
-        def list_target_history(
-            self,
-            *,
-            target_kind: str,
-            target_id: str,
-            limit: int = 10,
-        ) -> list[dict[str, str]]:
-            _ = target_kind, target_id, limit
-            return [
-                {"preview": "User: earlier question\nAssistant: earlier answer"},
-                {"preview": "User: latest question\nAssistant: latest answer"},
-            ]
-
-    monkeypatch.setattr(
-        "codex_autorunner.integrations.discord.car_handlers.compact_commands.TranscriptMirrorStore",
-        _FakeTranscriptMirrorStore,
+    service._hub_client = _FakeCompactHubClient(
+        orchestration_service,
+        transcript_entries=[
+            {"preview": "User: earlier question\nAssistant: earlier answer"},
+            {"preview": "User: latest question\nAssistant: latest answer"},
+        ],
     )
     service._run_agent_turn_for_message = _fake_run_turn  # type: ignore[assignment]
 
@@ -9248,6 +9264,7 @@ async def test_car_session_compact_reuses_preview_without_part_numbering(
         )
 
     service._run_agent_turn_for_message = _fake_run_turn  # type: ignore[assignment]
+    service._hub_client = _FakeCompactHubClient(orchestration_service)
 
     try:
         await service._handle_car_compact(
@@ -9440,6 +9457,7 @@ async def test_car_session_compact_places_continue_button_on_last_chunk_without_
         )
 
     service._run_agent_turn_for_message = _fake_run_turn  # type: ignore[assignment]
+    service._hub_client = _FakeCompactHubClient(orchestration_service)
 
     try:
         await service._handle_car_compact(
