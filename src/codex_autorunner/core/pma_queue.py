@@ -378,11 +378,23 @@ class PmaQueue:
 
     async def _append_to_file(self, item: PmaQueueItem) -> None:
         async with self._ensure_lane_lock(item.lane_id):
-            await asyncio.to_thread(self._append_to_file_sync, item)
+            await self._await_threaded_lane_call(self._append_to_file_sync, item)
 
     async def _update_in_file(self, item: PmaQueueItem) -> None:
         async with self._ensure_lane_lock(item.lane_id):
-            await asyncio.to_thread(self._update_in_file_sync, item)
+            await self._await_threaded_lane_call(self._update_in_file_sync, item)
+
+    async def _await_threaded_lane_call(self, func: Any, /, *args: Any) -> Any:
+        operation = asyncio.create_task(asyncio.to_thread(func, *args))
+        try:
+            return await asyncio.shield(operation)
+        except asyncio.CancelledError:
+            # Keep the lane lock held until the offloaded SQLite/mirror mutation
+            # completes so a second writer cannot interleave behind a cancelled task.
+            try:
+                await operation
+            finally:
+                raise
 
     async def compact_lane(
         self,
@@ -413,7 +425,9 @@ class PmaQueue:
             ]
             if not delete_ids:
                 return False
-            await asyncio.to_thread(self._delete_items_sync, lane_id, delete_ids)
+            await self._await_threaded_lane_call(
+                self._delete_items_sync, lane_id, delete_ids
+            )
             return True
 
     async def _maybe_compact_lane(self, lane_id: str) -> None:

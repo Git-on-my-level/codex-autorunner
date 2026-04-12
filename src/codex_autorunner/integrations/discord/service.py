@@ -1502,6 +1502,32 @@ class DiscordBotService:
             )
         return acknowledged
 
+    def _dispatch_ack_failure_confirms_expiry(
+        self,
+        ctx: IngressContext,
+        envelope: RuntimeInteractionEnvelope,
+    ) -> bool:
+        ack_policy = envelope.dispatch_ack_policy
+        if ack_policy in (None, "immediate"):
+            return False
+
+        ack_finished_at = ctx.timing.ack_finished_at
+        ingress_started_at = ctx.timing.ingress_started_at
+        if ack_finished_at is not None and ingress_started_at is not None:
+            ack_deadline_at = ingress_started_at + self._initial_ack_budget_seconds()
+            if ack_finished_at >= ack_deadline_at:
+                return True
+
+        session = self._get_interaction_session(ctx.interaction_token)
+        if session is None:
+            return False
+
+        delivery_status = (session.last_delivery_status or "").strip()
+        delivery_error = (session.last_delivery_error or "").lower()
+        if delivery_status != "ack_failed":
+            return False
+        return "unknown interaction" in delivery_error or "10062" in delivery_error
+
     async def acknowledge_runtime_envelope(
         self,
         envelope: RuntimeInteractionEnvelope,
@@ -4146,9 +4172,9 @@ class DiscordBotService:
                         envelope,
                         stage="dispatch",
                     )
-                    if not acked and envelope.dispatch_ack_policy not in (
-                        None,
-                        "immediate",
+                    if not acked and self._dispatch_ack_failure_confirms_expiry(
+                        ctx,
+                        envelope,
                     ):
                         log_event(
                             self._logger,
@@ -4164,6 +4190,21 @@ class DiscordBotService:
                         # The interaction callback window is already gone. Trying to
                         # answer again only produces a second stale-callback failure
                         # that can bubble back into gateway reconnect handling.
+                        ctx.timing = replace(
+                            ctx.timing,
+                            ack_finished_at=time.monotonic(),
+                            ingress_finished_at=time.monotonic(),
+                        )
+                        return
+                    if not acked and envelope.dispatch_ack_policy not in (
+                        None,
+                        "immediate",
+                    ):
+                        await self._respond_ephemeral(
+                            ctx.interaction_id,
+                            ctx.interaction_token,
+                            "Discord interaction did not acknowledge. Please retry.",
+                        )
                         ctx.timing = replace(
                             ctx.timing,
                             ack_finished_at=time.monotonic(),

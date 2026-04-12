@@ -897,7 +897,9 @@ def _spawn_discord_background_task(
     *,
     await_on_shutdown: bool = False,
 ) -> asyncio.Task[Any]:
-    spawn_task = service._spawn_task
+    spawn_task = getattr(service, "_spawn_task", None)
+    if not callable(spawn_task):
+        return cast(asyncio.Task[Any], asyncio.ensure_future(coro))
     if not await_on_shutdown:
         return cast(asyncio.Task[Any], spawn_task(coro))
     try:
@@ -909,6 +911,99 @@ def _spawn_discord_background_task(
         if "await_on_shutdown" not in str(exc):
             raise
         return cast(asyncio.Task[Any], spawn_task(coro))
+
+
+def _spawn_discord_progress_background_task(
+    service: Any,
+    coro: Awaitable[None],
+    *,
+    managed_thread_id: Optional[str] = None,
+    execution_id: Optional[str] = None,
+    lease_id: Optional[str] = None,
+    channel_id: Optional[str] = None,
+    message_id: Optional[str] = None,
+    failure_note: Optional[str] = None,
+    orphaned: bool = False,
+    await_on_shutdown: bool = False,
+) -> asyncio.Task[Any]:
+    task = _spawn_discord_background_task(
+        service,
+        coro,
+        await_on_shutdown=await_on_shutdown,
+    )
+    return bind_discord_progress_task_context(
+        task,
+        managed_thread_id=managed_thread_id,
+        execution_id=execution_id,
+        lease_id=lease_id,
+        channel_id=channel_id,
+        message_id=message_id,
+        failure_note=failure_note,
+        orphaned=orphaned,
+    )
+
+
+def _discord_progress_lease_is_not_newer_than_terminal_turn(
+    lease: Any,
+    *,
+    terminal_message_id: Optional[str],
+    terminal_created_at: Optional[str],
+) -> bool:
+    lease_message_id = _execution_field(lease, "message_id")
+    if (
+        isinstance(lease_message_id, str)
+        and lease_message_id.isdigit()
+        and isinstance(terminal_message_id, str)
+        and terminal_message_id.isdigit()
+    ):
+        return int(lease_message_id) <= int(terminal_message_id)
+    return False
+
+
+async def _reconcile_other_discord_turn_progress_leases(
+    service: Any,
+    *,
+    managed_thread_id: Optional[str],
+    keep_lease_id: Optional[str] = None,
+    keep_message_id: Optional[str] = None,
+    terminal_message_id: Optional[str] = None,
+    terminal_created_at: Optional[str] = None,
+) -> int:
+    normalized_thread_id = str(managed_thread_id or "").strip()
+    if not normalized_thread_id:
+        return 0
+    retained_lease_id = str(keep_lease_id or "").strip() or None
+    retained_message_id = str(keep_message_id or "").strip() or None
+    reconciled = 0
+    for lease in await _list_discord_progress_leases(
+        service,
+        managed_thread_id=normalized_thread_id,
+    ):
+        current_lease_id = _execution_field(lease, "lease_id")
+        current_message_id = _execution_field(lease, "message_id")
+        if current_lease_id and current_lease_id == retained_lease_id:
+            continue
+        if current_message_id and current_message_id == retained_message_id:
+            continue
+        # A sibling lease on the same Discord message can only exist when a newer
+        # turn has reused that progress message and replaced the older lease row.
+        # Older-turn delivery must never retire that replacement lease.
+        if current_message_id and current_message_id == terminal_message_id:
+            continue
+        # Older-turn delivery should never retire a sibling lease that belongs to
+        # a newer turn on the same managed thread, even if that newer turn has
+        # already been assigned an execution id.
+        if not _discord_progress_lease_is_not_newer_than_terminal_turn(
+            lease,
+            terminal_message_id=terminal_message_id,
+            terminal_created_at=terminal_created_at,
+        ):
+            continue
+        reconciled += await reconcile_discord_turn_progress_leases(
+            service,
+            lease_id=current_lease_id,
+        )
+    return reconciled
 
 
 async def _acknowledge_discord_progress_reuse(
@@ -1699,6 +1794,27 @@ async def _deliver_discord_turn_result(
         send_final_message = True
         preserve_progress_lease = False
 
+    managed_thread_id = None
+    current_lease_id = None
+    current_message_id = None
+    current_lease_created_at = None
+    if supervision is not None:
+        managed_thread_id = _execution_field(
+            supervision.task_context,
+            "managed_thread_id",
+        )
+        current_lease_id = _execution_field(supervision.task_context, "lease_id")
+        current_message_id = _execution_field(supervision.task_context, "message_id")
+        if current_lease_id:
+            current_lease = await _get_discord_progress_lease(
+                dispatch.service,
+                lease_id=current_lease_id,
+            )
+            current_lease_created_at = _execution_field(
+                current_lease,
+                "created_at",
+            )
+
     if supervision is not None:
         supervision.set_message_id(preview_message_id)
         supervision.set_execution_id(execution_id)
@@ -1733,17 +1849,26 @@ async def _deliver_discord_turn_result(
             ),
         )
         if preview_message_deleted:
-            for lease in await _list_discord_progress_leases(
-                dispatch.service,
-                channel_id=dispatch.channel_id,
-                message_id=preview_message_id,
+            if current_lease_id:
+                await _delete_discord_progress_lease(
+                    dispatch.service,
+                    lease_id=current_lease_id,
+                )
+            elif (
+                isinstance(execution_id, str)
+                and execution_id
+                and not preserve_progress_lease
             ):
-                current_lease_id = _execution_field(lease, "lease_id")
-                if current_lease_id:
-                    await _delete_discord_progress_lease(
-                        dispatch.service,
-                        lease_id=current_lease_id,
-                    )
+                for lease in await _list_discord_progress_leases(
+                    dispatch.service,
+                    execution_id=execution_id,
+                ):
+                    orphaned_lease_id = _execution_field(lease, "lease_id")
+                    if orphaned_lease_id:
+                        await _delete_discord_progress_lease(
+                            dispatch.service,
+                            lease_id=orphaned_lease_id,
+                        )
             if supervision is not None:
                 supervision.clear_progress_tracking()
     elif isinstance(execution_id, str) and execution_id and not preserve_progress_lease:
@@ -1759,14 +1884,24 @@ async def _deliver_discord_turn_result(
                 )
         if supervision is not None:
             supervision.set_lease_id(None)
-    if send_final_message:
-        await _send_discord_turn_section(
+    try:
+        if send_final_message:
+            await _send_discord_turn_section(
+                dispatch.service,
+                channel_id=dispatch.channel_id,
+                text=response_text or "(No response text returned.)",
+                record_prefix=f"turn:final:{dispatch.session_key}",
+                attachment_filename="final-response.md",
+                attachment_caption="Final response too long; attached as final-response.md.",
+            )
+    finally:
+        await _reconcile_other_discord_turn_progress_leases(
             dispatch.service,
-            channel_id=dispatch.channel_id,
-            text=response_text or "(No response text returned.)",
-            record_prefix=f"turn:final:{dispatch.session_key}",
-            attachment_filename="final-response.md",
-            attachment_caption="Final response too long; attached as final-response.md.",
+            managed_thread_id=managed_thread_id,
+            keep_lease_id=current_lease_id if preserve_progress_lease else None,
+            keep_message_id=current_message_id if preserve_progress_lease else None,
+            terminal_message_id=current_message_id,
+            terminal_created_at=current_lease_created_at,
         )
     try:
         if dispatch.pending_compact_seed is not None:
@@ -2620,12 +2755,14 @@ async def _run_discord_orchestrated_turn_for_message(
                 supervision.set_message_id(progress_message_id)
             await _register_progress_lease(state="pending")
             await _edit_progress(force=True)
-            progress_heartbeat_task = bind_discord_progress_task_context(
-                asyncio.create_task(_progress_heartbeat()),
+            progress_heartbeat_task = _spawn_discord_progress_background_task(
+                service,
+                _progress_heartbeat(),
                 managed_thread_id=managed_thread_id,
                 lease_id=progress_lease_id,
                 channel_id=channel_id,
                 message_id=progress_message_id,
+                await_on_shutdown=True,
             )
         else:
             initial_rendered = render_progress_text(
@@ -2658,12 +2795,14 @@ async def _run_discord_orchestrated_turn_for_message(
                 progress_rendered = initial_content
                 progress_last_updated = time.monotonic()
                 await _register_progress_lease(state="pending")
-                progress_heartbeat_task = bind_discord_progress_task_context(
-                    asyncio.create_task(_progress_heartbeat()),
+                progress_heartbeat_task = _spawn_discord_progress_background_task(
+                    service,
+                    _progress_heartbeat(),
                     managed_thread_id=managed_thread_id,
                     lease_id=progress_lease_id,
                     channel_id=channel_id,
                     message_id=progress_message_id,
+                    await_on_shutdown=True,
                 )
     except (DiscordTransientError, RuntimeError, ConnectionError, OSError):
         service._logger.warning(
@@ -2964,16 +3103,16 @@ async def _run_discord_orchestrated_turn_for_message(
             queue=ManagedSurfaceQueueConfig(
                 task_map=_get_discord_thread_queue_task_map(service),
                 managed_thread_id=managed_thread_id,
-                spawn_task=lambda coro: bind_discord_progress_task_context(
-                    _spawn_discord_background_task(
-                        service, coro, await_on_shutdown=True
-                    ),
+                spawn_task=lambda coro: _spawn_discord_progress_background_task(
+                    service,
+                    coro,
                     managed_thread_id=managed_thread_id,
                     failure_note=(
                         "Status: this progress message lost its queue worker and is "
                         "no longer live. Please retry if needed."
                     ),
                     orphaned=True,
+                    await_on_shutdown=True,
                 ),
                 begin_next_execution=cast(
                     ManagedThreadQueuedExecutionStarter,

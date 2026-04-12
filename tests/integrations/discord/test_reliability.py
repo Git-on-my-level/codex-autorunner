@@ -1161,7 +1161,7 @@ async def test_ack_budget_expiry_stops_execution_and_logs_expired_before_ack(
 
 
 @pytest.mark.anyio
-async def test_on_dispatch_does_not_attempt_fallback_response_after_ack_expiry() -> (
+async def test_on_dispatch_does_not_attempt_fallback_response_after_confirmed_ack_expiry() -> (
     None
 ):
     service = DiscordBotService.__new__(DiscordBotService)
@@ -1176,8 +1176,10 @@ async def test_on_dispatch_does_not_attempt_fallback_response_after_ack_expiry()
     service._respond_ephemeral = AsyncMock(
         side_effect=AssertionError("stale fallback should not be attempted")
     )
+    service._get_interaction_session = lambda _token: None  # type: ignore[assignment]
 
     ctx = _make_ctx(interaction_id="inter-expired", interaction_token="tok-expired")
+    ctx.timing = IngressTiming(ingress_started_at=10.0)
     envelope = RuntimeInteractionEnvelope(
         context=ctx,
         conversation_id="conversation:discord:chan-1",
@@ -1185,7 +1187,15 @@ async def test_on_dispatch_does_not_attempt_fallback_response_after_ack_expiry()
         dispatch_ack_policy="defer_ephemeral",
     )
     service._build_runtime_interaction_envelope = AsyncMock(return_value=envelope)
-    service._acknowledge_runtime_envelope = AsyncMock(return_value=False)
+
+    async def _fail_after_deadline(*_args: Any, **_kwargs: Any) -> bool:
+        ctx.timing = IngressTiming(
+            ingress_started_at=10.0,
+            ack_finished_at=12.6,
+        )
+        return False
+
+    service._acknowledge_runtime_envelope = AsyncMock(side_effect=_fail_after_deadline)
     service._ingress.process_raw_payload = AsyncMock(
         return_value=SimpleNamespace(accepted=True, context=ctx)
     )
@@ -1201,6 +1211,68 @@ async def test_on_dispatch_does_not_attempt_fallback_response_after_ack_expiry()
     service._register_interaction_ingress.assert_not_awaited()
     service._command_runner.skip_submission_order.assert_called_once_with(None)
     service._release_interaction_ingress.assert_awaited_once_with("inter-expired")
+    assert ctx.timing.ack_finished_at is not None
+    assert ctx.timing.ingress_finished_at is not None
+
+
+@pytest.mark.anyio
+async def test_on_dispatch_attempts_fallback_response_after_non_expired_ack_failure() -> (
+    None
+):
+    service = DiscordBotService.__new__(DiscordBotService)
+    service._logger = logging.getLogger(
+        "test.reliability.dispatch_ack_retryable_failure"
+    )
+    service._ingress = SimpleNamespace()
+    service._command_runner = SimpleNamespace(skip_submission_order=Mock())
+    service._persist_runtime_interaction = AsyncMock()
+    service._register_interaction_ingress = AsyncMock(return_value=False)
+    service._release_interaction_ingress = AsyncMock()
+    service._interaction_telemetry_fields = lambda *args, **kwargs: {}  # type: ignore[assignment]
+    service._initial_ack_budget_seconds = lambda: 2.5  # type: ignore[assignment]
+    service._respond_ephemeral = AsyncMock()
+    service._get_interaction_session = lambda _token: SimpleNamespace(  # type: ignore[assignment]
+        last_delivery_status="ack_failed",
+        last_delivery_error="Discord API network error for POST /interactions/123/callback: boom",
+    )
+
+    ctx = _make_ctx(interaction_id="inter-retry", interaction_token="tok-retry")
+    ctx.timing = IngressTiming(ingress_started_at=10.0)
+    envelope = RuntimeInteractionEnvelope(
+        context=ctx,
+        conversation_id="conversation:discord:chan-1",
+        resource_keys=("conversation:discord:chan-1",),
+        dispatch_ack_policy="defer_ephemeral",
+    )
+    service._build_runtime_interaction_envelope = AsyncMock(return_value=envelope)
+
+    async def _fail_before_deadline(*_args: Any, **_kwargs: Any) -> bool:
+        ctx.timing = IngressTiming(
+            ingress_started_at=10.0,
+            ack_finished_at=10.5,
+        )
+        return False
+
+    service._acknowledge_runtime_envelope = AsyncMock(side_effect=_fail_before_deadline)
+    service._ingress.process_raw_payload = AsyncMock(
+        return_value=SimpleNamespace(accepted=True, context=ctx)
+    )
+
+    payload = _slash_payload()
+    payload["id"] = "inter-retry"
+    payload["token"] = "tok-retry"
+
+    await service._on_dispatch("INTERACTION_CREATE", payload)
+
+    service._respond_ephemeral.assert_awaited_once_with(
+        "inter-retry",
+        "tok-retry",
+        "Discord interaction did not acknowledge. Please retry.",
+    )
+    service._persist_runtime_interaction.assert_not_awaited()
+    service._register_interaction_ingress.assert_not_awaited()
+    service._command_runner.skip_submission_order.assert_called_once_with(None)
+    service._release_interaction_ingress.assert_awaited_once_with("inter-retry")
     assert ctx.timing.ack_finished_at is not None
     assert ctx.timing.ingress_finished_at is not None
 

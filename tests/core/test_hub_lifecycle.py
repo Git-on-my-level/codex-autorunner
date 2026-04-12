@@ -228,3 +228,30 @@ def test_hub_lifecycle_worker_stops_after_unrecoverable_schema_error(caplog) -> 
     assert attempts == 1
     assert worker.running is False
     assert "Stopping lifecycle event processor after unrecoverable error" in caplog.text
+
+
+def test_hub_lifecycle_worker_stop_clears_dead_thread_after_self_termination() -> None:
+    logger = logging.getLogger("test.hub_lifecycle.worker.stop")
+
+    def _process_once() -> None:
+        raise RuntimeError(
+            "orchestration.sqlite3 schema is newer than this build supports"
+        )
+
+    worker = HubLifecycleWorker(
+        process_once=_process_once,
+        poll_interval_seconds=0.01,
+        join_timeout_seconds=0.5,
+        logger=logger,
+    )
+
+    worker.start()
+    thread = worker._thread
+    assert thread is not None
+    thread.join(timeout=1.0)
+    assert thread.is_alive() is False
+
+    worker.stop()
+
+    assert worker._thread is None
+    assert worker.running is False

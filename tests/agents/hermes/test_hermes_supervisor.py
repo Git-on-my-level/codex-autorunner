@@ -601,12 +601,61 @@ async def test_hermes_supervisor_replacing_turn_cancels_previous_pending_approva
             session.session_id,
             second_turn_id,
         )
-
-        with pytest.raises(HermesSupervisorError, match="Unknown Hermes turn"):
-            await supervisor.wait_for_turn(tmp_path, session.session_id, first_turn_id)
+        first_result = await supervisor.wait_for_turn(
+            tmp_path,
+            session.session_id,
+            first_turn_id,
+        )
+        assert first_result.status == "cancelled"
         assert second_result.status == "completed"
     finally:
         approval_gate.set()
+        await supervisor.close_all()
+
+
+@pytest.mark.slow
+@pytest.mark.asyncio
+async def test_hermes_supervisor_preserves_completed_turn_after_newer_turn_starts(
+    tmp_path: Path,
+) -> None:
+    supervisor = HermesSupervisor(fixture_command("official"))
+    try:
+        session = await supervisor.create_session(tmp_path)
+        first_turn_id = await supervisor.start_turn(
+            tmp_path,
+            session.session_id,
+            "hello from hermes",
+        )
+        await asyncio.sleep(0.2)
+
+        second_turn_id = await supervisor.start_turn(
+            tmp_path,
+            session.session_id,
+            "hello again",
+        )
+
+        first_result = await supervisor.wait_for_turn(
+            tmp_path,
+            session.session_id,
+            first_turn_id,
+        )
+        second_result = await supervisor.wait_for_turn(
+            tmp_path,
+            session.session_id,
+            second_turn_id,
+        )
+
+        assert first_result.status == "completed"
+        assert any(
+            event.get("method") == "prompt/completed"
+            for event in first_result.raw_events
+        )
+        assert second_result.status == "completed"
+        assert any(
+            event.get("method") == "prompt/completed"
+            for event in second_result.raw_events
+        )
+    finally:
         await supervisor.close_all()
 
 
