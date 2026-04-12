@@ -22,14 +22,11 @@ from .replies import (
     dispatch_reply,
     ensure_reply_dirs,
     next_reply_seq,
-    parse_user_reply,
     resolve_reply_paths,
 )
 from .runner_execution import (
-    capture_git_state,
     capture_git_state_after,
     compute_loop_guard,
-    execute_turn,
     is_network_error,
     should_pause_for_loop,
 )
@@ -39,6 +36,19 @@ from .runner_prompt import (
     _preserve_ticket_structure,  # noqa: F401  # re-exported for backwards compatibility
     _shrink_prompt,
     _truncate_text_by_bytes,
+)
+from .runner_step_support import (
+    build_reply_context,
+    build_turn_options,
+    capture_pre_turn_git_state,
+    execute_turn_with_thread_binding_retry,
+    increment_turn_counters,
+    load_previous_ticket_content,
+    record_successful_turn_state,
+)
+from .runner_thread_bindings import (
+    clear_ticket_thread_binding,
+    normalize_profile,
 )
 
 _is_network_error = is_network_error
@@ -201,6 +211,11 @@ class TicketRunner:
         )
         commit_pending = bool(commit_state.get("pending"))
         commit_retries = int(commit_state.get("retries") or 0)
+        previous_ticket_id = (
+            state.get("current_ticket_id")
+            if isinstance(state.get("current_ticket_id"), str)
+            else None
+        )
         # Global counters.
         total_turns = int(state.get("total_turns") or 0)
 
@@ -268,6 +283,12 @@ class TicketRunner:
                 reason_code=selection_result.pause_reason_code or "needs_user_fix",
             )
         if selection_result.status == "completed":
+            if previous_ticket_id:
+                clear_ticket_thread_binding(
+                    state,
+                    ticket_id=previous_ticket_id,
+                    reason="ticket_completed_before_selection",
+                )
             state["status"] = "completed"
             return TicketResult(
                 status="completed",
@@ -307,7 +328,7 @@ class TicketRunner:
         )
         lint_retries = int(lint_state.get("retries") or 0)
         _conv_id_raw = lint_state.get("conversation_id")
-        reuse_conversation_id: Optional[str] = (
+        lint_retry_conversation_id: Optional[str] = (
             _conv_id_raw if isinstance(_conv_id_raw, str) else None
         )
 
@@ -342,13 +363,22 @@ class TicketRunner:
         ticket_doc = validation_result.validated.ticket_doc
         current_ticket_id = ticket_doc.frontmatter.ticket_id
         state["current_ticket_id"] = current_ticket_id
+        current_ticket_profile = normalize_profile(ticket_doc.frontmatter.profile)
+        if previous_ticket_id and previous_ticket_id != current_ticket_id:
+            clear_ticket_thread_binding(
+                state,
+                ticket_id=previous_ticket_id,
+                reason="ticket_changed",
+            )
         if validation_result.validated.skip_execution:
             return TicketResult(status="continue", state=state)
 
         ticket_turns = int(state.get("ticket_turns") or 0)
         reply_seq = int(state.get("reply_seq") or 0)
-        reply_context, reply_max_seq = self._build_reply_context(
-            reply_paths=reply_paths, last_seq=reply_seq
+        reply_context, reply_max_seq = build_reply_context(
+            reply_paths=reply_paths,
+            last_seq=reply_seq,
+            workspace_root=self._workspace_root,
         )
         ticket_paths = list_ticket_paths(ticket_dir)
         requested_context_block, missing_required_context = _load_ticket_context_block(
@@ -370,21 +400,11 @@ class TicketRunner:
                 reason_details=details,
                 current_ticket=safe_relpath(current_path, self._workspace_root),
             )
-
-        previous_ticket_content: Optional[str] = None
-        if self._config.include_previous_ticket_context:
-            try:
-                if current_path in ticket_paths:
-                    curr_idx = ticket_paths.index(current_path)
-                    if curr_idx > 0:
-                        prev_path = ticket_paths[curr_idx - 1]
-                        content = prev_path.read_text(encoding="utf-8")
-                        previous_ticket_content = _truncate_text_by_bytes(
-                            content, 16384
-                        )
-            except OSError:
-                _logger.debug("failed to read previous ticket content", exc_info=True)
-
+        previous_ticket_content = load_previous_ticket_content(
+            current_path=current_path,
+            ticket_paths=ticket_paths,
+            include_previous_ticket_context=self._config.include_previous_ticket_context,
+        )
         prompt = runner_prompt.build_prompt(
             ticket_path=current_path,
             workspace_root=self._workspace_root,
@@ -410,34 +430,26 @@ class TicketRunner:
             prior_no_change_turns=self._prior_no_change_turns(state, current_ticket_id),
             prompt_max_bytes=self._config.prompt_max_bytes,
         )
-
-        # Execute turn.
-        # Build options dict with model/reasoning from ticket frontmatter if set.
-        turn_options: dict[str, Any] = {}
-        if ticket_doc.frontmatter.model:
-            turn_options["model"] = ticket_doc.frontmatter.model
-        if ticket_doc.frontmatter.reasoning:
-            turn_options["reasoning"] = ticket_doc.frontmatter.reasoning
+        turn_options = build_turn_options(ticket_doc=ticket_doc)
         turn_options["ticket_flow_run_id"] = self._run_id
-
-        total_turns += 1
-        ticket_turns += 1
-        state["total_turns"] = total_turns
-        state["ticket_turns"] = ticket_turns
-
-        current_ticket_path = safe_relpath(current_path, self._workspace_root)
-
-        git_state_before = capture_git_state(workspace_root=self._workspace_root)
-        repo_fingerprint_before_turn = git_state_before["repo_fingerprint_before"]
-        head_before_turn = git_state_before["head_before_turn"]
-
-        result = await execute_turn(
+        total_turns, ticket_turns = increment_turn_counters(
+            state=state,
+            ticket_turns=ticket_turns,
+        )
+        repo_fingerprint_before_turn, head_before_turn = capture_pre_turn_git_state(
+            workspace_root=self._workspace_root
+        )
+        result, binding_decision = await execute_turn_with_thread_binding_retry(
             agent_pool=self._agent_pool,
-            agent_id=ticket_doc.frontmatter.agent,
-            prompt=prompt,
             workspace_root=self._workspace_root,
-            conversation_id=reuse_conversation_id,
-            options=turn_options if turn_options else None,
+            state=state,
+            ticket_id=current_ticket_id,
+            ticket_path=current_ticket_path,
+            agent_id=ticket_doc.frontmatter.agent,
+            profile=current_ticket_profile,
+            prompt=prompt,
+            lint_retry_conversation_id=lint_retry_conversation_id,
+            turn_options=turn_options if turn_options else None,
             emit_event=emit_event,
             max_network_retries=self._config.max_network_retries,
             current_network_retries=network_retries,
@@ -492,14 +504,17 @@ class TicketRunner:
                 reason_code="infra_error",
             )
 
-        # Mark replies as consumed only after a successful agent turn.
-        if reply_max_seq > reply_seq:
-            state["reply_seq"] = reply_max_seq
-        state["last_agent_output"] = result.text
-        state.pop("network_retry", None)
-        state["last_agent_id"] = result.agent_id
-        state["last_agent_conversation_id"] = result.conversation_id
-        state["last_agent_turn_id"] = result.turn_id
+        record_successful_turn_state(
+            state=state,
+            reply_seq=reply_seq,
+            reply_max_seq=reply_max_seq,
+            result=result,
+            ticket_id=current_ticket_id,
+            ticket_path=current_ticket_path,
+            agent_id=ticket_doc.frontmatter.agent,
+            profile=current_ticket_profile,
+            binding_decision=binding_decision,
+        )
 
         git_state_after = capture_git_state_after(
             workspace_root=self._workspace_root,
@@ -764,6 +779,11 @@ class TicketRunner:
 
             # Clean (or unknown) → commit satisfied (or no changes / cannot check).
             state.pop("commit", None)
+            clear_ticket_thread_binding(
+                state,
+                ticket_id=current_ticket_id,
+                reason="ticket_completed",
+            )
             state.pop("current_ticket", None)
             state.pop("current_ticket_id", None)
             state.pop("ticket_turns", None)
@@ -869,84 +889,6 @@ class TicketRunner:
             title=title,
             body=body,
         )
-
-    def _build_reply_context(self, *, reply_paths, last_seq: int) -> tuple[str, int]:
-        """Render new human replies (reply_history) into a prompt block.
-
-        Returns (rendered_text, max_seq_seen).
-        """
-
-        history_dir = getattr(reply_paths, "reply_history_dir", None)
-        if history_dir is None:
-            return "", last_seq
-        if not history_dir.exists() or not history_dir.is_dir():
-            return "", last_seq
-
-        entries: list[tuple[int, Path]] = []
-        try:
-            for child in history_dir.iterdir():
-                try:
-                    if not child.is_dir():
-                        continue
-                    name = child.name
-                    if not (len(name) == 4 and name.isdigit()):
-                        continue
-                    seq = int(name)
-                    if seq <= last_seq:
-                        continue
-                    entries.append((seq, child))
-                except OSError:
-                    continue
-        except OSError:
-            return "", last_seq
-
-        if not entries:
-            return "", last_seq
-
-        entries.sort(key=lambda x: x[0])
-        max_seq = max(seq for seq, _ in entries)
-
-        blocks: list[str] = []
-        for seq, entry_dir in entries:
-            reply_path = entry_dir / "USER_REPLY.md"
-            reply, errors = (
-                parse_user_reply(reply_path)
-                if reply_path.exists()
-                else (None, ["USER_REPLY.md missing"])
-            )
-
-            block_lines: list[str] = [f"[USER_REPLY {seq:04d}]"]
-            if errors:
-                block_lines.append("Errors:\n- " + "\n- ".join(errors))
-            if reply is not None:
-                if reply.title:
-                    block_lines.append(f"Title: {reply.title}")
-                if reply.body:
-                    block_lines.append(reply.body)
-
-            attachments: list[str] = []
-            try:
-                for child in sorted(entry_dir.iterdir(), key=lambda p: p.name):
-                    try:
-                        if child.name.startswith("."):
-                            continue
-                        if child.name == "USER_REPLY.md":
-                            continue
-                        if child.is_dir():
-                            continue
-                        attachments.append(safe_relpath(child, self._workspace_root))
-                    except OSError:
-                        continue
-            except OSError:
-                attachments = []
-
-            if attachments:
-                block_lines.append("Attachments:\n- " + "\n- ".join(attachments))
-
-            blocks.append("\n".join(block_lines).strip())
-
-        rendered = "\n\n".join(blocks).strip()
-        return rendered, max_seq
 
     def _build_prompt(
         self,
