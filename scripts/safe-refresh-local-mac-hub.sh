@@ -488,15 +488,16 @@ if [[ ! -f "${PLIST_PATH}" ]]; then
 fi
 
 HUB_ROOT="$(_plist_arg_value path)"
-PACKAGE_INSTALL_SPEC="${PACKAGE_SRC}[browser]"
+PACKAGE_EXTRAS="[browser]"
 if [[ -n "${HUB_ROOT}" ]]; then
   VOICE_PROVIDER="$(_voice_provider_for_hub_root "${HUB_ROOT}")"
   if [[ "${VOICE_PROVIDER}" == "local_whisper" ]]; then
-    PACKAGE_INSTALL_SPEC="${PACKAGE_SRC}[browser,voice-local]"
+    PACKAGE_EXTRAS="[browser,voice-local]"
   elif [[ "${VOICE_PROVIDER}" == "mlx_whisper" ]]; then
-    PACKAGE_INSTALL_SPEC="${PACKAGE_SRC}[browser,voice-mlx]"
+    PACKAGE_EXTRAS="[browser,voice-mlx]"
   fi
 fi
+PACKAGE_INSTALL_SPEC="${PACKAGE_SRC}${PACKAGE_EXTRAS}"
 
 _realpath() {
   "${HELPER_PYTHON}" - "$1" <<'PY'
@@ -541,6 +542,80 @@ subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], chec
 PY
 }
 
+_path_to_file_uri() {
+  "${HELPER_PYTHON}" - "$1" <<'PY'
+from pathlib import Path
+import sys
+
+print(Path(sys.argv[1]).resolve().as_uri())
+PY
+}
+
+_build_package_wheel() {
+  local python_bin wheel_dir wheel_path
+  python_bin="$1"
+  wheel_dir="$2"
+
+  rm -rf "${wheel_dir}"
+  mkdir -p "${wheel_dir}"
+
+  echo "Building codex-autorunner wheel from ${PACKAGE_SRC} into ${wheel_dir}..." >&2
+  "${python_bin}" -m pip -q wheel --no-deps --no-cache-dir --wheel-dir "${wheel_dir}" "${PACKAGE_SRC}" >&2
+
+  wheel_path="$("${HELPER_PYTHON}" - "${wheel_dir}" <<'PY'
+from pathlib import Path
+import sys
+
+wheel_dir = Path(sys.argv[1])
+wheels = sorted(wheel_dir.glob("codex_autorunner-*.whl"))
+if not wheels:
+    raise SystemExit(1)
+print(wheels[-1])
+PY
+)"
+  if [[ -z "${wheel_path}" || ! -f "${wheel_path}" ]]; then
+    fail "Unable to locate freshly built codex-autorunner wheel in ${wheel_dir}."
+  fi
+
+  "${HELPER_PYTHON}" - "${wheel_path}" <<'PY'
+from pathlib import PurePosixPath
+import sys
+import zipfile
+
+wheel_path = sys.argv[1]
+required_prefixes = {
+    "codex_autorunner/workspace/",
+    "codex_autorunner/tickets/",
+    "codex_autorunner/integrations/docker/",
+}
+with zipfile.ZipFile(wheel_path) as zf:
+    names = set(PurePosixPath(name).as_posix() for name in zf.namelist())
+missing = sorted(
+    prefix[:-1] if prefix.endswith("/") else prefix
+    for prefix in required_prefixes
+    if not any(name.startswith(prefix) for name in names)
+)
+if missing:
+    raise SystemExit(
+        "built wheel is missing required packages: " + ", ".join(missing)
+    )
+print("wheel package contents ok", file=sys.stderr)
+PY
+
+  printf '%s\n' "${wheel_path}"
+}
+
+_install_package_from_wheel() {
+  local python_bin wheel_path wheel_uri install_spec
+  python_bin="$1"
+  wheel_path="$2"
+  wheel_uri="$(_path_to_file_uri "${wheel_path}")"
+  install_spec="codex-autorunner${PACKAGE_EXTRAS} @ ${wheel_uri}"
+
+  echo "Installing codex-autorunner from staged wheel ${wheel_path} into staged venv..."
+  "${python_bin}" -m pip -q install --force-reinstall --no-cache-dir "${install_spec}"
+}
+
 if [[ ! -d "${PIPX_VENV}" ]]; then
   if [[ -L "${CURRENT_VENV_LINK}" ]]; then
     current_target="$(_realpath "${CURRENT_VENV_LINK}")"
@@ -573,17 +648,36 @@ fi
 
 ts="$(date +%Y%m%d-%H%M%S)"
 next_venv="${PIPX_ROOT}/venvs/codex-autorunner.next-${ts}"
+wheel_dir="${next_venv}.wheelhouse"
 
 echo "Creating staged venv at ${next_venv} (python: ${PIPX_PYTHON})..."
 "${PIPX_PYTHON}" -m venv "${next_venv}"
 "${next_venv}/bin/python" -m pip -q install --upgrade pip
 
-echo "Installing codex-autorunner from ${PACKAGE_INSTALL_SPEC} into staged venv..."
-"${next_venv}/bin/python" -m pip -q install --force-reinstall "${PACKAGE_INSTALL_SPEC}"
+echo "Preparing staged wheel for ${PACKAGE_INSTALL_SPEC}..."
+wheel_path="$(_build_package_wheel "${next_venv}/bin/python" "${wheel_dir}")"
+_install_package_from_wheel "${next_venv}/bin/python" "${wheel_path}"
 _ensure_playwright_chromium "${next_venv}/bin/python"
+rm -rf "${wheel_dir}"
 
 echo "Smoke-checking staged venv imports..."
-"${next_venv}/bin/python" -c "import codex_autorunner; from codex_autorunner.server import create_hub_app; print('ok')"
+"${next_venv}/bin/python" - <<'PY'
+import importlib.util
+
+required_modules = (
+    "codex_autorunner.workspace",
+    "codex_autorunner.tickets",
+    "codex_autorunner.integrations.docker",
+)
+for module_name in required_modules:
+    if importlib.util.find_spec(module_name) is None:
+        raise SystemExit(f"required staged module missing: {module_name}")
+
+import codex_autorunner
+from codex_autorunner.server import create_hub_app
+
+print("staged imports ok")
+PY
 echo "Smoke-checking hub startup lifecycle..."
 "${next_venv}/bin/python" - <<'PY'
 from pathlib import Path
