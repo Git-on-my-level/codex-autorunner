@@ -94,10 +94,31 @@ def record_successful_turn_state(
     profile: Optional[str],
     binding_decision: dict[str, Any],
 ) -> None:
+    record_turn_runtime_state(
+        state=state,
+        result=result,
+        ticket_id=ticket_id,
+        ticket_path=ticket_path,
+        agent_id=agent_id,
+        profile=profile,
+        binding_decision=binding_decision,
+    )
     if reply_max_seq > reply_seq:
         state["reply_seq"] = reply_max_seq
-    state["last_agent_output"] = result.text
     state.pop("network_retry", None)
+
+
+def record_turn_runtime_state(
+    *,
+    state: dict[str, Any],
+    result,
+    ticket_id: str,
+    ticket_path: str,
+    agent_id: str,
+    profile: Optional[str],
+    binding_decision: dict[str, Any],
+) -> None:
+    state["last_agent_output"] = result.text
     state["last_agent_id"] = result.agent_id
     state["last_agent_conversation_id"] = result.conversation_id
     state["last_agent_turn_id"] = result.turn_id

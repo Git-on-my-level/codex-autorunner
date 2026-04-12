@@ -20,6 +20,26 @@ class CanonicalHermesIdentity:
     profile: Optional[str]
 
 
+def _syntactic_alias_profile(
+    agent_id: str,
+    explicit_profile: Optional[str],
+) -> Optional[CanonicalHermesIdentity]:
+    normalized_agent = _normalize_optional_text(agent_id)
+    if not normalized_agent or not is_hermes_alias_agent(normalized_agent):
+        return None
+    for separator in ("-", "_"):
+        prefix = f"hermes{separator}"
+        if normalized_agent.startswith(prefix):
+            suffix = normalized_agent[len(prefix) :].strip()
+            if not suffix:
+                return None
+            return CanonicalHermesIdentity(
+                agent="hermes",
+                profile=explicit_profile or suffix,
+            )
+    return None
+
+
 def canonicalize_hermes_identity(
     agent_id: str,
     profile: Optional[str] = None,
@@ -41,6 +61,7 @@ def canonicalize_hermes_identity(
         return CanonicalHermesIdentity(agent=agent_id, profile=profile)
 
     normalized_profile = _normalize_optional_text(profile)
+    syntactic = _syntactic_alias_profile(agent_id, normalized_profile)
 
     try:
         resolution = resolve_agent_runtime(
@@ -49,6 +70,8 @@ def canonicalize_hermes_identity(
             context=context,
         )
     except (ValueError, TypeError, RuntimeError):
+        if syntactic is not None:
+            return syntactic
         return CanonicalHermesIdentity(agent=agent_id, profile=profile)
 
     if resolution.logical_agent_id == "hermes" and normalized_agent != "hermes":
@@ -62,6 +85,9 @@ def canonicalize_hermes_identity(
             agent=resolution.logical_agent_id,
             profile=resolution.logical_profile,
         )
+
+    if syntactic is not None:
+        return syntactic
 
     return CanonicalHermesIdentity(
         agent=normalized_agent,

@@ -1236,6 +1236,63 @@ async def test_ticket_runner_retries_on_network_error(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_ticket_runner_persists_thread_binding_across_network_retry(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    ticket_path = ticket_dir / "TICKET-001.md"
+    _write_ticket(ticket_path, agent="hermes", done=False)
+
+    call_count = 0
+
+    def handler(req: AgentTurnRequest) -> AgentTurnResult:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            assert req.conversation_id is None
+            return AgentTurnResult(
+                agent_id=req.agent_id,
+                conversation_id="thread-1",
+                turn_id="t1",
+                text="failed",
+                error="Network error: stream disconnected",
+            )
+        assert req.conversation_id == "thread-1"
+        _set_ticket_done(ticket_path, done=True)
+        return AgentTurnResult(
+            agent_id=req.agent_id,
+            conversation_id="thread-1",
+            turn_id="t2",
+            text="done",
+        )
+
+    pool = FakeAgentPool(handler)
+    runner = TicketRunner(
+        workspace_root=workspace_root,
+        run_id="run-1",
+        config=TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            max_network_retries=5,
+            auto_commit=False,
+        ),
+        agent_pool=pool,
+    )
+
+    first = await runner.step({})
+    assert first.status == "continue"
+    ticket_id = first.state["current_ticket_id"]
+    bindings = first.state.get("ticket_thread_bindings") or {}
+    assert bindings[ticket_id]["thread_target_id"] == "thread-1"
+
+    second = await runner.step(first.state)
+    assert second.status == "continue"
+    assert len(pool.requests) == 2
+    assert pool.requests[1].conversation_id == "thread-1"
+
+
+@pytest.mark.asyncio
 async def test_ticket_runner_pauses_after_network_retries_exhausted(
     tmp_path: Path,
 ) -> None:
@@ -1342,6 +1399,62 @@ async def test_ticket_runner_clears_network_retry_on_non_network_error(
     assert r2.reason == "Agent turn failed. Fix the issue and resume."
     assert "Validation error" in r2.reason_details
     assert r2.state.get("network_retry") is None
+
+
+@pytest.mark.asyncio
+async def test_ticket_runner_persists_thread_binding_across_paused_failure(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    ticket_path = ticket_dir / "TICKET-001.md"
+    _write_ticket(ticket_path, agent="hermes", done=False)
+
+    call_count = 0
+
+    def handler(req: AgentTurnRequest) -> AgentTurnResult:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            assert req.conversation_id is None
+            return AgentTurnResult(
+                agent_id=req.agent_id,
+                conversation_id="thread-1",
+                turn_id="t1",
+                text="failed",
+                error="Validation error: still blocked",
+            )
+        assert req.conversation_id == "thread-1"
+        _set_ticket_done(ticket_path, done=True)
+        return AgentTurnResult(
+            agent_id=req.agent_id,
+            conversation_id="thread-1",
+            turn_id="t2",
+            text="done",
+        )
+
+    pool = FakeAgentPool(handler)
+    runner = TicketRunner(
+        workspace_root=workspace_root,
+        run_id="run-1",
+        config=TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            auto_commit=False,
+        ),
+        agent_pool=pool,
+    )
+
+    first = await runner.step({})
+    assert first.status == "paused"
+    ticket_id = first.state["current_ticket_id"]
+    bindings = first.state.get("ticket_thread_bindings") or {}
+    assert bindings[ticket_id]["thread_target_id"] == "thread-1"
+
+    second = await runner.step(first.state)
+    assert second.status == "continue"
+    assert len(pool.requests) == 2
+    assert pool.requests[1].conversation_id == "thread-1"
 
 
 @pytest.mark.asyncio

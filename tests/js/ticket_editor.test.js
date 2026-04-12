@@ -48,3 +48,9 @@ test("ticket editor undo snapshots treat profile-only edits as distinct", () => 
     false
   );
 });
+
+test("ticket editor treats Hermes aliases as non-canonical agent options", () => {
+  assert.equal(__ticketEditorTest.isHermesAliasAgentId("hermes"), false);
+  assert.equal(__ticketEditorTest.isHermesAliasAgentId("hermes-m4-pma"), true);
+  assert.equal(__ticketEditorTest.isHermesAliasAgentId("hermes_fast"), true);
+});

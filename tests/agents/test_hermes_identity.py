@@ -95,7 +95,7 @@ class TestCanonicalizeHermesIdentity:
         result = canonicalize_hermes_identity("")
         assert result.agent == ""
 
-    def test_resolution_failure_returns_raw_identity(
+    def test_resolution_failure_falls_back_to_syntactic_alias_parsing(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from codex_autorunner.agents import hermes_identity as mod
@@ -106,5 +106,5 @@ class TestCanonicalizeHermesIdentity:
         monkeypatch.setattr(mod, "resolve_agent_runtime", _fail)
 
         result = canonicalize_hermes_identity("hermes-m4-pma")
-        assert result.agent == "hermes-m4-pma"
-        assert result.profile is None
+        assert result.agent == "hermes"
+        assert result.profile == "m4-pma"

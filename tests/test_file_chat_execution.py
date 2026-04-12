@@ -9,11 +9,15 @@ import pytest
 from fastapi import HTTPException
 
 from codex_autorunner.core import drafts as draft_utils
+from codex_autorunner.core.orchestration import FreshConversationRequiredError
 from codex_autorunner.core.state import now_iso
 from codex_autorunner.surfaces.web.routes.file_chat_routes import (
     execution as execution_module,
 )
-from codex_autorunner.surfaces.web.routes.file_chat_routes import runtime
+from codex_autorunner.surfaces.web.routes.file_chat_routes import (
+    execution_agents,
+    runtime,
+)
 from codex_autorunner.surfaces.web.routes.file_chat_routes.drafts import (
     apply_file_patch,
     pending_file_patch,
@@ -57,6 +61,148 @@ def _make_request_with_hermes(
         config=config,
         hermes_supervisor=object(),
     )
+
+
+class _ThreadRegistryStub:
+    def __init__(self, thread_id: str | None = None) -> None:
+        self.thread_id = thread_id
+        self.reset_calls: list[str] = []
+        self.set_calls: list[tuple[str, str]] = []
+
+    def get_thread_id(self, thread_key: str) -> str | None:
+        return self.thread_id
+
+    def set_thread_id(self, thread_key: str, thread_id: str) -> None:
+        self.thread_id = thread_id
+        self.set_calls.append((thread_key, thread_id))
+
+    def reset_thread(self, thread_key: str) -> None:
+        self.thread_id = None
+        self.reset_calls.append(thread_key)
+
+
+class _HarnessTurnStub:
+    def __init__(self, conversation_id: str, turn_id: str = "turn-1") -> None:
+        self.conversation_id = conversation_id
+        self.turn_id = turn_id
+
+
+class _HarnessResultStub:
+    assistant_text = "Agent: updated via hermes"
+    raw_events: list[object] = []
+    errors: list[str] = []
+
+
+@pytest.mark.asyncio
+async def test_execute_harness_turn_recovers_from_stale_resume_conversation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_root = tmp_path
+    registry = _ThreadRegistryStub(thread_id="stale-conv")
+    started: list[str] = []
+
+    class Harness:
+        def supports(self, capability: str) -> bool:
+            return capability in {"durable_threads", "message_turns"}
+
+        async def ensure_ready(self, _repo_root: Path) -> None:
+            return None
+
+        async def resume_conversation(self, _repo_root: Path, conversation_id: str):
+            raise FreshConversationRequiredError("missing session")
+
+        async def new_conversation(self, _repo_root: Path, title: str = ""):
+            return SimpleNamespace(id="fresh-conv")
+
+        async def start_turn(
+            self, _repo_root: Path, conversation_id: str, *args, **kwargs
+        ):
+            started.append(conversation_id)
+            return _HarnessTurnStub(conversation_id, "turn-fresh")
+
+        async def wait_for_turn(
+            self, _repo_root: Path, conversation_id: str, turn_id: str, timeout=None
+        ):
+            return _HarnessResultStub()
+
+    monkeypatch.setattr(
+        execution_agents, "_build_runtime_harness", lambda *args, **kwargs: Harness()
+    )
+
+    result = await execution_agents.execute_harness_turn(
+        _make_request(repo_root),
+        repo_root,
+        "edit file",
+        asyncio.Event(),
+        agent_id="hermes",
+        profile="m4-pma",
+        thread_registry=registry,
+        thread_key="file_chat.hermes.profile.m4-pma.demo",
+    )
+
+    assert result["status"] == "ok"
+    assert started == ["fresh-conv"]
+    assert registry.thread_id == "fresh-conv"
+    assert registry.reset_calls == []
+
+
+@pytest.mark.asyncio
+async def test_execute_harness_turn_resets_stale_thread_when_start_turn_requires_fresh_conversation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_root = tmp_path
+    registry = _ThreadRegistryStub(thread_id="stale-conv")
+    started: list[str] = []
+
+    class Harness:
+        def __init__(self) -> None:
+            self.start_calls = 0
+
+        def supports(self, capability: str) -> bool:
+            return capability in {"durable_threads", "message_turns"}
+
+        async def ensure_ready(self, _repo_root: Path) -> None:
+            return None
+
+        async def resume_conversation(self, _repo_root: Path, conversation_id: str):
+            return SimpleNamespace(id=conversation_id)
+
+        async def new_conversation(self, _repo_root: Path, title: str = ""):
+            return SimpleNamespace(id="fresh-conv")
+
+        async def start_turn(
+            self, _repo_root: Path, conversation_id: str, *args, **kwargs
+        ):
+            self.start_calls += 1
+            started.append(conversation_id)
+            if self.start_calls == 1:
+                raise FreshConversationRequiredError("stale turn target")
+            return _HarnessTurnStub(conversation_id, "turn-fresh")
+
+        async def wait_for_turn(
+            self, _repo_root: Path, conversation_id: str, turn_id: str, timeout=None
+        ):
+            return _HarnessResultStub()
+
+    monkeypatch.setattr(
+        execution_agents, "_build_runtime_harness", lambda *args, **kwargs: Harness()
+    )
+
+    result = await execution_agents.execute_harness_turn(
+        _make_request(repo_root),
+        repo_root,
+        "edit file",
+        asyncio.Event(),
+        agent_id="hermes",
+        profile="m4-pma",
+        thread_registry=registry,
+        thread_key="file_chat.hermes.profile.m4-pma.demo",
+    )
+
+    assert result["status"] == "ok"
+    assert started == ["stale-conv", "fresh-conv"]
+    assert registry.reset_calls == ["file_chat.hermes.profile.m4-pma.demo"]
+    assert registry.thread_id == "fresh-conv"
 
 
 @pytest.mark.asyncio

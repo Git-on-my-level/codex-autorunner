@@ -13,6 +13,7 @@ import {
   loadTicketPending,
   renderTicketChat,
   resetTicketChatState,
+  restoreTicketChatSelectionToActiveTurn,
   syncTicketChatTargetToSelection,
   ticketChatState,
   resumeTicketPendingTurn,
@@ -475,11 +476,19 @@ function formatFrontmatterProfileLabel(
   return currentOnly ? `${base} (current)` : base;
 }
 
+function isHermesAliasAgentId(agentId: string): boolean {
+  const normalized = (agentId || "").trim().toLowerCase();
+  if (!normalized || normalized === "hermes") return false;
+  return normalized.startsWith("hermes-") || normalized.startsWith("hermes_");
+}
+
 function renderFmAgentOptions(selectedAgent: string): string {
   const { fmAgent } = els();
   if (!fmAgent) return selectedAgent || "codex";
 
-  const agents = getRegisteredAgents();
+  const agents = getRegisteredAgents().filter(
+    (agent) => !isHermesAliasAgentId(agent.id)
+  );
   const hasCatalogAgents =
     agents.length > 1 || (agents[0]?.id && agents[0].id !== "codex");
   if (!hasCatalogAgents && fmAgent.options.length > 1) {
@@ -1227,12 +1236,22 @@ export function initTicketEditor(): void {
   if (patchDiscardBtn) patchDiscardBtn.addEventListener("click", () => void discardTicketPatch());
   if (agentSelect) {
     agentSelect.addEventListener("change", () => {
+      if (ticketChatState.status === "running") {
+        flash("Finish or cancel the current ticket chat turn before switching agents.", "error");
+        void restoreTicketChatSelectionToActiveTurn();
+        return;
+      }
       syncTicketChatTargetToSelection();
       void resumeTicketPendingTurn(ticketChatState.ticketIndex, ticketChatState.ticketChatKey);
     });
   }
   if (profileSelect) {
     profileSelect.addEventListener("change", () => {
+      if (ticketChatState.status === "running") {
+        flash("Finish or cancel the current ticket chat turn before switching profiles.", "error");
+        void restoreTicketChatSelectionToActiveTurn();
+        return;
+      }
       syncTicketChatTargetToSelection();
       void resumeTicketPendingTurn(ticketChatState.ticketIndex, ticketChatState.ticketChatKey);
     });
@@ -1338,5 +1357,6 @@ export function initTicketEditor(): void {
 
 export { TicketData };
 export const __ticketEditorTest = {
+  isHermesAliasAgentId,
   sameUndoSnapshot,
 };

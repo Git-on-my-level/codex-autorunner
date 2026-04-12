@@ -189,4 +189,6 @@ changed or explicitly gated. Owners refer to downstream Hermes tickets.
   `set_session_mode`) are exposed through typed wrappers and degrade gracefully
   on servers that do not support them.
 - Advertised slash commands are extracted from ACP initialization and surfaced
-  in PMA/help surfaces.
+  through PMA/help metadata for the active runtime session. CAR does not yet
+  ship a dedicated selector UI for reusing listed Hermes sessions or a durable
+  persisted slash-command catalog beyond the live ACP session.

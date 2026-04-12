@@ -1,10 +1,11 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 /**
  * Ticket Editor Modal - handles creating, editing, and deleting tickets
  */
 import { api, confirmModal, flash, updateUrlParams, splitMarkdownFrontmatter } from "./utils.js";
 import { publish } from "./bus.js";
 import { clearTicketChatHistory } from "./ticketChatStorage.js";
-import { setTicketIndex, sendTicketChat, cancelTicketChat, applyTicketPatch, discardTicketPatch, loadTicketPending, renderTicketChat, resetTicketChatState, syncTicketChatTargetToSelection, ticketChatState, resumeTicketPendingTurn, } from "./ticketChatActions.js";
+import { setTicketIndex, sendTicketChat, cancelTicketChat, applyTicketPatch, discardTicketPatch, loadTicketPending, renderTicketChat, resetTicketChatState, restoreTicketChatSelectionToActiveTurn, syncTicketChatTargetToSelection, ticketChatState, resumeTicketPendingTurn, } from "./ticketChatActions.js";
 import { ensureAgentCatalog, getRegisteredAgents, getRegisteredAgentProfiles, initAgentControls, } from "./agentControls.js";
 import { initTicketVoice } from "./ticketVoice.js";
 import { initTicketChatEvents, renderTicketEvents, renderTicketMessages } from "./ticketChatEvents.js";
@@ -351,11 +352,17 @@ function formatFrontmatterProfileLabel(profile, currentOnly = false) {
         : profile.id;
     return currentOnly ? `${base} (current)` : base;
 }
+function isHermesAliasAgentId(agentId) {
+    const normalized = (agentId || "").trim().toLowerCase();
+    if (!normalized || normalized === "hermes")
+        return false;
+    return normalized.startsWith("hermes-") || normalized.startsWith("hermes_");
+}
 function renderFmAgentOptions(selectedAgent) {
     const { fmAgent } = els();
     if (!fmAgent)
         return selectedAgent || "codex";
-    const agents = getRegisteredAgents();
+    const agents = getRegisteredAgents().filter((agent) => !isHermesAliasAgentId(agent.id));
     const hasCatalogAgents = agents.length > 1 || (agents[0]?.id && agents[0].id !== "codex");
     if (!hasCatalogAgents && fmAgent.options.length > 1) {
         fmAgent.value = Array.from(fmAgent.options).some((option) => option.value === selectedAgent)
@@ -997,12 +1004,22 @@ export function initTicketEditor() {
         patchDiscardBtn.addEventListener("click", () => void discardTicketPatch());
     if (agentSelect) {
         agentSelect.addEventListener("change", () => {
+            if (ticketChatState.status === "running") {
+                flash("Finish or cancel the current ticket chat turn before switching agents.", "error");
+                void restoreTicketChatSelectionToActiveTurn();
+                return;
+            }
             syncTicketChatTargetToSelection();
             void resumeTicketPendingTurn(ticketChatState.ticketIndex, ticketChatState.ticketChatKey);
         });
     }
     if (profileSelect) {
         profileSelect.addEventListener("change", () => {
+            if (ticketChatState.status === "running") {
+                flash("Finish or cancel the current ticket chat turn before switching profiles.", "error");
+                void restoreTicketChatSelectionToActiveTurn();
+                return;
+            }
             syncTicketChatTargetToSelection();
             void resumeTicketPendingTurn(ticketChatState.ticketIndex, ticketChatState.ticketChatKey);
         });
@@ -1098,5 +1115,6 @@ export function initTicketEditor() {
     }
 }
 export const __ticketEditorTest = {
+    isHermesAliasAgentId,
     sameUndoSnapshot,
 };

@@ -186,15 +186,19 @@ Notes:
 
 - `car pma models hermes` is expected to fail because Hermes does not advertise
   `model_listing`.
-- Hermes session selectors can reuse existing Hermes sessions because
-  `active_thread_discovery` is now advertised through the harness.
+- Hermes advertises `active_thread_discovery` through the harness, so CAR can
+  list and resume managed Hermes sessions in PMA/CLI flows that consume managed
+  thread metadata. CAR does not yet ship a dedicated selector-driven Hermes
+  session picker UI.
 - Use `--model <value>` only when you want to pass a free-form Hermes model
   override on the next turn.
 - CAR exposes typed wrappers for optional Hermes ACP session methods when the
   server supports them: `fork_session`, `set_session_model`, `set_session_mode`.
   These degrade gracefully on servers that do not advertise the methods.
 - If Hermes advertises available slash commands in its ACP initialization
-  response, CAR persists and surfaces them in PMA and help surfaces.
+  response, CAR surfaces them through PMA agent metadata and help-oriented
+  surfaces for the current runtime session. CAR does not yet persist a command
+  catalog beyond the active ACP session.
 
 ## Ticket-Flow Usage
 

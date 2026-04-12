@@ -461,6 +461,11 @@ function renderAgentControls(payload) {
 export async function refreshAgentControls(request = {}) {
     await agentControlsRefresh.refresh(loadAgentControlsPayload, request);
 }
+export async function setSelectedAgentProfile(agent, profile = "") {
+    setSelectedAgent(agent);
+    setSelectedProfile(agent, profile);
+    await refreshAgentControls({ force: true, reason: "manual" });
+}
 async function handleAgentChange(nextAgent) {
     const previous = getSelectedAgent();
     setSelectedAgent(nextAgent);

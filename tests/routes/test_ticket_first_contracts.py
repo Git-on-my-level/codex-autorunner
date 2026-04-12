@@ -195,6 +195,25 @@ def test_create_ticket_appends_after_highest_index_when_gaps_exist(
         assert not (ticket_dir / "TICKET-002.md").exists()
 
 
+def test_create_ticket_canonicalizes_hermes_alias_input(tmp_path, monkeypatch):
+    ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True)
+    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
+
+    app = FastAPI()
+    app.include_router(flow_routes.build_flow_routes())
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/flows/ticket_flow/tickets",
+            json={"agent": "hermes-m4-pma", "title": "Demo", "body": "Body"},
+        )
+        assert created.status_code == 200
+        payload = created.json()
+        assert payload["frontmatter"]["agent"] == "hermes"
+        assert payload["frontmatter"]["profile"] == "m4-pma"
+
+
 def test_create_ticket_rejects_unknown_keys(tmp_path, monkeypatch):
     ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True)
@@ -771,6 +790,39 @@ def test_bulk_set_agent_can_clear_profile_explicitly(tmp_path, monkeypatch):
     )
     assert frontmatter["agent"] == "hermes"
     assert "profile" not in frontmatter
+
+
+def test_bulk_set_agent_canonicalizes_hermes_alias_input(tmp_path, monkeypatch):
+    ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True)
+    ticket_path = ticket_dir / "TICKET-001.md"
+    ticket_path.write_text(
+        "---\n"
+        "ticket_id: tkt_bulkprofilealias001\n"
+        "agent: codex\n"
+        "done: false\n"
+        "title: One\n"
+        "---\n\n"
+        "Body 1\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
+    app = FastAPI()
+    app.include_router(flow_routes.build_flow_routes())
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/flows/ticket_flow/tickets/bulk-set-agent",
+            json={"agent": "hermes-m4-pma"},
+        )
+
+    assert response.status_code == 200
+    frontmatter, _body = parse_markdown_frontmatter(
+        ticket_path.read_text(encoding="utf-8")
+    )
+    assert frontmatter["agent"] == "hermes"
+    assert frontmatter["profile"] == "m4-pma"
 
 
 def test_bulk_clear_model_rejects_unknown_keys(tmp_path, monkeypatch):

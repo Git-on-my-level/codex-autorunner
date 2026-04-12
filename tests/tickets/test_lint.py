@@ -53,6 +53,18 @@ def test_lint_ticket_frontmatter_accepts_known_agents_and_user() -> None:
     assert any("invalid" in e for e in errors)
 
 
+def test_lint_ticket_frontmatter_canonicalizes_hermes_alias_without_runtime_context() -> (
+    None
+):
+    fm, errors = lint_ticket_frontmatter(
+        _ticket_frontmatter(agent="hermes-m4-pma", done=False)
+    )
+    assert errors == []
+    assert fm is not None
+    assert fm.agent == "hermes"
+    assert fm.profile == "m4-pma"
+
+
 def test_lint_ticket_frontmatter_accepts_fallback_ticket_id() -> None:
     fm, errors = lint_ticket_frontmatter(
         {"agent": "codex", "done": False},

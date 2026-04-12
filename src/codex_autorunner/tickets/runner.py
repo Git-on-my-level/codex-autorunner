@@ -46,6 +46,7 @@ from .runner_step_support import (
     increment_turn_counters,
     load_previous_ticket_content,
     record_successful_turn_state,
+    record_turn_runtime_state,
 )
 from .runner_thread_bindings import (
     clear_ticket_thread_binding,
@@ -296,14 +297,12 @@ class TicketRunner:
                 state=state,
                 reason=selection_result.pause_reason or "All tickets done.",
             )
-
         if not selection_result.selected:
             return self._pause(
                 state,
                 reason="Ticket selection failed unexpectedly.",
                 reason_code="infra_error",
             )
-
         current_path = selection_result.selected.path
         _commit_raw = state.get("commit")
         commit_state = _commit_raw if isinstance(_commit_raw, dict) else {}
@@ -320,7 +319,6 @@ class TicketRunner:
             state.pop("reason_details", None)
             state.pop("reason_code", None)
             state.pop("pause_context", None)
-
         _lint_raw = state.get("lint")
         lint_state: dict[str, Any] = _lint_raw if isinstance(_lint_raw, dict) else {}
         _lint_errors_raw = lint_state.get("errors")
@@ -360,7 +358,6 @@ class TicketRunner:
                 current_ticket=current_ticket_path,
                 reason_code="infra_error",
             )
-
         ticket_doc = validation_result.validated.ticket_doc
         current_ticket_id = ticket_doc.frontmatter.ticket_id
         state["current_ticket_id"] = current_ticket_id
@@ -492,10 +489,15 @@ class TicketRunner:
             current_network_retries=network_retries,
         )
         if not result.success:
-            state["last_agent_output"] = result.text
-            state["last_agent_id"] = result.agent_id
-            state["last_agent_conversation_id"] = result.conversation_id
-            state["last_agent_turn_id"] = result.turn_id
+            record_turn_runtime_state(
+                state=state,
+                result=result,
+                ticket_id=current_ticket_id,
+                ticket_path=current_ticket_path,
+                agent_id=canonical_agent_id,
+                profile=current_ticket_profile,
+                binding_decision=binding_decision,
+            )
 
             if result.should_retry:
                 state["network_retry"] = {

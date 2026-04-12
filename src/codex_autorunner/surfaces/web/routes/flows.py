@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from ....agents.hermes_identity import canonicalize_hermes_identity
 from ....core.config import load_repo_config
 from ....core.config_contract import ConfigError
 from ....core.file_chat_keys import (
@@ -1243,6 +1244,11 @@ You are the first ticket in a new ticket_flow run.
         repo_root = find_repo_root()
         ticket_dir = repo_root / ".codex-autorunner" / "tickets"
         ticket_dir.mkdir(parents=True, exist_ok=True)
+        canonical = canonicalize_hermes_identity(
+            request.agent,
+            request.profile,
+            context=repo_root,
+        )
 
         # Find next available index
         existing_paths = list_ticket_paths(ticket_dir)
@@ -1264,14 +1270,14 @@ You are the first ticket in a new ticket_flow run.
         title_line = f"title: {_quote(request.title)}\n" if request.title else ""
         goal_line = f"goal: {_quote(request.goal)}\n" if request.goal else ""
         profile_line = (
-            f"profile: {_quote(request.profile)}\n" if request.profile else ""
+            f"profile: {_quote(canonical.profile)}\n" if canonical.profile else ""
         )
         ticket_id = generate_ticket_id()
         ticket_id_line = f"ticket_id: {_quote(ticket_id)}\n"
 
         content = (
             "---\n"
-            f"agent: {_quote(request.agent)}\n"
+            f"agent: {_quote(canonical.agent)}\n"
             "done: false\n"
             f"{ticket_id_line}"
             f"{title_line}"

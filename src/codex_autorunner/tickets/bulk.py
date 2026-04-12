@@ -141,12 +141,21 @@ def bulk_set_agent(
     profile: Optional[str] = None,
     profile_explicit: bool = False,
 ) -> TicketBulkEditResult:
+    from ..agents.hermes_identity import canonicalize_hermes_identity
+
+    canonical = canonicalize_hermes_identity(agent, profile, context=repo_root)
+    next_agent = canonical.agent
+    next_profile = canonical.profile
+    profile_should_change = (
+        profile_explicit or next_agent != agent or next_profile != profile
+    )
+
     def mutate(fm: dict[str, Any]) -> None:
-        fm["agent"] = agent
-        if not profile_explicit:
+        fm["agent"] = next_agent
+        if not profile_should_change:
             return
-        if profile:
-            fm["profile"] = profile
+        if next_profile:
+            fm["profile"] = next_profile
         else:
             fm.pop("profile", None)
 
