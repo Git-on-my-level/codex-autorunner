@@ -236,10 +236,6 @@ def recover_last_assistant_message(
     if not isinstance(messages_raw, list):
         return OpenCodeMessageResult(text="", error=None)
 
-    normalized_prompt = (
-        prompt.strip() if isinstance(prompt, str) and prompt.strip() else None
-    )
-
     for entry in reversed(messages_raw):
         if not isinstance(entry, dict):
             continue
@@ -256,11 +252,23 @@ def recover_last_assistant_message(
             error = None
         if error is None:
             error = extract_error_text(info) or extract_error_text(entry)
-        if normalized_prompt and text and text == normalized_prompt:
+        if prompt_echo_matches(text, prompt=prompt):
             continue
         if text or error:
             return OpenCodeMessageResult(text=text, error=error)
     return OpenCodeMessageResult(text="", error=None)
+
+
+def prompt_echo_matches(text: Any, *, prompt: Optional[str]) -> bool:
+    if not isinstance(text, str):
+        return False
+    normalized_text = text.strip()
+    if not normalized_text:
+        return False
+    normalized_prompt = (
+        prompt.strip() if isinstance(prompt, str) and prompt.strip() else None
+    )
+    return normalized_prompt is not None and normalized_text == normalized_prompt
 
 
 def normalize_message_phase(value: Any) -> Optional[str]:
@@ -684,7 +692,7 @@ def normalize_message_text(value: Any) -> Optional[str]:
         joined = "".join(parts)
         return joined if joined != "" else None
     if isinstance(value, dict):
-        for key in ("text", "message", "content"):
+        for key in ("text", "message", "content", "parts"):
             nested_text = normalize_message_text(value.get(key))
             if nested_text:
                 return nested_text
@@ -732,15 +740,6 @@ def extract_completed_text(params: dict[str, Any]) -> Optional[str]:
     if isinstance(result, dict):
         return normalize_message_text(result)
     return normalize_message_text(params)
-
-
-def extract_harness_error_text(params: dict[str, Any]) -> Optional[str]:
-    error = params.get("error")
-    if isinstance(error, dict):
-        return normalize_message_text(error)
-    return normalize_message_text(params.get("message")) or normalize_message_text(
-        params.get("detail")
-    )
 
 
 def extract_message_info(params: dict[str, Any]) -> dict[str, Any]:

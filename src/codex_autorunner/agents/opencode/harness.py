@@ -21,7 +21,10 @@ import httpx
 
 from ...core.logging_utils import log_event
 from ...core.orchestration.interfaces import FreshConversationRequiredError
-from ...core.orchestration.stream_text_merge import merge_assistant_stream_text
+from ...core.orchestration.runtime_thread_events import (
+    RuntimeThreadRunEventState,
+    normalize_runtime_thread_raw_event,
+)
 from ...core.orchestration.turn_event_buffer import TurnEventBuffer
 from ...core.sse import SSEEvent
 from ...integrations.chat.agents import DEFAULT_CHAT_AGENT_MODELS
@@ -35,18 +38,6 @@ from ..types import (
     TerminalTurnResult,
     TurnRef,
 )
-from .event_fields import (
-    extract_message_id as _extract_message_id,
-)
-from .event_fields import (
-    extract_message_role as _extract_message_role,
-)
-from .event_fields import (
-    extract_part_message_id as _extract_part_message_id,
-)
-from .event_fields import (
-    extract_part_type as _extract_part_type,
-)
 from .progress_synthesis import (
     DescendantSessionTracker,
     start_silent_turn_progress,
@@ -58,12 +49,8 @@ from .progress_synthesis import (
     synthetic_command_result_events as _synthetic_command_result_events,
 )
 from .protocol_payload import (
-    extract_completed_text,
-    extract_delta_text,
-    extract_harness_error_text,
     extract_message_info,
     extract_message_phase,
-    normalize_message_text,
 )
 from .runtime import (
     OpenCodeTurnOutput,
@@ -308,12 +295,8 @@ def _workspace_permission_decision(
     return "allow"
 
 
-_extract_delta_text = extract_delta_text
-_extract_completed_text = extract_completed_text
-_extract_error_text = extract_harness_error_text
 _extract_message_info = extract_message_info
 _extract_message_phase = extract_message_phase
-_normalize_message_text = normalize_message_text
 
 
 def _unwrap_harness_payload(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -328,158 +311,6 @@ def _unwrap_harness_payload(payload: dict[str, Any]) -> tuple[str, dict[str, Any
     if isinstance(method, str) and isinstance(params, dict):
         return method, params
     return "", {}
-
-
-def _collect_terminal_text(payloads: list[dict[str, Any]]) -> tuple[str, list[str]]:
-    output_text = ""
-    completed_message: Optional[str] = None
-    completed_final_message: Optional[str] = None
-    commentary_message: Optional[str] = None
-    errors: list[str] = []
-    message_roles: dict[str, str] = {}
-    pending_by_message: dict[str, str] = {}
-    pending_no_id = ""
-    message_roles_seen = False
-    part_types: dict[str, str] = {}
-
-    def _append_part_text(message_id: Optional[str], text: str) -> None:
-        nonlocal output_text
-        nonlocal pending_no_id
-        if not text:
-            return
-        if message_id is None:
-            if not message_roles_seen:
-                output_text = merge_assistant_stream_text(output_text, text)
-            else:
-                pending_no_id = merge_assistant_stream_text(pending_no_id, text)
-            return
-        role = message_roles.get(message_id)
-        if role == "user":
-            return
-        if role == "assistant":
-            output_text = merge_assistant_stream_text(output_text, text)
-            return
-        pending_by_message[message_id] = merge_assistant_stream_text(
-            pending_by_message.get(message_id, ""),
-            text,
-        )
-
-    def _register_role(message_id: Optional[str], role: Optional[str]) -> None:
-        nonlocal output_text
-        nonlocal pending_no_id
-        nonlocal message_roles_seen
-        if not message_id or not role:
-            return
-        message_roles[message_id] = role
-        message_roles_seen = True
-        pending = pending_by_message.pop(message_id, "")
-        if role == "assistant":
-            if pending:
-                output_text = merge_assistant_stream_text(output_text, pending)
-            if pending_no_id:
-                output_text = merge_assistant_stream_text(output_text, pending_no_id)
-                pending_no_id = ""
-            return
-        if role == "user":
-            pending_no_id = ""
-
-    def _flush_fallback_pending() -> None:
-        nonlocal output_text
-        if pending_by_message:
-            for message_id, pending in list(pending_by_message.items()):
-                if message_roles.get(message_id) == "assistant":
-                    output_text = merge_assistant_stream_text(output_text, pending)
-            pending_by_message.clear()
-        if pending_no_id and not message_roles_seen:
-            output_text = merge_assistant_stream_text(output_text, pending_no_id)
-
-    def _record_completed_message(text: str, phase: Optional[str]) -> None:
-        nonlocal commentary_message
-        nonlocal completed_final_message
-        nonlocal completed_message
-        if not text:
-            return
-        if phase == "final_answer":
-            completed_final_message = text
-            return
-        if phase == "commentary":
-            commentary_message = text
-            return
-        completed_message = text
-
-    for payload in payloads:
-        method, params = _unwrap_harness_payload(payload)
-        method_lower = method.lower()
-
-        if method in {
-            "message.delta",
-            "message.updated",
-            "message.completed",
-            "message.part.updated",
-            "message.part.delta",
-        }:
-            if method in {"message.updated", "message.completed"}:
-                _register_role(
-                    _extract_message_id(params),
-                    _extract_message_role(params),
-                )
-            text = _extract_delta_text(params) or _extract_completed_text(params)
-            if text:
-                if method == "message.delta":
-                    # When ``properties.part.type`` is present, drop non-text deltas (same
-                    # policy as ``message.part.*``). Typical ``message.delta`` payloads only
-                    # carry ``delta.text`` without a typed part; in that case type is
-                    # unknown and we keep prior behavior (merge all delta text).
-                    part_type = _extract_part_type(params, part_types=part_types)
-                    if part_type not in (None, "", "text"):
-                        continue
-                    output_text = merge_assistant_stream_text(output_text, text)
-                elif method in {"message.part.updated", "message.part.delta"}:
-                    part_type = _extract_part_type(params, part_types=part_types)
-                    if part_type not in (None, "", "text"):
-                        continue
-                    _append_part_text(_extract_part_message_id(params), text)
-                else:
-                    role = _extract_message_role(params)
-                    if role != "user":
-                        _record_completed_message(text, _extract_message_phase(params))
-            continue
-
-        if method == "item/agentMessage/delta" or method == "turn/streamDelta":
-            text = _extract_delta_text(params)
-            if text:
-                output_text = merge_assistant_stream_text(output_text, text)
-            continue
-
-        if "outputdelta" in method_lower:
-            text = _extract_delta_text(params)
-            if text:
-                output_text = merge_assistant_stream_text(output_text, text)
-            continue
-
-        if method == "item/completed":
-            item = params.get("item")
-            if isinstance(item, dict) and item.get("type") == "agentMessage":
-                text = _extract_completed_text(params)
-                if text:
-                    _record_completed_message(text, _extract_message_phase(params))
-            continue
-
-        if method in {"turn/error", "error"}:
-            error = _extract_error_text(params)
-            if error:
-                errors.append(error)
-
-    if not completed_message:
-        _flush_fallback_pending()
-    assistant_text = (
-        completed_final_message
-        or completed_message
-        or output_text
-        or commentary_message
-        or ""
-    ).strip()
-    return assistant_text, errors
 
 
 def _saw_terminal_completion(payloads: list[dict[str, Any]]) -> bool:
@@ -1146,7 +977,7 @@ class OpenCodeHarness(AgentHarness):
 
         async def _collect() -> TerminalTurnResult:
             if pending is None:
-                payloads: list[dict[str, Any]] = []
+                raw_events: list[dict[str, Any]] = []
                 stream_error: Optional[Exception] = None
 
                 try:
@@ -1156,29 +987,47 @@ class OpenCodeHarness(AgentHarness):
                         turn_id or "",
                     ):
                         if isinstance(payload, dict):
-                            payloads.append(payload)
+                            raw_events.append(payload)
                 except (
                     RuntimeError,
                     OSError,
                     ProcessLookupError,
                     BrokenPipeError,
                     httpx.HTTPError,
-                ) as exc:  # intentional: stores any stream error for later propagation
+                ) as exc:
                     stream_error = exc
 
-                assistant_text, errors = _collect_terminal_text(payloads)
+                normalized_state = RuntimeThreadRunEventState()
+                for raw_event in raw_events:
+                    await normalize_runtime_thread_raw_event(
+                        raw_event, normalized_state
+                    )
+                assistant_text = normalized_state.best_assistant_text().strip()
+                errors = (
+                    [normalized_state.last_error_message]
+                    if normalized_state.last_error_message
+                    else []
+                )
+                if not assistant_text and not errors:
+                    recovered = recover_last_assistant_message(
+                        await client.list_messages(conversation_id, limit=10)
+                    )
+                    if recovered.text:
+                        assistant_text = recovered.text
+                    if recovered.error:
+                        errors = [recovered.error]
                 if stream_error is not None and not (
-                    assistant_text and _saw_terminal_completion(payloads)
+                    assistant_text and _saw_terminal_completion(raw_events)
                 ):
                     raise stream_error
                 return TerminalTurnResult(
                     status="error" if errors else "ok",
                     assistant_text=assistant_text,
                     errors=errors,
-                    raw_events=payloads,
+                    raw_events=raw_events,
                 )
 
-            raw_events: list[dict[str, Any]] = []
+            streamed_raw_events: list[dict[str, Any]] = []
             tracker = DescendantSessionTracker(conversation_id)
 
             async def _publish_progress_event(raw_event: dict[str, Any]) -> None:
@@ -1239,7 +1088,7 @@ class OpenCodeHarness(AgentHarness):
                         return
 
                     for visible_event in visible_events:
-                        raw_events.append(visible_event)
+                        streamed_raw_events.append(visible_event)
                         if not is_idle:
                             pending.progress_events_published += 1
                             await _publish_progress_event(visible_event)
@@ -1422,9 +1271,9 @@ class OpenCodeHarness(AgentHarness):
                         assistant_text="",
                         errors=[str(exc)],
                         raw_events=(
-                            list(pending.synthetic_raw_events) + raw_events
+                            list(pending.synthetic_raw_events) + streamed_raw_events
                             if pending is not None
-                            else raw_events
+                            else streamed_raw_events
                         ),
                     )
 
@@ -1434,9 +1283,9 @@ class OpenCodeHarness(AgentHarness):
                 assistant_text=output.text,
                 errors=errors,
                 raw_events=(
-                    list(pending.synthetic_raw_events) + raw_events
+                    list(pending.synthetic_raw_events) + streamed_raw_events
                     if pending is not None
-                    else raw_events
+                    else streamed_raw_events
                 ),
             )
 

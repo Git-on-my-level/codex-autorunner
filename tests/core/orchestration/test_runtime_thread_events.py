@@ -1610,3 +1610,46 @@ async def test_ticket028_completion_detection_uses_acp_lifecycle_snapshot() -> N
             f"runtime_terminal_status={snapshot.runtime_terminal_status}, "
             f"got completed_seen={state.completed_seen}"
         )
+
+
+async def test_ticket028_turn_completed_uses_nested_turn_status() -> None:
+    state = RuntimeThreadRunEventState()
+
+    await normalize_runtime_thread_raw_event(
+        {
+            "method": "turn/completed",
+            "params": {"turn": {"status": "failed"}},
+        },
+        state,
+    )
+
+    assert state.completed_seen is False
+
+
+async def test_message_completed_commentary_does_not_override_stream_text() -> None:
+    state = RuntimeThreadRunEventState()
+
+    await normalize_runtime_thread_raw_event(
+        {
+            "method": "message.completed",
+            "params": {
+                "sessionID": "session-1",
+                "text": "draft reply",
+                "phase": "commentary",
+            },
+        },
+        state,
+    )
+    await normalize_runtime_thread_raw_event(
+        {
+            "method": "item/agentMessage/delta",
+            "params": {
+                "sessionID": "session-1",
+                "itemId": "item-1",
+                "delta": "final reply",
+            },
+        },
+        state,
+    )
+
+    assert state.best_assistant_text() == "final reply"

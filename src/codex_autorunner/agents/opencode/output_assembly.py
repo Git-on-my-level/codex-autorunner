@@ -31,6 +31,7 @@ from .protocol_payload import (
     extract_total_tokens,
     extract_usage_details,
     parse_message_response,
+    prompt_echo_matches,
     recover_last_assistant_message,
 )
 from .usage_decoder import extract_usage
@@ -367,7 +368,7 @@ class OutputAssembler:
             if resolved_role == "assistant" or (
                 resolved_role is None
                 and text
-                and (self._prompt is None or text.strip() != self._prompt.strip())
+                and not prompt_echo_matches(text, prompt=self._prompt)
             ):
                 self._text_parts.append(text)
 

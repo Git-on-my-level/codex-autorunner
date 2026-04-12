@@ -297,14 +297,26 @@ async def test_apply_prompt_fallback_keeps_existing_text() -> None:
 
 
 @pytest.mark.anyio
-async def test_apply_prompt_fallback_uses_prompt_text_when_empty() -> None:
+async def test_apply_prompt_fallback_uses_prompt_text_when_non_echo() -> None:
     async def _ok() -> dict[str, Any]:
         return {"text": "from prompt"}
 
     task = asyncio.create_task(_ok())
     await task
-    text, error = _apply_prompt_fallback("", None, task)
+    text, error = _apply_prompt_fallback("", None, task, prompt="different prompt")
     assert text == "from prompt"
+
+
+@pytest.mark.anyio
+async def test_apply_prompt_fallback_ignores_prompt_echo_when_empty() -> None:
+    async def _ok() -> dict[str, Any]:
+        return {"parts": [{"type": "text", "text": "repeat me"}]}
+
+    task = asyncio.create_task(_ok())
+    await task
+    text, error = _apply_prompt_fallback("", None, task, prompt="repeat me")
+    assert text == ""
+    assert error is None
 
 
 @pytest.mark.anyio

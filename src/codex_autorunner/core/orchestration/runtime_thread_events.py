@@ -673,6 +673,8 @@ def normalize_runtime_thread_message(
             _extract_message_role(params),
             timestamp=event_timestamp,
         )
+        if _extract_message_phase(params) == "commentary":
+            return role_events
         content = _extract_message_text(params)
         if not content:
             return role_events
@@ -1218,6 +1220,17 @@ def _extract_agent_message_text(item: dict[str, Any]) -> str:
 
 def _is_commentary_agent_message(item: dict[str, Any]) -> bool:
     return str(item.get("phase") or "").strip().lower() == "commentary"
+
+
+def _extract_message_phase(params: dict[str, Any]) -> Optional[str]:
+    phase = params.get("phase")
+    if isinstance(phase, str) and phase.strip():
+        return phase.strip().lower()
+    info = _extract_message_info(params)
+    nested_phase = info.get("phase")
+    if isinstance(nested_phase, str) and nested_phase.strip():
+        return nested_phase.strip().lower()
+    return None
 
 
 def _extract_usage(params: dict[str, Any]) -> Optional[dict[str, Any]]:
