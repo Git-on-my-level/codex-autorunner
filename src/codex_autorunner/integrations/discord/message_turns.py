@@ -957,9 +957,6 @@ def _discord_progress_lease_is_not_newer_than_terminal_turn(
         and terminal_message_id.isdigit()
     ):
         return int(lease_message_id) <= int(terminal_message_id)
-    lease_created_at = _execution_field(lease, "created_at")
-    if lease_created_at and terminal_created_at:
-        return lease_created_at <= terminal_created_at
     return False
 
 
@@ -987,6 +984,11 @@ async def _reconcile_other_discord_turn_progress_leases(
         if current_lease_id and current_lease_id == retained_lease_id:
             continue
         if current_message_id and current_message_id == retained_message_id:
+            continue
+        # A sibling lease on the same Discord message can only exist when a newer
+        # turn has reused that progress message and replaced the older lease row.
+        # Older-turn delivery must never retire that replacement lease.
+        if current_message_id and current_message_id == terminal_message_id:
             continue
         # Older-turn delivery should never retire a sibling lease that belongs to
         # a newer turn on the same managed thread, even if that newer turn has
@@ -1847,17 +1849,26 @@ async def _deliver_discord_turn_result(
             ),
         )
         if preview_message_deleted:
-            for lease in await _list_discord_progress_leases(
-                dispatch.service,
-                channel_id=dispatch.channel_id,
-                message_id=preview_message_id,
+            if current_lease_id:
+                await _delete_discord_progress_lease(
+                    dispatch.service,
+                    lease_id=current_lease_id,
+                )
+            elif (
+                isinstance(execution_id, str)
+                and execution_id
+                and not preserve_progress_lease
             ):
-                current_lease_id = _execution_field(lease, "lease_id")
-                if current_lease_id:
-                    await _delete_discord_progress_lease(
-                        dispatch.service,
-                        lease_id=current_lease_id,
-                    )
+                for lease in await _list_discord_progress_leases(
+                    dispatch.service,
+                    execution_id=execution_id,
+                ):
+                    orphaned_lease_id = _execution_field(lease, "lease_id")
+                    if orphaned_lease_id:
+                        await _delete_discord_progress_lease(
+                            dispatch.service,
+                            lease_id=orphaned_lease_id,
+                        )
             if supervision is not None:
                 supervision.clear_progress_tracking()
     elif isinstance(execution_id, str) and execution_id and not preserve_progress_lease:
