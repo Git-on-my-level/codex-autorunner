@@ -85,8 +85,3 @@ Reference docs in `docs/` (e.g., configuration, operations, debugging).
 
 ## Cursor Cloud specific instructions
 - See `docs/ops/running-in-a-vm.md` for VM/cloud-agent startup caveats, service commands, and known test quirks.
-- **System dep**: `python3.12-venv` must be installed (`sudo apt-get install -y python3.12-venv`) before `make setup` on Ubuntu 24.04 cloud VMs. The update script handles this.
-- **Hub init**: Run `CAR_DEV_INCLUDE_ROOT_REPO=1 .venv/bin/car init --mode hub` once to bootstrap `.codex-autorunner/` before starting the dev server.
-- **Dev server**: `make serve-dev HOST=0.0.0.0` (port 4173). Health check: `curl http://localhost:4173/health`.
-- **Test suite is large** (~5500 tests, runs serially via `make test`). Expect 60-100 min wall time. A few known env-specific failures in containers (process termination, multibyte unicode, PID namespace tests per `docs/ops/running-in-a-vm.md`).
-- **Lint/check/build**: `make check` runs the full pre-commit suite. Individual: `black --check`, `ruff check`, `pnpm lint`, `make typecheck-strict`. `make build` compiles TS→JS.
