@@ -3931,7 +3931,7 @@ async def test_service_continues_when_sync_request_fails(tmp_path: Path) -> None
 
 
 @pytest.mark.anyio
-async def test_service_does_not_attempt_followup_when_initial_response_fails(
+async def test_service_attempts_fallback_reply_when_initial_response_fails(
     tmp_path: Path,
 ) -> None:
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
@@ -3950,7 +3950,11 @@ async def test_service_does_not_attempt_followup_when_initial_response_fails(
     try:
         await service.run_forever()
         assert rest.interaction_responses == []
-        assert rest.followup_messages == []
+        assert len(rest.followup_messages) == 1
+        assert (
+            rest.followup_messages[0]["payload"]["content"]
+            == "Discord interaction did not acknowledge. Please retry."
+        )
     finally:
         await store.close()
 
@@ -5909,7 +5913,7 @@ async def test_car_update_without_target_returns_picker(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
-async def test_car_update_without_target_aborts_when_required_preflight_fails(
+async def test_car_update_without_target_replies_when_dispatch_ack_fails_without_expiry(
     tmp_path: Path,
 ) -> None:
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
@@ -5932,7 +5936,14 @@ async def test_car_update_without_target_aborts_when_required_preflight_fails(
 
     try:
         await service.run_forever()
-        assert rest.interaction_responses == []
+        assert len(rest.interaction_responses) == 1
+        payload = rest.interaction_responses[0]["payload"]
+        assert payload["type"] == 4
+        assert (
+            payload["data"]["content"]
+            == "Discord interaction did not acknowledge. Please retry."
+        )
+        assert payload["data"]["flags"] == 64
         assert rest.followup_messages == []
     finally:
         await store.close()
