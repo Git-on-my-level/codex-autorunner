@@ -150,6 +150,17 @@ def lint_ticket_frontmatter(
     # Optional model/reasoning overrides.
     model = _as_optional_str(data.get("model"))
     reasoning = _as_optional_str(data.get("reasoning"))
+
+    # Optional runtime profile.
+    profile_raw = data.get("profile")
+    profile: Optional[str] = None
+    if profile_raw is not None:
+        profile = _as_optional_str(profile_raw)
+        if profile is None:
+            errors.append(
+                "frontmatter.profile must be a non-empty string when provided."
+            )
+
     context, context_errors = _parse_context_entries(data.get("context"))
     errors.extend(context_errors)
 
@@ -162,6 +173,7 @@ def lint_ticket_frontmatter(
         "goal",
         "model",
         "reasoning",
+        "profile",
         "context",
     ):
         extra.pop(key, None)
@@ -181,6 +193,7 @@ def lint_ticket_frontmatter(
             goal=goal,
             model=model,
             reasoning=reasoning,
+            profile=profile,
             context=context,
             extra=extra,
         ),

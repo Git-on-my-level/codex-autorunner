@@ -142,6 +142,47 @@ def test_lint_ticket_frontmatter_rejects_invalid_context_entries() -> None:
     assert any("context[2].max_bytes" in e for e in errors)
 
 
+def test_lint_ticket_frontmatter_accepts_optional_profile() -> None:
+    fm, errors = lint_ticket_frontmatter(
+        _ticket_frontmatter(agent="codex", done=False, profile="m4-pma")
+    )
+    assert errors == []
+    assert fm is not None
+    assert fm.profile == "m4-pma"
+
+
+def test_lint_ticket_frontmatter_profile_defaults_to_none() -> None:
+    fm, errors = lint_ticket_frontmatter(_ticket_frontmatter(agent="codex", done=False))
+    assert errors == []
+    assert fm is not None
+    assert fm.profile is None
+
+
+def test_lint_ticket_frontmatter_rejects_empty_profile() -> None:
+    fm, errors = lint_ticket_frontmatter(
+        _ticket_frontmatter(agent="codex", done=False, profile="  ")
+    )
+    assert fm is None
+    assert any("profile" in e for e in errors)
+
+
+def test_lint_ticket_frontmatter_rejects_non_string_profile() -> None:
+    fm, errors = lint_ticket_frontmatter(
+        _ticket_frontmatter(agent="codex", done=False, profile=42)
+    )
+    assert fm is None
+    assert any("profile" in e for e in errors)
+
+
+def test_lint_ticket_frontmatter_profile_not_in_extra() -> None:
+    fm, errors = lint_ticket_frontmatter(
+        _ticket_frontmatter(agent="codex", done=False, profile="m4-pma")
+    )
+    assert errors == []
+    assert fm is not None
+    assert "profile" not in fm.extra
+
+
 def test_lint_dispatch_frontmatter_defaults_notify_and_validates_mode() -> None:
     normalized, errors = lint_dispatch_frontmatter({})
     assert errors == []
