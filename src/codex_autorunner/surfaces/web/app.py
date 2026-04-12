@@ -38,6 +38,7 @@ from .middleware import (
 )
 from .routes.feedback_reports import build_feedback_report_routes
 from .routes.filebox import build_hub_filebox_routes
+from .routes.hub_control_plane import build_hub_control_plane_routes
 from .routes.hub_messages import build_hub_messages_routes
 from .routes.hub_repos import HubMountManager, build_hub_repo_routes
 from .routes.pma import build_pma_routes
@@ -151,6 +152,7 @@ def create_hub_app(
     app.include_router(build_feedback_report_routes())
     app.include_router(build_scm_webhook_routes())
     app.include_router(build_hub_filebox_routes())
+    app.include_router(build_hub_control_plane_routes())
 
     app.state.hub_started = False
     repo_server_overrides: Optional[ServerOverrides] = None

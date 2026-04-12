@@ -8,7 +8,12 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from .orchestration.sqlite import open_orchestration_sqlite
-from .text_utils import _json_dumps, _json_loads_object, _normalize_text
+from .text_utils import (
+    _json_dumps,
+    _json_loads_object,
+    _normalize_optional_text,
+    _normalize_text,
+)
 from .time_utils import now_iso
 
 
@@ -218,7 +223,7 @@ class PmaNotificationStore:
         self, *, delivery_record_id: str, delivered_message_id: Any
     ) -> Optional[NotificationConversation]:
         normalized_record_id = _normalize_text(delivery_record_id)
-        normalized_message_id = _normalize_text(delivered_message_id)
+        normalized_message_id = _normalize_optional_text(delivered_message_id)
         if normalized_record_id is None or normalized_message_id is None:
             return None
         timestamp = now_iso()
@@ -281,7 +286,7 @@ class PmaNotificationStore:
     ) -> Optional[NotificationConversation]:
         normalized_surface_kind = _normalize_text(surface_kind)
         normalized_surface_key = _normalize_text(surface_key)
-        normalized_message_id = _normalize_text(delivered_message_id)
+        normalized_message_id = _normalize_optional_text(delivered_message_id)
         if (
             normalized_surface_kind is None
             or normalized_surface_key is None

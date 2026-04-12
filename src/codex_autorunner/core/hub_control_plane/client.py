@@ -15,6 +15,7 @@ from .models import (
     NotificationDeliveryMarkRequest,
     NotificationLookupRequest,
     NotificationRecordResponse,
+    NotificationReplyTargetLookupRequest,
     SurfaceBindingLookupRequest,
     SurfaceBindingResponse,
     SurfaceBindingUpsertRequest,
@@ -38,6 +39,10 @@ class HubControlPlaneClient(Protocol):
 
     async def get_notification_record(
         self, request: NotificationLookupRequest
+    ) -> NotificationRecordResponse: ...
+
+    async def get_notification_reply_target(
+        self, request: NotificationReplyTargetLookupRequest
     ) -> NotificationRecordResponse: ...
 
     async def bind_notification_continuation(

@@ -10,6 +10,7 @@ HandshakeCompatibilityState = Literal["compatible", "incompatible"]
 ControlPlaneCapability = Literal[
     "compatibility_handshake",
     "notification_records",
+    "notification_reply_targets",
     "notification_continuations",
     "notification_delivery_ack",
     "surface_bindings",
@@ -30,6 +31,23 @@ def _normalize_optional_text(value: Any) -> str | None:
 
 def _normalize_required_text(value: Any, *, field_name: str) -> str:
     normalized = _normalize_optional_text(value)
+    if normalized is None:
+        raise ValueError(f"{field_name} is required")
+    return normalized
+
+
+def _normalize_optional_identifier(value: Any) -> str | None:
+    if isinstance(value, str):
+        normalized = value.strip()
+        return normalized or None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        normalized = str(value).strip()
+        return normalized or None
+    return None
+
+
+def _normalize_required_identifier(value: Any, *, field_name: str) -> str:
+    normalized = _normalize_optional_identifier(value)
     if normalized is None:
         raise ValueError(f"{field_name} is required")
     return normalized
@@ -355,6 +373,39 @@ class NotificationLookupRequest:
 
 
 @dataclass(frozen=True)
+class NotificationReplyTargetLookupRequest:
+    surface_kind: str
+    surface_key: str
+    delivered_message_id: str
+
+    @classmethod
+    def from_mapping(
+        cls, data: Mapping[str, Any]
+    ) -> "NotificationReplyTargetLookupRequest":
+        return cls(
+            surface_kind=_normalize_required_text(
+                data.get("surface_kind"),
+                field_name="surface_kind",
+            ),
+            surface_key=_normalize_required_text(
+                data.get("surface_key"),
+                field_name="surface_key",
+            ),
+            delivered_message_id=_normalize_required_identifier(
+                data.get("delivered_message_id"),
+                field_name="delivered_message_id",
+            ),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "surface_kind": self.surface_kind,
+            "surface_key": self.surface_key,
+            "delivered_message_id": self.delivered_message_id,
+        }
+
+
+@dataclass(frozen=True)
 class NotificationDeliveryMarkRequest:
     delivery_record_id: str
     delivered_message_id: str
@@ -366,7 +417,7 @@ class NotificationDeliveryMarkRequest:
                 data.get("delivery_record_id"),
                 field_name="delivery_record_id",
             ),
-            delivered_message_id=_normalize_required_text(
+            delivered_message_id=_normalize_required_identifier(
                 data.get("delivered_message_id"),
                 field_name="delivered_message_id",
             ),
@@ -925,6 +976,7 @@ __all__ = [
     "NotificationContinuationBindRequest",
     "NotificationDeliveryMarkRequest",
     "NotificationLookupRequest",
+    "NotificationReplyTargetLookupRequest",
     "NotificationRecord",
     "NotificationRecordResponse",
     "SurfaceBindingLookupRequest",

@@ -5,6 +5,7 @@ from .errors import (
     HubControlPlaneErrorInfo,
     default_retryable,
 )
+from .http_client import HttpHubControlPlaneClient
 from .models import (
     AgentWorkspaceDescriptor,
     AgentWorkspaceListRequest,
@@ -25,6 +26,7 @@ from .models import (
     NotificationLookupRequest,
     NotificationRecord,
     NotificationRecordResponse,
+    NotificationReplyTargetLookupRequest,
     SurfaceBindingLookupRequest,
     SurfaceBindingResponse,
     SurfaceBindingUpsertRequest,
@@ -40,6 +42,7 @@ from .models import (
     WorkspaceSetupCommandResult,
     evaluate_handshake_compatibility,
 )
+from .service import HubSharedStateService
 
 __all__ = [
     "AgentWorkspaceDescriptor",
@@ -57,14 +60,17 @@ __all__ = [
     "HandshakeRequest",
     "HandshakeResponse",
     "HubControlPlaneClient",
+    "HttpHubControlPlaneClient",
     "HubControlPlaneError",
     "HubControlPlaneErrorCode",
     "HubControlPlaneErrorInfo",
     "NotificationContinuationBindRequest",
     "NotificationDeliveryMarkRequest",
     "NotificationLookupRequest",
+    "NotificationReplyTargetLookupRequest",
     "NotificationRecord",
     "NotificationRecordResponse",
+    "HubSharedStateService",
     "SurfaceBindingLookupRequest",
     "SurfaceBindingResponse",
     "SurfaceBindingUpsertRequest",

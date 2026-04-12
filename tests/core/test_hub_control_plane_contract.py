@@ -6,7 +6,9 @@ from codex_autorunner.core.hub_control_plane import (
     HandshakeResponse,
     HubControlPlaneError,
     HubControlPlaneErrorInfo,
+    NotificationDeliveryMarkRequest,
     NotificationRecordResponse,
+    NotificationReplyTargetLookupRequest,
     ThreadTargetResponse,
     evaluate_handshake_compatibility,
 )
@@ -182,6 +184,32 @@ def test_notification_record_response_round_trip() -> None:
         "context": {"actor": "car"},
         "created_at": "2026-04-12T01:02:03Z",
         "updated_at": "2026-04-12T01:02:04Z",
+    }
+
+
+def test_notification_request_models_accept_numeric_message_ids() -> None:
+    reply_lookup = NotificationReplyTargetLookupRequest.from_mapping(
+        {
+            "surface_kind": "telegram",
+            "surface_key": "chat:1",
+            "delivered_message_id": 88,
+        }
+    )
+    delivery_mark = NotificationDeliveryMarkRequest.from_mapping(
+        {
+            "delivery_record_id": "delivery-1",
+            "delivered_message_id": 88,
+        }
+    )
+
+    assert reply_lookup.to_dict() == {
+        "surface_kind": "telegram",
+        "surface_key": "chat:1",
+        "delivered_message_id": "88",
+    }
+    assert delivery_mark.to_dict() == {
+        "delivery_record_id": "delivery-1",
+        "delivered_message_id": "88",
     }
 
 
