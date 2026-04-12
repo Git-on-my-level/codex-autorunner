@@ -1716,6 +1716,12 @@ async function bulkSetAgent(): Promise<void> {
     confirmText: "Set agent",
   });
   if (!agent) return;
+  const profile = await inputModal("Optional profile (e.g. Hermes profile). Leave blank for default.", {
+    placeholder: "m4-pma",
+    confirmText: "Apply",
+    allowEmpty: true,
+  });
+  if (profile === null) return;
   const range = await inputModal("Optional range (A:B). Leave blank for all tickets.", {
     placeholder: "1:20",
     confirmText: "Apply",
@@ -1723,6 +1729,7 @@ async function bulkSetAgent(): Promise<void> {
   });
   if (range === null) return;
   const rangeValue = range.trim() || undefined;
+  const profileValue = profile.trim() || undefined;
 
   setButtonLoading(bulkSetAgentBtn, true);
   try {
@@ -1730,6 +1737,7 @@ async function bulkSetAgent(): Promise<void> {
       method: "POST",
       body: {
         agent,
+        profile: profileValue,
         range: rangeValue,
       },
     })) as TicketBulkUpdateResponse;
@@ -1774,6 +1782,41 @@ async function bulkClearModel(): Promise<void> {
     flash((err as Error).message || "Failed to clear model overrides", "error");
   } finally {
     setButtonLoading(bulkClearModelBtn, false);
+  }
+}
+
+async function bulkCanonicalizeHermes(): Promise<void> {
+  const range = await inputModal("Optional range (A:B). Leave blank for all tickets.", {
+    placeholder: "1:20",
+    confirmText: "Canonicalize",
+    allowEmpty: true,
+  });
+  if (range === null) return;
+  const rangeValue = range.trim() || undefined;
+
+  const confirmed = await confirmModal(
+    rangeValue
+      ? `Canonicalize Hermes aliases for tickets ${rangeValue}?`
+      : "Canonicalize Hermes aliases for all tickets?",
+    { confirmText: "Canonicalize", cancelText: "Cancel" }
+  );
+  if (!confirmed) return;
+
+  const btn = document.getElementById("ticket-bulk-canonicalize-hermes") as HTMLButtonElement | null;
+  setButtonLoading(btn, true);
+  try {
+    const payload = (await api("/api/flows/ticket_flow/tickets/bulk-canonicalize-hermes", {
+      method: "POST",
+      body: {
+        range: rangeValue,
+      },
+    })) as TicketBulkUpdateResponse;
+    summarizeBulkResult("Canonicalize Hermes", payload);
+    await loadTicketFiles({ reason: "manual" });
+  } catch (err) {
+    flash((err as Error).message || "Failed to canonicalize Hermes agents", "error");
+  } finally {
+    setButtonLoading(btn, false);
   }
 }
 
@@ -2472,6 +2515,10 @@ export function initTicketFlow(): void {
   if (recoverBtn) recoverBtn.addEventListener("click", recoverTicketFlow);
   if (bulkSetAgentBtn) bulkSetAgentBtn.addEventListener("click", () => void bulkSetAgent());
   if (bulkClearModelBtn) bulkClearModelBtn.addEventListener("click", () => void bulkClearModel());
+  {
+    const btn = document.getElementById("ticket-bulk-canonicalize-hermes") as HTMLButtonElement | null;
+    if (btn) btn.addEventListener("click", () => void bulkCanonicalizeHermes());
+  }
   if (refreshBtn) refreshBtn.addEventListener("click", () => {
     void loadTicketFlow({ reason: "manual" });
   });

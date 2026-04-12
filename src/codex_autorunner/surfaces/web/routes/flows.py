@@ -57,7 +57,11 @@ from ....flows.ticket_flow import build_ticket_flow_definition
 from ....flows.ticket_flow.runtime_helpers import normalize_ticket_flow_input_data
 from ....integrations.agents.build_agent_pool import build_agent_pool
 from ....integrations.github.service import GitHubError, GitHubService
-from ....tickets.bulk import bulk_clear_model_pin, bulk_set_agent
+from ....tickets.bulk import (
+    bulk_canonicalize_hermes_agents,
+    bulk_clear_model_pin,
+    bulk_set_agent,
+)
 from ....tickets.files import (
     list_ticket_paths,
     parse_ticket_index,
@@ -1259,6 +1263,9 @@ You are the first ticket in a new ticket_flow run.
 
         title_line = f"title: {_quote(request.title)}\n" if request.title else ""
         goal_line = f"goal: {_quote(request.goal)}\n" if request.goal else ""
+        profile_line = (
+            f"profile: {_quote(request.profile)}\n" if request.profile else ""
+        )
         ticket_id = generate_ticket_id()
         ticket_id_line = f"ticket_id: {_quote(ticket_id)}\n"
 
@@ -1269,6 +1276,7 @@ You are the first ticket in a new ticket_flow run.
             f"{ticket_id_line}"
             f"{title_line}"
             f"{goal_line}"
+            f"{profile_line}"
             "---\n\n"
             f"{request.body}\n"
         )
@@ -1446,6 +1454,7 @@ You are the first ticket in a new ticket_flow run.
                 request.agent,
                 request.range,
                 repo_root=repo_root,
+                profile=request.profile,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from None
@@ -1469,6 +1478,35 @@ You are the first ticket in a new ticket_flow run.
         ticket_dir = repo_root / ".codex-autorunner" / "tickets"
         try:
             result = bulk_clear_model_pin(
+                ticket_dir,
+                request.range,
+                repo_root=repo_root,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+
+        lint_errors = _lint_after_ticket_update(ticket_dir)
+        status = "ok" if not result.errors and not lint_errors else "error"
+        return TicketBulkUpdateResponse(
+            status=status,
+            updated=result.updated,
+            skipped=result.skipped,
+            errors=result.errors,
+            lint_errors=lint_errors,
+        )
+
+    @router.post(
+        "/ticket_flow/tickets/bulk-canonicalize-hermes",
+        response_model=TicketBulkUpdateResponse,
+    )
+    async def bulk_canonicalize_hermes_route(
+        request: TicketBulkClearModelRequest,
+    ):
+        """Migrate legacy Hermes alias agents to canonical agent+profile form."""
+        repo_root = find_repo_root()
+        ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+        try:
+            result = bulk_canonicalize_hermes_agents(
                 ticket_dir,
                 request.range,
                 repo_root=repo_root,

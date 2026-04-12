@@ -893,6 +893,7 @@ class TicketCreateRequest(Payload):
     title: Optional[str] = None
     goal: Optional[str] = None
     body: str = ""
+    profile: Optional[str] = None
 
 
 class TicketUpdateRequest(Payload):
@@ -937,6 +938,7 @@ class TicketBulkSetAgentRequest(Payload):
     model_config = ConfigDict(extra="forbid")
 
     agent: str
+    profile: Optional[str] = None
     range: Optional[str] = None
 
 

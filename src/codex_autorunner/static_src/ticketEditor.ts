@@ -39,6 +39,7 @@ type FrontmatterState = {
   title: string;
   model: string;
   reasoning: string;
+  profile: string;
 };
 
 type EditorState = {
@@ -62,6 +63,7 @@ const DEFAULT_FRONTMATTER: FrontmatterState = {
   title: "",
   model: "",
   reasoning: "",
+  profile: "",
 };
 
 const state: EditorState = {
@@ -179,6 +181,7 @@ function els(): {
   fmAgent: HTMLSelectElement | null;
   fmModel: HTMLSelectElement | null;
   fmReasoning: HTMLSelectElement | null;
+  fmProfile: HTMLInputElement | null;
   fmDone: HTMLInputElement | null;
   fmTitle: HTMLInputElement | null;
   // Chat elements
@@ -212,6 +215,7 @@ function els(): {
     fmAgent: document.getElementById("ticket-fm-agent") as HTMLSelectElement | null,
     fmModel: document.getElementById("ticket-fm-model") as HTMLSelectElement | null,
     fmReasoning: document.getElementById("ticket-fm-reasoning") as HTMLSelectElement | null,
+    fmProfile: document.getElementById("ticket-fm-profile") as HTMLInputElement | null,
     fmDone: document.getElementById("ticket-fm-done") as HTMLInputElement | null,
     fmTitle: document.getElementById("ticket-fm-title") as HTMLInputElement | null,
     // Chat elements
@@ -376,7 +380,7 @@ function updateUndoButton(): void {
  * Get current frontmatter values from form fields
  */
 function getFrontmatterFromForm(): FrontmatterState {
-  const { fmAgent, fmModel, fmReasoning, fmDone, fmTitle } = els();
+  const { fmAgent, fmModel, fmReasoning, fmProfile, fmDone, fmTitle } = els();
   return {
     agent: fmAgent?.value || "codex",
     done: fmDone?.checked || false,
@@ -387,6 +391,7 @@ function getFrontmatterFromForm(): FrontmatterState {
     title: fmTitle?.value || "",
     model: fmModel?.value || "",
     reasoning: fmReasoning?.value || "",
+    profile: fmProfile?.value || "",
   };
 }
 
@@ -394,10 +399,11 @@ function getFrontmatterFromForm(): FrontmatterState {
  * Set frontmatter form fields from values
  */
 function setFrontmatterForm(fm: FrontmatterState): void {
-  const { fmAgent, fmModel, fmReasoning, fmDone, fmTitle } = els();
+  const { fmAgent, fmModel, fmReasoning, fmProfile, fmDone, fmTitle } = els();
   if (fmAgent) fmAgent.value = fm.agent;
   if (fmModel) fmModel.value = fm.model;
   if (fmReasoning) fmReasoning.value = fm.reasoning;
+  if (fmProfile) fmProfile.value = fm.profile;
   if (fmDone) fmDone.checked = fm.done;
   if (fmTitle) fmTitle.value = fm.title;
 }
@@ -418,6 +424,7 @@ function extractFrontmatter(ticket: TicketData): FrontmatterState {
     title: (fm.title as string) || "",
     model: (fm.model as string) || "",
     reasoning: (fm.reasoning as string) || "",
+    profile: (fm.profile as string) || "",
   };
 }
 
@@ -441,6 +448,7 @@ function buildTicketContent(): string {
   lines.push(`done: ${fm.done}`);
   if (fm.ticketId) lines.push(`ticket_id: ${yamlQuote(fm.ticketId)}`);
   if (fm.title) lines.push(`title: ${yamlQuote(fm.title)}`);
+  if (fm.profile) lines.push(`profile: ${yamlQuote(fm.profile)}`);
   if (fm.model) lines.push(`model: ${yamlQuote(fm.model)}`);
   if (fm.reasoning) lines.push(`reasoning: ${yamlQuote(fm.reasoning)}`);
 
@@ -558,7 +566,8 @@ function hasUnsavedChanges(): boolean {
     currentFm.ticketId !== state.lastSavedFrontmatter.ticketId ||
     currentFm.title !== state.lastSavedFrontmatter.title ||
     currentFm.model !== state.lastSavedFrontmatter.model ||
-    currentFm.reasoning !== state.lastSavedFrontmatter.reasoning
+    currentFm.reasoning !== state.lastSavedFrontmatter.reasoning ||
+    currentFm.profile !== state.lastSavedFrontmatter.profile
   );
 }
 
@@ -642,6 +651,7 @@ async function performAutosaveOnce(options: AutosaveOptions = {}): Promise<void>
           agent: fm.agent,
           title: fm.title || undefined,
           body: content.value,
+          profile: fm.profile || undefined,
         },
       }) as TicketData;
 
@@ -969,6 +979,7 @@ export function initTicketEditor(): void {
     fmAgent,
     fmModel,
     fmReasoning,
+    fmProfile,
     fmDone,
     fmTitle,
     chatInput,
@@ -1045,6 +1056,7 @@ export function initTicketEditor(): void {
   if (fmReasoning) fmReasoning.addEventListener("change", onFrontmatterChange);
   if (fmDone) fmDone.addEventListener("change", onFrontmatterChange);
   if (fmTitle) fmTitle.addEventListener("input", onFrontmatterChange);
+  if (fmProfile) fmProfile.addEventListener("input", onFrontmatterChange);
 
   // Chat button handlers
   if (chatSendBtn) chatSendBtn.addEventListener("click", () => void sendTicketChat());

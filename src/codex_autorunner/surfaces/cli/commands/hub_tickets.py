@@ -9,7 +9,11 @@ from ....core.config import HubConfig
 from ....core.hub import HubSupervisor
 from ....core.runtime import RuntimeContext
 from ....core.utils import atomic_write
-from ....tickets.bulk import bulk_clear_model_pin, bulk_set_agent
+from ....tickets.bulk import (
+    bulk_canonicalize_hermes_agents,
+    bulk_clear_model_pin,
+    bulk_set_agent,
+)
 from ....tickets.doctor import format_or_doctor_tickets
 from ....tickets.hub_pack import (
     TicketPackImportError,
@@ -243,12 +247,15 @@ def register_hub_tickets_commands(
     def hub_tickets_bulk_set(
         repo_id: str = typer.Option(..., "--repo", help="Hub repo id"),
         agent: str = typer.Option(..., "--agent", help="Agent id to set on tickets"),
+        profile: Optional[str] = typer.Option(
+            None, "--profile", help="Agent profile to set on tickets"
+        ),
         range_spec: Optional[str] = typer.Option(
             None, "--range", help="Range of ticket indices in the form A:B"
         ),
         hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
     ):
-        """Set `frontmatter.agent` for a ticket range."""
+        """Set `frontmatter.agent` (and optionally `profile`) for a ticket range."""
         config = require_hub_config_func(hub)
         repo_root = resolve_hub_repo_root(config, repo_id)
         ticket_dir = repo_root / ".codex-autorunner" / "tickets"
@@ -265,6 +272,7 @@ def register_hub_tickets_commands(
                 agent,
                 range_spec,
                 repo_root=repo_root,
+                profile=profile,
             )
         except ValueError as exc:
             raise_exit(str(exc), cause=exc)
@@ -318,6 +326,42 @@ def register_hub_tickets_commands(
 
         if result.errors or lint_errors:
             raise_exit("Ticket bulk update failed.")
+
+    @hub_tickets_app.command("canonicalize-hermes")
+    def hub_tickets_canonicalize_hermes(
+        repo_id: str = typer.Option(..., "--repo", help="Hub repo id"),
+        range_spec: Optional[str] = typer.Option(
+            None, "--range", help="Range of ticket indices in the form A:B"
+        ),
+        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+    ):
+        """Migrate legacy Hermes alias agents to canonical agent+profile form."""
+        config = require_hub_config_func(hub)
+        repo_root = resolve_hub_repo_root(config, repo_id)
+        ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+
+        try:
+            result = bulk_canonicalize_hermes_agents(
+                ticket_dir,
+                range_spec,
+                repo_root=repo_root,
+            )
+        except ValueError as exc:
+            raise_exit(str(exc), cause=exc)
+
+        lint_errors = validate_tickets(ticket_dir)
+        _print_ticket_bulk_report(
+            repo_id=repo_id,
+            ticket_dir=ticket_dir,
+            action="canonicalize-hermes",
+            updated=result.updated,
+            skipped=result.skipped,
+            errors=result.errors,
+            lint_errors=lint_errors,
+        )
+
+        if result.errors or lint_errors:
+            raise_exit("Ticket canonicalization failed.")
 
     @hub_tickets_app.command("fmt")
     def hub_tickets_fmt(

@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from ..agents.hermes_identity import canonicalize_hermes_identity
 from ..contextspace.paths import contextspace_doc_path
 from ..core.file_chat_keys import ticket_instance_token
 from ..core.flows.models import FlowEventType
@@ -363,7 +364,13 @@ class TicketRunner:
         ticket_doc = validation_result.validated.ticket_doc
         current_ticket_id = ticket_doc.frontmatter.ticket_id
         state["current_ticket_id"] = current_ticket_id
-        current_ticket_profile = normalize_profile(ticket_doc.frontmatter.profile)
+        raw_profile = normalize_profile(ticket_doc.frontmatter.profile)
+        canonical = canonicalize_hermes_identity(
+            ticket_doc.frontmatter.agent,
+            raw_profile,
+        )
+        current_ticket_profile = canonical.profile
+        canonical_agent_id = canonical.agent
         if previous_ticket_id and previous_ticket_id != current_ticket_id:
             clear_ticket_thread_binding(
                 state,
@@ -432,6 +439,10 @@ class TicketRunner:
         )
         turn_options = build_turn_options(ticket_doc=ticket_doc)
         turn_options["ticket_flow_run_id"] = self._run_id
+        turn_options["ticket_id"] = current_ticket_id
+        turn_options["ticket_path"] = current_ticket_path
+        if current_ticket_profile and "profile" not in turn_options:
+            turn_options["profile"] = current_ticket_profile
         total_turns, ticket_turns = increment_turn_counters(
             state=state,
             ticket_turns=ticket_turns,
@@ -445,7 +456,7 @@ class TicketRunner:
             state=state,
             ticket_id=current_ticket_id,
             ticket_path=current_ticket_path,
-            agent_id=ticket_doc.frontmatter.agent,
+            agent_id=canonical_agent_id,
             profile=current_ticket_profile,
             prompt=prompt,
             lint_retry_conversation_id=lint_retry_conversation_id,
@@ -511,7 +522,7 @@ class TicketRunner:
             result=result,
             ticket_id=current_ticket_id,
             ticket_path=current_ticket_path,
-            agent_id=ticket_doc.frontmatter.agent,
+            agent_id=canonical_agent_id,
             profile=current_ticket_profile,
             binding_decision=binding_decision,
         )
@@ -554,63 +565,20 @@ class TicketRunner:
             state["dispatch_seq"] = dispatch.seq
             state.pop("outbox_lint", None)
 
-        # Create turn summary record for the agent's final output.
-        # This appears in dispatch history as a distinct "turn summary" entry.
         turn_summary_seq = int(state.get("dispatch_seq") or 0) + 1
-
-        # Compute diff stats for this turn (changes since head_before_turn).
-        # This captures both committed and uncommitted changes made by the agent.
-        turn_diff_stats = None
-        try:
-            if head_before_turn:
-                # Compare current state (HEAD + working tree) against pre-turn commit
-                turn_diff_stats = git_diff_stats(
-                    self._workspace_root, from_ref=head_before_turn
-                )
-            else:
-                # No reference commit; show all uncommitted changes
-                turn_diff_stats = git_diff_stats(
-                    self._workspace_root, from_ref=None, include_staged=True
-                )
-        except (OSError, ValueError, RuntimeError):
-            # Best-effort; don't block on stats computation errors
-            turn_diff_stats = None
-
-        turn_summary, turn_summary_errors = create_turn_summary(
-            outbox_paths,
-            next_seq=turn_summary_seq,
-            agent_output=result.text or "",
-            ticket_id=dispatch_ticket_id,
-            agent_id=result.agent_id,
-            turn_number=total_turns,
-            diff_stats=turn_diff_stats,
+        self._record_turn_summary(
+            state=state,
+            outbox_paths=outbox_paths,
+            turn_summary_seq=turn_summary_seq,
+            result=result,
+            dispatch_ticket_id=dispatch_ticket_id,
+            total_turns=total_turns,
+            head_before_turn=head_before_turn,
+            current_ticket_id=current_ticket_id,
+            current_ticket_key=current_ticket_key,
+            current_ticket_path=current_ticket_path,
+            emit_event=emit_event,
         )
-        if turn_summary is not None:
-            state["dispatch_seq"] = turn_summary.seq
-
-            # Persist per-turn diff stats in FlowStore as a structured event
-            # instead of embedding them into DISPATCH.md metadata.
-            if emit_event is not None and isinstance(turn_diff_stats, dict):
-                try:
-                    emit_event(
-                        FlowEventType.DIFF_UPDATED,
-                        {
-                            "ticket_id": current_ticket_id,
-                            "ticket_key": current_ticket_key,
-                            "ticket_path": current_ticket_path,
-                            "dispatch_seq": turn_summary.seq,
-                            "insertions": int(turn_diff_stats.get("insertions") or 0),
-                            "deletions": int(turn_diff_stats.get("deletions") or 0),
-                            "files_changed": int(
-                                turn_diff_stats.get("files_changed") or 0
-                            ),
-                        },
-                    )
-                except (
-                    Exception
-                ):  # intentional: best-effort event emission via callback
-                    # Best-effort; do not block ticket execution on event emission.
-                    pass
 
         # Loop guard: if the same ticket runs with no repository state change for
         # LOOP_NO_CHANGE_THRESHOLD consecutive successful turns, pause and ask for
@@ -813,6 +781,64 @@ class TicketRunner:
 
     def _recheck_ticket_frontmatter(self, ticket_path: Path):
         return runner_post_turn.check_ticket_frontmatter(ticket_path=ticket_path)
+
+    def _record_turn_summary(
+        self,
+        *,
+        state: dict[str, Any],
+        outbox_paths: Any,
+        turn_summary_seq: int,
+        result: Any,
+        dispatch_ticket_id: str,
+        total_turns: int,
+        head_before_turn: Optional[str],
+        current_ticket_id: str,
+        current_ticket_key: str,
+        current_ticket_path: str,
+        emit_event: Optional[Callable[..., None]],
+    ) -> None:
+        turn_diff_stats: Optional[dict[str, Any]] = None
+        try:
+            if head_before_turn:
+                turn_diff_stats = git_diff_stats(
+                    self._workspace_root, from_ref=head_before_turn
+                )
+            else:
+                turn_diff_stats = git_diff_stats(
+                    self._workspace_root, from_ref=None, include_staged=True
+                )
+        except (OSError, ValueError, RuntimeError):
+            turn_diff_stats = None
+
+        turn_summary, _turn_summary_errors = create_turn_summary(
+            outbox_paths,
+            next_seq=turn_summary_seq,
+            agent_output=result.text or "",
+            ticket_id=dispatch_ticket_id,
+            agent_id=result.agent_id,
+            turn_number=total_turns,
+            diff_stats=turn_diff_stats,
+        )
+        if turn_summary is not None:
+            state["dispatch_seq"] = turn_summary.seq
+            if emit_event is not None and isinstance(turn_diff_stats, dict):
+                try:
+                    emit_event(
+                        FlowEventType.DIFF_UPDATED,
+                        {
+                            "ticket_id": current_ticket_id,
+                            "ticket_key": current_ticket_key,
+                            "ticket_path": current_ticket_path,
+                            "dispatch_seq": turn_summary.seq,
+                            "insertions": int(turn_diff_stats.get("insertions") or 0),
+                            "deletions": int(turn_diff_stats.get("deletions") or 0),
+                            "files_changed": int(
+                                turn_diff_stats.get("files_changed") or 0
+                            ),
+                        },
+                    )
+                except Exception:
+                    pass
 
     def _checkpoint_git(self, *, turn: int, agent: str) -> Optional[str]:
         """Create a best-effort git commit checkpoint.
