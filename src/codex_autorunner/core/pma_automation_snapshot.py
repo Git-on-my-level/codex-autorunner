@@ -8,6 +8,18 @@ from .hub import HubSupervisor
 _logger = logging.getLogger(__name__)
 
 
+def empty_automation_snapshot() -> dict[str, Any]:
+    return {
+        "subscriptions": {"active_count": 0, "sample": []},
+        "timers": {"pending_count": 0, "sample": []},
+        "wakeups": {
+            "pending_count": 0,
+            "dispatched_recent_count": 0,
+            "pending_sample": [],
+        },
+    }
+
+
 def _coerce_automation_items(payload: Any, *, key: str) -> list[dict[str, Any]]:
     if isinstance(payload, list):
         return [entry for entry in payload if isinstance(entry, dict)]
@@ -38,15 +50,7 @@ def _call_automation_list(
 def snapshot_pma_automation(
     supervisor: HubSupervisor, *, max_items: int = 10
 ) -> dict[str, Any]:
-    out = {
-        "subscriptions": {"active_count": 0, "sample": []},
-        "timers": {"pending_count": 0, "sample": []},
-        "wakeups": {
-            "pending_count": 0,
-            "dispatched_recent_count": 0,
-            "pending_sample": [],
-        },
-    }
+    out = empty_automation_snapshot()
     try:
         store = supervisor.pma_automation_store
     except (AttributeError, RuntimeError, TypeError):

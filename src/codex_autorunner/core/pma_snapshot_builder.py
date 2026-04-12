@@ -17,7 +17,7 @@ from .freshness import (
 )
 from .hub import HubSupervisor
 from .pma_action_queue import build_pma_action_queue
-from .pma_automation_snapshot import snapshot_pma_automation
+from .pma_automation_snapshot import empty_automation_snapshot, snapshot_pma_automation
 from .pma_context_shared import (
     PMA_MAX_MESSAGES,
     PMA_MAX_REPOS,
@@ -143,6 +143,30 @@ def _snapshot_pma_files(
     except (OSError, KeyError, TypeError, RuntimeError) as exc:
         _logger.warning("Could not list filebox contents: %s", exc)
     return pma_files, pma_files_detail
+
+
+def annotate_pma_files_detail(
+    pma_files_detail: dict[str, list[dict[str, Any]]],
+    *,
+    generated_at: str,
+    stale_threshold_seconds: int,
+) -> dict[str, list[dict[str, Any]]]:
+    annotated: dict[str, list[dict[str, Any]]] = {}
+    for box in BOXES:
+        entries = pma_files_detail.get(box) or []
+        annotated_entries: list[dict[str, Any]] = []
+        for entry in entries:
+            payload = dict(entry)
+            payload["freshness"] = build_freshness_payload(
+                generated_at=generated_at,
+                stale_threshold_seconds=stale_threshold_seconds,
+                candidates=[("file_modified_at", entry.get("modified_at"))],
+            )
+            if box == "inbox":
+                payload = enrich_pma_file_inbox_entry(payload)
+            annotated_entries.append(payload)
+        annotated[box] = annotated_entries
+    return annotated
 
 
 def _build_templates_snapshot(
@@ -371,26 +395,17 @@ def _collect_hub_local_artifacts(
     if hub_root is None:
         return pma_files, pma_files_detail, pma_threads, automation
 
-    pma_files, pma_files_detail = _snapshot_pma_files(hub_root)
-    pma_threads = snapshot_pma_threads(hub_root)
-    for thread in pma_threads:
-        thread["freshness"] = build_freshness_payload(
-            generated_at=generated_at,
-            stale_threshold_seconds=stale_threshold_seconds,
-            candidates=[
-                ("thread_status_changed_at", thread.get("status_changed_at")),
-                ("thread_updated_at", thread.get("updated_at")),
-            ],
-        )
-    for box in BOXES:
-        for index, entry in enumerate(pma_files_detail.get(box) or []):
-            entry["freshness"] = build_freshness_payload(
-                generated_at=generated_at,
-                stale_threshold_seconds=stale_threshold_seconds,
-                candidates=[("file_modified_at", entry.get("modified_at"))],
-            )
-            if box == "inbox":
-                pma_files_detail[box][index] = enrich_pma_file_inbox_entry(entry)
+    pma_files, raw_files_detail = _snapshot_pma_files(hub_root)
+    pma_files_detail = annotate_pma_files_detail(
+        raw_files_detail,
+        generated_at=generated_at,
+        stale_threshold_seconds=stale_threshold_seconds,
+    )
+    pma_threads = snapshot_pma_threads(
+        hub_root,
+        generated_at=generated_at,
+        stale_threshold_seconds=stale_threshold_seconds,
+    )
     return pma_files, pma_files_detail, pma_threads, automation
 
 
@@ -414,15 +429,7 @@ async def build_hub_snapshot_payload(
             "lifecycle_events": [],
             "pma_files_detail": empty_files,
             "pma_threads": [],
-            "automation": {
-                "subscriptions": {"active_count": 0, "sample": []},
-                "timers": {"pending_count": 0, "sample": []},
-                "wakeups": {
-                    "pending_count": 0,
-                    "dispatched_recent_count": 0,
-                    "pending_sample": [],
-                },
-            },
+            "automation": empty_automation_snapshot(),
             "freshness": _build_snapshot_freshness_summary(
                 generated_at=generated_at,
                 stale_threshold_seconds=stale_threshold_seconds,

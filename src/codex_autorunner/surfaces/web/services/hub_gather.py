@@ -11,10 +11,9 @@ from ....core.capability_hints import (
     build_hub_capability_hints,
     build_repo_capability_hints,
 )
-from ....core.filebox import BOXES, empty_listing
+from ....core.filebox import empty_listing
 from ....core.flows.workspace_root import resolve_ticket_flow_workspace_root
 from ....core.freshness import (
-    build_freshness_payload,
     iso_now,
     resolve_stale_threshold_seconds,
 )
@@ -30,8 +29,8 @@ from ....core.pma_context import (
     _snapshot_pma_automation,
     _snapshot_pma_files,
     _snapshot_pma_threads,
+    annotate_pma_files_detail,
     build_pma_action_queue,
-    enrich_pma_file_inbox_entry,
 )
 from ....core.pma_thread_store import default_pma_threads_db_path
 from ....tickets.files import safe_relpath
@@ -295,24 +294,6 @@ def _build_snapshot_settings(
     )
 
 
-def _serialize_pma_file_entry(
-    box: str,
-    entry: dict[str, Any],
-    *,
-    generated_at: str,
-    stale_threshold_seconds: int,
-) -> dict[str, Any]:
-    payload = dict(entry)
-    payload["freshness"] = build_freshness_payload(
-        generated_at=generated_at,
-        stale_threshold_seconds=stale_threshold_seconds,
-        candidates=[("file_modified_at", entry.get("modified_at"))],
-    )
-    if box == "inbox":
-        return enrich_pma_file_inbox_entry(payload)
-    return payload
-
-
 def _collect_pma_files_detail(
     hub_root: Path,
     *,
@@ -320,18 +301,11 @@ def _collect_pma_files_detail(
     stale_threshold_seconds: int,
 ) -> dict[str, list[dict[str, Any]]]:
     _, raw_listing = _snapshot_pma_files(hub_root)
-    return {
-        box: [
-            _serialize_pma_file_entry(
-                box,
-                entry,
-                generated_at=generated_at,
-                stale_threshold_seconds=stale_threshold_seconds,
-            )
-            for entry in raw_listing.get(box) or []
-        ]
-        for box in BOXES
-    }
+    return annotate_pma_files_detail(
+        raw_listing,
+        generated_at=generated_at,
+        stale_threshold_seconds=stale_threshold_seconds,
+    )
 
 
 def _collect_pma_threads(
@@ -340,20 +314,11 @@ def _collect_pma_threads(
     generated_at: str,
     stale_threshold_seconds: int,
 ) -> list[dict[str, Any]]:
-    return [
-        {
-            **thread,
-            "freshness": build_freshness_payload(
-                generated_at=generated_at,
-                stale_threshold_seconds=stale_threshold_seconds,
-                candidates=[
-                    ("thread_status_changed_at", thread.get("status_changed_at")),
-                    ("thread_updated_at", thread.get("updated_at")),
-                ],
-            ),
-        }
-        for thread in _snapshot_pma_threads(hub_root)
-    ]
+    return _snapshot_pma_threads(
+        hub_root,
+        generated_at=generated_at,
+        stale_threshold_seconds=stale_threshold_seconds,
+    )
 
 
 def _load_repo_message_context(

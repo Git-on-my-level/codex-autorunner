@@ -11,7 +11,12 @@ from .pma_active_context import (
     get_active_context_auto_prune_meta,
     maybe_auto_prune_active_context,
 )
-from .pma_automation_snapshot import snapshot_pma_automation as _snapshot_pma_automation
+from .pma_automation_snapshot import (
+    empty_automation_snapshot as _empty_automation_snapshot,
+)
+from .pma_automation_snapshot import (
+    snapshot_pma_automation as _snapshot_pma_automation,
+)
 from .pma_context_shared import (
     PMA_CONTEXT_LOG_TAIL_LINES,
     PMA_DOCS_MAX_CHARS,
@@ -44,6 +49,9 @@ from .pma_snapshot_builder import (
     _resolve_pma_freshness_threshold_seconds,
     _snapshot_pma_files,
     build_hub_snapshot_payload,
+)
+from .pma_snapshot_builder import (
+    annotate_pma_files_detail as annotate_pma_files_detail,
 )
 from .pma_thread_snapshot import snapshot_pma_threads as _snapshot_pma_threads
 from .pma_workspace_docs import load_pma_prompt, load_pma_workspace_docs
@@ -187,6 +195,7 @@ __all__ = [
     "_build_snapshot_freshness_summary",
     "_build_templates_snapshot",
     "_dispatch_is_actionable",
+    "_empty_automation_snapshot",
     "_gather_inbox",
     "_latest_dispatch",
     "_latest_reply_history_seq",
@@ -201,6 +210,7 @@ __all__ = [
     "_ticket_flow_inbox_item_type_and_next_action",
     "_trim_extra",
     "_truncate",
+    "annotate_pma_files_detail",
     "build_hub_snapshot",
     "build_hub_snapshot_payload",
     "build_pma_action_queue",
