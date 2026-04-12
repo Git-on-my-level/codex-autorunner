@@ -1556,3 +1556,57 @@ async def test_message_delta_uses_cached_part_type_for_reasoning() -> None:
 
     assert events == []
     assert state.assistant_stream_text == ""
+
+
+# ---------------------------------------------------------------------------
+# TICKET-028: Shared lifecycle snapshot drives completion detection
+# ---------------------------------------------------------------------------
+
+
+async def test_ticket028_completion_detection_uses_acp_lifecycle_snapshot() -> None:
+    from codex_autorunner.core.acp_lifecycle import analyze_acp_lifecycle_message
+
+    cases = [
+        (
+            {"method": "prompt/completed", "params": {"status": "completed"}},
+            True,
+        ),
+        (
+            {"method": "turn/completed", "params": {"status": "completed"}},
+            True,
+        ),
+        (
+            {"method": "prompt/completed", "params": {}},
+            True,
+        ),
+        (
+            {"method": "turn/completed", "params": {"status": "failed"}},
+            False,
+        ),
+        (
+            {"method": "prompt/cancelled", "params": {}},
+            False,
+        ),
+        (
+            {"method": "session.idle", "params": {}},
+            True,
+        ),
+        (
+            {"method": "session.status", "params": {"status": {"type": "idle"}}},
+            True,
+        ),
+        (
+            {"method": "session.status", "params": {"status": {"type": "running"}}},
+            False,
+        ),
+    ]
+    for raw, expected_completed in cases:
+        snapshot = analyze_acp_lifecycle_message(raw)
+        state = RuntimeThreadRunEventState()
+        await normalize_runtime_thread_raw_event(raw, state)
+        assert state.completed_seen == expected_completed, (
+            f"{raw['method']} with {raw['params']}: "
+            f"expected completed_seen={expected_completed}, "
+            f"runtime_terminal_status={snapshot.runtime_terminal_status}, "
+            f"got completed_seen={state.completed_seen}"
+        )
