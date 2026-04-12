@@ -14,7 +14,11 @@ from ...agents.base import (
     harness_progress_event_stream,
     harness_supports_progress_event_stream,
 )
-from ...agents.registry import get_registered_agents
+from ...agents.registry import (
+    get_registered_agents,
+    resolve_agent_runtime,
+    wrap_requested_agent_context,
+)
 from ...core.flows.models import FlowEventType
 from ...core.orchestration import (
     MessageRequest,
@@ -274,11 +278,24 @@ class DefaultAgentPool:
         )
         harness_context = self._get_harness_context()
 
-        def _make_harness(agent_id: str) -> Any:
-            descriptor = descriptors.get(agent_id)
+        def _make_harness(agent_id: str, profile: Optional[str] = None) -> Any:
+            resolution = resolve_agent_runtime(
+                agent_id,
+                profile,
+                context=harness_context,
+            )
+            descriptor = descriptors.get(resolution.runtime_agent_id)
             if descriptor is None:
-                raise KeyError(f"Unknown agent definition '{agent_id}'")
-            return descriptor.make_harness(harness_context)
+                raise KeyError(
+                    f"Unknown agent definition '{resolution.runtime_agent_id}'"
+                )
+            return descriptor.make_harness(
+                wrap_requested_agent_context(
+                    harness_context,
+                    agent_id=resolution.runtime_agent_id,
+                    profile=resolution.runtime_profile,
+                )
+            )
 
         self._orchestration_service = build_harness_backed_orchestration_service(
             descriptors=cast(Any, descriptors),
@@ -907,6 +924,7 @@ class DefaultAgentPool:
     async def run_turn(self, req: AgentTurnRequest) -> AgentTurnResult:
         agent_id = self._resolve_ticket_flow_agent_id(req.agent_id)
         options = req.options if isinstance(req.options, dict) else {}
+        agent_profile = _normalize_optional_text(options.get("profile"))
         model = _normalize_model(options.get("model"))
         reasoning = (
             options.get("reasoning")
@@ -929,25 +947,33 @@ class DefaultAgentPool:
         state = self._ticket_flow_runner_state()
         service = self._get_orchestration_service()
         ticket_flow_run_id = _normalize_optional_text(options.get("ticket_flow_run_id"))
+        ticket_id = _normalize_optional_text(options.get("ticket_id"))
+        ticket_path = _normalize_optional_text(options.get("ticket_path"))
+        display_name = f"ticket-flow:{agent_id}"
+        if agent_profile:
+            display_name = f"{display_name}@{agent_profile}"
         thread = service.resolve_thread_target(
             thread_target_id=_normalize_optional_text(req.conversation_id),
             agent_id=agent_id,
             workspace_root=req.workspace_root.resolve(),
             repo_id=self._repo_id,
-            display_name=f"ticket-flow:{agent_id}",
+            display_name=display_name,
             backend_thread_id=None,
             metadata={
+                "agent_profile": agent_profile,
                 "thread_kind": "ticket_flow",
                 "flow_type": "ticket_flow",
                 "run_id": ticket_flow_run_id,
+                "ticket_id": ticket_id,
+                "ticket_path": ticket_path,
             },
         )
-        harness = service.harness_factory(thread.agent_id)
         request = MessageRequest(
             target_id=thread.thread_target_id,
             target_kind="thread",
             message_text=prompt,
             busy_policy="queue",
+            agent_profile=agent_profile,
             model=model,
             reasoning=reasoning,
             approval_mode=state.autorunner_approval_policy,
@@ -956,7 +982,6 @@ class DefaultAgentPool:
         execution = await service.send_message(
             request,
             sandbox_policy=state.autorunner_sandbox_mode,
-            harness=harness,
         )
         execution_id = execution.execution_id
         future: asyncio.Future[AgentTurnResult] = (
@@ -969,6 +994,10 @@ class DefaultAgentPool:
             refreshed_thread = service.get_thread_target(thread.thread_target_id)
             if refreshed_thread is None or not refreshed_thread.workspace_root:
                 raise RuntimeError("Thread target is missing workspace_root")
+            harness = service.harness_factory(
+                refreshed_thread.agent_id,
+                refreshed_thread.agent_profile,
+            )
             await self._ensure_thread_worker(
                 thread.thread_target_id,
                 initial=RuntimeThreadExecution(

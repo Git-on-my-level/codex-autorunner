@@ -61,6 +61,8 @@ def load_previous_ticket_content(
 
 def build_turn_options(*, ticket_doc) -> dict[str, Any]:
     turn_options: dict[str, Any] = {}
+    if ticket_doc.frontmatter.profile:
+        turn_options["profile"] = ticket_doc.frontmatter.profile
     if ticket_doc.frontmatter.model:
         turn_options["model"] = ticket_doc.frontmatter.model
     if ticket_doc.frontmatter.reasoning:
