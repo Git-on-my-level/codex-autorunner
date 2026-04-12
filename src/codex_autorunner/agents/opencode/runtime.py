@@ -25,23 +25,16 @@ from typing import (
 
 import httpx
 
-from ...core.coercion import coerce_int
 from ...core.logging_utils import log_event
 from ...core.sse import SSEEvent
 from ...core.utils import resolve_opencode_auth_path
-from .constants import OPENCODE_MODEL_CONTEXT_KEYS
-from .event_fields import (
-    extract_message_id as extract_event_message_id,
-)
-from .event_fields import (
-    extract_message_role as extract_event_message_role,
-)
 from .event_fields import (
     extract_part_id as extract_event_part_id,
 )
 from .event_fields import (
     extract_part_message_id as extract_event_part_message_id,
 )
+from .output_assembly import OutputAssembler
 from .protocol_payload import (
     OPENCODE_PERMISSION_REJECT,
     PERMISSION_ALLOW,
@@ -50,21 +43,15 @@ from .protocol_payload import (
     OpenCodeMessageResult,
     auto_answers_for_questions,
     build_turn_id,
-    extract_context_window,
     extract_error_text,
     extract_message_phase,
-    extract_model_ids,
     extract_permission_request,
     extract_question_request,
     extract_session_id,
     extract_status_type,
-    extract_total_tokens,
     extract_turn_id,
-    extract_usage_details,
-    extract_visible_message_text,
     format_permission_prompt,
     map_approval_policy_to_permission,
-    normalize_message_phase,
     normalize_permission_decision,
     normalize_question_answers,
     normalize_question_policy,
@@ -81,7 +68,6 @@ from .stream_lifecycle import (
     LifecycleAction,
     StreamLifecycleController,
 )
-from .usage_decoder import extract_usage
 
 PermissionDecision = str
 PermissionHandler = Callable[[str, dict[str, Any]], Awaitable[PermissionDecision]]
@@ -97,17 +83,11 @@ class OpenCodeTurnOutput:
 
 
 _extract_error_text = extract_error_text
-_extract_visible_message_text = extract_visible_message_text
 _extract_message_phase = extract_message_phase
 _extract_permission_request = extract_permission_request
 _extract_question_request = extract_question_request
-_extract_model_ids = extract_model_ids
-_extract_total_tokens = extract_total_tokens
-_extract_usage_details = extract_usage_details
-_extract_context_window = extract_context_window
 _extract_status_type = extract_status_type
 _status_is_idle = status_is_idle
-_normalize_message_phase = normalize_message_phase
 _normalize_question_policy = normalize_question_policy
 _normalize_permission_decision = normalize_permission_decision
 _permission_policy_reply = permission_policy_reply
@@ -263,258 +243,22 @@ async def collect_opencode_output_from_events(
     ] = _OPENCODE_FIRST_EVENT_TIMEOUT_SECONDS,
     logger: Optional[logging.Logger] = None,
 ) -> OpenCodeTurnOutput:
-    text_parts: list[str] = []
-    part_lengths: dict[str, int] = {}
-    last_full_text = ""
-    error: Optional[str] = None
-    message_roles: dict[str, str] = {}
-    message_roles_seen = False
-    pending_text: dict[str, list[str]] = {}
-    pending_no_id: list[str] = []
-    no_id_role: Optional[str] = None
-    fallback_message: Optional[tuple[Optional[str], Optional[str], str]] = None
-    last_completed_assistant_text: Optional[str] = None
-    last_usage_signature: Optional[
-        tuple[
-            Optional[str],
-            Optional[str],
-            Optional[int],
-            Optional[int],
-            Optional[int],
-            Optional[int],
-            Optional[int],
-            Optional[int],
-        ]
-    ] = None
-    latest_usage_snapshot: Optional[dict[str, Any]] = None
-    part_types: dict[str, str] = {}
     seen_question_request_ids: set[tuple[Optional[str], str]] = set()
     logged_permission_errors: set[str] = set()
     normalized_question_policy = _normalize_question_policy(question_policy)
     if logger is None:
         logger = logging.getLogger(__name__)
-    providers_cache: Optional[list[dict[str, Any]]] = None
-    context_window_cache: dict[str, Optional[int]] = {}
-    session_model_ids: Optional[tuple[Optional[str], Optional[str]]] = None
-    default_model_ids = (
-        _extract_model_ids(model_payload) if isinstance(model_payload, dict) else None
+
+    assembler = OutputAssembler(
+        session_id=session_id,
+        prompt=prompt,
+        model_payload=model_payload,
+        session_fetcher=session_fetcher,
+        provider_fetcher=provider_fetcher,
+        messages_fetcher=messages_fetcher,
+        part_handler=part_handler,
+        logger=logger,
     )
-
-    def _register_message_role(payload: Any) -> tuple[Optional[str], Optional[str]]:
-        nonlocal message_roles_seen
-        if not isinstance(payload, dict):
-            return None, None
-        role = extract_event_message_role(payload)
-        msg_id = extract_event_message_id(payload)
-        if isinstance(role, str) and msg_id:
-            message_roles[msg_id] = role
-            message_roles_seen = True
-        return msg_id, role
-
-    def _flush_pending_no_id_as_assistant() -> None:
-        nonlocal no_id_role
-        if pending_no_id:
-            text_parts.extend(pending_no_id)
-            pending_no_id.clear()
-        no_id_role = "assistant"
-
-    def _discard_pending_no_id() -> None:
-        if pending_no_id:
-            pending_no_id.clear()
-
-    def _append_text_for_message(message_id: Optional[str], text: str) -> None:
-        if not text:
-            return
-        if message_id is None:
-            if no_id_role == "assistant":
-                text_parts.append(text)
-            else:
-                pending_no_id.append(text)
-            return
-        role = message_roles.get(message_id)
-        if role == "user":
-            return
-        if role == "assistant":
-            text_parts.append(text)
-            return
-        pending_text.setdefault(message_id, []).append(text)
-
-    def _flush_pending_text(message_id: Optional[str]) -> None:
-        if not message_id:
-            return
-        role = message_roles.get(message_id)
-        if role != "assistant":
-            pending_text.pop(message_id, None)
-            return
-        pending = pending_text.pop(message_id, [])
-        if pending:
-            text_parts.extend(pending)
-
-    def _flush_all_pending_text() -> None:
-        if pending_text:
-            for pending in list(pending_text.values()):
-                if pending:
-                    text_parts.extend(pending)
-            pending_text.clear()
-        if pending_no_id:
-            # If we have not seen a role yet, assume assistant for backwards
-            # compatibility with providers that omit roles entirely. Otherwise,
-            # only flush when we have already classified no-id text as assistant
-            # or when we have no other text (to avoid echoing user prompts).
-            if not message_roles_seen or no_id_role == "assistant" or not text_parts:
-                text_parts.extend(pending_no_id)
-            pending_no_id.clear()
-
-    def _handle_role_update(message_id: Optional[str], role: Optional[str]) -> None:
-        nonlocal no_id_role
-        if not role:
-            return
-        if role == "assistant":
-            _flush_pending_text(message_id)
-            _flush_pending_no_id_as_assistant()
-            return
-        if role == "user":
-            _flush_pending_text(message_id)
-            _discard_pending_no_id()
-            no_id_role = None
-
-    async def _resolve_session_model_ids() -> tuple[Optional[str], Optional[str]]:
-        nonlocal session_model_ids
-        if session_model_ids is not None:
-            return session_model_ids
-        resolved_ids: Optional[tuple[Optional[str], Optional[str]]] = None
-        if session_fetcher is not None:
-            try:
-                payload = await session_fetcher()
-                resolved_ids = _extract_model_ids(payload)
-            except (httpx.HTTPError, ValueError, OSError):
-                resolved_ids = None
-        # If we failed to resolve model ids from the session (including the empty
-        # tuple case), fall back to the caller-provided model payload so we can
-        # still backfill usage metadata.
-        if not resolved_ids or all(value is None for value in resolved_ids):
-            resolved_ids = default_model_ids
-        session_model_ids = resolved_ids or (None, None)
-        return session_model_ids
-
-    async def _resolve_context_window_from_providers(
-        provider_id: Optional[str], model_id: Optional[str]
-    ) -> Optional[int]:
-        nonlocal providers_cache
-        if not provider_id or not model_id:
-            return None
-        cache_key = f"{provider_id}/{model_id}"
-        if cache_key in context_window_cache:
-            return context_window_cache[cache_key]
-        if provider_fetcher is None:
-            context_window_cache[cache_key] = None
-            return None
-        if providers_cache is None:
-            try:
-                payload = await provider_fetcher()
-            except (httpx.HTTPError, ValueError, OSError):
-                context_window_cache[cache_key] = None
-                return None
-            providers: list[dict[str, Any]] = []
-            if isinstance(payload, dict):
-                raw_providers = payload.get("providers")
-                if isinstance(raw_providers, list):
-                    providers = [
-                        entry for entry in raw_providers if isinstance(entry, dict)
-                    ]
-            elif isinstance(payload, list):
-                providers = [entry for entry in payload if isinstance(entry, dict)]
-            providers_cache = providers
-        context_window = None
-        for provider in providers_cache or []:
-            pid = provider.get("id") or provider.get("providerID")
-            if pid != provider_id:
-                continue
-            models = provider.get("models")
-            model_entry = None
-            if isinstance(models, dict):
-                candidate = models.get(model_id)
-                if isinstance(candidate, dict):
-                    model_entry = candidate
-            elif isinstance(models, list):
-                for entry in models:
-                    if not isinstance(entry, dict):
-                        continue
-                    entry_id = entry.get("id") or entry.get("modelID")
-                    if entry_id == model_id:
-                        model_entry = entry
-                        break
-            if isinstance(model_entry, dict):
-                limit = model_entry.get("limit") or model_entry.get("limits")
-                if isinstance(limit, dict):
-                    for key in OPENCODE_MODEL_CONTEXT_KEYS:
-                        value = coerce_int(limit.get(key))
-                        if value is not None and value > 0:
-                            context_window = value
-                            break
-                if context_window is None:
-                    for key in OPENCODE_MODEL_CONTEXT_KEYS:
-                        value = coerce_int(model_entry.get(key))
-                        if value is not None and value > 0:
-                            context_window = value
-                            break
-            if context_window is None:
-                limit = provider.get("limit") or provider.get("limits")
-                if isinstance(limit, dict):
-                    for key in OPENCODE_MODEL_CONTEXT_KEYS:
-                        value = coerce_int(limit.get(key))
-                        if value is not None and value > 0:
-                            context_window = value
-                            break
-            break
-        context_window_cache[cache_key] = context_window
-        return context_window
-
-    async def _emit_usage_update(payload: Any, *, is_primary_session: bool) -> None:
-        nonlocal last_usage_signature, latest_usage_snapshot
-        if not is_primary_session:
-            return
-        usage = extract_usage(payload)
-        if usage is None:
-            return
-        provider_id, model_id = _extract_model_ids(payload)
-        if not provider_id or not model_id:
-            provider_id, model_id = await _resolve_session_model_ids()
-        total_tokens = _extract_total_tokens(usage)
-        context_window = _extract_context_window(payload, usage)
-        if context_window is None:
-            context_window = await _resolve_context_window_from_providers(
-                provider_id, model_id
-            )
-        usage_details = _extract_usage_details(usage)
-        usage_signature = (
-            provider_id,
-            model_id,
-            total_tokens,
-            usage_details.get("inputTokens"),
-            usage_details.get("cachedInputTokens"),
-            usage_details.get("outputTokens"),
-            usage_details.get("reasoningTokens"),
-            context_window,
-        )
-        if usage_signature == last_usage_signature:
-            return
-        last_usage_signature = usage_signature
-        usage_snapshot: dict[str, Any] = {}
-        if provider_id:
-            usage_snapshot["providerID"] = provider_id
-        if model_id:
-            usage_snapshot["modelID"] = model_id
-        if total_tokens is not None:
-            usage_snapshot["totalTokens"] = total_tokens
-        if usage_details:
-            usage_snapshot.update(usage_details)
-        if context_window is not None:
-            usage_snapshot["modelContextWindow"] = context_window
-        if usage_snapshot:
-            latest_usage_snapshot = dict(usage_snapshot)
-            if part_handler is not None:
-                await part_handler("usage", usage_snapshot, None)
 
     lifecycle = StreamLifecycleController(
         session_id=session_id,
@@ -559,12 +303,12 @@ async def collect_opencode_output_from_events(
                 decision = await lifecycle.on_timeout_error(now=now)
                 if (
                     decision.should_flush_if_pending
-                    and not text_parts
-                    and (pending_text or pending_no_id)
+                    and not assembler.has_text
+                    and assembler.has_pending_text
                 ):
-                    _flush_all_pending_text()
+                    assembler.flush_pending()
                 if decision.error is not None:
-                    error = decision.error
+                    assembler.error = decision.error
                 if decision.action == LifecycleAction.BREAK:
                     break
                 continue
@@ -584,12 +328,12 @@ async def collect_opencode_output_from_events(
                 decision = await lifecycle.on_irrelevant_event(now=now)
                 if (
                     decision.should_flush_if_pending
-                    and not text_parts
-                    and (pending_text or pending_no_id)
+                    and not assembler.has_text
+                    and assembler.has_pending_text
                 ):
-                    _flush_all_pending_text()
+                    assembler.flush_pending()
                 if decision.error is not None:
-                    error = decision.error
+                    assembler.error = decision.error
                 if decision.action == LifecycleAction.BREAK:
                     break
                 continue
@@ -767,11 +511,12 @@ async def collect_opencode_output_from_events(
                             )
                         if is_primary_session:
                             detail = body_preview or _extract_error_text(payload)
-                            error = "OpenCode permission reply failed"
+                            perm_error = "OpenCode permission reply failed"
                             if status_code is not None:
-                                error = f"{error} ({status_code})"
+                                perm_error = f"{perm_error} ({status_code})"
                             if detail:
-                                error = f"{error}: {detail}"
+                                perm_error = f"{perm_error}: {detail}"
+                            assembler.error = perm_error
                             break
             if event.event == "session.error":
                 error_text = _extract_error_text(payload) or "OpenCode session error"
@@ -785,13 +530,13 @@ async def collect_opencode_output_from_events(
                     is_primary=is_primary_session,
                 )
                 if is_primary_session:
-                    error = error_text
+                    assembler.error = error_text
                     break
                 continue
             if event.event in ("message.updated", "message.completed"):
                 if is_primary_session:
-                    msg_id, role = _register_message_role(payload)
-                    _handle_role_update(msg_id, role)
+                    msg_id, role = assembler.on_register_message_role(payload)
+                    assembler.on_handle_role_update(msg_id, role)
             if event.event in ("message.part.updated", "message.part.delta"):
                 properties = (
                     payload.get("properties") if isinstance(payload, dict) else None
@@ -811,32 +556,24 @@ async def collect_opencode_output_from_events(
                 part_ignored = bool(part_dict.get("ignored")) if part_dict else False
                 part_message_id = extract_event_part_message_id(payload)
                 part_id = extract_event_part_id(payload)
-                if (
-                    isinstance(part_id, str)
-                    and part_id
-                    and isinstance(part_type, str)
-                    and part_type
-                ):
-                    part_types[part_id] = part_type
-                elif (
-                    isinstance(part_id, str)
-                    and part_id
-                    and not isinstance(part_type, str)
-                    and part_id in part_types
-                ):
-                    part_type = part_types[part_id]
+                assembler.remember_part_type(part_id, part_type)
+                resolved_part_type = (
+                    part_type
+                    if isinstance(part_type, str)
+                    else assembler.lookup_part_type(part_id)
+                )
                 if part_with_session is None and (
                     isinstance(part_id, str)
                     or isinstance(part_message_id, str)
-                    or isinstance(part_type, str)
+                    or isinstance(resolved_part_type, str)
                 ):
                     part_with_session = {"sessionID": event_session_id}
                     if isinstance(part_id, str) and part_id:
                         part_with_session["id"] = part_id
                     if isinstance(part_message_id, str) and part_message_id:
                         part_with_session["messageID"] = part_message_id
-                    if isinstance(part_type, str) and part_type:
-                        part_with_session["type"] = part_type
+                    if isinstance(resolved_part_type, str) and resolved_part_type:
+                        part_with_session["type"] = resolved_part_type
                 if isinstance(delta, dict):
                     delta_text = delta.get("text")
                 elif isinstance(delta, str):
@@ -844,177 +581,88 @@ async def collect_opencode_output_from_events(
                 else:
                     delta_text = None
                 if isinstance(delta_text, str) and delta_text:
-                    if part_type == "reasoning":
+                    if resolved_part_type == "reasoning":
                         if part_handler and part_with_session:
                             await part_handler(
                                 "reasoning", part_with_session, delta_text
                             )
-                    elif part_type in (None, "text") and not part_ignored:
+                    elif resolved_part_type in (None, "text") and not part_ignored:
                         if not is_primary_session:
                             continue
-                        _append_text_for_message(part_message_id, delta_text)
-                        # Update dedupe bookkeeping for text deltas to prevent re-adding later
-                        if isinstance(part_id, str) and part_id:
-                            if isinstance(part_dict, dict):
-                                text = part_dict.get("text")
-                                if isinstance(text, str):
-                                    part_lengths[part_id] = len(text)
-                                else:
-                                    part_lengths[part_id] = part_lengths.get(
-                                        part_id, 0
-                                    ) + len(delta_text)
-                            else:
-                                part_lengths[part_id] = part_lengths.get(
-                                    part_id, 0
-                                ) + len(delta_text)
-                        elif isinstance(part_dict, dict):
-                            text = part_dict.get("text")
-                            if isinstance(text, str):
-                                last_full_text = text
+                        await assembler.on_text_delta(
+                            part_message_id=part_message_id,
+                            delta_text=delta_text,
+                            part_id=part_id,
+                            part_dict=part_dict,
+                        )
                         if part_handler and part_with_session:
                             await part_handler("text", part_with_session, delta_text)
-                    elif part_handler and part_with_session and part_type:
-                        await part_handler(part_type, part_with_session, delta_text)
+                    elif part_handler and part_with_session and resolved_part_type:
+                        await part_handler(
+                            resolved_part_type, part_with_session, delta_text
+                        )
                 elif (
                     isinstance(part_dict, dict)
-                    and part_type in (None, "text")
+                    and resolved_part_type in (None, "text")
                     and not part_ignored
                 ):
                     if not is_primary_session:
                         continue
-                    text = part_dict.get("text")
-                    if isinstance(text, str) and text:
-                        part_id = part_dict.get("id") or part_dict.get("partId")
-                        if isinstance(part_id, str) and part_id:
-                            last_len = part_lengths.get(part_id, 0)
-                            if len(text) > last_len:
-                                _append_text_for_message(
-                                    part_message_id, text[last_len:]
-                                )
-                                part_lengths[part_id] = len(text)
-                        else:
-                            if last_full_text and text.startswith(last_full_text):
-                                _append_text_for_message(
-                                    part_message_id, text[len(last_full_text) :]
-                                )
-                            elif text != last_full_text:
-                                _append_text_for_message(part_message_id, text)
-                            last_full_text = text
-                elif part_handler and part_with_session and part_type:
-                    await part_handler(part_type, part_with_session, None)
-                if part_type != "usage":
-                    await _emit_usage_update(
+                    await assembler.on_full_text_part(
+                        part_message_id=part_message_id,
+                        part_dict=part_dict,
+                    )
+                elif part_handler and part_with_session and resolved_part_type:
+                    await part_handler(resolved_part_type, part_with_session, None)
+                if resolved_part_type != "usage":
+                    await assembler.emit_usage_update(
                         payload, is_primary_session=is_primary_session
                     )
             message_role: Optional[str] = None
             if event.event in ("message.completed", "message.updated"):
-                message_result = parse_message_response(payload)
-                msg_id = None
-                role = None
-                if is_primary_session:
-                    msg_id, role = _register_message_role(payload)
-                    resolved_role = role
-                    if resolved_role is None and msg_id:
-                        resolved_role = message_roles.get(msg_id)
-                    message_role = resolved_role
-                    if message_result.text:
-                        if resolved_role == "assistant" or resolved_role is None:
-                            fallback_message = (
-                                msg_id,
-                                resolved_role,
-                                message_result.text,
-                            )
-                            if resolved_role is None:
-                                log_event(
-                                    logger,
-                                    logging.DEBUG,
-                                    "opencode.message.completed.role_missing",
-                                    session_id=event_session_id,
-                                    message_id=msg_id,
-                                )
-                        else:
-                            log_event(
-                                logger,
-                                logging.DEBUG,
-                                "opencode.message.completed.ignored",
-                                session_id=event_session_id,
-                                message_id=msg_id,
-                                role=resolved_role,
-                            )
-                    if message_result.error and not error:
-                        error = message_result.error
-                await _emit_usage_update(payload, is_primary_session=is_primary_session)
-            if (
-                event.event == "message.completed"
-                and is_primary_session
-                and message_role == "assistant"
-                and _extract_message_phase(payload) != "commentary"
-            ):
-                lifecycle.on_primary_completion()
-                last_completed_assistant_text = (
-                    message_result.text if message_result.text else None
+                message_role = assembler.on_message_completed(
+                    payload,
+                    is_primary_session=is_primary_session,
+                    event_session_id=event_session_id,
                 )
+                await assembler.emit_usage_update(
+                    payload, is_primary_session=is_primary_session
+                )
+            if event.event == "message.completed" and is_primary_session:
+                assembler.on_primary_assistant_completion(payload, message_role)
+                if (
+                    message_role == "assistant"
+                    and _extract_message_phase(payload) != "commentary"
+                ):
+                    lifecycle.on_primary_completion()
             if event.event == "session.idle" or (
                 event.event == "session.status"
                 and _status_is_idle(_extract_status_type(payload))
             ):
                 if event_session_id != session_id:
                     continue
-                if not text_parts and (pending_text or pending_no_id):
-                    _flush_all_pending_text()
+                if not assembler.has_text and assembler.has_pending_text:
+                    assembler.flush_pending()
                 break
             grace_decision = lifecycle.check_grace_elapsed()
             if grace_decision is not None:
                 if (
                     grace_decision.should_flush_if_pending
-                    and not text_parts
-                    and (pending_text or pending_no_id)
+                    and not assembler.has_text
+                    and assembler.has_pending_text
                 ):
-                    _flush_all_pending_text()
+                    assembler.flush_pending()
                 if grace_decision.error is not None:
-                    error = grace_decision.error
+                    assembler.error = grace_decision.error
                 break
     finally:
         await lifecycle.close()
 
-    if not text_parts and fallback_message is not None:
-        msg_id, role, text = fallback_message
-        resolved_role = role
-        if resolved_role is None and msg_id:
-            resolved_role = message_roles.get(msg_id)
-        if resolved_role == "assistant" or (
-            resolved_role is None
-            and text
-            and (prompt is None or text.strip() != prompt.strip())
-        ):
-            text_parts.append(text)
-
-    if not text_parts and messages_fetcher is not None:
-        try:
-            messages_payload = await messages_fetcher()
-        except (httpx.HTTPError, ValueError, OSError, AttributeError) as exc:
-            log_event(
-                logger,
-                logging.DEBUG,
-                "opencode.messages.fetch_failed",
-                session_id=session_id,
-                exc=exc,
-            )
-        else:
-            recovered = recover_last_assistant_message(
-                messages_payload,
-                prompt=prompt,
-            )
-            if recovered.text:
-                text_parts.append(recovered.text)
-            if recovered.error and not error:
-                error = recovered.error
-
-    final_text = last_completed_assistant_text or "".join(text_parts)
+    result = await assembler.build_result()
     return OpenCodeTurnOutput(
-        text=final_text.strip(),
-        error=error,
-        usage=latest_usage_snapshot,
+        text=result.text,
+        error=result.error,
+        usage=result.usage,
     )
 
 
