@@ -7,6 +7,7 @@ import yaml
 
 from codex_autorunner.bootstrap import GENERATED_CONFIG_HEADER
 from codex_autorunner.core.config import (
+    ACTIVE_HUB_ROOT_ENV,
     CONFIG_FILENAME,
     DEFAULT_REPO_CONFIG,
     REPO_OVERRIDE_FILENAME,
@@ -1021,6 +1022,24 @@ def test_load_repo_config_raises_when_no_hub_config(tmp_path: Path) -> None:
         load_repo_config(repo_root, hub_path=hub_root)
 
     assert not config_path.exists(), "load_repo_config should not create hub config"
+
+
+def test_load_repo_config_uses_active_hub_root_env_for_out_of_tree_repo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    write_test_config(hub_root / CONFIG_FILENAME, {"mode": "hub"})
+
+    repo_root = tmp_path / "external-repo"
+    repo_root.mkdir()
+    (repo_root / ".git").mkdir()
+
+    monkeypatch.setenv(ACTIVE_HUB_ROOT_ENV, str(hub_root))
+
+    config = load_repo_config(repo_root)
+
+    assert config.root == repo_root.resolve()
 
 
 def test_ensure_hub_config_at_seeds_when_missing(tmp_path: Path) -> None:
