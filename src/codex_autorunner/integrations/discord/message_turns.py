@@ -984,17 +984,17 @@ async def _reconcile_other_discord_turn_progress_leases(
     ):
         current_lease_id = _execution_field(lease, "lease_id")
         current_message_id = _execution_field(lease, "message_id")
-        current_execution_id = _execution_field(lease, "execution_id")
         if current_lease_id and current_lease_id == retained_lease_id:
             continue
         if current_message_id and current_message_id == retained_message_id:
             continue
-        if current_execution_id is None and not (
-            _discord_progress_lease_is_not_newer_than_terminal_turn(
-                lease,
-                terminal_message_id=terminal_message_id,
-                terminal_created_at=terminal_created_at,
-            )
+        # Older-turn delivery should never retire a sibling lease that belongs to
+        # a newer turn on the same managed thread, even if that newer turn has
+        # already been assigned an execution id.
+        if not _discord_progress_lease_is_not_newer_than_terminal_turn(
+            lease,
+            terminal_message_id=terminal_message_id,
+            terminal_created_at=terminal_created_at,
         ):
             continue
         reconciled += await reconcile_discord_turn_progress_leases(

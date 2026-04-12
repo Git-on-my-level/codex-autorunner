@@ -437,6 +437,102 @@ async def test_deliver_result_keeps_newer_pending_sibling_progress_lease(
 
 
 @pytest.mark.asyncio
+async def test_deliver_result_keeps_newer_queued_sibling_progress_lease_with_execution_id(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    store = support.DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_turn_progress_lease(
+        lease_id="lease-current",
+        managed_thread_id="thread-1",
+        execution_id="exec-2",
+        channel_id="channel-1",
+        message_id="200",
+        state="active",
+        progress_label="working",
+    )
+    await store.upsert_turn_progress_lease(
+        lease_id="lease-newer",
+        managed_thread_id="thread-1",
+        execution_id="exec-3",
+        channel_id="channel-1",
+        message_id="300",
+        state="active",
+        progress_label="queued",
+    )
+
+    def _get_execution(_thread_id: str, execution_id: str) -> SimpleNamespace:
+        status = "queued" if execution_id == "exec-3" else "ok"
+        return SimpleNamespace(
+            execution_id=execution_id,
+            status=status,
+        )
+
+    monkeypatch.setattr(
+        support.discord_message_turns_module,
+        "build_discord_thread_orchestration_service",
+        lambda _service: SimpleNamespace(
+            get_thread_target=lambda _thread_id: SimpleNamespace(
+                thread_target_id="thread-1"
+            ),
+            get_latest_execution=lambda _thread_id: SimpleNamespace(
+                execution_id="exec-3",
+                status="queued",
+            ),
+            get_running_execution=lambda _thread_id: None,
+            get_execution=_get_execution,
+        ),
+    )
+
+    rest = support._FakeRest()
+    service = support.DiscordBotService(
+        support._config(tmp_path, allowed_channel_ids=frozenset({"channel-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=support._FakeGateway([]),
+        state_store=store,
+        outbox_manager=support._FakeOutboxManager(),
+    )
+    supervision = support.discord_message_turns_module._DiscordTurnExecutionSupervision(
+        service,
+        channel_id="channel-1",
+    )
+    supervision.set_managed_thread_id("thread-1")
+    supervision.set_lease_id("lease-current")
+    supervision.set_message_id("200")
+    supervision.set_execution_id("exec-2")
+    dispatch = SimpleNamespace(
+        service=service,
+        channel_id="channel-1",
+        session_key="session-1",
+        pending_compact_seed=None,
+        agent="codex",
+        model_override=None,
+    )
+
+    try:
+        await support.discord_message_turns_module._deliver_discord_turn_result(
+            dispatch,
+            workspace_root=workspace,
+            turn_result=support.DiscordMessageTurnResult(
+                final_message="done",
+                preview_message_id="200",
+                execution_id="exec-2",
+            ),
+            supervision=supervision,
+        )
+
+        remaining = await store.list_turn_progress_leases(managed_thread_id="thread-1")
+        assert [lease.lease_id for lease in remaining] == ["lease-newer"]
+        assert rest.edited_channel_messages == []
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
 async def test_orchestrated_turn_interrupt_send_falls_back_when_progress_ack_edit_is_transient(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
