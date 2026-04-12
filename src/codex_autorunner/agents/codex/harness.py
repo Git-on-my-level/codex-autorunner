@@ -5,9 +5,9 @@ import re
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
+from ...integrations.app_server import is_missing_thread_error
 from ...integrations.app_server.client import (
     CodexAppServerResponseError,
-    is_missing_thread_error,
 )
 from ...integrations.app_server.event_buffer import AppServerEventBuffer
 from ...integrations.app_server.supervisor import WorkspaceAppServerSupervisor

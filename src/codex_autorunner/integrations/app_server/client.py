@@ -25,12 +25,7 @@ from typing import (
 )
 
 from ...core.circuit_breaker import CircuitBreaker
-from ...core.exceptions import (
-    AppServerError,
-    CircuitOpenError,
-    PermanentError,
-    TransientError,
-)
+from ...core.exceptions import CircuitOpenError
 from ...core.logging_utils import log_event, sanitize_log_value
 from ...core.managed_processes.registry import (
     ProcessRecord,
@@ -38,11 +33,17 @@ from ...core.managed_processes.registry import (
     write_process_record,
 )
 from ...core.retry import retry_transient
+from .errors import (
+    CodexAppServerDisconnected,
+    CodexAppServerError,
+    CodexAppServerProtocolError,
+    CodexAppServerResponseError,
+)
 from .ids import extract_thread_id, extract_thread_id_for_turn, extract_turn_id
 from .protocol_helpers import (
     RawApprovalRequestAdapter,
     RawNotificationAdapter,
-    extract_resume_snapshot,
+    _maybe_await,
     normalize_approval_request,
     normalize_notification_envelope,
     normalize_response,
@@ -53,6 +54,7 @@ from .protocol_helpers import (
 from .protocol_helpers import (
     _extract_agent_message_text as _protocol_extract_agent_message_text,
 )
+from .recovery import RecoveryConfig, TurnRecoveryCoordinator
 from .transport import AppServerReadBuffer, build_message
 from .turn_state import (
     TurnKey,
@@ -60,7 +62,6 @@ from .turn_state import (
     TurnState,
     TurnStateManager,
     extract_notification_item_id,
-    status_is_terminal,
 )
 
 ApprovalDecision = Union[str, Dict[str, Any]]
@@ -81,7 +82,6 @@ _RESTART_BACKOFF_INITIAL_SECONDS = 0.5
 _RESTART_BACKOFF_MAX_SECONDS = 30.0
 _RESTART_BACKOFF_JITTER_RATIO = 0.1
 
-# Per-turn stall detection defaults.
 _TURN_STALL_TIMEOUT_SECONDS = 60.0
 _TURN_STALL_POLL_INTERVAL_SECONDS = 2.0
 _TURN_STALL_RECOVERY_MIN_INTERVAL_SECONDS = 10.0
@@ -93,58 +93,7 @@ _INVALID_JSON_PREVIEW_BYTES = 200
 _DEFAULT_OUTPUT_POLICY = "final_only"
 _OUTPUT_POLICIES = {"final_only", "all_agent_messages"}
 
-# Track live clients so tests/cleanup can cancel any background restart tasks.
 _CLIENT_INSTANCES: weakref.WeakSet = weakref.WeakSet()
-
-
-class CodexAppServerError(AppServerError):
-    """Base error for app-server client failures."""
-
-
-class CodexAppServerResponseError(CodexAppServerError):
-    """Raised when the app-server responds with an error payload."""
-
-    def __init__(
-        self,
-        *,
-        method: Optional[str],
-        code: Optional[int],
-        message: str,
-        data: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        super().__init__(message)
-        self.method = method
-        self.code = code
-        self.data = data
-
-
-class CodexAppServerDisconnected(CodexAppServerError, TransientError):
-    """Raised when the app-server disconnects mid-flight."""
-
-    def __init__(self, message: str = "App-server disconnected") -> None:
-        super().__init__(
-            message, user_message="App-server temporarily unavailable. Reconnecting..."
-        )
-
-
-class CodexAppServerProtocolError(CodexAppServerError, PermanentError):
-    """Raised when the app-server returns malformed responses."""
-
-    def __init__(self, message: str) -> None:
-        super().__init__(message, user_message="App-server protocol error. Check logs.")
-
-
-_MISSING_THREAD_MARKERS = (
-    "thread not found",
-    "no rollout found for thread id",
-)
-
-
-def is_missing_thread_error(exc: Exception) -> bool:
-    if not isinstance(exc, CodexAppServerResponseError):
-        return False
-    message = str(exc).lower()
-    return any(marker in message for marker in _MISSING_THREAD_MARKERS)
 
 
 def _extract_agent_message_text(item: Any) -> Optional[str]:
@@ -291,12 +240,37 @@ class CodexAppServerClient:
         self._restart_task: Optional[asyncio.Task] = None
         self._restart_backoff_seconds = self._restart_backoff_initial_seconds
         self._stderr_tail: deque[str] = deque(maxlen=5)
-        self._turn_stall_timeout_seconds: Optional[float] = turn_stall_timeout_seconds
-        if (
-            self._turn_stall_timeout_seconds is not None
-            and self._turn_stall_timeout_seconds <= 0
-        ):
-            self._turn_stall_timeout_seconds = None
+        _stall_timeout: Optional[float] = turn_stall_timeout_seconds
+        if _stall_timeout is not None and _stall_timeout <= 0:
+            _stall_timeout = None
+        _recovery_min_interval: float = (
+            turn_stall_recovery_min_interval_seconds
+            if turn_stall_recovery_min_interval_seconds is not None
+            else _TURN_STALL_RECOVERY_MIN_INTERVAL_SECONDS
+        )
+        if _recovery_min_interval is not None and _recovery_min_interval < 0:
+            _recovery_min_interval = _TURN_STALL_RECOVERY_MIN_INTERVAL_SECONDS
+        _max_recovery: Optional[int]
+        if turn_stall_max_recovery_attempts is None:
+            _max_recovery = None
+        elif turn_stall_max_recovery_attempts <= 0:
+            _max_recovery = None
+        else:
+            _max_recovery = int(turn_stall_max_recovery_attempts)
+        _completion_gap_timeout: Optional[float] = turn_completion_gap_timeout_seconds
+        if _completion_gap_timeout is not None and _completion_gap_timeout <= 0:
+            _completion_gap_timeout = None
+        self._recovery_coordinator = TurnRecoveryCoordinator(
+            config=RecoveryConfig(
+                stall_timeout_seconds=_stall_timeout,
+                stall_recovery_min_interval_seconds=_recovery_min_interval,
+                stall_max_recovery_attempts=_max_recovery,
+                completion_gap_timeout_seconds=_completion_gap_timeout,
+            ),
+            logger=self._logger,
+            turn_state_manager=self._turn_state_manager,
+            dispatch_recovered_notification=self._dispatch_recovered_notification,
+        )
         self._turn_stall_poll_interval_seconds: float = (
             turn_stall_poll_interval_seconds
             if turn_stall_poll_interval_seconds is not None
@@ -307,35 +281,6 @@ class CodexAppServerClient:
             and self._turn_stall_poll_interval_seconds <= 0
         ):
             self._turn_stall_poll_interval_seconds = _TURN_STALL_POLL_INTERVAL_SECONDS
-        self._turn_stall_recovery_min_interval_seconds: float = (
-            turn_stall_recovery_min_interval_seconds
-            if turn_stall_recovery_min_interval_seconds is not None
-            else _TURN_STALL_RECOVERY_MIN_INTERVAL_SECONDS
-        )
-        if (
-            self._turn_stall_recovery_min_interval_seconds is not None
-            and self._turn_stall_recovery_min_interval_seconds < 0
-        ):
-            self._turn_stall_recovery_min_interval_seconds = (
-                _TURN_STALL_RECOVERY_MIN_INTERVAL_SECONDS
-            )
-        self._turn_stall_max_recovery_attempts: Optional[int]
-        if turn_stall_max_recovery_attempts is None:
-            self._turn_stall_max_recovery_attempts = None
-        elif turn_stall_max_recovery_attempts <= 0:
-            self._turn_stall_max_recovery_attempts = None
-        else:
-            self._turn_stall_max_recovery_attempts = int(
-                turn_stall_max_recovery_attempts
-            )
-        self._turn_completion_gap_timeout_seconds: Optional[float] = (
-            turn_completion_gap_timeout_seconds
-        )
-        if (
-            self._turn_completion_gap_timeout_seconds is not None
-            and self._turn_completion_gap_timeout_seconds <= 0
-        ):
-            self._turn_completion_gap_timeout_seconds = None
         _CLIENT_INSTANCES.add(self)
 
     async def start(self) -> None:
@@ -548,11 +493,12 @@ class CodexAppServerClient:
                 turn_id=turn_id,
                 thread_id=thread_id or state.thread_id,
             )
-            await self._maybe_recover_stalled_turn(
+            await self._recovery_coordinator.maybe_recover_stalled_turn(
                 state,
                 turn_id=turn_id,
                 thread_id=thread_id or state.thread_id,
                 deadline=deadline,
+                resume_fn=self.thread_resume,
             )
 
     def _turn_wait_deadline(self, timeout: Optional[float]) -> Optional[float]:
@@ -584,30 +530,6 @@ class CodexAppServerClient:
         except asyncio.TimeoutError:
             return None
 
-    async def _maybe_recover_stalled_turn(
-        self,
-        state: _TurnState,
-        *,
-        turn_id: str,
-        thread_id: Optional[str],
-        deadline: Optional[float],
-    ) -> None:
-        if state.future.done():
-            return
-        stall_timeout = self._turn_stall_timeout_seconds
-        if deadline is None and stall_timeout is None:
-            return
-        if deadline is not None and deadline <= time.monotonic():
-            raise asyncio.TimeoutError()
-        idle_seconds = time.monotonic() - state.last_event_at
-        if stall_timeout is not None and idle_seconds >= stall_timeout:
-            await self._recover_stalled_turn(
-                state,
-                turn_id,
-                thread_id=thread_id,
-                idle_seconds=idle_seconds,
-            )
-
     async def _maybe_reconcile_turn_completion_gap(
         self,
         state: _TurnState,
@@ -615,275 +537,23 @@ class CodexAppServerClient:
         turn_id: str,
         thread_id: Optional[str],
     ) -> None:
-        if state.future.done() or state.turn_completed_seen:
-            return
-        completion_gap_timeout = self._turn_completion_gap_timeout_seconds
-        if completion_gap_timeout is None or thread_id is None:
-            return
-        completion_gap_started_at = state.completion_gap_started_at
-        if completion_gap_started_at is None:
-            return
-        now = time.monotonic()
-        if state.active_item_ids:
-            return
-        if state.last_event_at and now - state.last_event_at < completion_gap_timeout:
-            return
-        completion_gap_seconds = now - completion_gap_started_at
-        if completion_gap_seconds < completion_gap_timeout:
-            return
-        min_interval = self._turn_stall_recovery_min_interval_seconds
-        if (
-            min_interval is not None
-            and state.last_completion_gap_recovery_at
-            and now - state.last_completion_gap_recovery_at < min_interval
-        ):
-            return
-
-        state.last_completion_gap_recovery_at = now
-        state.completion_gap_recovery_attempts += 1
-        log_event(
-            self._logger,
-            logging.WARNING,
-            "app_server.turn_completion_gap",
-            turn_id=turn_id,
-            thread_id=thread_id,
-            completion_gap_seconds=round(completion_gap_seconds, 2),
-            item_completed_count=state.item_completed_count,
-            last_method=state.last_method,
-            recovery_attempts=state.completion_gap_recovery_attempts,
-        )
-        try:
-            resume_result = await self.thread_resume(thread_id)
-        except (
-            CodexAppServerError,
-            CircuitOpenError,
-            asyncio.TimeoutError,
-            ConnectionError,
-            OSError,
-        ) as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "app_server.turn_completion_gap_recovery.failed",
-                turn_id=turn_id,
-                thread_id=thread_id,
-                completion_gap_seconds=round(completion_gap_seconds, 2),
-                item_completed_count=state.item_completed_count,
-                exc=exc,
-            )
-            self._maybe_fail_completion_gap_turn(
-                state,
-                turn_id=turn_id,
-                thread_id=thread_id,
-                completion_gap_seconds=completion_gap_seconds,
-                reason="thread_resume_failed",
-                recovery_status=state.status,
-            )
-            return
-
-        snapshot = extract_resume_snapshot(resume_result, turn_id)
-        if snapshot is None:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "app_server.turn_completion_gap_recovery.missing_snapshot",
-                turn_id=turn_id,
-                thread_id=thread_id,
-                completion_gap_seconds=round(completion_gap_seconds, 2),
-                item_completed_count=state.item_completed_count,
-            )
-            self._maybe_fail_completion_gap_turn(
-                state,
-                turn_id=turn_id,
-                thread_id=thread_id,
-                completion_gap_seconds=completion_gap_seconds,
-                reason="resume_snapshot_missing",
-                recovery_status=state.status,
-            )
-            return
-
-        status = self._apply_resume_snapshot(state, snapshot)
-        effective_status = status or state.status
-        if (
-            effective_status
-            and status_is_terminal(effective_status)
-            and not state.future.done()
-        ):
-            await self._emit_recovered_turn_completed_notification(
-                state, thread_id=thread_id, recovery_source="turn_completion_gap"
-            )
-            log_event(
-                self._logger,
-                logging.INFO,
-                "app_server.turn_completion_gap_recovery.completed",
-                turn_id=turn_id,
-                thread_id=thread_id,
-                status=effective_status,
-                item_completed_count=state.item_completed_count,
-                recovery_attempts=state.completion_gap_recovery_attempts,
-            )
-            self._set_turn_result_if_pending(state)
-            return
-        if effective_status and not status_is_terminal(effective_status):
-            self._reset_completion_gap_recovery(state)
-            state.last_event_at = now
-            log_event(
-                self._logger,
-                logging.INFO,
-                "app_server.turn_completion_gap_recovery.active",
-                turn_id=turn_id,
-                thread_id=thread_id,
-                status=effective_status,
-                item_completed_count=state.item_completed_count,
-            )
-            return
-
-        log_event(
-            self._logger,
-            logging.INFO,
-            "app_server.turn_completion_gap_recovery.pending",
-            turn_id=turn_id,
-            thread_id=thread_id,
-            status=state.status,
-            item_completed_count=state.item_completed_count,
-            recovery_attempts=state.completion_gap_recovery_attempts,
-        )
-        self._maybe_fail_completion_gap_turn(
+        await self._recovery_coordinator.maybe_reconcile_completion_gap(
             state,
             turn_id=turn_id,
             thread_id=thread_id,
-            completion_gap_seconds=completion_gap_seconds,
-            reason="resume_non_terminal",
-            recovery_status=state.status,
+            resume_fn=self.thread_resume,
         )
 
-    async def _recover_stalled_turn(
-        self,
-        state: _TurnState,
-        turn_id: str,
-        *,
-        thread_id: Optional[str],
-        idle_seconds: float,
-    ) -> None:
-        now = time.monotonic()
-        if thread_id is None:
-            state.last_event_at = now
-            return
-        min_interval = self._turn_stall_recovery_min_interval_seconds
-        if (
-            min_interval is not None
-            and state.last_recovery_at
-            and now - state.last_recovery_at < min_interval
-        ):
-            return
-        state.last_recovery_at = now
-        state.recovery_attempts += 1
-        log_event(
-            self._logger,
-            logging.WARNING,
-            "app_server.turn_stalled",
-            turn_id=turn_id,
-            thread_id=thread_id,
-            idle_seconds=round(idle_seconds, 2),
-            last_method=state.last_method,
-            recovery_attempts=state.recovery_attempts,
-            max_recovery_attempts=self._turn_stall_max_recovery_attempts,
-        )
-        try:
-            resume_result = await self.thread_resume(thread_id)
-        except (
-            CodexAppServerError,
-            CircuitOpenError,
-            asyncio.TimeoutError,
-            ConnectionError,
-            OSError,
-        ) as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "app_server.turn_recovery.failed",
-                turn_id=turn_id,
-                thread_id=thread_id,
-                idle_seconds=round(idle_seconds, 2),
-                exc=exc,
-            )
-            self._maybe_fail_stalled_turn(
-                state,
-                turn_id=turn_id,
-                thread_id=thread_id,
-                idle_seconds=idle_seconds,
-                reason="thread_resume_failed",
-                recovery_status=state.status,
-            )
-            state.last_event_at = now
-            return
-
-        snapshot = extract_resume_snapshot(resume_result, turn_id)
-        if snapshot is None:
-            self._maybe_fail_stalled_turn(
-                state,
-                turn_id=turn_id,
-                thread_id=thread_id,
-                idle_seconds=idle_seconds,
-                reason="resume_snapshot_missing",
-                recovery_status=state.status,
-            )
-            state.last_event_at = now
-            return
-
-        status = self._apply_resume_snapshot(state, snapshot)
-
-        if status and status_is_terminal(status) and not state.future.done():
-            await self._emit_recovered_turn_completed_notification(
-                state, thread_id=thread_id, recovery_source="turn_stall"
-            )
-            self._set_turn_result_if_pending(state)
-            return
-
-        self._maybe_fail_stalled_turn(
-            state,
-            turn_id=turn_id,
-            thread_id=thread_id,
-            idle_seconds=idle_seconds,
-            reason="resume_non_terminal",
-            recovery_status=state.status,
-        )
-        state.last_event_at = now
-
-    def _apply_resume_snapshot(
-        self,
-        state: _TurnState,
-        snapshot: tuple[Optional[str], list[str], list[str], list[str], list[str]],
-    ) -> Optional[str]:
-        return self._turn_state_manager.apply_resume_snapshot(state, snapshot)
-
-    async def _emit_recovered_turn_completed_notification(
-        self,
-        state: _TurnState,
-        *,
-        thread_id: str,
-        recovery_source: str,
-    ) -> None:
-        if state.turn_completed_seen:
-            return
-        params = {
-            "turnId": state.turn_id,
-            "threadId": thread_id,
-            "status": state.status,
-            "recoveredVia": "thread/resume",
-            "recoverySource": recovery_source,
-            "synthetic": True,
-        }
-        message = {
-            "jsonrpc": "2.0",
-            "method": "turn/completed",
-            "params": params,
-        }
-        self._mark_notification_event(state=state, method="turn/completed")
-        self._apply_turn_completed(state, message, params)
-        if self._notification_handler is None:
-            return
+    def _dispatch_recovered_notification(self, message: Dict[str, Any]) -> None:
         self._schedule_notification_handler(message, method="turn/completed")
+
+    @property
+    def _turn_stall_timeout_seconds(self) -> Optional[float]:
+        return self._recovery_coordinator.config.stall_timeout_seconds
+
+    @property
+    def _turn_stall_max_recovery_attempts(self) -> Optional[int]:
+        return self._recovery_coordinator.config.stall_max_recovery_attempts
 
     def _schedule_notification_handler(
         self, message: Dict[str, Any], *, method: str, handled: bool = True
@@ -912,46 +582,6 @@ class CodexAppServerClient:
         task = asyncio.create_task(_invoke_notification_handler())
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
-
-    def _maybe_fail_stalled_turn(
-        self,
-        state: _TurnState,
-        *,
-        turn_id: str,
-        thread_id: str,
-        idle_seconds: float,
-        reason: str,
-        recovery_status: Optional[str],
-    ) -> None:
-        self._turn_state_manager.maybe_fail_stalled_turn(
-            state,
-            turn_id=turn_id,
-            thread_id=thread_id,
-            idle_seconds=idle_seconds,
-            reason=reason,
-            recovery_status=recovery_status,
-            max_attempts=self._turn_stall_max_recovery_attempts,
-        )
-
-    def _maybe_fail_completion_gap_turn(
-        self,
-        state: _TurnState,
-        *,
-        turn_id: str,
-        thread_id: str,
-        completion_gap_seconds: float,
-        reason: str,
-        recovery_status: Optional[str],
-    ) -> None:
-        self._turn_state_manager.maybe_fail_completion_gap_turn(
-            state,
-            turn_id=turn_id,
-            thread_id=thread_id,
-            completion_gap_seconds=completion_gap_seconds,
-            reason=reason,
-            recovery_status=recovery_status,
-            max_attempts=self._turn_stall_max_recovery_attempts,
-        )
 
     async def _ensure_process(self) -> None:
         async with self._circuit_breaker.call():
@@ -1499,9 +1129,6 @@ class CodexAppServerClient:
             create_pending=create_pending,
         )
 
-    def _reset_completion_gap_recovery(self, state: _TurnState) -> None:
-        self._turn_state_manager.reset_completion_gap_recovery(state)
-
     def _mark_notification_event(self, *, state: _TurnState, method: str) -> None:
         self._turn_state_manager.mark_notification_event(state=state, method=method)
 
@@ -2047,12 +1674,6 @@ def _client_version() -> str:
         return importlib_metadata.version("codex-autorunner")
     except importlib_metadata.PackageNotFoundError:
         return "unknown"
-
-
-async def _maybe_await(value: Any) -> Any:
-    if asyncio.iscoroutine(value):
-        return await value
-    return value
 
 
 def _first_regex_group(text: str, pattern: str) -> Optional[str]:
