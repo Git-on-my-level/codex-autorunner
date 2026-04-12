@@ -316,10 +316,8 @@ async def test_pma_managed_thread_turn_forwards_yolo_defaults(
         agent_turn_timeout_seconds={"codex": None, "opencode": None},
     )
     handler._spawn_task = lambda coro: None
-    handler._effective_policies = (
-        lambda current_record: WorkspaceCommands._effective_policies(
-            handler, current_record
-        )
+    handler._effective_policies = lambda current_record: (
+        WorkspaceCommands._effective_policies(handler, current_record)
     )
     captured: dict[str, Any] = {}
 
@@ -387,10 +385,8 @@ async def test_pma_managed_thread_turn_forwards_non_yolo_override(
         agent_turn_timeout_seconds={"codex": None, "opencode": None},
     )
     handler._spawn_task = lambda coro: None
-    handler._effective_policies = (
-        lambda current_record: WorkspaceCommands._effective_policies(
-            handler, current_record
-        )
+    handler._effective_policies = lambda current_record: (
+        WorkspaceCommands._effective_policies(handler, current_record)
     )
     captured: dict[str, Any] = {}
 
@@ -582,8 +578,8 @@ async def test_telegram_opencode_turn_routes_through_managed_thread_without_root
     handler._effective_agent = lambda _record: "opencode"
     handler._effective_policies = lambda _record: (None, None)
     handler._files_inbox_dir = lambda _workspace, _topic_key: tmp_path / "inbox"
-    handler._files_outbox_pending_dir = (
-        lambda _workspace, _topic_key: tmp_path / "outbox"
+    handler._files_outbox_pending_dir = lambda _workspace, _topic_key: (
+        tmp_path / "outbox"
     )
     handler._files_topic_dir = lambda _workspace, _topic_key: tmp_path / "topic"
     handler._config.media = SimpleNamespace(max_file_bytes=1024)
@@ -1773,9 +1769,11 @@ async def test_managed_thread_queue_worker_wraps_execution_with_typing_indicator
     coordinator.ensure_queue_worker(
         task_map={},
         managed_thread_id="managed-thread-1",
-        spawn_task=lambda coro: execution_commands_module._spawn_telegram_background_task(
-            handler,
-            coro,
+        spawn_task=lambda coro: (
+            execution_commands_module._spawn_telegram_background_task(
+                handler,
+                coro,
+            )
         ),
         hooks=execution_commands_module.ManagedThreadCoordinatorHooks(
             deliver_result=_deliver_result,
@@ -2729,17 +2727,18 @@ async def test_resolve_telegram_managed_thread_reuses_archived_thread(
     )
     orchestration_service.archive_thread_target(current_thread.thread_target_id)
 
-    _service, resolved = (
-        await execution_commands_module._resolve_telegram_managed_thread(
-            handler,
-            surface_key="telegram:-1001:101",
-            workspace_root=workspace.resolve(),
-            agent="codex",
-            repo_id="repo-1",
-            mode="pma",
-            pma_enabled=True,
-            allow_new_thread=False,
-        )
+    (
+        _service,
+        resolved,
+    ) = await execution_commands_module._resolve_telegram_managed_thread(
+        handler,
+        surface_key="telegram:-1001:101",
+        workspace_root=workspace.resolve(),
+        agent="codex",
+        repo_id="repo-1",
+        mode="pma",
+        pma_enabled=True,
+        allow_new_thread=False,
     )
 
     assert resolved is not None
@@ -2797,18 +2796,19 @@ async def test_resolve_telegram_managed_thread_ignores_backend_thread_id_binding
         ),
     )
 
-    _service, resolved = (
-        await execution_commands_module._resolve_telegram_managed_thread(
-            SimpleNamespace(_logger=logging.getLogger("test")),
-            surface_key="telegram:-1001:101",
-            workspace_root=workspace.resolve(),
-            agent="codex",
-            repo_id="repo-1",
-            mode="pma",
-            pma_enabled=True,
-            backend_thread_id="stale-backend",
-            allow_new_thread=False,
-        )
+    (
+        _service,
+        resolved,
+    ) = await execution_commands_module._resolve_telegram_managed_thread(
+        SimpleNamespace(_logger=logging.getLogger("test")),
+        surface_key="telegram:-1001:101",
+        workspace_root=workspace.resolve(),
+        agent="codex",
+        repo_id="repo-1",
+        mode="pma",
+        pma_enabled=True,
+        backend_thread_id="stale-backend",
+        allow_new_thread=False,
     )
 
     assert resolved is not None
@@ -5211,19 +5211,20 @@ async def test_sync_telegram_thread_binding_rejects_rebind_when_runtime_missing(
         ),
     )
     try:
-        _service, thread = (
-            await execution_commands_module._sync_telegram_thread_binding(
-                handlers,
-                surface_key="topic-1",
-                workspace_root=workspace,
-                agent="opencode",
-                repo_id="repo-1",
-                resource_kind="repo",
-                resource_id="repo-1",
-                backend_thread_id="backend-new",
-                mode="repo",
-                pma_enabled=False,
-            )
+        (
+            _service,
+            thread,
+        ) = await execution_commands_module._sync_telegram_thread_binding(
+            handlers,
+            surface_key="topic-1",
+            workspace_root=workspace,
+            agent="opencode",
+            repo_id="repo-1",
+            resource_kind="repo",
+            resource_id="repo-1",
+            backend_thread_id="backend-new",
+            mode="repo",
+            pma_enabled=False,
         )
     finally:
         monkeypatch.undo()
@@ -5275,20 +5276,21 @@ async def test_resolve_telegram_managed_thread_rejects_rebind_when_runtime_missi
         ),
     )
     try:
-        _service, resolved_thread = (
-            await execution_commands_module._resolve_telegram_managed_thread(
-                handlers,
-                surface_key="topic-1",
-                workspace_root=workspace,
-                agent="opencode",
-                repo_id="repo-1",
-                resource_kind="repo",
-                resource_id="repo-1",
-                mode="repo",
-                pma_enabled=False,
-                backend_thread_id="backend-new",
-                allow_new_thread=True,
-            )
+        (
+            _service,
+            resolved_thread,
+        ) = await execution_commands_module._resolve_telegram_managed_thread(
+            handlers,
+            surface_key="topic-1",
+            workspace_root=workspace,
+            agent="opencode",
+            repo_id="repo-1",
+            resource_kind="repo",
+            resource_id="repo-1",
+            mode="repo",
+            pma_enabled=False,
+            backend_thread_id="backend-new",
+            allow_new_thread=True,
         )
     finally:
         monkeypatch.undo()
@@ -5354,20 +5356,21 @@ async def test_resolve_telegram_managed_thread_keeps_requested_backend_thread_id
         ),
     )
     try:
-        _service, resolved_thread = (
-            await execution_commands_module._resolve_telegram_managed_thread(
-                handlers,
-                surface_key="topic-1",
-                workspace_root=workspace,
-                agent="opencode",
-                repo_id="repo-1",
-                resource_kind="repo",
-                resource_id="repo-1",
-                mode="repo",
-                pma_enabled=False,
-                backend_thread_id="backend-new",
-                allow_new_thread=True,
-            )
+        (
+            _service,
+            resolved_thread,
+        ) = await execution_commands_module._resolve_telegram_managed_thread(
+            handlers,
+            surface_key="topic-1",
+            workspace_root=workspace,
+            agent="opencode",
+            repo_id="repo-1",
+            resource_kind="repo",
+            resource_id="repo-1",
+            mode="repo",
+            pma_enabled=False,
+            backend_thread_id="backend-new",
+            allow_new_thread=True,
         )
     finally:
         monkeypatch.undo()
@@ -5432,18 +5435,19 @@ async def test_reset_telegram_thread_binding_archives_after_lost_backend_recover
         ),
     )
     try:
-        had_previous, new_thread_id = (
-            await execution_commands_module._reset_telegram_thread_binding(
-                handlers,
-                surface_key="topic-1",
-                workspace_root=workspace,
-                agent="codex",
-                repo_id="repo-1",
-                resource_kind="repo",
-                resource_id="repo-1",
-                mode="pma",
-                pma_enabled=True,
-            )
+        (
+            had_previous,
+            new_thread_id,
+        ) = await execution_commands_module._reset_telegram_thread_binding(
+            handlers,
+            surface_key="topic-1",
+            workspace_root=workspace,
+            agent="codex",
+            repo_id="repo-1",
+            resource_kind="repo",
+            resource_id="repo-1",
+            mode="pma",
+            pma_enabled=True,
         )
     finally:
         monkeypatch.undo()
@@ -5644,10 +5648,20 @@ async def test_apply_compact_summary_uses_shared_lifecycle_before_topic_mirror_u
                 ("bind", kwargs["thread_target_id"], kwargs.get("mode"))
             )
 
+    class _FakeHubClient:
+        async def update_thread_compact_seed(self, request: Any) -> None:
+            compact_seed_calls.append(
+                (
+                    getattr(request, "thread_target_id", ""),
+                    str(getattr(request, "compact_seed", "") or ""),
+                )
+            )
+
     class _CompactHandler(TelegramCommandHandlers):
         def __init__(self) -> None:
             self._logger = logging.getLogger("test")
             self._router = _RouterStub()
+            self._hub_client = _FakeHubClient()
             self._config = SimpleNamespace(
                 root=tmp_path,
                 defaults=SimpleNamespace(policies_for_mode=lambda _mode: (None, None)),
@@ -5666,11 +5680,6 @@ async def test_apply_compact_summary_uses_shared_lifecycle_before_topic_mirror_u
         ) -> str:
             return "123:root"
 
-    def _fake_set_thread_compact_seed(
-        self, managed_thread_id: str, compact_seed: Optional[str], **_kwargs: Any
-    ) -> None:
-        compact_seed_calls.append((managed_thread_id, str(compact_seed or "")))
-
     monkeypatch.setattr(
         execution_commands_module,
         "_get_telegram_thread_binding",
@@ -5684,10 +5693,6 @@ async def test_apply_compact_summary_uses_shared_lifecycle_before_topic_mirror_u
                 lifecycle_status="active",
             ),
         ),
-    )
-    monkeypatch.setattr(
-        "codex_autorunner.core.pma_thread_store.PmaThreadStore.set_thread_compact_seed",
-        _fake_set_thread_compact_seed,
     )
 
     handler = _CompactHandler()
@@ -5758,10 +5763,20 @@ async def test_apply_compact_summary_preserves_pma_mode_for_replacement_thread(
         async def thread_start(self, _workspace_path: str, **_kwargs: Any) -> Any:
             return {"id": "backend-pma-new"}
 
+    class _FakeHubClient:
+        async def update_thread_compact_seed(self, request: Any) -> None:
+            compact_seed_calls.append(
+                (
+                    getattr(request, "thread_target_id", ""),
+                    str(getattr(request, "compact_seed", "") or ""),
+                )
+            )
+
     class _CompactHandler(TelegramCommandHandlers):
         def __init__(self) -> None:
             self._logger = logging.getLogger("test")
             self._router = _RouterStub()
+            self._hub_client = _FakeHubClient()
             self._config = SimpleNamespace(
                 root=tmp_path,
                 defaults=SimpleNamespace(policies_for_mode=lambda _mode: (None, None)),
@@ -5835,24 +5850,21 @@ async def test_apply_compact_summary_preserves_pma_mode_for_replacement_thread(
         )
         return SimpleNamespace(thread_target_id="managed-new")
 
-    def _fake_set_thread_compact_seed(
-        self, managed_thread_id: str, compact_seed: Optional[str], **_kwargs: Any
-    ) -> None:
-        compact_seed_calls.append((managed_thread_id, str(compact_seed or "")))
-
     monkeypatch.setattr(
         execution_commands_module,
         "_get_telegram_thread_binding",
-        lambda *args, **kwargs: (binding_mode_calls.append(str(kwargs["mode"])) or True)
-        and (
-            SimpleNamespace(),
-            SimpleNamespace(thread_target_id="managed-old", mode="pma"),
-            SimpleNamespace(
-                thread_target_id="managed-old",
-                agent_id="codex",
-                workspace_root=str(workspace),
-                lifecycle_status="active",
-            ),
+        lambda *args, **kwargs: (
+            (binding_mode_calls.append(str(kwargs["mode"])) or True)
+            and (
+                SimpleNamespace(),
+                SimpleNamespace(thread_target_id="managed-old", mode="pma"),
+                SimpleNamespace(
+                    thread_target_id="managed-old",
+                    agent_id="codex",
+                    workspace_root=str(workspace),
+                    lifecycle_status="active",
+                ),
+            )
         ),
     )
     monkeypatch.setattr(
@@ -5862,10 +5874,6 @@ async def test_apply_compact_summary_preserves_pma_mode_for_replacement_thread(
     monkeypatch.setattr(
         "codex_autorunner.integrations.chat.managed_thread_lifecycle.bind_surface_thread",
         _fake_bind_surface_thread,
-    )
-    monkeypatch.setattr(
-        "codex_autorunner.core.pma_thread_store.PmaThreadStore.set_thread_compact_seed",
-        _fake_set_thread_compact_seed,
     )
 
     handler = _CompactHandler()
@@ -6072,20 +6080,21 @@ async def test_sync_telegram_thread_binding_keeps_requested_backend_thread_id_fo
         ),
     )
     try:
-        _service, current_thread = (
-            await execution_commands_module._sync_telegram_thread_binding(
-                handlers,
-                surface_key="topic-1",
-                workspace_root=workspace,
-                agent="codex",
-                repo_id="repo-1",
-                resource_kind="repo",
-                resource_id="repo-1",
-                backend_thread_id="backend-new",
-                mode="repo",
-                pma_enabled=False,
-                replace_existing=True,
-            )
+        (
+            _service,
+            current_thread,
+        ) = await execution_commands_module._sync_telegram_thread_binding(
+            handlers,
+            surface_key="topic-1",
+            workspace_root=workspace,
+            agent="codex",
+            repo_id="repo-1",
+            resource_kind="repo",
+            resource_id="repo-1",
+            backend_thread_id="backend-new",
+            mode="repo",
+            pma_enabled=False,
+            replace_existing=True,
         )
     finally:
         monkeypatch.undo()

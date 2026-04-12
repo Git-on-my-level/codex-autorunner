@@ -21,9 +21,11 @@ from ....core.hub_control_plane import (
     SurfaceBindingUpsertRequest,
     ThreadCompactSeedUpdateRequest,
     ThreadTargetArchiveRequest,
+    ThreadTargetCreateRequest,
     ThreadTargetListRequest,
     ThreadTargetLookupRequest,
     ThreadTargetResumeRequest,
+    TranscriptHistoryRequest,
     WorkspaceSetupCommandRequest,
 )
 
@@ -228,6 +230,41 @@ def build_hub_control_plane_routes() -> APIRouter:
                 request_payload
             ),
             operation=service.update_thread_compact_seed,
+        )
+
+    @router.post("/thread-targets")
+    async def create_thread_target(request: Request, payload: dict[str, Any]):
+        service = _require_control_plane_service(request)
+        return await _run_control_plane_call(
+            request_factory=lambda: ThreadTargetCreateRequest.from_mapping(payload),
+            operation=service.create_thread_target,
+        )
+
+    @router.get("/transcript-history")
+    async def get_transcript_history(
+        request: Request,
+        target_kind: str,
+        target_id: str,
+        limit: int = 10,
+    ):
+        service = _require_control_plane_service(request)
+        return await _run_control_plane_call(
+            request_factory=lambda: TranscriptHistoryRequest.from_mapping(
+                {
+                    "target_kind": target_kind,
+                    "target_id": target_id,
+                    "limit": limit,
+                }
+            ),
+            operation=service.get_transcript_history,
+        )
+
+    @router.get("/pma-snapshot")
+    async def get_pma_snapshot(request: Request):
+        service = _require_control_plane_service(request)
+        return await _run_control_plane_call(
+            request_factory=lambda: None,
+            operation=lambda _: service.get_pma_snapshot(),
         )
 
     @router.get("/agent-workspaces")

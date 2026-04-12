@@ -44,7 +44,6 @@ from ...core.pma_context import (
     load_pma_prompt,
 )
 from ...core.pma_notification_store import (
-    PmaNotificationStore,
     build_notification_context_block,
     notification_surface_key,
 )
@@ -1588,9 +1587,18 @@ async def _execute_discord_thread_message(
 
     if dispatch.effective_pma_enabled:
         try:
-            snapshot = await build_hub_snapshot(
-                None, hub_root=dispatch.service._config.root
-            )
+            hub_client = getattr(dispatch.service, "_hub_client", None)
+            snapshot = None
+            if hub_client is not None:
+                try:
+                    cp_snapshot = await hub_client.get_pma_snapshot()
+                    snapshot = cp_snapshot.snapshot
+                except Exception:
+                    pass
+            if snapshot is None:
+                snapshot = await build_hub_snapshot(
+                    None, hub_root=dispatch.service._config.root
+                )
             prompt_base = load_pma_prompt(dispatch.service._config.root)
             if dispatch.notification_reply is not None:
                 prompt_text = (
@@ -1765,14 +1773,20 @@ async def _handle_discord_notification_turn(
                         thread_target_id=orch_binding.thread_target_id,
                     )
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                dispatch.log_event_fn(
+                    dispatch.service._logger,
+                    logging.WARNING,
+                    "discord.notification.continuation_bind.control_plane_failed",
+                    notification_id=dispatch.notification_reply.notification_id,
+                    exc=exc,
+                )
         else:
-            PmaNotificationStore(
-                dispatch.service._config.root
-            ).bind_continuation_thread(
+            dispatch.log_event_fn(
+                dispatch.service._logger,
+                logging.WARNING,
+                "discord.notification.continuation_bind.hub_client_unavailable",
                 notification_id=dispatch.notification_reply.notification_id,
-                thread_target_id=orch_binding.thread_target_id,
             )
     return turn_result
 
@@ -2028,16 +2042,15 @@ async def handle_message_event(
                 )
                 if cp_response.record is not None:
                     notification_reply = cp_response.record
-            except Exception:
-                pass
-        if notification_reply is None and event.reply_to is not None:
-            notification_reply = PmaNotificationStore(
-                service._config.root
-            ).get_reply_target(
-                surface_kind="discord",
-                surface_key=channel_id,
-                delivered_message_id=event.reply_to.message_id,
-            )
+            except Exception as exc:
+                log_event(
+                    service._logger,
+                    logging.WARNING,
+                    "discord.notification.reply_target.control_plane_failed",
+                    channel_id=channel_id,
+                    message_id=event.reply_to.message_id,
+                    exc=exc,
+                )
     effective_pma_enabled = pma_enabled or notification_reply is not None
     agent, agent_profile = service._resolve_agent_state(binding)
     runtime_agent = service._runtime_agent_for_binding(binding)

@@ -4018,33 +4018,33 @@ class DiscordBotService:
     ) -> None:
         if not isinstance(delivered_message_id, str) or not delivered_message_id:
             return
-        if self._hub_client is not None:
-            from ...core.hub_control_plane import (
-                NotificationDeliveryMarkRequest as _CPDeliveryMarkRequest,
+        if self._hub_client is None:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.outbox.delivery_mark.hub_client_unavailable",
+                record_id=record.record_id,
             )
-
-            try:
-                await self._hub_client.mark_notification_delivered(
-                    _CPDeliveryMarkRequest(
-                        delivery_record_id=record.record_id,
-                        delivered_message_id=delivered_message_id,
-                    )
-                )
-                return
-            except (HubControlPlaneError, OSError, ValueError) as exc:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "discord.outbox.delivery_mark.control_plane_failed",
-                    record_id=record.record_id,
-                    exc=exc,
-                )
-        from ...core.pma_notification_store import PmaNotificationStore
-
-        PmaNotificationStore(self._config.root).mark_delivered(
-            delivery_record_id=record.record_id,
-            delivered_message_id=delivered_message_id,
+            return
+        from ...core.hub_control_plane import (
+            NotificationDeliveryMarkRequest as _CPDeliveryMarkRequest,
         )
+
+        try:
+            await self._hub_client.mark_notification_delivered(
+                _CPDeliveryMarkRequest(
+                    delivery_record_id=record.record_id,
+                    delivered_message_id=delivered_message_id,
+                )
+            )
+        except (HubControlPlaneError, OSError, ValueError) as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.outbox.delivery_mark.control_plane_failed",
+                record_id=record.record_id,
+                exc=exc,
+            )
 
     async def _delete_channel_message_safe(
         self,

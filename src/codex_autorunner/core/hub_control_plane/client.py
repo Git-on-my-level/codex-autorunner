@@ -16,16 +16,20 @@ from .models import (
     NotificationLookupRequest,
     NotificationRecordResponse,
     NotificationReplyTargetLookupRequest,
+    PmaSnapshotResponse,
     SurfaceBindingLookupRequest,
     SurfaceBindingResponse,
     SurfaceBindingUpsertRequest,
     ThreadCompactSeedUpdateRequest,
     ThreadTargetArchiveRequest,
+    ThreadTargetCreateRequest,
     ThreadTargetListRequest,
     ThreadTargetListResponse,
     ThreadTargetLookupRequest,
     ThreadTargetResponse,
     ThreadTargetResumeRequest,
+    TranscriptHistoryRequest,
+    TranscriptHistoryResponse,
     WorkspaceSetupCommandRequest,
     WorkspaceSetupCommandResult,
 )
@@ -69,6 +73,10 @@ class HubControlPlaneClient(Protocol):
         self, request: ThreadTargetListRequest
     ) -> ThreadTargetListResponse: ...
 
+    async def create_thread_target(
+        self, request: ThreadTargetCreateRequest
+    ) -> ThreadTargetResponse: ...
+
     async def resume_thread_target(
         self, request: ThreadTargetResumeRequest
     ) -> ThreadTargetResponse: ...
@@ -80,6 +88,12 @@ class HubControlPlaneClient(Protocol):
     async def update_thread_compact_seed(
         self, request: ThreadCompactSeedUpdateRequest
     ) -> ThreadTargetResponse: ...
+
+    async def get_transcript_history(
+        self, request: TranscriptHistoryRequest
+    ) -> TranscriptHistoryResponse: ...
+
+    async def get_pma_snapshot(self) -> PmaSnapshotResponse: ...
 
     async def get_agent_workspace(
         self, request: AgentWorkspaceLookupRequest

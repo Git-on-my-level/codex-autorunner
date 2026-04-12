@@ -875,7 +875,7 @@ async def _run_telegram_managed_thread_turn(
             return
         await handlers._send_message(
             message.chat_id,
-            ("Turn failed: " f"{finalized.error or public_execution_error}"),
+            (f"Turn failed: {finalized.error or public_execution_error}"),
             thread_id=message.thread_id,
             reply_to=None,
         )
@@ -2902,9 +2902,18 @@ class ExecutionCommands(TelegramCommandSupportMixin):
         hub_root = getattr(self, "_hub_root", None)
         if hub_root is None:
             return None
-        supervisor = getattr(self, "_hub_supervisor", None)
         try:
-            snapshot = await build_hub_snapshot(supervisor, hub_root=Path(hub_root))
+            hub_client = getattr(self, "_hub_client", None)
+            snapshot = None
+            if hub_client is not None:
+                try:
+                    cp_snapshot = await hub_client.get_pma_snapshot()
+                    snapshot = cp_snapshot.snapshot
+                except Exception:
+                    pass
+            if snapshot is None:
+                supervisor = getattr(self, "_hub_supervisor", None)
+                snapshot = await build_hub_snapshot(supervisor, hub_root=Path(hub_root))
             base_prompt = load_pma_prompt(hub_root)
             prompt_state_key = self._pma_registry_key(record, message)
             return format_pma_prompt(

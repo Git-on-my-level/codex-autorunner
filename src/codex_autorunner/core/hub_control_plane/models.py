@@ -691,6 +691,111 @@ class ThreadCompactSeedUpdateRequest:
 
 
 @dataclass(frozen=True)
+class ThreadTargetCreateRequest:
+    agent_id: str
+    workspace_root: str
+    repo_id: Optional[str] = None
+    resource_kind: Optional[str] = None
+    resource_id: Optional[str] = None
+    display_name: Optional[str] = None
+    backend_thread_id: Optional[str] = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> "ThreadTargetCreateRequest":
+        return cls(
+            agent_id=_normalize_required_text(
+                data.get("agent_id"),
+                field_name="agent_id",
+            ),
+            workspace_root=_normalize_required_text(
+                data.get("workspace_root"),
+                field_name="workspace_root",
+            ),
+            repo_id=_normalize_optional_text(data.get("repo_id")),
+            resource_kind=_normalize_optional_text(data.get("resource_kind")),
+            resource_id=_normalize_optional_text(data.get("resource_id")),
+            display_name=_normalize_optional_text(data.get("display_name")),
+            backend_thread_id=_normalize_optional_text(data.get("backend_thread_id")),
+            metadata=_copy_mapping(data.get("metadata")),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "agent_id": self.agent_id,
+            "workspace_root": self.workspace_root,
+            "repo_id": self.repo_id,
+            "resource_kind": self.resource_kind,
+            "resource_id": self.resource_id,
+            "display_name": self.display_name,
+            "backend_thread_id": self.backend_thread_id,
+            "metadata": dict(self.metadata),
+        }
+
+
+@dataclass(frozen=True)
+class TranscriptHistoryRequest:
+    target_kind: str
+    target_id: str
+    limit: int = 10
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> "TranscriptHistoryRequest":
+        return cls(
+            target_kind=_normalize_required_text(
+                data.get("target_kind"),
+                field_name="target_kind",
+            ),
+            target_id=_normalize_required_text(
+                data.get("target_id"),
+                field_name="target_id",
+            ),
+            limit=max(1, _coerce_int(data.get("limit", 10), field_name="limit")),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "target_kind": self.target_kind,
+            "target_id": self.target_id,
+            "limit": self.limit,
+        }
+
+
+@dataclass(frozen=True)
+class TranscriptHistoryResponse:
+    entries: tuple[dict[str, Any], ...]
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> "TranscriptHistoryResponse":
+        raw_entries = data.get("entries")
+        if not isinstance(raw_entries, list):
+            return cls(entries=())
+        entries: list[dict[str, Any]] = []
+        for item in raw_entries:
+            if isinstance(item, Mapping):
+                entries.append(dict(item))
+        return cls(entries=tuple(entries))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"entries": [dict(e) for e in self.entries]}
+
+
+@dataclass(frozen=True)
+class PmaSnapshotResponse:
+    snapshot: dict[str, Any]
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> "PmaSnapshotResponse":
+        raw_snapshot = data.get("snapshot")
+        if isinstance(raw_snapshot, Mapping):
+            return cls(snapshot=dict(raw_snapshot))
+        return cls(snapshot={})
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"snapshot": dict(self.snapshot)}
+
+
+@dataclass(frozen=True)
 class ThreadTargetResponse:
     thread: Optional[ThreadTarget]
 
@@ -979,17 +1084,21 @@ __all__ = [
     "NotificationReplyTargetLookupRequest",
     "NotificationRecord",
     "NotificationRecordResponse",
+    "PmaSnapshotResponse",
     "SurfaceBindingLookupRequest",
     "SurfaceBindingResponse",
     "SurfaceBindingUpsertRequest",
     "ThreadCompactSeedUpdateRequest",
     "ThreadTarget",
     "ThreadTargetArchiveRequest",
+    "ThreadTargetCreateRequest",
     "ThreadTargetListRequest",
     "ThreadTargetListResponse",
     "ThreadTargetLookupRequest",
     "ThreadTargetResponse",
     "ThreadTargetResumeRequest",
+    "TranscriptHistoryRequest",
+    "TranscriptHistoryResponse",
     "WorkspaceSetupCommandRequest",
     "WorkspaceSetupCommandResult",
     "evaluate_handshake_compatibility",

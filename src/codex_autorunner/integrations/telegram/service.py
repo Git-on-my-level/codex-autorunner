@@ -469,33 +469,33 @@ class TelegramBotService(
         if not isinstance(delivered_message_id, int):
             return
         delivered_id_str = str(delivered_message_id)
-        if self._hub_client is not None:
-            from ...core.hub_control_plane import (
-                NotificationDeliveryMarkRequest as _CPDeliveryMarkRequest,
+        if self._hub_client is None:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.outbox.delivery_mark.hub_client_unavailable",
+                record_id=record.record_id,
             )
-
-            try:
-                await self._hub_client.mark_notification_delivered(
-                    _CPDeliveryMarkRequest(
-                        delivery_record_id=record.record_id,
-                        delivered_message_id=delivered_id_str,
-                    )
-                )
-                return
-            except (HubControlPlaneError, OSError, ValueError) as exc:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "telegram.outbox.delivery_mark.control_plane_failed",
-                    record_id=record.record_id,
-                    exc=exc,
-                )
-        from ...core.pma_notification_store import PmaNotificationStore
-
-        PmaNotificationStore(self._config.root).mark_delivered(
-            delivery_record_id=record.record_id,
-            delivered_message_id=delivered_id_str,
+            return
+        from ...core.hub_control_plane import (
+            NotificationDeliveryMarkRequest as _CPDeliveryMarkRequest,
         )
+
+        try:
+            await self._hub_client.mark_notification_delivered(
+                _CPDeliveryMarkRequest(
+                    delivery_record_id=record.record_id,
+                    delivered_message_id=delivered_id_str,
+                )
+            )
+        except (HubControlPlaneError, OSError, ValueError) as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.outbox.delivery_mark.control_plane_failed",
+                record_id=record.record_id,
+                exc=exc,
+            )
 
     async def _housekeeping_roots(self) -> list[Path]:
         roots: set[Path] = set()

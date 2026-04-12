@@ -353,12 +353,6 @@ async def test_discord_message_turns_include_reply_context_in_prompt(
         "build_surface_orchestration_ingress",
         lambda **_: _IngressStub(),
     )
-    monkeypatch.setattr(
-        discord_message_turns,
-        "PmaNotificationStore",
-        lambda _root: SimpleNamespace(get_reply_target=lambda **_kwargs: None),
-    )
-
     thread = ChatThreadRef(platform="discord", chat_id="channel-1", thread_id=None)
     reply_message = ChatMessageRef(thread=thread, message_id="msg-0")
     event = ChatMessageEvent(
@@ -815,25 +809,18 @@ async def test_discord_notification_reply_routes_to_pma_thread_with_context(
         context={"wake_up": {"kind": "dispatch_paused"}},
     )
 
-    class _NotificationStoreStub:
-        def __init__(self, _root: Path) -> None:
-            return
+    class _HubClientStub:
+        async def get_notification_reply_target(self, request: object) -> object:
+            assert isinstance(request, SimpleNamespace) or hasattr(
+                request, "surface_key"
+            )
+            return SimpleNamespace(record=notification_reply)
 
-        def get_reply_target(
-            self, *, surface_kind: str, surface_key: str, delivered_message_id: object
-        ) -> object | None:
-            assert surface_kind == "discord"
-            assert surface_key == "channel-1"
-            assert delivered_message_id == "notif-msg-1"
-            return notification_reply
-
-        def bind_continuation_thread(
-            self, *, notification_id: str, thread_target_id: str
-        ) -> None:
+        async def bind_notification_continuation(self, request: object) -> None:
             bind_calls.append(
                 {
-                    "notification_id": notification_id,
-                    "thread_target_id": thread_target_id,
+                    "notification_id": getattr(request, "notification_id", None),
+                    "thread_target_id": getattr(request, "thread_target_id", None),
                 }
             )
 
@@ -857,6 +844,7 @@ async def test_discord_notification_reply_routes_to_pma_thread_with_context(
             self._logger = logging.getLogger("test")
             self._config = SimpleNamespace(root=tmp_path)
             self._hub_supervisor = object()
+            self._hub_client = _HubClientStub()
             self._background_tasks: set[asyncio.Task[Any]] = set()
 
         def _resolve_agent_state(self, binding: dict[str, object]) -> tuple[str, None]:
@@ -939,11 +927,6 @@ async def test_discord_notification_reply_routes_to_pma_thread_with_context(
     ) -> dict[str, object]:
         return {}
 
-    monkeypatch.setattr(
-        discord_message_turns,
-        "PmaNotificationStore",
-        _NotificationStoreStub,
-    )
     monkeypatch.setattr(
         discord_message_turns,
         "build_surface_orchestration_ingress",

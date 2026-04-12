@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import re
@@ -1993,7 +1994,6 @@ class TelegramCommandHandlers(
             )
             key = await self._resolve_topic_key(message.chat_id, message.thread_id)
             try:
-                from ....core.pma_thread_store import PmaThreadStore
                 from ...chat.managed_thread_lifecycle import (
                     bind_surface_thread,
                     replace_surface_thread,
@@ -2077,11 +2077,26 @@ class TelegramCommandHandlers(
                     backend_thread_id=new_thread_id,
                     thread=replacement.replacement_thread,
                 )
-                config_root = getattr(self._config, "root", None)
-                if config_root is not None:
-                    PmaThreadStore(config_root).set_thread_compact_seed(
-                        replacement_thread.thread_target_id,
-                        summary_text,
+                hub_client = getattr(self, "_hub_client", None)
+                if hub_client is not None:
+                    from ....core.hub_control_plane import (
+                        ThreadCompactSeedUpdateRequest as _CPCompactSeedRequest,
+                    )
+
+                    with contextlib.suppress(Exception):
+                        await hub_client.update_thread_compact_seed(
+                            _CPCompactSeedRequest(
+                                thread_target_id=replacement_thread.thread_target_id,
+                                compact_seed=summary_text,
+                            )
+                        )
+                else:
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "telegram.compact.seed_save.hub_client_unavailable",
+                        chat_id=message.chat_id,
+                        thread_id=message.thread_id,
                     )
             except (
                 RuntimeError,
@@ -2126,7 +2141,6 @@ class TelegramCommandHandlers(
             return True, None
         key = await self._resolve_topic_key(message.chat_id, message.thread_id)
         try:
-            from ....core.pma_thread_store import PmaThreadStore
             from ...chat.managed_thread_lifecycle import replace_surface_thread
             from .commands.execution import _get_telegram_thread_binding
 
@@ -2176,11 +2190,26 @@ class TelegramCommandHandlers(
                 thread=current_thread,
             )
             replacement_thread = replacement.replacement_thread
-            config_root = getattr(self._config, "root", None)
-            if config_root is not None:
-                PmaThreadStore(config_root).set_thread_compact_seed(
-                    replacement_thread.thread_target_id,
-                    summary_text,
+            hub_client = getattr(self, "_hub_client", None)
+            if hub_client is not None:
+                from ....core.hub_control_plane import (
+                    ThreadCompactSeedUpdateRequest as _CPCompactSeedRequest,
+                )
+
+                with contextlib.suppress(Exception):
+                    await hub_client.update_thread_compact_seed(
+                        _CPCompactSeedRequest(
+                            thread_target_id=replacement_thread.thread_target_id,
+                            compact_seed=summary_text,
+                        )
+                    )
+            else:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.compact.seed_save.hub_client_unavailable",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
                 )
         except (RuntimeError, OSError, ValueError, TypeError, ConnectionError) as exc:
             log_event(

@@ -21,16 +21,20 @@ from .models import (
     NotificationLookupRequest,
     NotificationRecordResponse,
     NotificationReplyTargetLookupRequest,
+    PmaSnapshotResponse,
     SurfaceBindingLookupRequest,
     SurfaceBindingResponse,
     SurfaceBindingUpsertRequest,
     ThreadCompactSeedUpdateRequest,
     ThreadTargetArchiveRequest,
+    ThreadTargetCreateRequest,
     ThreadTargetListRequest,
     ThreadTargetListResponse,
     ThreadTargetLookupRequest,
     ThreadTargetResponse,
     ThreadTargetResumeRequest,
+    TranscriptHistoryRequest,
+    TranscriptHistoryResponse,
     WorkspaceSetupCommandRequest,
     WorkspaceSetupCommandResult,
 )
@@ -245,6 +249,33 @@ class HttpHubControlPlaneClient(HubControlPlaneClient):
             json_payload=request.to_dict(),
         )
         return ThreadTargetResponse.from_mapping(payload)
+
+    async def create_thread_target(
+        self, request: ThreadTargetCreateRequest
+    ) -> ThreadTargetResponse:
+        payload = await self._request(
+            method="POST",
+            path="/hub/api/control-plane/thread-targets",
+            json_payload=request.to_dict(),
+        )
+        return ThreadTargetResponse.from_mapping(payload)
+
+    async def get_transcript_history(
+        self, request: TranscriptHistoryRequest
+    ) -> TranscriptHistoryResponse:
+        payload = await self._request(
+            method="GET",
+            path="/hub/api/control-plane/transcript-history",
+            params=request.to_dict(),
+        )
+        return TranscriptHistoryResponse.from_mapping(payload)
+
+    async def get_pma_snapshot(self) -> PmaSnapshotResponse:
+        payload = await self._request(
+            method="GET",
+            path="/hub/api/control-plane/pma-snapshot",
+        )
+        return PmaSnapshotResponse.from_mapping(payload)
 
     async def get_agent_workspace(
         self, request: AgentWorkspaceLookupRequest

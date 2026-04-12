@@ -28,16 +28,20 @@ from .models import (
     NotificationRecord,
     NotificationRecordResponse,
     NotificationReplyTargetLookupRequest,
+    PmaSnapshotResponse,
     SurfaceBindingLookupRequest,
     SurfaceBindingResponse,
     SurfaceBindingUpsertRequest,
     ThreadCompactSeedUpdateRequest,
     ThreadTargetArchiveRequest,
+    ThreadTargetCreateRequest,
     ThreadTargetListRequest,
     ThreadTargetListResponse,
     ThreadTargetLookupRequest,
     ThreadTargetResponse,
     ThreadTargetResumeRequest,
+    TranscriptHistoryRequest,
+    TranscriptHistoryResponse,
     WorkspaceSetupCommandRequest,
     WorkspaceSetupCommandResult,
 )
@@ -53,8 +57,11 @@ CONTROL_PLANE_CAPABILITIES: tuple[str, ...] = (
     "notification_delivery_ack",
     "notification_records",
     "notification_reply_targets",
+    "pma_snapshot",
     "surface_bindings",
+    "thread_target_creation",
     "thread_targets",
+    "transcript_history",
     "workspace_setup_commands",
 )
 
@@ -340,6 +347,48 @@ class HubSharedStateService:
                 self._thread_store.get_thread(request.thread_target_id)
             )
         )
+
+    def create_thread_target(
+        self, request: ThreadTargetCreateRequest
+    ) -> ThreadTargetResponse:
+        from ..pma_thread_store import PmaThreadStore
+
+        thread_store = self._thread_store
+        if not isinstance(thread_store, PmaThreadStore):
+            return ThreadTargetResponse(thread=None)
+        created = thread_store.create_thread(
+            agent=request.agent_id,
+            workspace_root=Path(request.workspace_root),
+            repo_id=request.repo_id,
+            resource_kind=request.resource_kind,
+            resource_id=request.resource_id,
+            name=request.display_name,
+            backend_thread_id=request.backend_thread_id,
+            metadata=request.metadata or None,
+        )
+        return ThreadTargetResponse(thread=_thread_target_from_row(created))
+
+    def get_transcript_history(
+        self, request: TranscriptHistoryRequest
+    ) -> TranscriptHistoryResponse:
+        from ..orchestration.transcript_mirror import TranscriptMirrorStore
+
+        entries = TranscriptMirrorStore(self._hub_root).list_target_history(
+            target_kind=request.target_kind,
+            target_id=request.target_id,
+            limit=request.limit,
+        )
+        return TranscriptHistoryResponse(entries=tuple(entries))
+
+    def get_pma_snapshot(self) -> PmaSnapshotResponse:
+        import asyncio
+
+        from ..pma_context import build_hub_snapshot
+
+        snapshot = asyncio.run(
+            build_hub_snapshot(self._supervisor, hub_root=self._hub_root)
+        )
+        return PmaSnapshotResponse(snapshot=snapshot)
 
     def get_agent_workspace(
         self, request: AgentWorkspaceLookupRequest
