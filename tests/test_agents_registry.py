@@ -21,7 +21,6 @@ from codex_autorunner.core.config import (
     AgentConfig,
     AgentConfigMixin,
     AgentProfileConfig,
-    ResolvedAgentTarget,
 )
 from codex_autorunner.core.config_contract import ConfigError
 
@@ -642,17 +641,22 @@ class TestHermesHarness:
         monkeypatch.setattr(
             "codex_autorunner.agents.registry._resolve_runtime_agent_config",
             lambda _ctx: SimpleNamespace(
-                resolve_runtime_agent_target=lambda agent_id, profile=None: (
-                    ResolvedAgentTarget(
-                        logical_agent_id=agent_id,
-                        logical_profile=profile,
-                        runtime_agent_id="hermes-m4-pma",
-                        runtime_profile=None,
-                        resolution_kind="alias_profile",
-                    )
-                    if agent_id == "hermes" and profile == "m4-pma"
-                    else None
-                )
+                agents={
+                    "hermes": AgentConfig(
+                        backend=None,
+                        binary="hermes",
+                        serve_command=None,
+                        base_url=None,
+                        subagent_models=None,
+                    ),
+                    "hermes-m4-pma": AgentConfig(
+                        backend="hermes",
+                        binary="hermes-m4-pma",
+                        serve_command=None,
+                        base_url=None,
+                        subagent_models=None,
+                    ),
+                },
             ),
         )
 
@@ -879,13 +883,15 @@ class TestResolveAgentRuntimeCharacterization:
         monkeypatch.setattr(
             "codex_autorunner.agents.registry._resolve_runtime_agent_config",
             lambda _ctx: SimpleNamespace(
-                resolve_runtime_agent_target=lambda agent_id, profile=None: ResolvedAgentTarget(
-                    logical_agent_id=agent_id,
-                    logical_profile=profile,
-                    runtime_agent_id=agent_id,
-                    runtime_profile=profile,
-                    resolution_kind="passthrough",
-                )
+                agents={
+                    "hermes": AgentConfig(
+                        backend=None,
+                        binary="hermes",
+                        serve_command=None,
+                        base_url=None,
+                        subagent_models=None,
+                    ),
+                },
             ),
         )
 
@@ -920,13 +926,15 @@ class TestResolveAgentRuntimeCharacterization:
         monkeypatch.setattr(
             "codex_autorunner.agents.registry._resolve_runtime_agent_config",
             lambda _ctx: SimpleNamespace(
-                resolve_runtime_agent_target=lambda agent_id, profile=None: ResolvedAgentTarget(
-                    logical_agent_id=agent_id,
-                    logical_profile=profile,
-                    runtime_agent_id=agent_id,
-                    runtime_profile=profile,
-                    resolution_kind="passthrough",
-                )
+                agents={
+                    "hermes": AgentConfig(
+                        backend=None,
+                        binary="hermes",
+                        serve_command=None,
+                        base_url=None,
+                        subagent_models=None,
+                    ),
+                },
             ),
         )
 

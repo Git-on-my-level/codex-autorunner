@@ -33,6 +33,80 @@ class ResolvedAgentTarget:
     resolution_kind: Literal["passthrough", "canonical_profile", "alias_profile"]
 
 
+def _normalize_token(value: object) -> str:
+    return str(value or "").strip().lower()
+
+
+def _strip_agent_prefix(agent_id: str, runtime_kind: str) -> Optional[str]:
+    normalized_agent_id = _normalize_token(agent_id)
+    normalized_runtime_kind = _normalize_token(runtime_kind)
+    if not normalized_agent_id or not normalized_runtime_kind:
+        return None
+    for prefix in (
+        f"{normalized_runtime_kind}-",
+        f"{normalized_runtime_kind}_",
+    ):
+        if normalized_agent_id.startswith(prefix):
+            suffix = normalized_agent_id[len(prefix) :].strip()
+            return suffix or None
+    return None
+
+
+def resolve_agent_target_from_agents(
+    agents: Dict[str, AgentConfig],
+    agent_id: str,
+    *,
+    profile: Optional[str] = None,
+) -> ResolvedAgentTarget:
+    logical_agent_id = _normalize_token(agent_id)
+    logical_profile = _normalize_token(profile) or None
+    if not logical_agent_id:
+        from .config_contract import ConfigError
+
+        raise ConfigError("agent_id is required")
+
+    if logical_profile is not None:
+        agent = agents.get(logical_agent_id)
+        configured_profiles = agent.profiles if agent is not None else None
+        if (
+            isinstance(configured_profiles, dict)
+            and logical_profile in configured_profiles
+        ):
+            return ResolvedAgentTarget(
+                logical_agent_id=logical_agent_id,
+                logical_profile=logical_profile,
+                runtime_agent_id=logical_agent_id,
+                runtime_profile=logical_profile,
+                resolution_kind="canonical_profile",
+            )
+
+        for raw_runtime_agent_id, runtime_agent in agents.items():
+            runtime_agent_id = _normalize_token(raw_runtime_agent_id)
+            if runtime_agent_id == logical_agent_id:
+                continue
+            runtime_kind = _normalize_token(runtime_agent.backend or runtime_agent_id)
+            if runtime_kind != logical_agent_id:
+                continue
+            derived_profile = _strip_agent_prefix(runtime_agent_id, logical_agent_id)
+            if derived_profile != logical_profile:
+                continue
+            return ResolvedAgentTarget(
+                logical_agent_id=logical_agent_id,
+                logical_profile=logical_profile,
+                runtime_agent_id=runtime_agent_id,
+                runtime_profile=None,
+                resolution_kind="alias_profile",
+            )
+
+    return ResolvedAgentTarget(
+        logical_agent_id=logical_agent_id,
+        logical_profile=logical_profile,
+        runtime_agent_id=logical_agent_id,
+        runtime_profile=logical_profile,
+        resolution_kind="passthrough",
+    )
+
+
 def _parse_command(raw: Any) -> List[str]:
     if isinstance(raw, list):
         return [str(item) for item in raw if item]

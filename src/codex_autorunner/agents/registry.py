@@ -7,7 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional, cast
 
-from ..core.config import ResolvedAgentTarget, load_hub_config, load_repo_config
+from ..core.agent_config import resolve_agent_target_from_agents
+from ..core.config import load_hub_config, load_repo_config
 from ..core.config_contract import ConfigError
 from ..plugin_api import CAR_AGENT_ENTRYPOINT_GROUP, CAR_PLUGIN_API_VERSION
 from .aliased_harness import AliasedAgentHarness
@@ -367,12 +368,6 @@ def _strip_runtime_kind_prefix(agent_id: str, runtime_kind: str) -> str:
     return aid
 
 
-def _coerce_resolved_agent_target(value: object) -> Optional[ResolvedAgentTarget]:
-    if isinstance(value, ResolvedAgentTarget):
-        return value
-    return None
-
-
 def resolve_agent_runtime(
     agent_id: str,
     profile: Optional[str] = None,
@@ -402,22 +397,25 @@ def resolve_agent_runtime(
                     logical_profile = derived_profile
 
     config = _resolve_runtime_agent_config(context)
-    resolver = getattr(config, "resolve_runtime_agent_target", None)
-    if callable(resolver):
-        try:
-            resolved_target = _coerce_resolved_agent_target(
-                resolver(logical_agent_id, profile=logical_profile)
-            )
-        except (ValueError, TypeError, RuntimeError, ConfigError):
-            resolved_target = None
-        if resolved_target is not None:
-            return AgentRuntimeResolution(
-                logical_agent_id=resolved_target.logical_agent_id,
-                logical_profile=resolved_target.logical_profile,
-                runtime_agent_id=resolved_target.runtime_agent_id,
-                runtime_profile=resolved_target.runtime_profile,
-                resolution_kind=resolved_target.resolution_kind,
-            )
+    if config is not None:
+        config_agents = getattr(config, "agents", None)
+        if isinstance(config_agents, dict):
+            try:
+                resolved_target = resolve_agent_target_from_agents(
+                    config_agents,
+                    logical_agent_id,
+                    profile=logical_profile,
+                )
+            except (ValueError, TypeError, RuntimeError, ConfigError):
+                resolved_target = None
+            if resolved_target is not None:
+                return AgentRuntimeResolution(
+                    logical_agent_id=resolved_target.logical_agent_id,
+                    logical_profile=resolved_target.logical_profile,
+                    runtime_agent_id=resolved_target.runtime_agent_id,
+                    runtime_profile=resolved_target.runtime_profile,
+                    resolution_kind=resolved_target.resolution_kind,
+                )
 
     if logical_profile is not None:
         for candidate_id, candidate_descriptor in descriptors.items():
