@@ -15,11 +15,13 @@ from .core.config import (
     DEFAULT_HUB_CONFIG,
     REPO_OVERRIDE_FILENAME,
     ConfigError,
+)
+from .core.config_layering import (
+    GENERATED_CONFIG_HEADER as CORE_GENERATED_CONFIG_HEADER,
+)
+from .core.generated_hub_config import (
     normalize_generated_hub_config,
     save_hub_config_data,
-)
-from .core.config import (
-    GENERATED_CONFIG_HEADER as CORE_GENERATED_CONFIG_HEADER,
 )
 from .core.state import RunnerState, save_state
 from .core.ticket_linter_cli import ensure_ticket_linter

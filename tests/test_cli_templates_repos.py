@@ -1,7 +1,8 @@
 from typer.testing import CliRunner
 
 from codex_autorunner.cli import app
-from codex_autorunner.core.config import CONFIG_FILENAME, GENERATED_CONFIG_HEADER
+from codex_autorunner.core.config import CONFIG_FILENAME
+from codex_autorunner.core.config_layering import GENERATED_CONFIG_HEADER
 
 
 def _load_raw_hub_config(config_path):

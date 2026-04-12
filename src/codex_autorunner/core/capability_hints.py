@@ -14,9 +14,9 @@ from .config import (
     HubConfig,
     load_repo_config,
     load_root_defaults,
-    normalize_generated_hub_config,
     resolve_env_for_root,
 )
+from .generated_hub_config import normalize_generated_hub_config
 from .text_utils import _mapping
 
 CAPABILITY_HINT_ITEM_TYPE = "capability_hint"
