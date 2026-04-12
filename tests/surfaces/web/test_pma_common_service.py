@@ -6,7 +6,10 @@ import pytest
 from fastapi import HTTPException
 
 from codex_autorunner.core.pma_automation_store import PmaAutomationThreadNotFoundError
-from codex_autorunner.surfaces.web.schemas import PmaManagedThreadCreateRequest
+from codex_autorunner.surfaces.web.schemas import (
+    PmaAutomationSubscriptionCreateRequest,
+    PmaManagedThreadCreateRequest,
+)
 from codex_autorunner.surfaces.web.services.pma.common import (
     build_idempotency_key,
     normalize_optional_text,
@@ -108,6 +111,28 @@ def test_managed_thread_create_request_captures_explicit_followup_fields() -> No
     assert payload.terminal_followup_explicit is True
     assert payload.notify_lane_explicit is True
     assert payload.notify_once_explicit is True
+
+
+def test_automation_subscription_request_accepts_idempotency_key_aliases() -> None:
+    snake_case = PmaAutomationSubscriptionCreateRequest.model_validate(
+        {
+            "event_types": ["managed_thread_completed"],
+            "thread_id": "thread-1",
+            "lane_id": "pma:lane-next",
+            "idempotency_key": "sub-key-1",
+        }
+    )
+    camel_case = PmaAutomationSubscriptionCreateRequest.model_validate(
+        {
+            "eventTypes": ["managed_thread_completed"],
+            "threadId": "thread-1",
+            "laneId": "pma:lane-next",
+            "idempotencyKey": "sub-key-2",
+        }
+    )
+
+    assert snake_case.normalized_payload()["idempotency_key"] == "sub-key-1"
+    assert camel_case.normalized_payload()["idempotency_key"] == "sub-key-2"
 
 
 def test_resolve_managed_thread_followup_policy_uses_defaults_best_effort() -> None:
