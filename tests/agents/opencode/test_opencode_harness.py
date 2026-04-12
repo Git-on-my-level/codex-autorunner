@@ -10,6 +10,9 @@ import pytest
 
 from codex_autorunner.agents.base import harness_progress_event_stream
 from codex_autorunner.agents.opencode import harness as harness_module
+from codex_autorunner.agents.opencode import (
+    progress_synthesis as progress_synthesis_module,
+)
 from codex_autorunner.agents.opencode.harness import (
     OpenCodeHarness,
     _collect_terminal_text,
@@ -578,7 +581,9 @@ async def test_opencode_harness_polls_messages_for_rich_progress_when_sse_is_sil
     client.prompt_async = _prompt_async  # type: ignore[method-assign]
     client.list_messages = _list_messages  # type: ignore[method-assign]
     harness = OpenCodeHarness(_StubSupervisor(client))
-    monkeypatch.setattr(harness_module, "_SILENT_TURN_PROGRESS_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(
+        progress_synthesis_module, "SILENT_TURN_PROGRESS_POLL_SECONDS", 0.01
+    )
 
     turn = await harness.start_turn(
         workspace,
@@ -703,7 +708,9 @@ async def test_opencode_harness_polls_messages_when_preconnected_stream_only_has
     client.prompt_async = _prompt_async  # type: ignore[method-assign]
     client.list_messages = _list_messages  # type: ignore[method-assign]
     harness = OpenCodeHarness(_StubSupervisor(client))
-    monkeypatch.setattr(harness_module, "_SILENT_TURN_PROGRESS_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(
+        progress_synthesis_module, "SILENT_TURN_PROGRESS_POLL_SECONDS", 0.01
+    )
 
     turn = await harness.start_turn(
         workspace,
