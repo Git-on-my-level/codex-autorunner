@@ -731,3 +731,107 @@ async def test_hermes_supervisor_rejects_unknown_turn_lookup(tmp_path: Path) -> 
             await supervisor.interrupt_turn(tmp_path, session.session_id, None)
     finally:
         await supervisor.close_all()
+
+
+@pytest.mark.slow
+@pytest.mark.asyncio
+async def test_hermes_supervisor_fork_session_creates_handle(tmp_path: Path) -> None:
+    supervisor = HermesSupervisor(fixture_command("official"))
+    try:
+        session = await supervisor.create_session(tmp_path)
+        forked = await supervisor.fork_session(
+            tmp_path, session.session_id, title="Fork"
+        )
+
+        assert forked is not None
+        assert forked.session_id != session.session_id
+        assert forked.title == "Fork"
+    finally:
+        await supervisor.close_all()
+
+
+@pytest.mark.slow
+@pytest.mark.asyncio
+async def test_hermes_supervisor_fork_session_unsupported_returns_none(
+    tmp_path: Path,
+) -> None:
+    from codex_autorunner.agents.acp.protocol import ACPSessionForkResult
+
+    result = ACPSessionForkResult.from_optional_response(None)
+    assert result.supported is False
+    assert result.session_id is None
+
+
+@pytest.mark.slow
+@pytest.mark.asyncio
+async def test_hermes_supervisor_set_session_model_returns_true_when_supported(
+    tmp_path: Path,
+) -> None:
+    supervisor = HermesSupervisor(fixture_command("official"))
+    try:
+        session = await supervisor.create_session(tmp_path)
+        supported = await supervisor.set_session_model(
+            tmp_path,
+            session.session_id,
+            "anthropic/claude-opus",
+        )
+
+        assert supported is True
+    finally:
+        await supervisor.close_all()
+
+
+@pytest.mark.slow
+@pytest.mark.asyncio
+async def test_hermes_supervisor_set_session_model_returns_false_when_unsupported(
+    tmp_path: Path,
+) -> None:
+    from codex_autorunner.agents.acp.protocol import ACPSetModelResult
+
+    result = ACPSetModelResult.from_optional_response(None)
+    assert result.supported is False
+
+
+@pytest.mark.slow
+@pytest.mark.asyncio
+async def test_hermes_supervisor_set_session_mode_returns_true_when_supported(
+    tmp_path: Path,
+) -> None:
+    supervisor = HermesSupervisor(fixture_command("official"))
+    try:
+        session = await supervisor.create_session(tmp_path)
+        supported = await supervisor.set_session_mode(
+            tmp_path,
+            session.session_id,
+            "code",
+        )
+
+        assert supported is True
+    finally:
+        await supervisor.close_all()
+
+
+@pytest.mark.slow
+@pytest.mark.asyncio
+async def test_hermes_supervisor_set_session_mode_returns_false_when_unsupported(
+    tmp_path: Path,
+) -> None:
+    from codex_autorunner.agents.acp.protocol import ACPSetModeResult
+
+    result = ACPSetModeResult.from_optional_response(None)
+    assert result.supported is False
+
+
+@pytest.mark.slow
+@pytest.mark.asyncio
+async def test_hermes_supervisor_advertised_commands_returns_list(
+    tmp_path: Path,
+) -> None:
+    supervisor = HermesSupervisor(fixture_command("official"))
+    try:
+        await supervisor.ensure_ready(tmp_path)
+        commands = await supervisor.advertised_commands(tmp_path)
+
+        assert isinstance(commands, list)
+    finally:
+        await supervisor.close_all()

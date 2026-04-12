@@ -19,6 +19,7 @@ from ...core.time_utils import now_iso
 from ...core.utils import resolve_executable
 from ...workspace import canonical_workspace_root
 from ..acp import (
+    ACPAdvertisedCommand,
     ACPPermissionRequestEvent,
     ACPPromptHandle,
     ACPSubprocessSupervisor,
@@ -213,6 +214,118 @@ class HermesSupervisor:
             )
             for session in sessions
         ]
+
+    async def fork_session(
+        self,
+        workspace_root: Path,
+        session_id: str,
+        *,
+        title: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> HermesSessionHandle | None:
+        started_at = time.monotonic()
+        log_event(
+            self._logger,
+            logging.INFO,
+            "hermes.session.fork_requested",
+            workspace_root=_workspace_key(workspace_root),
+            source_session_id=session_id,
+            title=title,
+            launch_command=list(self._command),
+        )
+        result = await self._acp.fork_session(
+            workspace_root,
+            session_id,
+            title=title,
+            metadata=metadata,
+        )
+        if not result.supported:
+            log_event(
+                self._logger,
+                logging.INFO,
+                "hermes.session.fork_unsupported",
+                workspace_root=_workspace_key(workspace_root),
+                source_session_id=session_id,
+                elapsed_ms=_elapsed_ms(started_at),
+            )
+            return None
+        handle = HermesSessionHandle(
+            session_id=result.session_id or "",
+            title=result.title,
+            raw=dict(result.raw),
+        )
+        log_event(
+            self._logger,
+            logging.INFO,
+            "hermes.session.forked",
+            workspace_root=_workspace_key(workspace_root),
+            source_session_id=session_id,
+            forked_session_id=handle.session_id,
+            elapsed_ms=_elapsed_ms(started_at),
+        )
+        return handle
+
+    async def set_session_model(
+        self,
+        workspace_root: Path,
+        session_id: str,
+        model_id: str,
+    ) -> bool:
+        started_at = time.monotonic()
+        log_event(
+            self._logger,
+            logging.INFO,
+            "hermes.session.set_model_requested",
+            workspace_root=_workspace_key(workspace_root),
+            session_id=session_id,
+            model_id=model_id,
+        )
+        result = await self._acp.set_session_model(workspace_root, session_id, model_id)
+        log_event(
+            self._logger,
+            logging.INFO,
+            "hermes.session.set_model_completed",
+            workspace_root=_workspace_key(workspace_root),
+            session_id=session_id,
+            model_id=model_id,
+            supported=result.supported,
+            elapsed_ms=_elapsed_ms(started_at),
+        )
+        return result.supported
+
+    async def set_session_mode(
+        self,
+        workspace_root: Path,
+        session_id: str,
+        mode: str,
+    ) -> bool:
+        started_at = time.monotonic()
+        log_event(
+            self._logger,
+            logging.INFO,
+            "hermes.session.set_mode_requested",
+            workspace_root=_workspace_key(workspace_root),
+            session_id=session_id,
+            mode=mode,
+        )
+        result = await self._acp.set_session_mode(workspace_root, session_id, mode)
+        log_event(
+            self._logger,
+            logging.INFO,
+            "hermes.session.set_mode_completed",
+            workspace_root=_workspace_key(workspace_root),
+            session_id=session_id,
+            mode=mode,
+            supported=result.supported,
+            elapsed_ms=_elapsed_ms(started_at),
+        )
+        return result.supported
+
+    async def advertised_commands(
+        self,
+        workspace_root: Path,
+    ) -> list[ACPAdvertisedCommand]:
+        return await self._acp.advertised_commands(workspace_root)
 
     async def start_turn(
         self,

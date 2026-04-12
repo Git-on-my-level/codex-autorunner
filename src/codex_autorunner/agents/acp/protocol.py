@@ -115,9 +115,134 @@ def coerce_session_list(payload: Any) -> list[ACPSessionDescriptor]:
     return sessions
 
 
+@dataclass(frozen=True)
+class ACPOptionalMethodResult:
+    supported: bool
+    result: Optional[Any] = None
+    raw: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_optional_response(cls, value: Any) -> "ACPOptionalMethodResult":
+        if value is None:
+            return cls(supported=False)
+        return cls(
+            supported=True,
+            result=value,
+            raw=_coerce_mapping(value) if isinstance(value, dict) else {},
+        )
+
+
+@dataclass(frozen=True)
+class ACPSessionForkResult:
+    session_id: Optional[str]
+    title: Optional[str] = None
+    supported: bool = True
+    raw: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_optional_response(cls, value: Any) -> "ACPSessionForkResult":
+        if value is None:
+            return cls(session_id=None, supported=False)
+        mapping = _coerce_mapping(value)
+        session = (
+            _coerce_mapping(mapping.get("session")) if "session" in mapping else mapping
+        )
+        session_id = _extract_identifier(session, "sessionId", "session_id", "id")
+        return cls(
+            session_id=session_id,
+            title=_normalize_optional_text(session.get("title")),
+            supported=True,
+            raw=mapping,
+        )
+
+
+@dataclass(frozen=True)
+class ACPSetModelResult:
+    supported: bool
+    model_id: Optional[str] = None
+    raw: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_optional_response(cls, value: Any) -> "ACPSetModelResult":
+        if value is None:
+            return cls(supported=False)
+        mapping = _coerce_mapping(value)
+        return cls(
+            supported=True,
+            model_id=_normalize_optional_text(
+                mapping.get("modelId") or mapping.get("model_id")
+            ),
+            raw=mapping,
+        )
+
+
+@dataclass(frozen=True)
+class ACPSetModeResult:
+    supported: bool
+    mode: Optional[str] = None
+    raw: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_optional_response(cls, value: Any) -> "ACPSetModeResult":
+        if value is None:
+            return cls(supported=False)
+        mapping = _coerce_mapping(value)
+        return cls(
+            supported=True,
+            mode=_normalize_optional_text(mapping.get("mode")),
+            raw=mapping,
+        )
+
+
+@dataclass(frozen=True)
+class ACPAdvertisedCommand:
+    name: str
+    description: Optional[str] = None
+    raw: dict[str, Any] = field(default_factory=dict)
+
+
+def extract_advertised_commands(
+    capabilities: dict[str, Any],
+) -> list[ACPAdvertisedCommand]:
+    if not isinstance(capabilities, dict):
+        return []
+    commands_raw = capabilities.get("commands")
+    if not isinstance(commands_raw, list):
+        commands_raw = capabilities.get("slashCommands")
+    if not isinstance(commands_raw, list):
+        session_caps = capabilities.get("sessionCapabilities")
+        if isinstance(session_caps, dict):
+            commands_raw = session_caps.get("commands")
+    if not isinstance(commands_raw, list):
+        return []
+    commands: list[ACPAdvertisedCommand] = []
+    for entry in commands_raw:
+        if not isinstance(entry, dict):
+            continue
+        name = _normalize_optional_text(entry.get("name") or entry.get("command"))
+        if not name:
+            continue
+        commands.append(
+            ACPAdvertisedCommand(
+                name=name,
+                description=_normalize_optional_text(
+                    entry.get("description") or entry.get("desc")
+                ),
+                raw=dict(entry),
+            )
+        )
+    return commands
+
+
 __all__ = [
+    "ACPAdvertisedCommand",
     "ACPInitializeResult",
+    "ACPOptionalMethodResult",
     "ACPPromptDescriptor",
     "ACPSessionDescriptor",
+    "ACPSessionForkResult",
+    "ACPSetModeResult",
+    "ACPSetModelResult",
     "coerce_session_list",
+    "extract_advertised_commands",
 ]
