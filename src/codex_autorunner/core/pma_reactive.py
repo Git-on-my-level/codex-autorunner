@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 import time
 from pathlib import Path
 from typing import Any, Optional
 
 from .locks import file_lock
-from .orchestration.legacy_backfill_gate import ensure_legacy_orchestration_backfill
 from .orchestration.sqlite import open_orchestration_sqlite
 from .text_utils import lock_path_for
 from .time_utils import now_iso
@@ -40,6 +40,9 @@ class PmaReactiveStore:
             state = self._load_unlocked()
             if state is not None:
                 return state
+            state = self._load_legacy_file_unlocked()
+            if state is not None:
+                return state
             state = default_pma_reactive_state()
             self._save_unlocked(state)
             return state
@@ -51,7 +54,11 @@ class PmaReactiveStore:
         """
         now = time.time()
         with file_lock(self._lock_path()):
-            state = self._load_unlocked() or default_pma_reactive_state()
+            state = self._load_unlocked()
+            if state is None:
+                state = self._load_legacy_file_unlocked()
+            if state is None:
+                state = default_pma_reactive_state()
             last_enqueued = state.get("last_enqueued")
             if not isinstance(last_enqueued, dict):
                 last_enqueued = {}
@@ -67,15 +74,23 @@ class PmaReactiveStore:
         return True
 
     def _load_unlocked(self) -> Optional[dict[str, Any]]:
-        ensure_legacy_orchestration_backfill(self._hub_root, durable=True)
-        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
-            rows = conn.execute(
-                """
-                SELECT debounce_key, last_enqueued_at
-                  FROM orch_reactive_debounce_state
-                 ORDER BY debounce_key ASC
-                """
-            ).fetchall()
+        try:
+            with open_orchestration_sqlite(
+                self._hub_root,
+                durable=True,
+                migrate=False,
+            ) as conn:
+                rows = conn.execute(
+                    """
+                    SELECT debounce_key, last_enqueued_at
+                      FROM orch_reactive_debounce_state
+                     ORDER BY debounce_key ASC
+                    """
+                ).fetchall()
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc).lower():
+                raise
+            return None
         if not rows:
             return None
         return {
@@ -88,11 +103,20 @@ class PmaReactiveStore:
             },
         }
 
+    def _load_legacy_file_unlocked(self) -> Optional[dict[str, Any]]:
+        if not self._path.exists():
+            return None
+        try:
+            raw = self._path.read_text(encoding="utf-8")
+            parsed = json.loads(raw)
+        except (OSError, json.JSONDecodeError):
+            return default_pma_reactive_state()
+        return parsed if isinstance(parsed, dict) else default_pma_reactive_state()
+
     def _save_unlocked(self, state: dict[str, Any]) -> None:
         last_enqueued = state.get("last_enqueued")
         values = last_enqueued if isinstance(last_enqueued, dict) else {}
         stamp = now_iso()
-        ensure_legacy_orchestration_backfill(self._hub_root, durable=True)
         with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
             with conn:
                 conn.execute("DELETE FROM orch_reactive_debounce_state")

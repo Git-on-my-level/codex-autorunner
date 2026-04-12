@@ -26,6 +26,8 @@ from ...core.flows.workspace_root import resolve_ticket_flow_workspace_root
 from ...core.hub_projection_store import HubProjectionStore
 from ...core.logging_utils import safe_log, setup_rotating_logger
 from ...core.optional_dependencies import require_optional_dependencies
+from ...core.orchestration.sqlite import prepare_orchestration_sqlite
+from ...core.pma_thread_store import prepare_pma_thread_store
 from ...core.runtime import RuntimeContext
 from ...core.runtime_services import RuntimeServices
 from ...core.state import load_state
@@ -667,6 +669,9 @@ def build_hub_context(
         if base_path is not None
         else config.server_base_path
     )
+    durable_writes = bool(getattr(config, "durable_writes", False))
+    prepare_orchestration_sqlite(config.root, durable=durable_writes)
+    prepare_pma_thread_store(config.root, durable=durable_writes)
     supervisor = HubSupervisor(
         config,
         backend_factory_builder=build_agent_backend_factory,

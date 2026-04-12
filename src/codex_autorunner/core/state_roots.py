@@ -26,6 +26,7 @@ GLOBAL_STATE_ROOT_ENV = "CAR_GLOBAL_STATE_ROOT"
 
 REPO_STATE_DIR = ".codex-autorunner"
 ORCHESTRATION_DB_FILENAME = "orchestration.sqlite3"
+ORCHESTRATION_COMPATIBILITY_METADATA_FILENAME = "orchestration-compatibility.json"
 HUB_PROJECTION_DB_FILENAME = "hub_projection.sqlite3"
 _SAFE_HUB_RESOURCE_SEGMENT = re.compile(r"^[A-Za-z0-9._-]+$")
 
@@ -107,6 +108,17 @@ def resolve_hub_orchestration_db_path(hub_root: Path) -> Path:
         resolve=False,
     )
     return state_root / ORCHESTRATION_DB_FILENAME
+
+
+def resolve_hub_orchestration_compatibility_metadata_path(hub_root: Path) -> Path:
+    """Return the canonical orchestration compatibility metadata path."""
+    state_root = resolve_hub_state_root(hub_root)
+    validate_path_within_roots(
+        state_root,
+        allowed_roots=get_canonical_roots(hub_root=hub_root),
+        resolve=False,
+    )
+    return state_root / ORCHESTRATION_COMPATIBILITY_METADATA_FILENAME
 
 
 def resolve_hub_projection_db_path(hub_root: Path) -> Path:

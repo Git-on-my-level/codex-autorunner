@@ -319,6 +319,26 @@ def _backfill_missing_thread_status(conn: Any) -> None:
             )
 
 
+def _thread_row_to_record(row: Any) -> dict[str, Any]:
+    return PmaThreadRecord.from_orchestration_row(row).to_dict()
+
+
+def _execution_row_to_record(row: Any) -> dict[str, Any]:
+    return PmaExecutionRecord.from_orchestration_row(row).to_dict()
+
+
+def prepare_pma_thread_store(hub_root: Path, *, durable: bool = False) -> None:
+    bootstrap = PmaThreadStoreBootstrap(
+        hub_root=hub_root,
+        db_path=default_pma_threads_db_path(hub_root),
+        durable=durable,
+        thread_row_to_record=_thread_row_to_record,
+        execution_row_to_record=_execution_row_to_record,
+        ensure_legacy_schema=_ensure_schema,
+    )
+    bootstrap.prepare()
+
+
 class PmaThreadStore:
     """Current PMA-backed persistence for runtime thread targets and executions.
 
@@ -348,13 +368,13 @@ class PmaThreadStore:
             hub_root=self._hub_root,
             db_path=self._path,
             durable=self._durable,
-            thread_row_to_record=self._thread_row_to_record,
-            execution_row_to_record=self._execution_row_to_record,
+            thread_row_to_record=_thread_row_to_record,
+            execution_row_to_record=_execution_row_to_record,
             ensure_legacy_schema=_ensure_schema,
         )
         self._lifecycle = PmaThreadStoreLifecycle(
             stale_running_threshold_seconds=self._stale_running_threshold_seconds,
-            execution_row_to_record=self._execution_row_to_record,
+            execution_row_to_record=_execution_row_to_record,
             transition_thread_status=self._transition_thread_status,
         )
         self._initialize()
@@ -397,17 +417,10 @@ class PmaThreadStore:
         with self._bootstrap.write_conn() as conn:
             yield conn
 
-    def _thread_row_to_record(self, row: Any) -> dict[str, Any]:
-        return PmaThreadRecord.from_orchestration_row(row).to_dict()
-
     def get_thread_runtime_binding(
         self, managed_thread_id: str
     ) -> Optional[RuntimeThreadBinding]:
         return get_runtime_thread_binding(self._hub_root, managed_thread_id)
-
-    @staticmethod
-    def _execution_row_to_record(row: Any) -> dict[str, Any]:
-        return PmaExecutionRecord.from_orchestration_row(row).to_dict()
 
     def _fetch_thread(
         self, conn: Any, managed_thread_id: str
@@ -422,7 +435,7 @@ class PmaThreadStore:
         ).fetchone()
         if row is None:
             return None
-        return self._thread_row_to_record(row)
+        return _thread_row_to_record(row)
 
     def _transition_thread_status(
         self,
@@ -640,7 +653,7 @@ class PmaThreadStore:
 
         with self._read_conn() as conn:
             rows = conn.execute(query, params).fetchall()
-        return [self._thread_row_to_record(row) for row in rows]
+        return [_thread_row_to_record(row) for row in rows]
 
     def count_threads_by_repo(
         self, *, agent: Optional[str] = None, status: Optional[str] = None
@@ -1029,7 +1042,7 @@ class PmaThreadStore:
 
         if row is None:
             raise RuntimeError("Failed to create managed PMA turn")
-        return self._execution_row_to_record(row)
+        return _execution_row_to_record(row)
 
     def mark_turn_finished(
         self,
@@ -1209,7 +1222,7 @@ class PmaThreadStore:
                 """,
                 (managed_thread_id, limit),
             ).fetchall()
-        return [self._execution_row_to_record(row) for row in rows]
+        return [_execution_row_to_record(row) for row in rows]
 
     def has_running_turn(self, managed_thread_id: str) -> bool:
         return self.get_running_turn(managed_thread_id) is not None
@@ -1236,7 +1249,7 @@ class PmaThreadStore:
             ).fetchone()
         if row is None:
             return None
-        return self._execution_row_to_record(row)
+        return _execution_row_to_record(row)
 
     def get_turn(
         self, managed_thread_id: str, managed_turn_id: str
@@ -1253,7 +1266,7 @@ class PmaThreadStore:
             ).fetchone()
         if row is None:
             return None
-        return self._execution_row_to_record(row)
+        return _execution_row_to_record(row)
 
     def get_turn_by_client_turn_id(
         self, managed_thread_id: str, client_turn_id: str
@@ -1282,7 +1295,7 @@ class PmaThreadStore:
             ).fetchone()
         if row is None:
             return None
-        return self._execution_row_to_record(row)
+        return _execution_row_to_record(row)
 
     def list_queued_turns(
         self, managed_thread_id: str, *, limit: int = 200
@@ -1310,7 +1323,7 @@ class PmaThreadStore:
                     limit,
                 ),
             ).fetchall()
-        return [self._execution_row_to_record(row) for row in rows]
+        return [_execution_row_to_record(row) for row in rows]
 
     def list_pending_turn_queue_items(
         self, managed_thread_id: str, *, limit: int = 200
