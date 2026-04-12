@@ -1,6 +1,6 @@
 import dataclasses
 import shlex
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Mapping, Optional
 
 from .config_contract import ConfigError
 
@@ -54,14 +54,74 @@ def _strip_agent_prefix(agent_id: str, runtime_kind: str) -> Optional[str]:
     return None
 
 
+def _infer_backend_id_by_prefix(
+    backend_id: str,
+    known_agent_ids: Mapping[str, object],
+) -> Optional[str]:
+    normalized_backend_id = _normalize_token(backend_id)
+    if not normalized_backend_id:
+        return None
+    boundary_prefixes: list[str] = []
+    for i, ch in enumerate(normalized_backend_id):
+        if ch in "-_" and i > 0:
+            boundary_prefixes.append(normalized_backend_id[:i])
+    if not boundary_prefixes:
+        return None
+    normalized_agent_ids = {_normalize_token(agent_id) for agent_id in known_agent_ids}
+    for prefix in sorted(boundary_prefixes, key=len, reverse=True):
+        if prefix in normalized_agent_ids:
+            return prefix
+    return None
+
+
+def _normalize_requested_agent_target(
+    agents: Mapping[str, AgentConfig],
+    agent_id: str,
+    *,
+    profile: Optional[str] = None,
+    runtime_alias_kinds: Optional[Mapping[str, str]] = None,
+) -> tuple[str, Optional[str]]:
+    logical_agent_id = _normalize_token(agent_id)
+    logical_profile = _normalize_token(profile) or None
+    if logical_profile is not None:
+        return logical_agent_id, logical_profile
+
+    configured_agent = agents.get(logical_agent_id)
+    if configured_agent is not None:
+        runtime_kind = _normalize_token(configured_agent.backend or logical_agent_id)
+        if runtime_kind == logical_agent_id:
+            inferred_runtime_kind = _infer_backend_id_by_prefix(
+                logical_agent_id, agents
+            )
+            if inferred_runtime_kind is not None:
+                runtime_kind = inferred_runtime_kind
+        derived_profile = _strip_agent_prefix(logical_agent_id, runtime_kind)
+        if derived_profile is not None:
+            return runtime_kind, derived_profile
+
+    if runtime_alias_kinds is not None:
+        runtime_kind = _normalize_token(runtime_alias_kinds.get(logical_agent_id))
+        derived_profile = _strip_agent_prefix(logical_agent_id, runtime_kind)
+        if derived_profile is not None:
+            return runtime_kind, derived_profile
+
+    return logical_agent_id, None
+
+
 def resolve_agent_target_from_agents(
     agents: Dict[str, AgentConfig],
     agent_id: str,
     *,
     profile: Optional[str] = None,
+    runtime_alias_kinds: Optional[Mapping[str, str]] = None,
+    allow_runtime_alias_fallback: bool = False,
 ) -> ResolvedAgentTarget:
-    logical_agent_id = _normalize_token(agent_id)
-    logical_profile = _normalize_token(profile) or None
+    logical_agent_id, logical_profile = _normalize_requested_agent_target(
+        agents,
+        agent_id,
+        profile=profile,
+        runtime_alias_kinds=runtime_alias_kinds,
+    )
     if not logical_agent_id:
         from .config_contract import ConfigError
 
@@ -87,6 +147,12 @@ def resolve_agent_target_from_agents(
             if runtime_agent_id == logical_agent_id:
                 continue
             runtime_kind = _normalize_token(runtime_agent.backend or runtime_agent_id)
+            if runtime_kind == runtime_agent_id:
+                inferred_runtime_kind = _infer_backend_id_by_prefix(
+                    runtime_agent_id, agents
+                )
+                if inferred_runtime_kind is not None:
+                    runtime_kind = inferred_runtime_kind
             if runtime_kind != logical_agent_id:
                 continue
             derived_profile = _strip_agent_prefix(runtime_agent_id, logical_agent_id)
@@ -99,6 +165,25 @@ def resolve_agent_target_from_agents(
                 runtime_profile=None,
                 resolution_kind="alias_profile",
             )
+        if allow_runtime_alias_fallback and runtime_alias_kinds is not None:
+            for raw_runtime_agent_id, runtime_kind in runtime_alias_kinds.items():
+                runtime_agent_id = _normalize_token(raw_runtime_agent_id)
+                if runtime_agent_id == logical_agent_id:
+                    continue
+                if _normalize_token(runtime_kind) != logical_agent_id:
+                    continue
+                derived_profile = _strip_agent_prefix(
+                    runtime_agent_id, logical_agent_id
+                )
+                if derived_profile != logical_profile:
+                    continue
+                return ResolvedAgentTarget(
+                    logical_agent_id=logical_agent_id,
+                    logical_profile=logical_profile,
+                    runtime_agent_id=runtime_agent_id,
+                    runtime_profile=None,
+                    resolution_kind="alias_profile",
+                )
 
     return ResolvedAgentTarget(
         logical_agent_id=logical_agent_id,

@@ -238,6 +238,21 @@ class TestValidateAppServerConfig:
         with pytest.raises(ConfigError, match="must be a mapping"):
             _validate_app_server_config({"app_server": {"prompts": "bad"}})
 
+    def test_output_must_be_mapping(self) -> None:
+        with pytest.raises(ConfigError, match="app_server.output must be a mapping"):
+            _validate_app_server_config({"app_server": {"output": "bad"}})
+
+    def test_output_policy_must_be_known_value(self) -> None:
+        _validate_app_server_config(
+            {"app_server": {"output": {"policy": "all_agent_messages"}}}
+        )
+        with pytest.raises(
+            ConfigError, match="app_server.output.policy must be one of"
+        ):
+            _validate_app_server_config(
+                {"app_server": {"output": {"policy": "invalid"}}}
+            )
+
     def test_prompts_section_must_be_mapping(self) -> None:
         with pytest.raises(ConfigError, match="must be a mapping"):
             _validate_app_server_config(

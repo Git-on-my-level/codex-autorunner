@@ -6,6 +6,7 @@ from codex_autorunner.core.agent_config import (
     ResolvedAgentTarget,
     _parse_command,
     parse_agents_config,
+    resolve_agent_target_from_agents,
 )
 from codex_autorunner.core.config_contract import ConfigError
 
@@ -330,3 +331,47 @@ class TestBackwardCompatImports:
         assert ConfigAgentConfig is AgentConfig
         assert ConfigAgentProfileConfig is AgentProfileConfig
         assert ConfigResolvedAgentTarget is ResolvedAgentTarget
+
+
+class TestResolveAgentTargetFromAgents:
+    def test_configured_alias_id_normalizes_without_registry_help(self) -> None:
+        result = resolve_agent_target_from_agents(
+            {
+                "hermes": AgentConfig(
+                    backend=None,
+                    binary="hermes",
+                    serve_command=None,
+                    base_url=None,
+                    subagent_models=None,
+                ),
+                "hermes-m4-pma": AgentConfig(
+                    backend="hermes",
+                    binary="hermes-m4-pma",
+                    serve_command=None,
+                    base_url=None,
+                    subagent_models=None,
+                ),
+            },
+            "hermes-m4-pma",
+        )
+
+        assert result.logical_agent_id == "hermes"
+        assert result.logical_profile == "m4-pma"
+        assert result.runtime_agent_id == "hermes-m4-pma"
+        assert result.runtime_profile is None
+        assert result.resolution_kind == "alias_profile"
+
+    def test_runtime_alias_fallback_can_resolve_profile_without_config(self) -> None:
+        result = resolve_agent_target_from_agents(
+            {},
+            "hermes",
+            profile="m4-pma",
+            runtime_alias_kinds={"hermes-m4-pma": "hermes"},
+            allow_runtime_alias_fallback=True,
+        )
+
+        assert result.logical_agent_id == "hermes"
+        assert result.logical_profile == "m4-pma"
+        assert result.runtime_agent_id == "hermes-m4-pma"
+        assert result.runtime_profile is None
+        assert result.resolution_kind == "alias_profile"

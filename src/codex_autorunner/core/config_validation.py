@@ -19,6 +19,8 @@ from .mutation_policy import (
 )
 from .path_utils import ConfigPathError, resolve_config_path
 
+_APP_SERVER_OUTPUT_POLICIES = {"final_only", "all_agent_messages"}
+
 
 def _normalize_ticket_flow_approval_mode(value: Any, *, scope: str) -> str:
     if not isinstance(value, str):
@@ -193,6 +195,17 @@ def _validate_app_server_config(cfg: Dict[str, Any]) -> None:
                         )
                 elif value <= 0:
                     raise ConfigError(f"app_server.client.{key} must be > 0")
+    output_cfg = app_server_cfg.get("output")
+    if output_cfg is not None:
+        if not isinstance(output_cfg, dict):
+            raise ConfigError("app_server.output must be a mapping if provided")
+        if "policy" in output_cfg:
+            policy = output_cfg.get("policy")
+            if not isinstance(policy, str):
+                raise ConfigError("app_server.output.policy must be a string")
+            if policy.strip().lower() not in _APP_SERVER_OUTPUT_POLICIES:
+                allowed = ", ".join(sorted(_APP_SERVER_OUTPUT_POLICIES))
+                raise ConfigError(f"app_server.output.policy must be one of: {allowed}")
     prompts = app_server_cfg.get("prompts")
     if prompts is not None:
         if not isinstance(prompts, dict):

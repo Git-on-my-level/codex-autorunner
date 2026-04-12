@@ -359,12 +359,11 @@ def _parse_app_server_output_config(
 ) -> AppServerOutputConfig:
     cfg = cfg if isinstance(cfg, dict) else {}
     defaults = defaults if isinstance(defaults, dict) else {}
-    policy_raw = cfg.get("policy", defaults.get("policy"))
+    policy_raw = cfg.get("policy", defaults.get("policy", "final_only"))
     policy = str(policy_raw).strip().lower() if policy_raw is not None else ""
     if policy not in _APP_SERVER_OUTPUT_POLICIES:
-        policy = str(defaults.get("policy") or "final_only").strip().lower()
-    if policy not in _APP_SERVER_OUTPUT_POLICIES:
-        policy = "final_only"
+        allowed = ", ".join(sorted(_APP_SERVER_OUTPUT_POLICIES))
+        raise ConfigError(f"app_server.output.policy must be one of: {allowed}")
     return AppServerOutputConfig(policy=policy)
 
 

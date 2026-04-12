@@ -506,6 +506,19 @@ class TestHermesHarness:
         assert harness._supervisor is sentinel_supervisors["hermes-m4-pma"]
         assert ("hermes", "hermes-m4-pma", "") in ctx._agent_runtime_supervisors
 
+        resolved_alias = resolve_agent_runtime("hermes-m4-pma", context=MockConfig)
+        assert resolved_alias.logical_agent_id == "hermes"
+        assert resolved_alias.logical_profile == "m4-pma"
+        assert resolved_alias.runtime_agent_id == "hermes-m4-pma"
+        assert resolved_alias.runtime_profile is None
+        assert resolved_alias.resolution_kind == "alias_profile"
+
+        resolved_profile = resolve_agent_runtime(
+            "hermes", profile="m4-pma", context=MockConfig
+        )
+        assert resolved_profile.runtime_agent_id == "hermes-m4-pma"
+        assert resolved_profile.resolution_kind == "alias_profile"
+
     def test_validate_agent_id_prefers_repo_config_for_path_context(self, monkeypatch):
         calls: list[str] = []
 
@@ -555,6 +568,60 @@ class TestHermesHarness:
         )
 
         assert validate_agent_id("hermes-m4-pma", Path("/tmp/repo")) == "hermes-m4-pma"
+        assert calls == ["repo"]
+
+    def test_validate_agent_id_prefers_repo_config_for_root_wrapper_context(
+        self, monkeypatch
+    ):
+        calls: list[str] = []
+
+        class HubConfig:
+            agents = {
+                "hermes": AgentConfig(
+                    backend=None,
+                    binary="hermes",
+                    serve_command=None,
+                    base_url=None,
+                    subagent_models=None,
+                )
+            }
+
+            @staticmethod
+            def agent_binary(agent_id: str) -> str:
+                return HubConfig.agents[agent_id].binary
+
+        class RepoConfig(HubConfig):
+            agents = {
+                **HubConfig.agents,
+                "hermes-m4-pma": AgentConfig(
+                    backend="hermes",
+                    binary="hermes-m4-pma",
+                    serve_command=None,
+                    base_url=None,
+                    subagent_models=None,
+                ),
+            }
+
+            @staticmethod
+            def agent_binary(agent_id: str) -> str:
+                return RepoConfig.agents[agent_id].binary
+
+            @staticmethod
+            def agent_backend(agent_id: str) -> str:
+                agent = RepoConfig.agents[agent_id]
+                return str(agent.backend or agent_id)
+
+        monkeypatch.setattr(
+            "codex_autorunner.agents.registry.load_repo_config",
+            lambda _root: calls.append("repo") or RepoConfig,
+        )
+        monkeypatch.setattr(
+            "codex_autorunner.agents.registry.load_hub_config",
+            lambda _root: calls.append("hub") or HubConfig,
+        )
+
+        context = SimpleNamespace(root=Path("/tmp/repo"))
+        assert validate_agent_id("hermes-m4-pma", context) == "hermes-m4-pma"
         assert calls == ["repo"]
 
     def test_get_registered_agents_skips_warning_for_known_profile_style_id(
