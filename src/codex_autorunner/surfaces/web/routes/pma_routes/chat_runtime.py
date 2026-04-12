@@ -74,6 +74,7 @@ from ...services.pma.common import (
     build_idempotency_key as service_build_idempotency_key,
 )
 from ...services.pma.common import pma_config_from_raw
+from ..agent_profile_validation import resolve_requested_agent_profile
 from ..agents import _available_agents
 from ..shared import SSE_HEADERS
 from .publish import publish_automation_result
@@ -160,84 +161,6 @@ async def _register_pma_result_future(
     if late_result is not None and not result_future.done():
         result_future.set_result(late_result)
     return result_future
-
-
-def _resolve_agent_profile(
-    request: Request,
-    agent_id: str,
-    requested_profile: Optional[str],
-    *,
-    default_profile: Optional[str] = None,
-) -> Optional[str]:
-    config = getattr(request.app.state, "config", None)
-    profile_getter = getattr(config, "agent_profiles", None)
-    default_profile_getter = getattr(config, "agent_default_profile", None)
-    available_profiles: dict[str, Any] = {}
-    if callable(profile_getter):
-        try:
-            available_profiles = profile_getter(agent_id) or {}
-        except (ValueError, TypeError, AttributeError):
-            available_profiles = {}
-    resolved_profile = _normalize_optional_text(requested_profile)
-    if resolved_profile is not None:
-        if agent_id == "hermes":
-            hermes_valid = set(available_profiles.keys())
-            try:
-                from .....integrations.chat.agents import chat_hermes_profile_options
-
-                hermes_valid |= {
-                    opt.profile
-                    for opt in chat_hermes_profile_options(request.app.state)
-                }
-            except (
-                ImportError,
-                AttributeError,
-                RuntimeError,
-            ):  # intentional: import and call of optional integration
-                logger.debug("Failed to resolve hermes profile options", exc_info=True)
-            if resolved_profile not in hermes_valid:
-                raise HTTPException(status_code=400, detail="profile is invalid")
-        elif resolved_profile not in available_profiles:
-            raise HTTPException(status_code=400, detail="profile is invalid")
-        return resolved_profile
-
-    fallback_profiles: list[Optional[str]] = [
-        _normalize_optional_text(default_profile),
-    ]
-    if callable(default_profile_getter):
-        try:
-            fallback_profiles.append(
-                _normalize_optional_text(default_profile_getter(agent_id))
-            )
-        except (ValueError, TypeError, AttributeError):
-            fallback_profiles.append(None)
-
-    fallback_keys: set[str] = set(available_profiles.keys())
-    if agent_id == "hermes":
-        try:
-            from .....integrations.chat.agents import chat_hermes_profile_options
-
-            fallback_keys |= {
-                opt.profile for opt in chat_hermes_profile_options(request.app.state)
-            }
-        except (
-            ImportError,
-            AttributeError,
-            RuntimeError,
-        ):  # intentional: import and call of optional integration
-            logger.debug(
-                "Failed to resolve hermes fallback profile options", exc_info=True
-            )
-
-    for fallback_profile in fallback_profiles:
-        if fallback_profile is not None:
-            if agent_id == "hermes":
-                if fallback_profile in fallback_keys:
-                    return fallback_profile
-            elif fallback_profile in available_profiles:
-                return fallback_profile
-
-    return None
 
 
 def _build_idempotency_key(
@@ -1466,7 +1389,7 @@ async def _execute_queue_item(
     except ValueError:
         agent_id = _resolve_default_agent(available_ids, available_default)
 
-    profile = _resolve_agent_profile(
+    profile = resolve_requested_agent_profile(
         request,
         agent_id,
         profile,

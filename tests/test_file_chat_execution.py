@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 
 from codex_autorunner.core import drafts as draft_utils
 from codex_autorunner.core.state import now_iso
@@ -26,13 +27,14 @@ from codex_autorunner.surfaces.web.routes.file_chat_routes.targets import (
 )
 
 
-def _make_request(repo_root: Path) -> SimpleNamespace:
+def _make_request(repo_root: Path, *, config: object | None = None) -> SimpleNamespace:
     return SimpleNamespace(
         app=SimpleNamespace(
             state=SimpleNamespace(
                 app_server_supervisor=object(),
                 app_server_threads=None,
                 opencode_supervisor=None,
+                config=config,
                 engine=SimpleNamespace(repo_root=repo_root),
                 app_server_events=None,
             )
@@ -40,7 +42,9 @@ def _make_request(repo_root: Path) -> SimpleNamespace:
     )
 
 
-def _make_request_with_hermes(repo_root: Path) -> SimpleNamespace:
+def _make_request_with_hermes(
+    repo_root: Path, *, config: object | None = None
+) -> SimpleNamespace:
     return SimpleNamespace(
         app=SimpleNamespace(
             state=SimpleNamespace(
@@ -48,6 +52,7 @@ def _make_request_with_hermes(repo_root: Path) -> SimpleNamespace:
                 app_server_threads=None,
                 opencode_supervisor=None,
                 hermes_supervisor=object(),
+                config=config,
                 engine=SimpleNamespace(repo_root=repo_root),
                 app_server_events=None,
             )
@@ -270,7 +275,7 @@ async def test_extracted_draft_handlers_reconstruct_content_from_artifacts(
 
 
 @pytest.mark.asyncio
-async def test_execute_file_chat_rejects_hermes_with_clear_error(
+async def test_execute_file_chat_passes_hermes_profile_to_runtime_turn(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repo_root = tmp_path
@@ -287,10 +292,48 @@ async def test_execute_file_chat_rejects_hermes_with_clear_error(
     async def fake_update_turn_state(*args, **kwargs) -> None:
         return None
 
+    observed: dict[str, object] = {}
+
+    async def fake_execute_harness_turn(
+        _request,
+        fake_repo_root: Path,
+        prompt: str,
+        _interrupt_event: asyncio.Event,
+        *,
+        agent_id: str,
+        profile: str | None,
+        thread_key: str | None,
+        **kwargs,
+    ) -> dict[str, str]:
+        observed["agent_id"] = agent_id
+        observed["profile"] = profile
+        observed["thread_key"] = thread_key
+        match = re.search(r"<path>\n(.+?)\n</path>", prompt, re.DOTALL)
+        assert match is not None
+        draft_path = fake_repo_root / match.group(1).strip()
+        draft_path.write_text("after\n", encoding="utf-8")
+        return {
+            "status": "ok",
+            "agent_message": "updated via hermes",
+            "message": "updated via hermes",
+            "thread_id": "hermes-thread-1",
+            "turn_id": "hermes-turn-1",
+        }
+
     monkeypatch.setattr(
         runtime, "get_or_create_interrupt_event", fake_get_or_create_interrupt_event
     )
     monkeypatch.setattr(runtime, "update_turn_state", fake_update_turn_state)
+    monkeypatch.setattr(
+        execution_module,
+        "resolve_requested_agent_profile",
+        lambda _request, _agent_id, requested_profile, default_profile=None: requested_profile,
+    )
+    monkeypatch.setattr(
+        execution_module,
+        "execute_harness_turn",
+        fake_execute_harness_turn,
+    )
 
     result = await execute_file_chat(
         _make_request_with_hermes(repo_root),
@@ -298,8 +341,37 @@ async def test_execute_file_chat_rejects_hermes_with_clear_error(
         target,
         "edit the file",
         agent="hermes",
+        profile="m4-pma",
     )
 
-    assert result["status"] == "error"
-    assert "hermes" in result["detail"].lower()
-    assert "not supported" in result["detail"].lower()
+    assert result["status"] == "ok"
+    assert result["profile"] == "m4-pma"
+    assert observed == {
+        "agent_id": "hermes",
+        "profile": "m4-pma",
+        "thread_key": "file_chat.hermes.profile.m4-pma.contextspace_spec.md",
+    }
+
+
+def test_resolve_file_chat_agent_selection_rejects_invalid_hermes_profile(
+    tmp_path: Path,
+) -> None:
+    target = parse_target(tmp_path, "ticket:1")
+    config = SimpleNamespace(
+        agent_profiles=lambda agent_id: (
+            {"m4-pma": object()} if agent_id == "hermes" else {}
+        ),
+        agent_default_profile=lambda _agent_id: None,
+    )
+    request = _make_request_with_hermes(tmp_path, config=config)
+
+    with pytest.raises(HTTPException) as exc_info:
+        execution_module.resolve_file_chat_agent_selection(
+            request,
+            target,
+            agent="hermes",
+            profile="bad-profile",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "profile is invalid"

@@ -112,8 +112,16 @@ export async function startNewTicketChatThread() {
     if (!confirmed)
         return;
     try {
+        const els = getTicketChatElements();
+        const agent = els.agentSelect
+            ? (els.agentSelect.value || "codex")
+            : (getSelectedAgent() || "codex");
+        const profile = els.profileSelect
+            ? (els.profileSelect.value || undefined)
+            : (getSelectedProfile(agent) || undefined);
         await api(`/api/tickets/${ticketChatState.ticketIndex}/chat/new-thread`, {
             method: "POST",
+            body: { agent, profile },
         });
         // Clear local message history
         const localHistoryKey = chatTargetForTicket(ticketChatState.ticketIndex, ticketChatState.ticketChatKey);
