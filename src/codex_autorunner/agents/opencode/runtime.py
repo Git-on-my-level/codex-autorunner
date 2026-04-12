@@ -12,7 +12,6 @@ import json
 import logging
 import os
 import time
-from contextlib import suppress
 from dataclasses import dataclass
 from typing import (
     Any,
@@ -76,22 +75,18 @@ from .protocol_payload import (
     status_is_idle,
     summarize_question_answers,
 )
+from .stream_lifecycle import (
+    _OPENCODE_FIRST_EVENT_TIMEOUT_SECONDS,
+    _OPENCODE_STREAM_STALL_TIMEOUT_SECONDS,
+    LifecycleAction,
+    StreamLifecycleController,
+)
 from .usage_decoder import extract_usage
 
 PermissionDecision = str
 PermissionHandler = Callable[[str, dict[str, Any]], Awaitable[PermissionDecision]]
 QuestionHandler = Callable[[str, dict[str, Any]], Awaitable[Optional[list[list[str]]]]]
 PartHandler = Callable[[str, dict[str, Any], Optional[str]], Awaitable[None]]
-
-_OPENCODE_STREAM_STALL_TIMEOUT_SECONDS = 60.0
-_OPENCODE_FIRST_EVENT_TIMEOUT_SECONDS = 60.0
-_OPENCODE_STREAM_RECONNECT_BACKOFF_SECONDS = (0.5, 1.0, 2.0, 5.0, 10.0)
-_OPENCODE_STREAM_MAX_STALL_RECONNECT_ATTEMPTS = 5
-_OPENCODE_STREAM_MAX_STALL_RECONNECT_SECONDS = 120.0
-_OPENCODE_STREAM_STALL_TIMEOUT_REASON = "opencode_stream_stalled_timeout"
-_OPENCODE_FIRST_EVENT_TIMEOUT_REASON = "opencode_first_event_timeout"
-_OPENCODE_POST_COMPLETION_GRACE_SECONDS = 5.0
-_OPENCODE_ABSOLUTE_MAX_IDLE_SECONDS = 300.0
 
 
 @dataclass(frozen=True)
@@ -521,308 +516,58 @@ async def collect_opencode_output_from_events(
             if part_handler is not None:
                 await part_handler("usage", usage_snapshot, None)
 
-    stream_factory = event_stream_factory
-    if events is None and stream_factory is None:
-        raise ValueError("events or event_stream_factory must be provided")
-
-    def _new_stream() -> AsyncIterator[SSEEvent]:
-        if stream_factory is not None:
-            return stream_factory()
-        if events is None:
-            raise ValueError("events or event_stream_factory must be provided")
-        return events
-
-    async def _close_stream(iterator: AsyncIterator[SSEEvent]) -> None:
-        aclose = getattr(iterator, "aclose", None)
-        if aclose is None:
-            return
-        with suppress(Exception):
-            await aclose()
-
-    stream_started_at = time.monotonic()
-    stream_iter = _new_stream().__aiter__()
-    last_relevant_event_at = stream_started_at
-    received_any_event = False
-    last_primary_completion_at: Optional[float] = None
-    post_completion_deadline: Optional[float] = None
-    reconnect_attempts = 0
-    reconnect_started_at: Optional[float] = None
-    can_reconnect = (
-        event_stream_factory is not None and stall_timeout_seconds is not None
+    lifecycle = StreamLifecycleController(
+        session_id=session_id,
+        event_stream_factory=event_stream_factory,
+        session_fetcher=session_fetcher,
+        stall_timeout_seconds=stall_timeout_seconds,
+        first_event_timeout_seconds=first_event_timeout_seconds,
+        status_event_handler=part_handler,
+        logger=logger,
     )
 
-    async def _fail_first_event_timeout(*, now: float) -> None:
-        nonlocal error
-        timeout_seconds = first_event_timeout_seconds
-        if timeout_seconds is None:
-            return
-        idle_seconds = now - stream_started_at
-        error = (
-            f"{_OPENCODE_FIRST_EVENT_TIMEOUT_REASON}: "
-            f"no relevant events received within {timeout_seconds:.1f}s"
-        )
-        log_event(
-            logger,
-            logging.ERROR,
-            "opencode.stream.first_event_timeout",
-            session_id=session_id,
-            idle_seconds=idle_seconds,
-            timeout_seconds=timeout_seconds,
-        )
-        if part_handler is not None:
-            await part_handler(
-                "status",
-                {
-                    "type": "first_event_timeout",
-                    "reason": _OPENCODE_FIRST_EVENT_TIMEOUT_REASON,
-                    "idleSeconds": idle_seconds,
-                    "firstEventTimeoutSeconds": timeout_seconds,
-                },
-                None,
-            )
+    if events is None and event_stream_factory is None:
+        raise ValueError("events or event_stream_factory must be provided")
 
-    async def _attempt_reconnect(
-        *,
-        now: float,
-        idle_seconds: float,
-        status_type: Optional[str],
-    ) -> bool:
-        nonlocal stream_iter, reconnect_attempts, reconnect_started_at, error, last_relevant_event_at
-        if not can_reconnect:
-            return False
-
-        if reconnect_started_at is None:
-            reconnect_started_at = now
-        stalled_elapsed_seconds = now - reconnect_started_at
-        attempts_exceeded = (
-            reconnect_attempts >= _OPENCODE_STREAM_MAX_STALL_RECONNECT_ATTEMPTS
-        )
-        elapsed_exceeded = (
-            stalled_elapsed_seconds >= _OPENCODE_STREAM_MAX_STALL_RECONNECT_SECONDS
-        )
-        if attempts_exceeded or elapsed_exceeded:
-            error = (
-                f"{_OPENCODE_STREAM_STALL_TIMEOUT_REASON}: "
-                f"stalled for {stalled_elapsed_seconds:.1f}s after "
-                f"{reconnect_attempts} reconnect attempts"
-            )
-            log_event(
-                logger,
-                logging.ERROR,
-                "opencode.stream.stalled.timeout",
-                session_id=session_id,
-                idle_seconds=idle_seconds,
-                stalled_elapsed_seconds=stalled_elapsed_seconds,
-                reconnect_attempts=reconnect_attempts,
-                max_reconnect_attempts=_OPENCODE_STREAM_MAX_STALL_RECONNECT_ATTEMPTS,
-                max_stalled_seconds=_OPENCODE_STREAM_MAX_STALL_RECONNECT_SECONDS,
-                status_type=status_type,
-            )
-            if part_handler is not None:
-                await part_handler(
-                    "status",
-                    {
-                        "type": "stall_timeout",
-                        "reason": _OPENCODE_STREAM_STALL_TIMEOUT_REASON,
-                        "idleSeconds": idle_seconds,
-                        "stalledSeconds": stalled_elapsed_seconds,
-                        "attempts": reconnect_attempts,
-                    },
-                    None,
-                )
-            return False
-
-        backoff_index = min(
-            reconnect_attempts,
-            len(_OPENCODE_STREAM_RECONNECT_BACKOFF_SECONDS) - 1,
-        )
-        backoff = _OPENCODE_STREAM_RECONNECT_BACKOFF_SECONDS[backoff_index]
-        reconnect_attempts += 1
-        log_event(
-            logger,
-            logging.WARNING,
-            "opencode.stream.stalled.reconnecting",
-            session_id=session_id,
-            idle_seconds=idle_seconds,
-            backoff_seconds=backoff,
-            status_type=status_type,
-            attempts=reconnect_attempts,
-        )
-        if part_handler is not None:
-            await part_handler(
-                "status",
-                {
-                    "type": "reconnecting",
-                    "idleSeconds": idle_seconds,
-                    "backoffSeconds": backoff,
-                    "attempts": reconnect_attempts,
-                    "maxAttempts": _OPENCODE_STREAM_MAX_STALL_RECONNECT_ATTEMPTS,
-                    "stalledSeconds": stalled_elapsed_seconds,
-                    "maxStalledSeconds": _OPENCODE_STREAM_MAX_STALL_RECONNECT_SECONDS,
-                },
-                None,
-            )
-        await _close_stream(stream_iter)
-        await asyncio.sleep(backoff)
-        stream_iter = _new_stream().__aiter__()
-        last_relevant_event_at = now
-        return True
-
-    async def _handle_stall_recovery(*, now: float) -> tuple[bool, bool]:
-        """Poll session and attempt reconnect on stall.
-
-        Returns (should_break, should_continue).
-        """
-        nonlocal error
-        idle_seconds = now - last_relevant_event_at
-        status_type = None
-        if session_fetcher is not None:
-            try:
-                fetched = await session_fetcher()
-                status_type = _extract_status_type(fetched)
-            except (httpx.HTTPError, ValueError, OSError) as exc:
-                log_event(
-                    logger,
-                    logging.WARNING,
-                    "opencode.session.poll_failed",
-                    session_id=session_id,
-                    exc=exc,
-                )
-        if _status_is_idle(status_type):
-            log_event(
-                logger,
-                logging.INFO,
-                "opencode.stream.stalled.session_idle",
-                session_id=session_id,
-                status_type=status_type,
-                idle_seconds=idle_seconds,
-            )
-            if not text_parts and (pending_text or pending_no_id):
-                _flush_all_pending_text()
-            return (True, False)
-        if last_primary_completion_at is not None:
-            log_event(
-                logger,
-                logging.INFO,
-                "opencode.stream.stalled.after_completion",
-                session_id=session_id,
-                status_type=status_type,
-                idle_seconds=idle_seconds,
-            )
-        reconnected = await _attempt_reconnect(
-            now=now,
-            idle_seconds=idle_seconds,
-            status_type=status_type,
-        )
-        if not reconnected:
-            if status_type and not _status_is_idle(status_type):
-                error = None
-                while True:
-                    await asyncio.sleep(5.0)
-                    if session_fetcher is not None:
-                        try:
-                            fetched = await session_fetcher()
-                            status_type = _extract_status_type(fetched)
-                        except (ConnectionError, OSError, TimeoutError):
-                            logger.debug(
-                                "session fetch during stall recovery failed",
-                                exc_info=True,
-                            )
-                    if _status_is_idle(status_type):
-                        break
-                return (True, False)
-            return (True, False)
-        return (False, True)
+    if event_stream_factory is not None:
+        lifecycle.set_stream_iterator(event_stream_factory().__aiter__())
+    elif events is not None:
+        lifecycle.set_stream_iterator(events.__aiter__())
+    else:
+        raise ValueError("events or event_stream_factory must be provided")
 
     try:
         while True:
             if should_stop is not None and should_stop():
                 break
             try:
-                wait_timeout: Optional[float] = None
-                if first_event_timeout_seconds is not None and not received_any_event:
-                    wait_timeout = max(
-                        0.0,
-                        stream_started_at
-                        + first_event_timeout_seconds
-                        - time.monotonic(),
-                    )
-                if (
-                    can_reconnect
-                    and stall_timeout_seconds is not None
-                    and (received_any_event or first_event_timeout_seconds is None)
-                ):
-                    wait_timeout = stall_timeout_seconds
-                if post_completion_deadline is not None:
-                    remaining_completion_seconds = max(
-                        0.0,
-                        post_completion_deadline - time.monotonic(),
-                    )
-                    if wait_timeout is None:
-                        wait_timeout = remaining_completion_seconds
-                    else:
-                        wait_timeout = min(
-                            wait_timeout,
-                            remaining_completion_seconds,
-                        )
-                if wait_timeout is None and received_any_event:
-                    wait_timeout = _OPENCODE_ABSOLUTE_MAX_IDLE_SECONDS
+                now = time.monotonic()
+                wait_timeout = lifecycle.compute_wait_timeout(now=now)
+                _stream_iter = lifecycle.stream_iterator
+                assert _stream_iter is not None
                 if wait_timeout is not None:
                     event = await asyncio.wait_for(
-                        stream_iter.__anext__(), timeout=wait_timeout
+                        _stream_iter.__anext__(),
+                        timeout=wait_timeout,
                     )
                 else:
-                    event = await stream_iter.__anext__()
+                    event = await _stream_iter.__anext__()
             except StopAsyncIteration:
                 break
             except asyncio.TimeoutError:
                 now = time.monotonic()
+                decision = await lifecycle.on_timeout_error(now=now)
                 if (
-                    post_completion_deadline is not None
-                    and now >= post_completion_deadline
+                    decision.should_flush_if_pending
+                    and not text_parts
+                    and (pending_text or pending_no_id)
                 ):
-                    log_event(
-                        logger,
-                        logging.INFO,
-                        "opencode.stream.completed.grace_elapsed",
-                        session_id=session_id,
-                        grace_seconds=_OPENCODE_POST_COMPLETION_GRACE_SECONDS,
-                        idle_seconds=now - last_relevant_event_at,
-                    )
-                    if not text_parts and (pending_text or pending_no_id):
-                        _flush_all_pending_text()
+                    _flush_all_pending_text()
+                if decision.error is not None:
+                    error = decision.error
+                if decision.action == LifecycleAction.BREAK:
                     break
-                if not received_any_event and first_event_timeout_seconds is not None:
-                    if now - stream_started_at >= first_event_timeout_seconds:
-                        status_type = None
-                        if session_fetcher is not None:
-                            try:
-                                fetched = await session_fetcher()
-                                status_type = _extract_status_type(fetched)
-                            except (ConnectionError, OSError, TimeoutError):
-                                logger.debug(
-                                    "session fetch during first-event timeout check failed",
-                                    exc_info=True,
-                                )
-
-                        if status_type and not _status_is_idle(status_type):
-                            (
-                                should_break,
-                                should_continue,
-                            ) = await _handle_stall_recovery(now=now)
-                            if should_break:
-                                break
-                            if should_continue:
-                                continue
-                        else:
-                            await _fail_first_event_timeout(now=now)
-                            break
-                    continue
-                should_break, should_continue = await _handle_stall_recovery(now=now)
-                if should_break:
-                    break
-                if should_continue:
-                    continue
+                continue
             now = time.monotonic()
             raw = event.data or ""
             try:
@@ -836,48 +581,19 @@ async def collect_opencode_output_from_events(
                 progress_session_ids=progress_session_ids,
             )
             if not is_relevant:
-                if not received_any_event and first_event_timeout_seconds is not None:
-                    if now - stream_started_at >= first_event_timeout_seconds:
-                        status_type = None
-                        if session_fetcher is not None:
-                            try:
-                                fetched = await session_fetcher()
-                                status_type = _extract_status_type(fetched)
-                            except (ConnectionError, OSError, TimeoutError):
-                                logger.debug(
-                                    "session fetch during irrelevant-event timeout check failed",
-                                    exc_info=True,
-                                )
-
-                        if status_type and not _status_is_idle(status_type):
-                            (
-                                should_break,
-                                should_continue,
-                            ) = await _handle_stall_recovery(now=now)
-                            if should_break:
-                                break
-                            if should_continue:
-                                continue
-                        else:
-                            await _fail_first_event_timeout(now=now)
-                            break
-                    continue
+                decision = await lifecycle.on_irrelevant_event(now=now)
                 if (
-                    stall_timeout_seconds is not None
-                    and now - last_relevant_event_at > stall_timeout_seconds
+                    decision.should_flush_if_pending
+                    and not text_parts
+                    and (pending_text or pending_no_id)
                 ):
-                    should_break, should_continue = await _handle_stall_recovery(
-                        now=now
-                    )
-                    if should_break:
-                        break
-                    if should_continue:
-                        continue
+                    _flush_all_pending_text()
+                if decision.error is not None:
+                    error = decision.error
+                if decision.action == LifecycleAction.BREAK:
+                    break
                 continue
-            last_relevant_event_at = now
-            received_any_event = True
-            reconnect_attempts = 0
-            reconnect_started_at = None
+            lifecycle.on_relevant_event(now=now)
             is_primary_session = event_session_id == session_id or not event_session_id
             if event.event == "question.asked":
                 request_id, props = _extract_question_request(payload)
@@ -1007,10 +723,10 @@ async def collect_opencode_output_from_events(
                         and permission_handler is not None
                     ):
                         try:
-                            decision = await permission_handler(request_id, props)
+                            perm_decision = await permission_handler(request_id, props)
                         except Exception:  # intentional: pluggable callback handler
-                            decision = OPENCODE_PERMISSION_REJECT
-                        reply = _normalize_permission_decision(decision)
+                            perm_decision = OPENCODE_PERMISSION_REJECT
+                        reply = _normalize_permission_decision(perm_decision)
                     else:
                         reply = _permission_policy_reply(permission_policy)
                     try:
@@ -1234,12 +950,9 @@ async def collect_opencode_output_from_events(
                 and message_role == "assistant"
                 and _extract_message_phase(payload) != "commentary"
             ):
-                last_primary_completion_at = time.monotonic()
+                lifecycle.on_primary_completion()
                 last_completed_assistant_text = (
                     message_result.text if message_result.text else None
-                )
-                post_completion_deadline = last_primary_completion_at + max(
-                    _OPENCODE_POST_COMPLETION_GRACE_SECONDS, 0.0
                 )
             if event.event == "session.idle" or (
                 event.event == "session.status"
@@ -1250,23 +963,19 @@ async def collect_opencode_output_from_events(
                 if not text_parts and (pending_text or pending_no_id):
                     _flush_all_pending_text()
                 break
-            if (
-                post_completion_deadline is not None
-                and time.monotonic() >= post_completion_deadline
-            ):
-                log_event(
-                    logger,
-                    logging.INFO,
-                    "opencode.stream.completed.grace_elapsed",
-                    session_id=session_id,
-                    grace_seconds=_OPENCODE_POST_COMPLETION_GRACE_SECONDS,
-                    idle_seconds=time.monotonic() - last_relevant_event_at,
-                )
-                if not text_parts and (pending_text or pending_no_id):
+            grace_decision = lifecycle.check_grace_elapsed()
+            if grace_decision is not None:
+                if (
+                    grace_decision.should_flush_if_pending
+                    and not text_parts
+                    and (pending_text or pending_no_id)
+                ):
                     _flush_all_pending_text()
+                if grace_decision.error is not None:
+                    error = grace_decision.error
                 break
     finally:
-        await _close_stream(stream_iter)
+        await lifecycle.close()
 
     if not text_parts and fallback_message is not None:
         msg_id, role, text = fallback_message
