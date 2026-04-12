@@ -128,6 +128,44 @@ def test_hub_control_plane_routes_return_typed_validation_errors(
     assert "client_name is required" in response.json()["error"]["message"]
 
 
+@pytest.mark.parametrize(
+    ("error", "expected_status"),
+    [
+        (
+            HubControlPlaneError("hub_unavailable", "Hub is not running"),
+            503,
+        ),
+        (
+            HubControlPlaneError("hub_incompatible", "schema generation mismatch"),
+            409,
+        ),
+    ],
+)
+def test_hub_control_plane_routes_distinguish_unavailable_from_incompatible(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    error: HubControlPlaneError,
+    expected_status: int,
+) -> None:
+    app, _thread_target_id = _build_test_app(tmp_path)
+    service = app.state.hub_control_plane_service
+
+    def _raise_handshake(_request: object) -> object:
+        raise error
+
+    monkeypatch.setattr(service, "handshake", _raise_handshake)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/hub/api/control-plane/handshake",
+            json={"client_name": "discord", "client_api_version": "1.0.0"},
+        )
+
+    assert response.status_code == expected_status
+    assert response.json()["error"]["code"] == error.code
+    assert response.json()["error"]["retryable"] is error.retryable
+
+
 @pytest.mark.anyio
 async def test_hub_control_plane_http_client_round_trip(tmp_path: Path) -> None:
     app, thread_target_id = _build_test_app(tmp_path)

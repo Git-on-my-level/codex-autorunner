@@ -389,6 +389,12 @@ _FORBIDDEN_NOTIFICATION_STORE_PATTERN = "PmaNotificationStore"
 
 _FORBIDDEN_TRANSCRIPT_MIRROR_PATTERN = "TranscriptMirrorStore"
 
+_FORBIDDEN_POLLING_OWNER_PATTERNS: tuple[str, ...] = (
+    "HubLifecycleWorker",
+    "GitHubScmPollingService",
+    "build_hub_scm_poll_processor",
+)
+
 _SIDE_PROCESS_BOUNDARY_ALLOWLIST: dict[str, list[str]] = {
     "integrations/discord/message_turns.py": [
         "build_hub_snapshot -- ALLOWED: fallback when hub client unavailable; hub_client path preferred",
@@ -563,5 +569,37 @@ def test_side_process_shared_state_imports_are_allowlisted() -> None:
                 )
     assert not violations, (
         "Side-process shared-state imports must have an explicit allowlist entry:\n"
+        + "\n".join(violations)
+    )
+
+
+def test_side_processes_do_not_import_polling_owners() -> None:
+    violations: list[str] = []
+    for path in _side_process_files():
+        try:
+            source = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        tree = ast.parse(source)
+        file_key = str(path.relative_to(SRC_ROOT))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                module = node.module or ""
+                for alias in node.names:
+                    full = f"{module}.{alias.name}" if module else alias.name
+                    for pattern in _FORBIDDEN_POLLING_OWNER_PATTERNS:
+                        if pattern in full or alias.name == pattern:
+                            violations.append(
+                                f"{file_key}: imports {pattern} via 'from {module} import {alias.name}'"
+                            )
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    for pattern in _FORBIDDEN_POLLING_OWNER_PATTERNS:
+                        if pattern in alias.name:
+                            violations.append(
+                                f"{file_key}: imports {pattern} via 'import {alias.name}'"
+                            )
+    assert not violations, (
+        "Side-process modules must not import hub-owned polling workers/services:\n"
         + "\n".join(violations)
     )

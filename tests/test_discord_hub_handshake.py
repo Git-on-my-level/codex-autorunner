@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from types import SimpleNamespace
@@ -67,6 +68,20 @@ class _FakeOutboxManager:
 
     async def run_loop(self) -> None:
         pass
+
+
+def _logged_events(
+    caplog: pytest.LogCaptureFixture, logger_name: str
+) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    for record in caplog.records:
+        if record.name != logger_name:
+            continue
+        message = record.getMessage()
+        if not message.startswith("{"):
+            continue
+        events.append(json.loads(message))
+    return events
 
 
 def _config(
@@ -147,7 +162,9 @@ async def test_discord_handshake_compatible_hub(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
-async def test_discord_handshake_incompatible_hub(tmp_path: Path) -> None:
+async def test_discord_handshake_incompatible_hub(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     seed_hub_files(tmp_path, force=True)
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
     await store.initialize()
@@ -163,9 +180,10 @@ async def test_discord_handshake_incompatible_hub(tmp_path: Path) -> None:
                 hub_asset_version=None,
             )
 
+    logger = logging.getLogger("test.discord.handshake.incompatible")
     service = DiscordBotService(
         _config(tmp_path),
-        logger=logging.getLogger("test"),
+        logger=logger,
         rest_client=_FakeRest(),
         gateway_client=_FakeGateway([]),
         state_store=store,
@@ -173,7 +191,8 @@ async def test_discord_handshake_incompatible_hub(tmp_path: Path) -> None:
     )
     service._hub_client = _FakeIncompatibleHubClient()
 
-    await service._perform_hub_handshake()
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        await service._perform_hub_handshake()
 
     assert service._hub_handshake_compatibility is not None
     assert service._hub_handshake_compatibility.compatible is False
@@ -181,12 +200,23 @@ async def test_discord_handshake_incompatible_hub(tmp_path: Path) -> None:
     assert "major version mismatch" in (
         service._hub_handshake_compatibility.reason or ""
     )
+    assert _logged_events(caplog, logger.name)[-1] == {
+        "event": "discord.hub_control_plane.handshake_incompatible",
+        "hub_root": str(tmp_path),
+        "reason": "control-plane API major version mismatch",
+        "server_api_version": "99.0.0",
+        "client_api_version": "1.0.0",
+        "server_schema_generation": 1,
+        "expected_schema_generation": None,
+    }
 
     await store.close()
 
 
 @pytest.mark.anyio
-async def test_discord_handshake_hub_unavailable(tmp_path: Path) -> None:
+async def test_discord_handshake_hub_unavailable(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     seed_hub_files(tmp_path, force=True)
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
     await store.initialize()
@@ -199,9 +229,10 @@ async def test_discord_handshake_hub_unavailable(tmp_path: Path) -> None:
                 "hub_unavailable", "Hub is not running", retryable=True
             )
 
+    logger = logging.getLogger("test.discord.handshake.unavailable")
     service = DiscordBotService(
         _config(tmp_path),
-        logger=logging.getLogger("test"),
+        logger=logger,
         rest_client=_FakeRest(),
         gateway_client=_FakeGateway([]),
         state_store=store,
@@ -209,9 +240,17 @@ async def test_discord_handshake_hub_unavailable(tmp_path: Path) -> None:
     )
     service._hub_client = _FakeUnavailableHubClient()
 
-    await service._perform_hub_handshake()
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        await service._perform_hub_handshake()
 
     assert service._hub_handshake_compatibility is None
+    assert _logged_events(caplog, logger.name)[-1] == {
+        "event": "discord.hub_control_plane.handshake_failed",
+        "hub_root": str(tmp_path),
+        "error_code": "hub_unavailable",
+        "retryable": True,
+        "message": "Hub is not running",
+    }
 
     await store.close()
 
