@@ -548,3 +548,171 @@ def test_resolve_file_chat_agent_selection_rejects_invalid_hermes_profile(
 
     assert exc_info.value.status_code == 400
     assert exc_info.value.detail == "profile is invalid"
+
+
+@pytest.mark.asyncio
+async def test_execute_file_chat_hermes_without_profile_uses_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_root = tmp_path
+    target_path = repo_root / ".codex-autorunner" / "contextspace" / "spec.md"
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_text("before\n", encoding="utf-8")
+    target = parse_target(repo_root, "contextspace:spec")
+
+    async def fake_get_or_create_interrupt_event(
+        _request, _state_key: str
+    ) -> asyncio.Event:
+        return asyncio.Event()
+
+    async def fake_update_turn_state(*args, **kwargs) -> None:
+        return None
+
+    observed: dict[str, object] = {}
+
+    async def fake_execute_harness_turn(
+        _request,
+        fake_repo_root: Path,
+        prompt: str,
+        _interrupt_event: asyncio.Event,
+        *,
+        agent_id: str,
+        profile: str | None,
+        thread_key: str | None,
+        **kwargs,
+    ) -> dict[str, str]:
+        observed["agent_id"] = agent_id
+        observed["profile"] = profile
+        observed["thread_key"] = thread_key
+        match = re.search(r"<path>\n(.+?)\n</path>", prompt, re.DOTALL)
+        assert match is not None
+        draft_path = fake_repo_root / match.group(1).strip()
+        draft_path.write_text("after\n", encoding="utf-8")
+        return {
+            "status": "ok",
+            "agent_message": "updated via hermes",
+            "message": "updated via hermes",
+            "thread_id": "hermes-thread-default",
+            "turn_id": "hermes-turn-default",
+        }
+
+    monkeypatch.setattr(
+        runtime, "get_or_create_interrupt_event", fake_get_or_create_interrupt_event
+    )
+    monkeypatch.setattr(runtime, "update_turn_state", fake_update_turn_state)
+
+    def _resolve_profile(_request, _agent_id, requested_profile, default_profile=None):
+        _ = default_profile
+        return requested_profile
+
+    monkeypatch.setattr(
+        execution_module,
+        "resolve_requested_agent_profile",
+        _resolve_profile,
+    )
+    monkeypatch.setattr(
+        execution_module,
+        "execute_harness_turn",
+        fake_execute_harness_turn,
+    )
+
+    result = await execute_file_chat(
+        _make_request_with_hermes(repo_root),
+        repo_root,
+        target,
+        "edit the file",
+        agent="hermes",
+        profile=None,
+    )
+
+    assert result["status"] == "ok"
+    assert observed["agent_id"] == "hermes"
+    assert observed["profile"] is None
+    assert observed["thread_key"] == "file_chat.hermes.contextspace_spec.md"
+
+
+@pytest.mark.asyncio
+async def test_execute_file_chat_hermes_thread_key_differs_by_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_root = tmp_path
+    target_path = repo_root / ".codex-autorunner" / "contextspace" / "decisions.md"
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_text("before\n", encoding="utf-8")
+    target = parse_target(repo_root, "contextspace:decisions")
+
+    async def fake_get_or_create_interrupt_event(
+        _request, _state_key: str
+    ) -> asyncio.Event:
+        return asyncio.Event()
+
+    async def fake_update_turn_state(*args, **kwargs) -> None:
+        return None
+
+    thread_keys: list[str | None] = []
+
+    async def fake_execute_harness_turn(
+        _request,
+        fake_repo_root: Path,
+        prompt: str,
+        _interrupt_event: asyncio.Event,
+        *,
+        agent_id: str,
+        profile: str | None,
+        thread_key: str | None,
+        **kwargs,
+    ) -> dict[str, str]:
+        thread_keys.append(thread_key)
+        match = re.search(r"<path>\n(.+?)\n</path>", prompt, re.DOTALL)
+        assert match is not None
+        draft_path = fake_repo_root / match.group(1).strip()
+        draft_path.write_text("after\n", encoding="utf-8")
+        return {
+            "status": "ok",
+            "agent_message": "updated",
+            "message": "updated",
+            "thread_id": "hermes-thread-x",
+            "turn_id": "hermes-turn-x",
+        }
+
+    monkeypatch.setattr(
+        runtime, "get_or_create_interrupt_event", fake_get_or_create_interrupt_event
+    )
+    monkeypatch.setattr(runtime, "update_turn_state", fake_update_turn_state)
+
+    def _resolve_profile(_request, _agent_id, requested_profile, default_profile=None):
+        _ = default_profile
+        return requested_profile
+
+    monkeypatch.setattr(
+        execution_module,
+        "resolve_requested_agent_profile",
+        _resolve_profile,
+    )
+    monkeypatch.setattr(
+        execution_module,
+        "execute_harness_turn",
+        fake_execute_harness_turn,
+    )
+
+    await execute_file_chat(
+        _make_request_with_hermes(repo_root),
+        repo_root,
+        target,
+        "edit",
+        agent="hermes",
+        profile=None,
+    )
+    await execute_file_chat(
+        _make_request_with_hermes(repo_root),
+        repo_root,
+        target,
+        "edit",
+        agent="hermes",
+        profile="m4-pma",
+    )
+
+    assert len(thread_keys) == 2
+    assert thread_keys[0] != thread_keys[1]
+    assert "profile" not in (thread_keys[0] or "")
+    assert "profile" in (thread_keys[1] or "")

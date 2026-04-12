@@ -64,7 +64,7 @@ native target, and it is not an `agent_workspace` runtime in v1.
 | `interrupt` | Supported | Hermes can cancel an in-flight turn for a bound session. |
 | `active_thread_discovery` | Supported | Hermes exposes session listing through ACP `session/list`, so CAR can list and resume existing Hermes sessions. |
 | `event_streaming` | Supported | Hermes can stream progress/events for active turns. |
-| `approvals` | Supported target for v1 | Hermes permission requests are part of the v1 contract, but CAR must not advertise this capability until TICKET-160 delivers the full approval bridge end to end. |
+| `approvals` | Supported | Hermes permission requests are bridged into CAR approval handling (delivered). |
 
 ### Unsupported v1 capabilities
 
@@ -73,6 +73,14 @@ native target, and it is not an `agent_workspace` runtime in v1.
 | `review` | Unsupported | Fail with a capability-driven error. Do not route review requests into normal turns. |
 | `model_listing` | Unsupported | Hermes may accept a free-form model override, but CAR must not promise a discoverable model catalog. |
 | `transcript_history` | Unsupported | CAR may show its own mirrored outputs, but Hermes transcript history is not a supported API contract. |
+
+### File-chat support
+
+Hermes file-chat is supported through the generic harness path in
+`execution_agents.py`. Any agent that advertises `durable_threads` and
+`message_turns` is eligible for file-chat execution; Hermes meets both
+requirements. Thread keys include agent and profile so profile switches produce
+distinct bindings. Draft-safety semantics match Codex and OpenCode file-chat.
 
 ### Model override rule
 
@@ -149,7 +157,7 @@ changed or explicitly gated. Owners refer to downstream Hermes tickets.
 | CLI PMA metadata and unsupported actions | `src/codex_autorunner/surfaces/cli/pma_cli.py` | Remove static allowlists and make unsupported `model_listing`, `review`, and `transcript_history` actions fail clearly for Hermes. | TICKET-170 |
 | Ticket-flow runtime allowlist | `src/codex_autorunner/integrations/agents/agent_pool_impl.py`, `src/codex_autorunner/tickets/agent_pool.py` | Ticket flow currently rejects non-Codex/OpenCode agents and still documents only those IDs. | TICKET-180 |
 | Legacy backend/thread-key seams | `src/codex_autorunner/integrations/agents/backend_orchestrator.py`, `src/codex_autorunner/integrations/app_server/threads.py` | Hermes ticket flow should use the runtime-thread seam rather than extending old Codex/OpenCode thread-key state. | TICKET-180 |
-| Shared chat and file chat catalogs | `src/codex_autorunner/integrations/chat/agents.py`, `src/codex_autorunner/integrations/chat/model_selection.py`, `src/codex_autorunner/surfaces/web/routes/file_chat.py`, `src/codex_autorunner/surfaces/web/routes/file_chat_routes/execution.py`, `src/codex_autorunner/integrations/app_server/threads.py` | Remove static Codex/OpenCode assumptions and gate Hermes cleanly where a surface still lacks support. | TICKET-190 |
+| Shared chat and file chat catalogs | `src/codex_autorunner/integrations/chat/agents.py`, `src/codex_autorunner/integrations/chat/model_selection.py`, `src/codex_autorunner/surfaces/web/routes/file_chat.py`, `src/codex_autorunner/surfaces/web/routes/file_chat_routes/execution.py`, `src/codex_autorunner/surfaces/web/routes/file_chat_routes/execution_agents.py` | Remove static Codex/OpenCode assumptions. Hermes file-chat is now supported through the generic harness path (delivered). | TICKET-190 |
 | Telegram agent/model/review UX | `src/codex_autorunner/integrations/telegram/handlers/commands_runtime.py`, `src/codex_autorunner/integrations/telegram/handlers/selections.py`, `src/codex_autorunner/integrations/telegram/handlers/commands_spec.py` | Telegram currently assumes Codex/OpenCode rules for model UX and review flows; Hermes must either work or fail with capability-driven errors. | TICKET-200 |
 | Discord selectors and unsupported actions | `src/codex_autorunner/integrations/discord/service.py` | Discord selection and command UX still assume current agents and need explicit Hermes gating for unsupported actions. | TICKET-210 |
 | Operator docs and characterization | `docs/adding-an-agent.md`, `docs/ops/hermes-acp.md` (new), Hermes-focused tests | Document installation, shared `HERMES_HOME`, capability gaps, and characterize the high-risk end-to-end paths. | TICKET-220 |
@@ -167,8 +175,18 @@ changed or explicitly gated. Owners refer to downstream Hermes tickets.
 
 - TICKET-170 must explicitly own capability-driven failures for unsupported CLI
   metadata/actions, including `review` and `transcript_history`, not just model
-  listing.
+  listing. (Delivered.)
 - TICKET-200 must explicitly own Telegram-side capability-driven rejection for
-  Hermes review/model UX paths that remain unsupported.
+  Hermes review/model UX paths that remain unsupported. (Delivered.)
 - TICKET-210 must explicitly own Discord-side capability-driven rejection for
   unsupported Hermes actions so Hermes is not merely selectable but misleading.
+  (Delivered.)
+- Hermes file-chat support was added through the generic harness path in
+  `execution_agents.py`. Hermes advertises `durable_threads` and
+  `message_turns`, which are the required capabilities. Thread keys include
+  agent and profile for correct profile-isolated bindings.
+- Optional ACP session methods (`fork_session`, `set_session_model`,
+  `set_session_mode`) are exposed through typed wrappers and degrade gracefully
+  on servers that do not support them.
+- Advertised slash commands are extracted from ACP initialization and surfaced
+  in PMA/help surfaces.
