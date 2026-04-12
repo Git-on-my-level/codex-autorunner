@@ -47,6 +47,130 @@ class OpenCodeRunConfig:
     permission_policy: str = PERMISSION_ALLOW
 
 
+async def _create_session(
+    client: Any,
+    workspace_root: str,
+    logger: Optional[logging.Logger],
+) -> str:
+    session = await client.create_session(directory=workspace_root)
+    session_id = extract_session_id(session, allow_fallback_id=True)
+    if not isinstance(session_id, str) or not session_id:
+        raise ValueError("OpenCode did not return a session id")
+    log_event(
+        logger or logging.getLogger(__name__),
+        logging.INFO,
+        "opencode.session.created",
+        session_id=session_id,
+        workspace_root=workspace_root,
+        source="run_prompt",
+        reuse=False,
+    )
+    return session_id
+
+
+async def _dispose_session(
+    client: Any,
+    session_id: str,
+    workspace_root: str,
+    logger: Optional[logging.Logger],
+) -> None:
+    try:
+        await client.dispose(session_id)
+        log_event(
+            logger or logging.getLogger(__name__),
+            logging.INFO,
+            "opencode.session.disposed",
+            session_id=session_id,
+            workspace_root=workspace_root,
+            source="run_prompt",
+            reuse=False,
+        )
+    except (RuntimeError, OSError, BrokenPipeError) as exc:
+        log_event(
+            logger or logging.getLogger(__name__),
+            logging.WARNING,
+            "opencode.session.dispose_failed",
+            session_id=session_id,
+            workspace_root=workspace_root,
+            source="run_prompt",
+            reuse=False,
+            exc=exc,
+        )
+        if logger is not None:
+            logger.warning(f"OpenCode dispose failed: {exc}")
+
+
+async def _abort_session(
+    client: Any,
+    session_id: str,
+    reason: str,
+    logger: Optional[logging.Logger],
+) -> None:
+    try:
+        await client.abort(session_id)
+    except (RuntimeError, OSError, BrokenPipeError, ProcessLookupError) as exc:
+        if logger is not None:
+            logger.warning(f"OpenCode abort failed ({reason}): {exc}")
+
+
+async def _collect_output_after_interrupt(
+    output_task: asyncio.Task[OpenCodeTurnOutput],
+    grace_seconds: int,
+    ignore_errors: bool,
+    logger: Optional[logging.Logger],
+) -> Optional[OpenCodeTurnOutput]:
+    if output_task.done():
+        try:
+            return await output_task
+        except (RuntimeError, OSError, ConnectionError, ValueError) as exc:
+            if not ignore_errors:
+                raise
+            if logger is not None:
+                logger.warning(f"OpenCode output failed after interrupt: {exc}")
+            return None
+
+    if grace_seconds <= 0:
+        output_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await output_task
+        return None
+
+    try:
+        return await asyncio.wait_for(output_task, timeout=grace_seconds)
+    except asyncio.TimeoutError:
+        output_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await output_task
+        if logger is not None:
+            logger.warning("OpenCode output did not stop within grace period")
+        return None
+    except (RuntimeError, OSError, ConnectionError, ValueError) as exc:
+        if not ignore_errors:
+            raise
+        if logger is not None:
+            logger.warning(f"OpenCode output failed after interrupt: {exc}")
+        return None
+
+
+def _apply_prompt_fallback(
+    output_text: str,
+    output_error: Optional[str],
+    prompt_task: asyncio.Task[Any],
+) -> tuple[str, Optional[str]]:
+    if output_text:
+        return output_text, output_error
+    try:
+        prompt_response = prompt_task.result()
+    except (RuntimeError, OSError, ConnectionError, ValueError):
+        return output_text, output_error
+    if prompt_response is None:
+        return output_text, output_error
+    fallback = parse_message_response(prompt_response)
+    text = fallback.text if fallback.text else output_text
+    error = fallback.error if fallback.error and not output_error else output_error
+    return text, error
+
+
 async def run_opencode_prompt(
     supervisor: OpenCodeSupervisor,
     config: OpenCodeRunConfig,
@@ -56,267 +180,209 @@ async def run_opencode_prompt(
 ) -> OpenCodeRunResult:
     client = await supervisor.get_client(Path(config.workspace_root))
 
-    session_id: Optional[str] = None
     try:
-        session = await client.create_session(directory=config.workspace_root)
-        session_id = extract_session_id(session, allow_fallback_id=True)
-        if not isinstance(session_id, str) or not session_id:
-            raise ValueError("OpenCode did not return a session id")
-        log_event(
-            logger or logging.getLogger(__name__),
-            logging.INFO,
-            "opencode.session.created",
-            session_id=session_id,
-            workspace_root=config.workspace_root,
-            source="run_prompt",
-            reuse=False,
-        )
+        session_id = await _create_session(client, config.workspace_root, logger)
     except (RuntimeError, OSError, ValueError, TypeError, ConnectionError) as exc:
         raise RuntimeError(f"Failed to create OpenCode session: {exc}") from exc
 
-    async def _dispose_session() -> None:
-        if not session_id:
-            return
-        try:
-            await client.dispose(session_id)
-            log_event(
-                logger or logging.getLogger(__name__),
-                logging.INFO,
-                "opencode.session.disposed",
-                session_id=session_id,
-                workspace_root=config.workspace_root,
-                source="run_prompt",
-                reuse=False,
-            )
-        except (RuntimeError, OSError, BrokenPipeError) as exc:
-            log_event(
-                logger or logging.getLogger(__name__),
-                logging.WARNING,
-                "opencode.session.dispose_failed",
-                session_id=session_id,
-                workspace_root=config.workspace_root,
-                source="run_prompt",
-                reuse=False,
-                exc=exc,
-            )
-            if logger is not None:
-                logger.warning(f"OpenCode dispose failed: {exc}")
-
     try:
-        model_payload = split_model_id(config.model)
-        missing_env = await opencode_missing_env(
-            client, config.workspace_root, model_payload
-        )
-        if missing_env:
-            provider_id = model_payload.get("providerID") if model_payload else None
-            missing_label = ", ".join(missing_env)
-            raise RuntimeError(
-                f"OpenCode provider {provider_id or 'selected'} requires env vars: {missing_label}"
-            )
-
-        opencode_turn_started = False
-        await supervisor.mark_turn_started(Path(config.workspace_root))
-        opencode_turn_started = True
-        turn_id = build_turn_id(session_id)
-
-        if config.on_turn_start is not None:
-            try:
-                await config.on_turn_start(session_id, turn_id)
-            except (RuntimeError, TypeError, AttributeError):
-                if logger is not None:
-                    logger.debug("on_turn_start callback failed", exc_info=True)
-
-        stopped = False
-        timed_out = False
-        output_result: Optional[OpenCodeTurnOutput] = None
-
-        stop_task = None
-        if should_stop is not None:
-
-            async def _wait_for_stop() -> bool:
-                while True:
-                    if should_stop():
-                        return True
-                    await asyncio.sleep(0.2)
-
-            stop_task = asyncio.create_task(_wait_for_stop())
-
-        async def _abort_session(reason: str) -> None:
-            try:
-                await client.abort(session_id)
-            except (RuntimeError, OSError, BrokenPipeError, ProcessLookupError) as exc:
-                if logger is not None:
-                    logger.warning(f"OpenCode abort failed ({reason}): {exc}")
-
-        permission_policy = config.permission_policy or PERMISSION_ALLOW
-        ready_event = asyncio.Event()
-        collector_kwargs: dict[str, Any] = {}
-        supervisor_stall = supervisor.session_stall_timeout_seconds
-        if supervisor_stall is not None:
-            stall_timeout, first_event_timeout = opencode_stream_timeouts(
-                supervisor_stall,
-            )
-            collector_kwargs["stall_timeout_seconds"] = stall_timeout
-            collector_kwargs["first_event_timeout_seconds"] = first_event_timeout
-        output_task = asyncio.create_task(
-            collect_opencode_output(
-                client,
-                session_id=session_id,
-                workspace_path=config.workspace_root,
-                model_payload=model_payload,
-                permission_policy=permission_policy,
-                should_stop=should_stop,
-                ready_event=ready_event,
-                logger=logger,
-                **collector_kwargs,
-            )
-        )
-        with contextlib.suppress(asyncio.TimeoutError):
-            await asyncio.wait_for(ready_event.wait(), timeout=2.0)
-        prompt_task = asyncio.create_task(
-            client.prompt_async(
-                session_id,
-                message=config.prompt,
-                model=model_payload,
-                variant=config.reasoning,
-            )
-        )
-        timeout_task = asyncio.create_task(asyncio.sleep(config.timeout_seconds))
-
-        async def _finish_output(
-            ignore_errors: bool,
-        ) -> Optional[OpenCodeTurnOutput]:
-            if output_task.done():
-                try:
-                    return await output_task
-                except (RuntimeError, OSError, ConnectionError, ValueError) as exc:
-                    if not ignore_errors:
-                        raise
-                    if logger is not None:
-                        logger.warning(f"OpenCode output failed after interrupt: {exc}")
-                    return None
-
-            grace_seconds = max(0, config.interrupt_grace_seconds or 0)
-            if grace_seconds <= 0:
-                output_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await output_task
-                return None
-
-            try:
-                return await asyncio.wait_for(output_task, timeout=grace_seconds)
-            except asyncio.TimeoutError:
-                output_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await output_task
-                if logger is not None:
-                    logger.warning("OpenCode output did not stop within grace period")
-                return None
-            except (RuntimeError, OSError, ConnectionError, ValueError) as exc:
-                if not ignore_errors:
-                    raise
-                if logger is not None:
-                    logger.warning(f"OpenCode output failed after interrupt: {exc}")
-                return None
-
-        try:
-            tasks = {output_task, prompt_task, timeout_task}
-            if stop_task is not None:
-                tasks.add(stop_task)
-
-            while True:
-                done, pending = await asyncio.wait(
-                    tasks, return_when=asyncio.FIRST_COMPLETED
-                )
-
-                if output_task in done:
-                    output_result = await output_task
-                    if should_stop is not None and should_stop():
-                        stopped = True
-                    break
-
-                if stop_task is not None and stop_task in done:
-                    stopped = True
-                    if logger is not None:
-                        logger.info("OpenCode prompt stopped")
-                    await _abort_session("stop")
-                    output_result = await _finish_output(ignore_errors=True)
-                    break
-
-                if timeout_task in done:
-                    timed_out = True
-                    if logger is not None:
-                        logger.warning("OpenCode prompt timed out")
-                    await _abort_session("timeout")
-                    output_result = await _finish_output(ignore_errors=True)
-                    break
-
-                if prompt_task in done:
-                    try:
-                        await prompt_task
-                    except (RuntimeError, OSError, ConnectionError, ValueError) as exc:
-                        if logger is not None:
-                            logger.error(f"OpenCode prompt failed: {exc}")
-                        output_task.cancel()
-                        with contextlib.suppress(asyncio.CancelledError):
-                            await output_task
-                        raise RuntimeError(f"OpenCode prompt failed: {exc}") from exc
-                    tasks.discard(prompt_task)
-                    tasks = pending
-        finally:
-            timeout_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await timeout_task
-            if stop_task is not None:
-                stop_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await stop_task
-            if not prompt_task.done():
-                prompt_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await prompt_task
-            if opencode_turn_started:
-                try:
-                    await supervisor.mark_turn_finished(Path(config.workspace_root))
-                except (RuntimeError, OSError):
-                    if logger is not None:
-                        logger.debug("mark_turn_finished failed", exc_info=True)
-
-        output_text = output_result.text if output_result else ""
-        output_error = output_result.error if output_result else None
-        output_usage = output_result.usage if output_result else None
-        if prompt_task.done() and not output_text:
-            try:
-                prompt_response = prompt_task.result()
-            except (RuntimeError, OSError, ConnectionError, ValueError):
-                prompt_response = None
-            if prompt_response is not None:
-                fallback = parse_message_response(prompt_response)
-                if fallback.text:
-                    output_text = fallback.text
-                if fallback.error and not output_error:
-                    output_error = fallback.error
-
-        if output_usage:
-            persist_opencode_usage_snapshot(
-                Path(config.workspace_root),
-                session_id=session_id,
-                turn_id=turn_id,
-                usage=output_usage,
-                source="live_stream",
-            )
-
-        return OpenCodeRunResult(
-            session_id=session_id,
-            turn_id=turn_id,
-            output_text=output_text,
-            output_error=output_error,
-            usage=output_usage,
-            stopped=stopped,
-            timed_out=timed_out,
+        return await _run_turn(
+            supervisor,
+            client,
+            session_id,
+            config,
+            should_stop=should_stop,
+            logger=logger,
         )
     finally:
-        await _dispose_session()
+        await _dispose_session(client, session_id, config.workspace_root, logger)
+
+
+async def _run_turn(
+    supervisor: OpenCodeSupervisor,
+    client: Any,
+    session_id: str,
+    config: OpenCodeRunConfig,
+    *,
+    should_stop: Optional[Callable[[], bool]],
+    logger: Optional[logging.Logger],
+) -> OpenCodeRunResult:
+    model_payload = split_model_id(config.model)
+    missing_env = await opencode_missing_env(
+        client, config.workspace_root, model_payload
+    )
+    if missing_env:
+        provider_id = model_payload.get("providerID") if model_payload else None
+        missing_label = ", ".join(missing_env)
+        raise RuntimeError(
+            f"OpenCode provider {provider_id or 'selected'} requires env vars: {missing_label}"
+        )
+
+    opencode_turn_started = False
+    await supervisor.mark_turn_started(Path(config.workspace_root))
+    opencode_turn_started = True
+    turn_id = build_turn_id(session_id)
+
+    if config.on_turn_start is not None:
+        try:
+            await config.on_turn_start(session_id, turn_id)
+        except (RuntimeError, TypeError, AttributeError):
+            if logger is not None:
+                logger.debug("on_turn_start callback failed", exc_info=True)
+
+    stopped = False
+    timed_out = False
+    output_result: Optional[OpenCodeTurnOutput] = None
+
+    stop_task: Optional[asyncio.Task[bool]] = None
+    if should_stop is not None:
+
+        async def _wait_for_stop() -> bool:
+            while True:
+                if should_stop():
+                    return True
+                await asyncio.sleep(0.2)
+
+        stop_task = asyncio.create_task(_wait_for_stop())
+
+    permission_policy = config.permission_policy or PERMISSION_ALLOW
+    ready_event = asyncio.Event()
+    collector_kwargs: dict[str, Any] = {}
+    supervisor_stall = supervisor.session_stall_timeout_seconds
+    if supervisor_stall is not None:
+        stall_timeout, first_event_timeout = opencode_stream_timeouts(
+            supervisor_stall,
+        )
+        collector_kwargs["stall_timeout_seconds"] = stall_timeout
+        collector_kwargs["first_event_timeout_seconds"] = first_event_timeout
+    output_task = asyncio.create_task(
+        collect_opencode_output(
+            client,
+            session_id=session_id,
+            workspace_path=config.workspace_root,
+            model_payload=model_payload,
+            permission_policy=permission_policy,
+            should_stop=should_stop,
+            ready_event=ready_event,
+            logger=logger,
+            **collector_kwargs,
+        )
+    )
+    with contextlib.suppress(asyncio.TimeoutError):
+        await asyncio.wait_for(ready_event.wait(), timeout=2.0)
+    prompt_task = asyncio.create_task(
+        client.prompt_async(
+            session_id,
+            message=config.prompt,
+            model=model_payload,
+            variant=config.reasoning,
+        )
+    )
+    timeout_task = asyncio.create_task(asyncio.sleep(config.timeout_seconds))
+    grace_seconds = max(0, config.interrupt_grace_seconds or 0)
+
+    try:
+        tasks: set[asyncio.Task[Any]] = {output_task, prompt_task, timeout_task}
+        if stop_task is not None:
+            tasks.add(stop_task)
+
+        while True:
+            done, pending = await asyncio.wait(
+                tasks, return_when=asyncio.FIRST_COMPLETED
+            )
+
+            if output_task in done:
+                output_result = await output_task
+                if should_stop is not None and should_stop():
+                    stopped = True
+                break
+
+            if stop_task is not None and stop_task in done:
+                stopped = True
+                if logger is not None:
+                    logger.info("OpenCode prompt stopped")
+                await _abort_session(client, session_id, "stop", logger)
+                output_result = await _collect_output_after_interrupt(
+                    output_task,
+                    grace_seconds,
+                    ignore_errors=True,
+                    logger=logger,
+                )
+                break
+
+            if timeout_task in done:
+                timed_out = True
+                if logger is not None:
+                    logger.warning("OpenCode prompt timed out")
+                await _abort_session(client, session_id, "timeout", logger)
+                output_result = await _collect_output_after_interrupt(
+                    output_task,
+                    grace_seconds,
+                    ignore_errors=True,
+                    logger=logger,
+                )
+                break
+
+            if prompt_task in done:
+                try:
+                    await prompt_task
+                except (RuntimeError, OSError, ConnectionError, ValueError) as exc:
+                    if logger is not None:
+                        logger.error(f"OpenCode prompt failed: {exc}")
+                    output_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await output_task
+                    raise RuntimeError(f"OpenCode prompt failed: {exc}") from exc
+                tasks.discard(prompt_task)
+                tasks = pending
+    finally:
+        timeout_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await timeout_task
+        if stop_task is not None:
+            stop_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stop_task
+        if not prompt_task.done():
+            prompt_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await prompt_task
+        if opencode_turn_started:
+            try:
+                await supervisor.mark_turn_finished(Path(config.workspace_root))
+            except (RuntimeError, OSError):
+                if logger is not None:
+                    logger.debug("mark_turn_finished failed", exc_info=True)
+
+    output_text = output_result.text if output_result else ""
+    output_error = output_result.error if output_result else None
+    output_usage = output_result.usage if output_result else None
+
+    if prompt_task.done():
+        output_text, output_error = _apply_prompt_fallback(
+            output_text,
+            output_error,
+            prompt_task,
+        )
+
+    if output_usage:
+        persist_opencode_usage_snapshot(
+            Path(config.workspace_root),
+            session_id=session_id,
+            turn_id=turn_id,
+            usage=output_usage,
+            source="live_stream",
+        )
+
+    return OpenCodeRunResult(
+        session_id=session_id,
+        turn_id=turn_id,
+        output_text=output_text,
+        output_error=output_error,
+        usage=output_usage,
+        stopped=stopped,
+        timed_out=timed_out,
+    )
 
 
 __all__ = [
