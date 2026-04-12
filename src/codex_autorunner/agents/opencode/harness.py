@@ -50,6 +50,14 @@ from .event_fields import (
 from .event_fields import (
     extract_part_type as _extract_part_type,
 )
+from .protocol_payload import (
+    extract_completed_text,
+    extract_delta_text,
+    extract_harness_error_text,
+    extract_message_info,
+    extract_message_phase,
+    normalize_message_text,
+)
 from .runtime import (
     OpenCodeTurnOutput,
     build_turn_id,
@@ -519,126 +527,12 @@ def _workspace_permission_decision(
     return "allow"
 
 
-def _normalize_message_text(value: Any) -> Optional[str]:
-    if isinstance(value, str):
-        return value if value != "" else None
-    if isinstance(value, list):
-        parts: list[str] = []
-        for part in value:
-            if isinstance(part, dict):
-                part_type = part.get("type")
-                if isinstance(part_type, str) and part_type != "text":
-                    continue
-                part_text = part.get("text")
-                if isinstance(part_text, str):
-                    parts.append(part_text)
-        joined = "".join(parts)
-        return joined if joined != "" else None
-    if isinstance(value, dict):
-        for key in ("text", "message", "content"):
-            nested_text = _normalize_message_text(value.get(key))
-            if nested_text:
-                return nested_text
-        return None
-    return None
-
-
-def _extract_delta_text(params: dict[str, Any]) -> Optional[str]:
-    for key in ("content", "delta", "text"):
-        text = _normalize_message_text(params.get(key))
-        if text:
-            return text
-    properties = params.get("properties")
-    if isinstance(properties, dict):
-        delta = properties.get("delta")
-        if isinstance(delta, str):
-            text = _normalize_message_text(delta)
-            if text:
-                return text
-        if isinstance(delta, dict):
-            text = _normalize_message_text(delta)
-            if text:
-                return text
-        part = properties.get("part")
-        if isinstance(part, dict) and part.get("type") == "text":
-            text = _normalize_message_text(part.get("text"))
-            if text:
-                return text
-    message = params.get("message")
-    if isinstance(message, dict):
-        return _extract_delta_text(message)
-    item = params.get("item")
-    if isinstance(item, dict):
-        return _extract_delta_text(item)
-    return None
-
-
-def _extract_completed_text(params: dict[str, Any]) -> Optional[str]:
-    item = params.get("item")
-    if isinstance(item, dict):
-        return _normalize_message_text(item.get("content")) or _normalize_message_text(
-            item
-        )
-    result = params.get("result")
-    if isinstance(result, dict):
-        return _normalize_message_text(result)
-    return _normalize_message_text(params)
-
-
-def _extract_error_text(params: dict[str, Any]) -> Optional[str]:
-    error = params.get("error")
-    if isinstance(error, dict):
-        return _normalize_message_text(error)
-    return _normalize_message_text(params.get("message")) or _normalize_message_text(
-        params.get("detail")
-    )
-
-
-def _extract_message_info(params: dict[str, Any]) -> dict[str, Any]:
-    info = params.get("info")
-    if isinstance(info, dict):
-        return info
-    properties = params.get("properties")
-    if isinstance(properties, dict):
-        nested = properties.get("info")
-        if isinstance(nested, dict):
-            return nested
-    return {}
-
-
-def _normalize_message_phase(value: Any) -> Optional[str]:
-    if not isinstance(value, str):
-        return None
-    normalized = value.strip().lower()
-    if normalized in {"commentary", "final_answer"}:
-        return normalized
-    return None
-
-
-def _extract_message_phase(params: dict[str, Any]) -> Optional[str]:
-    phase = _normalize_message_phase(params.get("phase"))
-    if phase:
-        return phase
-    info = _extract_message_info(params)
-    phase = _normalize_message_phase(info.get("phase"))
-    if phase:
-        return phase
-    properties = params.get("properties")
-    if isinstance(properties, dict):
-        phase = _normalize_message_phase(properties.get("phase"))
-        if phase:
-            return phase
-    message = params.get("message")
-    if isinstance(message, dict):
-        phase = _normalize_message_phase(message.get("phase"))
-        if phase:
-            return phase
-    item = params.get("item")
-    if isinstance(item, dict):
-        phase = _normalize_message_phase(item.get("phase"))
-        if phase:
-            return phase
-    return None
+_extract_delta_text = extract_delta_text
+_extract_completed_text = extract_completed_text
+_extract_error_text = extract_harness_error_text
+_extract_message_info = extract_message_info
+_extract_message_phase = extract_message_phase
+_normalize_message_text = normalize_message_text
 
 
 def _unwrap_harness_payload(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
