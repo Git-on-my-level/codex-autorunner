@@ -916,28 +916,20 @@ def _parse_app_server_config(
         auto_restart = bool(auto_restart_raw)
     max_handles_raw = cfg.get("max_handles", defaults.get("max_handles"))
     max_handles = _parse_optional_int(max_handles_raw)
-    if max_handles is not None and max_handles <= 0:
-        max_handles = None
     idle_ttl_raw = cfg.get("idle_ttl_seconds", defaults.get("idle_ttl_seconds"))
     idle_ttl_seconds = _parse_optional_int(idle_ttl_raw)
-    if idle_ttl_seconds is not None and idle_ttl_seconds <= 0:
-        idle_ttl_seconds = None
     turn_timeout_raw = cfg.get(
         "turn_timeout_seconds", defaults.get("turn_timeout_seconds")
     )
     turn_timeout_seconds = (
         float(turn_timeout_raw) if turn_timeout_raw is not None else None
     )
-    if turn_timeout_seconds is not None and turn_timeout_seconds <= 0:
-        turn_timeout_seconds = None
     stall_timeout_raw = cfg.get(
         "turn_stall_timeout_seconds", defaults.get("turn_stall_timeout_seconds")
     )
     turn_stall_timeout_seconds = (
         float(stall_timeout_raw) if stall_timeout_raw is not None else None
     )
-    if turn_stall_timeout_seconds is not None and turn_stall_timeout_seconds <= 0:
-        turn_stall_timeout_seconds = None
     stall_poll_raw = cfg.get(
         "turn_stall_poll_interval_seconds",
         defaults.get("turn_stall_poll_interval_seconds"),
@@ -945,13 +937,6 @@ def _parse_app_server_config(
     turn_stall_poll_interval_seconds = (
         float(stall_poll_raw) if stall_poll_raw is not None else None
     )
-    if (
-        turn_stall_poll_interval_seconds is not None
-        and turn_stall_poll_interval_seconds <= 0
-    ):
-        turn_stall_poll_interval_seconds = defaults.get(
-            "turn_stall_poll_interval_seconds"
-        )
     stall_recovery_raw = cfg.get(
         "turn_stall_recovery_min_interval_seconds",
         defaults.get("turn_stall_recovery_min_interval_seconds"),
@@ -959,29 +944,15 @@ def _parse_app_server_config(
     turn_stall_recovery_min_interval_seconds = (
         float(stall_recovery_raw) if stall_recovery_raw is not None else None
     )
-    if (
-        turn_stall_recovery_min_interval_seconds is not None
-        and turn_stall_recovery_min_interval_seconds < 0
-    ):
-        turn_stall_recovery_min_interval_seconds = defaults.get(
-            "turn_stall_recovery_min_interval_seconds"
-        )
     stall_max_attempts_raw = cfg.get(
         "turn_stall_max_recovery_attempts",
         defaults.get("turn_stall_max_recovery_attempts"),
     )
     turn_stall_max_recovery_attempts = _parse_optional_int(stall_max_attempts_raw)
-    if (
-        turn_stall_max_recovery_attempts is not None
-        and turn_stall_max_recovery_attempts <= 0
-    ):
-        turn_stall_max_recovery_attempts = None
     request_timeout_raw = cfg.get("request_timeout", defaults.get("request_timeout"))
     request_timeout = (
         float(request_timeout_raw) if request_timeout_raw is not None else None
     )
-    if request_timeout is not None and request_timeout <= 0:
-        request_timeout = None
     client_defaults = defaults.get("client")
     client_defaults = client_defaults if isinstance(client_defaults, dict) else {}
     client_cfg_raw = cfg.get("client")
@@ -989,17 +960,15 @@ def _parse_app_server_config(
 
     def _client_int(key: str) -> int:
         value = client_cfg.get(key, client_defaults.get(key))
-        value = int(value) if value is not None else 0
-        if value <= 0:
-            value = int(client_defaults.get(key) or 0)
-        return value
+        return int(value) if value is not None else int(client_defaults.get(key) or 0)
 
-    def _client_float(key: str, *, allow_zero: bool = False) -> float:
+    def _client_float(key: str) -> float:
         value = client_cfg.get(key, client_defaults.get(key))
-        value = float(value) if value is not None else 0.0
-        if value < 0 or (not allow_zero and value <= 0):
-            value = float(client_defaults.get(key) or 0.0)
-        return value
+        return (
+            float(value)
+            if value is not None
+            else float(client_defaults.get(key) or 0.0)
+        )
 
     output_defaults = defaults.get("output")
     output_cfg_raw = cfg.get("output")
@@ -1026,9 +995,7 @@ def _parse_app_server_config(
                 "restart_backoff_initial_seconds"
             ),
             restart_backoff_max_seconds=_client_float("restart_backoff_max_seconds"),
-            restart_backoff_jitter_ratio=_client_float(
-                "restart_backoff_jitter_ratio", allow_zero=True
-            ),
+            restart_backoff_jitter_ratio=_client_float("restart_backoff_jitter_ratio"),
         ),
         output=output,
         prompts=prompts,
@@ -1046,8 +1013,6 @@ def _parse_opencode_config(
         "server_scope", defaults.get("server_scope", "workspace")
     )
     server_scope = str(server_scope_raw).strip().lower() or "workspace"
-    if server_scope not in {"workspace", "global"}:
-        server_scope = "workspace"
     stall_timeout_raw = cfg.get(
         "session_stall_timeout_seconds",
         defaults.get("session_stall_timeout_seconds"),
@@ -1055,22 +1020,12 @@ def _parse_opencode_config(
     stall_timeout_seconds = (
         float(stall_timeout_raw) if stall_timeout_raw is not None else None
     )
-    if stall_timeout_seconds is not None and stall_timeout_seconds <= 0:
-        stall_timeout_seconds = None
     max_text_chars_raw = cfg.get("max_text_chars", defaults.get("max_text_chars"))
-    max_text_chars = (
-        int(max_text_chars_raw)
-        if isinstance(max_text_chars_raw, int) and max_text_chars_raw > 0
-        else None
-    )
+    max_text_chars = int(max_text_chars_raw) if max_text_chars_raw is not None else None
     max_handles_raw = cfg.get("max_handles", defaults.get("max_handles"))
     max_handles = _parse_optional_int(max_handles_raw)
-    if max_handles is not None and max_handles <= 0:
-        max_handles = None
     idle_ttl_raw = cfg.get("idle_ttl_seconds", defaults.get("idle_ttl_seconds"))
     idle_ttl_seconds = _parse_optional_int(idle_ttl_raw)
-    if idle_ttl_seconds is not None and idle_ttl_seconds <= 0:
-        idle_ttl_seconds = None
     return OpenCodeConfig(
         server_scope=server_scope,
         session_stall_timeout_seconds=stall_timeout_seconds,

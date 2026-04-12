@@ -1,3 +1,5 @@
+import pytest
+
 from codex_autorunner.core.agent_config import (
     AgentConfig,
     AgentProfileConfig,
@@ -5,6 +7,7 @@ from codex_autorunner.core.agent_config import (
     _parse_command,
     parse_agents_config,
 )
+from codex_autorunner.core.config_contract import ConfigError
 
 
 class TestParseCommand:
@@ -50,20 +53,20 @@ class TestParseAgentsConfig:
         result = parse_agents_config(None, defaults)
         assert "codex" in result
 
-    def test_skips_non_dict_agent_entries(self) -> None:
+    def test_non_dict_agent_entry_raises(self) -> None:
         cfg = {"agents": {"codex": "not-a-dict"}}
-        result = parse_agents_config(cfg, {})
-        assert "codex" not in result
+        with pytest.raises(ConfigError, match="must be a mapping"):
+            parse_agents_config(cfg, {})
 
-    def test_skips_agent_with_missing_binary(self) -> None:
+    def test_agent_with_missing_binary_raises(self) -> None:
         cfg = {"agents": {"codex": {"backend": "codex"}}}
-        result = parse_agents_config(cfg, {})
-        assert "codex" not in result
+        with pytest.raises(ConfigError, match="binary is required"):
+            parse_agents_config(cfg, {})
 
-    def test_skips_agent_with_empty_binary(self) -> None:
+    def test_agent_with_empty_binary_raises(self) -> None:
         cfg = {"agents": {"codex": {"backend": "codex", "binary": "  "}}}
-        result = parse_agents_config(cfg, {})
-        assert "codex" not in result
+        with pytest.raises(ConfigError, match="binary is required"):
+            parse_agents_config(cfg, {})
 
     def test_parses_basic_agent(self) -> None:
         cfg = {
@@ -197,7 +200,7 @@ class TestParseAgentsConfig:
         result = parse_agents_config(cfg, {})
         assert result["x"].profiles is None
 
-    def test_skips_profile_with_empty_id(self) -> None:
+    def test_profile_with_empty_id_raises(self) -> None:
         cfg = {
             "agents": {
                 "x": {
@@ -206,10 +209,10 @@ class TestParseAgentsConfig:
                 }
             }
         }
-        result = parse_agents_config(cfg, {})
-        assert result["x"].profiles is None
+        with pytest.raises(ConfigError, match="must be non-empty strings"):
+            parse_agents_config(cfg, {})
 
-    def test_skips_profile_with_non_dict_value(self) -> None:
+    def test_profile_with_non_dict_value_raises(self) -> None:
         cfg = {
             "agents": {
                 "x": {
@@ -218,8 +221,8 @@ class TestParseAgentsConfig:
                 }
             }
         }
-        result = parse_agents_config(cfg, {})
-        assert result["x"].profiles is None
+        with pytest.raises(ConfigError, match="must be a mapping"):
+            parse_agents_config(cfg, {})
 
     def test_profile_backend_none_when_empty(self) -> None:
         cfg = {

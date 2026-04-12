@@ -97,37 +97,68 @@ def _validate_app_server_config(cfg: Dict[str, Any]) -> None:
             raise ConfigError("app_server.auto_restart must be boolean or null")
     for key in ("max_handles", "idle_ttl_seconds"):
         if key in app_server_cfg and app_server_cfg.get(key) is not None:
-            if not isinstance(app_server_cfg.get(key), int):
+            val = app_server_cfg.get(key)
+            if not isinstance(val, int):
                 raise ConfigError(f"app_server.{key} must be an integer or null")
+            if val <= 0:
+                raise ConfigError(f"app_server.{key} must be > 0 or null")
     if (
         "turn_timeout_seconds" in app_server_cfg
         and app_server_cfg.get("turn_timeout_seconds") is not None
     ):
-        if not isinstance(app_server_cfg.get("turn_timeout_seconds"), (int, float)):
+        turn_timeout = app_server_cfg.get("turn_timeout_seconds")
+        if not isinstance(turn_timeout, (int, float)):
             raise ConfigError(
                 "app_server.turn_timeout_seconds must be a number or null"
             )
+        if turn_timeout <= 0:
+            raise ConfigError("app_server.turn_timeout_seconds must be > 0 or null")
     if (
         "request_timeout" in app_server_cfg
         and app_server_cfg.get("request_timeout") is not None
     ):
-        if not isinstance(app_server_cfg.get("request_timeout"), (int, float)):
+        req_timeout = app_server_cfg.get("request_timeout")
+        if not isinstance(req_timeout, (int, float)):
             raise ConfigError("app_server.request_timeout must be a number or null")
+        if req_timeout <= 0:
+            raise ConfigError("app_server.request_timeout must be > 0 or null")
     for key in (
         "turn_stall_timeout_seconds",
         "turn_stall_poll_interval_seconds",
-        "turn_stall_recovery_min_interval_seconds",
     ):
         if key in app_server_cfg and app_server_cfg.get(key) is not None:
-            if not isinstance(app_server_cfg.get(key), (int, float)):
+            val = app_server_cfg.get(key)
+            if not isinstance(val, (int, float)):
                 raise ConfigError(f"app_server.{key} must be a number or null")
+            if val <= 0:
+                raise ConfigError(f"app_server.{key} must be > 0 or null")
+    if (
+        "turn_stall_recovery_min_interval_seconds" in app_server_cfg
+        and app_server_cfg.get("turn_stall_recovery_min_interval_seconds") is not None
+    ):
+        recovery_interval = app_server_cfg.get(
+            "turn_stall_recovery_min_interval_seconds"
+        )
+        if not isinstance(recovery_interval, (int, float)):
+            raise ConfigError(
+                "app_server.turn_stall_recovery_min_interval_seconds must be a number or null"
+            )
+        if recovery_interval < 0:
+            raise ConfigError(
+                "app_server.turn_stall_recovery_min_interval_seconds must be >= 0 or null"
+            )
     if (
         "turn_stall_max_recovery_attempts" in app_server_cfg
         and app_server_cfg.get("turn_stall_max_recovery_attempts") is not None
     ):
-        if not isinstance(app_server_cfg.get("turn_stall_max_recovery_attempts"), int):
+        max_attempts = app_server_cfg.get("turn_stall_max_recovery_attempts")
+        if not isinstance(max_attempts, int):
             raise ConfigError(
                 "app_server.turn_stall_max_recovery_attempts must be an integer or null"
+            )
+        if max_attempts <= 0:
+            raise ConfigError(
+                "app_server.turn_stall_max_recovery_attempts must be > 0 or null"
             )
     client_cfg = app_server_cfg.get("client")
     if client_cfg is not None:
@@ -403,11 +434,14 @@ def _validate_opencode_config(cfg: Dict[str, Any]) -> None:
         "session_stall_timeout_seconds" in opencode_cfg
         and opencode_cfg.get("session_stall_timeout_seconds") is not None
     ):
-        if not isinstance(
-            opencode_cfg.get("session_stall_timeout_seconds"), (int, float)
-        ):
+        stall_timeout = opencode_cfg.get("session_stall_timeout_seconds")
+        if not isinstance(stall_timeout, (int, float)):
             raise ConfigError(
                 "opencode.session_stall_timeout_seconds must be a number or null"
+            )
+        if stall_timeout <= 0:
+            raise ConfigError(
+                "opencode.session_stall_timeout_seconds must be > 0 or null"
             )
     if (
         "max_text_chars" in opencode_cfg
@@ -416,15 +450,23 @@ def _validate_opencode_config(cfg: Dict[str, Any]) -> None:
         max_text_chars = opencode_cfg.get("max_text_chars")
         if not isinstance(max_text_chars, int):
             raise ConfigError("opencode.max_text_chars must be an integer or null")
+        if max_text_chars <= 0:
+            raise ConfigError("opencode.max_text_chars must be > 0 or null")
     if "max_handles" in opencode_cfg and opencode_cfg.get("max_handles") is not None:
-        if not isinstance(opencode_cfg.get("max_handles"), int):
+        oc_handles = opencode_cfg.get("max_handles")
+        if not isinstance(oc_handles, int):
             raise ConfigError("opencode.max_handles must be an integer or null")
+        if oc_handles <= 0:
+            raise ConfigError("opencode.max_handles must be > 0 or null")
     if (
         "idle_ttl_seconds" in opencode_cfg
         and opencode_cfg.get("idle_ttl_seconds") is not None
     ):
-        if not isinstance(opencode_cfg.get("idle_ttl_seconds"), int):
+        oc_idle = opencode_cfg.get("idle_ttl_seconds")
+        if not isinstance(oc_idle, int):
             raise ConfigError("opencode.idle_ttl_seconds must be an integer or null")
+        if oc_idle <= 0:
+            raise ConfigError("opencode.idle_ttl_seconds must be > 0 or null")
 
 
 def _validate_update_config(cfg: Dict[str, Any]) -> None:

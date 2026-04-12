@@ -2,6 +2,8 @@ import dataclasses
 import shlex
 from typing import Any, Dict, List, Literal, Optional
 
+from .config_contract import ConfigError
+
 
 @dataclasses.dataclass(frozen=True)
 class AgentProfileConfig:
@@ -124,13 +126,13 @@ def parse_agents_config(
     agents: Dict[str, AgentConfig] = {}
     for agent_id, agent_cfg in raw_agents.items():
         if not isinstance(agent_cfg, dict):
-            continue
+            raise ConfigError(f"agents.{agent_id} must be a mapping")
         backend = agent_cfg.get("backend")
         if not isinstance(backend, str) or not backend.strip():
             backend = None
         binary = agent_cfg.get("binary")
         if not isinstance(binary, str) or not binary.strip():
-            continue
+            raise ConfigError(f"agents.{agent_id}.binary is required")
         serve_command = None
         if "serve_command" in agent_cfg:
             serve_command = _parse_command(agent_cfg.get("serve_command"))
@@ -149,8 +151,14 @@ def parse_agents_config(
             parsed_profiles: Dict[str, AgentProfileConfig] = {}
             for profile_id, profile_cfg in profiles_raw.items():
                 normalized_profile_id = str(profile_id or "").strip().lower()
-                if not normalized_profile_id or not isinstance(profile_cfg, dict):
-                    continue
+                if not normalized_profile_id:
+                    raise ConfigError(
+                        f"agents.{agent_id}.profiles keys must be non-empty strings"
+                    )
+                if not isinstance(profile_cfg, dict):
+                    raise ConfigError(
+                        f"agents.{agent_id}.profiles.{profile_id} must be a mapping"
+                    )
                 profile_backend = profile_cfg.get("backend")
                 if not isinstance(profile_backend, str) or not profile_backend.strip():
                     profile_backend = None
