@@ -125,6 +125,34 @@ class TestColdTraceWriter:
             manifest = writer.finalize()
         assert manifest.trace_id == "custom-trace-123"
 
+    def test_open_persists_visible_manifest_before_finalize(
+        self, hub_root: Path
+    ) -> None:
+        _init_orchestration_db(hub_root)
+        writer = ColdTraceWriter(
+            hub_root=hub_root,
+            execution_id="exec-open",
+            trace_id="trace-open-123",
+        ).open()
+        try:
+            writer.append(
+                event_family="run_notice",
+                event_type="RunNotice",
+                payload={"kind": "thinking", "message": "hello"},
+            )
+            store = ColdTraceStore(hub_root)
+            manifest = store.get_manifest("exec-open")
+            assert manifest is not None
+            assert manifest.trace_id == "trace-open-123"
+            assert manifest.status == "open"
+            assert manifest.event_count == 1
+            by_trace = store.get_manifest_by_trace_id("trace-open-123")
+            assert by_trace is not None
+            assert by_trace.status == "open"
+            assert by_trace.event_count == 1
+        finally:
+            writer.close()
+
 
 class TestColdTraceReader:
     def test_read_events_with_offset_and_limit(self, hub_root: Path) -> None:

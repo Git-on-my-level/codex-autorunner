@@ -161,7 +161,11 @@ def build_trace_inspection_routes(router: APIRouter) -> None:
                 status_code=404,
                 detail="No checkpoint found for this execution",
             )
-        manifest = store.get_manifest(execution_id)
+        manifest = None
+        if checkpoint.trace_manifest_id:
+            manifest = store.get_manifest_by_trace_id(checkpoint.trace_manifest_id)
+        if manifest is None:
+            manifest = store.get_manifest(execution_id)
         result: dict[str, Any] = {
             "checkpoint": checkpoint.to_dict(),
             "execution_id": execution_id,

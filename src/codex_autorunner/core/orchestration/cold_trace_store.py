@@ -4,6 +4,7 @@ import gzip
 import hashlib
 import json
 import uuid
+import zlib
 from pathlib import Path
 from typing import Any, Iterator, Optional, cast
 
@@ -105,6 +106,24 @@ class ColdTraceWriter:
         self._artifact_path.parent.mkdir(parents=True, exist_ok=True)
         self._file = gzip.open(self._artifact_path, "ab")
         self._started_at = now_iso()
+        self._manifest = ExecutionTraceManifest(
+            trace_id=self._trace_id,
+            execution_id=self._execution_id,
+            artifact_relpath=self._relpath,
+            trace_format=_TRACE_FORMAT,
+            event_count=0,
+            byte_count=0,
+            checksum=None,
+            schema_version=_TRACE_SCHEMA_VERSION,
+            status="open",
+            started_at=self._started_at,
+            finished_at=None,
+            backend_thread_id=self._backend_thread_id,
+            backend_turn_id=self._backend_turn_id,
+            includes_families=(),
+            redactions_applied=(),
+        )
+        _persist_manifest(self._hub_root, self._manifest)
         return self
 
     def append(
@@ -263,21 +282,16 @@ class ColdTraceReader:
             return []
         events: list[dict[str, Any]] = []
         count = 0
-        with gzip.open(artifact_path, "rt", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    envelope = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                count += 1
-                if count <= offset:
-                    continue
-                events.append(envelope)
-                if limit is not None and len(events) >= limit:
-                    break
+        for envelope in _iter_trace_envelopes(
+            artifact_path,
+            allow_partial=(manifest.status == "open"),
+        ):
+            count += 1
+            if count <= offset:
+                continue
+            events.append(envelope)
+            if limit is not None and len(events) >= limit:
+                break
         return events
 
     @staticmethod
@@ -289,16 +303,10 @@ class ColdTraceReader:
         artifact_path = traces_root / manifest.artifact_relpath
         if not artifact_path.exists():
             return
-        with gzip.open(artifact_path, "rt", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    envelope = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                yield envelope
+        yield from _iter_trace_envelopes(
+            artifact_path,
+            allow_partial=(manifest.status == "open"),
+        )
 
 
 class ColdTraceStore:
@@ -335,7 +343,6 @@ class ColdTraceStore:
                 SELECT *
                   FROM orch_cold_trace_manifests
                  WHERE execution_id = ?
-                   AND status = 'finalized'
                  ORDER BY updated_at DESC
                  LIMIT 1
                 """,
@@ -343,7 +350,7 @@ class ColdTraceStore:
             ).fetchone()
         if row is None:
             return None
-        return _row_to_manifest(row)
+        return _refresh_open_manifest(self._hub_root, _row_to_manifest(row))
 
     def get_manifest_by_trace_id(
         self, trace_id: str
@@ -359,7 +366,7 @@ class ColdTraceStore:
             ).fetchone()
         if row is None:
             return None
-        return _row_to_manifest(row)
+        return _refresh_open_manifest(self._hub_root, _row_to_manifest(row))
 
     def list_manifests(
         self,
@@ -389,7 +396,10 @@ class ColdTraceStore:
                     """,
                     (limit,),
                 ).fetchall()
-        return [_row_to_manifest(row) for row in rows]
+        return [
+            _refresh_open_manifest(self._hub_root, _row_to_manifest(row))
+            for row in rows
+        ]
 
     def read_events(
         self,
@@ -558,6 +568,84 @@ def _row_to_manifest(row: Any) -> ExecutionTraceManifest:
             str(r) for r in (redactions_raw if isinstance(redactions_raw, list) else [])
         ),
     )
+
+
+def _refresh_open_manifest(
+    hub_root: Path,
+    manifest: ExecutionTraceManifest,
+) -> ExecutionTraceManifest:
+    if manifest.status != "open":
+        return manifest
+    traces_root = resolve_hub_traces_root(hub_root)
+    artifact_path = traces_root / manifest.artifact_relpath
+    if not artifact_path.exists():
+        return manifest
+    event_count = 0
+    includes_families: set[str] = set()
+    for envelope in _iter_trace_envelopes(artifact_path, allow_partial=True):
+        event_count += 1
+        family = str(envelope.get("event_family") or "").strip()
+        if family:
+            includes_families.add(family)
+    return ExecutionTraceManifest(
+        trace_id=manifest.trace_id,
+        execution_id=manifest.execution_id,
+        artifact_relpath=manifest.artifact_relpath,
+        trace_format=manifest.trace_format,
+        event_count=event_count,
+        byte_count=artifact_path.stat().st_size,
+        checksum=manifest.checksum,
+        schema_version=manifest.schema_version,
+        status=manifest.status,
+        started_at=manifest.started_at,
+        finished_at=manifest.finished_at,
+        backend_thread_id=manifest.backend_thread_id,
+        backend_turn_id=manifest.backend_turn_id,
+        includes_families=cast(
+            tuple[ExecutionHistoryEventFamily, ...],
+            tuple(sorted(includes_families)) or manifest.includes_families,
+        ),
+        redactions_applied=manifest.redactions_applied,
+    )
+
+
+def _iter_trace_envelopes(
+    artifact_path: Path,
+    *,
+    allow_partial: bool,
+) -> Iterator[dict[str, Any]]:
+    if allow_partial:
+        raw_bytes = artifact_path.read_bytes()
+        if not raw_bytes:
+            return
+        decompressor = zlib.decompressobj(16 + zlib.MAX_WBITS)
+        try:
+            text = decompressor.decompress(raw_bytes).decode("utf-8", errors="ignore")
+        except zlib.error:
+            return
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                envelope = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(envelope, dict):
+                yield envelope
+        return
+
+    with gzip.open(artifact_path, "rt", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                envelope = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(envelope, dict):
+                yield envelope
 
 
 def _row_optional(row: Any, key: str) -> Optional[str]:

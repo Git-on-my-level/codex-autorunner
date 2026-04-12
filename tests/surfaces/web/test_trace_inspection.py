@@ -13,6 +13,8 @@ from codex_autorunner.core.orchestration.cold_trace_store import (
     ColdTraceWriter,
 )
 from codex_autorunner.core.orchestration.execution_history import ExecutionCheckpoint
+from codex_autorunner.core.orchestration.turn_timeline import persist_turn_timeline
+from codex_autorunner.core.ports.run_event import RunNotice
 from codex_autorunner.server import create_hub_app
 
 
@@ -292,6 +294,51 @@ class TestTraceCheckpointEndpoint:
             resp = client.get("/hub/pma/traces/checkpoint/nonexistent")
 
         assert resp.status_code == 404
+
+    def test_get_trace_checkpoint_and_events_while_trace_is_open(self, hub_env) -> None:
+        _init_orchestration_db(hub_env.hub_root)
+        store = ColdTraceStore(hub_env.hub_root)
+        writer = store.open_writer(
+            execution_id="exec-open-checkpoint",
+            trace_id="trace-open-checkpoint",
+        ).open()
+        try:
+            persist_turn_timeline(
+                hub_env.hub_root,
+                execution_id="exec-open-checkpoint",
+                target_kind="thread_target",
+                target_id="thread-open-checkpoint",
+                events=[
+                    RunNotice(
+                        timestamp="2026-04-12T00:00:00Z",
+                        kind="thinking",
+                        message="inspect live trace",
+                    )
+                ],
+                cold_trace_writer=writer,
+            )
+
+            with _make_hub_app(hub_env.hub_root) as client:
+                checkpoint_resp = client.get(
+                    "/hub/pma/traces/checkpoint/exec-open-checkpoint"
+                )
+                events_resp = client.get("/hub/pma/traces/events/exec-open-checkpoint")
+        finally:
+            writer.close()
+
+        assert checkpoint_resp.status_code == 200
+        checkpoint_body = checkpoint_resp.json()
+        assert checkpoint_body["cold_trace_available"] is True
+        assert checkpoint_body["trace_manifest"]["trace_id"] == "trace-open-checkpoint"
+        assert checkpoint_body["trace_manifest"]["status"] == "open"
+        assert checkpoint_body["trace_manifest"]["event_count"] == 1
+
+        assert events_resp.status_code == 200
+        events_body = events_resp.json()
+        assert events_body["manifest_available"] is True
+        assert events_body["trace_status"] == "open"
+        assert events_body["total_count"] == 1
+        assert len(events_body["events"]) == 1
 
 
 class TestTurnDetailTraceMetadata:
