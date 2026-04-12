@@ -88,7 +88,16 @@ class PmaQueueItem:
 
 
 class PmaQueue:
-    """PMA queue backed by orchestration SQLite with JSONL compatibility mirrors."""
+    """PMA lane queue over ``orch_queue_items`` in orchestration SQLite.
+
+    **Canonical store:** the ``orch_queue_items`` table owns all queue state.
+    Every enqueue, status transition, and compaction writes to SQLite first.
+
+    **Compatibility mirrors:** after each canonical mutation the lane JSONL
+    file under ``.codex-autorunner/pma/queue/`` is rewritten as a
+    read-only compatibility and audit artifact.  The JSONL files are **not**
+    the source of truth; deleting them does not affect queue behaviour.
+    """
 
     def __init__(self, hub_root: Path) -> None:
         self._hub_root = hub_root
@@ -175,11 +184,11 @@ class PmaQueue:
                     )
                     dedupe_item.state = QueueItemState.DEDUPED
                     dedupe_item.dedupe_reason = f"duplicate_of_{existing.item_id}"
-                    await self._append_to_file(dedupe_item)
+                    await self._insert_canonical_row(dedupe_item)
                     return dedupe_item, f"duplicate of {existing.item_id}"
 
             item = PmaQueueItem.create(lane_id, idempotency_key, payload)
-            await self._append_to_file(item)
+            await self._insert_canonical_row(item)
             queue = self._ensure_lane_queue(lane_id)
             await queue.put(item)
             self._ensure_lane_known_ids(lane_id).add(item.item_id)
@@ -202,11 +211,11 @@ class PmaQueue:
                 )
                 dedupe_item.state = QueueItemState.DEDUPED
                 dedupe_item.dedupe_reason = f"duplicate_of_{existing.item_id}"
-                self._append_to_file_sync(dedupe_item)
+                self._insert_canonical_row_sync(dedupe_item)
                 return dedupe_item, f"duplicate of {existing.item_id}"
 
         item = PmaQueueItem.create(lane_id, idempotency_key, payload)
-        self._append_to_file_sync(item)
+        self._insert_canonical_row_sync(item)
         self._notify_in_memory_enqueue(item)
         return item, None
 
@@ -219,7 +228,7 @@ class PmaQueue:
             item = queue.get_nowait()
             item.state = QueueItemState.RUNNING
             item.started_at = now_iso()
-            await self._update_in_file(item)
+            await self._update_canonical_row(item)
             return item
         except asyncio.QueueEmpty:
             return None
@@ -231,14 +240,14 @@ class PmaQueue:
         item.finished_at = now_iso()
         if result is not None:
             item.result = result
-        await self._update_in_file(item)
+        await self._update_canonical_row(item)
         await self._maybe_compact_lane(item.lane_id)
 
     async def fail_item(self, item: PmaQueueItem, error: str) -> None:
         item.state = QueueItemState.FAILED
         item.finished_at = now_iso()
         item.error = error
-        await self._update_in_file(item)
+        await self._update_canonical_row(item)
         await self._maybe_compact_lane(item.lane_id)
 
     async def cancel_lane(self, lane_id: str) -> int:
@@ -249,7 +258,7 @@ class PmaQueue:
             if item.state == QueueItemState.PENDING:
                 item.state = QueueItemState.CANCELLED
                 item.finished_at = now_iso()
-                await self._update_in_file(item)
+                await self._update_canonical_row(item)
                 cancelled += 1
                 cancelled_ids.add(item.item_id)
 
@@ -266,7 +275,7 @@ class PmaQueue:
                     continue
                 queued_item.state = QueueItemState.CANCELLED
                 queued_item.finished_at = now_iso()
-                await self._update_in_file(queued_item)
+                await self._update_canonical_row(queued_item)
                 cancelled += 1
                 cancelled_ids.add(queued_item.item_id)
 
@@ -376,7 +385,8 @@ class PmaQueue:
                 return item
         return None
 
-    async def _append_to_file(self, item: PmaQueueItem) -> None:
+    async def _insert_canonical_row(self, item: PmaQueueItem) -> None:
+        """Insert (or upsert) a queue item into the canonical ``orch_queue_items`` table, then sync the compatibility mirror."""
         async with self._ensure_lane_lock(item.lane_id):
             with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
                 with conn:
@@ -419,9 +429,10 @@ class PmaQueue:
                         """,
                         self._item_db_tuple(item),
                     )
-            self._sync_lane_mirror_sync(item.lane_id)
+            self._write_compatibility_mirror(item.lane_id)
 
-    async def _update_in_file(self, item: PmaQueueItem) -> None:
+    async def _update_canonical_row(self, item: PmaQueueItem) -> None:
+        """Update an existing queue item in the canonical ``orch_queue_items`` table, then sync the compatibility mirror."""
         async with self._ensure_lane_lock(item.lane_id):
             with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
                 with conn:
@@ -464,7 +475,7 @@ class PmaQueue:
                             item.item_id,
                         ),
                     )
-            self._sync_lane_mirror_sync(item.lane_id)
+            self._write_compatibility_mirror(item.lane_id)
 
     async def compact_lane(
         self,
@@ -501,7 +512,7 @@ class PmaQueue:
                         "DELETE FROM orch_queue_items WHERE queue_item_id = ?",
                         [(item_id,) for item_id in delete_ids],
                     )
-            self._sync_lane_mirror_sync(lane_id)
+            self._write_compatibility_mirror(lane_id)
             return True
 
     async def _maybe_compact_lane(self, lane_id: str) -> None:
@@ -513,7 +524,8 @@ class PmaQueue:
             return
         await self.compact_lane(lane_id)
 
-    def _append_to_file_sync(self, item: PmaQueueItem) -> None:
+    def _insert_canonical_row_sync(self, item: PmaQueueItem) -> None:
+        """Synchronous counterpart of :meth:`_insert_canonical_row`."""
         with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
             with conn:
                 conn.execute(
@@ -555,7 +567,7 @@ class PmaQueue:
                     """,
                     self._item_db_tuple(item),
                 )
-        self._sync_lane_mirror_sync(item.lane_id)
+        self._write_compatibility_mirror(item.lane_id)
 
     def _read_items_sync(self, lane_id: str) -> list[PmaQueueItem]:
         return self._read_items_from_sqlite(lane_id)
@@ -676,7 +688,14 @@ class PmaQueue:
             ).fetchall()
         return [self._row_to_item(row) for row in rows]
 
-    def _sync_lane_mirror_sync(self, lane_id: str) -> None:
+    def _write_compatibility_mirror(self, lane_id: str) -> None:
+        """Rewrite the JSONL lane mirror from canonical SQLite rows.
+
+        This is a **compatibility artifact**, not the source of truth.
+        The mirror is rebuilt from ``orch_queue_items`` after every canonical
+        mutation so that downstream consumers expecting JSONL files continue
+        to see up-to-date data.
+        """
         path = self._lane_queue_path(lane_id)
         items = self._read_items_from_sqlite(lane_id)
         with file_lock(self._lane_queue_lock_path(lane_id)):
