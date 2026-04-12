@@ -27,36 +27,35 @@ from codex_autorunner.surfaces.web.routes.file_chat_routes.targets import (
 )
 
 
-def _make_request(repo_root: Path, *, config: object | None = None) -> SimpleNamespace:
-    return SimpleNamespace(
-        app=SimpleNamespace(
-            state=SimpleNamespace(
-                app_server_supervisor=object(),
-                app_server_threads=None,
-                opencode_supervisor=None,
-                config=config,
-                engine=SimpleNamespace(repo_root=repo_root),
-                app_server_events=None,
-            )
-        )
+def _make_request_state(
+    repo_root: Path,
+    *,
+    config: object | None = None,
+    **extra_state: object,
+) -> SimpleNamespace:
+    state = dict(
+        app_server_supervisor=object(),
+        app_server_threads=None,
+        opencode_supervisor=None,
+        config=config,
+        engine=SimpleNamespace(repo_root=repo_root),
+        app_server_events=None,
     )
+    state.update(extra_state)
+    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(**state)))
+
+
+def _make_request(repo_root: Path, *, config: object | None = None) -> SimpleNamespace:
+    return _make_request_state(repo_root, config=config)
 
 
 def _make_request_with_hermes(
     repo_root: Path, *, config: object | None = None
 ) -> SimpleNamespace:
-    return SimpleNamespace(
-        app=SimpleNamespace(
-            state=SimpleNamespace(
-                app_server_supervisor=object(),
-                app_server_threads=None,
-                opencode_supervisor=None,
-                hermes_supervisor=object(),
-                config=config,
-                engine=SimpleNamespace(repo_root=repo_root),
-                app_server_events=None,
-            )
-        )
+    return _make_request_state(
+        repo_root,
+        config=config,
+        hermes_supervisor=object(),
     )
 
 
@@ -324,10 +323,15 @@ async def test_execute_file_chat_passes_hermes_profile_to_runtime_turn(
         runtime, "get_or_create_interrupt_event", fake_get_or_create_interrupt_event
     )
     monkeypatch.setattr(runtime, "update_turn_state", fake_update_turn_state)
+
+    def _resolve_profile(_request, _agent_id, requested_profile, default_profile=None):
+        _ = default_profile
+        return requested_profile
+
     monkeypatch.setattr(
         execution_module,
         "resolve_requested_agent_profile",
-        lambda _request, _agent_id, requested_profile, default_profile=None: requested_profile,
+        _resolve_profile,
     )
     monkeypatch.setattr(
         execution_module,
@@ -350,6 +354,175 @@ async def test_execute_file_chat_passes_hermes_profile_to_runtime_turn(
         "agent_id": "hermes",
         "profile": "m4-pma",
         "thread_key": "file_chat.hermes.profile.m4-pma.contextspace_spec.md",
+    }
+
+
+@pytest.mark.asyncio
+async def test_execute_file_chat_supports_hermes_without_codex_or_opencode_supervisors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_root = tmp_path
+    target_path = repo_root / ".codex-autorunner" / "contextspace" / "decisions.md"
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_text("before\n", encoding="utf-8")
+    target = parse_target(repo_root, "contextspace:decisions")
+
+    async def fake_get_or_create_interrupt_event(
+        _request, _state_key: str
+    ) -> asyncio.Event:
+        return asyncio.Event()
+
+    async def fake_update_turn_state(*args, **kwargs) -> None:
+        return None
+
+    observed: dict[str, object] = {}
+
+    async def fake_execute_harness_turn(
+        _request,
+        fake_repo_root: Path,
+        prompt: str,
+        _interrupt_event: asyncio.Event,
+        *,
+        agent_id: str,
+        profile: str | None,
+        thread_key: str | None,
+        **kwargs,
+    ) -> dict[str, str]:
+        observed["agent_id"] = agent_id
+        observed["profile"] = profile
+        observed["thread_key"] = thread_key
+        match = re.search(r"<path>\n(.+?)\n</path>", prompt, re.DOTALL)
+        assert match is not None
+        draft_path = fake_repo_root / match.group(1).strip()
+        draft_path.write_text("after\n", encoding="utf-8")
+        return {
+            "status": "ok",
+            "agent_message": "updated via hermes",
+            "message": "updated via hermes",
+            "thread_id": "hermes-thread-2",
+            "turn_id": "hermes-turn-2",
+        }
+
+    monkeypatch.setattr(
+        runtime, "get_or_create_interrupt_event", fake_get_or_create_interrupt_event
+    )
+    monkeypatch.setattr(runtime, "update_turn_state", fake_update_turn_state)
+
+    def _resolve_profile(_request, _agent_id, requested_profile, default_profile=None):
+        _ = default_profile
+        return requested_profile
+
+    monkeypatch.setattr(
+        execution_module,
+        "resolve_requested_agent_profile",
+        _resolve_profile,
+    )
+    monkeypatch.setattr(
+        execution_module,
+        "execute_harness_turn",
+        fake_execute_harness_turn,
+    )
+
+    request = _make_request_state(
+        repo_root,
+        app_server_supervisor=None,
+        opencode_supervisor=None,
+        hermes_supervisor=object(),
+    )
+    result = await execute_file_chat(
+        request,
+        repo_root,
+        target,
+        "edit the file",
+        agent="hermes",
+        profile="m4-pma",
+    )
+
+    assert result["status"] == "ok"
+    assert result["profile"] == "m4-pma"
+    assert observed == {
+        "agent_id": "hermes",
+        "profile": "m4-pma",
+        "thread_key": "file_chat.hermes.profile.m4-pma.contextspace_decisions.md",
+    }
+
+
+@pytest.mark.asyncio
+async def test_execute_file_chat_reports_capability_driven_error_for_unsupported_agent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_root = tmp_path
+    target_path = repo_root / ".codex-autorunner" / "contextspace" / "active_context.md"
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_text("before\n", encoding="utf-8")
+    target = parse_target(repo_root, "contextspace:active_context")
+
+    async def fake_get_or_create_interrupt_event(
+        _request, _state_key: str
+    ) -> asyncio.Event:
+        return asyncio.Event()
+
+    async def fake_update_turn_state(*args, **kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(
+        runtime, "get_or_create_interrupt_event", fake_get_or_create_interrupt_event
+    )
+    monkeypatch.setattr(runtime, "update_turn_state", fake_update_turn_state)
+
+    def _resolve_chat_agent(
+        agent, profile=None, default="codex", context=None
+    ) -> tuple[str, None]:
+        _ = profile, default, context
+        return str(agent).strip().lower(), None
+
+    def _resolve_profile(_request, _agent_id, requested_profile, default_profile=None):
+        _ = default_profile
+        return requested_profile
+
+    def _has_capability(agent_id, capability, _context=None) -> bool:
+        return capability == "durable_threads" and agent_id == "broken"
+
+    monkeypatch.setattr(
+        execution_module,
+        "resolve_chat_agent_and_profile",
+        _resolve_chat_agent,
+    )
+    monkeypatch.setattr(
+        execution_module,
+        "validate_agent_id",
+        lambda agent_id, _context=None: str(agent_id).strip().lower(),
+    )
+    monkeypatch.setattr(
+        execution_module,
+        "resolve_requested_agent_profile",
+        _resolve_profile,
+    )
+    monkeypatch.setattr(
+        execution_module,
+        "has_capability",
+        _has_capability,
+    )
+
+    request = _make_request_state(
+        repo_root,
+        app_server_supervisor=None,
+        opencode_supervisor=None,
+    )
+    result = await execute_file_chat(
+        request,
+        repo_root,
+        target,
+        "edit the file",
+        agent="broken",
+    )
+
+    assert result == {
+        "status": "error",
+        "detail": (
+            "Agent 'broken' does not support file-chat execution "
+            "(missing capability: message_turns)"
+        ),
     }
 
 

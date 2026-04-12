@@ -7,20 +7,20 @@ from typing import Any, Callable, Dict, Optional
 
 from fastapi import Request
 
-from .....agents.registry import validate_agent_id
+from .....agents.registry import has_capability, validate_agent_id
 from .....core import drafts as draft_utils
 from .....core.utils import atomic_write
 from .....integrations.app_server.threads import file_chat_target_key
 from .....integrations.chat.agents import resolve_chat_agent_and_profile
 from ..agent_profile_validation import resolve_requested_agent_profile
 from .draft_state import load_draft_snapshot, persist_draft, relative_to_repo
-from .execution_agents import FileChatError
 from .execution_agents import execute_app_server as _execute_app_server_impl
 from .execution_agents import execute_harness_turn as _execute_harness_turn_impl
 from .execution_agents import execute_opencode as _execute_opencode_impl
 from .targets import _Target, build_file_chat_prompt, read_file
 
 FILE_CHAT_TIMEOUT_SECONDS = 180
+_FILE_CHAT_REQUIRED_CAPABILITIES = ("durable_threads", "message_turns")
 
 
 @dataclass(frozen=True)
@@ -88,9 +88,18 @@ def _build_execution_context(
         )
     except (AttributeError, TypeError):
         stall_timeout_seconds = None
-    if supervisor is None and opencode is None:
-        raise FileChatError("No agent supervisor available for file chat")
     return supervisor, threads, opencode, events, stall_timeout_seconds
+
+
+def _missing_file_chat_capability(
+    agent_id: str,
+    *,
+    context: Any,
+) -> Optional[str]:
+    for capability in _FILE_CHAT_REQUIRED_CAPABILITIES:
+        if not has_capability(agent_id, capability, context):
+            return capability
+    return None
 
 
 async def _update_file_chat_turn_state(
@@ -156,26 +165,31 @@ async def _execute_selected_agent(
             on_meta=on_meta,
             events=events,
         )
-    if selection.agent_id == "hermes":
-        return await execute_harness_turn(
-            request,
-            repo_root,
-            prompt,
-            interrupt_event,
-            agent_id=selection.agent_id,
-            profile=selection.profile,
-            model=model,
-            reasoning=reasoning,
-            thread_registry=threads,
-            thread_key=selection.thread_key,
-            on_meta=on_meta,
-        )
-    return {
-        "status": "error",
-        "detail": (
-            f"Agent '{selection.agent_id}' is not supported on file-chat surface yet"
-        ),
-    }
+    missing_capability = _missing_file_chat_capability(
+        selection.agent_id,
+        context=request.app.state,
+    )
+    if missing_capability is not None:
+        return {
+            "status": "error",
+            "detail": (
+                f"Agent '{selection.agent_id}' does not support file-chat execution "
+                f"(missing capability: {missing_capability})"
+            ),
+        }
+    return await execute_harness_turn(
+        request,
+        repo_root,
+        prompt,
+        interrupt_event,
+        agent_id=selection.agent_id,
+        profile=selection.profile,
+        model=model,
+        reasoning=reasoning,
+        thread_registry=threads,
+        thread_key=selection.thread_key,
+        on_meta=on_meta,
+    )
 
 
 def _build_file_chat_success_result(
