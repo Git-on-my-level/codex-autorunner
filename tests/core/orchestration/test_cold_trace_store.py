@@ -274,6 +274,12 @@ class TestColdTraceStore:
         finalized = store.list_manifests(status="finalized")
         assert len(finalized) == 3
 
+        paged = store.list_manifests(limit=2, offset=1)
+        assert len(paged) == 2
+
+        itered = list(store.iter_manifests(page_size=1))
+        assert len(itered) == 3
+
     def test_archive_trace(self, store: ColdTraceStore) -> None:
         _init_orchestration_db(store._hub_root)
         with store.open_writer(
@@ -469,6 +475,12 @@ class TestExecutionCheckpoint:
         completed = store.list_checkpoints(status="completed")
         assert len(completed) == 1
         assert completed[0].execution_id == "exec-lc2"
+
+        paged = store.list_checkpoints(limit=1, offset=1)
+        assert len(paged) == 1
+
+        itered = list(store.iter_checkpoints(page_size=1))
+        assert len(itered) == 2
 
     def test_load_missing_checkpoint(self, store: ColdTraceStore) -> None:
         _init_orchestration_db(store._hub_root)

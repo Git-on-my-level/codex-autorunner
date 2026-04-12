@@ -234,27 +234,44 @@ def test_persist_turn_timeline_appends_from_start_index(tmp_path: Path) -> None:
     ]
 
 
-def test_persist_turn_timeline_raises_when_cold_trace_append_fails(
+def test_persist_turn_timeline_continues_hot_persistence_when_cold_trace_append_fails(
     tmp_path: Path,
 ) -> None:
     class _FailingColdTraceWriter:
         trace_id = "trace-fail"
+        is_writable = True
+
+        def __init__(self) -> None:
+            self.disabled = False
 
         def append(self, **_kwargs) -> None:
             raise OSError("disk full")
 
-    with pytest.raises(RuntimeError, match="cold trace"):
-        persist_turn_timeline(
-            tmp_path,
-            execution_id="turn-cold-fail",
-            target_kind="thread_target",
-            target_id="thread-1",
-            events=[
-                RunNotice(
-                    timestamp="2026-03-19T00:00:00Z",
-                    kind="thinking",
-                    message="planning",
-                )
-            ],
-            cold_trace_writer=_FailingColdTraceWriter(),
-        )
+        def disable(self) -> None:
+            self.disabled = True
+            self.is_writable = False
+
+    writer = _FailingColdTraceWriter()
+    count = persist_turn_timeline(
+        tmp_path,
+        execution_id="turn-cold-fail",
+        target_kind="thread_target",
+        target_id="thread-1",
+        events=[
+            RunNotice(
+                timestamp="2026-03-19T00:00:00Z",
+                kind="thinking",
+                message="planning",
+            )
+        ],
+        cold_trace_writer=writer,
+    )
+
+    assert count == 1
+    assert writer.disabled is True
+    timeline = list_turn_timeline(tmp_path, execution_id="turn-cold-fail")
+    assert [entry["event_type"] for entry in timeline] == ["run_notice"]
+    checkpoint = ColdTraceStore(tmp_path).load_checkpoint("turn-cold-fail")
+    assert checkpoint is not None
+    assert checkpoint.trace_manifest_id is None
+    assert checkpoint.progress_text_preview == "planning"

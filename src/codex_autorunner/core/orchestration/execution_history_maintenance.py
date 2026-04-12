@@ -186,8 +186,8 @@ def audit_execution_history(
 ) -> ExecutionHistoryAuditSummary:
     resolved_policy = policy or ExecutionHistoryMaintenancePolicy()
     store = ColdTraceStore(hub_root)
-    manifests = store.list_manifests(limit=10_000)
-    checkpoints = store.list_checkpoints(limit=10_000)
+    manifests = list(store.iter_manifests())
+    checkpoints = list(store.iter_checkpoints())
     manifest_by_execution = {
         manifest.execution_id: manifest
         for manifest in manifests
@@ -634,7 +634,16 @@ def prune_execution_history_retention(
                 )
 
         if cold_cutoff is not None:
-            manifests = store.list_manifests(limit=10_000)
+            checkpoints_by_trace_manifest_id: dict[str, list[ExecutionCheckpoint]] = {}
+            if not dry_run:
+                for checkpoint in store.iter_checkpoints():
+                    trace_manifest_id = str(checkpoint.trace_manifest_id or "").strip()
+                    if not trace_manifest_id:
+                        continue
+                    checkpoints_by_trace_manifest_id.setdefault(
+                        trace_manifest_id, []
+                    ).append(checkpoint)
+            manifests = list(store.iter_manifests())
             for manifest in manifests:
                 manifest_timestamp = manifest.finished_at or manifest.started_at
                 if not manifest_timestamp:
@@ -656,11 +665,9 @@ def prune_execution_history_retention(
                     bytes_reclaimed += file_bytes
                 if dry_run:
                     continue
-                affected_checkpoints = [
-                    checkpoint
-                    for checkpoint in store.list_checkpoints(limit=10_000)
-                    if checkpoint.trace_manifest_id == manifest.trace_id
-                ]
+                affected_checkpoints = checkpoints_by_trace_manifest_id.get(
+                    manifest.trace_id, []
+                )
                 for checkpoint in affected_checkpoints:
                     store.save_checkpoint(
                         dataclasses.replace(
@@ -718,7 +725,7 @@ def export_execution_history_bundle(
     traces_dest = export_root / "traces"
     traces_dest.mkdir(parents=True, exist_ok=True)
 
-    manifests = store.list_manifests(limit=10_000)
+    manifests = list(store.iter_manifests())
     if normalized_ids is not None:
         manifests = [
             manifest
@@ -730,7 +737,7 @@ def export_execution_history_bundle(
     }
     checkpoints = [
         checkpoint
-        for checkpoint in store.list_checkpoints(limit=10_000)
+        for checkpoint in store.iter_checkpoints()
         if checkpoint.execution_id in execution_id_set
     ]
     total_bytes = 0

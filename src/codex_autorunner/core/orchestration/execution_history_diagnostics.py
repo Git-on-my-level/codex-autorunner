@@ -113,8 +113,8 @@ def collect_execution_history_metrics(
 ) -> ExecutionHistoryMetrics:
     resolved_policy = policy or ExecutionHistoryMaintenancePolicy()
     store = ColdTraceStore(hub_root)
-    manifests = store.list_manifests(limit=50_000)
-    checkpoints = store.list_checkpoints(limit=50_000)
+    manifests = list(store.iter_manifests())
+    checkpoints = list(store.iter_checkpoints())
 
     manifest_by_execution: dict[str, int] = {}
     for manifest in manifests:
@@ -216,7 +216,7 @@ def collect_top_n_heavy_executions(
     top_n: int = 10,
 ) -> ExecutionHistoryTopN:
     store = ColdTraceStore(hub_root)
-    manifests = store.list_manifests(limit=50_000)
+    manifests = list(store.iter_manifests())
 
     with open_orchestration_sqlite(hub_root) as conn:
         execution_hot_rows = {

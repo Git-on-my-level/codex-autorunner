@@ -354,6 +354,7 @@ def test_compact_completed_execution_history_reduces_hot_rows_and_keeps_cold_tra
 
 def test_prune_execution_history_retention_removes_old_hot_rows_and_traces(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     hub_root = tmp_path / "hub"
     hub_root.mkdir()
@@ -417,6 +418,20 @@ def test_prune_execution_history_retention_removes_old_hot_rows_and_traces(
         hub_root / ".codex-autorunner" / "traces" / old_manifest.artifact_relpath
     )
     assert old_artifact.exists()
+
+    original_iter_manifests = ColdTraceStore.iter_manifests
+    original_iter_checkpoints = ColdTraceStore.iter_checkpoints
+
+    def _iter_manifests_paged(self, **kwargs):
+        kwargs.setdefault("page_size", 1)
+        yield from original_iter_manifests(self, **kwargs)
+
+    def _iter_checkpoints_paged(self, **kwargs):
+        kwargs.setdefault("page_size", 1)
+        yield from original_iter_checkpoints(self, **kwargs)
+
+    monkeypatch.setattr(ColdTraceStore, "iter_manifests", _iter_manifests_paged)
+    monkeypatch.setattr(ColdTraceStore, "iter_checkpoints", _iter_checkpoints_paged)
 
     summary = prune_execution_history_retention(
         hub_root,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
@@ -48,6 +49,7 @@ _HOT_FAMILY_ROW_LIMITS = {
     "terminal": 8,
 }
 _COALESCED_NOTICE_KINDS = frozenset({"progress", "thinking"})
+logger = logging.getLogger(__name__)
 
 
 def iso_from_epoch_millis(epoch_millis: Any) -> Optional[str]:
@@ -668,6 +670,10 @@ def persist_turn_timeline(
     )
     count = 0
     next_index = max(int(start_index or 1), 1)
+    cold_trace_available = bool(
+        cold_trace_writer is not None
+        and getattr(cold_trace_writer, "is_writable", True)
+    )
     with open_orchestration_sqlite(hub_root) as conn:
         for event in events:
             index = next_index + count
@@ -679,13 +685,32 @@ def persist_turn_timeline(
                 event_index=index,
             )
 
-            if cold_trace_writer is not None and routing.capture_cold_trace:
-                _append_event_to_cold_trace(
-                    cold_trace_writer=cold_trace_writer,
-                    event=event,
-                    event_type=event_type,
-                    routing=routing,
-                )
+            if (
+                cold_trace_available
+                and cold_trace_writer is not None
+                and routing.capture_cold_trace
+            ):
+                try:
+                    _append_event_to_cold_trace(
+                        cold_trace_writer=cold_trace_writer,
+                        event=event,
+                        event_type=event_type,
+                        routing=routing,
+                    )
+                except Exception:
+                    cold_trace_available = False
+                    base_metadata.pop("trace_manifest_id", None)
+                    checkpoint_accumulator.trace_manifest_id = None
+                    disable_writer = getattr(cold_trace_writer, "disable", None)
+                    if callable(disable_writer):
+                        disable_writer()
+                    logger.warning(
+                        "Cold trace append failed; continuing with hot-only timeline persistence "
+                        "(execution_id=%s, event_type=%s)",
+                        normalized_execution_id,
+                        event_type,
+                        exc_info=True,
+                    )
 
             count += 1
             if not routing.persist_hot_projection:
@@ -705,14 +730,18 @@ def persist_turn_timeline(
                 hot_state.note_spilled(
                     family,
                     has_cold_trace=bool(
-                        cold_trace_writer is not None and routing.capture_cold_trace
+                        cold_trace_available
+                        and cold_trace_writer is not None
+                        and routing.capture_cold_trace
                     ),
                 )
                 log_spill_to_cold(
                     execution_id=normalized_execution_id,
                     event_family=family,
                     has_cold_trace=bool(
-                        cold_trace_writer is not None and routing.capture_cold_trace
+                        cold_trace_available
+                        and cold_trace_writer is not None
+                        and routing.capture_cold_trace
                     ),
                     hot_rows_so_far=hot_state.family_hot_rows.get(family, 0),
                     hot_limit=_HOT_FAMILY_ROW_LIMITS.get(family, 0),

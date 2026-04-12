@@ -85,6 +85,7 @@ class ColdTraceWriter:
         self._finished_at: Optional[str] = None
         self._manifest: Optional[ExecutionTraceManifest] = None
         self._file: Optional[gzip.GzipFile] = None
+        self._disabled: bool = False
 
     @property
     def trace_id(self) -> str:
@@ -102,9 +103,14 @@ class ColdTraceWriter:
     def manifest(self) -> Optional[ExecutionTraceManifest]:
         return self._manifest
 
+    @property
+    def is_writable(self) -> bool:
+        return self._file is not None and not self._disabled
+
     def open(self) -> "ColdTraceWriter":
         self._artifact_path.parent.mkdir(parents=True, exist_ok=True)
         self._file = gzip.open(self._artifact_path, "ab")
+        self._disabled = False
         self._started_at = now_iso()
         self._manifest = ExecutionTraceManifest(
             trace_id=self._trace_id,
@@ -133,7 +139,7 @@ class ColdTraceWriter:
         event_type: str,
         payload: dict[str, Any],
     ) -> int:
-        if self._file is None:
+        if self._disabled or self._file is None:
             raise RuntimeError("ColdTraceWriter is not open")
         self._seq += 1
         envelope = _build_trace_envelope(
@@ -155,6 +161,8 @@ class ColdTraceWriter:
             self._file.flush()
 
     def finalize(self) -> ExecutionTraceManifest:
+        if self._disabled:
+            raise RuntimeError("ColdTraceWriter is unavailable")
         self._finished_at = now_iso()
         self.flush()
         self._close_file()
@@ -187,6 +195,10 @@ class ColdTraceWriter:
         return manifest
 
     def close(self) -> None:
+        self._close_file()
+
+    def disable(self) -> None:
+        self._disabled = True
         self._close_file()
 
     def _close_file(self) -> None:
@@ -373,6 +385,7 @@ class ColdTraceStore:
         *,
         status: Optional[str] = None,
         limit: int = 100,
+        offset: int = 0,
     ) -> list[ExecutionTraceManifest]:
         with open_orchestration_sqlite(self._hub_root) as conn:
             if status is not None:
@@ -383,8 +396,9 @@ class ColdTraceStore:
                      WHERE status = ?
                      ORDER BY updated_at DESC
                      LIMIT ?
+                    OFFSET ?
                     """,
-                    (status, limit),
+                    (status, limit, offset),
                 ).fetchall()
             else:
                 rows = conn.execute(
@@ -393,13 +407,34 @@ class ColdTraceStore:
                       FROM orch_cold_trace_manifests
                      ORDER BY updated_at DESC
                      LIMIT ?
+                    OFFSET ?
                     """,
-                    (limit,),
+                    (limit, offset),
                 ).fetchall()
         return [
             _refresh_open_manifest(self._hub_root, _row_to_manifest(row))
             for row in rows
         ]
+
+    def iter_manifests(
+        self,
+        *,
+        status: Optional[str] = None,
+        page_size: int = 1000,
+    ) -> Iterator[ExecutionTraceManifest]:
+        offset = 0
+        while True:
+            batch = self.list_manifests(
+                status=status,
+                limit=page_size,
+                offset=offset,
+            )
+            if not batch:
+                break
+            yield from batch
+            if len(batch) < page_size:
+                break
+            offset += len(batch)
 
     def read_events(
         self,
@@ -491,6 +526,7 @@ class ColdTraceStore:
         thread_target_id: Optional[str] = None,
         status: Optional[str] = None,
         limit: int = 100,
+        offset: int = 0,
     ) -> list[ExecutionCheckpoint]:
         with open_orchestration_sqlite(self._hub_root) as conn:
             conditions: list[str] = []
@@ -511,10 +547,33 @@ class ColdTraceStore:
                  {where}
                  ORDER BY updated_at DESC, rowid DESC
                  LIMIT ?
+                OFFSET ?
                 """,
-                (*params, limit),
+                (*params, limit, offset),
             ).fetchall()
         return [_parse_checkpoint(row["checkpoint_json"]) for row in rows]
+
+    def iter_checkpoints(
+        self,
+        *,
+        thread_target_id: Optional[str] = None,
+        status: Optional[str] = None,
+        page_size: int = 1000,
+    ) -> Iterator[ExecutionCheckpoint]:
+        offset = 0
+        while True:
+            batch = self.list_checkpoints(
+                thread_target_id=thread_target_id,
+                status=status,
+                limit=page_size,
+                offset=offset,
+            )
+            if not batch:
+                break
+            yield from batch
+            if len(batch) < page_size:
+                break
+            offset += len(batch)
 
     def archive_trace(self, trace_id: str) -> Optional[ExecutionTraceManifest]:
         manifest = self.get_manifest_by_trace_id(trace_id)
