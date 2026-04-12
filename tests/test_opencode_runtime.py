@@ -2,6 +2,7 @@ import asyncio
 import json
 import time
 
+import httpx
 import pytest
 
 from codex_autorunner.agents.opencode import runtime as opencode_runtime
@@ -9,6 +10,8 @@ from codex_autorunner.agents.opencode.runtime import (
     collect_opencode_output,
     collect_opencode_output_from_events,
     extract_session_id,
+    extract_turn_id,
+    opencode_event_is_progress_signal,
     opencode_stream_timeouts,
     parse_message_response,
     recover_last_assistant_message,
@@ -1339,8 +1342,7 @@ async def test_collect_output_sessionless_completed_recovers_roleless_text() -> 
     events = [
         SSEEvent(
             event="message.completed",
-            data='{"info":{"id":"m1"},'
-            '"parts":[{"type":"text","text":"Final answer"}]}',
+            data='{"info":{"id":"m1"},"parts":[{"type":"text","text":"Final answer"}]}',
         ),
         SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
     ]
@@ -1660,3 +1662,486 @@ async def test_collect_output_completed_message_excludes_reasoning_from_final_te
     )
     assert output.text == "The final answer."
     assert "internal reasoning" not in output.text
+
+
+# ---------------------------------------------------------------------------
+# TICKET-021: Protocol field alias / schema-drift tolerance characterization
+# ---------------------------------------------------------------------------
+
+
+def test_extract_session_id_reads_sessionId_camelCase() -> None:
+    assert extract_session_id({"sessionId": "s-camel"}) == "s-camel"
+
+
+def test_extract_session_id_reads_session_id_snake_case() -> None:
+    assert extract_session_id({"session_id": "s-snake"}) == "s-snake"
+
+
+def test_extract_session_id_reads_id_when_allow_fallback() -> None:
+    assert (
+        extract_session_id({"id": "s-fallback"}, allow_fallback_id=True) == "s-fallback"
+    )
+
+
+def test_extract_session_id_ignores_id_without_fallback_flag() -> None:
+    assert extract_session_id({"id": "s-fallback"}) is None
+
+
+def test_extract_session_id_reads_info_nested_direct() -> None:
+    assert extract_session_id({"info": {"sessionID": "s-info"}}) == "s-info"
+
+
+def test_extract_session_id_reads_info_session_id() -> None:
+    assert (
+        extract_session_id({"info": {"session_id": "s-info-snake"}}) == "s-info-snake"
+    )
+
+
+def test_extract_session_id_reads_properties_direct() -> None:
+    assert extract_session_id({"properties": {"sessionID": "s-props"}}) == "s-props"
+
+
+def test_extract_session_id_reads_properties_info_nested() -> None:
+    assert (
+        extract_session_id({"properties": {"info": {"session_id": "s-props-info"}}})
+        == "s-props-info"
+    )
+
+
+def test_extract_session_id_reads_properties_part_nested() -> None:
+    assert (
+        extract_session_id({"properties": {"part": {"sessionID": "s-props-part"}}})
+        == "s-props-part"
+    )
+
+
+def test_extract_session_id_reads_session_nested_direct() -> None:
+    assert extract_session_id({"session": {"sessionID": "s-session"}}) == "s-session"
+
+
+def test_extract_session_id_reads_session_nested_id() -> None:
+    assert extract_session_id({"session": {"id": "s-session-id"}}) == "s-session-id"
+
+
+def test_extract_session_id_precedence_top_level_over_info() -> None:
+    payload = {"sessionID": "top", "info": {"sessionID": "info-val"}}
+    assert extract_session_id(payload) == "top"
+
+
+def test_extract_session_id_precedence_info_over_properties() -> None:
+    payload = {
+        "info": {"sessionID": "info-val"},
+        "properties": {"sessionID": "props-val"},
+    }
+    assert extract_session_id(payload) == "info-val"
+
+
+def test_extract_session_id_precedence_properties_over_session() -> None:
+    payload = {
+        "properties": {"sessionID": "props-val"},
+        "session": {"sessionID": "sess-val"},
+    }
+    assert extract_session_id(payload) == "props-val"
+
+
+def test_extract_turn_id_reads_info_id() -> None:
+    assert extract_turn_id("s1", {"info": {"id": "turn-abc"}}) == "turn-abc"
+
+
+def test_extract_turn_id_reads_info_message_id() -> None:
+    assert extract_turn_id("s1", {"info": {"message_id": "turn-def"}}) == "turn-def"
+
+
+def test_extract_turn_id_reads_info_turn_id() -> None:
+    assert extract_turn_id("s1", {"info": {"turn_id": "turn-ghi"}}) == "turn-ghi"
+
+
+def test_extract_turn_id_reads_info_turnId() -> None:
+    assert extract_turn_id("s1", {"info": {"turnId": "turn-jkl"}}) == "turn-jkl"
+
+
+def test_extract_turn_id_reads_top_level_messageId() -> None:
+    assert extract_turn_id("s1", {"messageId": "turn-mno"}) == "turn-mno"
+
+
+def test_extract_turn_id_falls_back_to_build() -> None:
+    result = extract_turn_id("s1", {})
+    assert result.startswith("s1:")
+
+
+def test_parse_message_response_reads_text_field() -> None:
+    result = parse_message_response({"text": "hello"})
+    assert result.text == "hello"
+
+
+def test_parse_message_response_reads_message_field() -> None:
+    result = parse_message_response({"message": "hello via message"})
+    assert result.text == "hello via message"
+
+
+def test_parse_message_response_reads_content_string() -> None:
+    result = parse_message_response({"content": "plain string"})
+    assert result.text == "plain string"
+
+
+def test_parse_message_response_reads_content_list() -> None:
+    result = parse_message_response(
+        {
+            "content": [
+                {"type": "text", "text": "hello "},
+                {"type": "text", "text": "world"},
+            ]
+        }
+    )
+    assert result.text == "hello world"
+
+
+def test_parse_message_response_reads_parts_text() -> None:
+    result = parse_message_response(
+        {"parts": [{"type": "text", "text": "parts answer"}]}
+    )
+    assert result.text == "parts answer"
+
+
+def test_parse_message_response_extracts_error_from_info() -> None:
+    result = parse_message_response({"info": {"error": "something broke"}})
+    assert result.error == "something broke"
+
+
+def test_parse_message_response_extracts_error_detail() -> None:
+    result = parse_message_response({"detail": "detail msg"})
+    assert result.error == "detail msg"
+
+
+def test_parse_message_response_extracts_error_reason() -> None:
+    result = parse_message_response({"reason": "reason msg"})
+    assert result.error == "reason msg"
+
+
+# ---------------------------------------------------------------------------
+# TICKET-021: Primary-session ownership invariants
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_collect_output_descendant_text_deltas_are_discarded() -> None:
+    events = [
+        SSEEvent(
+            event="message.part.updated",
+            data='{"sessionID":"child-1","properties":{"delta":{"text":"child text"},'
+            '"part":{"type":"text","text":"child text"}}}',
+        ),
+        SSEEvent(
+            event="message.part.updated",
+            data='{"sessionID":"s1","properties":{"delta":{"text":"primary text"},'
+            '"part":{"type":"text","text":"primary text"}}}',
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+    )
+    assert output.text == "primary text"
+    assert "child" not in output.text
+
+
+@pytest.mark.anyio
+async def test_collect_output_descendant_full_text_parts_are_discarded() -> None:
+    events = [
+        SSEEvent(
+            event="message.part.updated",
+            data='{"sessionID":"child-1","properties":{"part":{"type":"text","text":"child full text"}}}',
+        ),
+        SSEEvent(
+            event="message.part.updated",
+            data='{"sessionID":"s1","properties":{"part":{"type":"text","text":"primary full text"}}}',
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+    )
+    assert output.text == "primary full text"
+    assert "child" not in output.text
+
+
+@pytest.mark.anyio
+async def test_collect_output_descendant_completed_message_does_not_overwrite_primary() -> (
+    None
+):
+    events = [
+        SSEEvent(
+            event="message.completed",
+            data='{"sessionID":"child-1","info":{"id":"cm1","role":"assistant"},'
+            '"parts":[{"type":"text","text":"child completed"}]}',
+        ),
+        SSEEvent(
+            event="message.completed",
+            data='{"sessionID":"s1","info":{"id":"pm1","role":"assistant"},'
+            '"parts":[{"type":"text","text":"primary completed"}]}',
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+    )
+    assert output.text == "primary completed"
+
+
+@pytest.mark.anyio
+async def test_collect_output_descendant_session_error_does_not_fail_primary() -> None:
+    events = [
+        SSEEvent(
+            event="session.error",
+            data='{"sessionID":"child-1","error":"child error"}',
+        ),
+        SSEEvent(
+            event="message.completed",
+            data='{"sessionID":"s1","info":{"id":"m1","role":"assistant"},'
+            '"parts":[{"type":"text","text":"ok"}]}',
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+    )
+    assert output.text == "ok"
+    assert output.error is None
+
+
+@pytest.mark.anyio
+async def test_collect_output_primary_session_error_ends_turn() -> None:
+    events = [
+        SSEEvent(
+            event="session.error",
+            data='{"sessionID":"s1","error":"primary error"}',
+        ),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+    )
+    assert output.error is not None
+    assert "primary error" in output.error
+
+
+@pytest.mark.anyio
+async def test_collect_output_descendant_reasoning_is_forwarded_to_handler() -> None:
+    seen: list[str] = []
+
+    async def _part_handler(part_type: str, part: dict, delta_text):
+        if part_type == "reasoning" and delta_text:
+            seen.append(delta_text)
+
+    events = [
+        SSEEvent(
+            event="message.part.updated",
+            data=json.dumps(
+                {
+                    "sessionID": "child-1",
+                    "properties": {
+                        "delta": {"text": "child reasoning"},
+                        "part": {
+                            "id": "r1",
+                            "type": "reasoning",
+                            "text": "child reasoning",
+                        },
+                    },
+                }
+            ),
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+        part_handler=_part_handler,
+        progress_session_ids={"child-1"},
+    )
+    assert output.text == ""
+    assert seen == ["child reasoning"]
+
+
+# ---------------------------------------------------------------------------
+# TICKET-021: messages_fetcher recovery invariants
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_collect_output_messages_fetcher_empty_list_yields_no_text() -> None:
+    events = [SSEEvent(event="session.idle", data='{"sessionID":"s1"}')]
+
+    async def _fetch_empty():
+        return []
+
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+        messages_fetcher=_fetch_empty,
+    )
+    assert output.text == ""
+    assert output.error is None
+
+
+@pytest.mark.anyio
+async def test_collect_output_messages_fetcher_user_only_yields_no_text() -> None:
+    events = [SSEEvent(event="session.idle", data='{"sessionID":"s1"}')]
+
+    async def _fetch_user_only():
+        return [
+            {
+                "info": {"id": "u1", "role": "user"},
+                "parts": [{"type": "text", "text": "prompt"}],
+            }
+        ]
+
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+        messages_fetcher=_fetch_user_only,
+    )
+    assert output.text == ""
+
+
+@pytest.mark.anyio
+async def test_collect_output_messages_fetcher_exception_does_not_crash() -> None:
+    events = [SSEEvent(event="session.idle", data='{"sessionID":"s1"}')]
+
+    async def _fetch_error():
+        raise httpx.HTTPStatusError(
+            "server error",
+            request=httpx.Request("GET", "http://x"),
+            response=httpx.Response(500),
+        )
+
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+        messages_fetcher=_fetch_error,
+    )
+    assert output.text == ""
+    assert output.error is None
+
+
+# ---------------------------------------------------------------------------
+# TICKET-021: Progress signal classification invariants
+# ---------------------------------------------------------------------------
+
+
+def test_opencode_event_is_progress_signal_ignores_server_heartbeat() -> None:
+    event = SSEEvent(event="server.heartbeat", data="{}")
+    assert opencode_event_is_progress_signal(event, session_id="s1") is False
+
+
+def test_opencode_event_is_progress_signal_ignores_server_connected() -> None:
+    event = SSEEvent(event="server.connected", data="{}")
+    assert opencode_event_is_progress_signal(event, session_id="s1") is False
+
+
+def test_opencode_event_is_progress_signal_counts_idle_status_as_progress() -> None:
+    event = SSEEvent(
+        event="session.status",
+        data='{"sessionID":"s1","properties":{"status":{"type":"idle"}}}',
+    )
+    assert opencode_event_is_progress_signal(event, session_id="s1") is True
+
+
+def test_opencode_event_is_progress_signal_ignores_busy_status() -> None:
+    event = SSEEvent(
+        event="session.status",
+        data='{"sessionID":"s1","status":{"type":"busy"}}',
+    )
+    assert opencode_event_is_progress_signal(event, session_id="s1") is False
+
+
+def test_opencode_event_is_progress_signal_mismatched_session_is_not_progress() -> None:
+    event = SSEEvent(
+        event="message.part.updated",
+        data='{"sessionID":"other","properties":{"delta":{"text":"x"},"part":{"type":"text"}}}',
+    )
+    assert opencode_event_is_progress_signal(event, session_id="s1") is False
+
+
+def test_opencode_event_is_progress_signal_progress_session_ids_accepted() -> None:
+    event = SSEEvent(
+        event="message.part.updated",
+        data='{"sessionID":"child-1","properties":{"delta":{"text":"x"},"part":{"type":"text"}}}',
+    )
+    assert (
+        opencode_event_is_progress_signal(
+            event, session_id="s1", progress_session_ids={"child-1"}
+        )
+        is True
+    )
+
+
+# ---------------------------------------------------------------------------
+# TICKET-021: Final output selection invariants
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_collect_output_prefers_last_completed_assistant_over_stream() -> None:
+    events = [
+        SSEEvent(
+            event="message.part.updated",
+            data='{"sessionID":"s1","properties":{"delta":{"text":"streaming text"},'
+            '"part":{"id":"p1","type":"text","text":"streaming text"}}}',
+        ),
+        SSEEvent(
+            event="message.completed",
+            data='{"sessionID":"s1","info":{"id":"m1","role":"assistant"},'
+            '"parts":[{"type":"text","text":"completed text"}]}',
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+    )
+    assert output.text == "completed text"
+
+
+@pytest.mark.anyio
+async def test_collect_output_commentary_phase_completion_ignored_for_final() -> None:
+    events = [
+        SSEEvent(
+            event="message.completed",
+            data='{"sessionID":"s1","info":{"id":"m1","role":"assistant"},'
+            '"parts":[{"type":"text","text":"commentary"}],'
+            '"phase":"commentary"}',
+        ),
+        SSEEvent(
+            event="message.part.updated",
+            data='{"sessionID":"s1","properties":{"delta":{"text":"real answer"},'
+            '"part":{"id":"p1","type":"text","text":"real answer"}}}',
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+    )
+    assert output.text == "real answer"
+
+
+@pytest.mark.anyio
+async def test_collect_output_idle_from_wrong_session_does_not_end_turn() -> None:
+    events = [
+        SSEEvent(event="session.idle", data='{"sessionID":"child-1"}'),
+        SSEEvent(
+            event="message.part.updated",
+            data='{"sessionID":"s1","properties":{"delta":{"text":"continued"},'
+            '"part":{"type":"text","text":"continued"}}}',
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+    )
+    assert output.text == "continued"

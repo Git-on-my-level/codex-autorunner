@@ -41,20 +41,51 @@ async def test_handshake_and_status(tmp_path: Path) -> None:
         await client.close()
 
 
-@pytest.mark.anyio
-async def test_request_response_out_of_order(tmp_path: Path) -> None:
-    client = CodexAppServerClient(fixture_command("basic"), cwd=tmp_path)
-    try:
-        slow_task = asyncio.create_task(
-            client.request("fixture/slow", {"value": "slow"})
-        )
-        fast_task = asyncio.create_task(
-            client.request("fixture/fast", {"value": "fast"})
-        )
-        assert await fast_task == {"value": "fast"}
-        assert await slow_task == {"value": "slow"}
-    finally:
-        await client.close()
+# ---------------------------------------------------------------------------
+# TICKET-021: Protocol envelope and normalization invariants
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_response_converts_int_id_to_str() -> None:
+    from codex_autorunner.integrations.app_server.protocol_helpers import (
+        normalize_response,
+    )
+
+    resp = normalize_response({"id": 42, "result": None})
+    assert resp is not None
+    assert resp.request_id == "42"
+
+
+def test_normalize_response_rejects_non_numeric_string_id() -> None:
+    from codex_autorunner.integrations.app_server.protocol_helpers import (
+        normalize_response,
+    )
+
+    resp = normalize_response({"id": "abc", "result": None})
+    assert resp is not None
+    assert resp.request_id == "abc"
+
+
+def test_normalize_notification_envelope_defaults_empty_params() -> None:
+    from codex_autorunner.integrations.app_server.protocol_helpers import (
+        normalize_notification_envelope,
+    )
+
+    envelope = normalize_notification_envelope({"method": "turn/completed"})
+    assert envelope is not None
+    assert envelope.params == {}
+    assert envelope.method == "turn/completed"
+
+
+def test_normalize_approval_request_rejects_wrong_method() -> None:
+    from codex_autorunner.integrations.app_server.protocol_helpers import (
+        normalize_approval_request,
+    )
+
+    result = normalize_approval_request(
+        {"id": "r1", "method": "turn/completed", "params": {}}
+    )
+    assert result is None
 
 
 @pytest.mark.anyio

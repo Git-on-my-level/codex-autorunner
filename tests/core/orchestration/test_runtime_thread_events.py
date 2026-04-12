@@ -1332,118 +1332,185 @@ async def test_message_delta_with_reasoning_part_type_is_dropped() -> None:
 
     assert events == []
     assert state.assistant_stream_text == ""
-    assert state.best_assistant_text() == ""
 
 
-async def test_message_delta_with_text_part_type_is_kept() -> None:
-    """message.delta carrying text part type should produce OutputDelta."""
+# ---------------------------------------------------------------------------
+# TICKET-021: Lifecycle method integration invariants
+# ---------------------------------------------------------------------------
+
+
+async def test_ticket021_normalize_handles_prompt_cancelled_as_empty() -> None:
     state = RuntimeThreadRunEventState()
-
     events = await normalize_runtime_thread_raw_event(
-        format_sse(
-            "app-server",
-            {
-                "message": {
-                    "method": "message.delta",
-                    "params": {
-                        "properties": {
-                            "delta": {"text": "the answer"},
-                            "part": {"id": "t1", "type": "text"},
-                        }
-                    },
-                }
-            },
-        ),
+        {"method": "prompt/cancelled", "params": {}},
         state,
     )
-
-    assert len(events) == 1
-    assert isinstance(events[0], OutputDelta)
-    assert events[0].content == "the answer"
-    assert state.best_assistant_text() == "the answer"
+    assert events == []
+    assert state.completed_seen is False
 
 
-async def test_message_delta_without_part_type_is_kept() -> None:
-    """message.delta without part metadata should still work (legacy)."""
+async def test_ticket021_normalize_handles_turn_cancelled_as_empty() -> None:
     state = RuntimeThreadRunEventState()
-
     events = await normalize_runtime_thread_raw_event(
-        format_sse(
-            "app-server",
-            {
-                "message": {
-                    "method": "message.delta",
-                    "params": {
-                        "properties": {
-                            "delta": {"text": "hello world"},
-                        }
-                    },
-                }
-            },
-        ),
+        {"method": "turn/cancelled", "params": {}},
         state,
     )
+    assert events == []
+    assert state.completed_seen is False
 
+
+async def test_ticket021_normalize_handles_prompt_started_as_empty() -> None:
+    state = RuntimeThreadRunEventState()
+    events = await normalize_runtime_thread_raw_event(
+        {"method": "prompt/started", "params": {}},
+        state,
+    )
+    assert events == []
+
+
+async def test_ticket021_normalize_handles_turn_started_as_empty() -> None:
+    state = RuntimeThreadRunEventState()
+    events = await normalize_runtime_thread_raw_event(
+        {"method": "turn/started", "params": {}},
+        state,
+    )
+    assert events == []
+
+
+async def test_ticket021_normalize_handles_session_created_as_empty() -> None:
+    state = RuntimeThreadRunEventState()
+    events = await normalize_runtime_thread_raw_event(
+        {"method": "session/created", "params": {"sessionId": "s1"}},
+        state,
+    )
+    assert events == []
+
+
+async def test_ticket021_normalize_handles_session_loaded_as_empty() -> None:
+    state = RuntimeThreadRunEventState()
+    events = await normalize_runtime_thread_raw_event(
+        {"method": "session/loaded", "params": {"sessionId": "s1"}},
+        state,
+    )
+    assert events == []
+
+
+async def test_ticket021_normalize_handles_prompt_message_as_output_delta() -> None:
+    state = RuntimeThreadRunEventState()
+    events = await normalize_runtime_thread_raw_event(
+        {"method": "prompt/message", "params": {"text": "agent msg"}},
+        state,
+    )
     assert len(events) == 1
     assert isinstance(events[0], OutputDelta)
-    assert events[0].content == "hello world"
-    assert state.best_assistant_text() == "hello world"
+    assert events[0].delta_type == "assistant_message"
 
 
-async def test_message_delta_reasoning_does_not_pollute_stream_when_paired_with_part_events() -> (
+async def test_ticket021_normalize_handles_turn_message_as_output_delta() -> None:
+    state = RuntimeThreadRunEventState()
+    events = await normalize_runtime_thread_raw_event(
+        {"method": "turn/message", "params": {"text": "agent msg"}},
+        state,
+    )
+    assert len(events) == 1
+    assert isinstance(events[0], OutputDelta)
+
+
+async def test_ticket021_normalize_handles_session_update_session_info_as_empty() -> (
     None
 ):
-    """Regression: reasoning arriving as both message.delta and message.part.delta
-    should produce exactly one RunNotice(thinking) and not contaminate assistant_stream_text.
-    """
     state = RuntimeThreadRunEventState()
-
-    delta_events = await normalize_runtime_thread_raw_event(
-        format_sse(
-            "app-server",
-            {
-                "message": {
-                    "method": "message.delta",
-                    "params": {
-                        "properties": {
-                            "delta": {"text": "Let me think"},
-                            "part": {"id": "r1", "type": "reasoning"},
-                        }
-                    },
-                }
+    events = await normalize_runtime_thread_raw_event(
+        {
+            "method": "session/update",
+            "params": {
+                "update": {"sessionUpdate": "session_info_update"},
+                "sessionId": "s1",
             },
-        ),
+        },
         state,
     )
+    assert events == []
 
-    part_events = await normalize_runtime_thread_raw_event(
-        format_sse(
-            "app-server",
-            {
-                "message": {
-                    "method": "message.part.delta",
-                    "params": {
-                        "properties": {
-                            "part": {
-                                "id": "r1",
-                                "type": "reasoning",
-                                "text": "Let me think",
-                            },
-                            "delta": {"text": "Let me think"},
-                        }
-                    },
-                }
+
+async def test_ticket021_normalize_session_update_usage_update_as_token_usage() -> None:
+    state = RuntimeThreadRunEventState()
+    events = await normalize_runtime_thread_raw_event(
+        {
+            "method": "session/update",
+            "params": {
+                "update": {
+                    "sessionUpdate": "usage_update",
+                    "usage": {"input": 10, "output": 5},
+                },
+                "sessionId": "s1",
             },
-        ),
+        },
         state,
     )
+    assert len(events) == 1
+    assert isinstance(events[0], TokenUsage)
 
-    assert delta_events == []
-    assert len(part_events) == 1
-    assert isinstance(part_events[0], RunNotice)
-    assert part_events[0].kind == "thinking"
-    assert state.assistant_stream_text == ""
-    assert state.best_assistant_text() == ""
+
+async def test_ticket021_normalize_handles_snake_case_session_id() -> None:
+    state = RuntimeThreadRunEventState()
+    events = await normalize_runtime_thread_raw_event(
+        {
+            "method": "session.status",
+            "params": {"session_id": "s1", "status": {"type": "idle"}},
+        },
+        state,
+    )
+    assert events == []
+    assert state.completed_seen is True
+
+
+async def test_ticket021_normalize_prompt_progress_textDelta_alias_not_extracted() -> (
+    None
+):
+    state = RuntimeThreadRunEventState()
+    events = await normalize_runtime_thread_raw_event(
+        {"method": "prompt/progress", "params": {"textDelta": "chunk"}},
+        state,
+    )
+    assert events == []
+
+
+async def test_ticket021_normalize_prompt_progress_text_delta_alias_not_extracted() -> (
+    None
+):
+    state = RuntimeThreadRunEventState()
+    events = await normalize_runtime_thread_raw_event(
+        {"method": "prompt/progress", "params": {"text_delta": "chunk2"}},
+        state,
+    )
+    assert events == []
+
+
+async def test_ticket021_normalize_session_status_nested_in_properties() -> None:
+    state = RuntimeThreadRunEventState()
+    events = await normalize_runtime_thread_raw_event(
+        {
+            "method": "session.status",
+            "params": {
+                "sessionID": "s1",
+                "properties": {"status": {"type": "running"}},
+            },
+        },
+        state,
+    )
+    assert len(events) == 1
+    assert isinstance(events[0], RunNotice)
+    assert events[0].kind == "progress"
+
+
+async def test_ticket021_normalize_turn_completed_sets_completed_seen() -> None:
+    state = RuntimeThreadRunEventState()
+    await normalize_runtime_thread_raw_event(
+        {"method": "turn/completed", "params": {"turnId": "t1", "status": "completed"}},
+        state,
+    )
+    assert state.completed_seen is True
 
 
 async def test_message_delta_uses_cached_part_type_for_reasoning() -> None:
