@@ -3494,7 +3494,9 @@ async def test_component_interaction_cancel_queued_turn_cancels_selected_executi
         )
 
         original_clear = discord_message_turns.clear_discord_turn_progress_leases
-        discord_message_turns.clear_discord_turn_progress_leases = _clear_progress_leases  # type: ignore[assignment]
+        discord_message_turns.clear_discord_turn_progress_leases = (
+            _clear_progress_leases  # type: ignore[assignment]
+        )
         try:
             await service._handle_component_interaction_normalized(
                 "interaction-1",
@@ -7423,25 +7425,29 @@ async def test_car_newt_runs_hub_setup_commands_for_bound_workspace(
         discord_service_module, "reset_branch_from_origin_main", _fake_reset_branch
     )
 
-    class _HubSupervisorStub:
+    class _FakeHubClient:
         def __init__(self) -> None:
-            self.calls: list[dict[str, object]] = []
+            self.setup_calls: list[dict[str, object]] = []
 
-        def run_setup_commands_for_workspace(
-            self, workspace_path: Path, *, repo_id_hint: str | None = None
-        ) -> int:
-            self.calls.append(
-                {"workspace_path": workspace_path, "repo_id_hint": repo_id_hint}
+        async def run_workspace_setup_commands(self, request: Any) -> Any:
+            self.setup_calls.append(
+                {
+                    "workspace_root": request.workspace_root,
+                    "repo_id_hint": request.repo_id_hint,
+                }
             )
-            return 1
+            return SimpleNamespace(setup_command_count=1)
 
-    hub_supervisor = _HubSupervisorStub()
-    service._hub_supervisor = hub_supervisor  # type: ignore[assignment]
+    hub_client = _FakeHubClient()
+    service._hub_client = hub_client  # type: ignore[assignment]
 
     try:
         await service.run_forever()
-        assert hub_supervisor.calls == [
-            {"workspace_path": workspace.resolve(), "repo_id_hint": "repo-1"}
+        assert hub_client.setup_calls == [
+            {
+                "workspace_root": str(workspace.resolve()),
+                "repo_id_hint": "repo-1",
+            }
         ]
         assert len(rest.followup_messages) == 1
         content = rest.followup_messages[0]["payload"]["content"].lower()

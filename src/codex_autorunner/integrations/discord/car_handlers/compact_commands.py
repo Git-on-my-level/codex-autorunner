@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ....core.orchestration.transcript_mirror import TranscriptMirrorStore
-from ....core.pma_thread_store import PmaThreadStore
 from ....core.utils import canonicalize_path
 from ...chat.compaction import build_compact_seed_prompt
 from ..errors import DiscordAPIError
@@ -280,10 +279,25 @@ async def handle_car_compact(
             agent_profile=agent_profile,
         )
         try:
-            PmaThreadStore(service._config.root).set_thread_compact_seed(
-                next_thread_id,
-                response_text,
-            )
+            hub_client = getattr(service, "_hub_client", None)
+            if hub_client is not None:
+                from ....core.hub_control_plane import (
+                    ThreadCompactSeedUpdateRequest as _CPCompactSeedRequest,
+                )
+
+                await hub_client.update_thread_compact_seed(
+                    _CPCompactSeedRequest(
+                        thread_target_id=next_thread_id,
+                        compact_seed=response_text,
+                    )
+                )
+            else:
+                from ....core.pma_thread_store import PmaThreadStore
+
+                PmaThreadStore(service._config.root).set_thread_compact_seed(
+                    next_thread_id,
+                    response_text,
+                )
             await service._store.set_pending_compact_seed(
                 channel_id=channel_id,
                 seed_text=build_compact_seed_prompt(response_text),

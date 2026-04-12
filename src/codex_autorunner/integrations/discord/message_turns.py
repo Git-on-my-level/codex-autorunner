@@ -1589,7 +1589,7 @@ async def _execute_discord_thread_message(
     if dispatch.effective_pma_enabled:
         try:
             snapshot = await build_hub_snapshot(
-                dispatch.service._hub_supervisor, hub_root=dispatch.service._config.root
+                None, hub_root=dispatch.service._config.root
             )
             prompt_base = load_pma_prompt(dispatch.service._config.root)
             if dispatch.notification_reply is not None:
@@ -1752,10 +1752,28 @@ async def _handle_discord_notification_turn(
         surface_key=surface_key,
     )
     if orch_binding is not None:
-        PmaNotificationStore(dispatch.service._config.root).bind_continuation_thread(
-            notification_id=dispatch.notification_reply.notification_id,
-            thread_target_id=orch_binding.thread_target_id,
-        )
+        hub_client = getattr(dispatch.service, "_hub_client", None)
+        if hub_client is not None:
+            from ...core.hub_control_plane import (
+                NotificationContinuationBindRequest as _CPContinuationRequest,
+            )
+
+            try:
+                await hub_client.bind_notification_continuation(
+                    _CPContinuationRequest(
+                        notification_id=dispatch.notification_reply.notification_id,
+                        thread_target_id=orch_binding.thread_target_id,
+                    )
+                )
+            except Exception:
+                pass
+        else:
+            PmaNotificationStore(
+                dispatch.service._config.root
+            ).bind_continuation_thread(
+                notification_id=dispatch.notification_reply.notification_id,
+                thread_target_id=orch_binding.thread_target_id,
+            )
     return turn_result
 
 
@@ -1994,13 +2012,32 @@ async def handle_message_event(
 
     notification_reply = None
     if event.reply_to is not None:
-        notification_reply = PmaNotificationStore(
-            service._config.root
-        ).get_reply_target(
-            surface_kind="discord",
-            surface_key=channel_id,
-            delivered_message_id=event.reply_to.message_id,
-        )
+        hub_client = getattr(service, "_hub_client", None)
+        if hub_client is not None:
+            from ...core.hub_control_plane import (
+                NotificationReplyTargetLookupRequest as _CPReplyTargetRequest,
+            )
+
+            try:
+                cp_response = await hub_client.get_notification_reply_target(
+                    _CPReplyTargetRequest(
+                        surface_kind="discord",
+                        surface_key=channel_id,
+                        delivered_message_id=event.reply_to.message_id,
+                    )
+                )
+                if cp_response.record is not None:
+                    notification_reply = cp_response.record
+            except Exception:
+                pass
+        if notification_reply is None and event.reply_to is not None:
+            notification_reply = PmaNotificationStore(
+                service._config.root
+            ).get_reply_target(
+                surface_kind="discord",
+                surface_key=channel_id,
+                delivered_message_id=event.reply_to.message_id,
+            )
     effective_pma_enabled = pma_enabled or notification_reply is not None
     agent, agent_profile = service._resolve_agent_state(binding)
     runtime_agent = service._runtime_agent_for_binding(binding)

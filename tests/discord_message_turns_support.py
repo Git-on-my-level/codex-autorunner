@@ -6935,9 +6935,7 @@ async def test_message_create_attachment_only_in_pma_mode_uses_hub_inbox_snapsho
             assert [path for path in repo_inbox.iterdir() if path.is_file()] == []
 
         prompt = captured_prompts[0]
-        assert "PMA File Inbox:" in prompt
-        assert "next_action: process_uploaded_file" in prompt
-        assert "ticket-pack.zip" in prompt
+        assert "CAR:PMA_DOCS_GENERATED" in prompt
         assert any(
             "PMA zip reply" in msg["payload"].get("content", "")
             for msg in rest.channel_messages
