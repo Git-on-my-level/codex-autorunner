@@ -78,17 +78,27 @@ def _list_agent_workspaces(service: Any) -> list[tuple[str, str, str]]:
         return []
     try:
         import asyncio
-        from concurrent.futures import TimeoutError as FuturesTimeoutError
+        from concurrent.futures import (
+            ThreadPoolExecutor,
+        )
+        from concurrent.futures import (
+            TimeoutError as FuturesTimeoutError,
+        )
 
         from ...core.hub_control_plane import AgentWorkspaceListRequest
 
         request = AgentWorkspaceListRequest()
         loop = asyncio.get_event_loop()
         if loop.is_running():
-            future = asyncio.run_coroutine_threadsafe(
-                hub_client.list_agent_workspaces(request), loop
-            )
-            response = future.result(timeout=10)
+            # Cannot use run_coroutine_threadsafe on the same loop —
+            # it would deadlock. Run asyncio.run() in a worker thread
+            # with a fresh loop instead.
+            def _fetch() -> Any:
+                return asyncio.run(hub_client.list_agent_workspaces(request))
+
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(_fetch)
+                response = future.result(timeout=10)
         else:
             response = loop.run_until_complete(
                 hub_client.list_agent_workspaces(request)

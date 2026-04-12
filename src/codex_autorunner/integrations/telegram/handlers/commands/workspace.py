@@ -870,14 +870,18 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
         if hub_client is not None:
             try:
                 import asyncio
+                from concurrent.futures import ThreadPoolExecutor
 
                 from .....core.hub_control_plane import AgentWorkspaceListRequest
 
-                loop = asyncio.get_running_loop()
-                future = asyncio.run_coroutine_threadsafe(
-                    hub_client.list_agent_workspaces(AgentWorkspaceListRequest()), loop
-                )
-                response = future.result(timeout=10)
+                request = AgentWorkspaceListRequest()
+
+                def _fetch() -> Any:
+                    return asyncio.run(hub_client.list_agent_workspaces(request))
+
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    future = pool.submit(_fetch)
+                    response = future.result(timeout=10)
                 for descriptor in response.workspaces:
                     workspace_id = descriptor.workspace_id
                     workspace_path = descriptor.workspace_root
