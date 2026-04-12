@@ -19,7 +19,7 @@ import logging
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Optional
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -1158,6 +1158,51 @@ async def test_ack_budget_expiry_stops_execution_and_logs_expired_before_ack(
     assert log_events
     assert log_events[0]["expired_before_ack"] is True
     assert log_events[0]["budget_overrun_ms"] is not None
+
+
+@pytest.mark.anyio
+async def test_on_dispatch_does_not_attempt_fallback_response_after_ack_expiry() -> (
+    None
+):
+    service = DiscordBotService.__new__(DiscordBotService)
+    service._logger = logging.getLogger("test.reliability.dispatch_ack_expiry")
+    service._ingress = SimpleNamespace()
+    service._command_runner = SimpleNamespace(skip_submission_order=Mock())
+    service._persist_runtime_interaction = AsyncMock()
+    service._register_interaction_ingress = AsyncMock(return_value=False)
+    service._release_interaction_ingress = AsyncMock()
+    service._interaction_telemetry_fields = lambda *args, **kwargs: {}  # type: ignore[assignment]
+    service._initial_ack_budget_seconds = lambda: 2.5  # type: ignore[assignment]
+    service._respond_ephemeral = AsyncMock(
+        side_effect=AssertionError("stale fallback should not be attempted")
+    )
+
+    ctx = _make_ctx(interaction_id="inter-expired", interaction_token="tok-expired")
+    envelope = RuntimeInteractionEnvelope(
+        context=ctx,
+        conversation_id="conversation:discord:chan-1",
+        resource_keys=("conversation:discord:chan-1",),
+        dispatch_ack_policy="defer_ephemeral",
+    )
+    service._build_runtime_interaction_envelope = AsyncMock(return_value=envelope)
+    service._acknowledge_runtime_envelope = AsyncMock(return_value=False)
+    service._ingress.process_raw_payload = AsyncMock(
+        return_value=SimpleNamespace(accepted=True, context=ctx)
+    )
+
+    payload = _slash_payload()
+    payload["id"] = "inter-expired"
+    payload["token"] = "tok-expired"
+
+    await service._on_dispatch("INTERACTION_CREATE", payload)
+
+    service._respond_ephemeral.assert_not_awaited()
+    service._persist_runtime_interaction.assert_not_awaited()
+    service._register_interaction_ingress.assert_not_awaited()
+    service._command_runner.skip_submission_order.assert_called_once_with(None)
+    service._release_interaction_ingress.assert_awaited_once_with("inter-expired")
+    assert ctx.timing.ack_finished_at is not None
+    assert ctx.timing.ingress_finished_at is not None
 
 
 @pytest.mark.anyio

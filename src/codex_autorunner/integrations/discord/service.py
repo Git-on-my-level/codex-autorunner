@@ -4161,11 +4161,9 @@ class DiscordBotService:
                                 envelope=envelope,
                             ),
                         )
-                        await self._respond_ephemeral(
-                            ctx.interaction_id,
-                            ctx.interaction_token,
-                            "Discord interaction did not acknowledge. Please retry.",
-                        )
+                        # The interaction callback window is already gone. Trying to
+                        # answer again only produces a second stale-callback failure
+                        # that can bubble back into gateway reconnect handling.
                         ctx.timing = replace(
                             ctx.timing,
                             ack_finished_at=time.monotonic(),
