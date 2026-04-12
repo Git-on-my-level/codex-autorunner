@@ -6375,6 +6375,13 @@ async def test_newt_branch_name_includes_chat_identity(
 async def test_newt_runs_hub_setup_commands_for_workspace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from unittest.mock import AsyncMock
+
+    from codex_autorunner.core.hub_control_plane.models import (
+        WorkspaceSetupCommandRequest,
+        WorkspaceSetupCommandResult,
+    )
+
     hub_root = tmp_path / "hub"
     workspace = hub_root / "repo"
     workspace.mkdir(parents=True)
@@ -6387,20 +6394,20 @@ async def test_newt_runs_hub_setup_commands_for_workspace(
     handler = _NewtHandler(record, hub_root=hub_root)
     branch_calls = _patch_newt_branch_reset(monkeypatch)
 
-    class _HubSupervisorStub:
-        def __init__(self) -> None:
-            self.calls: list[dict[str, object]] = []
+    async def _mock_run_setup_commands(
+        request: WorkspaceSetupCommandRequest,
+    ) -> WorkspaceSetupCommandResult:
+        assert request.workspace_root == str(workspace.resolve())
+        assert request.repo_id_hint == "base-repo"
+        return WorkspaceSetupCommandResult(
+            workspace_root=request.workspace_root,
+            repo_id_hint=request.repo_id_hint,
+            setup_command_count=2,
+        )
 
-        def run_setup_commands_for_workspace(
-            self, workspace_path: Path, *, repo_id_hint: Optional[str] = None
-        ) -> int:
-            self.calls.append(
-                {"workspace_path": workspace_path, "repo_id_hint": repo_id_hint}
-            )
-            return 2
-
-    hub_supervisor = _HubSupervisorStub()
-    handler._hub_supervisor = hub_supervisor  # type: ignore[attr-defined]
+    hub_client = AsyncMock()
+    hub_client.run_workspace_setup_commands = _mock_run_setup_commands
+    handler._hub_client = hub_client  # type: ignore[attr-defined]
     message = TelegramMessage(
         update_id=100,
         message_id=200,
@@ -6415,9 +6422,6 @@ async def test_newt_runs_hub_setup_commands_for_workspace(
     await handler._handle_newt(message)
 
     assert len(branch_calls) == 1
-    assert hub_supervisor.calls == [
-        {"workspace_path": workspace.resolve(), "repo_id_hint": "base-repo"}
-    ]
     assert any("Ran 2 setup command(s)." in text for text in handler._sent)
 
 

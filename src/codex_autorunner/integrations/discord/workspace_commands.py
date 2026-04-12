@@ -78,16 +78,22 @@ def _list_agent_workspaces(service: Any) -> list[tuple[str, str, str]]:
         return []
     try:
         import asyncio
+        from concurrent.futures import TimeoutError as FuturesTimeoutError
 
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            return _list_agent_workspaces_from_cache(service)
         from ...core.hub_control_plane import AgentWorkspaceListRequest
 
-        response = loop.run_until_complete(
-            hub_client.list_agent_workspaces(AgentWorkspaceListRequest())
-        )
-    except Exception:
+        request = AgentWorkspaceListRequest()
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            future = asyncio.run_coroutine_threadsafe(
+                hub_client.list_agent_workspaces(request), loop
+            )
+            response = future.result(timeout=10)
+        else:
+            response = loop.run_until_complete(
+                hub_client.list_agent_workspaces(request)
+            )
+    except (Exception, FuturesTimeoutError):
         return _list_agent_workspaces_from_cache(service)
     workspaces: list[tuple[str, str, str]] = []
     for descriptor in response.workspaces:

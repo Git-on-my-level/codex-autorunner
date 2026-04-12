@@ -866,25 +866,34 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
         arg = (arg or "").strip()
         if not arg:
             return None
-        hub_supervisor = getattr(self, "_hub_supervisor", None)
-        if hub_supervisor is not None:
+        hub_client = getattr(self, "_hub_client", None)
+        if hub_client is not None:
             try:
-                for snapshot in hub_supervisor.list_agent_workspaces():
-                    workspace_id = str(getattr(snapshot, "id", "") or "").strip()
-                    workspace_path = getattr(snapshot, "path", None)
-                    if isinstance(workspace_path, str):
-                        workspace_path = Path(workspace_path)
-                    if workspace_id != arg or not isinstance(workspace_path, Path):
+                import asyncio
+
+                from .....core.hub_control_plane import AgentWorkspaceListRequest
+
+                loop = asyncio.get_running_loop()
+                future = asyncio.run_coroutine_threadsafe(
+                    hub_client.list_agent_workspaces(AgentWorkspaceListRequest()), loop
+                )
+                response = future.result(timeout=10)
+                for descriptor in response.workspaces:
+                    workspace_id = descriptor.workspace_id
+                    workspace_path = descriptor.workspace_root
+                    if not workspace_id or not workspace_path:
+                        continue
+                    if workspace_id != arg:
                         continue
                     return (
-                        str(canonicalize_path(workspace_path)),
+                        str(canonicalize_path(Path(workspace_path))),
                         None,
                         "agent_workspace",
                         workspace_id,
                     )
-            except (OSError, ValueError, RuntimeError):
+            except (OSError, ValueError, RuntimeError, Exception):
                 self._logger.debug(
-                    "resolve_workspace: hub_supervisor lookup failed", exc_info=True
+                    "resolve_workspace: hub_client lookup failed", exc_info=True
                 )
         if self._manifest_path and self._hub_root:
             try:
@@ -1801,19 +1810,23 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
             return
 
         setup_command_count = 0
-        hub_supervisor = getattr(self, "_hub_supervisor", None)
-        if hub_supervisor is not None:
+        hub_client = getattr(self, "_hub_client", None)
+        if hub_client is not None:
             repo_id_hint = (
                 record.repo_id.strip()
                 if isinstance(record.repo_id, str) and record.repo_id.strip()
                 else None
             )
             try:
-                setup_command_count = await asyncio.to_thread(
-                    hub_supervisor.run_setup_commands_for_workspace,
-                    workspace_root,
-                    repo_id_hint=repo_id_hint,
+                from .....core.hub_control_plane import WorkspaceSetupCommandRequest
+
+                cp_result = await hub_client.run_workspace_setup_commands(
+                    WorkspaceSetupCommandRequest(
+                        workspace_root=str(workspace_root),
+                        repo_id_hint=repo_id_hint,
+                    )
                 )
+                setup_command_count = cp_result.setup_command_count
             except (OSError, RuntimeError, ValueError) as exc:
                 log_event(
                     self._logger,

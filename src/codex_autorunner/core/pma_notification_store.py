@@ -5,7 +5,10 @@ import sqlite3
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Mapping, Optional
+
+if TYPE_CHECKING:
+    from .hub_control_plane.models import NotificationRecord
 
 from .orchestration.sqlite import open_orchestration_sqlite
 from .text_utils import (
@@ -76,7 +79,9 @@ def notification_surface_key(notification_id: str) -> str:
     return f"notification:{normalized}"
 
 
-def build_notification_context_block(conversation: NotificationConversation) -> str:
+def build_notification_context_block(
+    conversation: "NotificationConversation | NotificationRecord",
+) -> str:
     payload = {
         "notification_id": conversation.notification_id,
         "correlation_id": conversation.correlation_id,

@@ -351,12 +351,7 @@ class HubSharedStateService:
     def create_thread_target(
         self, request: ThreadTargetCreateRequest
     ) -> ThreadTargetResponse:
-        from ..pma_thread_store import PmaThreadStore
-
-        thread_store = self._thread_store
-        if not isinstance(thread_store, PmaThreadStore):
-            return ThreadTargetResponse(thread=None)
-        created = thread_store.create_thread(
+        created = self._thread_store.create_thread(
             agent=request.agent_id,
             workspace_root=Path(request.workspace_root),
             repo_id=request.repo_id,
@@ -385,9 +380,20 @@ class HubSharedStateService:
 
         from ..pma_context import build_hub_snapshot
 
-        snapshot = asyncio.run(
-            build_hub_snapshot(self._supervisor, hub_root=self._hub_root)
-        )
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop is not None and loop.is_running():
+            future = asyncio.run_coroutine_threadsafe(
+                build_hub_snapshot(self._supervisor, hub_root=self._hub_root), loop
+            )
+            snapshot = future.result(timeout=30)
+        else:
+            snapshot = asyncio.run(
+                build_hub_snapshot(self._supervisor, hub_root=self._hub_root)
+            )
         return PmaSnapshotResponse(snapshot=snapshot)
 
     def get_agent_workspace(
