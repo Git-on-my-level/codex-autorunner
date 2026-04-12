@@ -273,6 +273,7 @@ def register_hub_tickets_commands(
                 range_spec,
                 repo_root=repo_root,
                 profile=profile,
+                profile_explicit=profile is not None,
             )
         except ValueError as exc:
             raise_exit(str(exc), cause=exc)

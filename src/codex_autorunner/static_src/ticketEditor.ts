@@ -13,6 +13,7 @@ import {
   loadTicketPending,
   renderTicketChat,
   resetTicketChatState,
+  syncTicketChatTargetToSelection,
   ticketChatState,
   resumeTicketPendingTurn,
 } from "./ticketChatActions.js";
@@ -60,6 +61,23 @@ type EditorState = {
   lastSavedBody: string;
   lastSavedFrontmatter: FrontmatterState;
 };
+
+function sameUndoSnapshot(
+  previous: { body: string; frontmatter: FrontmatterState } | undefined,
+  next: { body: string; frontmatter: FrontmatterState }
+): boolean {
+  if (!previous) return false;
+  return (
+    previous.body === next.body &&
+    previous.frontmatter.agent === next.frontmatter.agent &&
+    previous.frontmatter.done === next.frontmatter.done &&
+    previous.frontmatter.ticketId === next.frontmatter.ticketId &&
+    previous.frontmatter.title === next.frontmatter.title &&
+    previous.frontmatter.model === next.frontmatter.model &&
+    previous.frontmatter.reasoning === next.frontmatter.reasoning &&
+    previous.frontmatter.profile === next.frontmatter.profile
+  );
+}
 
 const DEFAULT_FRONTMATTER: FrontmatterState = {
   agent: "codex",
@@ -322,20 +340,15 @@ function pushUndoState(): void {
   const { content, undoBtn } = els();
   const fm = getFrontmatterFromForm();
   const body = content?.value || "";
+  const nextState = { body, frontmatter: { ...fm } };
   
   // Don't push if same as last undo state
   const last = state.undoStack[state.undoStack.length - 1];
-  if (last && last.body === body && 
-      last.frontmatter.agent === fm.agent &&
-      last.frontmatter.done === fm.done &&
-      last.frontmatter.ticketId === fm.ticketId &&
-      last.frontmatter.title === fm.title &&
-      last.frontmatter.model === fm.model &&
-      last.frontmatter.reasoning === fm.reasoning) {
+  if (sameUndoSnapshot(last, nextState)) {
     return;
   }
   
-  state.undoStack.push({ body, frontmatter: { ...fm } });
+  state.undoStack.push(nextState);
   
   // Limit stack size
   if (state.undoStack.length > 50) {
@@ -1212,6 +1225,18 @@ export function initTicketEditor(): void {
   if (chatCancelBtn) chatCancelBtn.addEventListener("click", () => void cancelTicketChat());
   if (patchApplyBtn) patchApplyBtn.addEventListener("click", () => void applyTicketPatch());
   if (patchDiscardBtn) patchDiscardBtn.addEventListener("click", () => void discardTicketPatch());
+  if (agentSelect) {
+    agentSelect.addEventListener("change", () => {
+      syncTicketChatTargetToSelection();
+      void resumeTicketPendingTurn(ticketChatState.ticketIndex, ticketChatState.ticketChatKey);
+    });
+  }
+  if (profileSelect) {
+    profileSelect.addEventListener("change", () => {
+      syncTicketChatTargetToSelection();
+      void resumeTicketPendingTurn(ticketChatState.ticketIndex, ticketChatState.ticketChatKey);
+    });
+  }
 
   // Cmd/Ctrl+Enter in chat input sends message
   if (chatInput) {
@@ -1312,3 +1337,6 @@ export function initTicketEditor(): void {
 }
 
 export { TicketData };
+export const __ticketEditorTest = {
+  sameUndoSnapshot,
+};

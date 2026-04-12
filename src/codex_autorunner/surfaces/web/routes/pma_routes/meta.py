@@ -4,10 +4,10 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
-from .....agents.hermes.supervisor import build_hermes_supervisor_from_config
 from .....agents.registry import get_agent_descriptor, get_available_agents
 from ...services.pma.common import pma_config_from_raw
 from ..agents import _available_agents, _serialize_model_catalog
+from .hermes_supervisors import resolve_cached_hermes_supervisor
 
 
 def build_pma_meta_routes(
@@ -30,14 +30,7 @@ def build_pma_meta_routes(
         *,
         profile: str | None,
     ):
-        if profile is None:
-            supervisor = getattr(request.app.state, "hermes_supervisor", None)
-            if supervisor is not None:
-                return supervisor
-        return build_hermes_supervisor_from_config(
-            request.app.state.config,
-            profile=profile,
-        )
+        return resolve_cached_hermes_supervisor(request, profile=profile)
 
     @router.get("/agents")
     async def list_pma_agents(request: Request) -> dict[str, Any]:
@@ -52,10 +45,12 @@ def build_pma_meta_routes(
                 continue
             agent_payload = dict(agent)
             if str(agent_payload.get("id") or "").strip().lower() == "hermes":
-                metadata_profile = default_profile or (
+                metadata_profile = (
                     str(agent_payload.get("default_profile") or "").strip().lower()
                     or None
                 )
+                if metadata_profile is None and default_agent == "hermes":
+                    metadata_profile = default_profile
                 supervisor = _resolve_hermes_supervisor(
                     request,
                     profile=metadata_profile,

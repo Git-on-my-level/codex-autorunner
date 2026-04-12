@@ -17,6 +17,7 @@ const dom = new JSDOM(
     <button id="ticket-chat-events-toggle"></button>
     <div id="ticket-chat-messages"></div>
     <select id="ticket-chat-agent-select"></select>
+    <select id="ticket-chat-profile-select"></select>
     <select id="ticket-chat-model-select"></select>
     <input id="ticket-chat-model-input" type="text" />
     <select id="ticket-chat-reasoning-select"></select>
@@ -68,5 +69,27 @@ test("ticket chat preserves manual model override when the select is disabled", 
       modelInput: manualInput,
     }),
     "hermes/stored-model"
+  );
+});
+
+test("ticket chat local keys are scoped by agent and profile", () => {
+  assert.notEqual(
+    __ticketChatActionsTest.buildScopedTicketChatTarget(
+      7,
+      "ticket-chat-key",
+      "hermes",
+      "m4-pma"
+    ),
+    __ticketChatActionsTest.buildScopedTicketChatTarget(
+      7,
+      "ticket-chat-key",
+      "hermes",
+      "fast"
+    )
+  );
+
+  assert.notEqual(
+    __ticketChatActionsTest.pendingKeyForTicket(7, "ticket-chat-key", "hermes", "m4-pma"),
+    __ticketChatActionsTest.pendingKeyForTicket(7, "ticket-chat-key", "hermes", "fast")
   );
 });

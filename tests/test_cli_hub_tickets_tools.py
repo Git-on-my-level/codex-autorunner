@@ -69,6 +69,37 @@ def test_hub_tickets_fmt_check_fails_on_drift(hub_env) -> None:
     assert "changed=1" in result.output
 
 
+def test_hub_tickets_bulk_set_profile_updates_frontmatter(hub_env) -> None:
+    ticket = hub_env.repo_root / ".codex-autorunner" / "tickets" / "TICKET-001.md"
+    ticket.parent.mkdir(parents=True, exist_ok=True)
+    ticket.write_text(
+        "---\nagent: hermes\ndone: false\nticket_id: tkt_bulksetprofile001\n---\n\nBody\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "hub",
+            "tickets",
+            "bulk-set",
+            "--hub",
+            str(hub_env.hub_root),
+            "--repo",
+            hub_env.repo_id,
+            "--agent",
+            "hermes",
+            "--profile",
+            "m4-pma",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+    frontmatter, _ = parse_markdown_frontmatter(ticket.read_text(encoding="utf-8"))
+    assert frontmatter["agent"] == "hermes"
+    assert frontmatter["profile"] == "m4-pma"
+
+
 def test_hub_tickets_setup_pack_creates_final_tickets(
     hub_env, tmp_path: Path, monkeypatch
 ) -> None:

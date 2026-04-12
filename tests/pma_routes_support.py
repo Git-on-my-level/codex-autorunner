@@ -35,7 +35,13 @@ from codex_autorunner.integrations.discord.state import DiscordStateStore
 from codex_autorunner.integrations.telegram.state import TelegramStateStore, topic_key
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes import pma as pma_routes
-from codex_autorunner.surfaces.web.routes.pma_routes import chat_runtime, tail_stream
+from codex_autorunner.surfaces.web.routes.pma_routes import (
+    chat_runtime,
+    tail_stream,
+)
+from codex_autorunner.surfaces.web.routes.pma_routes import (
+    hermes_supervisors as hermes_supervisor_routes,
+)
 from codex_autorunner.surfaces.web.routes.pma_routes import publish as publish_routes
 from tests.conftest import write_test_config
 
@@ -317,6 +323,62 @@ def test_pma_agents_endpoint_surfaces_hermes_optional_controls_and_commands(
         {"name": "/fork", "description": "Fork the current session"},
         {"name": "/model", "description": "Switch model"},
     ]
+
+
+def test_pma_agents_endpoint_prefers_hermes_default_profile_over_global_default(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg.setdefault("pma", {})
+    cfg["pma"]["enabled"] = True
+    cfg["pma"]["profile"] = "codex-profile"
+    cfg.setdefault("agents", {})
+    cfg["agents"]["hermes"] = {
+        "binary": "hermes",
+        "profiles": {"m4": {"binary": "hermes-m4"}},
+        "default_profile": "m4",
+    }
+    write_test_config(hub_env.hub_root / CONFIG_FILENAME, cfg)
+    app = create_hub_app(hub_env.hub_root)
+    observed: dict[str, Any] = {"profiles": []}
+
+    class _HermesSupervisor:
+        async def session_capabilities(self, workspace_root: Path):
+            _ = workspace_root
+            return type(
+                "Caps",
+                (),
+                {
+                    "list_sessions": True,
+                    "fork": True,
+                    "set_model": False,
+                    "set_mode": False,
+                },
+            )()
+
+        async def advertised_commands(self, workspace_root: Path):
+            _ = workspace_root
+            return []
+
+    def _build_supervisor(_config, *, profile=None, **_kwargs):
+        observed["profiles"].append(profile)
+        return _HermesSupervisor()
+
+    monkeypatch.setattr(
+        hermes_supervisor_routes,
+        "build_hermes_supervisor_from_config",
+        _build_supervisor,
+    )
+
+    with TestClient(app) as client:
+        first = client.get("/hub/pma/agents")
+        second = client.get("/hub/pma/agents")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert observed["profiles"] == ["m4"]
+    hermes = {agent["id"]: agent for agent in first.json()["agents"]}["hermes"]
+    assert hermes["metadata_profile"] == "m4"
 
 
 def test_pma_chat_requires_message(hub_env) -> None:
@@ -1876,29 +1938,22 @@ def test_pma_new_forks_current_hermes_thread_when_runtime_supports_it(hub_env) -
 
     with TestClient(app) as client:
         registry = app.state.app_server_threads
+        registry.set_thread_id("pma.hermes", "hermes-session-source")
         original_get_current_snapshot = (
             chat_runtime.PmaRuntimeState.get_current_snapshot
         )
 
         async def _fake_get_current_snapshot(self) -> dict[str, Any]:
-            return {
-                "agent": "hermes",
-                "profile": None,
-                "thread_id": "hermes-session-source",
-            }
+            return {}
 
         try:
-            chat_runtime.PmaRuntimeState.get_current_snapshot = (  # type: ignore[assignment]
-                _fake_get_current_snapshot
-            )
+            chat_runtime.PmaRuntimeState.get_current_snapshot = _fake_get_current_snapshot  # type: ignore[assignment]
             resp = client.post(
                 "/hub/pma/new",
                 json={"agent": "hermes", "lane_id": "pma:default"},
             )
         finally:
-            chat_runtime.PmaRuntimeState.get_current_snapshot = (  # type: ignore[assignment]
-                original_get_current_snapshot
-            )
+            chat_runtime.PmaRuntimeState.get_current_snapshot = original_get_current_snapshot  # type: ignore[assignment]
 
     assert resp.status_code == 200
     payload = resp.json()

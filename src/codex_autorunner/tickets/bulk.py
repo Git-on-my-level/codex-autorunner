@@ -189,7 +189,11 @@ def bulk_canonicalize_hermes_agents(
         if not isinstance(raw_agent, str) or not is_hermes_alias_agent(raw_agent):
             return
         raw_profile = fm.get("profile")
-        canonical = canonicalize_hermes_identity(raw_agent, raw_profile)
+        canonical = canonicalize_hermes_identity(
+            raw_agent,
+            raw_profile,
+            context=repo_root,
+        )
         fm["agent"] = canonical.agent
         if canonical.profile is not None:
             fm["profile"] = canonical.profile

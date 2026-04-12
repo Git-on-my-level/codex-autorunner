@@ -551,7 +551,7 @@ def test_resolve_file_chat_agent_selection_rejects_invalid_hermes_profile(
 
 
 @pytest.mark.asyncio
-async def test_execute_file_chat_hermes_without_profile_uses_default(
+async def test_execute_file_chat_hermes_without_profile_uses_resolved_profile(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repo_root = tmp_path
@@ -603,7 +603,7 @@ async def test_execute_file_chat_hermes_without_profile_uses_default(
 
     def _resolve_profile(_request, _agent_id, requested_profile, default_profile=None):
         _ = default_profile
-        return requested_profile
+        return requested_profile or "m4-default"
 
     monkeypatch.setattr(
         execution_module,
@@ -627,8 +627,11 @@ async def test_execute_file_chat_hermes_without_profile_uses_default(
 
     assert result["status"] == "ok"
     assert observed["agent_id"] == "hermes"
-    assert observed["profile"] is None
-    assert observed["thread_key"] == "file_chat.hermes.contextspace_spec.md"
+    assert observed["profile"] == "m4-default"
+    assert (
+        observed["thread_key"]
+        == "file_chat.hermes.profile.m4-default.contextspace_spec.md"
+    )
 
 
 @pytest.mark.asyncio

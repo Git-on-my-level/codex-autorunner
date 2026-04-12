@@ -15,7 +15,6 @@ from .....agents.base import (
     harness_progress_event_stream,
 )
 from .....agents.codex.harness import CodexHarness
-from .....agents.hermes.supervisor import build_hermes_supervisor_from_config
 from .....agents.opencode.harness import OpenCodeHarness
 from .....agents.registry import (
     get_registered_agents,
@@ -78,6 +77,7 @@ from ...services.pma.common import pma_config_from_raw
 from ..agent_profile_validation import resolve_requested_agent_profile
 from ..agents import _available_agents
 from ..shared import SSE_HEADERS
+from .hermes_supervisors import resolve_cached_hermes_supervisor
 from .publish import publish_automation_result
 from .runtime_state import PmaRuntimeState
 from .tail_stream import resolve_resume_after
@@ -106,14 +106,7 @@ def _resolve_hermes_supervisor(
     *,
     profile: Optional[str],
 ):
-    if profile is None:
-        supervisor = getattr(request.app.state, "hermes_supervisor", None)
-        if supervisor is not None:
-            return supervisor
-    return build_hermes_supervisor_from_config(
-        request.app.state.config,
-        profile=profile,
-    )
+    return resolve_cached_hermes_supervisor(request, profile=profile)
 
 
 async def _maybe_fork_hermes_pma_session(
@@ -123,27 +116,49 @@ async def _maybe_fork_hermes_pma_session(
     agent: Optional[str],
     profile: Optional[str],
     hub_root: Path,
+    stored_thread_id: Optional[str] = None,
 ) -> dict[str, Any]:
     current_agent = _normalize_optional_text(current.get("agent"))
     current_profile = _normalize_optional_text(current.get("profile"))
     current_thread_id = _normalize_optional_text(current.get("thread_id"))
-    if not current_agent or not current_thread_id:
-        return {}
-
-    current_runtime = resolve_agent_runtime(
-        current_agent,
-        current_profile,
-        context=request.app.state,
-    )
     requested_runtime = resolve_agent_runtime(
-        agent or current_agent,
+        agent or current_agent or "codex",
         profile,
         context=request.app.state,
     )
-    if (
-        current_runtime.logical_agent_id != "hermes"
-        or requested_runtime.logical_agent_id != "hermes"
+    if requested_runtime.logical_agent_id != "hermes":
+        return {}
+
+    current_runtime = None
+    if current_agent:
+        current_runtime = resolve_agent_runtime(
+            current_agent,
+            current_profile,
+            context=request.app.state,
+        )
+    if current_runtime is not None and (
+        current_runtime.logical_agent_id != requested_runtime.logical_agent_id
         or current_runtime.logical_profile != requested_runtime.logical_profile
+    ):
+        return {}
+
+    if not current_thread_id:
+        current_thread_id = _normalize_optional_text(stored_thread_id)
+    if not current_thread_id:
+        current_thread_id = _normalize_optional_text(
+            request.app.state.app_server_threads.get_thread_id(
+                pma_base_key(
+                    requested_runtime.logical_agent_id,
+                    requested_runtime.logical_profile,
+                )
+            )
+        )
+    if not current_thread_id:
+        return {}
+
+    if (
+        current_runtime is not None
+        and current_runtime.logical_profile != requested_runtime.logical_profile
     ):
         return {}
 
@@ -179,6 +194,53 @@ async def _maybe_fork_hermes_pma_session(
         "source_thread_id": current_thread_id,
         "thread_id": forked.session_id,
     }
+
+
+def _resolve_preclear_hermes_fork_thread_id(
+    request: Request,
+    *,
+    current: dict[str, Any],
+    agent: Optional[str],
+    profile: Optional[str],
+) -> Optional[str]:
+    requested_runtime = resolve_agent_runtime(
+        agent or _normalize_optional_text(current.get("agent")) or "codex",
+        profile or _normalize_optional_text(current.get("profile")),
+        context=request.app.state,
+    )
+    if requested_runtime.logical_agent_id != "hermes":
+        return None
+    return _normalize_optional_text(
+        request.app.state.app_server_threads.get_thread_id(
+            pma_base_key(
+                requested_runtime.logical_agent_id,
+                requested_runtime.logical_profile,
+            )
+        )
+    )
+
+
+async def _build_new_session_details(
+    request: Request,
+    *,
+    current: dict[str, Any],
+    agent: Optional[str],
+    profile: Optional[str],
+    hub_root: Path,
+) -> dict[str, Any]:
+    return await _maybe_fork_hermes_pma_session(
+        request,
+        current=current,
+        agent=agent,
+        profile=profile,
+        hub_root=hub_root,
+        stored_thread_id=_resolve_preclear_hermes_fork_thread_id(
+            request,
+            current=current,
+            agent=agent,
+            profile=profile,
+        ),
+    )
 
 
 def _serialize_lifecycle_result(
@@ -1907,7 +1969,7 @@ def build_chat_runtime_router(
 
         details = dict(result.details)
         details.update(
-            await _maybe_fork_hermes_pma_session(
+            await _build_new_session_details(
                 request,
                 current=current,
                 agent=agent,

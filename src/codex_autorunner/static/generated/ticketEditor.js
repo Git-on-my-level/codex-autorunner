@@ -1,17 +1,28 @@
-// GENERATED FILE - do not edit directly. Source: static_src/
 /**
  * Ticket Editor Modal - handles creating, editing, and deleting tickets
  */
 import { api, confirmModal, flash, updateUrlParams, splitMarkdownFrontmatter } from "./utils.js";
 import { publish } from "./bus.js";
 import { clearTicketChatHistory } from "./ticketChatStorage.js";
-import { setTicketIndex, sendTicketChat, cancelTicketChat, applyTicketPatch, discardTicketPatch, loadTicketPending, renderTicketChat, resetTicketChatState, ticketChatState, resumeTicketPendingTurn, } from "./ticketChatActions.js";
+import { setTicketIndex, sendTicketChat, cancelTicketChat, applyTicketPatch, discardTicketPatch, loadTicketPending, renderTicketChat, resetTicketChatState, syncTicketChatTargetToSelection, ticketChatState, resumeTicketPendingTurn, } from "./ticketChatActions.js";
 import { ensureAgentCatalog, getRegisteredAgents, getRegisteredAgentProfiles, initAgentControls, } from "./agentControls.js";
 import { initTicketVoice } from "./ticketVoice.js";
 import { initTicketChatEvents, renderTicketEvents, renderTicketMessages } from "./ticketChatEvents.js";
 import { initChatPasteUpload } from "./chatUploads.js";
 import { DocEditor } from "./docEditor.js";
 import { initTicketTemplates } from "./ticketTemplates.js";
+function sameUndoSnapshot(previous, next) {
+    if (!previous)
+        return false;
+    return (previous.body === next.body &&
+        previous.frontmatter.agent === next.frontmatter.agent &&
+        previous.frontmatter.done === next.frontmatter.done &&
+        previous.frontmatter.ticketId === next.frontmatter.ticketId &&
+        previous.frontmatter.title === next.frontmatter.title &&
+        previous.frontmatter.model === next.frontmatter.model &&
+        previous.frontmatter.reasoning === next.frontmatter.reasoning &&
+        previous.frontmatter.profile === next.frontmatter.profile);
+}
 const DEFAULT_FRONTMATTER = {
     agent: "codex",
     done: false,
@@ -223,18 +234,13 @@ function pushUndoState() {
     const { content, undoBtn } = els();
     const fm = getFrontmatterFromForm();
     const body = content?.value || "";
+    const nextState = { body, frontmatter: { ...fm } };
     // Don't push if same as last undo state
     const last = state.undoStack[state.undoStack.length - 1];
-    if (last && last.body === body &&
-        last.frontmatter.agent === fm.agent &&
-        last.frontmatter.done === fm.done &&
-        last.frontmatter.ticketId === fm.ticketId &&
-        last.frontmatter.title === fm.title &&
-        last.frontmatter.model === fm.model &&
-        last.frontmatter.reasoning === fm.reasoning) {
+    if (sameUndoSnapshot(last, nextState)) {
         return;
     }
-    state.undoStack.push({ body, frontmatter: { ...fm } });
+    state.undoStack.push(nextState);
     // Limit stack size
     if (state.undoStack.length > 50) {
         state.undoStack.shift();
@@ -989,6 +995,18 @@ export function initTicketEditor() {
         patchApplyBtn.addEventListener("click", () => void applyTicketPatch());
     if (patchDiscardBtn)
         patchDiscardBtn.addEventListener("click", () => void discardTicketPatch());
+    if (agentSelect) {
+        agentSelect.addEventListener("change", () => {
+            syncTicketChatTargetToSelection();
+            void resumeTicketPendingTurn(ticketChatState.ticketIndex, ticketChatState.ticketChatKey);
+        });
+    }
+    if (profileSelect) {
+        profileSelect.addEventListener("change", () => {
+            syncTicketChatTargetToSelection();
+            void resumeTicketPendingTurn(ticketChatState.ticketIndex, ticketChatState.ticketChatKey);
+        });
+    }
     // Cmd/Ctrl+Enter in chat input sends message
     if (chatInput) {
         chatInput.addEventListener("keydown", (e) => {
@@ -1079,3 +1097,6 @@ export function initTicketEditor() {
         });
     }
 }
+export const __ticketEditorTest = {
+    sameUndoSnapshot,
+};

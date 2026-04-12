@@ -368,9 +368,35 @@ class TicketRunner:
         canonical = canonicalize_hermes_identity(
             ticket_doc.frontmatter.agent,
             raw_profile,
+            context=self._workspace_root,
         )
         current_ticket_profile = canonical.profile
         canonical_agent_id = canonical.agent
+        lint_retry_ticket_id = lint_state.get("ticket_id")
+        lint_retry_ticket_path = lint_state.get("ticket_path")
+        lint_retry_agent_id = normalize_profile(lint_state.get("agent_id"))
+        lint_retry_profile = normalize_profile(lint_state.get("profile"))
+        if lint_retry_conversation_id is not None:
+            if (
+                (
+                    isinstance(lint_retry_ticket_path, str)
+                    and lint_retry_ticket_path != current_ticket_path
+                )
+                or (
+                    isinstance(lint_retry_ticket_id, str)
+                    and current_ticket_id != "lint-retry-ticket"
+                    and lint_retry_ticket_id != current_ticket_id
+                )
+                or (
+                    lint_retry_agent_id is not None
+                    and lint_retry_agent_id != canonical_agent_id
+                )
+                or (
+                    "profile" in lint_state
+                    and lint_retry_profile != current_ticket_profile
+                )
+            ):
+                lint_retry_conversation_id = None
         if previous_ticket_id and previous_ticket_id != current_ticket_id:
             clear_ticket_thread_binding(
                 state,
@@ -657,6 +683,10 @@ class TicketRunner:
                 "errors": fm_errors,
                 "retries": lint_retries,
                 "conversation_id": result.conversation_id,
+                "ticket_id": current_ticket_id,
+                "ticket_path": current_ticket_path,
+                "agent_id": canonical_agent_id,
+                "profile": current_ticket_profile,
             }
             return TicketResult(
                 status="continue",

@@ -214,6 +214,8 @@ def _validate_ticket_lint_retry(
     data, _ = parse_markdown_frontmatter(raw)
     agent = data.get("agent")
     agent_id = agent.strip() if isinstance(agent, str) else None
+    profile = data.get("profile")
+    profile_id = profile.strip() if isinstance(profile, str) else None
     if not agent_id:
         return TicketValidationResult(
             status="paused",
@@ -243,6 +245,7 @@ def _validate_ticket_lint_retry(
                 frontmatter=TicketFrontmatter(
                     ticket_id="lint-retry-ticket",
                     agent=agent_id,
+                    profile=profile_id or None,
                     done=False,
                 ),
                 body="",

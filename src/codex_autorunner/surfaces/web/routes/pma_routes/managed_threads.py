@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, Annotated, Any, Optional, cast
 
 from fastapi import APIRouter, Body, HTTPException, Request
 
-from .....agents.hermes.supervisor import build_hermes_supervisor_from_config
 from .....agents.registry import (
     get_registered_agents,
     resolve_agent_runtime,
@@ -41,6 +40,7 @@ from .automation_adapter import (
     get_automation_store,
     normalize_optional_text,
 )
+from .hermes_supervisors import resolve_cached_hermes_supervisor
 from .managed_thread_route_helpers import (
     _apply_chat_binding_fields,
     _attach_latest_execution_fields,
@@ -112,14 +112,7 @@ def build_managed_thread_orchestration_service(request: Request):
 
 
 def _resolve_hermes_supervisor(request: Request, *, profile: Optional[str]):
-    if profile is None:
-        supervisor = getattr(request.app.state, "hermes_supervisor", None)
-        if supervisor is not None:
-            return supervisor
-    return build_hermes_supervisor_from_config(
-        request.app.state.config,
-        profile=profile,
-    )
+    return resolve_cached_hermes_supervisor(request, profile=profile)
 
 
 def build_automation_routes(
