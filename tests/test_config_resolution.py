@@ -1042,6 +1042,34 @@ def test_load_repo_config_uses_active_hub_root_env_for_out_of_tree_repo(
     assert config.root == repo_root.resolve()
 
 
+def test_load_repo_config_prefers_nearest_hub_over_active_hub_root_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env_hub_root = tmp_path / "env-hub"
+    env_hub_root.mkdir()
+    write_test_config(
+        env_hub_root / CONFIG_FILENAME,
+        {"mode": "hub", "agents": {"opencode": {"binary": "/env/opencode"}}},
+    )
+
+    local_hub_root = tmp_path / "local-hub"
+    local_hub_root.mkdir()
+    write_test_config(
+        local_hub_root / CONFIG_FILENAME,
+        {"mode": "hub", "agents": {"opencode": {"binary": "/local/opencode"}}},
+    )
+
+    repo_root = local_hub_root / "repo"
+    repo_root.mkdir()
+    (repo_root / ".git").mkdir()
+
+    monkeypatch.setenv(ACTIVE_HUB_ROOT_ENV, str(env_hub_root))
+
+    config = load_repo_config(repo_root)
+
+    assert config.agent_binary("opencode") == "/local/opencode"
+
+
 def test_ensure_hub_config_at_seeds_when_missing(tmp_path: Path) -> None:
     """Test that ensure_hub_config_at seeds hub config when missing."""
     from codex_autorunner.core.config import ensure_hub_config_at

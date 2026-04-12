@@ -2759,6 +2759,9 @@ def _resolve_hub_path_for_repo(repo_root: Path, hub_path: Optional[Path]) -> Pat
         if mode not in (None, "hub"):
             raise ConfigError(f"Invalid hub config mode '{mode}'; expected 'hub'")
         return candidate
+    local_candidate = find_nearest_hub_config_path(repo_root)
+    if local_candidate:
+        return local_candidate
     env_hub_root = os.environ.get(ACTIVE_HUB_ROOT_ENV, "").strip()
     if env_hub_root:
         candidate = Path(env_hub_root).expanduser()
