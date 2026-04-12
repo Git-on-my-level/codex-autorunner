@@ -166,3 +166,34 @@ async def test_compact_lane_keeps_non_terminal_and_last_terminal_items(
         item.item_id for item in items if item.state == QueueItemState.COMPLETED
     ]
     assert kept_terminal_ids == terminal_ids[-keep_last:]
+
+
+@pytest.mark.anyio
+async def test_async_queue_operations_offload_blocking_store_calls(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lane_id = "pma:default"
+    queue = PmaQueue(tmp_path)
+    calls: list[str] = []
+    original_to_thread = asyncio.to_thread
+
+    async def _record_to_thread(func, /, *args, **kwargs):
+        calls.append(getattr(func, "__name__", repr(func)))
+        return await original_to_thread(func, *args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", _record_to_thread)
+
+    item, _ = await queue.enqueue(lane_id, "offload-key", {"message": "hello"})
+    items = await queue.list_items(lane_id)
+    assert items and items[0].item_id == item.item_id
+
+    dequeued = await queue.dequeue(lane_id)
+    assert dequeued is not None
+    await queue.complete_item(dequeued, {"status": "ok"})
+
+    lanes = await queue.get_all_lanes()
+    assert lane_id in lanes
+    assert "_append_to_file_sync" in calls
+    assert "_update_in_file_sync" in calls
+    assert "_get_all_lanes_sync" in calls

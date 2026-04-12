@@ -26,8 +26,8 @@ async def test_pma_lane_worker_processes_item(tmp_path: Path) -> None:
 
     await asyncio.wait_for(processed.wait(), timeout=2.0)
 
-    for _ in range(20):
-        items = await queue.list_items(lane_id)
+    for _ in range(80):
+        items = await asyncio.to_thread(queue._read_items_from_sqlite, lane_id)
         if items and items[0].state in (
             QueueItemState.COMPLETED,
             QueueItemState.FAILED,
@@ -35,7 +35,7 @@ async def test_pma_lane_worker_processes_item(tmp_path: Path) -> None:
             break
         await asyncio.sleep(0.05)
 
-    items = await queue.list_items(lane_id)
+    items = await asyncio.to_thread(queue._read_items_from_sqlite, lane_id)
     assert items, "queue item should be present"
     assert items[0].item_id == item.item_id
     assert items[0].state in (QueueItemState.COMPLETED, QueueItemState.FAILED)

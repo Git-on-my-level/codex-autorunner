@@ -378,93 +378,11 @@ class PmaQueue:
 
     async def _append_to_file(self, item: PmaQueueItem) -> None:
         async with self._ensure_lane_lock(item.lane_id):
-            with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
-                with conn:
-                    conn.execute(
-                        """
-                        INSERT INTO orch_queue_items (
-                            queue_item_id,
-                            lane_id,
-                            source_kind,
-                            source_key,
-                            dedupe_key,
-                            state,
-                            visible_at,
-                            claimed_at,
-                            completed_at,
-                            payload_json,
-                            created_at,
-                            updated_at,
-                            idempotency_key,
-                            error_text,
-                            dedupe_reason,
-                            result_json
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        ON CONFLICT(queue_item_id) DO UPDATE SET
-                            lane_id = excluded.lane_id,
-                            source_kind = excluded.source_kind,
-                            source_key = excluded.source_key,
-                            dedupe_key = excluded.dedupe_key,
-                            state = excluded.state,
-                            visible_at = excluded.visible_at,
-                            claimed_at = excluded.claimed_at,
-                            completed_at = excluded.completed_at,
-                            payload_json = excluded.payload_json,
-                            created_at = excluded.created_at,
-                            updated_at = excluded.updated_at,
-                            idempotency_key = excluded.idempotency_key,
-                            error_text = excluded.error_text,
-                            dedupe_reason = excluded.dedupe_reason,
-                            result_json = excluded.result_json
-                        """,
-                        self._item_db_tuple(item),
-                    )
-            self._sync_lane_mirror_sync(item.lane_id)
+            await asyncio.to_thread(self._append_to_file_sync, item)
 
     async def _update_in_file(self, item: PmaQueueItem) -> None:
         async with self._ensure_lane_lock(item.lane_id):
-            with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
-                with conn:
-                    conn.execute(
-                        """
-                        UPDATE orch_queue_items
-                           SET lane_id = ?,
-                               source_kind = ?,
-                               source_key = ?,
-                               dedupe_key = ?,
-                               state = ?,
-                               visible_at = ?,
-                               claimed_at = ?,
-                               completed_at = ?,
-                               payload_json = ?,
-                               created_at = ?,
-                               updated_at = ?,
-                               idempotency_key = ?,
-                               error_text = ?,
-                               dedupe_reason = ?,
-                               result_json = ?
-                         WHERE queue_item_id = ?
-                        """,
-                        (
-                            item.lane_id,
-                            "pma_lane",
-                            item.item_id,
-                            item.idempotency_key,
-                            item.state.value,
-                            item.enqueued_at,
-                            item.started_at,
-                            item.finished_at,
-                            json.dumps(item.payload, separators=(",", ":")),
-                            item.enqueued_at,
-                            item.finished_at or item.started_at or item.enqueued_at,
-                            item.idempotency_key,
-                            item.error,
-                            item.dedupe_reason,
-                            json.dumps(item.result or {}, separators=(",", ":")),
-                            item.item_id,
-                        ),
-                    )
-            self._sync_lane_mirror_sync(item.lane_id)
+            await asyncio.to_thread(self._update_in_file_sync, item)
 
     async def compact_lane(
         self,
@@ -474,7 +392,7 @@ class PmaQueue:
     ) -> bool:
         keep_last = max(0, keep_last)
         async with self._ensure_lane_lock(lane_id):
-            items = self._read_items_from_sqlite(lane_id)
+            items = await asyncio.to_thread(self._read_items_from_sqlite, lane_id)
             if not items:
                 return False
             terminal_indexes = [
@@ -495,13 +413,7 @@ class PmaQueue:
             ]
             if not delete_ids:
                 return False
-            with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
-                with conn:
-                    conn.executemany(
-                        "DELETE FROM orch_queue_items WHERE queue_item_id = ?",
-                        [(item_id,) for item_id in delete_ids],
-                    )
-            self._sync_lane_mirror_sync(lane_id)
+            await asyncio.to_thread(self._delete_items_sync, lane_id, delete_ids)
             return True
 
     async def _maybe_compact_lane(self, lane_id: str) -> None:
@@ -557,6 +469,50 @@ class PmaQueue:
                 )
         self._sync_lane_mirror_sync(item.lane_id)
 
+    def _update_in_file_sync(self, item: PmaQueueItem) -> None:
+        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            with conn:
+                conn.execute(
+                    """
+                    UPDATE orch_queue_items
+                       SET lane_id = ?,
+                           source_kind = ?,
+                           source_key = ?,
+                           dedupe_key = ?,
+                           state = ?,
+                           visible_at = ?,
+                           claimed_at = ?,
+                           completed_at = ?,
+                           payload_json = ?,
+                           created_at = ?,
+                           updated_at = ?,
+                           idempotency_key = ?,
+                           error_text = ?,
+                           dedupe_reason = ?,
+                           result_json = ?
+                     WHERE queue_item_id = ?
+                    """,
+                    (
+                        item.lane_id,
+                        "pma_lane",
+                        item.item_id,
+                        item.idempotency_key,
+                        item.state.value,
+                        item.enqueued_at,
+                        item.started_at,
+                        item.finished_at,
+                        json.dumps(item.payload, separators=(",", ":")),
+                        item.enqueued_at,
+                        item.finished_at or item.started_at or item.enqueued_at,
+                        item.idempotency_key,
+                        item.error,
+                        item.dedupe_reason,
+                        json.dumps(item.result or {}, separators=(",", ":")),
+                        item.item_id,
+                    ),
+                )
+        self._sync_lane_mirror_sync(item.lane_id)
+
     def _read_items_sync(self, lane_id: str) -> list[PmaQueueItem]:
         return self._read_items_from_sqlite(lane_id)
 
@@ -603,15 +559,7 @@ class PmaQueue:
         }
 
     async def get_all_lanes(self) -> list[str]:
-        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
-            rows = conn.execute(
-                """
-                SELECT DISTINCT lane_id
-                  FROM orch_queue_items
-                 ORDER BY lane_id ASC
-                """
-            ).fetchall()
-        return [str(row["lane_id"]) for row in rows if row["lane_id"]]
+        return await asyncio.to_thread(self._get_all_lanes_sync)
 
     async def get_queue_summary(self) -> dict[str, Any]:
         lanes = await self.get_all_lanes()
@@ -686,6 +634,26 @@ class PmaQueue:
             ]
             content = "\n".join(lines)
             atomic_write(path, (content + "\n") if content else "")
+
+    def _delete_items_sync(self, lane_id: str, item_ids: list[str]) -> None:
+        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            with conn:
+                conn.executemany(
+                    "DELETE FROM orch_queue_items WHERE queue_item_id = ?",
+                    [(item_id,) for item_id in item_ids],
+                )
+        self._sync_lane_mirror_sync(lane_id)
+
+    def _get_all_lanes_sync(self) -> list[str]:
+        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT lane_id
+                  FROM orch_queue_items
+                 ORDER BY lane_id ASC
+                """
+            ).fetchall()
+        return [str(row["lane_id"]) for row in rows if row["lane_id"]]
 
 
 __all__ = [

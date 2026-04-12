@@ -236,13 +236,22 @@ class HubLifecycleWorker:
             return
 
         def _process_loop() -> None:
-            while not self._stop_event.wait(self._poll_interval_seconds):
-                try:
-                    self._process_once()
-                except (
-                    Exception
-                ):  # intentional: process_once is a user-provided callback
-                    self._logger.exception("Error in lifecycle event processor")
+            try:
+                while not self._stop_event.wait(self._poll_interval_seconds):
+                    try:
+                        self._process_once()
+                    except (
+                        Exception
+                    ) as exc:  # intentional: process_once is a user-provided callback
+                        if _is_unrecoverable_lifecycle_error(exc):
+                            self._logger.exception(
+                                "Stopping lifecycle event processor after unrecoverable error"
+                            )
+                            self._stop_event.set()
+                            break
+                        self._logger.exception("Error in lifecycle event processor")
+            finally:
+                self._thread = None
 
         self._thread = threading.Thread(
             target=_process_loop,
@@ -257,3 +266,7 @@ class HubLifecycleWorker:
         self._stop_event.set()
         self._thread.join(timeout=self._join_timeout_seconds)
         self._thread = None
+
+
+def _is_unrecoverable_lifecycle_error(exc: Exception) -> bool:
+    return "schema is newer than this build supports" in str(exc).lower()
