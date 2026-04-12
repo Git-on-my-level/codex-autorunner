@@ -16,7 +16,12 @@ import {
   ticketChatState,
   resumeTicketPendingTurn,
 } from "./ticketChatActions.js";
-import { initAgentControls } from "./agentControls.js";
+import {
+  ensureAgentCatalog,
+  getRegisteredAgents,
+  getRegisteredAgentProfiles,
+  initAgentControls,
+} from "./agentControls.js";
 import { initTicketVoice } from "./ticketVoice.js";
 import { initTicketChatEvents, renderTicketEvents, renderTicketMessages } from "./ticketChatEvents.js";
 import { initChatPasteUpload } from "./chatUploads.js";
@@ -181,7 +186,7 @@ function els(): {
   fmAgent: HTMLSelectElement | null;
   fmModel: HTMLSelectElement | null;
   fmReasoning: HTMLSelectElement | null;
-  fmProfile: HTMLInputElement | null;
+  fmProfile: HTMLSelectElement | null;
   fmDone: HTMLInputElement | null;
   fmTitle: HTMLInputElement | null;
   // Chat elements
@@ -215,7 +220,7 @@ function els(): {
     fmAgent: document.getElementById("ticket-fm-agent") as HTMLSelectElement | null,
     fmModel: document.getElementById("ticket-fm-model") as HTMLSelectElement | null,
     fmReasoning: document.getElementById("ticket-fm-reasoning") as HTMLSelectElement | null,
-    fmProfile: document.getElementById("ticket-fm-profile") as HTMLInputElement | null,
+    fmProfile: document.getElementById("ticket-fm-profile") as HTMLSelectElement | null,
     fmDone: document.getElementById("ticket-fm-done") as HTMLInputElement | null,
     fmTitle: document.getElementById("ticket-fm-title") as HTMLInputElement | null,
     // Chat elements
@@ -434,6 +439,134 @@ function extractFrontmatter(ticket: TicketData): FrontmatterState {
 function yamlQuote(value: string): string {
   // Use JSON.stringify for simple, safe double-quoted scalars (handles colons, quotes, newlines).
   return JSON.stringify(value ?? "");
+}
+
+function formatFrontmatterAgentLabel(agent: {
+  id: string;
+  name?: string;
+}, currentOnly: boolean = false): string {
+  const base = agent.name && agent.name !== agent.id
+    ? `${agent.name} (${agent.id})`
+    : agent.id;
+  return currentOnly ? `${base} (current)` : base;
+}
+
+function formatFrontmatterProfileLabel(
+  profile: { id: string; display_name?: string },
+  currentOnly: boolean = false
+): string {
+  const base =
+    profile.display_name && profile.display_name !== profile.id
+      ? `${profile.display_name} (${profile.id})`
+      : profile.id;
+  return currentOnly ? `${base} (current)` : base;
+}
+
+function renderFmAgentOptions(selectedAgent: string): string {
+  const { fmAgent } = els();
+  if (!fmAgent) return selectedAgent || "codex";
+
+  const agents = getRegisteredAgents();
+  const hasCatalogAgents =
+    agents.length > 1 || (agents[0]?.id && agents[0].id !== "codex");
+  if (!hasCatalogAgents && fmAgent.options.length > 1) {
+    fmAgent.value = Array.from(fmAgent.options).some(
+      (option) => option.value === selectedAgent
+    )
+      ? selectedAgent
+      : fmAgent.value || "codex";
+    return fmAgent.value || "codex";
+  }
+
+  const currentMissing =
+    Boolean(selectedAgent) && !agents.some((agent) => agent.id === selectedAgent);
+  const nextValue = agents.some((agent) => agent.id === selectedAgent)
+    ? selectedAgent
+    : agents[0]?.id || "codex";
+  fmAgent.innerHTML = "";
+  for (const agent of agents) {
+    const option = document.createElement("option");
+    option.value = agent.id;
+    option.textContent = formatFrontmatterAgentLabel(agent);
+    fmAgent.appendChild(option);
+  }
+  if (currentMissing) {
+    const option = document.createElement("option");
+    option.value = selectedAgent;
+    option.textContent = formatFrontmatterAgentLabel({ id: selectedAgent }, true);
+    fmAgent.appendChild(option);
+  }
+  fmAgent.value = nextValue;
+  if (currentMissing) {
+    fmAgent.value = selectedAgent;
+  }
+  return fmAgent.value || nextValue;
+}
+
+function renderFmProfileOptions(agent: string, currentProfile: string): void {
+  const { fmProfile } = els();
+  if (!fmProfile) return;
+
+  const normalizedCurrent = currentProfile.trim();
+  const profiles = getRegisteredAgentProfiles(agent);
+  const currentMissing =
+    Boolean(normalizedCurrent) &&
+    !profiles.some((profile) => profile.id === normalizedCurrent);
+
+  fmProfile.innerHTML = "";
+
+  const defaultOption = document.createElement("option");
+  defaultOption.value = "";
+  defaultOption.textContent = profiles.length || normalizedCurrent
+    ? "Default profile"
+    : "No profiles";
+  fmProfile.appendChild(defaultOption);
+
+  for (const profile of profiles) {
+    const option = document.createElement("option");
+    option.value = profile.id;
+    option.textContent = formatFrontmatterProfileLabel(profile);
+    fmProfile.appendChild(option);
+  }
+
+  if (currentMissing) {
+    const option = document.createElement("option");
+    option.value = normalizedCurrent;
+    option.textContent = formatFrontmatterProfileLabel(
+      { id: normalizedCurrent },
+      true
+    );
+    fmProfile.appendChild(option);
+  }
+
+  const shouldShow = profiles.length > 0 || Boolean(normalizedCurrent);
+  fmProfile.classList.toggle("hidden", !shouldShow);
+  fmProfile.disabled = !shouldShow;
+  fmProfile.value = normalizedCurrent;
+  if (fmProfile.value !== normalizedCurrent) {
+    fmProfile.value = "";
+  }
+}
+
+function refreshFrontmatterAgentProfileControls(
+  agent: string,
+  profile: string
+): void {
+  const selectedAgent = renderFmAgentOptions(agent);
+  renderFmProfileOptions(selectedAgent, profile);
+}
+
+async function syncFrontmatterAgentProfileControls(
+  agent: string,
+  profile: string
+): Promise<void> {
+  refreshFrontmatterAgentProfileControls(agent, profile);
+  try {
+    await ensureAgentCatalog();
+  } catch {
+    return;
+  }
+  refreshFrontmatterAgentProfileControls(agent, profile);
 }
 
 function buildTicketContent(): string {
@@ -748,9 +881,13 @@ export function openTicketEditor(ticket?: TicketData): void {
     const fm = extractFrontmatter(ticket);
     state.originalFrontmatter = { ...fm };
     state.lastSavedFrontmatter = { ...fm };
+    refreshFrontmatterAgentProfileControls(fm.agent, fm.profile);
     setFrontmatterForm(fm);
-    
-    // Load model/reasoning options for the agent, then restore selections
+
+    // Load agent/profile catalogs plus model/reasoning options, then restore selections.
+    void syncFrontmatterAgentProfileControls(fm.agent, fm.profile).then(() => {
+      setFrontmatterForm(fm);
+    });
     void refreshFmModelOptions(fm.agent, false).then(() => {
       const { fmModel, fmReasoning } = els();
       if (fmModel && fm.model) fmModel.value = fm.model;
@@ -796,9 +933,19 @@ export function openTicketEditor(ticket?: TicketData): void {
     // Reset frontmatter to defaults
     state.originalFrontmatter = { ...DEFAULT_FRONTMATTER };
     state.lastSavedFrontmatter = { ...DEFAULT_FRONTMATTER };
+    refreshFrontmatterAgentProfileControls(
+      DEFAULT_FRONTMATTER.agent,
+      DEFAULT_FRONTMATTER.profile
+    );
     setFrontmatterForm(DEFAULT_FRONTMATTER);
-    
-    // Load model/reasoning options for the default agent
+
+    // Load agent/profile catalogs plus model/reasoning options for the default agent.
+    void syncFrontmatterAgentProfileControls(
+      DEFAULT_FRONTMATTER.agent,
+      DEFAULT_FRONTMATTER.profile
+    ).then(() => {
+      setFrontmatterForm(DEFAULT_FRONTMATTER);
+    });
     void refreshFmModelOptions(DEFAULT_FRONTMATTER.agent, false);
     
     // Clear body
@@ -1040,9 +1187,11 @@ export function initTicketEditor(): void {
   // Autosave on frontmatter changes
   if (fmAgent) {
     fmAgent.addEventListener("change", () => {
-      // Refresh model/reasoning options when agent changes
-      void refreshFmModelOptions(fmAgent.value, false);
-      onFrontmatterChange();
+      void (async () => {
+        await syncFrontmatterAgentProfileControls(fmAgent.value, "");
+        await refreshFmModelOptions(fmAgent.value, false);
+        onFrontmatterChange();
+      })();
     });
   }
   if (fmModel) {
@@ -1056,7 +1205,7 @@ export function initTicketEditor(): void {
   if (fmReasoning) fmReasoning.addEventListener("change", onFrontmatterChange);
   if (fmDone) fmDone.addEventListener("change", onFrontmatterChange);
   if (fmTitle) fmTitle.addEventListener("input", onFrontmatterChange);
-  if (fmProfile) fmProfile.addEventListener("input", onFrontmatterChange);
+  if (fmProfile) fmProfile.addEventListener("change", onFrontmatterChange);
 
   // Chat button handlers
   if (chatSendBtn) chatSendBtn.addEventListener("click", () => void sendTicketChat());

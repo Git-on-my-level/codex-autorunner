@@ -1715,8 +1715,9 @@ async function bulkSetAgent(): Promise<void> {
     placeholder: "codex",
     confirmText: "Set agent",
   });
-  if (!agent) return;
-  const profile = await inputModal("Optional profile (e.g. Hermes profile). Leave blank for default.", {
+  const agentValue = agent?.trim() || "";
+  if (!agentValue) return;
+  const profile = await inputModal("Optional profile (e.g. Hermes profile). Leave blank to clear and use the default.", {
     placeholder: "m4-pma",
     confirmText: "Apply",
     allowEmpty: true,
@@ -1729,14 +1730,15 @@ async function bulkSetAgent(): Promise<void> {
   });
   if (range === null) return;
   const rangeValue = range.trim() || undefined;
-  const profileValue = profile.trim() || undefined;
+  const trimmedProfile = profile.trim();
+  const profileValue = trimmedProfile || null;
 
   setButtonLoading(bulkSetAgentBtn, true);
   try {
     const payload = (await api("/api/flows/ticket_flow/tickets/bulk-set-agent", {
       method: "POST",
       body: {
-        agent,
+        agent: agentValue,
         profile: profileValue,
         range: rangeValue,
       },

@@ -139,10 +139,13 @@ def bulk_set_agent(
     *,
     repo_root: Path,
     profile: Optional[str] = None,
+    profile_explicit: bool = False,
 ) -> TicketBulkEditResult:
     def mutate(fm: dict[str, Any]) -> None:
         fm["agent"] = agent
-        if profile is not None:
+        if not profile_explicit:
+            return
+        if profile:
             fm["profile"] = profile
         else:
             fm.pop("profile", None)

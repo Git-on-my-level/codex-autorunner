@@ -1455,6 +1455,7 @@ You are the first ticket in a new ticket_flow run.
                 request.range,
                 repo_root=repo_root,
                 profile=request.profile,
+                profile_explicit=request.profile_explicit,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from None

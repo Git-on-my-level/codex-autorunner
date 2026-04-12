@@ -11,6 +11,7 @@ from codex_autorunner.core.flows.models import FlowEventType, FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.surfaces.web.routes import base as base_routes
 from codex_autorunner.surfaces.web.routes import flows as flow_routes
+from codex_autorunner.tickets.frontmatter import parse_markdown_frontmatter
 
 
 def test_ticket_flow_runs_endpoint_returns_empty_list_on_fresh_repo(
@@ -699,6 +700,76 @@ def test_bulk_set_agent_rejects_unknown_keys(tmp_path, monkeypatch):
     assert response.status_code == 422
     detail = response.json()["detail"]
     assert any(item["loc"][-1] == "rangee" for item in detail)
+
+
+def test_bulk_set_agent_preserves_existing_profile_when_profile_omitted(
+    tmp_path, monkeypatch
+):
+    ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True)
+    ticket_path = ticket_dir / "TICKET-001.md"
+    ticket_path.write_text(
+        "---\n"
+        "ticket_id: tkt_bulkprofile001\n"
+        "agent: hermes\n"
+        "profile: m4-pma\n"
+        "done: false\n"
+        "title: One\n"
+        "---\n\n"
+        "Body 1\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
+    app = FastAPI()
+    app.include_router(flow_routes.build_flow_routes())
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/flows/ticket_flow/tickets/bulk-set-agent",
+            json={"agent": "codex"},
+        )
+
+    assert response.status_code == 200
+    frontmatter, _body = parse_markdown_frontmatter(
+        ticket_path.read_text(encoding="utf-8")
+    )
+    assert frontmatter["agent"] == "codex"
+    assert frontmatter["profile"] == "m4-pma"
+
+
+def test_bulk_set_agent_can_clear_profile_explicitly(tmp_path, monkeypatch):
+    ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True)
+    ticket_path = ticket_dir / "TICKET-001.md"
+    ticket_path.write_text(
+        "---\n"
+        "ticket_id: tkt_bulkprofileclear001\n"
+        "agent: hermes\n"
+        "profile: m4-pma\n"
+        "done: false\n"
+        "title: One\n"
+        "---\n\n"
+        "Body 1\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
+    app = FastAPI()
+    app.include_router(flow_routes.build_flow_routes())
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/flows/ticket_flow/tickets/bulk-set-agent",
+            json={"agent": "hermes", "profile": None},
+        )
+
+    assert response.status_code == 200
+    frontmatter, _body = parse_markdown_frontmatter(
+        ticket_path.read_text(encoding="utf-8")
+    )
+    assert frontmatter["agent"] == "hermes"
+    assert "profile" not in frontmatter
 
 
 def test_bulk_clear_model_rejects_unknown_keys(tmp_path, monkeypatch):
