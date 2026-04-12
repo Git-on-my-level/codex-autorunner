@@ -480,34 +480,28 @@ def _infer_backend_id_by_prefix(
     return None
 
 
-def _configured_profile_target(
-    config: Any,
+def _check_canonical_profile(
+    config_agents: dict[str, Any],
     agent_id: str,
-    base_agents: dict[str, AgentDescriptor],
 ) -> Optional[tuple[str, str]]:
-    profile_getter = getattr(config, "agent_profiles", None)
-    if not callable(profile_getter):
+    normalized = str(agent_id or "").strip().lower()
+    if not normalized:
         return None
-    normalized_agent_id = str(agent_id or "").strip().lower()
-    if not normalized_agent_id:
-        return None
-    for backend_id, descriptor in base_agents.items():
-        runtime_kind = _agent_runtime_kind(backend_id, descriptor)
-        if runtime_kind != backend_id:
+    for raw_base_id, agent_cfg in config_agents.items():
+        base = str(raw_base_id or "").strip().lower()
+        if not base or base == normalized:
             continue
-        derived_profile = _strip_runtime_kind_prefix(normalized_agent_id, runtime_kind)
-        if derived_profile == normalized_agent_id:
-            continue
-        try:
-            profiles = profile_getter(backend_id)
-        except (KeyError, AttributeError, TypeError, ValueError, RuntimeError):
-            continue
+        profiles = getattr(agent_cfg, "profiles", None)
         if not isinstance(profiles, dict):
             continue
-        if derived_profile in {
-            str(profile_id or "").strip().lower() for profile_id in profiles
-        }:
-            return backend_id, derived_profile
+        profile_keys = {str(k).strip().lower() for k in profiles}
+        for sep in ("-", "_"):
+            prefix = f"{base}{sep}"
+            if not normalized.startswith(prefix):
+                continue
+            suffix = normalized[len(prefix) :].strip()
+            if suffix and suffix in profile_keys:
+                return base, suffix
     return None
 
 
@@ -527,7 +521,7 @@ def _build_config_alias_agents(context: Any) -> dict[str, AgentDescriptor]:
         if agent_id in base_agents:
             continue
         backend_id = agent_id
-        profile_target = _configured_profile_target(config, agent_id, base_agents)
+        profile_target = _check_canonical_profile(configured_agents, agent_id)
         if callable(getattr(config, "agent_backend", None)):
             try:
                 backend_id = str(config.agent_backend(agent_id) or "").strip().lower()
