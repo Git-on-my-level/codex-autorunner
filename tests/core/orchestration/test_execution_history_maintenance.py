@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from codex_autorunner.core.orchestration.cold_trace_store import ColdTraceStore
 from codex_autorunner.core.orchestration.execution_history import ExecutionCheckpoint
 from codex_autorunner.core.orchestration.execution_history_maintenance import (
