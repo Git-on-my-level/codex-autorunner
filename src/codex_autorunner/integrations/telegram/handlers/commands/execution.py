@@ -515,6 +515,7 @@ def _build_telegram_managed_thread_coordinator(
     return ManagedThreadTurnCoordinator(
         orchestration_service=orchestration_service,
         state_root=_telegram_state_root(handlers),
+        hub_client=getattr(handlers, "_hub_client", None),
         surface=ManagedThreadSurfaceInfo(
             log_label="Telegram",
             surface_kind="telegram",

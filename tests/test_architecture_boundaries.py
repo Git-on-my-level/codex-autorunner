@@ -410,9 +410,6 @@ _SIDE_PROCESS_BOUNDARY_ALLOWLIST: dict[str, list[str]] = {
     "integrations/telegram/handlers/commands/flows.py": [
         "build_ticket_flow_orchestration_service -- ALLOWED: ticket flow uses per-workspace orchestration SQLite",
     ],
-    "integrations/chat/managed_thread_turns.py": [
-        "PmaThreadStore -- ALLOWED: shared module for execution finalization reads thread state directly",
-    ],
     "integrations/agents/agent_pool_impl.py": [
         "PmaThreadStore -- ALLOWED: agent pool manages thread execution records in hub context",
     ],

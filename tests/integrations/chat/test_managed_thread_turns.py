@@ -771,6 +771,35 @@ class _FakeTranscriptStore:
         self.writes.append((turn_id, metadata, assistant_text))
 
 
+class _FakeHubPersistenceClient:
+    def __init__(self) -> None:
+        self.timeline_requests: list[Any] = []
+        self.trace_requests: list[Any] = []
+        self.transcript_requests: list[Any] = []
+        self.activity_requests: list[Any] = []
+
+    async def persist_execution_timeline(self, request: Any) -> Any:
+        self.timeline_requests.append(request)
+        return SimpleNamespace(
+            execution_id=request.execution_id,
+            persisted_event_count=len(request.events),
+        )
+
+    async def finalize_execution_cold_trace(self, request: Any) -> Any:
+        self.trace_requests.append(request)
+        return SimpleNamespace(
+            execution_id=request.execution_id,
+            trace_manifest_id="trace-1",
+        )
+
+    async def write_transcript(self, request: Any) -> Any:
+        self.transcript_requests.append(request)
+        return SimpleNamespace(turn_id=request.turn_id)
+
+    async def record_thread_activity(self, request: Any) -> None:
+        self.activity_requests.append(request)
+
+
 @pytest.mark.anyio
 async def test_finalize_managed_thread_execution_logs_timeout_source(
     tmp_path: Path,
@@ -778,21 +807,7 @@ async def test_finalize_managed_thread_execution_logs_timeout_source(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     started = _started_execution_with_backend_ids(tmp_path)
-    fake_thread_store = _FakeThreadStore(tmp_path)
-
-    monkeypatch.setattr(
-        managed_thread_turns_module, "PmaThreadStore", lambda _root: fake_thread_store
-    )
-    monkeypatch.setattr(
-        managed_thread_turns_module,
-        "PmaTranscriptStore",
-        lambda _root: _FakeTranscriptStore(tmp_path),
-    )
-    monkeypatch.setattr(
-        managed_thread_turns_module,
-        "persist_turn_timeline",
-        lambda *args, **kwargs: None,
-    )
+    fake_hub_client = _FakeHubPersistenceClient()
     monkeypatch.setattr(
         managed_thread_turns_module,
         "harness_supports_progress_event_stream",
@@ -832,6 +847,7 @@ async def test_finalize_managed_thread_execution_logs_timeout_source(
         orchestration_service=orchestration_service,
         started=started,
         state_root=tmp_path,
+        hub_client=fake_hub_client,
         surface=managed_thread_turns_module.ManagedThreadSurfaceInfo(
             log_label="Discord",
             surface_kind="discord",
@@ -852,6 +868,16 @@ async def test_finalize_managed_thread_execution_logs_timeout_source(
     assert '"completion_source":"timeout"' in caplog.text
     assert '"managed_thread_id":"thread-1"' in caplog.text
     assert '"backend_thread_id":"session-1"' in caplog.text
+    assert len(fake_hub_client.timeline_requests) == 1
+    assert fake_hub_client.timeline_requests[0].metadata["status"] == "error"
+    assert fake_hub_client.timeline_requests[0].metadata["backend_turn_id"] == "turn-1"
+    assert (
+        fake_hub_client.timeline_requests[0].metadata["trace_manifest_id"] == "trace-1"
+    )
+    assert len(fake_hub_client.trace_requests) == 1
+    assert fake_hub_client.trace_requests[0].backend_turn_id == "turn-1"
+    assert fake_hub_client.transcript_requests == []
+    assert fake_hub_client.activity_requests == []
 
 
 @pytest.mark.anyio
@@ -861,22 +887,7 @@ async def test_finalize_managed_thread_execution_logs_finalization_failure_after
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     started = _started_execution_with_backend_ids(tmp_path)
-    fake_thread_store = _FakeThreadStore(tmp_path)
-    fake_transcripts = _FakeTranscriptStore(tmp_path)
-
-    monkeypatch.setattr(
-        managed_thread_turns_module, "PmaThreadStore", lambda _root: fake_thread_store
-    )
-    monkeypatch.setattr(
-        managed_thread_turns_module,
-        "PmaTranscriptStore",
-        lambda _root: fake_transcripts,
-    )
-    monkeypatch.setattr(
-        managed_thread_turns_module,
-        "persist_turn_timeline",
-        lambda *args, **kwargs: None,
-    )
+    fake_hub_client = _FakeHubPersistenceClient()
     monkeypatch.setattr(
         managed_thread_turns_module,
         "harness_supports_progress_event_stream",
@@ -917,6 +928,7 @@ async def test_finalize_managed_thread_execution_logs_finalization_failure_after
         orchestration_service=orchestration_service,
         started=started,
         state_root=tmp_path,
+        hub_client=fake_hub_client,
         surface=managed_thread_turns_module.ManagedThreadSurfaceInfo(
             log_label="Telegram",
             surface_kind="telegram",
@@ -936,3 +948,14 @@ async def test_finalize_managed_thread_execution_logs_finalization_failure_after
     assert "chat.managed_thread.finalization_failed_after_prompt_return" in caplog.text
     assert '"completion_source":"prompt_return"' in caplog.text
     assert '"managed_turn_id":"exec-1"' in caplog.text
+    assert len(fake_hub_client.timeline_requests) == 1
+    assert fake_hub_client.timeline_requests[0].metadata["status"] == "ok"
+    assert fake_hub_client.timeline_requests[0].metadata["backend_turn_id"] == "turn-1"
+    assert (
+        fake_hub_client.timeline_requests[0].metadata["trace_manifest_id"] == "trace-1"
+    )
+    assert len(fake_hub_client.trace_requests) == 1
+    assert fake_hub_client.trace_requests[0].backend_turn_id == "turn-1"
+    assert len(fake_hub_client.transcript_requests) == 1
+    assert fake_hub_client.transcript_requests[0].assistant_text == "fixture reply"
+    assert fake_hub_client.activity_requests == []

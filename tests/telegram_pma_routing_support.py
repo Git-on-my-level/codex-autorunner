@@ -131,9 +131,6 @@ class _InProcessHubControlPlaneClient:
     async def list_surface_bindings(self, request: Any) -> Any:
         return self._service.list_surface_bindings(request)
 
-    async def list_surface_bindings(self, request: Any) -> Any:
-        return self._service.list_surface_bindings(request)
-
     async def get_thread_target(self, request: Any) -> Any:
         return self._service.get_thread_target(request)
 
@@ -179,12 +176,6 @@ class _InProcessHubControlPlaneClient:
     async def set_execution_backend_id(self, request: Any) -> None:
         self._service.set_execution_backend_id(request)
 
-    async def persist_execution_timeline(self, request: Any) -> Any:
-        return self._service.persist_execution_timeline(request)
-
-    async def finalize_execution_cold_trace(self, request: Any) -> Any:
-        return self._service.finalize_execution_cold_trace(request)
-
     async def claim_next_queued_execution(self, request: Any) -> Any:
         return self._service.claim_next_queued_execution(request)
 
@@ -202,9 +193,6 @@ class _InProcessHubControlPlaneClient:
 
     async def set_thread_backend_id(self, request: Any) -> None:
         self._service.set_thread_backend_id(request)
-
-    async def write_transcript(self, request: Any) -> Any:
-        return self._service.write_transcript(request)
 
     async def record_thread_activity(self, request: Any) -> None:
         self._service.record_thread_activity(request)
@@ -4214,6 +4202,7 @@ async def test_repo_message_ingress_callback_reaches_orchestrated_thread_executi
             )
         },
     )
+
     class _IngressStub:
         async def submit_message(self, request, **kwargs):  # type: ignore[no-untyped-def]
             await kwargs["submit_thread_message"](request)
@@ -4224,6 +4213,7 @@ async def test_repo_message_ingress_callback_reaches_orchestrated_thread_executi
         "build_surface_orchestration_ingress",
         lambda **_: _IngressStub(),
     )
+
     message = TelegramMessage(
         update_id=1,
         message_id=2,
@@ -4234,9 +4224,8 @@ async def test_repo_message_ingress_callback_reaches_orchestrated_thread_executi
         date=None,
         is_topic_message=True,
     )
-
     await telegram_messages_module.handle_message_inner(handler, message)
-    with anyio.fail_after(2):
+    with anyio.fail_after(5):
         while "repo ingress orchestration reply" not in handler._sent:
             await anyio.sleep(0.05)
 

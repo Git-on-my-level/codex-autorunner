@@ -2478,6 +2478,7 @@ def _build_discord_managed_thread_coordinator(
     return ManagedThreadTurnCoordinator(
         orchestration_service=orchestration_service,
         state_root=service._config.root,
+        hub_client=getattr(service, "_hub_client", None),
         surface=ManagedThreadSurfaceInfo(
             log_label="Discord",
             surface_kind="discord",
