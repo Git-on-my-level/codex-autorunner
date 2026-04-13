@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from codex_autorunner.bootstrap import seed_hub_files
+from codex_autorunner.core.orchestration import ORCHESTRATION_SCHEMA_VERSION
 from codex_autorunner.integrations.discord.config import (
     DiscordBotConfig,
     DiscordBotShellConfig,
@@ -54,8 +55,10 @@ class _FakeGateway:
     def __init__(self, events: list[tuple[str, dict[str, Any]]]) -> None:
         self._events = events
         self.stopped = False
+        self.ran = False
 
     async def run(self, on_dispatch) -> None:
+        self.ran = True
         await on_dispatch("", {})
 
     async def stop(self) -> None:
@@ -130,13 +133,15 @@ async def test_discord_handshake_compatible_hub(tmp_path: Path) -> None:
     seed_hub_files(tmp_path, force=True)
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
     await store.initialize()
+    captured_request: dict[str, Any] = {}
 
     class _FakeHubClient:
         async def handshake(self, request: Any) -> Any:
+            captured_request["request"] = request
             return SimpleNamespace(
                 api_version="1.0.0",
                 minimum_client_api_version="1.0.0",
-                schema_generation=1,
+                schema_generation=ORCHESTRATION_SCHEMA_VERSION,
                 capabilities=("compatibility_handshake",),
                 hub_build_version="0.0.0",
                 hub_asset_version=None,
@@ -152,11 +157,16 @@ async def test_discord_handshake_compatible_hub(tmp_path: Path) -> None:
     )
     service._hub_client = _FakeHubClient()
 
-    await service._perform_hub_handshake()
+    handshake_ok = await service._perform_hub_handshake()
 
+    assert handshake_ok is True
     assert service._hub_handshake_compatibility is not None
     assert service._hub_handshake_compatibility.compatible is True
     assert service._hub_handshake_compatibility.state == "compatible"
+    assert (
+        captured_request["request"].expected_schema_generation
+        == ORCHESTRATION_SCHEMA_VERSION
+    )
 
     await store.close()
 
@@ -168,13 +178,15 @@ async def test_discord_handshake_incompatible_hub(
     seed_hub_files(tmp_path, force=True)
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
     await store.initialize()
+    captured_request: dict[str, Any] = {}
 
     class _FakeIncompatibleHubClient:
         async def handshake(self, request: Any) -> Any:
+            captured_request["request"] = request
             return SimpleNamespace(
                 api_version="99.0.0",
                 minimum_client_api_version="99.0.0",
-                schema_generation=1,
+                schema_generation=ORCHESTRATION_SCHEMA_VERSION,
                 capabilities=(),
                 hub_build_version=None,
                 hub_asset_version=None,
@@ -192,8 +204,9 @@ async def test_discord_handshake_incompatible_hub(
     service._hub_client = _FakeIncompatibleHubClient()
 
     with caplog.at_level(logging.INFO, logger=logger.name):
-        await service._perform_hub_handshake()
+        handshake_ok = await service._perform_hub_handshake()
 
+    assert handshake_ok is False
     assert service._hub_handshake_compatibility is not None
     assert service._hub_handshake_compatibility.compatible is False
     assert service._hub_handshake_compatibility.state == "incompatible"
@@ -206,9 +219,71 @@ async def test_discord_handshake_incompatible_hub(
         "reason": "control-plane API major version mismatch",
         "server_api_version": "99.0.0",
         "client_api_version": "1.0.0",
-        "server_schema_generation": 1,
-        "expected_schema_generation": None,
+        "server_schema_generation": ORCHESTRATION_SCHEMA_VERSION,
+        "expected_schema_generation": ORCHESTRATION_SCHEMA_VERSION,
     }
+    assert (
+        captured_request["request"].expected_schema_generation
+        == ORCHESTRATION_SCHEMA_VERSION
+    )
+
+    await store.close()
+
+
+@pytest.mark.anyio
+async def test_discord_handshake_rejects_schema_generation_mismatch(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    seed_hub_files(tmp_path, force=True)
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    captured_request: dict[str, Any] = {}
+
+    class _FakeMismatchedSchemaHubClient:
+        async def handshake(self, request: Any) -> Any:
+            captured_request["request"] = request
+            return SimpleNamespace(
+                api_version="1.0.0",
+                minimum_client_api_version="1.0.0",
+                schema_generation=ORCHESTRATION_SCHEMA_VERSION + 1,
+                capabilities=("compatibility_handshake",),
+                hub_build_version=None,
+                hub_asset_version=None,
+            )
+
+    logger = logging.getLogger("test.discord.handshake.schema_mismatch")
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logger,
+        rest_client=_FakeRest(),
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    service._hub_client = _FakeMismatchedSchemaHubClient()
+
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        handshake_ok = await service._perform_hub_handshake()
+
+    assert handshake_ok is False
+    assert service._hub_handshake_compatibility is not None
+    assert service._hub_handshake_compatibility.state == "incompatible"
+    assert service._hub_handshake_compatibility.reason == (
+        "orchestration schema generation mismatch"
+    )
+    assert _logged_events(caplog, logger.name)[-1] == {
+        "event": "discord.hub_control_plane.handshake_incompatible",
+        "hub_root": str(tmp_path),
+        "reason": "orchestration schema generation mismatch",
+        "server_api_version": "1.0.0",
+        "client_api_version": "1.0.0",
+        "server_schema_generation": ORCHESTRATION_SCHEMA_VERSION + 1,
+        "expected_schema_generation": ORCHESTRATION_SCHEMA_VERSION,
+    }
+    assert (
+        captured_request["request"].expected_schema_generation
+        == ORCHESTRATION_SCHEMA_VERSION
+    )
 
     await store.close()
 
@@ -241,8 +316,9 @@ async def test_discord_handshake_hub_unavailable(
     service._hub_client = _FakeUnavailableHubClient()
 
     with caplog.at_level(logging.INFO, logger=logger.name):
-        await service._perform_hub_handshake()
+        handshake_ok = await service._perform_hub_handshake()
 
+    assert handshake_ok is False
     assert service._hub_handshake_compatibility is None
     assert _logged_events(caplog, logger.name)[-1] == {
         "event": "discord.hub_control_plane.handshake_failed",
@@ -250,19 +326,23 @@ async def test_discord_handshake_hub_unavailable(
         "error_code": "hub_unavailable",
         "retryable": True,
         "message": "Hub is not running",
+        "expected_schema_generation": ORCHESTRATION_SCHEMA_VERSION,
     }
 
     await store.close()
 
 
 @pytest.mark.anyio
-async def test_discord_handshake_no_client(tmp_path: Path) -> None:
+async def test_discord_handshake_no_client(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
     await store.initialize()
+    logger = logging.getLogger("test.discord.handshake.no_client")
 
     service = DiscordBotService(
         _config(tmp_path),
-        logger=logging.getLogger("test"),
+        logger=logger,
         rest_client=_FakeRest(),
         gateway_client=_FakeGateway([]),
         state_store=store,
@@ -270,8 +350,54 @@ async def test_discord_handshake_no_client(tmp_path: Path) -> None:
     )
     service._hub_client = None
 
-    await service._perform_hub_handshake()
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        handshake_ok = await service._perform_hub_handshake()
 
+    assert handshake_ok is False
     assert service._hub_handshake_compatibility is None
+    assert _logged_events(caplog, logger.name)[-1] == {
+        "event": "discord.hub_control_plane.client_not_configured",
+        "hub_root": str(tmp_path),
+        "expected_schema_generation": ORCHESTRATION_SCHEMA_VERSION,
+    }
+
+    await store.close()
+
+
+@pytest.mark.anyio
+async def test_discord_startup_aborts_before_gateway_on_incompatible_handshake(
+    tmp_path: Path,
+) -> None:
+    seed_hub_files(tmp_path, force=True)
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    gateway = _FakeGateway([])
+
+    class _FakeIncompatibleHubClient:
+        async def handshake(self, request: Any) -> Any:
+            return SimpleNamespace(
+                api_version="1.0.0",
+                minimum_client_api_version="1.0.0",
+                schema_generation=ORCHESTRATION_SCHEMA_VERSION + 1,
+                capabilities=("compatibility_handshake",),
+                hub_build_version=None,
+                hub_asset_version=None,
+            )
+
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test.discord.handshake.startup_abort"),
+        rest_client=_FakeRest(),
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    service._hub_client = _FakeIncompatibleHubClient()
+
+    with pytest.raises(SystemExit) as exc_info:
+        await service.run_forever()
+
+    assert exc_info.value.code == 1
+    assert gateway.ran is False
 
     await store.close()

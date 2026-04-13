@@ -7408,6 +7408,11 @@ async def test_car_newt_runs_hub_setup_commands_for_bound_workspace(
         discord_service_module, "reset_branch_from_origin_main", _fake_reset_branch
     )
 
+    async def _fake_reset_thread_binding(**_kwargs: Any) -> tuple[bool, str]:
+        return False, "thread-newt-1"
+
+    service._reset_discord_thread_binding = _fake_reset_thread_binding  # type: ignore[method-assign]
+
     class _FakeHubClient:
         def __init__(self) -> None:
             self.setup_calls: list[dict[str, object]] = []

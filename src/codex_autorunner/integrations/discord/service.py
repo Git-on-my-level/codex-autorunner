@@ -86,7 +86,10 @@ from ...core.hub_control_plane.service import (
 )
 from ...core.logging_utils import log_event
 from ...core.managed_processes import reap_managed_processes
-from ...core.orchestration import build_ticket_flow_orchestration_service
+from ...core.orchestration import (
+    ORCHESTRATION_SCHEMA_VERSION,
+    build_ticket_flow_orchestration_service,
+)
 from ...core.state_roots import resolve_global_state_root
 from ...core.update import (  # noqa: F401 - kept for test monkeypatching
     UpdateInProgressError,
@@ -833,7 +836,9 @@ class DiscordBotService:
 
     async def run_forever(self) -> None:
         self._service_started_at_monotonic = time.monotonic()
-        await self._perform_hub_handshake()
+        handshake_ok = await self._perform_hub_handshake()
+        if not handshake_ok:
+            raise SystemExit(1)
         self._reap_managed_processes(stage="startup")
         await self._store.initialize()
         await self._reconcile_discord_progress_leases_on_startup()
@@ -915,26 +920,30 @@ class DiscordBotService:
         current = time.monotonic() if now is None else now
         return round(max(0.0, (current - started_at) * 1000), 1)
 
-    async def _perform_hub_handshake(self) -> None:
+    async def _perform_hub_handshake(self) -> bool:
+        expected_schema_generation = ORCHESTRATION_SCHEMA_VERSION
         if self._hub_client is None:
             log_event(
                 self._logger,
-                logging.WARNING,
+                logging.ERROR,
                 "discord.hub_control_plane.client_not_configured",
                 hub_root=str(self._config.root),
+                expected_schema_generation=expected_schema_generation,
             )
-            return
+            return False
 
         try:
             response = await self._hub_client.handshake(
                 _HandshakeRequest(
                     client_name="discord",
                     client_api_version=_CONTROL_PLANE_API_VERSION,
+                    expected_schema_generation=expected_schema_generation,
                 )
             )
             compatibility = evaluate_handshake_compatibility(
                 response,
                 client_api_version=_CONTROL_PLANE_API_VERSION,
+                expected_schema_generation=expected_schema_generation,
             )
             self._hub_handshake_compatibility = compatibility
             if compatibility.compatible:
@@ -945,7 +954,9 @@ class DiscordBotService:
                     hub_root=str(self._config.root),
                     api_version=response.api_version,
                     schema_generation=response.schema_generation,
+                    expected_schema_generation=expected_schema_generation,
                 )
+                return True
             else:
                 log_event(
                     self._logger,
@@ -958,24 +969,29 @@ class DiscordBotService:
                     server_schema_generation=compatibility.server_schema_generation,
                     expected_schema_generation=compatibility.expected_schema_generation,
                 )
+                return False
         except HubControlPlaneError as exc:
             log_event(
                 self._logger,
-                logging.WARNING,
+                logging.ERROR,
                 "discord.hub_control_plane.handshake_failed",
                 hub_root=str(self._config.root),
                 error_code=exc.code,
                 retryable=exc.retryable,
                 message=str(exc),
+                expected_schema_generation=expected_schema_generation,
             )
+            return False
         except Exception as exc:
             log_event(
                 self._logger,
-                logging.WARNING,
+                logging.ERROR,
                 "discord.hub_control_plane.handshake_unexpected_error",
                 hub_root=str(self._config.root),
                 exc=exc,
+                expected_schema_generation=expected_schema_generation,
             )
+            return False
 
     @property
     def hub_client(self) -> Optional[HttpHubControlPlaneClient]:

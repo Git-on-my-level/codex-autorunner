@@ -1,4 +1,5 @@
 import asyncio
+import builtins
 import logging
 import sys
 from pathlib import Path
@@ -143,6 +144,23 @@ def build_service_in_closed_loop(
     finally:
         asyncio.set_event_loop(None)
         loop.close()
+
+
+def disable_managed_thread_runtime(
+    monkeypatch: pytest.MonkeyPatch, service: TelegramBotService
+) -> None:
+    spawn_task_func = getattr(type(service), "_spawn_task", None)
+    original_callable = builtins.callable
+
+    def _patched_callable(obj: object) -> bool:
+        if (
+            getattr(obj, "__self__", None) is service
+            and getattr(obj, "__func__", None) is spawn_task_func
+        ):
+            return False
+        return original_callable(obj)
+
+    monkeypatch.setattr(builtins, "callable", _patched_callable)
 
 
 async def _drain_spawned_tasks(service: TelegramBotService) -> None:
@@ -1128,11 +1146,14 @@ async def test_thread_start_rejects_missing_workspace(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
-async def test_thread_start_rejects_mismatched_workspace(tmp_path: Path) -> None:
+async def test_thread_start_rejects_mismatched_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     config = make_config(tmp_path, fixture_command("thread_start_mismatch"))
     service = TelegramBotService(config, hub_root=tmp_path)
+    disable_managed_thread_runtime(monkeypatch, service)
     fake_bot = FakeBot()
     service._bot = fake_bot
     bind_message = build_message("/bind", message_id=10)
@@ -1160,11 +1181,13 @@ async def test_thread_start_rejects_mismatched_workspace(tmp_path: Path) -> None
 async def test_stale_active_thread_is_recovered_during_verification(
     tmp_path: Path,
     missing_resume_scenario: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     config = make_config(tmp_path, fixture_command(missing_resume_scenario))
     service = TelegramBotService(config, hub_root=tmp_path)
+    disable_managed_thread_runtime(monkeypatch, service)
     fake_bot = FakeBot()
     service._bot = fake_bot
     bind_message = build_message("/bind", message_id=10)

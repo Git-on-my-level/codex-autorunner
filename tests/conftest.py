@@ -176,6 +176,55 @@ def pytest_collection_modifyitems(
         item.add_marker(pytest.mark.timeout(DEFAULT_NON_INTEGRATION_TIMEOUT_SECONDS))
 
 
+@pytest.fixture(autouse=True)
+def _stub_surface_startup_handshakes_for_non_handshake_tests(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = Path(str(request.node.fspath))
+    if path.name in {"test_discord_hub_handshake.py", "test_telegram_hub_handshake.py"}:
+        return
+
+    from codex_autorunner.core.hub_control_plane.http_client import (
+        HttpHubControlPlaneClient,
+    )
+    from codex_autorunner.core.hub_control_plane.models import HandshakeCompatibility
+    from codex_autorunner.integrations.discord.service import DiscordBotService
+    from codex_autorunner.integrations.telegram.service import TelegramBotService
+
+    async def _discord_handshake_ok(self: DiscordBotService) -> bool:
+        if isinstance(getattr(self, "_hub_client", None), HttpHubControlPlaneClient):
+            self._hub_client = None
+            self._hub_handshake_compatibility = HandshakeCompatibility(
+                state="incompatible",
+                reason="test fallback uses local shared-state stubs",
+            )
+        else:
+            self._hub_handshake_compatibility = HandshakeCompatibility(
+                state="compatible"
+            )
+        return True
+
+    async def _telegram_handshake_ok(self: TelegramBotService) -> bool:
+        if isinstance(getattr(self, "_hub_client", None), HttpHubControlPlaneClient):
+            self._hub_client = None
+            self._hub_handshake_compatibility = HandshakeCompatibility(
+                state="incompatible",
+                reason="test fallback uses local shared-state stubs",
+            )
+        else:
+            self._hub_handshake_compatibility = HandshakeCompatibility(
+                state="compatible"
+            )
+        return True
+
+    monkeypatch.setattr(
+        DiscordBotService, "_perform_hub_handshake", _discord_handshake_ok
+    )
+    monkeypatch.setattr(
+        TelegramBotService, "_perform_hub_handshake", _telegram_handshake_ok
+    )
+
+
 def _list_car_managed_docker_containers() -> dict[str, tuple[str, ...]] | None:
     try:
         version_proc = subprocess.run(

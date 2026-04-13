@@ -39,6 +39,7 @@ from ...core.hub_control_plane.service import (
 )
 from ...core.locks import FileLock, FileLockBusy
 from ...core.logging_utils import log_event
+from ...core.orchestration import ORCHESTRATION_SCHEMA_VERSION
 from ...core.request_context import reset_conversation_id, set_conversation_id
 from ...core.runtime_services import RuntimeServices
 from ...core.state import now_iso
@@ -806,33 +807,39 @@ class TelegramBotService(
         return self._turn_semaphore
 
     async def run_polling(self) -> None:
-        await self._perform_hub_handshake()
+        handshake_ok = await self._perform_hub_handshake()
+        if not handshake_ok:
+            raise SystemExit(1)
         await self._chat_core.run()
 
     @property
     def hub_client(self) -> Optional[HttpHubControlPlaneClient]:
         return self._hub_client
 
-    async def _perform_hub_handshake(self) -> None:
+    async def _perform_hub_handshake(self) -> bool:
+        expected_schema_generation = ORCHESTRATION_SCHEMA_VERSION
         if self._hub_client is None:
             log_event(
                 self._logger,
-                logging.WARNING,
+                logging.ERROR,
                 "telegram.hub_control_plane.client_not_configured",
                 hub_root=str(self._hub_root or self._config.root),
+                expected_schema_generation=expected_schema_generation,
             )
-            return
+            return False
 
         try:
             response = await self._hub_client.handshake(
                 _HandshakeRequest(
                     client_name="telegram",
                     client_api_version=_CONTROL_PLANE_API_VERSION,
+                    expected_schema_generation=expected_schema_generation,
                 )
             )
             compatibility = evaluate_handshake_compatibility(
                 response,
                 client_api_version=_CONTROL_PLANE_API_VERSION,
+                expected_schema_generation=expected_schema_generation,
             )
             self._hub_handshake_compatibility = compatibility
             if compatibility.compatible:
@@ -843,7 +850,9 @@ class TelegramBotService(
                     hub_root=str(self._hub_root or self._config.root),
                     api_version=response.api_version,
                     schema_generation=response.schema_generation,
+                    expected_schema_generation=expected_schema_generation,
                 )
+                return True
             else:
                 log_event(
                     self._logger,
@@ -856,24 +865,29 @@ class TelegramBotService(
                     server_schema_generation=compatibility.server_schema_generation,
                     expected_schema_generation=compatibility.expected_schema_generation,
                 )
+                return False
         except HubControlPlaneError as exc:
             log_event(
                 self._logger,
-                logging.WARNING,
+                logging.ERROR,
                 "telegram.hub_control_plane.handshake_failed",
                 hub_root=str(self._hub_root or self._config.root),
                 error_code=exc.code,
                 retryable=exc.retryable,
                 message=str(exc),
+                expected_schema_generation=expected_schema_generation,
             )
+            return False
         except Exception as exc:
             log_event(
                 self._logger,
-                logging.WARNING,
+                logging.ERROR,
                 "telegram.hub_control_plane.handshake_unexpected_error",
                 hub_root=str(self._hub_root or self._config.root),
                 exc=exc,
+                expected_schema_generation=expected_schema_generation,
             )
+            return False
 
     async def _dispatch_update(self, update: TelegramUpdate) -> None:
         await dispatch_update(self, update)
