@@ -36,6 +36,7 @@ from .....core.context_awareness import (
     maybe_inject_filebox_hint,
     maybe_inject_prompt_writing_hint,
 )
+from .....core.hub_control_plane import RemoteThreadExecutionStore
 from .....core.injected_context import wrap_injected_context
 from .....core.logging_utils import log_event
 from .....core.orchestration import (
@@ -56,7 +57,6 @@ from .....core.pma_context import (
     format_pma_prompt,
     load_pma_prompt,
 )
-from .....core.pma_thread_store import PmaThreadStore
 from .....core.state import now_iso
 from .....core.utils import canonicalize_path
 from .....integrations.app_server.threads import (
@@ -366,13 +366,33 @@ def _build_telegram_thread_orchestration_service(handlers: Any) -> Any:
             )
         )
 
-    state_root = _telegram_state_root(handlers)
-
-    created = build_harness_backed_orchestration_service(
-        descriptors=descriptors,
-        harness_factory=_make_harness,
-        pma_thread_store=PmaThreadStore(state_root),
+    hub_client = getattr(handlers, "_hub_client", None)
+    handshake_compat = getattr(handlers, "_hub_handshake_compatibility", None)
+    handshake_ok = hub_client is not None and getattr(
+        handshake_compat, "compatible", False
     )
+    if handshake_ok:
+        thread_store = RemoteThreadExecutionStore(hub_client)
+        created = build_harness_backed_orchestration_service(
+            descriptors=descriptors,
+            harness_factory=_make_harness,
+            thread_store=thread_store,
+        )
+    else:
+        from .....core.pma_thread_store import PmaThreadStore
+
+        log_event(
+            handlers._logger,
+            logging.WARNING,
+            "telegram.orchestration.hub_client_unavailable",
+            message="Falling back to local PmaThreadStore for orchestration",
+        )
+        state_root = _telegram_state_root(handlers)
+        created = build_harness_backed_orchestration_service(
+            descriptors=descriptors,
+            harness_factory=_make_harness,
+            pma_thread_store=PmaThreadStore(state_root),
+        )
     handlers._telegram_managed_thread_orchestration_service = created
     handlers._telegram_thread_orchestration_service = created
     return created

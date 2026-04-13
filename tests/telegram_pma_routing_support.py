@@ -17,6 +17,7 @@ from codex_autorunner.core.orchestration.runtime_threads import (
     RUNTIME_THREAD_TIMEOUT_ERROR,
 )
 from codex_autorunner.core.pma_context import default_pma_prompt_state_path
+from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.sse import format_sse
 from codex_autorunner.integrations.app_server.client import (
     CodexAppServerDisconnected,
@@ -2488,7 +2489,7 @@ async def test_pma_text_messages_route_repeated_messages_through_managed_thread_
         assert "first telegram orchestration reply" in handler._sent
         assert "second telegram orchestration reply" in handler._sent
 
-        thread_store = execution_commands_module.PmaThreadStore(tmp_path)
+        thread_store = PmaThreadStore(tmp_path)
         threads = thread_store.list_threads(limit=10)
         assert len(threads) == 1
         turns = thread_store.list_turns(threads[0]["managed_thread_id"], limit=10)
@@ -2973,7 +2974,7 @@ async def test_pma_native_input_items_route_through_managed_thread_execution(
     assert any(item.get("type") == "localImage" for item in items[1:])
     assert "telegram managed attachment reply" in handler._sent
 
-    thread_store = execution_commands_module.PmaThreadStore(tmp_path)
+    thread_store = PmaThreadStore(tmp_path)
     threads = thread_store.list_threads(limit=10)
     assert len(threads) == 1
     turns = thread_store.list_turns(threads[0]["managed_thread_id"], limit=10)
@@ -3165,7 +3166,7 @@ async def test_pma_interrupt_uses_managed_thread_orchestration_for_text_turns(
         )
         assert "unexpected queued reply" not in handler._sent
 
-        thread_store = execution_commands_module.PmaThreadStore(tmp_path)
+        thread_store = PmaThreadStore(tmp_path)
         threads = thread_store.list_threads(limit=10)
         assert len(threads) == 1
         turns = thread_store.list_turns(threads[0]["managed_thread_id"], limit=10)
@@ -3362,7 +3363,7 @@ async def test_pma_interrupt_recovers_missing_backend_thread_for_text_turns(
             "Recovered stale PMA session after backend thread was lost." in sent
             for sent in handler._sent
         )
-        thread_store = execution_commands_module.PmaThreadStore(tmp_path)
+        thread_store = PmaThreadStore(tmp_path)
         threads = thread_store.list_threads(limit=10)
         assert len(threads) == 1
         turns = thread_store.list_turns(threads[0]["managed_thread_id"], limit=10)

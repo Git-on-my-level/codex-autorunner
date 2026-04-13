@@ -410,7 +410,7 @@ _SIDE_PROCESS_BOUNDARY_ALLOWLIST: dict[str, list[str]] = {
     ],
     "integrations/telegram/handlers/commands/execution.py": [
         "build_hub_snapshot -- ALLOWED: fallback when hub client unavailable; hub_client path preferred",
-        "PmaThreadStore -- ALLOWED: orchestration service execution lifecycle needs direct thread store",
+        "PmaThreadStore -- ALLOWED: lazy fallback when hub handshake not completed; RemoteThreadExecutionStore preferred",
         "AppServerThreadRegistry -- ALLOWED: protocol-local PMA thread ID mapping for topic routing",
     ],
     "integrations/telegram/handlers/commands/flows.py": [
