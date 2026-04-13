@@ -488,6 +488,8 @@ def test_format_pma_prompt_includes_hub_snapshot_and_message(tmp_path: Path) -> 
         "Managed threads are the default for straightforward work in one managed resource"
         in result
     )
+    assert "Do not launch runtime CLIs directly" in result
+    assert "`codex`, `opencode`, `zeroclaw`" in result
     assert "Do not write ticket files as scaffolding for managed-thread work" in result
     assert "3+ planned tickets" in result
     assert "car pma thread spawn" in result

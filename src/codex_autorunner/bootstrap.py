@@ -329,6 +329,7 @@ You are an **abstraction layer, not an executor**. Coordinate tickets and flows 
 
 - Managed threads are the default for straightforward work in one repo: exploratory work, reviews, bug fixes, focused refactors, and single-feature PRs that fit in one clear prompt.
 - Reuse an existing relevant managed thread before spawning a new one.
+- Do not launch runtime CLIs directly (`codex`, `opencode`, `zeroclaw`, etc.) for PMA-managed work when a managed thread fits; use `car pma thread spawn` and `car pma thread send` so CAR can track lifecycle and progress.
 - Do not write ticket files as scaffolding for managed-thread work.
 - Use ticket flows for larger structured work: cross-repo changes, 3+ planned tickets, explicit acceptance criteria tracking, or work that benefits from pause/resume/review handoffs.
 - Managed thread state is visible in `hub_snapshot.pma_threads`.

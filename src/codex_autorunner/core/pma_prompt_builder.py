@@ -49,6 +49,7 @@ First-turn routine:
     - If `hub_snapshot.pma_threads` has a relevant active thread, resume it instead of spawning a new one.
     - Treat `chat_bound=true` managed threads as continuity artifacts protected from cleanup by default. Broad requests like "clean up workspace" do not authorize archiving or removing them; only explicit user direction does.
     - For hub-scoped PMA CLI commands, include `--path <hub_root>` so they resolve the intended hub config instead of relying on the current working directory.
+    - Do not launch runtime CLIs directly (`codex`, `opencode`, `zeroclaw`, etc.) for PMA-managed work when a managed thread fits. Use CAR managed threads so lifecycle, progress, subscriptions, and wake-ups stay visible to PMA.
     - If no suitable thread exists, spawn one, run work, and keep it compact:
       - `car pma thread spawn --agent codex --repo <repo_id> --name <label> --path <hub_root>`
       - `car pma thread spawn --resource-kind agent_workspace --resource-id <workspace_id> --name <label> --path <hub_root>`
