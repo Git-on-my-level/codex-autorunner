@@ -1319,19 +1319,21 @@ def test_archive_repo_state_waits_for_runner_exit_before_archiving(
     monkeypatch.setattr(
         hub_module,
         "archive_workspace_for_fresh_start",
-        lambda **_kwargs: archived.append(dict(_kwargs))
-        or types.SimpleNamespace(
-            snapshot_id="snap",
-            snapshot_path=base.path / ".codex-autorunner" / "archive",
-            meta_path=base.path / ".codex-autorunner" / "archive" / "META.json",
-            status="complete",
-            file_count=0,
-            total_bytes=0,
-            flow_run_count=0,
-            latest_flow_run_id=None,
-            archived_paths=(),
-            reset_paths=(),
-            archived_thread_ids=(),
+        lambda **_kwargs: (
+            archived.append(dict(_kwargs))
+            or types.SimpleNamespace(
+                snapshot_id="snap",
+                snapshot_path=base.path / ".codex-autorunner" / "archive",
+                meta_path=base.path / ".codex-autorunner" / "archive" / "META.json",
+                status="complete",
+                file_count=0,
+                total_bytes=0,
+                flow_run_count=0,
+                latest_flow_run_id=None,
+                archived_paths=(),
+                reset_paths=(),
+                archived_thread_ids=(),
+            )
         ),
     )
 
@@ -4385,3 +4387,151 @@ def test_get_agent_workspace_runtime_readiness_rejects_missing(tmp_path: Path) -
     supervisor = HubSupervisor(load_hub_config(hub_root))
     with pytest.raises(ValueError, match="not found"):
         supervisor.get_agent_workspace_runtime_readiness("nope")
+
+
+def test_warm_start_list_repos_picks_up_new_repo_after_scan(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    repo_a = hub_root / "alpha"
+    (repo_a / ".git").mkdir(parents=True, exist_ok=True)
+
+    first = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+    )
+    first.scan()
+    first.shutdown()
+
+    repo_b = hub_root / "beta"
+    (repo_b / ".git").mkdir(parents=True, exist_ok=True)
+
+    second = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+    )
+    try:
+        warm = second.list_repos()
+        warm_ids = {r.id for r in warm}
+        assert "alpha" in warm_ids
+
+        second.scan()
+        refreshed = second.list_repos()
+        refreshed_ids = {r.id for r in refreshed}
+        assert "alpha" in refreshed_ids
+        assert "beta" in refreshed_ids
+    finally:
+        second.shutdown()
+
+
+def test_warm_start_list_repos_reflects_removed_repo_after_rescan(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    repo_dir = hub_root / "demo"
+    (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
+
+    first = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+    )
+    first.scan()
+    first.shutdown()
+
+    shutil.rmtree(repo_dir)
+
+    second = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+    )
+    try:
+        warm = second.list_repos()
+        warm_ids = {r.id for r in warm}
+        assert "demo" in warm_ids
+        warm_demo = next(r for r in warm if r.id == "demo")
+        assert warm_demo.exists_on_disk is True
+
+        second.scan()
+        refreshed = second.list_repos()
+        refreshed_demo = next((r for r in refreshed if r.id == "demo"), None)
+        assert refreshed_demo is not None
+        assert refreshed_demo.exists_on_disk is False
+        assert refreshed_demo.status == RepoStatus.MISSING
+    finally:
+        second.shutdown()
+
+
+def test_scan_discovers_new_repo_not_in_manifest(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    repo_a = hub_root / "alpha"
+    (repo_a / ".git").mkdir(parents=True, exist_ok=True)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+    )
+    try:
+        supervisor.scan()
+        first = supervisor.list_repos(use_cache=False)
+        assert {r.id for r in first} == {"alpha"}
+
+        repo_b = hub_root / "beta"
+        (repo_b / ".git").mkdir(parents=True, exist_ok=True)
+
+        without_scan = supervisor.list_repos(use_cache=False)
+        assert {r.id for r in without_scan} == {"alpha"}
+
+        supervisor.scan()
+        refreshed = supervisor.list_repos(use_cache=False)
+        refreshed_ids = {r.id for r in refreshed}
+        assert "alpha" in refreshed_ids
+        assert "beta" in refreshed_ids
+    finally:
+        supervisor.shutdown()
+
+
+def test_archive_failure_without_force_archive_aborts_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/archive-fail-abort",
+        start_point="HEAD",
+    )
+
+    def _failing_archive(*args, **kwargs):
+        raise RuntimeError("archive disk full")
+
+    monkeypatch.setattr(
+        wtm_module.WorktreeManager, "_archive_worktree_snapshot", _failing_archive
+    )
+
+    with pytest.raises(RuntimeError, match="archive disk full"):
+        supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=True)
+
+    assert worktree.path.exists()
+    manifest = load_manifest(hub_root / ".codex-autorunner" / "manifest.yml", hub_root)
+    assert manifest.get(worktree.id) is not None

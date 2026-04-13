@@ -1895,3 +1895,177 @@ def test_service_exposes_binding_queries_when_binding_store_is_configured(
     assert summaries[0].thread_target_id == thread.thread_target_id
     assert summaries[0].execution_id == turn["managed_turn_id"]
     assert summaries[0].execution_status == "running"
+
+
+async def test_send_message_creates_fresh_conversation_after_binding_loss(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness(
+        next_conversation_id="backend-fresh-after-loss",
+    )
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target(
+        "codex",
+        workspace_root,
+        backend_thread_id="backend-original",
+    )
+
+    execution = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="first message",
+        )
+    )
+    service.record_execution_result(
+        thread.thread_target_id,
+        execution.execution_id,
+        status="ok",
+        assistant_text="first answer",
+    )
+
+    clear_runtime_thread_binding(tmp_path / "hub", thread.thread_target_id)
+    harness.resume_conversation_calls.clear()
+    harness.new_conversation_calls.clear()
+    harness.start_turn_calls.clear()
+
+    next_execution = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="second message",
+        )
+    )
+
+    assert next_execution.status == "running"
+    assert harness.resume_conversation_calls == []
+    assert harness.new_conversation_calls == [(workspace_root, None)]
+    assert harness.start_turn_calls[0]["conversation_id"] == "backend-fresh-after-loss"
+    assert harness.start_turn_calls[0]["prompt"] == "second message"
+    assert (
+        "Recovered durable conversation state"
+        not in harness.start_turn_calls[0]["prompt"]
+    )
+
+    refreshed_thread = service.get_thread_target(thread.thread_target_id)
+    assert refreshed_thread is not None
+    binding = _thread_runtime_binding(service, thread.thread_target_id)
+    assert binding is not None
+    assert binding.backend_thread_id == "backend-fresh-after-loss"
+
+
+async def test_recover_running_after_restart_does_not_synthesize_success(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+    execution = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="in-flight work",
+        )
+    )
+
+    clear_runtime_thread_binding(tmp_path / "hub", thread.thread_target_id)
+    restarted = _build_service(tmp_path, harness)
+
+    recovered = restarted.recover_running_execution_after_restart(
+        thread.thread_target_id
+    )
+
+    assert recovered is not None
+    assert recovered.execution_id == execution.execution_id
+    assert recovered.status == "error"
+    assert "missing" in recovered.error.lower()
+    assert restarted.get_running_execution(thread.thread_target_id) is None
+    assert _thread_runtime_binding(restarted, thread.thread_target_id) is None
+
+
+async def test_stop_thread_preserves_binding_and_clears_execution(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+    execution = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="running work",
+        )
+    )
+
+    outcome = await service.stop_thread(thread.thread_target_id)
+
+    assert outcome.interrupted_active is True
+    assert outcome.execution is not None
+    assert outcome.execution.execution_id == execution.execution_id
+    assert outcome.execution.status == "interrupted"
+    assert service.get_running_execution(thread.thread_target_id) is None
+    binding = _thread_runtime_binding(service, thread.thread_target_id)
+    assert binding is not None
+    assert binding.backend_thread_id == "backend-conversation-1"
+
+    persisted = service.get_execution(thread.thread_target_id, execution.execution_id)
+    assert persisted is not None
+    assert persisted.status == "interrupted"
+
+
+async def test_send_message_after_stop_resumes_existing_conversation(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness(
+        next_turn_id="backend-turn-after-stop",
+    )
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+
+    first = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="first",
+        )
+    )
+    await service.stop_thread(thread.thread_target_id)
+
+    harness.new_conversation_calls.clear()
+    harness.start_turn_calls.clear()
+    harness.resume_conversation_calls.clear()
+
+    second = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="second",
+        )
+    )
+
+    assert second.status == "running"
+    assert second.backend_id == "backend-turn-after-stop"
+    assert harness.resume_conversation_calls == [
+        (workspace_root, "backend-conversation-1")
+    ]
+    assert harness.new_conversation_calls == []
+    assert harness.start_turn_calls[0]["conversation_id"] == "backend-conversation-1"
+    assert harness.start_turn_calls[0]["prompt"] == "second"
+    binding = _thread_runtime_binding(service, thread.thread_target_id)
+    assert binding is not None
+    assert binding.backend_thread_id == "backend-conversation-1"
+
+    first_exec = service.get_execution(thread.thread_target_id, first.execution_id)
+    second_exec = service.get_execution(thread.thread_target_id, second.execution_id)
+    assert first_exec is not None
+    assert first_exec.status == "interrupted"
+    assert second_exec is not None
+    assert second_exec.status == "running"

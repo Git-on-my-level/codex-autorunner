@@ -837,3 +837,172 @@ def test_gather_hub_message_snapshot_reuses_short_ttl_cache(
     assert first["items"] == []
     assert second["items"] == []
     assert calls["list_repos"] == 1
+
+
+def test_active_chat_binding_counts_recomputes_when_manifest_changes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir(parents=True, exist_ok=True)
+    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text("repos:\n  - id: demo\n", encoding="utf-8")
+    calls = {"pma": 0}
+
+    monkeypatch.setattr(
+        chat_bindings_module,
+        "_repo_id_by_workspace_path",
+        lambda _hub_root, _raw_config: {},
+    )
+
+    def fake_pma(_hub_root: Path, _repo_id_by_workspace) -> dict[str, int]:
+        calls["pma"] += 1
+        return {"demo": 1}
+
+    monkeypatch.setattr(chat_bindings_module, "_active_pma_thread_counts", fake_pma)
+    monkeypatch.setattr(
+        chat_bindings_module,
+        "_orchestration_binding_counts_by_source",
+        lambda **kw: {},
+    )
+    monkeypatch.setattr(
+        chat_bindings_module, "_read_discord_repo_counts", lambda **kw: {}
+    )
+    monkeypatch.setattr(
+        chat_bindings_module, "_read_current_telegram_repo_counts", lambda **kw: {}
+    )
+
+    first = chat_bindings_module.active_chat_binding_counts_by_source(
+        hub_root=hub_root,
+        raw_config={},
+    )
+    second = chat_bindings_module.active_chat_binding_counts_by_source(
+        hub_root=hub_root,
+        raw_config={},
+    )
+    assert first == {"demo": {"pma": 1}}
+    assert second == first
+    assert calls["pma"] == 1
+
+    manifest_path.write_text("repos:\n  - id: demo\n  - id: other\n", encoding="utf-8")
+    third = chat_bindings_module.active_chat_binding_counts_by_source(
+        hub_root=hub_root,
+        raw_config={},
+    )
+    assert third == {"demo": {"pma": 1}}
+    assert calls["pma"] == 2
+
+
+def test_hub_projection_store_failures_are_best_effort(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir(parents=True, exist_ok=True)
+
+    import codex_autorunner.core.hub_projection_store as proj_mod
+
+    def _failing_open(path, *, durable=False):
+        raise OSError("projection db unavailable")
+
+    monkeypatch.setattr(proj_mod, "open_sqlite", _failing_open)
+
+    store = proj_mod.HubProjectionStore(hub_root, durable=False)
+
+    assert store.get_cache("any-key", ("fp",)) is None
+    store.set_cache("any-key", ("fp",), {"data": True})
+    store.invalidate_cache("any-key")
+
+
+def test_hub_repo_listing_service_manifest_fingerprint_changes_with_manifest_mtime(
+    tmp_path: Path,
+) -> None:
+    class _AsyncMountManager:
+        async def refresh_mounts(self, _snapshots) -> None:
+            return None
+
+    snapshot = _repo_snapshot(tmp_path / "repo-1", repo_id="repo-1")
+    manifest_path = tmp_path / ".codex-autorunner" / "manifest.yml"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text("repos:\n  - id: repo-1\n", encoding="utf-8")
+    calls = {"enrich_repo": 0}
+
+    def enrich_repo(
+        _snapshot, chat_binding_counts: dict[str, int], chat_binding_counts_by_source
+    ) -> dict[str, object]:
+        calls["enrich_repo"] += 1
+        return {"repo_id": "repo-1", "call": calls["enrich_repo"]}
+
+    import time
+
+    context = SimpleNamespace(
+        config=SimpleNamespace(
+            root=tmp_path,
+            raw={},
+            manifest_path=manifest_path,
+            pma=SimpleNamespace(freshness_stale_threshold_seconds=None),
+        ),
+        projection_store=projection_store_module.HubProjectionStore(
+            tmp_path, durable=False
+        ),
+        supervisor=SimpleNamespace(
+            list_repos=lambda: [snapshot],
+            state=SimpleNamespace(
+                last_scan_at="2026-04-05T00:00:00Z",
+                pinned_parent_repo_ids=[],
+                repos=[snapshot],
+                agent_workspaces=[],
+            ),
+        ),
+        logger=logging.getLogger(__name__),
+    )
+    first_service = HubRepoListingService(
+        context,
+        _AsyncMountManager(),
+        SimpleNamespace(
+            enrich_repo=enrich_repo,
+            repo_state_fingerprint=lambda *_args, **_kwargs: ("repo-1",),
+        ),
+    )
+
+    first = asyncio.run(first_service.list_repos(sections={"repos"}))
+    assert first["repos"][0]["call"] == 1
+
+    time.sleep(0.01)
+    manifest_path.write_text(
+        "repos:\n  - id: repo-1\n  - id: repo-2\n", encoding="utf-8"
+    )
+
+    second_context = SimpleNamespace(
+        config=SimpleNamespace(
+            root=tmp_path,
+            raw={},
+            manifest_path=manifest_path,
+            pma=SimpleNamespace(freshness_stale_threshold_seconds=None),
+        ),
+        projection_store=projection_store_module.HubProjectionStore(
+            tmp_path, durable=False
+        ),
+        supervisor=SimpleNamespace(
+            list_repos=lambda: [snapshot],
+            state=SimpleNamespace(
+                last_scan_at="2026-04-05T00:00:00Z",
+                pinned_parent_repo_ids=[],
+                repos=[snapshot],
+                agent_workspaces=[],
+            ),
+        ),
+        logger=logging.getLogger(__name__),
+    )
+    second_service = HubRepoListingService(
+        second_context,
+        _AsyncMountManager(),
+        SimpleNamespace(
+            enrich_repo=enrich_repo,
+            repo_state_fingerprint=lambda *_args, **_kwargs: ("repo-1",),
+        ),
+    )
+    second = asyncio.run(second_service.list_repos(sections={"repos"}))
+    assert second["repos"][0]["call"] == 2
+    assert calls["enrich_repo"] == 2
