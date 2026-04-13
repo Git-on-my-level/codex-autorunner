@@ -103,7 +103,7 @@ class RunnerOrchestrator:
         timeout_seconds: float = 30.0,
         poll_interval_seconds: float = 0.2,
     ) -> None:
-        from .hub import LockStatus, read_lock_status
+        from .hub_topology import LockStatus, read_lock_status
 
         runner = self.ensure_runner(repo_id, allow_uninitialized=True)
         if not runner:

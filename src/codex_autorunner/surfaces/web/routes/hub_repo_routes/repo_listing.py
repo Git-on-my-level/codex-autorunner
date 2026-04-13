@@ -15,6 +15,7 @@ from .....core.freshness import (
     resolve_stale_threshold_seconds,
     summarize_section_freshness,
 )
+from .....core.hub_projection_store import path_stat_fingerprint
 from .....core.logging_utils import safe_log
 from .....core.pma_thread_store_bootstrap import default_pma_threads_db_path
 from .....core.request_context import get_request_id
@@ -44,14 +45,6 @@ class _RepoListingCacheEntry:
 
 def _monotonic() -> float:
     return time.monotonic()
-
-
-def _path_stat_fingerprint(path: Path) -> tuple[bool, Optional[int], Optional[int]]:
-    try:
-        stat = path.stat()
-    except OSError:
-        return (False, None, None)
-    return (True, int(stat.st_mtime_ns), int(stat.st_size))
 
 
 def normalize_repo_listing_sections(raw: Optional[str]) -> set[str]:
@@ -109,20 +102,20 @@ class HubRepoListingService:
         manifest_path = getattr(self._context.config, "manifest_path", None)
         return (
             (
-                _path_stat_fingerprint(manifest_path)
+                path_stat_fingerprint(manifest_path)
                 if isinstance(manifest_path, Path)
                 else None
             ),
-            _path_stat_fingerprint(
+            path_stat_fingerprint(
                 default_pma_threads_db_path(self._context.config.root)
             ),
-            _path_stat_fingerprint(
+            path_stat_fingerprint(
                 resolve_hub_orchestration_db_path(self._context.config.root)
             ),
-            _path_stat_fingerprint(
+            path_stat_fingerprint(
                 self._resolve_state_path("discord_bot", DISCORD_STATE_FILE)
             ),
-            _path_stat_fingerprint(
+            path_stat_fingerprint(
                 self._resolve_state_path("telegram_bot", TELEGRAM_STATE_FILE)
             ),
         )
@@ -171,7 +164,7 @@ class HubRepoListingService:
             getattr(supervisor_state, "last_scan_at", None),
             tuple(pinned_parent_repo_ids),
             (
-                _path_stat_fingerprint(manifest_path)
+                path_stat_fingerprint(manifest_path)
                 if isinstance(manifest_path, Path)
                 else None
             ),

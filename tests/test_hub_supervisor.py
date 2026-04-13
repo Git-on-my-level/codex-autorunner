@@ -16,6 +16,7 @@ from starlette.routing import Mount
 
 import codex_autorunner.core.hub as hub_module
 import codex_autorunner.core.hub_runner_orchestrator as orch_module
+import codex_autorunner.core.hub_topology as hub_topology_module
 import codex_autorunner.core.hub_worktree_manager as wtm_module
 from codex_autorunner.bootstrap import seed_repo_files
 from codex_autorunner.core.config import (
@@ -324,7 +325,9 @@ def test_list_repos_does_not_refresh_pma_threads_artifact(
     def _record_artifact_call(path: Path) -> None:
         calls.append(path)
 
-    monkeypatch.setattr(hub_module, "_save_pma_threads_artifact", _record_artifact_call)
+    monkeypatch.setattr(
+        hub_topology_module, "_save_pma_threads_artifact", _record_artifact_call
+    )
     try:
         supervisor.list_repos(use_cache=False)
     finally:
@@ -4337,13 +4340,15 @@ def test_load_hub_state_handles_malformed_repo_entry(tmp_path: Path) -> None:
 
 
 def test_normalize_pinned_parent_repo_ids_filters() -> None:
-    assert hub_module._normalize_pinned_parent_repo_ids(None) == []
-    assert hub_module._normalize_pinned_parent_repo_ids("not_a_list") == []
-    assert hub_module._normalize_pinned_parent_repo_ids(["a", "b", "a", "", "  "]) == [
+    assert hub_topology_module.normalize_pinned_parent_repo_ids(None) == []
+    assert hub_topology_module.normalize_pinned_parent_repo_ids("not_a_list") == []
+    assert hub_topology_module.normalize_pinned_parent_repo_ids(
+        ["a", "b", "a", "", "  "]
+    ) == [
         "a",
         "b",
     ]
-    assert hub_module._normalize_pinned_parent_repo_ids([1, 2]) == []
+    assert hub_topology_module.normalize_pinned_parent_repo_ids([1, 2]) == []
 
 
 def test_runtime_preflight_blocks_enable() -> None:

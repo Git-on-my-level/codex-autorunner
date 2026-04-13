@@ -1,6 +1,4 @@
 import asyncio
-import dataclasses
-import enum
 import importlib
 import json
 import logging
@@ -15,7 +13,6 @@ from ..discovery import DiscoveryRecord, discover_and_init
 from ..manifest import (
     Manifest,
     ManifestAgentWorkspace,
-    ManifestRepo,
     load_manifest,
     normalize_manifest_destination,
     sanitize_repo_id,
@@ -32,11 +29,6 @@ from .config import (
     RepoConfig,
     derive_repo_config,
     load_hub_config,
-)
-from .destinations import (
-    default_local_destination,
-    resolve_effective_agent_workspace_destination,
-    resolve_effective_repo_destination,
 )
 from .git_utils import (
     GitError,
@@ -55,6 +47,23 @@ from .hub_lifecycle import (
 )
 from .hub_repo_manager import RepoManager
 from .hub_runner_orchestrator import RunnerOrchestrator
+from .hub_topology import (
+    AgentWorkspaceSnapshot,
+    HubState,
+    LockStatus,  # noqa: F401  re-exported for consumers
+    RepoSnapshot,
+    RepoStatus,  # noqa: F401  re-exported for consumers
+    build_agent_workspace_snapshot,
+    build_agent_workspace_snapshots,
+    build_full_topology,
+    build_repo_snapshot,
+    build_repo_snapshots,
+    load_hub_state,
+    normalize_pinned_parent_repo_ids,
+    prune_pinned_parent_repo_ids,
+    read_lock_status,  # noqa: F401  re-exported for consumers
+    save_hub_state,
+)
 from .hub_worktree_manager import WorktreeManager
 from .lifecycle_events import (
     LifecycleEvent,
@@ -62,7 +71,6 @@ from .lifecycle_events import (
     LifecycleEventStore,
     LifecycleEventType,
 )
-from .locks import DEFAULT_RUNNER_CMD_HINTS, assess_lock, process_alive
 from .orchestration.sqlite import open_orchestration_sqlite
 from .pma_automation_store import DEFAULT_PMA_LANE_ID, PmaAutomationStore
 from .pma_dispatch_interceptor import PmaDispatchInterceptor
@@ -75,10 +83,9 @@ from .ports.backend_orchestrator import (
 )
 from .runner_controller import ProcessRunnerController, SpawnRunnerFn
 from .runtime import RuntimeContext
-from .state import RunnerState, load_state, now_iso
+from .state import RunnerState, now_iso  # noqa: F401
 from .state_roots import resolve_hub_agent_workspace_root
 from .types import AppServerSupervisorFactory, BackendFactory
-from .utils import atomic_write
 
 logger = logging.getLogger("codex_autorunner.hub")
 
@@ -188,313 +195,6 @@ def _runtime_preflight_blocks_enable(
         return False
     status = str(preflight.get("status") or "").strip().lower()
     return bool(status and status not in {"ready", "deferred"})
-
-
-class RepoStatus(str, enum.Enum):
-    UNINITIALIZED = "uninitialized"
-    INITIALIZING = "initializing"
-    IDLE = "idle"
-    RUNNING = "running"
-    ERROR = "error"
-    LOCKED = "locked"
-    MISSING = "missing"
-    INIT_ERROR = "init_error"
-
-
-class LockStatus(str, enum.Enum):
-    UNLOCKED = "unlocked"
-    LOCKED_ALIVE = "locked_alive"
-    LOCKED_STALE = "locked_stale"
-
-
-@dataclasses.dataclass
-class RepoSnapshot:
-    id: str
-    path: Path
-    display_name: str
-    enabled: bool
-    auto_run: bool
-    worktree_setup_commands: Optional[List[str]]
-    kind: str  # base|worktree
-    worktree_of: Optional[str]
-    branch: Optional[str]
-    exists_on_disk: bool
-    is_clean: Optional[bool]
-    initialized: bool
-    init_error: Optional[str]
-    status: RepoStatus
-    lock_status: LockStatus
-    last_run_id: Optional[int]
-    last_run_started_at: Optional[str]
-    last_run_finished_at: Optional[str]
-    last_exit_code: Optional[int]
-    runner_pid: Optional[int]
-    last_run_duration_seconds: Optional[float] = None
-    effective_destination: Dict[str, Any] = dataclasses.field(
-        default_factory=default_local_destination
-    )
-    chat_bound: bool = False
-    chat_bound_thread_count: int = 0
-    pma_chat_bound_thread_count: int = 0
-    discord_chat_bound_thread_count: int = 0
-    telegram_chat_bound_thread_count: int = 0
-    non_pma_chat_bound_thread_count: int = 0
-    unbound_managed_thread_count: int = 0
-    cleanup_blocked_by_chat_binding: bool = False
-    has_car_state: bool = False
-    resource_kind: str = "repo"
-
-    def to_dict(self, hub_root: Path) -> Dict[str, object]:
-        try:
-            rel_path = self.path.relative_to(hub_root)
-        except ValueError:
-            rel_path = self.path
-        return {
-            "id": self.id,
-            "path": str(rel_path),
-            "display_name": self.display_name,
-            "enabled": self.enabled,
-            "auto_run": self.auto_run,
-            "worktree_setup_commands": self.worktree_setup_commands,
-            "kind": self.kind,
-            "worktree_of": self.worktree_of,
-            "branch": self.branch,
-            "exists_on_disk": self.exists_on_disk,
-            "is_clean": self.is_clean,
-            "initialized": self.initialized,
-            "init_error": self.init_error,
-            "status": self.status.value,
-            "lock_status": self.lock_status.value,
-            "last_run_id": self.last_run_id,
-            "last_run_started_at": self.last_run_started_at,
-            "last_run_finished_at": self.last_run_finished_at,
-            "last_run_duration_seconds": self.last_run_duration_seconds,
-            "last_exit_code": self.last_exit_code,
-            "runner_pid": self.runner_pid,
-            "effective_destination": self.effective_destination,
-            "chat_bound": self.chat_bound,
-            "chat_bound_thread_count": self.chat_bound_thread_count,
-            "pma_chat_bound_thread_count": self.pma_chat_bound_thread_count,
-            "discord_chat_bound_thread_count": self.discord_chat_bound_thread_count,
-            "telegram_chat_bound_thread_count": self.telegram_chat_bound_thread_count,
-            "non_pma_chat_bound_thread_count": self.non_pma_chat_bound_thread_count,
-            "unbound_managed_thread_count": self.unbound_managed_thread_count,
-            "cleanup_blocked_by_chat_binding": self.cleanup_blocked_by_chat_binding,
-            "has_car_state": self.has_car_state,
-            "resource_kind": self.resource_kind,
-        }
-
-
-@dataclasses.dataclass
-class AgentWorkspaceSnapshot:
-    id: str
-    runtime: str
-    path: Path
-    display_name: str
-    enabled: bool
-    exists_on_disk: bool
-    effective_destination: Dict[str, Any] = dataclasses.field(
-        default_factory=default_local_destination
-    )
-    resource_kind: str = "agent_workspace"
-
-    def to_dict(self, hub_root: Path) -> Dict[str, object]:
-        try:
-            rel_path = self.path.relative_to(hub_root)
-        except ValueError:
-            rel_path = self.path
-        return {
-            "id": self.id,
-            "runtime": self.runtime,
-            "path": str(rel_path),
-            "display_name": self.display_name,
-            "enabled": self.enabled,
-            "exists_on_disk": self.exists_on_disk,
-            "effective_destination": self.effective_destination,
-            "resource_kind": self.resource_kind,
-        }
-
-
-@dataclasses.dataclass
-class HubState:
-    last_scan_at: Optional[str]
-    repos: List[RepoSnapshot]
-    agent_workspaces: List[AgentWorkspaceSnapshot] = dataclasses.field(
-        default_factory=list
-    )
-    pinned_parent_repo_ids: List[str] = dataclasses.field(default_factory=list)
-
-    def to_dict(self, hub_root: Path) -> Dict[str, object]:
-        return {
-            "last_scan_at": self.last_scan_at,
-            "repos": [repo.to_dict(hub_root) for repo in self.repos],
-            "agent_workspaces": [
-                workspace.to_dict(hub_root) for workspace in self.agent_workspaces
-            ],
-            "pinned_parent_repo_ids": list(self.pinned_parent_repo_ids or []),
-        }
-
-
-def read_lock_status(lock_path: Path) -> LockStatus:
-    if not lock_path.exists():
-        return LockStatus.UNLOCKED
-    assessment = assess_lock(
-        lock_path,
-        expected_cmd_substrings=DEFAULT_RUNNER_CMD_HINTS,
-    )
-    if not assessment.freeable and assessment.pid and process_alive(assessment.pid):
-        return LockStatus.LOCKED_ALIVE
-    return LockStatus.LOCKED_STALE
-
-
-def load_hub_state(state_path: Path, hub_root: Path) -> HubState:
-    if not state_path.exists():
-        return HubState(
-            last_scan_at=None,
-            repos=[],
-            agent_workspaces=[],
-            pinned_parent_repo_ids=[],
-        )
-    data = state_path.read_text(encoding="utf-8")
-    try:
-        import json
-
-        payload = json.loads(data)
-    except (json.JSONDecodeError, ValueError) as exc:
-        logger.warning("Failed to parse hub state from %s: %s", state_path, exc)
-        return HubState(
-            last_scan_at=None,
-            repos=[],
-            agent_workspaces=[],
-            pinned_parent_repo_ids=[],
-        )
-    last_scan_at = payload.get("last_scan_at")
-    pinned_parent_repo_ids = _normalize_pinned_parent_repo_ids(
-        payload.get("pinned_parent_repo_ids")
-    )
-    repos_payload = payload.get("repos") or []
-    agent_workspaces_payload = payload.get("agent_workspaces") or []
-    repos: List[RepoSnapshot] = []
-    agent_workspaces: List[AgentWorkspaceSnapshot] = []
-    for entry in repos_payload:
-        try:
-            repo = RepoSnapshot(
-                id=str(entry.get("id")),
-                path=hub_root / entry.get("path", ""),
-                display_name=str(entry.get("display_name", "")),
-                enabled=bool(entry.get("enabled", True)),
-                auto_run=bool(entry.get("auto_run", False)),
-                worktree_setup_commands=(
-                    [
-                        str(cmd).strip()
-                        for cmd in (entry.get("worktree_setup_commands") or [])
-                        if isinstance(cmd, str) and str(cmd).strip()
-                    ]
-                    or None
-                ),
-                kind=str(entry.get("kind", "base")),
-                worktree_of=entry.get("worktree_of"),
-                branch=entry.get("branch"),
-                exists_on_disk=bool(entry.get("exists_on_disk", False)),
-                is_clean=entry.get("is_clean"),
-                initialized=bool(entry.get("initialized", False)),
-                init_error=entry.get("init_error"),
-                status=RepoStatus(entry.get("status", RepoStatus.UNINITIALIZED.value)),
-                lock_status=LockStatus(
-                    entry.get("lock_status", LockStatus.UNLOCKED.value)
-                ),
-                last_run_id=entry.get("last_run_id"),
-                last_run_started_at=entry.get("last_run_started_at"),
-                last_run_finished_at=entry.get("last_run_finished_at"),
-                last_run_duration_seconds=entry.get("last_run_duration_seconds"),
-                last_exit_code=entry.get("last_exit_code"),
-                runner_pid=entry.get("runner_pid"),
-                effective_destination=(
-                    normalize_manifest_destination(entry.get("effective_destination"))
-                    or default_local_destination()
-                ),
-            )
-            repos.append(repo)
-        except (ValueError, TypeError, KeyError) as exc:
-            repo_id = entry.get("id", "unknown")
-            logger.warning(
-                "Failed to load repo snapshot for id=%s from hub state: %s",
-                repo_id,
-                exc,
-            )
-            continue
-    for entry in agent_workspaces_payload:
-        try:
-            workspace = AgentWorkspaceSnapshot(
-                id=str(entry.get("id")),
-                runtime=str(entry.get("runtime", "")),
-                path=hub_root / entry.get("path", ""),
-                display_name=str(entry.get("display_name", "")),
-                enabled=bool(entry.get("enabled", True)),
-                exists_on_disk=bool(entry.get("exists_on_disk", False)),
-                effective_destination=(
-                    normalize_manifest_destination(entry.get("effective_destination"))
-                    or default_local_destination()
-                ),
-            )
-            agent_workspaces.append(workspace)
-        except (ValueError, TypeError, KeyError) as exc:
-            workspace_id = entry.get("id", "unknown")
-            logger.warning(
-                "Failed to load agent workspace snapshot for id=%s from hub state: %s",
-                workspace_id,
-                exc,
-            )
-            continue
-    return HubState(
-        last_scan_at=last_scan_at,
-        repos=repos,
-        agent_workspaces=agent_workspaces,
-        pinned_parent_repo_ids=pinned_parent_repo_ids,
-    )
-
-
-def save_hub_state(
-    state_path: Path,
-    state: HubState,
-    hub_root: Path,
-    *,
-    refresh_pma_threads_artifact: bool = True,
-) -> None:
-    payload = state.to_dict(hub_root)
-    atomic_write(state_path, json.dumps(payload, indent=2) + "\n")
-    if refresh_pma_threads_artifact:
-        try:
-            _save_pma_threads_artifact(hub_root)
-        except (OSError, ValueError, TypeError) as exc:
-            logger.warning("Failed to write PMA thread snapshot artifact: %s", exc)
-
-
-def _save_pma_threads_artifact(hub_root: Path) -> None:
-    from .pma_context import _snapshot_pma_threads
-
-    payload = {
-        "generated_at": now_iso(),
-        "threads": _snapshot_pma_threads(hub_root),
-    }
-    artifact_path = hub_root / ".codex-autorunner" / "pma_threads.json"
-    atomic_write(artifact_path, json.dumps(payload, indent=2) + "\n")
-
-
-def _normalize_pinned_parent_repo_ids(value: Any) -> List[str]:
-    if not isinstance(value, list):
-        return []
-    out: List[str] = []
-    seen: set[str] = set()
-    for item in value:
-        if not isinstance(item, str):
-            continue
-        repo_id = item.strip()
-        if not repo_id or repo_id in seen:
-            continue
-        seen.add(repo_id)
-        out.append(repo_id)
-    return out
 
 
 class RepoRunner:
@@ -652,11 +352,12 @@ class HubSupervisor:
     def scan(self) -> List[RepoSnapshot]:
         self._invalidate_list_cache()
         manifest, records = discover_and_init(self.hub_config)
-        snapshots = self._build_snapshots(records)
-        agent_workspaces = self._build_agent_workspace_snapshots(
-            manifest.agent_workspaces
+        snapshots, agent_workspaces, pinned_parent_repo_ids = build_full_topology(
+            records,
+            manifest.agent_workspaces,
+            self.state.pinned_parent_repo_ids,
+            self.hub_config.root,
         )
-        pinned_parent_repo_ids = self._prune_pinned_parent_repo_ids(snapshots)
         self.state = HubState(
             last_scan_at=now_iso(),
             repos=snapshots,
@@ -678,11 +379,12 @@ class HubSupervisor:
                 return self._list_cache
             self._startup_repo_state_pending = False
             manifest, records = self._manifest_records(manifest_only=True)
-            snapshots = self._build_snapshots(records)
-            agent_workspaces = self._build_agent_workspace_snapshots(
-                manifest.agent_workspaces
+            snapshots, agent_workspaces, pinned_parent_repo_ids = build_full_topology(
+                records,
+                manifest.agent_workspaces,
+                self.state.pinned_parent_repo_ids,
+                self.hub_config.root,
             )
-            pinned_parent_repo_ids = self._prune_pinned_parent_repo_ids(snapshots)
             self.state = HubState(
                 last_scan_at=self.state.last_scan_at,
                 repos=snapshots,
@@ -724,7 +426,7 @@ class HubSupervisor:
                 last_scan_at=self.state.last_scan_at,
                 repos=self.state.repos,
                 agent_workspaces=self.state.agent_workspaces,
-                pinned_parent_repo_ids=_normalize_pinned_parent_repo_ids(current),
+                pinned_parent_repo_ids=normalize_pinned_parent_repo_ids(current),
             )
             save_hub_state(
                 self.state_path,
@@ -1533,21 +1235,17 @@ class HubSupervisor:
         return manifest, records
 
     def _build_snapshots(self, records: List[DiscoveryRecord]) -> List[RepoSnapshot]:
-        repos_by_id = {record.repo.id: record.repo for record in records}
-        snapshots: List[RepoSnapshot] = []
-        for record in records:
-            snapshots.append(self._snapshot_from_record(record, repos_by_id))
-        return snapshots
+        return build_repo_snapshots(records)
 
     def _build_agent_workspace_snapshots(
         self, workspaces: List[ManifestAgentWorkspace]
     ) -> List[AgentWorkspaceSnapshot]:
-        return [self._snapshot_from_agent_workspace(entry) for entry in workspaces]
+        return build_agent_workspace_snapshots(workspaces, self.hub_config.root)
 
     def _prune_pinned_parent_repo_ids(self, snapshots: List[RepoSnapshot]) -> List[str]:
-        base_repo_ids = {snap.id for snap in snapshots if snap.kind == "base"}
-        pinned = _normalize_pinned_parent_repo_ids(self.state.pinned_parent_repo_ids)
-        return [repo_id for repo_id in pinned if repo_id in base_repo_ids]
+        return prune_pinned_parent_repo_ids(
+            self.state.pinned_parent_repo_ids, snapshots
+        )
 
     def _snapshot_for_repo(self, repo_id: str) -> RepoSnapshot:
         _, records = self._manifest_records(manifest_only=True)
@@ -1555,7 +1253,7 @@ class HubSupervisor:
         if not record:
             raise ValueError(f"Repo {repo_id} not found in manifest")
         repos_by_id = {entry.repo.id: entry.repo for entry in records}
-        snapshot = self._snapshot_from_record(record, repos_by_id)
+        snapshot = build_repo_snapshot(record, repos_by_id)
         self.list_repos(use_cache=False)
         return snapshot
 
@@ -1566,7 +1264,7 @@ class HubSupervisor:
         workspace = manifest.get_agent_workspace(workspace_id)
         if not workspace:
             raise ValueError(f"Agent workspace {workspace_id} not found in manifest")
-        return self._snapshot_from_agent_workspace(workspace)
+        return build_agent_workspace_snapshot(workspace, self.hub_config.root)
 
     def _invalidate_list_cache(self) -> None:
         with self._list_lock:
@@ -2419,94 +2117,3 @@ class HubSupervisor:
             processed,
             automation_wakeups,
         )
-
-    def _snapshot_from_record(
-        self,
-        record: DiscoveryRecord,
-        repos_by_id: Optional[Dict[str, ManifestRepo]] = None,
-    ) -> RepoSnapshot:
-        repo_path = record.absolute_path
-        lock_path = repo_path / ".codex-autorunner" / "lock"
-        lock_status = read_lock_status(lock_path)
-
-        runner_state: Optional[RunnerState] = None
-        if record.initialized:
-            runner_state = load_state(repo_path / ".codex-autorunner" / "state.sqlite3")
-
-        is_clean: Optional[bool] = None
-        if record.exists_on_disk and git_available(repo_path):
-            is_clean = git_is_clean(repo_path)
-
-        status = self._derive_status(record, lock_status, runner_state)
-        last_run_id = runner_state.last_run_id if runner_state else None
-        repo_index = repos_by_id or {record.repo.id: record.repo}
-        effective_destination = resolve_effective_repo_destination(
-            record.repo, repo_index
-        ).to_dict()
-        return RepoSnapshot(
-            id=record.repo.id,
-            path=repo_path,
-            display_name=record.repo.display_name or repo_path.name or record.repo.id,
-            enabled=record.repo.enabled,
-            auto_run=record.repo.auto_run,
-            worktree_setup_commands=record.repo.worktree_setup_commands,
-            kind=record.repo.kind,
-            worktree_of=record.repo.worktree_of,
-            branch=record.repo.branch,
-            exists_on_disk=record.exists_on_disk,
-            is_clean=is_clean,
-            initialized=record.initialized,
-            init_error=record.init_error,
-            status=status,
-            lock_status=lock_status,
-            last_run_id=last_run_id,
-            last_run_started_at=(
-                runner_state.last_run_started_at if runner_state else None
-            ),
-            last_run_finished_at=(
-                runner_state.last_run_finished_at if runner_state else None
-            ),
-            last_run_duration_seconds=None,
-            last_exit_code=runner_state.last_exit_code if runner_state else None,
-            runner_pid=runner_state.runner_pid if runner_state else None,
-            effective_destination=effective_destination,
-        )
-
-    def _snapshot_from_agent_workspace(
-        self, workspace: ManifestAgentWorkspace
-    ) -> AgentWorkspaceSnapshot:
-        workspace_path = (self.hub_config.root / workspace.path).resolve()
-        effective_destination = resolve_effective_agent_workspace_destination(
-            workspace
-        ).to_dict()
-        return AgentWorkspaceSnapshot(
-            id=workspace.id,
-            runtime=workspace.runtime,
-            path=workspace_path,
-            display_name=workspace.display_name or workspace_path.name or workspace.id,
-            enabled=workspace.enabled,
-            exists_on_disk=workspace_path.exists(),
-            effective_destination=effective_destination,
-        )
-
-    def _derive_status(
-        self,
-        record: DiscoveryRecord,
-        lock_status: LockStatus,
-        runner_state: Optional[RunnerState],
-    ) -> RepoStatus:
-        if not record.exists_on_disk:
-            return RepoStatus.MISSING
-        if record.init_error:
-            return RepoStatus.INIT_ERROR
-        if not record.initialized:
-            return RepoStatus.UNINITIALIZED
-        if runner_state and runner_state.status == "running":
-            if lock_status == LockStatus.LOCKED_ALIVE:
-                return RepoStatus.RUNNING
-            return RepoStatus.IDLE
-        if lock_status in (LockStatus.LOCKED_ALIVE, LockStatus.LOCKED_STALE):
-            return RepoStatus.LOCKED
-        if runner_state and runner_state.status == "error":
-            return RepoStatus.ERROR
-        return RepoStatus.IDLE

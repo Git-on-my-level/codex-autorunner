@@ -23,6 +23,7 @@ from ....core.hub_inbox_resolution import (
     message_resolution_state,
     message_resolvable_actions,
 )
+from ....core.hub_projection_store import path_stat_fingerprint
 from ....core.pma_context import (
     PMA_MAX_TEXT,
     _gather_inbox,
@@ -116,14 +117,6 @@ def _serialize_latest_dispatch_response(
     return payload
 
 
-def _path_stat_fingerprint(path: Path) -> tuple[bool, Optional[int], Optional[int]]:
-    try:
-        stat = path.stat()
-    except OSError:
-        return (False, None, None)
-    return (True, int(stat.st_mtime_ns), int(stat.st_size))
-
-
 def _hub_snapshot_fingerprint(
     context: HubAppContext,
     *,
@@ -144,9 +137,9 @@ def _hub_snapshot_fingerprint(
         fingerprint.extend(
             [
                 str(root_path),
-                _path_stat_fingerprint(root_path / ".codex-autorunner"),
-                _path_stat_fingerprint(root_path / ".codex-autorunner" / "filebox"),
-                _path_stat_fingerprint(default_pma_threads_db_path(root_path)),
+                path_stat_fingerprint(root_path / ".codex-autorunner"),
+                path_stat_fingerprint(root_path / ".codex-autorunner" / "filebox"),
+                path_stat_fingerprint(default_pma_threads_db_path(root_path)),
             ]
         )
     return tuple(fingerprint)
