@@ -1291,11 +1291,8 @@ function renderDispatchHistory(runId, data) {
         header.appendChild(headerContent);
         contentWrapper.appendChild(header);
         container.append(collapseBar, contentWrapper);
-        // Add diff stats if present (for turn summaries)
-        // New path: dispatch.diff_stats (from FlowStore DIFF_UPDATED merge)
-        // Legacy fallback: dispatch.extra.diff_stats (DISPATCH.md frontmatter)
-        const diffStats = (dispatch?.diff_stats ||
-            dispatch?.extra?.diff_stats);
+        // Diff stats from FlowStore DIFF_UPDATED merge (dispatch.diff_stats)
+        const diffStats = dispatch?.diff_stats;
         if (diffStats && (diffStats.insertions || diffStats.deletions)) {
             const statsEl = document.createElement("span");
             statsEl.className = "dispatch-diff-stats";
@@ -1544,39 +1541,6 @@ async function bulkClearModel() {
     }
     finally {
         setButtonLoading(bulkClearModelBtn, false);
-    }
-}
-async function bulkCanonicalizeHermes() {
-    const range = await inputModal("Optional range (A:B). Leave blank for all tickets.", {
-        placeholder: "1:20",
-        confirmText: "Canonicalize",
-        allowEmpty: true,
-    });
-    if (range === null)
-        return;
-    const rangeValue = range.trim() || undefined;
-    const confirmed = await confirmModal(rangeValue
-        ? `Canonicalize Hermes aliases for tickets ${rangeValue}?`
-        : "Canonicalize Hermes aliases for all tickets?", { confirmText: "Canonicalize", cancelText: "Cancel" });
-    if (!confirmed)
-        return;
-    const btn = document.getElementById("ticket-bulk-canonicalize-hermes");
-    setButtonLoading(btn, true);
-    try {
-        const payload = (await api("/api/flows/ticket_flow/tickets/bulk-canonicalize-hermes", {
-            method: "POST",
-            body: {
-                range: rangeValue,
-            },
-        }));
-        summarizeBulkResult("Canonicalize Hermes", payload);
-        await loadTicketFiles({ reason: "manual" });
-    }
-    catch (err) {
-        flash(err.message || "Failed to canonicalize Hermes agents", "error");
-    }
-    finally {
-        setButtonLoading(btn, false);
     }
 }
 /**
@@ -2264,11 +2228,6 @@ export function initTicketFlow() {
         bulkSetAgentBtn.addEventListener("click", () => void bulkSetAgent());
     if (bulkClearModelBtn)
         bulkClearModelBtn.addEventListener("click", () => void bulkClearModel());
-    {
-        const btn = document.getElementById("ticket-bulk-canonicalize-hermes");
-        if (btn)
-            btn.addEventListener("click", () => void bulkCanonicalizeHermes());
-    }
     if (refreshBtn)
         refreshBtn.addEventListener("click", () => {
             void loadTicketFlow({ reason: "manual" });

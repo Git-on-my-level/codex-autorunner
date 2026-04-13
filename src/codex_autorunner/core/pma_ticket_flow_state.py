@@ -319,11 +319,11 @@ def build_ticket_flow_run_state(
 ) -> TicketFlowRunState:
     run_id = str(record.id)
     quoted_repo = shlex.quote(str(repo_root))
-    archive_cmd = f"car flow ticket_flow archive --repo {quoted_repo} --run-id {run_id}"
-    status_cmd = f"car flow ticket_flow status --repo {quoted_repo} --run-id {run_id}"
-    resume_cmd = f"car flow ticket_flow start --repo {quoted_repo}"
-    start_cmd = f"car flow ticket_flow start --repo {quoted_repo}"
-    stop_cmd = f"car flow ticket_flow stop --repo {quoted_repo} --run-id {run_id}"
+    archive_cmd = f"car ticket-flow archive --repo {quoted_repo} --run-id {run_id}"
+    status_cmd = f"car ticket-flow status --repo {quoted_repo} --run-id {run_id}"
+    resume_cmd = f"car ticket-flow start --repo {quoted_repo}"
+    start_cmd = f"car ticket-flow start --repo {quoted_repo}"
+    stop_cmd = f"car ticket-flow stop --repo {quoted_repo} --run-id {run_id}"
 
     failure_payload = get_failure_payload(record)
     failure_summary = (

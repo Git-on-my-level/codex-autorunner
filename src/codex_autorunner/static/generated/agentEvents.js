@@ -224,12 +224,6 @@ function summarizeFileChanges(files, totalCount) {
     }
     return { summary: "File changes", detail: "" };
 }
-function parseLegacyDiffEntryCount(value) {
-    const match = value.match(/^(\d+)\s+diff entries?$/i);
-    if (!match)
-        return null;
-    return Number.parseInt(match[1] || "", 10);
-}
 function extractErrorMessage(params) {
     if (!params || typeof params !== "object")
         return "";
@@ -362,17 +356,10 @@ export function parseAppServerEvent(payload) {
         const diffCountLabel = diffCount === null ? "" : (diffCount === 1 ? "1 file change" : `${diffCount} file changes`);
         let summary = fileSummary;
         let detailText = detail;
-        if (!files.length && fallbackPreview) {
-            const legacyDiffCount = parseLegacyDiffEntryCount(fallbackPreview);
-            const effectiveDiffCount = diffCount ?? legacyDiffCount;
-            if (effectiveDiffCount !== null && legacyDiffCount !== null) {
-                summary = effectiveDiffCount === 1 ? "1 file change" : `${effectiveDiffCount} file changes`;
-            }
-            else if (fallbackPreview !== "diff updated") {
-                summary = fallbackPreview;
-                if (!detailText && diffCountLabel && fallbackPreview !== diffCountLabel) {
-                    detailText = diffCountLabel;
-                }
+        if (!files.length && fallbackPreview && fallbackPreview !== "diff updated") {
+            summary = fallbackPreview;
+            if (!detailText && diffCountLabel && fallbackPreview !== diffCountLabel) {
+                detailText = diffCountLabel;
             }
         }
         return {

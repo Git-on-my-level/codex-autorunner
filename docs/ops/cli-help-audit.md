@@ -26,14 +26,14 @@ Reviewed help pages: 131 command/group pages.
 | `car chat` | 3 | Complete | Group help + `channels` subgroup help present. |
 | `car doctor` | 3 | Complete | Group help + `versions` command summary added. |
 | `car protocol` | 2 | Complete | Group help present; refresh command documented. |
-| `car flow` | 9 | Complete | Group help present; `ticket_flow` alias points to canonical `ticket-flow`. |
+| `car flow` | 9 | Complete | Group help present; telemetry/housekeep live under `flow` (ticket_flow commands are top-level `car ticket-flow`). |
 | `car ticket-flow` | 7 | Complete | Canonical ticket_flow group help present; status/start/bootstrap breadcrumbs retained. |
 | `car pma` | 33 | Complete | Group/subgroup help added (`docs`, `context`, `thread`). |
 
 ## Canonical Discoverability Changes
 
 - `car template --help` now states canonical form: `car templates ...`.
-- `car flow ticket_flow --help` now states canonical form: `car ticket-flow ...`.
+- `car ticket-flow --help` now states canonical form: `car ticket-flow ...`.
 - `car hub worktree list/scan` now emit canonical lifecycle hints:
   - Human output: `recommended: car hub worktree archive <repo_id>`
   - JSON payload: `recommended_command` + `recommended_actions`

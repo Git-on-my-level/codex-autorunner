@@ -7,6 +7,7 @@ from codex_autorunner.cli import app
 from codex_autorunner.core.config import load_hub_config
 from codex_autorunner.core.flows.models import FlowRunRecord, FlowRunStatus
 from codex_autorunner.surfaces.cli import cli as cli_module
+from codex_autorunner.surfaces.cli.cli import FLOW_COMMANDS
 
 
 def test_ticket_flow_start_rejects_unregistered_worktree(tmp_path) -> None:
@@ -74,7 +75,7 @@ def test_resumable_run_prefers_non_latest_active_run() -> None:
         ),
     ]
 
-    run, reason = cli_module._resumable_run(records)
+    run, reason = FLOW_COMMANDS.ticket_flow_resumable_run(records)
     assert run is not None
     assert run.id == "older-active"
     assert reason == "active"
@@ -83,7 +84,6 @@ def test_resumable_run_prefers_non_latest_active_run() -> None:
 def test_flow_command_exports_bridge_uses_typed_attributes(monkeypatch) -> None:
     calls: list[object] = []
     fake_exports = SimpleNamespace(
-        ticket_flow_resumable_run=lambda records: ("fake-run", records),
         _ticket_flow_preflight=lambda engine, ticket_dir: (
             "preflight",
             engine,
@@ -97,7 +97,6 @@ def test_flow_command_exports_bridge_uses_typed_attributes(monkeypatch) -> None:
 
     monkeypatch.setattr(cli_module, "FLOW_COMMANDS", fake_exports)
 
-    assert cli_module._resumable_run(["record"]) == ("fake-run", ["record"])
     assert cli_module._ticket_flow_preflight("engine", "tickets") == (
         "preflight",
         "engine",

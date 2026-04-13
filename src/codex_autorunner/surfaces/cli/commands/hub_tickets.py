@@ -6,14 +6,9 @@ import typer
 
 from ....agents.registry import validate_agent_id
 from ....core.config import HubConfig
-from ....core.hub import HubSupervisor
 from ....core.runtime import RuntimeContext
 from ....core.utils import atomic_write
-from ....tickets.bulk import (
-    bulk_canonicalize_hermes_agents,
-    bulk_clear_model_pin,
-    bulk_set_agent,
-)
+from ....tickets.bulk import bulk_clear_model_pin, bulk_set_agent
 from ....tickets.doctor import format_or_doctor_tickets
 from ....tickets.hub_pack import (
     TicketPackImportError,
@@ -149,7 +144,6 @@ def register_hub_tickets_commands(
     ],
     require_templates_enabled_func: Callable,
     fetch_template_with_scan_func: Callable,
-    build_hub_supervisor: Callable[[HubConfig], HubSupervisor],
     ticket_flow_preflight: Callable[[RuntimeContext, Path], Any],
     print_preflight_report: Callable[[Any], None],
     ticket_flow_start: Callable[..., None],
@@ -328,42 +322,6 @@ def register_hub_tickets_commands(
         if result.errors or lint_errors:
             raise_exit("Ticket bulk update failed.")
 
-    @hub_tickets_app.command("canonicalize-hermes")
-    def hub_tickets_canonicalize_hermes(
-        repo_id: str = typer.Option(..., "--repo", help="Hub repo id"),
-        range_spec: Optional[str] = typer.Option(
-            None, "--range", help="Range of ticket indices in the form A:B"
-        ),
-        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
-    ):
-        """Migrate legacy Hermes alias agents to canonical agent+profile form."""
-        config = require_hub_config_func(hub)
-        repo_root = resolve_hub_repo_root(config, repo_id)
-        ticket_dir = repo_root / ".codex-autorunner" / "tickets"
-
-        try:
-            result = bulk_canonicalize_hermes_agents(
-                ticket_dir,
-                range_spec,
-                repo_root=repo_root,
-            )
-        except ValueError as exc:
-            raise_exit(str(exc), cause=exc)
-
-        lint_errors = validate_tickets(ticket_dir)
-        _print_ticket_bulk_report(
-            repo_id=repo_id,
-            ticket_dir=ticket_dir,
-            action="canonicalize-hermes",
-            updated=result.updated,
-            skipped=result.skipped,
-            errors=result.errors,
-            lint_errors=lint_errors,
-        )
-
-        if result.errors or lint_errors:
-            raise_exit("Ticket canonicalization failed.")
-
     @hub_tickets_app.command("fmt")
     def hub_tickets_fmt(
         repo_id: str = typer.Option(..., "--repo", help="Hub repo id"),
@@ -436,233 +394,69 @@ def register_hub_tickets_commands(
 
     @hub_tickets_app.command("setup-pack")
     def hub_tickets_setup_pack(
-        target_path: Optional[Path] = typer.Argument(
-            None, help="Existing repo/worktree path (new mode)."
+        target_path: Path = typer.Argument(
+            ...,
+            help="Existing repo/worktree path that will receive unpacked tickets.",
         ),
-        from_zip: Optional[Path] = typer.Option(
-            None, "--from", help="Path to ticket pack zip (new mode)"
+        from_zip: Path = typer.Option(
+            ...,
+            "--from",
+            help="Path to ticket pack zip",
         ),
         assign: list[str] = typer.Option(
             [],
             "--assign",
-            help="Agent assignment spec '<agent>:<ticket_numbers>' (repeatable, new mode)",
+            help="Agent assignment spec '<agent>:<ticket_numbers>' (repeatable)",
         ),
         start: bool = typer.Option(
             False,
             "--start",
-            help="Start ticket_flow after setup succeeds (new mode and legacy mode)",
+            help="Start ticket_flow after setup succeeds",
         ),
-        base_repo_id: Optional[str] = typer.Option(
-            None, "--base-repo", help="Base repo id (legacy mode)"
-        ),
-        branch: Optional[str] = typer.Option(
-            None, "--branch", help="Branch name for worktree (legacy mode)"
-        ),
-        zip_path: Optional[Path] = typer.Option(
-            None, "--zip", help="Path to ticket pack zip (legacy mode)"
-        ),
-        renumber: Optional[str] = typer.Option(
-            None, "--renumber", help="Renumber tickets with start=<n>,step=<n> (legacy)"
-        ),
-        assign_agent: Optional[str] = typer.Option(
-            None, "--assign-agent", help="Override ticket frontmatter agent (legacy)"
-        ),
-        clear_model_pin: bool = typer.Option(
-            False, "--clear-model-pin", help="Clear model/reasoning overrides (legacy)"
-        ),
-        apply_template: Optional[str] = typer.Option(
-            None, "--apply-template", help="Template ref REPO:PATH[@REF] (legacy)"
-        ),
-        reconcile_depends_on: str = typer.Option(
-            "auto",
-            "--reconcile-depends-on",
-            help="depends_on reconciliation mode: off, warn, auto (legacy)",
+        append_final_tickets: bool = typer.Option(
+            False,
+            "--append-final-tickets",
+            help="Add final-review and open-pr tickets after import",
         ),
         final_review_agent: str = typer.Option(
             "codex",
             "--final-review-agent",
-            help="Agent for final review ticket (legacy)",
+            help="Agent for final-review ticket (with --append-final-tickets)",
         ),
         pr_agent: str = typer.Option(
-            "codex", "--pr-agent", help="Agent for open PR ticket (legacy)"
-        ),
-        start_point: Optional[str] = typer.Option(
-            None,
-            "--start-point",
-            help="Optional git ref for worktree branch (legacy, default: origin/<default-branch>)",
-        ),
-        force: bool = typer.Option(
-            False, "--force", help="Allow existing worktree path (legacy)"
+            "codex",
+            "--pr-agent",
+            help="Agent for open-pr ticket (with --append-final-tickets)",
         ),
         output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
         hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
     ):
-        """One-command ticket pack setup.
+        """Unpack a ticket pack zip into a repo and run ticket lint + flow preflight."""
 
-        New mode:
-        - `car hub tickets setup-pack <target_path> --from <zip> [--assign ...] [--start]`
-
-        Legacy mode:
-        - `car hub tickets setup-pack --base-repo ... --branch ... --zip ...`
-        """
-
-        new_mode_requested = (
-            target_path is not None or from_zip is not None or bool(assign)
-        )
-
-        if new_mode_requested:
-            if target_path is None:
-                raise_exit(
-                    "New setup-pack mode requires <target_path>. Example: "
-                    "car hub tickets setup-pack worktrees/repo--branch --from pack.zip"
-                )
-            if from_zip is None:
-                raise_exit("New setup-pack mode requires --from <zip_path>.")
-            if zip_path is not None:
-                raise_exit("Do not pass --zip with new mode; use --from.")
-            if (
-                any(
-                    value is not None
-                    for value in (
-                        base_repo_id,
-                        branch,
-                        renumber,
-                        assign_agent,
-                        apply_template,
-                        start_point,
-                    )
-                )
-                or clear_model_pin
-                or force
-            ):
-                raise_exit(
-                    "Cannot combine new mode flags (--from/--assign) with legacy setup-pack flags."
-                )
-            if reconcile_depends_on != "auto":
-                raise_exit(
-                    "Cannot use --reconcile-depends-on in new mode; depends_on is preserved."
-                )
-            if final_review_agent != "codex" or pr_agent != "codex":
-                raise_exit("Cannot use --final-review-agent/--pr-agent in new mode.")
-
-            target_repo = target_path.resolve()
-            try:
-                parse_assignment_specs(assign)
-                report = setup_ticket_pack(
-                    target_path=target_repo,
-                    zip_path=from_zip,
-                    assignment_specs=assign,
-                )
-            except TicketPackSetupError as exc:
-                raise_exit(str(exc), cause=exc)
-
-            ticket_dir = target_repo / ".codex-autorunner" / "tickets"
-            lint_errors = validate_tickets(ticket_dir)
-            engine = require_repo_config_func(target_repo, hub)
-            preflight = ticket_flow_preflight(engine, ticket_dir)
-
-            payload = {
-                "mode": "path",
-                "repo_root": str(target_repo),
-                "zip_path": str(from_zip),
-                "assign": list(assign),
-                "setup": report.to_dict(),
-                "lint_errors": lint_errors,
-                "preflight": preflight.to_dict(),
-                "started": False,
-            }
-
-            if output_json:
-                typer.echo(json.dumps(payload, indent=2))
-            else:
-                typer.echo(
-                    f"setup-pack: repo={target_repo} extracted={len(report.extracted_files)} assigned={len(report.assigned_files)}"
-                )
-                if lint_errors:
-                    for err in lint_errors:
-                        typer.echo(f"lint: {err}")
-                typer.echo("preflight:")
-                print_preflight_report(preflight)
-
-            if lint_errors or preflight.has_errors():
-                raise_exit("Ticket setup-pack failed preflight.")
-            if start:
-                ticket_flow_start(repo=target_repo, hub=hub, force_new=False)
-            return
-
-        if not base_repo_id or not branch or zip_path is None:
-            raise_exit(
-                "Legacy setup-pack mode requires --base-repo, --branch, and --zip. "
-                "Or use new mode: setup-pack <target_path> --from <zip>."
-            )
-        config = require_hub_config_func(hub)
-        if not zip_path.exists():
-            raise_exit(f"Zip path does not exist: {zip_path}")
-        if zip_path.is_dir():
-            raise_exit("Zip path must be a file.")
-
-        if assign_agent and assign_agent != "user":
-            try:
-                validate_agent_id(assign_agent, config)
-            except ValueError as exc:
-                raise_exit(str(exc), cause=exc)
-        if final_review_agent != "user":
-            try:
-                validate_agent_id(final_review_agent, config)
-            except ValueError as exc:
-                raise_exit(str(exc), cause=exc)
-        if pr_agent != "user":
-            try:
-                validate_agent_id(pr_agent, config)
-            except ValueError as exc:
-                raise_exit(str(exc), cause=exc)
-
-        supervisor = build_hub_supervisor(config)
+        target_repo = target_path.resolve()
         try:
-            snapshot = supervisor.create_worktree(
-                base_repo_id=base_repo_id,
-                branch=branch,
-                force=force,
-                start_point=start_point,
+            parse_assignment_specs(assign)
+            report = setup_ticket_pack(
+                target_path=target_repo,
+                zip_path=from_zip,
+                assignment_specs=assign,
             )
-        except Exception as exc:  # intentional: worktree creation error barrier
+        except TicketPackSetupError as exc:
             raise_exit(str(exc), cause=exc)
 
-        repo_id = snapshot.id
-        repo_root = snapshot.path
-        ticket_dir = repo_root / ".codex-autorunner" / "tickets"
-        renumber_parsed = parse_renumber(renumber)
-
-        template_frontmatter = None
-        if apply_template:
-            ctx = require_repo_config_func(repo_root, config.root)
-            require_templates_enabled_func(ctx.config)
-            fetched, _scan_record, _hub_root = fetch_template_with_scan_func(
-                apply_template, ctx, config.root
-            )
-            try:
-                template_frontmatter = load_template_frontmatter(fetched.content)
-            except TicketPackImportError as exc:
-                raise_exit(str(exc), cause=exc)
-
-        import_report = import_ticket_pack(
-            repo_id=repo_id,
-            repo_root=repo_root,
-            ticket_dir=ticket_dir,
-            zip_path=zip_path,
-            renumber=renumber_parsed,
-            assign_agent=assign_agent,
-            clear_model_pin=clear_model_pin,
-            template_ref=apply_template,
-            template_frontmatter=template_frontmatter,
-            lint=True,
-            dry_run=False,
-            strip_depends_on=False,
-            reconcile_depends_on=reconcile_depends_on,
-        )
-
+        ticket_dir = target_repo / ".codex-autorunner" / "tickets"
         final_tickets: list[str] = []
-        if import_report.ok():
+        if append_final_tickets:
+            if final_review_agent != "user":
+                try:
+                    validate_agent_id(final_review_agent, target_repo)
+                except ValueError as exc:
+                    raise_exit(str(exc), cause=exc)
+            if pr_agent != "user":
+                try:
+                    validate_agent_id(pr_agent, target_repo)
+                except ValueError as exc:
+                    raise_exit(str(exc), cause=exc)
             final_tickets = _append_setup_pack_final_tickets(
                 ticket_dir=ticket_dir,
                 review_agent=final_review_agent,
@@ -670,17 +464,15 @@ def register_hub_tickets_commands(
             )
 
         lint_errors = validate_tickets(ticket_dir)
-        engine = require_repo_config_func(repo_root, config.root)
+        engine = require_repo_config_func(target_repo, hub)
         preflight = ticket_flow_preflight(engine, ticket_dir)
 
         payload = {
-            "mode": "legacy",
-            "repo_id": repo_id,
-            "repo_root": str(repo_root),
-            "worktree_of": base_repo_id,
-            "branch": branch,
-            "zip_path": str(zip_path),
-            "import": import_report.to_dict(),
+            "mode": "path",
+            "repo_root": str(target_repo),
+            "zip_path": str(from_zip),
+            "assign": list(assign),
+            "setup": report.to_dict(),
             "final_tickets": final_tickets,
             "lint_errors": lint_errors,
             "preflight": preflight.to_dict(),
@@ -691,9 +483,8 @@ def register_hub_tickets_commands(
             typer.echo(json.dumps(payload, indent=2))
         else:
             typer.echo(
-                f"setup-pack: repo={repo_id} branch={branch} base={base_repo_id}"
+                f"setup-pack: repo={target_repo} extracted={len(report.extracted_files)} assigned={len(report.assigned_files)}"
             )
-            _print_ticket_import_report(import_report)
             if final_tickets:
                 typer.echo(f"final: {', '.join(final_tickets)}")
             if lint_errors:
@@ -702,7 +493,7 @@ def register_hub_tickets_commands(
             typer.echo("preflight:")
             print_preflight_report(preflight)
 
-        if (not import_report.ok()) or lint_errors or preflight.has_errors():
-            raise_exit("Ticket setup-pack failed.")
+        if lint_errors or preflight.has_errors():
+            raise_exit("Ticket setup-pack failed preflight.")
         if start:
-            ticket_flow_start(repo=repo_root, hub=config.root, force_new=False)
+            ticket_flow_start(repo=target_repo, hub=hub, force_new=False)

@@ -105,7 +105,7 @@ class RunnerStateManager:
                 return f"Autorunner is running (pid={pid}{host}); try again later."
             return (
                 "Autorunner lock present; clear it before continuing, or use "
-                "'car flow ticket_flow start' to resume existing flows."
+                "'car ticket-flow start' to resume existing flows."
             )
 
         state = load_state(self.state_path)
@@ -116,7 +116,7 @@ class RunnerStateManager:
             ):
                 return f"Autorunner is currently running (pid={state.runner_pid}); try again later."
             return (
-                "Autorunner state is stale; use 'car flow ticket_flow start' to "
+                "Autorunner state is stale; use 'car ticket-flow start' to "
                 "resume existing flows."
             )
         return None

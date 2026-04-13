@@ -424,13 +424,13 @@ def pma_notes_content() -> str:
 ## Ticket flow (start/resume)
 
 - Bootstrap (creates TICKET-001 if missing):
-  `car flow ticket_flow bootstrap --repo <path>`
+  `car ticket-flow bootstrap --repo <path>`
 - Start/resume:
-  `car flow ticket_flow start --repo <path>`
-  `car flow ticket_flow start --repo <path>`
+  `car ticket-flow start --repo <path>`
+  `car ticket-flow start --repo <path>`
 - Status/stop:
-  `car flow ticket_flow status --repo <path> [--run-id <uuid>]`
-  `car flow ticket_flow stop --repo <path> [--run-id <uuid>]`
+  `car ticket-flow status --repo <path> [--run-id <uuid>]`
+  `car ticket-flow stop --repo <path> [--run-id <uuid>]`
 - See `<repo>/.codex-autorunner/TICKET_FLOW_QUICKSTART.md` for CLI entrypoints + gotchas.
 
 ## Ticket flow mechanics (planning constraints)

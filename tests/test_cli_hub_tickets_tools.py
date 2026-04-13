@@ -2,13 +2,11 @@ from __future__ import annotations
 
 import zipfile
 from pathlib import Path
-from types import SimpleNamespace
 
 from typer.testing import CliRunner
 
-from codex_autorunner.bootstrap import seed_repo_files
 from codex_autorunner.cli import app
-from codex_autorunner.surfaces.cli.cli import PreflightCheck, PreflightReport
+from codex_autorunner.surfaces.cli.cli import FLOW_COMMANDS
 from codex_autorunner.tickets.frontmatter import parse_markdown_frontmatter
 
 runner = CliRunner()
@@ -107,23 +105,11 @@ def test_hub_tickets_setup_pack_creates_final_tickets(
     with zipfile.ZipFile(zip_path, "w") as zf:
         zf.writestr("TICKET-001.md", "---\nagent: codex\ndone: false\n---\n\nBody\n")
 
-    def _fake_create_worktree(self, base_repo_id: str, branch: str, **_kwargs):
-        repo_id = f"{base_repo_id}--{branch}"
-        repo_root = self.hub_config.root / "worktrees" / repo_id
-        repo_root.mkdir(parents=True, exist_ok=True)
-        (repo_root / ".git").mkdir(exist_ok=True)
-        seed_repo_files(repo_root, git_required=False)
-        return SimpleNamespace(id=repo_id, path=repo_root, branch=branch)
-
-    monkeypatch.setattr(
-        "codex_autorunner.surfaces.cli.cli.HubSupervisor.create_worktree",
-        _fake_create_worktree,
-    )
     monkeypatch.setattr(
         "codex_autorunner.surfaces.cli.cli._ticket_flow_preflight",
-        lambda *_args, **_kwargs: PreflightReport(
+        lambda *_args, **_kwargs: FLOW_COMMANDS.PreflightReport(
             checks=[
-                PreflightCheck(
+                FLOW_COMMANDS.PreflightCheck(
                     check_id="frontmatter",
                     status="ok",
                     message="ok",
@@ -138,14 +124,10 @@ def test_hub_tickets_setup_pack_creates_final_tickets(
             "hub",
             "tickets",
             "setup-pack",
-            "--hub",
-            str(hub_env.hub_root),
-            "--base-repo",
-            hub_env.repo_id,
-            "--branch",
-            "feature/setup-pack",
-            "--zip",
+            str(hub_env.repo_root),
+            "--from",
             str(zip_path),
+            "--append-final-tickets",
             "--json",
         ],
     )
@@ -157,12 +139,7 @@ def test_hub_tickets_setup_pack_creates_final_tickets(
     assert "preflight" in payload
 
     pr_ticket = (
-        hub_env.hub_root
-        / "worktrees"
-        / f"{hub_env.repo_id}--feature/setup-pack"
-        / ".codex-autorunner"
-        / "tickets"
-        / "TICKET-003-open-pr.md"
+        hub_env.repo_root / ".codex-autorunner" / "tickets" / "TICKET-003-open-pr.md"
     )
     _frontmatter, body = parse_markdown_frontmatter(
         pr_ticket.read_text(encoding="utf-8")

@@ -233,17 +233,17 @@ Operators should migrate only when they need intentional shared-chat behavior:
   and any root-chat or default-mode warnings.
 
 ### ticket_flow resume blocked or stale
-If `car flow ticket_flow start` fails because another run is active, inspect that active run before creating a new one.
+If `car ticket-flow start` fails because another run is active, inspect that active run before creating a new one.
 
 If the conflicting run is healthy (`status: running`, `worker.status: alive`), resume or stop that run instead of using `--force-new`.
 
 Use `--force-new` only when the conflicting active run is confirmed stale (`worker.status: absent` / `worker metadata missing`):
 
-`car flow ticket_flow start --repo <path> --force-new`
+`car ticket-flow start --repo <path> --force-new`
 
 Then verify the new run is live:
 
-`car flow ticket_flow status --json --repo <path> [--run-id <uuid>]`
+`car ticket-flow status --json --repo <path> [--run-id <uuid>]`
 
 Only use `resume` by default when the target run metadata is healthy and there is no active-run conflict.
 
@@ -301,10 +301,10 @@ Once basic setup is complete, suggest these next steps:
 
 | Command | Description |
 |---------|-------------|
-| `car flow ticket_flow bootstrap` | Seed tickets (if needed) and start a ticket flow |
-| `car flow ticket_flow start` | Start or resume the latest ticket flow (use `--force-new` when resume metadata is stale) |
-| `car flow ticket_flow status` | Show ticket flow status |
-| `car flow ticket_flow stop` | Stop a ticket flow |
+| `car ticket-flow bootstrap` | Seed tickets (if needed) and start a ticket flow |
+| `car ticket-flow start` | Start or resume the latest ticket flow (use `--force-new` when resume metadata is stale) |
+| `car ticket-flow status` | Show ticket flow status |
+| `car ticket-flow stop` | Stop a ticket flow |
 | `car status` | Show autorunner status |
 | `car log` | Show autorunner log output |
 | `car edit <doc>` | Open a workspace doc in your editor |

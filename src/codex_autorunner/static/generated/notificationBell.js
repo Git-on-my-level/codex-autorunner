@@ -81,9 +81,7 @@ function renderList(items) {
         const seq = item.seq ? `#${item.seq}` : "";
         const isInformationalDispatch = item.item_type === "run_dispatch" && item.dispatch_actionable === false;
         const canonicalState = item.canonical_state_v1;
-        const canonicalRecommendedAction = (canonicalState?.recommended_action || "").trim();
-        const legacyRecommendedAction = (item.run_state?.recommended_action || "").trim();
-        const recommendedAction = canonicalRecommendedAction || legacyRecommendedAction;
+        const recommendedAction = (canonicalState?.recommended_action || "").trim();
         const canonicalRecommendationConfidence = canonicalState?.recommendation_confidence;
         const canonicalRecommendationIsStale = Boolean(canonicalState?.recommendation_stale_reason) || canonicalRecommendationConfidence === "low";
         const snapshotFreshness = canonicalState?.freshness;
