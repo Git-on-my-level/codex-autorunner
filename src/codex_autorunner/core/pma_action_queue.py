@@ -10,6 +10,11 @@ from .pma_file_inbox import (
     _timestamp_sort_value,
     enrich_pma_file_inbox_entry,
 )
+from .pma_thread_classification import (
+    classify_thread_followup,
+    is_pma_self_thread,
+    thread_followup_state_rank,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -39,213 +44,6 @@ def _queue_supersession_payload(
         "superseded": superseded,
         "superseded_by": superseded_by,
         "reason": reason,
-    }
-
-
-def _thread_followup_state_rank(state: str) -> int:
-    normalized = state.strip().lower()
-    if normalized == "attention_required":
-        return 0
-    if normalized == "awaiting_followup":
-        return 10
-    if normalized == "reusable":
-        return 20
-    if normalized == "protected_chat_bound":
-        return 25
-    if normalized == "idle_archive_candidate":
-        return 30
-    return 99
-
-
-def _is_pma_self_thread(entry: Mapping[str, Any]) -> bool:
-    agent = str(entry.get("agent") or entry.get("agent_id") or "").strip().lower()
-    thread_kind = str(entry.get("thread_kind") or "").strip().lower()
-    resource_kind = str(entry.get("resource_kind") or "").strip().lower()
-    if thread_kind == "pma":
-        return True
-    return resource_kind == "agent_workspace" and agent.endswith("-pma")
-
-
-def _thread_followup_semantics(entry: Mapping[str, Any]) -> dict[str, Any]:
-    status = str(entry.get("status") or "").strip().lower()
-    status_reason = str(entry.get("status_reason") or "").strip().lower()
-    last_turn_id = str(entry.get("last_turn_id") or "").strip()
-    is_chat_bound = bool(
-        entry.get("chat_bound") is True or entry.get("cleanup_protected") is True
-    )
-    freshness = _extract_entry_freshness(entry)
-    is_stale = bool(
-        isinstance(freshness, Mapping) and freshness.get("is_stale") is True
-    )
-
-    if status == "running":
-        if is_stale:
-            if _is_pma_self_thread(entry):
-                return {
-                    "followup_state": "running_healthy",
-                    "operator_need": "none",
-                    "recommended_action": None,
-                    "why_selected": (
-                        "PMA self thread is still running; suppress hung-thread noise"
-                    ),
-                }
-            return {
-                "followup_state": "attention_required",
-                "operator_need": "urgent",
-                "recommended_action": "inspect_likely_hung_thread",
-                "why_selected": (
-                    "Managed thread has been running for an unusually long time "
-                    "and is likely hung; inspect or interrupt it"
-                ),
-                "recommended_detail_template": (
-                    "car pma thread status --id {managed_thread_id} --path <hub_root> ; "
-                    "car pma thread interrupt --id {managed_thread_id} --path <hub_root>"
-                ),
-            }
-        return {
-            "followup_state": "running_healthy",
-            "operator_need": "none",
-            "recommended_action": None,
-            "why_selected": "Managed thread is actively running",
-        }
-
-    if status == "failed":
-        return {
-            "followup_state": "attention_required",
-            "operator_need": "urgent",
-            "recommended_action": "inspect_managed_thread_failure",
-            "why_selected": "Managed thread failed and needs inspection before reuse",
-            "recommended_detail_template": (
-                "car pma thread status --id {managed_thread_id} --path <hub_root>"
-            ),
-        }
-    if status == "paused":
-        return {
-            "followup_state": "awaiting_followup",
-            "operator_need": "normal",
-            "recommended_action": "resume_managed_thread",
-            "why_selected": "Managed thread is paused and likely waiting for the next turn",
-            "recommended_detail_template": (
-                'car pma thread send --id {managed_thread_id} --message "..." --path <hub_root>'
-            ),
-        }
-    if status in {"completed", "interrupted"}:
-        if is_stale:
-            if is_chat_bound:
-                return {
-                    "followup_state": "protected_chat_bound",
-                    "operator_need": "protected",
-                    "recommended_action": "show_protected_threads",
-                    "why_selected": (
-                        "Chat-bound managed thread is dormant, but continuity-bearing "
-                        "chat threads are protected from cleanup by default"
-                    ),
-                    "recommended_detail_template": (
-                        "Protected by default: review this chat-bound thread before "
-                        "taking any action. Do not archive or remove it unless the "
-                        'user is explicit; broad requests like "clean up workspace" '
-                        "are not enough."
-                    ),
-                }
-            return {
-                "followup_state": "idle_archive_candidate",
-                "operator_need": "cleanup",
-                "recommended_action": "review_or_archive_managed_thread",
-                "why_selected": (
-                    "Managed thread has been dormant since its last completed turn "
-                    "and is a cleanup candidate"
-                ),
-                "recommended_detail_template": (
-                    "Review before cleanup: car pma thread archive --id "
-                    "{managed_thread_id} --path <hub_root> if dormant, or reuse it with "
-                    'car pma thread send --id {managed_thread_id} --message "..." --path <hub_root>'
-                ),
-            }
-        return {
-            "followup_state": "reusable",
-            "operator_need": "optional",
-            "recommended_action": "consider_resuming_managed_thread",
-            "why_selected": (
-                "Managed thread can be reused, but there is no stronger signal "
-                "that PMA needs to act on it now"
-            ),
-            "recommended_detail_template": (
-                "Optional reuse: car pma thread send --id {managed_thread_id} "
-                '--message "..." --path <hub_root>'
-            ),
-        }
-    if status == "idle":
-        if (
-            (status_reason == "thread_created" and not last_turn_id)
-            or status_reason == "thread_resumed"
-        ) and not is_stale:
-            return {
-                "followup_state": "reusable",
-                "operator_need": "optional",
-                "recommended_action": "consider_resuming_managed_thread",
-                "why_selected": (
-                    "Managed thread was recently created or resumed, but there is "
-                    "no explicit wake-up or continuity signal that PMA needs to "
-                    "act on it now"
-                ),
-                "recommended_detail_template": (
-                    "Optional reuse: car pma thread send --id {managed_thread_id} "
-                    '--message "..." --path <hub_root>'
-                ),
-            }
-        if is_stale:
-            if is_chat_bound:
-                return {
-                    "followup_state": "protected_chat_bound",
-                    "operator_need": "protected",
-                    "recommended_action": "show_protected_threads",
-                    "why_selected": (
-                        "Chat-bound managed thread is dormant, but continuity-bearing "
-                        "chat threads are protected from cleanup by default"
-                    ),
-                    "recommended_detail_template": (
-                        "Protected by default: review this chat-bound thread before "
-                        "taking any action. Do not archive or remove it unless the "
-                        'user is explicit; broad requests like "clean up workspace" '
-                        "are not enough."
-                    ),
-                }
-            return {
-                "followup_state": "idle_archive_candidate",
-                "operator_need": "cleanup",
-                "recommended_action": "review_or_archive_managed_thread",
-                "why_selected": (
-                    "Managed thread has been idle for a while with no recent "
-                    "operator signal and is a cleanup candidate"
-                ),
-                "recommended_detail_template": (
-                    "Review before cleanup: car pma thread archive --id "
-                    "{managed_thread_id} --path <hub_root> if dormant, or reuse it with "
-                    'car pma thread send --id {managed_thread_id} --message "..." --path <hub_root>'
-                ),
-            }
-        return {
-            "followup_state": "reusable",
-            "operator_need": "optional",
-            "recommended_action": "consider_resuming_managed_thread",
-            "why_selected": (
-                "Managed thread is available for reuse, but no immediate follow-up "
-                "signal is present"
-            ),
-            "recommended_detail_template": (
-                "Optional reuse: car pma thread send --id {managed_thread_id} "
-                '--message "..." --path <hub_root>'
-            ),
-        }
-    return {
-        "followup_state": "reusable",
-        "operator_need": "optional",
-        "recommended_action": "consider_resuming_managed_thread",
-        "why_selected": "Managed thread can accept another turn if PMA needs it",
-        "recommended_detail_template": (
-            "Optional reuse: car pma thread send --id {managed_thread_id} "
-            '--message "..." --path <hub_root>'
-        ),
     }
 
 
@@ -370,7 +168,7 @@ def _build_low_signal_thread_summary_item(
         "followup_state": followup_state,
         "followup_state_counts": {followup_state: len(items)},
         "operator_need": operator_need,
-        "operator_need_rank": _thread_followup_state_rank(followup_state),
+        "operator_need_rank": thread_followup_state_rank(followup_state),
         "why_selected": why_selected,
         "recommended_action": recommended_action,
         "recommended_detail": recommended_detail,
@@ -500,19 +298,26 @@ def _build_thread_queue_items(
         status = str(entry.get("status") or "").strip().lower()
         if status in {"", "archived"}:
             continue
+        freshness = _extract_entry_freshness(entry)
+        is_stale = bool(
+            isinstance(freshness, Mapping) and freshness.get("is_stale") is True
+        )
         if status == "running":
-            freshness = _extract_entry_freshness(entry)
-            is_stale = bool(
-                isinstance(freshness, Mapping) and freshness.get("is_stale") is True
-            )
-            if is_stale and _is_pma_self_thread(entry):
+            if is_stale and is_pma_self_thread(entry):
                 continue
             if not is_stale:
                 continue
         repo_id = str(entry.get("repo_id") or "").strip()
         managed_thread_id = str(entry.get("managed_thread_id") or "").strip()
-        freshness = _extract_entry_freshness(entry)
-        semantics = _thread_followup_semantics(entry)
+        is_chat_bound = bool(
+            entry.get("chat_bound") is True or entry.get("cleanup_protected") is True
+        )
+        semantics = classify_thread_followup(
+            entry,
+            is_stale=is_stale,
+            is_chat_bound=is_chat_bound,
+            is_self_thread=is_pma_self_thread(entry),
+        )
         next_action = str(semantics.get("recommended_action") or "").strip() or None
         why_selected = str(semantics.get("why_selected") or "").strip() or None
         detail_template = (
@@ -561,7 +366,7 @@ def _build_thread_queue_items(
                 "precedence": {"rank": rank, "label": label},
                 "followup_state": semantics.get("followup_state"),
                 "operator_need": semantics.get("operator_need"),
-                "operator_need_rank": _thread_followup_state_rank(
+                "operator_need_rank": thread_followup_state_rank(
                     str(semantics.get("followup_state") or "")
                 ),
                 "why_selected": why_selected,

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -851,6 +852,7 @@ class TestCompactionAndRetentionAtScale:
             )
             _seed_legacy_timeline_rows(hub_root, execution_id=eid, rows=rows)
 
+        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         for i in range(num_new):
             eid = f"exec-new-{i:03d}"
             rows = _build_legacy_timeline_rows(
@@ -859,7 +861,12 @@ class TestCompactionAndRetentionAtScale:
                 num_run_notices=3,
                 num_tool_calls=1,
             )
-            _seed_thread_and_execution(hub_root, execution_id=eid)
+            _seed_thread_and_execution(
+                hub_root,
+                execution_id=eid,
+                started_at=now_iso,
+                finished_at=now_iso,
+            )
             _seed_legacy_timeline_rows(hub_root, execution_id=eid, rows=rows)
 
         backfill_legacy_execution_history(hub_root)
