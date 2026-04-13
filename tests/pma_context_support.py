@@ -484,6 +484,12 @@ def test_format_pma_prompt_includes_hub_snapshot_and_message(tmp_path: Path) -> 
     assert "Run Dispatches (paused runs needing attention):" in result
     assert "Ticket planning constraints (state machine):" in result
     assert "Managed threads vs ticket flows:" in result
+    assert (
+        "Managed threads are the default for straightforward work in one managed resource"
+        in result
+    )
+    assert "Do not write ticket files as scaffolding for managed-thread work" in result
+    assert "3+ planned tickets" in result
     assert "car pma thread spawn" in result
     assert "Automation continuity (subscriptions + timers):" in result
     assert "/hub/pma/subscriptions" in result

@@ -34,6 +34,15 @@ def test_pma_files_created_on_hub_init(tmp_path: Path) -> None:
     assert "decisions.md" in prompt_content
     assert "spec.md" in prompt_content
     assert "car pma thread" in prompt_content
+    assert (
+        "Managed threads are the default for straightforward work in one repo"
+        in prompt_content
+    )
+    assert (
+        "Do not write ticket files as scaffolding for managed-thread work"
+        in prompt_content
+    )
+    assert "3+ planned tickets" in prompt_content
     assert "Automation primitives (event-driven continuity)" in prompt_content
     assert "/hub/pma/subscriptions" in prompt_content
     assert "/hub/pma/timers" in prompt_content
@@ -57,6 +66,14 @@ def test_pma_files_created_on_hub_init(tmp_path: Path) -> None:
     assert "flow_completed" in about_content
     assert "managed_thread_failed" in about_content
     assert ".codex-autorunner/pma/automation_store.json" in about_content
+
+    agents_path = docs_dir / "AGENTS.md"
+    assert agents_path.exists()
+    agents_content = agents_path.read_text(encoding="utf-8")
+    assert (
+        "Default to managed threads for straightforward single-session work"
+        in agents_content
+    )
 
 
 def test_pma_config_defaults(tmp_path: Path) -> None:
