@@ -45,6 +45,8 @@ from .models import (
     SurfaceBindingLookupRequest,
     SurfaceBindingResponse,
     SurfaceBindingUpsertRequest,
+    ThreadActivityRecordRequest,
+    ThreadBackendIdUpdateRequest,
     ThreadCompactSeedUpdateRequest,
     ThreadTargetArchiveRequest,
     ThreadTargetCreateRequest,
@@ -302,6 +304,24 @@ class HttpHubControlPlaneClient(HubControlPlaneClient):
             json_payload=request.to_dict(),
         )
         return ThreadTargetResponse.from_mapping(payload)
+
+    async def set_thread_backend_id(
+        self, request: ThreadBackendIdUpdateRequest
+    ) -> None:
+        await self._request_no_content(
+            method="POST",
+            path=f"/hub/api/control-plane/thread-targets/{request.thread_target_id}/backend-id",
+            json_payload=request.to_dict(),
+        )
+
+    async def record_thread_activity(
+        self, request: ThreadActivityRecordRequest
+    ) -> None:
+        await self._request_no_content(
+            method="POST",
+            path=f"/hub/api/control-plane/thread-targets/{request.thread_target_id}/activity",
+            json_payload=request.to_dict(),
+        )
 
     async def update_thread_compact_seed(
         self, request: ThreadCompactSeedUpdateRequest

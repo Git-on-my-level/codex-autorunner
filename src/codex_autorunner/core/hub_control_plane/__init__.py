@@ -51,6 +51,8 @@ from .models import (
     SurfaceBindingLookupRequest,
     SurfaceBindingResponse,
     SurfaceBindingUpsertRequest,
+    ThreadActivityRecordRequest,
+    ThreadBackendIdUpdateRequest,
     ThreadCompactSeedUpdateRequest,
     ThreadTarget,
     ThreadTargetArchiveRequest,
@@ -66,6 +68,7 @@ from .models import (
     WorkspaceSetupCommandResult,
     evaluate_handshake_compatibility,
 )
+from .remote_execution_store import RemoteThreadExecutionStore
 from .service import HubSharedStateService
 
 __all__ = [
@@ -119,6 +122,8 @@ __all__ = [
     "SurfaceBindingLookupRequest",
     "SurfaceBindingResponse",
     "SurfaceBindingUpsertRequest",
+    "ThreadActivityRecordRequest",
+    "ThreadBackendIdUpdateRequest",
     "ThreadCompactSeedUpdateRequest",
     "ThreadTarget",
     "ThreadTargetArchiveRequest",
@@ -126,6 +131,7 @@ __all__ = [
     "ThreadTargetListRequest",
     "ThreadTargetListResponse",
     "ThreadTargetLookupRequest",
+    "RemoteThreadExecutionStore",
     "ThreadTargetResponse",
     "ThreadTargetResumeRequest",
     "TranscriptHistoryRequest",

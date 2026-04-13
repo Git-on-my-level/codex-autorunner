@@ -53,6 +53,8 @@ from .models import (
     SurfaceBindingLookupRequest,
     SurfaceBindingResponse,
     SurfaceBindingUpsertRequest,
+    ThreadActivityRecordRequest,
+    ThreadBackendIdUpdateRequest,
     ThreadCompactSeedUpdateRequest,
     ThreadTargetArchiveRequest,
     ThreadTargetCreateRequest,
@@ -80,6 +82,8 @@ CONTROL_PLANE_CAPABILITIES: tuple[str, ...] = (
     "notification_reply_targets",
     "pma_snapshot",
     "surface_bindings",
+    "thread_activity_updates",
+    "thread_backend_updates",
     "thread_execution_lifecycle",
     "thread_target_creation",
     "thread_targets",
@@ -364,6 +368,20 @@ class HubSharedStateService:
             thread=_thread_target_from_row(
                 self._thread_store.get_thread(request.thread_target_id)
             )
+        )
+
+    def set_thread_backend_id(self, request: ThreadBackendIdUpdateRequest) -> None:
+        self._thread_store.set_thread_backend_id(
+            request.thread_target_id,
+            request.backend_thread_id,
+            backend_runtime_instance_id=request.backend_runtime_instance_id,
+        )
+
+    def record_thread_activity(self, request: ThreadActivityRecordRequest) -> None:
+        self._thread_store.update_thread_after_turn(
+            request.thread_target_id,
+            last_turn_id=request.execution_id,
+            last_message_preview=request.message_preview,
         )
 
     def update_thread_compact_seed(

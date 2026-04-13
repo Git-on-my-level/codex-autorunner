@@ -40,6 +40,8 @@ from .models import (
     SurfaceBindingLookupRequest,
     SurfaceBindingResponse,
     SurfaceBindingUpsertRequest,
+    ThreadActivityRecordRequest,
+    ThreadBackendIdUpdateRequest,
     ThreadCompactSeedUpdateRequest,
     ThreadTargetArchiveRequest,
     ThreadTargetCreateRequest,
@@ -156,6 +158,14 @@ class HubControlPlaneClient(Protocol):
     async def archive_thread_target(
         self, request: ThreadTargetArchiveRequest
     ) -> ThreadTargetResponse: ...
+
+    async def set_thread_backend_id(
+        self, request: ThreadBackendIdUpdateRequest
+    ) -> None: ...
+
+    async def record_thread_activity(
+        self, request: ThreadActivityRecordRequest
+    ) -> None: ...
 
     async def update_thread_compact_seed(
         self, request: ThreadCompactSeedUpdateRequest

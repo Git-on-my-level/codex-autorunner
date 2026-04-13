@@ -22,6 +22,8 @@ ControlPlaneCapability = Literal[
     "pma_snapshot",
     "surface_bindings",
     "thread_execution_lifecycle",
+    "thread_activity_updates",
+    "thread_backend_updates",
     "thread_target_creation",
     "thread_targets",
     "transcript_history",
@@ -713,6 +715,58 @@ class ThreadCompactSeedUpdateRequest:
         return {
             "thread_target_id": self.thread_target_id,
             "compact_seed": self.compact_seed,
+        }
+
+
+@dataclass(frozen=True)
+class ThreadBackendIdUpdateRequest:
+    thread_target_id: str
+    backend_thread_id: Optional[str] = None
+    backend_runtime_instance_id: Optional[str] = None
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> "ThreadBackendIdUpdateRequest":
+        return cls(
+            thread_target_id=_normalize_required_text(
+                data.get("thread_target_id"),
+                field_name="thread_target_id",
+            ),
+            backend_thread_id=_normalize_optional_text(data.get("backend_thread_id")),
+            backend_runtime_instance_id=_normalize_optional_text(
+                data.get("backend_runtime_instance_id")
+            ),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "thread_target_id": self.thread_target_id,
+            "backend_thread_id": self.backend_thread_id,
+            "backend_runtime_instance_id": self.backend_runtime_instance_id,
+        }
+
+
+@dataclass(frozen=True)
+class ThreadActivityRecordRequest:
+    thread_target_id: str
+    execution_id: Optional[str] = None
+    message_preview: Optional[str] = None
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> "ThreadActivityRecordRequest":
+        return cls(
+            thread_target_id=_normalize_required_text(
+                data.get("thread_target_id"),
+                field_name="thread_target_id",
+            ),
+            execution_id=_normalize_optional_text(data.get("execution_id")),
+            message_preview=_normalize_optional_text(data.get("message_preview")),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "thread_target_id": self.thread_target_id,
+            "execution_id": self.execution_id,
+            "message_preview": self.message_preview,
         }
 
 
@@ -1623,6 +1677,8 @@ __all__ = [
     "SurfaceBindingLookupRequest",
     "SurfaceBindingResponse",
     "SurfaceBindingUpsertRequest",
+    "ThreadActivityRecordRequest",
+    "ThreadBackendIdUpdateRequest",
     "ThreadCompactSeedUpdateRequest",
     "ThreadTarget",
     "ThreadTargetArchiveRequest",
