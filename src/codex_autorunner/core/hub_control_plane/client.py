@@ -193,5 +193,7 @@ class HubControlPlaneClient(Protocol):
         self, request: AutomationRequest
     ) -> AutomationResult: ...
 
+    async def aclose(self) -> None: ...
+
 
 __all__ = ["HubControlPlaneClient"]

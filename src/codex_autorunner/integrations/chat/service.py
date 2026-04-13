@@ -270,6 +270,16 @@ class ChatBotServiceCore:
                         f"{self._platform}.state.close_failed",
                         exc=exc,
                     )
+                if owner._hub_client is not None:
+                    try:
+                        await owner._hub_client.aclose()
+                    except (OSError, RuntimeError) as exc:
+                        log_event(
+                            owner._logger,
+                            logging.WARNING,
+                            f"{self._platform}.hub_client.close_failed",
+                            exc=exc,
+                        )
                 owner._release_instance_lock()
 
     async def run_adapter_loop(

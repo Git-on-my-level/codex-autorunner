@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import httpx
+
 from codex_autorunner.core.hub_control_plane import (
     ControlPlaneVersion,
     ExecutionBackendIdUpdateRequest,
@@ -327,3 +329,39 @@ def test_error_info_round_trip_preserves_taxonomy() -> None:
     assert info.code == "hub_incompatible"
     assert info.retryable is False
     assert info.details["expected_schema_generation"] == 17
+
+
+async def test_http_client_aclose_closes_owned_httpx_client() -> None:
+    from codex_autorunner.core.hub_control_plane.http_client import (
+        HttpHubControlPlaneClient,
+    )
+
+    client = HttpHubControlPlaneClient(base_url="http://localhost:9999")
+    assert not client._http_client.is_closed
+    await client.aclose()
+    assert client._http_client.is_closed
+
+
+async def test_http_client_aclose_skips_injected_httpx_client() -> None:
+    from codex_autorunner.core.hub_control_plane.http_client import (
+        HttpHubControlPlaneClient,
+    )
+
+    injected = httpx.AsyncClient(base_url="http://localhost:9999")
+    client = HttpHubControlPlaneClient(
+        base_url="http://localhost:9999", http_client=injected
+    )
+    await client.aclose()
+    assert not injected.is_closed
+    await injected.aclose()
+
+
+async def test_http_client_context_manager_closes() -> None:
+    from codex_autorunner.core.hub_control_plane.http_client import (
+        HttpHubControlPlaneClient,
+    )
+
+    client = HttpHubControlPlaneClient(base_url="http://localhost:9999")
+    async with client:
+        assert not client._http_client.is_closed
+    assert client._http_client.is_closed

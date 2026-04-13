@@ -3888,6 +3888,9 @@ class DiscordBotService:
                 await self._store.close()
         await self._close_all_app_server_supervisors()
         await self._close_all_opencode_supervisors()
+        if self._hub_client is not None:
+            with contextlib.suppress(Exception):
+                await self._hub_client.aclose()
         self._reap_managed_processes(stage="shutdown")
 
     async def _close_all_app_server_supervisors(self) -> None:

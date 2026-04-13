@@ -84,6 +84,7 @@ class _OwnerStub:
         self._ticket_flow_watch_task = None
         self._terminal_flow_watch_task = None
         self._spawned_tasks: set[asyncio.Task[object]] = set()
+        self._hub_client = None
         self._poller = _PollerStub()
 
     def _acquire_instance_lock(self) -> None:
