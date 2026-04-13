@@ -4157,7 +4157,9 @@ def test_build_pma_lifecycle_message(tmp_path: Path) -> None:
             data={"key": "val"},
             origin="test",
         )
-        msg = supervisor._build_pma_lifecycle_message(event, reason="auto")
+        msg = supervisor._lifecycle_router._build_lifecycle_message(
+            event, reason="auto"
+        )
         assert "dispatch_created" in msg
         assert "demo" in msg
         assert "reason: auto" in msg
@@ -4186,7 +4188,7 @@ def test_pma_reactive_gate_allows_by_default(tmp_path: Path) -> None:
             data=None,
             origin="test",
         )
-        allowed, reason = supervisor._pma_reactive_gate(event)
+        allowed, reason = supervisor._lifecycle_router.check_reactive_gate(event)
         assert allowed is True
         assert reason == "reactive_allowed"
     finally:
@@ -4214,7 +4216,7 @@ def test_pma_reactive_gate_blocks_disabled(tmp_path: Path) -> None:
             data=None,
             origin="test",
         )
-        allowed, reason = supervisor._pma_reactive_gate(event)
+        allowed, reason = supervisor._lifecycle_router.check_reactive_gate(event)
         assert allowed is False
         assert reason == "reactive_disabled"
     finally:
@@ -4242,7 +4244,7 @@ def test_pma_reactive_gate_blocks_origin(tmp_path: Path) -> None:
             data=None,
             origin="blocked_bot",
         )
-        allowed, reason = supervisor._pma_reactive_gate(event)
+        allowed, reason = supervisor._lifecycle_router.check_reactive_gate(event)
         assert allowed is False
         assert reason == "reactive_origin_blocked"
     finally:
@@ -4270,7 +4272,7 @@ def test_pma_reactive_gate_filters_event_types(tmp_path: Path) -> None:
             data=None,
             origin="test",
         )
-        allowed, reason = supervisor._pma_reactive_gate(event)
+        allowed, reason = supervisor._lifecycle_router.check_reactive_gate(event)
         assert allowed is False
         assert reason == "reactive_filtered"
     finally:
