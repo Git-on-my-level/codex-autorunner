@@ -2,16 +2,19 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
 from codex_autorunner.tickets.agent_pool import AgentTurnRequest, AgentTurnResult
+from codex_autorunner.tickets.files import read_ticket
 from codex_autorunner.tickets.models import TicketRunConfig
 from codex_autorunner.tickets.runner import TicketRunner
 from codex_autorunner.tickets.runner_prompt import (
     _preserve_ticket_structure,
     _shrink_prompt,
     _truncate_text_by_bytes,
+    build_prompt,
 )
 
 
@@ -160,6 +163,41 @@ def test_shrink_prompt_no_truncation_needed() -> None:
     assert sections["b"] == "World"
 
 
+def test_build_prompt_preserves_ticket_frontmatter_under_tight_budget(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    ticket_path = ticket_dir / "TICKET-001.md"
+    _write_ticket(ticket_path, done=False, body="x" * 10_000)
+
+    outbox_paths = MagicMock()
+    outbox_paths.dispatch_dir = (
+        workspace_root / ".codex-autorunner" / "runs" / "run-1" / "dispatch"
+    )
+    outbox_paths.dispatch_path = (
+        workspace_root / ".codex-autorunner" / "runs" / "run-1" / "DISPATCH.md"
+    )
+
+    ticket_doc, _ = read_ticket(ticket_path)
+    prompt = build_prompt(
+        ticket_path=ticket_path,
+        workspace_root=workspace_root,
+        ticket_doc=ticket_doc,
+        last_agent_output=None,
+        outbox_paths=outbox_paths,
+        lint_errors=None,
+        prompt_max_bytes=1024,
+    )
+
+    assert len(prompt.encode("utf-8")) <= 1024
+    assert "<CAR_CURRENT_TICKET_FILE>" in prompt
+    assert "<TICKET_MARKDOWN>" in prompt
+    assert "agent: codex" in prompt
+    assert "done: false" in prompt
+
+
 @pytest.mark.asyncio
 async def test_oversize_ticket_body_is_truncated(tmp_path: Path) -> None:
     workspace_root = tmp_path
@@ -213,7 +251,10 @@ async def test_oversize_agent_output_is_truncated(tmp_path: Path) -> None:
     )
 
     large_output = "y" * 5_000_000  # 5 MB
-    state = {"last_agent_output": large_output}
+    state = {
+        "current_ticket": ".codex-autorunner/tickets/TICKET-001.md",
+        "last_agent_output": large_output,
+    }
 
     def handler(req: AgentTurnRequest) -> AgentTurnResult:
         assert len(req.prompt.encode("utf-8")) <= 2048
