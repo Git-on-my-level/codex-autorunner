@@ -562,6 +562,7 @@ class HubSupervisor:
         backend_orchestrator_builder: Optional[BackendOrchestratorBuilder] = None,
         agent_id_validator: Optional[Callable[[str], str]] = None,
         scm_poll_processor: Optional[Callable[[int], dict[str, int]]] = None,
+        start_lifecycle_worker: bool = True,
     ):
         self.hub_config = hub_config
         self.state_path = hub_config.root / ".codex-autorunner" / "hub_state.json"
@@ -626,7 +627,8 @@ class HubSupervisor:
         )
         self._wire_outbox_lifecycle()
         self._reconcile_startup()
-        self._start_lifecycle_event_processor()
+        if start_lifecycle_worker:
+            self.startup()
 
     @classmethod
     def from_path(
@@ -1698,6 +1700,9 @@ class HubSupervisor:
 
     def _stop_lifecycle_event_processor(self) -> None:
         self._lifecycle_worker.stop()
+
+    def startup(self) -> None:
+        self._start_lifecycle_event_processor()
 
     def shutdown(self) -> None:
         self._stop_lifecycle_event_processor()

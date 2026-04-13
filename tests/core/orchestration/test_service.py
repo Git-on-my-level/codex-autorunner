@@ -1202,6 +1202,37 @@ async def test_record_execution_interrupted_notifies_managed_thread_subscription
     assert wakeup["lane_id"] == "pma:lane-next"
 
 
+async def test_record_execution_interrupted_is_idempotent_for_already_interrupted_turn(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+
+    running = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="trigger interruption",
+        )
+    )
+
+    first = service.record_execution_interrupted(
+        thread.thread_target_id,
+        running.execution_id,
+    )
+    second = service.record_execution_interrupted(
+        thread.thread_target_id,
+        running.execution_id,
+    )
+
+    assert first.status == "interrupted"
+    assert second.status == "interrupted"
+    assert second.execution_id == running.execution_id
+
+
 async def test_send_message_interrupts_busy_thread_when_requested(
     tmp_path: Path,
 ) -> None:

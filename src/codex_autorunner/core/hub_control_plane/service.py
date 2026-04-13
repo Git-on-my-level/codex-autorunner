@@ -125,10 +125,21 @@ def _coerce_positive_int(
     return normalized
 
 
-def _thread_target_from_row(record: dict[str, Any] | None) -> ThreadTarget | None:
+def _thread_target_from_store_row(
+    store: PmaThreadStore, record: dict[str, Any] | None
+) -> ThreadTarget | None:
     if record is None:
         return None
-    return ThreadTarget.from_mapping(record)
+    payload = dict(record)
+    thread_target_id = str(payload.get("managed_thread_id") or "").strip()
+    if thread_target_id:
+        runtime_binding = store.get_thread_runtime_binding(thread_target_id)
+        if runtime_binding is not None:
+            payload["backend_thread_id"] = runtime_binding.backend_thread_id
+            payload["backend_runtime_instance_id"] = (
+                runtime_binding.backend_runtime_instance_id
+            )
+    return ThreadTarget.from_mapping(payload)
 
 
 def _execution_from_record(record: ExecutionRecord | None) -> ExecutionRecord | None:
@@ -317,8 +328,8 @@ class HubSharedStateService:
     def get_thread_target(
         self, request: ThreadTargetLookupRequest
     ) -> ThreadTargetResponse:
-        thread = _thread_target_from_row(
-            self._thread_store.get_thread(request.thread_target_id)
+        thread = _thread_target_from_store_row(
+            self._thread_store, self._thread_store.get_thread(request.thread_target_id)
         )
         return ThreadTargetResponse(thread=thread)
 
@@ -336,7 +347,9 @@ class HubSharedStateService:
         )
         threads = tuple(
             thread
-            for thread in (_thread_target_from_row(row) for row in rows)
+            for thread in (
+                _thread_target_from_store_row(self._thread_store, row) for row in rows
+            )
             if thread is not None
         )
         return ThreadTargetListResponse(threads=threads)
@@ -353,8 +366,9 @@ class HubSharedStateService:
         )
         self._thread_store.activate_thread(request.thread_target_id)
         return ThreadTargetResponse(
-            thread=_thread_target_from_row(
-                self._thread_store.get_thread(request.thread_target_id)
+            thread=_thread_target_from_store_row(
+                self._thread_store,
+                self._thread_store.get_thread(request.thread_target_id),
             )
         )
 
@@ -365,8 +379,9 @@ class HubSharedStateService:
             return ThreadTargetResponse(thread=None)
         self._thread_store.archive_thread(request.thread_target_id)
         return ThreadTargetResponse(
-            thread=_thread_target_from_row(
-                self._thread_store.get_thread(request.thread_target_id)
+            thread=_thread_target_from_store_row(
+                self._thread_store,
+                self._thread_store.get_thread(request.thread_target_id),
             )
         )
 
@@ -394,8 +409,9 @@ class HubSharedStateService:
             request.compact_seed,
         )
         return ThreadTargetResponse(
-            thread=_thread_target_from_row(
-                self._thread_store.get_thread(request.thread_target_id)
+            thread=_thread_target_from_store_row(
+                self._thread_store,
+                self._thread_store.get_thread(request.thread_target_id),
             )
         )
 
@@ -412,7 +428,9 @@ class HubSharedStateService:
             backend_thread_id=request.backend_thread_id,
             metadata=request.metadata or None,
         )
-        return ThreadTargetResponse(thread=_thread_target_from_row(created))
+        return ThreadTargetResponse(
+            thread=_thread_target_from_store_row(self._thread_store, created)
+        )
 
     def _execution_rejected(
         self, *, operation: str, exc: BaseException

@@ -21,7 +21,10 @@ from ...core.context_awareness import (
     maybe_inject_prompt_writing_hint,
 )
 from ...core.filebox import inbox_dir, outbox_dir, outbox_pending_dir
-from ...core.hub_control_plane import RemoteThreadExecutionStore
+from ...core.hub_control_plane import (
+    RemoteSurfaceBindingStore,
+    RemoteThreadExecutionStore,
+)
 from ...core.injected_context import wrap_injected_context
 from ...core.logging_utils import log_event
 from ...core.orchestration import (
@@ -32,6 +35,7 @@ from ...core.orchestration import (
     build_harness_backed_orchestration_service,
     build_surface_orchestration_ingress,
 )
+from ...core.orchestration.bindings import OrchestrationBindingStore
 from ...core.orchestration.runtime_thread_events import RuntimeThreadRunEventState
 from ...core.orchestration.runtime_threads import (
     RuntimeThreadExecution,
@@ -2339,10 +2343,14 @@ def build_discord_thread_orchestration_service(service: Any) -> Any:
         )
         return None
     thread_store = RemoteThreadExecutionStore(cast(Any, hub_client))
+    binding_store: OrchestrationBindingStore = RemoteSurfaceBindingStore(  # type: ignore[assignment]
+        cast(Any, hub_client)
+    )
     created = build_harness_backed_orchestration_service(
         descriptors=cast(Any, descriptors),
         harness_factory=_make_harness,
         thread_store=thread_store,
+        binding_store=binding_store,
     )
     service._discord_thread_orchestration_service = created
     service._discord_managed_thread_orchestration_service = created

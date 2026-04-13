@@ -36,7 +36,10 @@ from .....core.context_awareness import (
     maybe_inject_filebox_hint,
     maybe_inject_prompt_writing_hint,
 )
-from .....core.hub_control_plane import RemoteThreadExecutionStore
+from .....core.hub_control_plane import (
+    RemoteSurfaceBindingStore,
+    RemoteThreadExecutionStore,
+)
 from .....core.injected_context import wrap_injected_context
 from .....core.logging_utils import log_event
 from .....core.orchestration import (
@@ -380,10 +383,12 @@ def _build_telegram_thread_orchestration_service(handlers: Any) -> Any:
         )
         return None
     thread_store = RemoteThreadExecutionStore(hub_client)
+    binding_store = RemoteSurfaceBindingStore(hub_client)
     created = build_harness_backed_orchestration_service(
         descriptors=descriptors,
         harness_factory=_make_harness,
         thread_store=thread_store,
+        binding_store=binding_store,
     )
     handlers._telegram_managed_thread_orchestration_service = created
     handlers._telegram_thread_orchestration_service = created

@@ -1448,6 +1448,11 @@ class _FakeCompactHubClient:
     async def update_thread_compact_seed(self, request: Any) -> Any:
         self.compact_seed_updates.append(request)
         thread_store = getattr(self._orchestration_service, "thread_store", None)
+        remote_client = getattr(thread_store, "_client", None)
+        if remote_client is not None and hasattr(
+            remote_client, "update_thread_compact_seed"
+        ):
+            return await remote_client.update_thread_compact_seed(request)
         pma_store = getattr(thread_store, "_store", None)
         if pma_store is not None:
             pma_store.set_thread_compact_seed(
@@ -6846,14 +6851,7 @@ async def test_message_create_in_pma_mode_uses_pma_session_key(tmp_path: Path) -
         assert captured[0]["orchestrator_channel_key"] == "pma:channel-1"
         prompt_text = captured[0]["prompt_text"]
         assert "plan next sprint" in prompt_text and prompt_text != "plan next sprint"
-        assert (
-            "Hub Snapshot Availability:" in prompt_text
-            and "status=hub_unavailable" in prompt_text
-        )
-        assert (
-            "Do not infer hub-root queue, thread, inbox, or automation state"
-            in prompt_text
-        )
+        assert "<hub_snapshot>" in prompt_text
         assert any(
             "PMA reply" in msg["payload"].get("content", "")
             for msg in rest.channel_messages
@@ -7755,7 +7753,7 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
 
         def __init__(self) -> None:
             self.turn_prompts: list[str] = []
-            self.resume_conversation_calls: list[tuple[Path, str]] = []
+            self.turn_conversation_ids: list[str] = []
 
         async def ensure_ready(self, workspace_root: Path) -> None:
             _ = workspace_root
@@ -7772,7 +7770,7 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
         async def resume_conversation(
             self, workspace_root: Path, conversation_id: str
         ) -> SimpleNamespace:
-            self.resume_conversation_calls.append((workspace_root, conversation_id))
+            _ = workspace_root
             return SimpleNamespace(id=conversation_id)
 
         async def start_turn(
@@ -7798,6 +7796,7 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
             )
             turn_id = f"backend-turn-{len(self.turn_prompts) + 1}"
             self.turn_prompts.append(prompt)
+            self.turn_conversation_ids.append(conversation_id)
             return SimpleNamespace(conversation_id=conversation_id, turn_id=turn_id)
 
         async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
@@ -7890,8 +7889,9 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
         )
         assert binding is not None
         assert binding.thread_target_id == threads[0]["managed_thread_id"]
-        assert harness.resume_conversation_calls == [
-            (workspace.resolve(), "backend-thread-1")
+        assert harness.turn_conversation_ids == [
+            "backend-thread-1",
+            "backend-thread-1",
         ]
     finally:
         if not release_task.done():
@@ -7962,7 +7962,7 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
 
         def __init__(self) -> None:
             self.turn_prompts: list[str] = []
-            self.resume_conversation_calls: list[tuple[Path, str]] = []
+            self.turn_conversation_ids: list[str] = []
 
         async def ensure_ready(self, workspace_root: Path) -> None:
             _ = workspace_root
@@ -7979,7 +7979,7 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
         async def resume_conversation(
             self, workspace_root: Path, conversation_id: str
         ) -> SimpleNamespace:
-            self.resume_conversation_calls.append((workspace_root, conversation_id))
+            _ = workspace_root
             return SimpleNamespace(id=conversation_id)
 
         async def start_turn(
@@ -8005,6 +8005,7 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
             )
             turn_id = f"hermes-backend-turn-{len(self.turn_prompts) + 1}"
             self.turn_prompts.append(prompt)
+            self.turn_conversation_ids.append(conversation_id)
             return SimpleNamespace(conversation_id=conversation_id, turn_id=turn_id)
 
         async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
@@ -8115,8 +8116,9 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
         turns = thread_store.list_turns(resolved_thread.thread_target_id, limit=10)
         assert len(turns) == 2
         assert [turn["status"] for turn in turns] == ["ok", "ok"]
-        assert harness.resume_conversation_calls == [
-            (workspace.resolve(), "hermes-backend-thread-1")
+        assert harness.turn_conversation_ids == [
+            "hermes-backend-thread-1",
+            "hermes-backend-thread-1",
         ]
     finally:
         if not release_task.done():

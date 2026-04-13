@@ -466,9 +466,11 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
         self, thread_target_id: str, execution_id: str
     ) -> ExecutionRecord:
         updated = self._store.mark_turn_interrupted(execution_id)
-        if not updated:
-            raise KeyError(f"Execution '{execution_id}' was not running")
         execution = self.get_execution(thread_target_id, execution_id)
+        if not updated:
+            if execution is not None and execution.status == "interrupted":
+                return execution
+            raise KeyError(f"Execution '{execution_id}' was not running")
         if execution is None:
             raise KeyError(
                 f"Execution '{execution_id}' is missing after interrupt recording"

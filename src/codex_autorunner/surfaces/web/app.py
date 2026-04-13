@@ -210,6 +210,10 @@ def create_hub_app(
             loop=asyncio.get_running_loop(),
         )
         try:
+            hub_supervisor = getattr(app.state, "hub_supervisor", None)
+            startup_hub_supervisor = getattr(hub_supervisor, "startup", None)
+            if callable(startup_hub_supervisor):
+                startup_hub_supervisor()
 
             async def _refresh_mounts_from_manifest() -> None:
                 try:
@@ -567,6 +571,21 @@ def create_hub_app(
                     task.cancel()
                 if tasks:
                     await asyncio.gather(*tasks, return_exceptions=True)
+                hub_supervisor = getattr(app.state, "hub_supervisor", None)
+                shutdown_hub_supervisor = getattr(hub_supervisor, "shutdown", None)
+                if callable(shutdown_hub_supervisor):
+                    try:
+                        shutdown_hub_supervisor()
+                    except (
+                        OSError,
+                        RuntimeError,
+                    ) as exc:  # intentional: cleanup must not crash
+                        safe_log(
+                            app.state.logger,
+                            logging.WARNING,
+                            "Hub supervisor shutdown failed",
+                            exc,
+                        )
                 await mount_manager.stop_repo_mounts()
                 if registered_pma_lane_starter and callable(pma_lane_starter_register):
                     try:

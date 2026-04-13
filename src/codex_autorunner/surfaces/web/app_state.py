@@ -684,6 +684,7 @@ def build_hub_context(
             hub_root=config.root,
             raw_config=config.raw,
         ),
+        start_lifecycle_worker=False,
     )
     logger = setup_rotating_logger(f"hub[{config.root}]", config.server_log)
     env_overrides = collect_env_overrides()

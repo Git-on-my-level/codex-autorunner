@@ -641,13 +641,20 @@ def test_hub_repos_sections_use_fresh_agent_workspace_listing(
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
     class _Workspace:
+        id = "fresh-ws"
+        runtime = "codex"
+        path = Path(".codex-autorunner/agent-workspaces/fresh-ws")
+        display_name = None
+        enabled = True
+        exists_on_disk = True
+
         def to_dict(self, _root: Path) -> dict[str, str]:
             return {"id": "fresh-ws", "resource_kind": "agent_workspace"}
 
     monkeypatch.setattr(
         HubSupervisor,
         "list_agent_workspaces",
-        lambda self: [_Workspace()],
+        lambda self, *, use_cache=True: [_Workspace()],
     )
 
     client = TestClient(create_hub_app(hub_root))

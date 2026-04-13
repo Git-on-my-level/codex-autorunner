@@ -12,6 +12,7 @@ from ...agents.base import (
     harness_progress_event_stream,
     harness_supports_progress_event_stream,
 )
+from ...core.hub_control_plane.errors import HubControlPlaneError
 from ...core.logging_utils import log_event
 from ...core.orchestration.cold_trace_store import ColdTraceWriter
 from ...core.orchestration.models import MessageRequest
@@ -969,11 +970,13 @@ def ensure_managed_thread_queue_worker(
                         transcript_turn_id=None,
                     )
             except (
+                HubControlPlaneError,
                 RuntimeError,
                 OSError,
                 ValueError,
                 TypeError,
                 AttributeError,
+                KeyError,
             ):
                 logger.exception(
                     "Managed-thread queue worker cleanup failed (thread=%s)",
@@ -1769,7 +1772,7 @@ async def finalize_managed_thread_execution(
             backend_turn_id=outcome.backend_turn_id,
             transcript_turn_id=None,
         )
-    except KeyError:
+    except (HubControlPlaneError, KeyError):
         pass
     log_event(
         logger,

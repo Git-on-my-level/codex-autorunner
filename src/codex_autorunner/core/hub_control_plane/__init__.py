@@ -68,6 +68,7 @@ from .models import (
     WorkspaceSetupCommandResult,
     evaluate_handshake_compatibility,
 )
+from .remote_binding_store import RemoteSurfaceBindingStore
 from .remote_execution_store import RemoteThreadExecutionStore
 from .service import HubSharedStateService
 
@@ -118,6 +119,7 @@ __all__ = [
     "QueueDepthRequest",
     "QueueDepthResponse",
     "QueuedExecutionListRequest",
+    "RemoteSurfaceBindingStore",
     "RunningExecutionLookupRequest",
     "SurfaceBindingLookupRequest",
     "SurfaceBindingResponse",

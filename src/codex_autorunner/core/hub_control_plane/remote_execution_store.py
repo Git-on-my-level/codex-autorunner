@@ -14,6 +14,7 @@ from ..orchestration.models import (
     MessageRequestKind,
     ThreadTarget,
 )
+from ..orchestration.runtime_bindings import RuntimeThreadBinding
 from .client import HubControlPlaneClient
 from .errors import HubControlPlaneError
 from .models import (
@@ -179,6 +180,23 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
             ),
         )
         return response.thread
+
+    def get_thread_runtime_binding(
+        self, thread_target_id: str
+    ) -> Optional[RuntimeThreadBinding]:
+        thread = self.get_thread_target(thread_target_id)
+        if thread is None:
+            return None
+        backend_thread_id = str(getattr(thread, "backend_thread_id", "") or "").strip()
+        backend_runtime_instance_id = str(
+            getattr(thread, "backend_runtime_instance_id", "") or ""
+        ).strip()
+        if not backend_thread_id and not backend_runtime_instance_id:
+            return None
+        return RuntimeThreadBinding(
+            backend_thread_id=backend_thread_id or None,
+            backend_runtime_instance_id=backend_runtime_instance_id or None,
+        )
 
     def list_thread_targets(
         self,

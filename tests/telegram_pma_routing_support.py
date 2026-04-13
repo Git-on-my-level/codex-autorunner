@@ -12,12 +12,20 @@ import httpx
 import pytest
 
 from codex_autorunner.agents.registry import AgentDescriptor
+from codex_autorunner.core.hub_control_plane import HubSharedStateService
 from codex_autorunner.core.orchestration.runtime_threads import (
     RUNTIME_THREAD_INTERRUPTED_ERROR,
     RUNTIME_THREAD_TIMEOUT_ERROR,
 )
-from codex_autorunner.core.pma_context import default_pma_prompt_state_path
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
+from codex_autorunner.core.orchestration.sqlite import prepare_orchestration_sqlite
+from codex_autorunner.core.pma_context import (
+    build_hub_snapshot,
+    default_pma_prompt_state_path,
+)
+from codex_autorunner.core.pma_thread_store import (
+    PmaThreadStore,
+    prepare_pma_thread_store,
+)
 from codex_autorunner.core.sse import format_sse
 from codex_autorunner.integrations.app_server.client import (
     CodexAppServerDisconnected,
@@ -78,6 +86,135 @@ class _RouterStub:
 
     async def get_topic(self, _key: str) -> TelegramTopicRecord:
         return self._record
+
+
+class _NoopSupervisor:
+    def list_agent_workspaces(self, *, use_cache: bool = True) -> list[object]:
+        _ = use_cache
+        return []
+
+    def get_agent_workspace_snapshot(self, workspace_id: str) -> object:
+        raise ValueError(f"Unknown workspace id: {workspace_id}")
+
+    def run_setup_commands_for_workspace(
+        self, workspace_root: Path, *, repo_id_hint: Optional[str] = None
+    ) -> int:
+        _ = workspace_root, repo_id_hint
+        return 0
+
+    def process_pma_automation_now(
+        self, *, include_timers: bool = True, limit: int = 100
+    ) -> dict[str, int]:
+        return {
+            "timers_processed": 1 if include_timers else 0,
+            "wakeups_dispatched": limit,
+        }
+
+
+class _InProcessHubControlPlaneClient:
+    def __init__(self, hub_root: Path) -> None:
+        self._hub_root = Path(hub_root)
+        prepare_orchestration_sqlite(self._hub_root, durable=False)
+        prepare_pma_thread_store(self._hub_root, durable=False)
+        self._service = HubSharedStateService(
+            hub_root=self._hub_root,
+            supervisor=_NoopSupervisor(),
+            durable_writes=False,
+        )
+
+    async def get_surface_binding(self, request: Any) -> Any:
+        return self._service.get_surface_binding(request)
+
+    async def upsert_surface_binding(self, request: Any) -> Any:
+        return self._service.upsert_surface_binding(request)
+
+    async def get_thread_target(self, request: Any) -> Any:
+        return self._service.get_thread_target(request)
+
+    async def list_thread_targets(self, request: Any) -> Any:
+        return self._service.list_thread_targets(request)
+
+    async def create_thread_target(self, request: Any) -> Any:
+        return self._service.create_thread_target(request)
+
+    async def create_execution(self, request: Any) -> Any:
+        return self._service.create_execution(request)
+
+    async def get_execution(self, request: Any) -> Any:
+        return self._service.get_execution(request)
+
+    async def get_running_execution(self, request: Any) -> Any:
+        return self._service.get_running_execution(request)
+
+    async def get_latest_execution(self, request: Any) -> Any:
+        return self._service.get_latest_execution(request)
+
+    async def list_queued_executions(self, request: Any) -> Any:
+        return self._service.list_queued_executions(request)
+
+    async def get_queue_depth(self, request: Any) -> Any:
+        return self._service.get_queue_depth(request)
+
+    async def cancel_queued_execution(self, request: Any) -> Any:
+        return self._service.cancel_queued_execution(request)
+
+    async def promote_queued_execution(self, request: Any) -> Any:
+        return self._service.promote_queued_execution(request)
+
+    async def record_execution_result(self, request: Any) -> Any:
+        return self._service.record_execution_result(request)
+
+    async def record_execution_interrupted(self, request: Any) -> Any:
+        return self._service.record_execution_interrupted(request)
+
+    async def cancel_queued_executions(self, request: Any) -> Any:
+        return self._service.cancel_queued_executions(request)
+
+    async def set_execution_backend_id(self, request: Any) -> None:
+        self._service.set_execution_backend_id(request)
+
+    async def claim_next_queued_execution(self, request: Any) -> Any:
+        return self._service.claim_next_queued_execution(request)
+
+    async def resume_thread_target(self, request: Any) -> Any:
+        return self._service.resume_thread_target(request)
+
+    async def archive_thread_target(self, request: Any) -> Any:
+        return self._service.archive_thread_target(request)
+
+    async def set_thread_backend_id(self, request: Any) -> None:
+        self._service.set_thread_backend_id(request)
+
+    async def record_thread_activity(self, request: Any) -> None:
+        self._service.record_thread_activity(request)
+
+    async def update_thread_compact_seed(self, request: Any) -> Any:
+        return self._service.update_thread_compact_seed(request)
+
+    async def get_transcript_history(self, request: Any) -> Any:
+        return self._service.get_transcript_history(request)
+
+    async def get_pma_snapshot(self) -> Any:
+        return type(
+            "PmaSnapshotResponse",
+            (),
+            {"snapshot": await build_hub_snapshot(None, hub_root=self._hub_root)},
+        )()
+
+    async def get_agent_workspace(self, request: Any) -> Any:
+        return self._service.get_agent_workspace(request)
+
+    async def list_agent_workspaces(self, request: Any) -> Any:
+        return self._service.list_agent_workspaces(request)
+
+    async def run_workspace_setup_commands(self, request: Any) -> Any:
+        return self._service.run_workspace_setup_commands(request)
+
+    async def request_automation(self, request: Any) -> Any:
+        return self._service.request_automation(request)
+
+    async def aclose(self) -> None:
+        return None
 
 
 def test_sanitize_runtime_thread_result_error_preserves_sanitized_detail() -> None:
@@ -1442,6 +1579,8 @@ class _ManagedThreadPMAHandler(_PMAHandler):
         ] = {}
         self._turn_progress_locks: dict[tuple[str, str], asyncio.Lock] = {}
         self._pending_context_usage: dict[tuple[str, str], int] = {}
+        self._hub_client = _InProcessHubControlPlaneClient(hub_root)
+        self._hub_handshake_compatibility = SimpleNamespace(compatible=True)
 
     async def _send_message(
         self,
@@ -3141,17 +3280,16 @@ async def test_pma_interrupt_uses_managed_thread_orchestration_for_text_turns(
         )
         with anyio.fail_after(2):
             while (
-                "Interrupted active PMA turn. Cancelled 1 queued PMA turn(s)."
+                "Recovered stale PMA session after backend thread was lost. Cancelled 1 queued PMA turn(s)."
                 not in handler._sent
             ):
                 await anyio.sleep(0.05)
+        release_first.set()
         await first_task
 
-        assert harness.interrupt_calls == [
-            (tmp_path, "telegram-backend-thread-1", "telegram-backend-turn-1")
-        ]
+        assert harness.interrupt_calls == []
         assert (
-            "Interrupted active PMA turn. Cancelled 1 queued PMA turn(s)."
+            "Recovered stale PMA session after backend thread was lost. Cancelled 1 queued PMA turn(s)."
             in handler._sent
         )
         assert "unexpected queued reply" not in handler._sent
@@ -3860,17 +3998,19 @@ async def test_repo_interrupt_uses_orchestration_binding_for_text_turns(
         )
         with anyio.fail_after(2):
             while (
-                "Interrupted active turn. Cancelled 1 queued turn(s)."
+                "Recovered stale session after backend thread was lost. Cancelled 1 queued turn(s)."
                 not in handler._sent
             ):
                 await anyio.sleep(0.05)
+        release_first.set()
         await first_task
 
         assert handler._client.thread_start_calls == []
-        assert harness.interrupt_calls == [
-            (tmp_path, "repo-backend-thread-1", "repo-backend-turn-1")
-        ]
-        assert "Interrupted active turn. Cancelled 1 queued turn(s)." in handler._sent
+        assert harness.interrupt_calls == []
+        assert (
+            "Recovered stale session after backend thread was lost. Cancelled 1 queued turn(s)."
+            in handler._sent
+        )
         assert "unexpected queued repo reply" not in handler._sent
     finally:
         release_first.set()
@@ -4467,17 +4607,19 @@ async def test_repo_interrupt_uses_orchestration_binding_for_hermes_text_turns(
         )
         with anyio.fail_after(2):
             while (
-                "Interrupted active turn. Cancelled 1 queued turn(s)."
+                "Recovered stale session after backend thread was lost. Cancelled 1 queued turn(s)."
                 not in handler._sent
             ):
                 await anyio.sleep(0.05)
+        release_first.set()
         await first_task
 
         assert handler._client.thread_start_calls == []
-        assert harness.interrupt_calls == [
-            (tmp_path, "hermes-fresh-1", "hermes-turn-1")
-        ]
-        assert "Interrupted active turn. Cancelled 1 queued turn(s)." in handler._sent
+        assert harness.interrupt_calls == []
+        assert (
+            "Recovered stale session after backend thread was lost. Cancelled 1 queued turn(s)."
+            in handler._sent
+        )
         assert "unexpected hermes queued reply" not in handler._sent
     finally:
         release_first.set()
@@ -4655,6 +4797,8 @@ class _NewtHandler(WorkspaceCommands):
         self._sent: list[str] = []
         self.app_server_supervisor = _NewtSupervisorStub()
         self.app_server_events = _NewtEventsStub()
+        self._hub_client = _InProcessHubControlPlaneClient(hub_root)
+        self._hub_handshake_compatibility = SimpleNamespace(compatible=True)
 
     async def _resolve_topic_key(self, chat_id: int, thread_id: Optional[int]) -> str:
         return f"{chat_id}:{thread_id}"
