@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -830,6 +831,12 @@ class TestCompactionAndRetentionAtScale:
     def test_retention_prune_at_scale(self, tmp_path: Path) -> None:
         hub_root = tmp_path / "hub"
         hub_root.mkdir()
+        recent_started_at = (datetime.now(timezone.utc) - timedelta(hours=12)).replace(
+            microsecond=0
+        )
+        recent_finished_at = recent_started_at + timedelta(minutes=5)
+        recent_started_at_iso = recent_started_at.isoformat().replace("+00:00", "Z")
+        recent_finished_at_iso = recent_finished_at.isoformat().replace("+00:00", "Z")
 
         num_old = 15
         num_new = 5
@@ -855,11 +862,18 @@ class TestCompactionAndRetentionAtScale:
             eid = f"exec-new-{i:03d}"
             rows = _build_legacy_timeline_rows(
                 execution_id=eid,
+                started_at=recent_started_at_iso,
+                finished_at=recent_finished_at_iso,
                 num_output_deltas=5,
                 num_run_notices=3,
                 num_tool_calls=1,
             )
-            _seed_thread_and_execution(hub_root, execution_id=eid)
+            _seed_thread_and_execution(
+                hub_root,
+                execution_id=eid,
+                started_at=recent_started_at_iso,
+                finished_at=recent_finished_at_iso,
+            )
             _seed_legacy_timeline_rows(hub_root, execution_id=eid, rows=rows)
 
         backfill_legacy_execution_history(hub_root)
