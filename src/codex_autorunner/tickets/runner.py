@@ -8,10 +8,10 @@ from ..contextspace.paths import contextspace_doc_path
 from ..core.file_chat_keys import ticket_instance_token
 from ..core.flows.models import FlowEventType
 from ..core.git_utils import git_diff_stats
-from . import runner_commit, runner_post_turn, runner_prompt, runner_selection
+from . import runner_commit, runner_post_turn, runner_selection
 from .agent_pool import AgentPool
-from .files import list_ticket_paths, safe_relpath
-from .models import TicketContextEntry, TicketResult, TicketRunConfig
+from .files import safe_relpath
+from .models import TicketResult, TicketRunConfig
 from .outbox import (
     archive_dispatch,
     create_turn_summary,
@@ -22,7 +22,6 @@ from .replies import (
     dispatch_reply,
     ensure_reply_dirs,
     next_reply_seq,
-    parse_user_reply,
     resolve_reply_paths,
 )
 from .runner_execution import (
@@ -38,7 +37,7 @@ from .runner_prompt import (
     _build_car_hud,
     _preserve_ticket_structure,  # noqa: F401  # re-exported for backwards compatibility
     _shrink_prompt,
-    _truncate_text_by_bytes,
+    _truncate_text_by_bytes,  # noqa: F401  # re-exported for backwards compatibility
 )
 
 _is_network_error = is_network_error
@@ -48,109 +47,11 @@ _logger = logging.getLogger(__name__)
 WORKSPACE_DOC_MAX_CHARS = 4000
 CAR_HUD_MAX_LINES = 14
 CAR_HUD_MAX_CHARS = 900
-TICKET_CONTEXT_DEFAULT_MAX_BYTES = 4096
-TICKET_CONTEXT_TOTAL_MAX_BYTES = 16384
-
-
-def _load_ticket_context_block(
-    *,
-    workspace_root: Path,
-    entries: tuple[TicketContextEntry, ...],
-) -> tuple[str, list[str]]:
-    """Resolve requested ticket context entries into a bounded prompt block."""
-
-    if not entries:
-        return "", []
-
-    missing_required: list[str] = []
-    blocks: list[str] = []
-    remaining_total = TICKET_CONTEXT_TOTAL_MAX_BYTES
-
-    for entry in entries:
-        rel_path = entry.path
-        absolute = workspace_root / rel_path
-        block_prefix = f"- path: {rel_path}\n- required: {str(entry.required).lower()}"
-        cap = min(
-            (
-                entry.max_bytes
-                if entry.max_bytes is not None
-                else TICKET_CONTEXT_DEFAULT_MAX_BYTES
-            ),
-            TICKET_CONTEXT_TOTAL_MAX_BYTES,
-        )
-        cap = min(cap, max(remaining_total, 0))
-
-        if not absolute.exists():
-            if entry.required:
-                missing_required.append(rel_path)
-            blocks.append(
-                "<CAR_CONTEXT_ENTRY>\n"
-                f"{block_prefix}\n"
-                "- status: missing\n"
-                "</CAR_CONTEXT_ENTRY>"
-            )
-            continue
-
-        if not absolute.is_file():
-            if entry.required:
-                missing_required.append(rel_path)
-            blocks.append(
-                "<CAR_CONTEXT_ENTRY>\n"
-                f"{block_prefix}\n"
-                "- status: not_a_file\n"
-                "</CAR_CONTEXT_ENTRY>"
-            )
-            continue
-
-        try:
-            raw = absolute.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError) as exc:
-            if entry.required:
-                missing_required.append(rel_path)
-            blocks.append(
-                "<CAR_CONTEXT_ENTRY>\n"
-                f"{block_prefix}\n"
-                f"- status: read_error ({exc})\n"
-                "</CAR_CONTEXT_ENTRY>"
-            )
-            continue
-
-        content = (raw or "").strip()
-        if cap <= 0:
-            blocks.append(
-                "<CAR_CONTEXT_ENTRY>\n"
-                f"{block_prefix}\n"
-                "- status: skipped_budget_exhausted\n"
-                "</CAR_CONTEXT_ENTRY>"
-            )
-            continue
-        truncated = _truncate_text_by_bytes(content, cap)
-        payload = (
-            "<CAR_CONTEXT_ENTRY>\n"
-            f"{block_prefix}\n"
-            f"- max_bytes: {cap}\n"
-            "- status: included\n"
-            "CONTENT:\n"
-            f"{truncated}\n"
-            "</CAR_CONTEXT_ENTRY>"
-        )
-        payload_bytes = len(payload.encode("utf-8"))
-        if payload_bytes > remaining_total:
-            # Final strict clamp for total boundedness.
-            trimmed = _truncate_text_by_bytes(payload, max(remaining_total, 0))
-            blocks.append(trimmed)
-            remaining_total = 0
-            break
-        blocks.append(payload)
-        remaining_total -= payload_bytes
-
-    header = (
-        "Requested ticket context includes "
-        f"(bounded total bytes={TICKET_CONTEXT_TOTAL_MAX_BYTES}):"
-    )
-    rendered = "\n\n".join([header] + blocks)
-    rendered = _truncate_text_by_bytes(rendered, TICKET_CONTEXT_TOTAL_MAX_BYTES)
-    return rendered, missing_required
+TICKET_CONTEXT_TOTAL_MAX_BYTES = runner_selection.TICKET_CONTEXT_TOTAL_MAX_BYTES
+load_ticket_context_block = runner_selection.load_ticket_context_block
+_load_ticket_context_block = (
+    runner_selection.load_ticket_context_block
+)  # noqa: F401  # backward compat re-export
 
 
 class TicketRunner:
@@ -195,13 +96,6 @@ class TicketRunner:
         # Clear transient reason from previous pause/resume cycles.
         state.pop("reason", None)
 
-        _commit_raw = state.get("commit")
-        commit_state: dict[str, Any] = (
-            _commit_raw if isinstance(_commit_raw, dict) else {}
-        )
-        commit_pending = bool(commit_state.get("pending"))
-        commit_retries = int(commit_state.get("retries") or 0)
-        # Global counters.
         total_turns = int(state.get("total_turns") or 0)
 
         _network_raw = state.get("network_retry")
@@ -283,149 +177,60 @@ class TicketRunner:
             )
 
         current_path = selection_result.selected.path
-        _commit_raw = state.get("commit")
-        commit_state = _commit_raw if isinstance(_commit_raw, dict) else {}
-        commit_pending = bool(commit_state.get("pending"))
-        commit_retries = int(commit_state.get("retries") or 0)
 
-        # Determine lint-retry mode early. When lint state is present, we allow the
-        # agent to fix the ticket frontmatter even if the ticket is currently
-        # unparsable by the strict lint rules.
-        if state.get("status") == "paused":
-            # Clear stale pause markers so upgraded logic can proceed without manual DB edits.
-            state["status"] = "running"
-            state.pop("reason", None)
-            state.pop("reason_details", None)
-            state.pop("reason_code", None)
-            state.pop("pause_context", None)
-
-        _lint_raw = state.get("lint")
-        lint_state: dict[str, Any] = _lint_raw if isinstance(_lint_raw, dict) else {}
-        _lint_errors_raw = lint_state.get("errors")
-        lint_errors: list[str] = (
-            _lint_errors_raw if isinstance(_lint_errors_raw, list) else []
-        )
-        lint_retries = int(lint_state.get("retries") or 0)
-        _conv_id_raw = lint_state.get("conversation_id")
-        reuse_conversation_id: Optional[str] = (
-            _conv_id_raw if isinstance(_conv_id_raw, str) else None
-        )
-
-        validation_result = runner_selection.validate_ticket_for_execution(
-            ticket_path=current_path,
+        # Pre-turn planning: validate, load context, build prompt.
+        plan = runner_selection.plan_pre_turn(
+            selection_result=selection_result,
             workspace_root=self._workspace_root,
+            ticket_dir=ticket_dir,
+            config=self._config,
             state=state,
-            lint_errors=lint_errors if lint_errors else None,
+            run_id=self._run_id,
+            outbox_paths=outbox_paths,
+            reply_paths=reply_paths,
         )
-        current_ticket_path = safe_relpath(current_path, self._workspace_root)
-        if validation_result.status == "paused":
-            reason_details = (
-                "Errors:\n- " + "\n- ".join(validation_result.errors)
-                if validation_result.errors
-                else None
-            )
+        for key, value in plan.state_updates.items():
+            if value is None:
+                state.pop(key, None)
+            else:
+                state[key] = value
+
+        if plan.status == "paused":
             return self._pause(
                 state,
-                reason=validation_result.pause_reason or "Ticket validation failed.",
-                reason_details=reason_details,
-                current_ticket=current_ticket_path,
-                reason_code=validation_result.pause_reason_code or "needs_user_fix",
+                reason=plan.pause_reason or "Paused",
+                reason_details=plan.pause_reason_details,
+                reason_code=plan.pause_reason_code or "needs_user_fix",
+                current_ticket=plan.current_ticket_path,
             )
-        if not validation_result.validated:
-            return self._pause(
-                state,
-                reason="Ticket validation failed unexpectedly.",
-                current_ticket=current_ticket_path,
-                reason_code="infra_error",
-            )
-
-        ticket_doc = validation_result.validated.ticket_doc
-        current_ticket_id = ticket_doc.frontmatter.ticket_id
-        state["current_ticket_id"] = current_ticket_id
-        if validation_result.validated.skip_execution:
-            return TicketResult(status="continue", state=state)
-
-        ticket_turns = int(state.get("ticket_turns") or 0)
-        reply_seq = int(state.get("reply_seq") or 0)
-        reply_context, reply_max_seq = self._build_reply_context(
-            reply_paths=reply_paths, last_seq=reply_seq
-        )
-        ticket_paths = list_ticket_paths(ticket_dir)
-        requested_context_block, missing_required_context = _load_ticket_context_block(
-            workspace_root=self._workspace_root,
-            entries=ticket_doc.frontmatter.context,
-        )
-        if missing_required_context:
-            details = "Missing required ticket context files:\n- " + "\n- ".join(
-                missing_required_context
-            )
-            state["status"] = "failed"
-            state["reason_code"] = "missing_required_context"
-            state["reason"] = "Required ticket context file missing."
-            state["reason_details"] = details
+        if plan.status == "failed":
             return TicketResult(
                 status="failed",
                 state=state,
-                reason="Required ticket context file missing.",
-                reason_details=details,
-                current_ticket=safe_relpath(current_path, self._workspace_root),
+                reason=plan.pause_reason or "Required ticket context file missing.",
+                reason_details=plan.pause_reason_details,
+                current_ticket=plan.current_ticket_path,
             )
+        if plan.status == "skip":
+            return TicketResult(status="continue", state=state)
 
-        previous_ticket_content: Optional[str] = None
-        if self._config.include_previous_ticket_context:
-            try:
-                if current_path in ticket_paths:
-                    curr_idx = ticket_paths.index(current_path)
-                    if curr_idx > 0:
-                        prev_path = ticket_paths[curr_idx - 1]
-                        content = prev_path.read_text(encoding="utf-8")
-                        previous_ticket_content = _truncate_text_by_bytes(
-                            content, 16384
-                        )
-            except OSError:
-                _logger.debug("failed to read previous ticket content", exc_info=True)
+        # Extract plan outputs for execution and post-turn phases.
+        commit_pending = plan.commit_pending
+        commit_retries = plan.commit_retries
+        lint_errors = plan.lint_errors
+        lint_retries = plan.lint_retries
+        reuse_conversation_id = plan.conversation_id
+        reply_seq = plan.reply_seq
+        reply_max_seq = plan.reply_max_seq
+        current_ticket_id: str = plan.current_ticket_id  # type: ignore[assignment]
+        current_ticket_path: str = plan.current_ticket_path  # type: ignore[assignment]
+        prompt: str = plan.prompt  # type: ignore[assignment]
 
-        prompt = runner_prompt.build_prompt(
-            ticket_path=current_path,
-            workspace_root=self._workspace_root,
-            ticket_doc=ticket_doc,
-            last_agent_output=(
-                state.get("last_agent_output")
-                if isinstance(state.get("last_agent_output"), str)
-                else None
-            ),
-            last_checkpoint_error=(
-                state.get("last_checkpoint_error")
-                if isinstance(state.get("last_checkpoint_error"), str)
-                else None
-            ),
-            commit_required=commit_pending,
-            commit_attempt=commit_retries + 1 if commit_pending else 0,
-            commit_max_attempts=self._config.max_commit_retries,
-            outbox_paths=outbox_paths,
-            lint_errors=lint_errors if lint_errors else None,
-            reply_context=reply_context,
-            requested_context=requested_context_block,
-            previous_ticket_content=previous_ticket_content,
-            prior_no_change_turns=self._prior_no_change_turns(state, current_ticket_id),
-            prompt_max_bytes=self._config.prompt_max_bytes,
-        )
-
-        # Execute turn.
-        # Build options dict with model/reasoning from ticket frontmatter if set.
-        turn_options: dict[str, Any] = {}
-        if ticket_doc.frontmatter.model:
-            turn_options["model"] = ticket_doc.frontmatter.model
-        if ticket_doc.frontmatter.reasoning:
-            turn_options["reasoning"] = ticket_doc.frontmatter.reasoning
-        turn_options["ticket_flow_run_id"] = self._run_id
-
+        # Increment turn counters.
         total_turns += 1
-        ticket_turns += 1
+        ticket_turns = int(state.get("ticket_turns") or 0) + 1
         state["total_turns"] = total_turns
         state["ticket_turns"] = ticket_turns
-
-        current_ticket_path = safe_relpath(current_path, self._workspace_root)
 
         git_state_before = capture_git_state(workspace_root=self._workspace_root)
         repo_fingerprint_before_turn = git_state_before["repo_fingerprint_before"]
@@ -433,11 +238,11 @@ class TicketRunner:
 
         result = await execute_turn(
             agent_pool=self._agent_pool,
-            agent_id=ticket_doc.frontmatter.agent,
+            agent_id=plan.ticket_doc.frontmatter.agent,
             prompt=prompt,
             workspace_root=self._workspace_root,
             conversation_id=reuse_conversation_id,
-            options=turn_options if turn_options else None,
+            options=plan.turn_options,
             emit_event=emit_event,
             max_network_retries=self._config.max_network_retries,
             current_network_retries=network_retries,
@@ -870,84 +675,6 @@ class TicketRunner:
             body=body,
         )
 
-    def _build_reply_context(self, *, reply_paths, last_seq: int) -> tuple[str, int]:
-        """Render new human replies (reply_history) into a prompt block.
-
-        Returns (rendered_text, max_seq_seen).
-        """
-
-        history_dir = getattr(reply_paths, "reply_history_dir", None)
-        if history_dir is None:
-            return "", last_seq
-        if not history_dir.exists() or not history_dir.is_dir():
-            return "", last_seq
-
-        entries: list[tuple[int, Path]] = []
-        try:
-            for child in history_dir.iterdir():
-                try:
-                    if not child.is_dir():
-                        continue
-                    name = child.name
-                    if not (len(name) == 4 and name.isdigit()):
-                        continue
-                    seq = int(name)
-                    if seq <= last_seq:
-                        continue
-                    entries.append((seq, child))
-                except OSError:
-                    continue
-        except OSError:
-            return "", last_seq
-
-        if not entries:
-            return "", last_seq
-
-        entries.sort(key=lambda x: x[0])
-        max_seq = max(seq for seq, _ in entries)
-
-        blocks: list[str] = []
-        for seq, entry_dir in entries:
-            reply_path = entry_dir / "USER_REPLY.md"
-            reply, errors = (
-                parse_user_reply(reply_path)
-                if reply_path.exists()
-                else (None, ["USER_REPLY.md missing"])
-            )
-
-            block_lines: list[str] = [f"[USER_REPLY {seq:04d}]"]
-            if errors:
-                block_lines.append("Errors:\n- " + "\n- ".join(errors))
-            if reply is not None:
-                if reply.title:
-                    block_lines.append(f"Title: {reply.title}")
-                if reply.body:
-                    block_lines.append(reply.body)
-
-            attachments: list[str] = []
-            try:
-                for child in sorted(entry_dir.iterdir(), key=lambda p: p.name):
-                    try:
-                        if child.name.startswith("."):
-                            continue
-                        if child.name == "USER_REPLY.md":
-                            continue
-                        if child.is_dir():
-                            continue
-                        attachments.append(safe_relpath(child, self._workspace_root))
-                    except OSError:
-                        continue
-            except OSError:
-                attachments = []
-
-            if attachments:
-                block_lines.append("Attachments:\n- " + "\n- ".join(attachments))
-
-            blocks.append("\n".join(block_lines).strip())
-
-        rendered = "\n\n".join(blocks).strip()
-        return rendered, max_seq
-
     def _build_prompt(
         self,
         *,
@@ -1169,12 +896,3 @@ class TicketRunner:
                 "ticket_block",
             ],
         )
-
-    def _prior_no_change_turns(self, state: dict[str, Any], ticket_id: str) -> int:
-        loop_guard_raw = state.get("loop_guard")
-        loop_guard_state = (
-            dict(loop_guard_raw) if isinstance(loop_guard_raw, dict) else {}
-        )
-        if loop_guard_state.get("ticket") != ticket_id:
-            return 0
-        return int(loop_guard_state.get("no_change_count") or 0)

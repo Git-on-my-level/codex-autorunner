@@ -12,7 +12,7 @@ from codex_autorunner.tickets.models import TicketContextEntry, TicketRunConfig
 from codex_autorunner.tickets.runner import (
     TICKET_CONTEXT_TOTAL_MAX_BYTES,
     TicketRunner,
-    _load_ticket_context_block,
+    load_ticket_context_block,
 )
 from codex_autorunner.tickets.runner_execution import (
     LOOP_NO_CHANGE_THRESHOLD,
@@ -20,6 +20,7 @@ from codex_autorunner.tickets.runner_execution import (
     should_pause_for_loop,
 )
 from codex_autorunner.tickets.runner_prompt import build_prompt as runner_prompt_build
+from codex_autorunner.tickets.runner_selection import build_reply_context
 
 
 def _write_ticket(
@@ -70,7 +71,7 @@ def _prompts_match_or_known_drift(legacy: str, module: str) -> bool:
 
 class TestLoadTicketContextBlock:
     def test_empty_entries_returns_empty(self, tmp_path: Path) -> None:
-        rendered, missing = _load_ticket_context_block(
+        rendered, missing = load_ticket_context_block(
             workspace_root=tmp_path,
             entries=(),
         )
@@ -79,7 +80,7 @@ class TestLoadTicketContextBlock:
 
     def test_missing_required_reported(self, tmp_path: Path) -> None:
         entries = (TicketContextEntry(path="docs/absent.md", required=True),)
-        rendered, missing = _load_ticket_context_block(
+        rendered, missing = load_ticket_context_block(
             workspace_root=tmp_path,
             entries=entries,
         )
@@ -88,7 +89,7 @@ class TestLoadTicketContextBlock:
 
     def test_missing_optional_not_reported(self, tmp_path: Path) -> None:
         entries = (TicketContextEntry(path="docs/optional.md", required=False),)
-        rendered, missing = _load_ticket_context_block(
+        rendered, missing = load_ticket_context_block(
             workspace_root=tmp_path,
             entries=entries,
         )
@@ -100,7 +101,7 @@ class TestLoadTicketContextBlock:
         docs.mkdir()
         (docs / "notes.md").write_text("Hello world", encoding="utf-8")
         entries = (TicketContextEntry(path="docs/notes.md", required=True),)
-        rendered, missing = _load_ticket_context_block(
+        rendered, missing = load_ticket_context_block(
             workspace_root=tmp_path,
             entries=entries,
         )
@@ -111,7 +112,7 @@ class TestLoadTicketContextBlock:
     def test_directory_instead_of_file_treated_as_missing(self, tmp_path: Path) -> None:
         (tmp_path / "docs_dir").mkdir()
         entries = (TicketContextEntry(path="docs_dir", required=True),)
-        rendered, missing = _load_ticket_context_block(
+        rendered, missing = load_ticket_context_block(
             workspace_root=tmp_path,
             entries=entries,
         )
@@ -127,7 +128,7 @@ class TestLoadTicketContextBlock:
             TicketContextEntry(path="docs/a.txt"),
             TicketContextEntry(path="docs/b.txt"),
         )
-        rendered, missing = _load_ticket_context_block(
+        rendered, missing = load_ticket_context_block(
             workspace_root=tmp_path,
             entries=entries,
         )
@@ -138,7 +139,7 @@ class TestLoadTicketContextBlock:
         docs.mkdir()
         (docs / "big.txt").write_text("X" * 50000, encoding="utf-8")
         entries = (TicketContextEntry(path="docs/big.txt", max_bytes=500),)
-        rendered, missing = _load_ticket_context_block(
+        rendered, missing = load_ticket_context_block(
             workspace_root=tmp_path,
             entries=entries,
         )
@@ -161,7 +162,7 @@ class TestLoadTicketContextBlock:
             TicketContextEntry(path="docs/first.txt"),
             TicketContextEntry(path="docs/second.txt"),
         )
-        rendered, missing = _load_ticket_context_block(
+        rendered, missing = load_ticket_context_block(
             workspace_root=tmp_path,
             entries=entries,
         )
@@ -174,7 +175,7 @@ class TestLoadTicketContextBlock:
         bad_file = docs / "bad.txt"
         bad_file.write_bytes(b"\xff\xfe\x00")
         entries = (TicketContextEntry(path="docs/bad.txt", required=False),)
-        rendered, missing = _load_ticket_context_block(
+        rendered, missing = load_ticket_context_block(
             workspace_root=tmp_path,
             entries=entries,
         )
@@ -187,7 +188,7 @@ class TestLoadTicketContextBlock:
         bad_file = docs / "bad.txt"
         bad_file.write_bytes(b"\xff\xfe\x00")
         entries = (TicketContextEntry(path="docs/bad.txt", required=True),)
-        rendered, missing = _load_ticket_context_block(
+        rendered, missing = load_ticket_context_block(
             workspace_root=tmp_path,
             entries=entries,
         )
@@ -581,20 +582,6 @@ class TestReplyContextOrdering:
         self, tmp_path: Path
     ) -> None:
         workspace_root = tmp_path
-        ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
-        ticket_dir.mkdir(parents=True, exist_ok=True)
-        ticket_path = ticket_dir / "TICKET-001.md"
-        _write_ticket(ticket_path, done=False)
-
-        runner = TicketRunner(
-            workspace_root=workspace_root,
-            run_id="run-1",
-            config=TicketRunConfig(
-                ticket_dir=Path(".codex-autorunner/tickets"),
-                auto_commit=False,
-            ),
-            agent_pool=MagicMock(),
-        )
 
         run_dir = workspace_root / ".codex-autorunner" / "runs" / "run-1"
         reply_history = run_dir / "reply_history"
@@ -615,8 +602,8 @@ class TestReplyContextOrdering:
         reply_paths = MagicMock()
         reply_paths.reply_history_dir = reply_history
 
-        rendered, max_seq = runner._build_reply_context(
-            reply_paths=reply_paths, last_seq=1
+        rendered, max_seq = build_reply_context(
+            workspace_root=workspace_root, reply_paths=reply_paths, last_seq=1
         )
 
         assert max_seq == 2
@@ -633,16 +620,6 @@ class TestReplyContextOrdering:
         ticket_path = ticket_dir / "TICKET-001.md"
         _write_ticket(ticket_path, done=False)
 
-        runner = TicketRunner(
-            workspace_root=workspace_root,
-            run_id="run-1",
-            config=TicketRunConfig(
-                ticket_dir=Path(".codex-autorunner/tickets"),
-                auto_commit=False,
-            ),
-            agent_pool=MagicMock(),
-        )
-
         run_dir = workspace_root / ".codex-autorunner" / "runs" / "run-1"
         reply_history = run_dir / "reply_history"
         reply_history.mkdir(parents=True, exist_ok=True)
@@ -656,8 +633,8 @@ class TestReplyContextOrdering:
         reply_paths = MagicMock()
         reply_paths.reply_history_dir = reply_history
 
-        rendered, max_seq = runner._build_reply_context(
-            reply_paths=reply_paths, last_seq=1
+        rendered, max_seq = build_reply_context(
+            workspace_root=workspace_root, reply_paths=reply_paths, last_seq=1
         )
 
         assert rendered == ""

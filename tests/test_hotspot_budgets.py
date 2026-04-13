@@ -81,13 +81,13 @@ STANDARD_FILE_BUDGETS = (
     ),
     FileBudget(
         path="src/codex_autorunner/tickets/runner_types.py",
-        max_lines=260,
+        max_lines=300,
         reason="Typed runner state belongs in a compact seam, not another catch-all module.",
     ),
     FileBudget(
         path="src/codex_autorunner/tickets/runner_selection.py",
-        max_lines=280,
-        reason="Ticket selection should stay extracted from TicketRunner.step().",
+        max_lines=700,
+        reason="Ticket selection, context loading, and pre-turn planning extracted from TicketRunner.step().",
     ),
     FileBudget(
         path="src/codex_autorunner/tickets/runner_execution.py",

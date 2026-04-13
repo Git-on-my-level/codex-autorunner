@@ -55,6 +55,34 @@ class TicketValidationResult:
 
 
 @dataclass(frozen=True)
+class PreTurnPlan:
+    """Result of pre-turn planning phase.
+
+    Either the turn is ready for execution (status='ready') with all prompt
+    inputs assembled, or the runner should pause/fail/skip.
+    """
+
+    status: str  # "ready" | "paused" | "failed" | "skip"
+    state_updates: dict[str, Any] = field(default_factory=dict)
+
+    prompt: Optional[str] = None
+    ticket_doc: Any = None
+    current_ticket_id: Optional[str] = None
+    conversation_id: Optional[str] = None
+    turn_options: Optional[dict[str, Any]] = None
+    reply_max_seq: int = 0
+    reply_seq: int = 0
+    commit_pending: bool = False
+    commit_retries: int = 0
+    lint_errors: Optional[list[str]] = None
+    lint_retries: int = 0
+    current_ticket_path: Optional[str] = None
+    pause_reason: Optional[str] = None
+    pause_reason_code: Optional[str] = None
+    pause_reason_details: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class PromptInputs:
     """Inputs required for prompt assembly."""
 
