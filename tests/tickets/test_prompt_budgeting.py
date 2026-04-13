@@ -7,8 +7,8 @@ import pytest
 
 from codex_autorunner.tickets.agent_pool import AgentTurnRequest, AgentTurnResult
 from codex_autorunner.tickets.models import TicketRunConfig
-from codex_autorunner.tickets.runner import (
-    TicketRunner,
+from codex_autorunner.tickets.runner import TicketRunner
+from codex_autorunner.tickets.runner_prompt import (
     _preserve_ticket_structure,
     _shrink_prompt,
     _truncate_text_by_bytes,

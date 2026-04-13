@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -24,27 +23,8 @@ from .runner_execution import (
     capture_git_state_after,
     compute_loop_guard,
     execute_turn,
-    is_network_error,
     should_pause_for_loop,
 )
-from .runner_prompt import (
-    CAR_HUD_MAX_CHARS,  # noqa: F401  # re-exported for backwards compatibility
-    CAR_HUD_MAX_LINES,  # noqa: F401  # re-exported for backwards compatibility
-    TRUNCATION_MARKER,  # noqa: F401  # re-exported for backwards compatibility
-    _preserve_ticket_structure,  # noqa: F401  # re-exported for backwards compatibility
-    _shrink_prompt,  # noqa: F401  # re-exported for backwards compatibility
-    _truncate_text_by_bytes,  # noqa: F401  # re-exported for backwards compatibility
-    build_prompt,
-)
-
-_is_network_error = is_network_error
-
-_logger = logging.getLogger(__name__)
-TICKET_CONTEXT_TOTAL_MAX_BYTES = runner_selection.TICKET_CONTEXT_TOTAL_MAX_BYTES
-load_ticket_context_block = runner_selection.load_ticket_context_block
-_load_ticket_context_block = (
-    runner_selection.load_ticket_context_block
-)  # noqa: F401  # backward compat re-export
 
 
 class TicketRunner:
@@ -624,39 +604,4 @@ class TicketRunner:
             run_id=self._run_id,
             title=title,
             body=body,
-        )
-
-    def _build_prompt(
-        self,
-        *,
-        ticket_path: Path,
-        ticket_doc,
-        last_agent_output: Optional[str],
-        last_checkpoint_error: Optional[str] = None,
-        commit_required: bool = False,
-        commit_attempt: int = 0,
-        commit_max_attempts: int = 2,
-        outbox_paths,
-        lint_errors: Optional[list[str]],
-        reply_context: Optional[str] = None,
-        requested_context: Optional[str] = None,
-        previous_ticket_content: Optional[str] = None,
-        prior_no_change_turns: int = 0,
-    ) -> str:
-        return build_prompt(
-            ticket_path=ticket_path,
-            workspace_root=self._workspace_root,
-            ticket_doc=ticket_doc,
-            last_agent_output=last_agent_output,
-            last_checkpoint_error=last_checkpoint_error,
-            commit_required=commit_required,
-            commit_attempt=commit_attempt,
-            commit_max_attempts=commit_max_attempts,
-            outbox_paths=outbox_paths,
-            lint_errors=lint_errors,
-            reply_context=reply_context,
-            requested_context=requested_context,
-            previous_ticket_content=previous_ticket_content,
-            prior_no_change_turns=prior_no_change_turns,
-            prompt_max_bytes=self._config.prompt_max_bytes,
         )

@@ -9,18 +9,18 @@ import pytest
 from codex_autorunner.tickets.agent_pool import AgentTurnRequest, AgentTurnResult
 from codex_autorunner.tickets.files import read_ticket
 from codex_autorunner.tickets.models import TicketContextEntry, TicketRunConfig
-from codex_autorunner.tickets.runner import (
-    TICKET_CONTEXT_TOTAL_MAX_BYTES,
-    TicketRunner,
-    load_ticket_context_block,
-)
+from codex_autorunner.tickets.runner import TicketRunner
 from codex_autorunner.tickets.runner_execution import (
     LOOP_NO_CHANGE_THRESHOLD,
     compute_loop_guard,
     should_pause_for_loop,
 )
 from codex_autorunner.tickets.runner_prompt import build_prompt as runner_prompt_build
-from codex_autorunner.tickets.runner_selection import build_reply_context
+from codex_autorunner.tickets.runner_selection import (
+    TICKET_CONTEXT_TOTAL_MAX_BYTES,
+    build_reply_context,
+    load_ticket_context_block,
+)
 
 
 def _write_ticket(
@@ -59,14 +59,6 @@ class FakeAgentPool:
     async def run_turn(self, req: AgentTurnRequest) -> AgentTurnResult:
         self.requests.append(req)
         return self._handler(req)
-
-
-def _prompts_match_or_known_drift(legacy: str, module: str) -> bool:
-    if legacy == module:
-        return True
-    normalized_legacy = legacy.replace("\u201c", '"').replace("\u201d", '"')
-    normalized_module = module.replace("\u201c", '"').replace("\u201d", '"')
-    return normalized_legacy == normalized_module
 
 
 class TestLoadTicketContextBlock:
@@ -196,10 +188,8 @@ class TestLoadTicketContextBlock:
         assert "read_error" in rendered
 
 
-class TestPromptDuplicationParity:
-    def test_build_prompt_and_legacy_produce_same_xml_structure(
-        self, tmp_path: Path
-    ) -> None:
+class TestPromptXmlStructure:
+    def test_build_prompt_contains_all_required_xml_tags(self, tmp_path: Path) -> None:
         workspace_root = tmp_path
         ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
         ticket_dir.mkdir(parents=True, exist_ok=True)
@@ -216,34 +206,7 @@ class TestPromptDuplicationParity:
 
         ticket_doc, _ = read_ticket(ticket_path)
 
-        config = TicketRunConfig(
-            ticket_dir=Path(".codex-autorunner/tickets"),
-            auto_commit=False,
-        )
-        runner = TicketRunner(
-            workspace_root=workspace_root,
-            run_id="run-1",
-            config=config,
-            agent_pool=MagicMock(),
-        )
-
-        legacy_prompt = runner._build_prompt(
-            ticket_path=ticket_path,
-            ticket_doc=ticket_doc,
-            last_agent_output="previous output",
-            last_checkpoint_error=None,
-            commit_required=False,
-            commit_attempt=0,
-            commit_max_attempts=2,
-            outbox_paths=outbox_paths,
-            lint_errors=None,
-            reply_context=None,
-            requested_context=None,
-            previous_ticket_content=None,
-            prior_no_change_turns=0,
-        )
-
-        module_prompt = runner_prompt_build(
+        prompt = runner_prompt_build(
             ticket_path=ticket_path,
             workspace_root=workspace_root,
             ticket_doc=ticket_doc,
@@ -285,17 +248,9 @@ class TestPromptDuplicationParity:
             "</CAR_PREVIOUS_AGENT_OUTPUT>",
         ]
         for tag in xml_tags:
-            assert tag in legacy_prompt, f"Legacy prompt missing {tag}"
-            assert tag in module_prompt, f"Module prompt missing {tag}"
+            assert tag in prompt, f"Prompt missing {tag}"
 
-        assert legacy_prompt == module_prompt or _prompts_match_or_known_drift(
-            legacy_prompt, module_prompt
-        ), (
-            "Prompt implementations diverged beyond known quote drift. "
-            "If this is intentional, update the characterization."
-        )
-
-    def test_build_prompt_with_lint_errors_parity(self, tmp_path: Path) -> None:
+    def test_build_prompt_with_lint_errors(self, tmp_path: Path) -> None:
         workspace_root = tmp_path
         ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
         ticket_dir.mkdir(parents=True, exist_ok=True)
@@ -311,27 +266,9 @@ class TestPromptDuplicationParity:
         )
 
         ticket_doc, _ = read_ticket(ticket_path)
-
-        config = TicketRunConfig(
-            ticket_dir=Path(".codex-autorunner/tickets"),
-            auto_commit=False,
-        )
-        runner = TicketRunner(
-            workspace_root=workspace_root,
-            run_id="run-1",
-            config=config,
-            agent_pool=MagicMock(),
-        )
 
         lint_errors = ["done must be a boolean", "agent is required"]
-        legacy = runner._build_prompt(
-            ticket_path=ticket_path,
-            ticket_doc=ticket_doc,
-            last_agent_output=None,
-            outbox_paths=outbox_paths,
-            lint_errors=lint_errors,
-        )
-        module = runner_prompt_build(
+        prompt = runner_prompt_build(
             ticket_path=ticket_path,
             workspace_root=workspace_root,
             ticket_doc=ticket_doc,
@@ -340,11 +277,9 @@ class TestPromptDuplicationParity:
             lint_errors=lint_errors,
         )
 
-        assert "<CAR_TICKET_FRONTMATTER_LINT_REPAIR>" in legacy
-        assert "<CAR_TICKET_FRONTMATTER_LINT_REPAIR>" in module
-        assert _prompts_match_or_known_drift(legacy, module)
+        assert "<CAR_TICKET_FRONTMATTER_LINT_REPAIR>" in prompt
 
-    def test_build_prompt_with_commit_required_parity(self, tmp_path: Path) -> None:
+    def test_build_prompt_with_commit_required(self, tmp_path: Path) -> None:
         workspace_root = tmp_path
         ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
         ticket_dir.mkdir(parents=True, exist_ok=True)
@@ -361,28 +296,7 @@ class TestPromptDuplicationParity:
 
         ticket_doc, _ = read_ticket(ticket_path)
 
-        config = TicketRunConfig(
-            ticket_dir=Path(".codex-autorunner/tickets"),
-            auto_commit=False,
-        )
-        runner = TicketRunner(
-            workspace_root=workspace_root,
-            run_id="run-1",
-            config=config,
-            agent_pool=MagicMock(),
-        )
-
-        legacy = runner._build_prompt(
-            ticket_path=ticket_path,
-            ticket_doc=ticket_doc,
-            last_agent_output=None,
-            outbox_paths=outbox_paths,
-            lint_errors=None,
-            commit_required=True,
-            commit_attempt=1,
-            commit_max_attempts=2,
-        )
-        module = runner_prompt_build(
+        prompt = runner_prompt_build(
             ticket_path=ticket_path,
             workspace_root=workspace_root,
             ticket_doc=ticket_doc,
@@ -394,13 +308,10 @@ class TestPromptDuplicationParity:
             commit_max_attempts=2,
         )
 
-        assert "<CAR_COMMIT_REQUIRED>" in legacy
-        assert "<CAR_COMMIT_REQUIRED>" in module
-        assert "Attempts remaining before user intervention: 2" in legacy
-        assert "Attempts remaining before user intervention: 2" in module
-        assert _prompts_match_or_known_drift(legacy, module)
+        assert "<CAR_COMMIT_REQUIRED>" in prompt
+        assert "Attempts remaining before user intervention: 2" in prompt
 
-    def test_build_prompt_with_loop_guard_parity(self, tmp_path: Path) -> None:
+    def test_build_prompt_with_loop_guard(self, tmp_path: Path) -> None:
         workspace_root = tmp_path
         ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
         ticket_dir.mkdir(parents=True, exist_ok=True)
@@ -417,26 +328,7 @@ class TestPromptDuplicationParity:
 
         ticket_doc, _ = read_ticket(ticket_path)
 
-        config = TicketRunConfig(
-            ticket_dir=Path(".codex-autorunner/tickets"),
-            auto_commit=False,
-        )
-        runner = TicketRunner(
-            workspace_root=workspace_root,
-            run_id="run-1",
-            config=config,
-            agent_pool=MagicMock(),
-        )
-
-        legacy = runner._build_prompt(
-            ticket_path=ticket_path,
-            ticket_doc=ticket_doc,
-            last_agent_output=None,
-            outbox_paths=outbox_paths,
-            lint_errors=None,
-            prior_no_change_turns=1,
-        )
-        module = runner_prompt_build(
+        prompt = runner_prompt_build(
             ticket_path=ticket_path,
             workspace_root=workspace_root,
             ticket_doc=ticket_doc,
@@ -446,11 +338,8 @@ class TestPromptDuplicationParity:
             prior_no_change_turns=1,
         )
 
-        assert "<CAR_LOOP_GUARD>" in legacy
-        assert "<CAR_LOOP_GUARD>" in module
-        assert "Consecutive no-change turns so far: 1" in legacy
-        assert "Consecutive no-change turns so far: 1" in module
-        assert _prompts_match_or_known_drift(legacy, module)
+        assert "<CAR_LOOP_GUARD>" in prompt
+        assert "Consecutive no-change turns so far: 1" in prompt
 
 
 class TestLoopGuardInvariants:

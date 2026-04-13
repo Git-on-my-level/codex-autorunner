@@ -14,10 +14,9 @@ from codex_autorunner.tickets.models import (
     DEFAULT_MAX_TOTAL_TURNS,
     TicketRunConfig,
 )
-from codex_autorunner.tickets.runner import (
-    TICKET_CONTEXT_TOTAL_MAX_BYTES,
-    TicketRunner,
-)
+from codex_autorunner.tickets.runner import TicketRunner
+from codex_autorunner.tickets.runner_execution import is_network_error
+from codex_autorunner.tickets.runner_selection import TICKET_CONTEXT_TOTAL_MAX_BYTES
 
 
 def _write_ticket(
@@ -815,27 +814,26 @@ async def test_previous_ticket_context_included_when_enabled(tmp_path: Path) -> 
 
 def test_is_network_error_detection() -> None:
     """Test network error detection logic."""
-    from codex_autorunner.tickets.runner import _is_network_error
 
     # Positive cases (should return True)
-    assert _is_network_error("network error") is True
-    assert _is_network_error("Connection timeout") is True
-    assert _is_network_error("transport error") is True
-    assert _is_network_error("stream disconnected") is True
-    assert _is_network_error("Reconnecting... 1/5") is True
-    assert _is_network_error("connection refused") is True
-    assert _is_network_error("connection reset") is True
-    assert _is_network_error("connection broken") is True
-    assert _is_network_error("unreachable") is True
-    assert _is_network_error("temporary failure") is True
+    assert is_network_error("network error") is True
+    assert is_network_error("Connection timeout") is True
+    assert is_network_error("transport error") is True
+    assert is_network_error("stream disconnected") is True
+    assert is_network_error("Reconnecting... 1/5") is True
+    assert is_network_error("connection refused") is True
+    assert is_network_error("connection reset") is True
+    assert is_network_error("connection broken") is True
+    assert is_network_error("unreachable") is True
+    assert is_network_error("temporary failure") is True
 
     # Negative cases (should return False)
-    assert _is_network_error("validation error") is False
-    assert _is_network_error("config error") is False
-    assert _is_network_error("permission denied") is False
-    assert _is_network_error("auth failed") is False
-    assert _is_network_error("") is False
-    assert _is_network_error("successful completion") is False
+    assert is_network_error("validation error") is False
+    assert is_network_error("config error") is False
+    assert is_network_error("permission denied") is False
+    assert is_network_error("auth failed") is False
+    assert is_network_error("") is False
+    assert is_network_error("successful completion") is False
 
 
 @pytest.mark.asyncio

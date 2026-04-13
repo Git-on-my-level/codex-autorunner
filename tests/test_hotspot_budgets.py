@@ -370,12 +370,6 @@ LEGACY_FUNCTION_CAPS = (
         max_lines=625,
         reason="TicketRunner.step() is still a legacy orchestration hotspot, but new growth should fail.",
     ),
-    FunctionBudget(
-        path="src/codex_autorunner/tickets/runner.py",
-        qualname="TicketRunner._build_prompt",
-        max_lines=240,
-        reason="The remaining prompt glue in runner.py should keep shrinking toward runner_prompt.py, not regrow.",
-    ),
 )
 
 HELPER_OWNERSHIP_RULES = (
