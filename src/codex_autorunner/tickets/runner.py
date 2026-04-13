@@ -241,63 +241,24 @@ class TicketRunner:
             current_network_retries=network_retries,
         )
         if not result.success:
-            state["last_agent_output"] = result.text
-            state["last_agent_id"] = result.agent_id
-            state["last_agent_conversation_id"] = result.conversation_id
-            state["last_agent_turn_id"] = result.turn_id
-
-            if result.should_retry:
-                state["network_retry"] = {
-                    "retries": result.network_retries,
-                    "last_error": result.error,
-                }
-                return TicketResult(
-                    status="continue",
-                    state=state,
-                    reason=(
-                        f"Network error detected (attempt {result.network_retries}/{self._config.max_network_retries}): {result.error}\n"
-                        "Retrying automatically..."
-                    ),
-                    current_ticket=current_ticket_path,
-                    agent_output=result.text,
-                    agent_id=result.agent_id,
-                    agent_conversation_id=result.conversation_id,
-                    agent_turn_id=result.turn_id,
-                )
-
-            state.pop("network_retry", None)
-            commit_failure_result = runner_commit.handle_failed_commit_turn(
-                state=state,
-                workspace_root=self._workspace_root,
+            return self._handle_failed_turn(
+                state,
+                result=result,
+                current_ticket_path=current_ticket_path,
                 commit_pending=commit_pending,
                 commit_retries=commit_retries,
                 head_before_turn=head_before_turn,
-                max_commit_retries=self._config.max_commit_retries,
-                current_ticket_path=current_ticket_path,
-                result_error=result.error,
-                result_text=result.text,
-                result_agent_id=result.agent_id,
-                result_conversation_id=result.conversation_id,
-                result_turn_id=result.turn_id,
-            )
-            if commit_failure_result is not None:
-                return commit_failure_result
-            return self._pause(
-                state,
-                reason="Agent turn failed. Fix the issue and resume.",
-                reason_details=f"Error: {result.error}",
-                current_ticket=current_ticket_path,
-                reason_code="infra_error",
             )
 
-        # Mark replies as consumed only after a successful agent turn.
-        if reply_max_seq > reply_seq:
-            state["reply_seq"] = reply_max_seq
-        state["last_agent_output"] = result.text
-        state.pop("network_retry", None)
-        state["last_agent_id"] = result.agent_id
-        state["last_agent_conversation_id"] = result.conversation_id
-        state["last_agent_turn_id"] = result.turn_id
+        state = runner_post_turn.apply_successful_turn_state(
+            state=state,
+            agent_text=result.text,
+            agent_id=result.agent_id,
+            agent_conversation_id=result.conversation_id,
+            agent_turn_id=result.turn_id,
+            reply_max_seq=reply_max_seq,
+            reply_seq=reply_seq,
+        )
 
         git_state_after = capture_git_state_after(
             workspace_root=self._workspace_root,
@@ -354,13 +315,14 @@ class TicketRunner:
             repo_fingerprint_after=repo_fingerprint_after_turn,
             lint_retry_mode=lint_retry_mode,
         )
+        state = runner_post_turn.apply_loop_guard_state(
+            state=state,
+            loop_guard_result=loop_guard_result,
+        )
         loop_guard_updates = loop_guard_result.get("loop_guard_updates", {})
-        if "loop_guard" in loop_guard_result:
-            state["loop_guard"] = loop_guard_result["loop_guard"]
 
         if should_pause_for_loop(loop_guard_updates=loop_guard_updates):
             no_change_count = loop_guard_updates.get("no_change_count", 0)
-            reason = "Ticket appears stuck: same ticket ran twice with no repository diff changes."
             details = (
                 "Runner paused to avoid repeated no-op work.\n\n"
                 f"Ticket: {current_ticket_path}\n"
@@ -376,25 +338,16 @@ class TicketRunner:
                 ticket_id=current_ticket_id,
                 ticket_path=current_ticket_path,
             )
-            paused = runner_post_turn.build_pause_result(
+            return runner_post_turn.build_loop_guard_pause_result(
                 state=state,
-                reason=reason,
-                reason_code="loop_no_diff",
-                reason_details=details,
-                current_ticket=current_ticket_path,
-                workspace_root=self._workspace_root,
-            )
-            return TicketResult(
-                status="paused",
-                state=paused["state"],
-                reason=paused["reason"],
-                reason_details=paused["reason_details"],
-                dispatch=dispatch_record,
-                current_ticket=paused["current_ticket"],
-                agent_output=result.text,
+                current_ticket_path=current_ticket_path,
+                loop_guard_updates=loop_guard_updates,
+                dispatch_record=dispatch_record,
+                agent_text=result.text,
                 agent_id=result.agent_id,
                 agent_conversation_id=result.conversation_id,
                 agent_turn_id=result.turn_id,
+                workspace_root=self._workspace_root,
             )
 
         # Post-turn: ticket frontmatter must remain valid.
@@ -442,82 +395,46 @@ class TicketRunner:
 
         # If we dispatched a pause message, pause regardless of ticket completion.
         if dispatch is not None and dispatch.dispatch.mode == "pause":
-            reason = dispatch.dispatch.title or "Paused for user input."
-            if checkpoint_error:
-                reason += f"\n\nNote: checkpoint commit failed: {checkpoint_error}"
-            state["status"] = "paused"
-            state["reason"] = reason
-            state["reason_code"] = "user_pause"
-            return TicketResult(
-                status="paused",
+            return runner_post_turn.build_dispatch_pause_result(
                 state=state,
-                reason=reason,
                 dispatch=dispatch,
-                current_ticket=safe_relpath(current_path, self._workspace_root),
-                agent_output=result.text,
+                checkpoint_error=checkpoint_error,
+                current_ticket_rel_path=safe_relpath(
+                    current_path, self._workspace_root
+                ),
+                agent_text=result.text,
                 agent_id=result.agent_id,
                 agent_conversation_id=result.conversation_id,
                 agent_turn_id=result.turn_id,
+                workspace_root=self._workspace_root,
             )
 
         # If ticket is marked done, require a clean working tree (i.e., changes
         # committed) before advancing. This is bounded by max_commit_retries.
-        if updated_fm and updated_fm.done:
-            if clean_after_agent is False:
-                (
-                    commit_state_update,
-                    commit_status,
-                    commit_reason,
-                    commit_reason_code,
-                    commit_reason_details,
-                ) = runner_commit.process_commit_required(
-                    clean_after_agent=clean_after_agent,
-                    commit_pending=commit_pending,
-                    commit_retries=commit_retries,
-                    head_before_turn=head_before_turn,
-                    head_after_agent=head_after_agent,
-                    agent_committed_this_turn=agent_committed_this_turn,
-                    status_after_agent=status_after_agent,
-                    max_commit_retries=self._config.max_commit_retries,
-                )
-                if commit_state_update:
-                    state["commit"] = commit_state_update
-                if commit_reason is not None:
-                    return self._pause(
-                        state,
-                        reason=commit_reason,
-                        reason_details=commit_reason_details,
-                        current_ticket=current_ticket_path,
-                        reason_code=commit_reason_code,
-                    )
+        commit_result = self._handle_commit_gating(
+            state,
+            result=result,
+            updated_fm=updated_fm,
+            clean_after_agent=clean_after_agent,
+            commit_pending=commit_pending,
+            commit_retries=commit_retries,
+            head_before_turn=head_before_turn,
+            head_after_agent=head_after_agent,
+            agent_committed_this_turn=agent_committed_this_turn,
+            status_after_agent=status_after_agent,
+            current_ticket_path=current_ticket_path,
+        )
+        if commit_result is not None:
+            return commit_result
 
-                return TicketResult(
-                    status=commit_status or "continue",
-                    state=state,
-                    reason="Ticket done but commit required; requesting agent commit.",
-                    current_ticket=current_ticket_path,
-                    agent_output=result.text,
-                    agent_id=result.agent_id,
-                    agent_conversation_id=result.conversation_id,
-                    agent_turn_id=result.turn_id,
-                )
-
-            # Clean (or unknown) → commit satisfied (or no changes / cannot check).
-            state.pop("commit", None)
-            state.pop("current_ticket", None)
-            state.pop("current_ticket_id", None)
-            state.pop("ticket_turns", None)
-            state.pop("last_agent_output", None)
-            state.pop("lint", None)
-        else:
-            # If the ticket is no longer done, clear any pending commit gating.
-            state.pop("commit", None)
-
-        if checkpoint_error:
-            # Non-fatal, but surface in state for UI.
-            state["last_checkpoint_error"] = checkpoint_error
-        else:
-            state.pop("last_checkpoint_error", None)
+        state = runner_post_turn.apply_completion_cleanup(
+            state=state,
+            updated_fm=updated_fm,
+        )
+        state = runner_post_turn.apply_checkpoint_error_state(
+            state=state,
+            checkpoint_error=checkpoint_error,
+        )
 
         return TicketResult(
             status="continue",
@@ -568,6 +485,124 @@ class TicketRunner:
             reason_details=paused["reason_details"],
             current_ticket=paused["current_ticket"],
         )
+
+    def _handle_failed_turn(
+        self,
+        state: dict[str, Any],
+        *,
+        result,
+        current_ticket_path: str,
+        commit_pending: bool,
+        commit_retries: int,
+        head_before_turn: Optional[str],
+    ) -> TicketResult:
+        state["last_agent_output"] = result.text
+        state["last_agent_id"] = result.agent_id
+        state["last_agent_conversation_id"] = result.conversation_id
+        state["last_agent_turn_id"] = result.turn_id
+
+        if result.should_retry:
+            state["network_retry"] = {
+                "retries": result.network_retries,
+                "last_error": result.error,
+            }
+            return TicketResult(
+                status="continue",
+                state=state,
+                reason=(
+                    f"Network error detected (attempt {result.network_retries}/{self._config.max_network_retries}): {result.error}\n"
+                    "Retrying automatically..."
+                ),
+                current_ticket=current_ticket_path,
+                agent_output=result.text,
+                agent_id=result.agent_id,
+                agent_conversation_id=result.conversation_id,
+                agent_turn_id=result.turn_id,
+            )
+
+        state.pop("network_retry", None)
+        commit_failure_result = runner_commit.handle_failed_commit_turn(
+            state=state,
+            workspace_root=self._workspace_root,
+            commit_pending=commit_pending,
+            commit_retries=commit_retries,
+            head_before_turn=head_before_turn,
+            max_commit_retries=self._config.max_commit_retries,
+            current_ticket_path=current_ticket_path,
+            result_error=result.error,
+            result_text=result.text,
+            result_agent_id=result.agent_id,
+            result_conversation_id=result.conversation_id,
+            result_turn_id=result.turn_id,
+        )
+        if commit_failure_result is not None:
+            return commit_failure_result
+        return self._pause(
+            state,
+            reason="Agent turn failed. Fix the issue and resume.",
+            reason_details=f"Error: {result.error}",
+            current_ticket=current_ticket_path,
+            reason_code="infra_error",
+        )
+
+    def _handle_commit_gating(
+        self,
+        state: dict[str, Any],
+        *,
+        result,
+        updated_fm: Any,
+        clean_after_agent: Optional[bool],
+        commit_pending: bool,
+        commit_retries: int,
+        head_before_turn: Optional[str],
+        head_after_agent: Optional[str],
+        agent_committed_this_turn: Optional[bool],
+        status_after_agent: Optional[str],
+        current_ticket_path: str,
+    ) -> Optional[TicketResult]:
+        if not (updated_fm and updated_fm.done):
+            return None
+
+        if clean_after_agent is False:
+            (
+                commit_state_update,
+                commit_status,
+                commit_reason,
+                commit_reason_code,
+                commit_reason_details,
+            ) = runner_commit.process_commit_required(
+                clean_after_agent=clean_after_agent,
+                commit_pending=commit_pending,
+                commit_retries=commit_retries,
+                head_before_turn=head_before_turn,
+                head_after_agent=head_after_agent,
+                agent_committed_this_turn=agent_committed_this_turn,
+                status_after_agent=status_after_agent,
+                max_commit_retries=self._config.max_commit_retries,
+            )
+            if commit_state_update:
+                state["commit"] = commit_state_update
+            if commit_reason is not None:
+                return self._pause(
+                    state,
+                    reason=commit_reason,
+                    reason_details=commit_reason_details,
+                    current_ticket=current_ticket_path,
+                    reason_code=commit_reason_code,
+                )
+
+            return TicketResult(
+                status=commit_status or "continue",
+                state=state,
+                reason="Ticket done but commit required; requesting agent commit.",
+                current_ticket=current_ticket_path,
+                agent_output=result.text,
+                agent_id=result.agent_id,
+                agent_conversation_id=result.conversation_id,
+                agent_turn_id=result.turn_id,
+            )
+
+        return None
 
     def _create_runner_pause_dispatch(
         self,

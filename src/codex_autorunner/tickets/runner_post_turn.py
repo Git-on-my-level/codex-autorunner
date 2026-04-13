@@ -9,6 +9,7 @@ from ..core.file_chat_keys import ticket_instance_token
 from ..core.flows.models import FlowEventType
 from ..core.git_utils import GitError, git_diff_stats, run_git
 from .files import read_ticket_frontmatter
+from .models import TicketResult
 from .outbox import (
     archive_dispatch,
     create_turn_summary,
@@ -320,3 +321,146 @@ def process_commit_required(
         status_after_agent=status_after_agent,
         max_commit_retries=max_commit_retries,
     )
+
+
+def apply_successful_turn_state(
+    *,
+    state: dict[str, Any],
+    agent_text: Optional[str],
+    agent_id: Optional[str],
+    agent_conversation_id: Optional[str],
+    agent_turn_id: Optional[str],
+    reply_max_seq: int,
+    reply_seq: int,
+) -> dict[str, Any]:
+    state = dict(state)
+    if reply_max_seq > reply_seq:
+        state["reply_seq"] = reply_max_seq
+    state["last_agent_output"] = agent_text
+    state.pop("network_retry", None)
+    state["last_agent_id"] = agent_id
+    state["last_agent_conversation_id"] = agent_conversation_id
+    state["last_agent_turn_id"] = agent_turn_id
+    return state
+
+
+def apply_loop_guard_state(
+    *,
+    state: dict[str, Any],
+    loop_guard_result: dict[str, Any],
+) -> dict[str, Any]:
+    state = dict(state)
+    if "loop_guard" in loop_guard_result:
+        state["loop_guard"] = loop_guard_result["loop_guard"]
+    return state
+
+
+def build_loop_guard_pause_result(
+    *,
+    state: dict[str, Any],
+    current_ticket_path: str,
+    loop_guard_updates: dict[str, Any],
+    dispatch_record: Any,
+    agent_text: Optional[str],
+    agent_id: Optional[str],
+    agent_conversation_id: Optional[str],
+    agent_turn_id: Optional[str],
+    workspace_root: Path,
+) -> TicketResult:
+    no_change_count = loop_guard_updates.get("no_change_count", 0)
+    reason = (
+        "Ticket appears stuck: same ticket ran twice with no repository diff changes."
+    )
+    details = (
+        "Runner paused to avoid repeated no-op work.\n\n"
+        f"Ticket: {current_ticket_path}\n"
+        f"Consecutive no-change turns: {no_change_count}\n\n"
+        "Please provide unblock guidance via reply, or change repository state, then resume. "
+        "Use force resume only if you intentionally want to retry unchanged."
+    )
+    paused = build_pause_result(
+        state=state,
+        reason=reason,
+        reason_code="loop_no_diff",
+        reason_details=details,
+        current_ticket=current_ticket_path,
+        workspace_root=workspace_root,
+    )
+    return TicketResult(
+        status="paused",
+        state=paused["state"],
+        reason=paused["reason"],
+        reason_details=paused["reason_details"],
+        dispatch=dispatch_record,
+        current_ticket=paused["current_ticket"],
+        agent_output=agent_text,
+        agent_id=agent_id,
+        agent_conversation_id=agent_conversation_id,
+        agent_turn_id=agent_turn_id,
+    )
+
+
+def build_dispatch_pause_result(
+    *,
+    state: dict[str, Any],
+    dispatch: Any,
+    checkpoint_error: Optional[str],
+    current_ticket_rel_path: str,
+    agent_text: Optional[str],
+    agent_id: Optional[str],
+    agent_conversation_id: Optional[str],
+    agent_turn_id: Optional[str],
+    workspace_root: Path,
+) -> TicketResult:
+    reason = dispatch.dispatch.title or "Paused for user input."
+    if checkpoint_error:
+        reason += f"\n\nNote: checkpoint commit failed: {checkpoint_error}"
+    paused = build_pause_result(
+        state=state,
+        reason=reason,
+        reason_code="user_pause",
+        current_ticket=current_ticket_rel_path,
+        workspace_root=workspace_root,
+    )
+    return TicketResult(
+        status="paused",
+        state=paused["state"],
+        reason=paused["reason"],
+        dispatch=dispatch,
+        current_ticket=current_ticket_rel_path,
+        agent_output=agent_text,
+        agent_id=agent_id,
+        agent_conversation_id=agent_conversation_id,
+        agent_turn_id=agent_turn_id,
+    )
+
+
+def apply_completion_cleanup(
+    *,
+    state: dict[str, Any],
+    updated_fm: Any,
+) -> dict[str, Any]:
+    state = dict(state)
+    if updated_fm and updated_fm.done:
+        state.pop("commit", None)
+        state.pop("current_ticket", None)
+        state.pop("current_ticket_id", None)
+        state.pop("ticket_turns", None)
+        state.pop("last_agent_output", None)
+        state.pop("lint", None)
+    else:
+        state.pop("commit", None)
+    return state
+
+
+def apply_checkpoint_error_state(
+    *,
+    state: dict[str, Any],
+    checkpoint_error: Optional[str],
+) -> dict[str, Any]:
+    state = dict(state)
+    if checkpoint_error:
+        state["last_checkpoint_error"] = checkpoint_error
+    else:
+        state.pop("last_checkpoint_error", None)
+    return state
