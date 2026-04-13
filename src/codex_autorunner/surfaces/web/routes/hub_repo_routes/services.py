@@ -152,11 +152,17 @@ class HubRepoEnricher:
 
         try:
             census = collect_ticket_flow_census(snapshot.path)
+            run_state, run_record = get_latest_ticket_flow_run_state_with_record(
+                snapshot.path,
+                snapshot.id,
+                store=store,
+            )
             ticket_flow = build_ticket_flow_summary(
                 snapshot.path,
                 include_failure=True,
                 store=store,
                 census=census,
+                record=run_record,
             )
             payload["ticket_flow"] = ticket_flow
             if isinstance(ticket_flow, dict):
@@ -181,11 +187,6 @@ class HubRepoEnricher:
                     total_count=0,
                     run_id=None,
                 )
-            run_state, run_record = get_latest_ticket_flow_run_state_with_record(
-                snapshot.path,
-                snapshot.id,
-                store=store,
-            )
             payload["run_state"] = run_state
             if run_record is not None:
                 if str(snapshot.last_run_id) != str(run_record.id):

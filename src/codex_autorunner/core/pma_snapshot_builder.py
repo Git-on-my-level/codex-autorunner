@@ -316,11 +316,14 @@ def _build_repo_summaries(
         }
         if snap.initialized and snap.exists_on_disk:
             census = collect_ticket_flow_census(snap.path)
-            summary["ticket_flow"] = build_ticket_flow_summary(
-                snap.path, include_failure=False, census=census
-            )
             run_state, run_record = get_latest_ticket_flow_run_state_with_record(
                 snap.path, snap.id
+            )
+            summary["ticket_flow"] = build_ticket_flow_summary(
+                snap.path,
+                include_failure=False,
+                census=census,
+                record=run_record,
             )
             summary["run_state"] = run_state
             if run_record is not None:

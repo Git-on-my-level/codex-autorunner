@@ -182,6 +182,38 @@ def _resolve_ingest_state(
     return frontmatter_total_count > 0, None, "ticket_files"
 
 
+def resolve_authoritative_ticket_flow_run(
+    repo_root: Path,
+    *,
+    store: Optional[FlowStore] = None,
+    preferred_run_id: Optional[str] = None,
+    represented_run_id: Optional[str] = None,
+) -> Optional[FlowRunRecord]:
+    if store is not None:
+        records = store.list_flow_runs(flow_type="ticket_flow")
+        return select_authoritative_run_record(
+            records,
+            preferred_run_id=preferred_run_id,
+            represented_run_id=represented_run_id,
+        )
+
+    db_path = repo_root / ".codex-autorunner" / "flows.db"
+    if not db_path.exists():
+        return None
+
+    try:
+        config = load_repo_config(repo_root)
+        with FlowStore(db_path, durable=config.durable_writes) as local_store:
+            records = local_store.list_flow_runs(flow_type="ticket_flow")
+            return select_authoritative_run_record(
+                records,
+                preferred_run_id=preferred_run_id,
+                represented_run_id=represented_run_id,
+            )
+    except Exception:
+        return None
+
+
 def _resolve_last_event_meta(
     *,
     repo_root: Path,
@@ -190,57 +222,29 @@ def _resolve_last_event_meta(
     preferred_run_id: Optional[str],
     represented_run_id: Optional[str],
 ) -> tuple[Optional[FlowRunRecord], Optional[int], Optional[str]]:
-    if record is not None:
-        if store is None:
-            return record, None, None
-        seq, event_at = store.get_last_event_meta(str(record.id))
-        return (
-            record,
-            _normalize_optional_int(seq),
-            _normalize_optional_str(event_at),
-        )
-
-    if store is not None:
-        records = store.list_flow_runs(flow_type="ticket_flow")
-        latest = select_authoritative_run_record(
-            records,
+    if record is None:
+        record = resolve_authoritative_ticket_flow_run(
+            repo_root,
+            store=store,
             preferred_run_id=preferred_run_id,
             represented_run_id=represented_run_id,
         )
-        if latest is None:
-            return None, None, None
-        seq, event_at = store.get_last_event_meta(str(latest.id))
-        return (
-            latest,
-            _normalize_optional_int(seq),
-            _normalize_optional_str(event_at),
-        )
 
-    db_path = repo_root / ".codex-autorunner" / "flows.db"
-    if not db_path.exists():
+    if record is None:
         return None, None, None
+
+    if store is None:
+        return record, None, None
 
     try:
-        config = load_repo_config(repo_root)
-        with FlowStore(db_path, durable=config.durable_writes) as local_store:
-            records = local_store.list_flow_runs(flow_type="ticket_flow")
-            latest = select_authoritative_run_record(
-                records,
-                preferred_run_id=preferred_run_id,
-                represented_run_id=represented_run_id,
-            )
-            if latest is None:
-                return None, None, None
-            seq, event_at = local_store.get_last_event_meta(str(latest.id))
-            return (
-                latest,
-                _normalize_optional_int(seq),
-                _normalize_optional_str(event_at),
-            )
-    except (
-        Exception
-    ):  # intentional: defensive fallback wrapping config loading, sqlite, and store operations
-        return None, None, None
+        seq, event_at = store.get_last_event_meta(str(record.id))
+    except Exception:
+        return record, None, None
+    return (
+        record,
+        _normalize_optional_int(seq),
+        _normalize_optional_str(event_at),
+    )
 
 
 def build_canonical_state_v1(

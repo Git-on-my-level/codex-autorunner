@@ -3,14 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
-from .config import load_repo_config
 from .flows import FlowStore
 from .flows.failure_diagnostics import format_failure_summary, get_failure_payload
 from .flows.models import FlowRunRecord
 from .ticket_flow_projection import (
     TicketFlowCensus,
     collect_ticket_flow_census,
-    select_authoritative_run_record,
+    resolve_authoritative_ticket_flow_run,
 )
 
 _FLOW_STATUS_ICONS = {
@@ -26,26 +25,6 @@ _FLOW_STATUS_ICONS = {
     "idle": "⚪",
 }
 _ACTIVE_FLOW_STATUSES = {"running", "pending", "paused", "stopping"}
-
-
-def get_latest_ticket_flow_run(store: FlowStore) -> Optional[FlowRunRecord]:
-    records = store.list_flow_runs(flow_type="ticket_flow")
-    return select_authoritative_run_record(records)
-
-
-def _load_latest_ticket_flow_run(repo_path: Path) -> Optional[FlowRunRecord]:
-    db_path = repo_path / ".codex-autorunner" / "flows.db"
-    if not db_path.exists():
-        return None
-    config = load_repo_config(repo_path)
-    with FlowStore(db_path, durable=config.durable_writes) as store:
-        return get_latest_ticket_flow_run(store)
-
-
-def _load_latest_ticket_flow_run_from_store(
-    store: FlowStore,
-) -> Optional[FlowRunRecord]:
-    return get_latest_ticket_flow_run(store)
 
 
 def build_ticket_flow_display(
@@ -113,6 +92,7 @@ def build_ticket_flow_summary(
     include_failure: bool,
     store: Optional[FlowStore] = None,
     census: Optional[TicketFlowCensus] = None,
+    record: Optional[FlowRunRecord] = None,
 ) -> Optional[dict[str, Any]]:
     if census is None:
         census = collect_ticket_flow_census(repo_path)
@@ -125,24 +105,22 @@ def build_ticket_flow_summary(
     final_review_status = census.final_review_status
 
     try:
-        latest = (
-            _load_latest_ticket_flow_run_from_store(store)
-            if store is not None
-            else _load_latest_ticket_flow_run(repo_path)
-        )
-    except (
-        Exception
-    ):  # intentional: summary degrades gracefully on any data-access failure
+        if record is None:
+            record = resolve_authoritative_ticket_flow_run(
+                repo_path,
+                store=store,
+            )
+    except Exception:
         return None
 
     display = build_ticket_flow_display(
-        status=latest.status.value if latest else None,
+        status=record.status.value if record else None,
         done_count=done_count,
         total_count=total_count,
-        run_id=latest.id if latest else None,
+        run_id=record.id if record else None,
     )
 
-    state = latest.state if latest and isinstance(latest.state, dict) else {}
+    state = record.state if record and isinstance(record.state, dict) else {}
     engine = state.get("ticket_engine") if isinstance(state, dict) else {}
     engine = engine if isinstance(engine, dict) else {}
     current_step = engine.get("total_turns")
@@ -160,7 +138,7 @@ def build_ticket_flow_summary(
         "final_review_status": final_review_status,
     }
     if include_failure:
-        failure_payload = get_failure_payload(latest) if latest else None
+        failure_payload = get_failure_payload(record) if record else None
         summary["failure"] = failure_payload
         summary["failure_summary"] = (
             format_failure_summary(failure_payload) if failure_payload else None

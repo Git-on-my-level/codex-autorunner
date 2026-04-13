@@ -89,7 +89,7 @@ def test_hub_repo_enricher_reuses_cached_repo_state(
         return True
 
     def fake_ticket_flow_summary(
-        _path: Path, *, include_failure: bool, store=None, census=None
+        _path: Path, *, include_failure: bool, store=None, census=None, record=None
     ) -> dict[str, object]:
         assert include_failure is True
         calls["ticket_flow_summary"] += 1
@@ -170,7 +170,7 @@ def test_hub_repo_enricher_reuses_durable_repo_state_across_instances(
         return True
 
     def fake_ticket_flow_summary(
-        _path: Path, *, include_failure: bool, store=None, census=None
+        _path: Path, *, include_failure: bool, store=None, census=None, record=None
     ) -> dict[str, object]:
         assert include_failure is True
         calls["ticket_flow_summary"] += 1
@@ -251,7 +251,7 @@ def test_hub_repo_enricher_expires_durable_repo_state_across_instances(
         return True
 
     def fake_ticket_flow_summary(
-        _path: Path, *, include_failure: bool, store=None, census=None
+        _path: Path, *, include_failure: bool, store=None, census=None, record=None
     ) -> dict[str, object]:
         assert include_failure is True
         calls["ticket_flow_summary"] += 1
@@ -335,7 +335,7 @@ def test_hub_repo_enricher_keeps_cache_when_flow_db_mtime_changes(
     calls = {"ticket_flow_summary": 0}
 
     def fake_ticket_flow_summary(
-        _path: Path, *, include_failure: bool, store=None, census=None
+        _path: Path, *, include_failure: bool, store=None, census=None, record=None
     ) -> dict[str, object]:
         assert include_failure is True
         calls["ticket_flow_summary"] += 1
@@ -404,7 +404,7 @@ def test_hub_repo_enricher_reuses_single_flow_store_per_repo_state(
     )
 
     def fake_ticket_flow_summary(
-        _path: Path, *, include_failure: bool, store=None, census=None
+        _path: Path, *, include_failure: bool, store=None, census=None, record=None
     ) -> dict[str, object]:
         assert include_failure is True
         assert store is not None
