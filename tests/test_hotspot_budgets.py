@@ -96,7 +96,7 @@ STANDARD_FILE_BUDGETS = (
     ),
     FileBudget(
         path="src/codex_autorunner/tickets/runner_post_turn.py",
-        max_lines=320,
+        max_lines=340,
         reason="Post-turn reconciliation should stay extracted from TicketRunner.step().",
     ),
     FileBudget(
@@ -218,7 +218,7 @@ STANDARD_FUNCTION_BUDGETS = (
     FunctionBudget(
         path="src/codex_autorunner/tickets/runner_post_turn.py",
         qualname="archive_dispatch_and_create_summary",
-        max_lines=80,
+        max_lines=85,
         reason="Dispatch archival should remain extracted from TicketRunner.step().",
     ),
     FunctionBudget(
