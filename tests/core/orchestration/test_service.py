@@ -680,6 +680,102 @@ async def test_send_message_retries_with_fresh_conversation_when_existing_bindin
     )
 
 
+async def test_send_message_retries_with_fresh_conversation_when_resume_hits_closed_loop(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness(
+        next_conversation_id="backend-fresh-2",
+        resume_conversation_error=RuntimeError("Event loop is closed"),
+    )
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target(
+        "codex",
+        workspace_root,
+        backend_thread_id="backend-existing-1",
+    )
+
+    execution = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="hello again",
+        )
+    )
+
+    refreshed_thread = service.get_thread_target(thread.thread_target_id)
+
+    assert execution.status == "running"
+    assert harness.resume_conversation_calls == [(workspace_root, "backend-existing-1")]
+    assert harness.new_conversation_calls == [(workspace_root, None)]
+    assert [call["conversation_id"] for call in harness.start_turn_calls] == [
+        "backend-fresh-2"
+    ]
+    assert refreshed_thread is not None
+    binding = _thread_runtime_binding(service, thread.thread_target_id)
+    assert binding is not None
+    assert binding.backend_thread_id == "backend-fresh-2"
+
+
+async def test_send_message_retries_with_fresh_conversation_when_start_turn_hits_closed_loop(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    harness = _FakeHarness(
+        next_conversation_id="backend-fresh-2",
+        start_turn_errors={"backend-existing-1": RuntimeError("Event loop is closed")},
+    )
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target(
+        "codex",
+        workspace_root,
+        backend_thread_id="backend-existing-1",
+    )
+
+    with caplog.at_level(
+        logging.INFO,
+        logger="codex_autorunner.core.orchestration.service",
+    ):
+        execution = await service.send_message(
+            MessageRequest(
+                target_id=thread.thread_target_id,
+                target_kind="thread",
+                message_text="hello again",
+            )
+        )
+
+    refreshed_thread = service.get_thread_target(thread.thread_target_id)
+    payloads = [
+        json.loads(record.message)
+        for record in caplog.records
+        if record.name == "codex_autorunner.core.orchestration.service"
+    ]
+
+    assert execution.status == "running"
+    assert harness.resume_conversation_calls == [(workspace_root, "backend-existing-1")]
+    assert [call["conversation_id"] for call in harness.start_turn_calls] == [
+        "backend-existing-1",
+        "backend-fresh-2",
+    ]
+    assert harness.new_conversation_calls == [(workspace_root, None)]
+    assert refreshed_thread is not None
+    binding = _thread_runtime_binding(service, thread.thread_target_id)
+    assert binding is not None
+    assert binding.backend_thread_id == "backend-fresh-2"
+    assert any(
+        payload.get("event") == "orchestration.thread.refreshing_backend_binding"
+        and payload.get("thread_target_id") == thread.thread_target_id
+        and payload.get("execution_id") == execution.execution_id
+        and payload.get("backend_thread_id") == "backend-existing-1"
+        and payload.get("operation") == "start_turn"
+        and payload.get("reason") == "Event loop is closed"
+        for payload in payloads
+    )
+
+
 async def test_send_review_retries_with_fresh_conversation_when_existing_binding_is_invalid(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
@@ -1513,6 +1609,34 @@ async def test_stop_thread_recovers_unknown_hermes_turn_interrupt_error(
     )
 
     harness.interrupt_error = RuntimeError("Unknown Hermes turn 'turn-10'")
+
+    outcome = await service.stop_thread(thread.thread_target_id)
+
+    assert len(harness.interrupt_calls) == 1
+    assert outcome.interrupted_active is True
+    assert outcome.recovered_lost_backend is True
+    assert outcome.execution is not None
+    assert outcome.execution.execution_id == execution.execution_id
+    assert outcome.execution.status == "interrupted"
+
+
+async def test_stop_thread_recovers_closed_loop_interrupt_error(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+    execution = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="Need an answer",
+        )
+    )
+
+    harness.interrupt_error = RuntimeError("Event loop is closed")
 
     outcome = await service.stop_thread(thread.thread_target_id)
 
