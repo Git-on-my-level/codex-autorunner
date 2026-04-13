@@ -118,7 +118,10 @@ class HubRepoEnricher:
         from .....core.pma_context import (
             get_latest_ticket_flow_run_state_with_record,
         )
-        from .....core.ticket_flow_projection import build_canonical_state_v1
+        from .....core.ticket_flow_projection import (
+            build_canonical_state_v1,
+            collect_ticket_flow_census,
+        )
         from .....core.ticket_flow_summary import (
             build_ticket_flow_display,
             build_ticket_flow_summary,
@@ -148,10 +151,12 @@ class HubRepoEnricher:
                 store = None
 
         try:
+            census = collect_ticket_flow_census(snapshot.path)
             ticket_flow = build_ticket_flow_summary(
                 snapshot.path,
                 include_failure=True,
                 store=store,
+                census=census,
             )
             payload["ticket_flow"] = ticket_flow
             if isinstance(ticket_flow, dict):
@@ -203,6 +208,7 @@ class HubRepoEnricher:
                     else None
                 ),
                 stale_threshold_seconds=stale_threshold_seconds,
+                census=census,
             )
         finally:
             if store is not None:

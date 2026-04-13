@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
@@ -15,6 +17,7 @@ from .text_utils import _iso_now
 _START_NEW_FLOW_TOKEN = " flow ticket_flow start "
 _COMPLETED_FLOW_STATUSES = {"completed", "done"}
 _ATTENTION_STATES = {"blocked", "dead", "paused"}
+_PR_URL_RE = re.compile(r"https://github\.com/[^/\s]+/[^/\s]+/pull/\d+", re.IGNORECASE)
 
 
 def _normalize_optional_str(value: Any) -> Optional[str]:
@@ -32,6 +35,22 @@ def _normalize_optional_int(value: Any) -> Optional[int]:
         if stripped.isdigit():
             return int(stripped)
     return None
+
+
+@dataclass(frozen=True)
+class TicketFlowCensus:
+    total_count: int
+    done_count: int
+    effective_next_ticket: Optional[str]
+    open_pr_url: Optional[str]
+    final_review_status: Optional[str]
+
+
+@dataclass(frozen=True)
+class AuthoritativeRunFacts:
+    record: Optional[FlowRunRecord]
+    last_event_seq: Optional[int]
+    last_event_at: Optional[str]
 
 
 def select_authoritative_run_record(
@@ -82,7 +101,18 @@ def _is_start_new_flow_action(action: str) -> bool:
     return _START_NEW_FLOW_TOKEN in normalized and " --run-id " not in normalized
 
 
-def _collect_ticket_frontmatter_state(repo_root: Path) -> dict[str, Any]:
+def _extract_pr_url(data: dict[str, Any], body: Optional[str]) -> Optional[str]:
+    frontmatter_pr = data.get("pr_url")
+    if isinstance(frontmatter_pr, str) and frontmatter_pr.strip():
+        return frontmatter_pr.strip()
+    if body:
+        match = _PR_URL_RE.search(body)
+        if match:
+            return match.group(0)
+    return None
+
+
+def collect_ticket_flow_census(repo_root: Path) -> TicketFlowCensus:
     ticket_dir = repo_root / ".codex-autorunner" / "tickets"
     try:
         ticket_paths = list_ticket_paths(ticket_dir)
@@ -92,29 +122,52 @@ def _collect_ticket_frontmatter_state(repo_root: Path) -> dict[str, Any]:
     total_count = len(ticket_paths)
     done_count = 0
     effective_next_ticket: Optional[str] = None
+    open_pr_url: Optional[str] = None
+    final_review_status: Optional[str] = None
 
     for path in ticket_paths:
         done_flag = False
+        frontmatter: Any = None
+        body: Optional[str] = None
         try:
             raw = path.read_text(encoding="utf-8")
-            frontmatter, _ = parse_markdown_frontmatter(raw)
-            if isinstance(frontmatter, dict) and isinstance(
-                frontmatter.get("done"), bool
-            ):
-                done_flag = frontmatter["done"]
+            frontmatter, body = parse_markdown_frontmatter(raw)
         except (OSError, ValueError):
             done_flag = False
+
+        if isinstance(frontmatter, dict) and isinstance(frontmatter.get("done"), bool):
+            done_flag = frontmatter["done"]
 
         if done_flag:
             done_count += 1
         elif effective_next_ticket is None:
             effective_next_ticket = path.name
 
-    return {
-        "frontmatter_total_count": total_count,
-        "frontmatter_done_count": done_count,
-        "effective_next_ticket": effective_next_ticket,
-    }
+        if not isinstance(frontmatter, dict):
+            continue
+
+        title = str(frontmatter.get("title") or "").strip().lower()
+        ticket_kind = str(frontmatter.get("ticket_kind") or "").strip().lower()
+
+        is_final_review = ticket_kind == "final_review" or "final review" in title
+        if is_final_review:
+            final_review_status = "done" if done_flag else "pending"
+
+        is_open_pr = (
+            ticket_kind == "open_pr" or "open pr" in title or "pull request" in title
+        )
+        if is_open_pr and open_pr_url is None:
+            pr = _extract_pr_url(frontmatter, body)
+            if pr is not None:
+                open_pr_url = pr
+
+    return TicketFlowCensus(
+        total_count=total_count,
+        done_count=done_count,
+        effective_next_ticket=effective_next_ticket,
+        open_pr_url=open_pr_url,
+        final_review_status=final_review_status,
+    )
 
 
 def _resolve_ingest_state(
@@ -199,14 +252,16 @@ def build_canonical_state_v1(
     store: Optional[FlowStore] = None,
     preferred_run_id: Optional[str] = None,
     stale_threshold_seconds: Optional[int] = None,
+    census: Optional[TicketFlowCensus] = None,
+    run_facts: Optional[AuthoritativeRunFacts] = None,
 ) -> dict[str, Any]:
     observed_at = _iso_now()
-    ticket_state = _collect_ticket_frontmatter_state(repo_root)
-    frontmatter_total_count = int(ticket_state["frontmatter_total_count"])
-    frontmatter_done_count = int(ticket_state["frontmatter_done_count"])
-    effective_next_ticket = _normalize_optional_str(
-        ticket_state["effective_next_ticket"]
-    )
+
+    if census is None:
+        census = collect_ticket_flow_census(repo_root)
+    frontmatter_total_count = census.total_count
+    frontmatter_done_count = census.done_count
+    effective_next_ticket = _normalize_optional_str(census.effective_next_ticket)
 
     run_state_payload = run_state if isinstance(run_state, dict) else {}
     run_state_run_id = _normalize_optional_str(run_state_payload.get("run_id"))
@@ -217,13 +272,18 @@ def build_canonical_state_v1(
     )
     represented_run_id = record_run_id or run_state_run_id
 
-    latest_record, last_event_seq, last_event_at = _resolve_last_event_meta(
-        repo_root=repo_root,
-        record=record,
-        store=store,
-        preferred_run_id=preferred_run_id,
-        represented_run_id=represented_run_id,
-    )
+    if run_facts is not None:
+        latest_record = run_facts.record
+        last_event_seq = run_facts.last_event_seq
+        last_event_at = run_facts.last_event_at
+    else:
+        latest_record, last_event_seq, last_event_at = _resolve_last_event_meta(
+            repo_root=repo_root,
+            record=record,
+            store=store,
+            preferred_run_id=preferred_run_id,
+            represented_run_id=represented_run_id,
+        )
 
     latest_run_id = (
         _normalize_optional_str(getattr(latest_record, "id", None))

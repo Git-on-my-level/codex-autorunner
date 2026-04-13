@@ -34,7 +34,7 @@ from .pma_file_inbox import (
 from .pma_thread_snapshot import snapshot_pma_threads
 from .pma_ticket_flow_state import get_latest_ticket_flow_run_state_with_record
 from .state_roots import resolve_hub_templates_root
-from .ticket_flow_projection import build_canonical_state_v1
+from .ticket_flow_projection import build_canonical_state_v1, collect_ticket_flow_census
 from .ticket_flow_summary import build_ticket_flow_summary
 
 _logger = logging.getLogger(__name__)
@@ -315,8 +315,9 @@ def _build_repo_summaries(
             "canonical_state_v1": None,
         }
         if snap.initialized and snap.exists_on_disk:
+            census = collect_ticket_flow_census(snap.path)
             summary["ticket_flow"] = build_ticket_flow_summary(
-                snap.path, include_failure=False
+                snap.path, include_failure=False, census=census
             )
             run_state, run_record = get_latest_ticket_flow_run_state_with_record(
                 snap.path, snap.id
@@ -340,6 +341,7 @@ def _build_repo_summaries(
                     str(snap.last_run_id) if snap.last_run_id is not None else None
                 ),
                 stale_threshold_seconds=stale_threshold_seconds,
+                census=census,
             )
         repos.append(summary)
     return repos
