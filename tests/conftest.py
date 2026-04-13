@@ -25,7 +25,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-DEFAULT_NON_INTEGRATION_TIMEOUT_SECONDS = 120
+DEFAULT_NON_INTEGRATION_TIMEOUT_SECONDS = 30
+DEFAULT_INTEGRATION_TIMEOUT_SECONDS = 30
 _OPENCODE_PROCESS_KIND = "opencode"
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _PYTEST_RUNTIME_KEY = hashlib.sha1(
@@ -102,7 +103,11 @@ def _prune_old_runtime_dirs(
 
 def _prune_inactive_pytest_temp_runs(*, keep: set[str]) -> None:
     cleanup_module = _load_pytest_temp_cleanup_module()
-    cleanup_module.cleanup_repo_pytest_temp_runs(_REPO_ROOT, keep_run_tokens=keep)
+    cleanup_module.cleanup_repo_pytest_temp_runs(
+        _REPO_ROOT,
+        keep_run_tokens=keep,
+        min_age_seconds=300,
+    )
 
 
 def _format_temp_processes(processes: tuple[object, ...]) -> str:
@@ -164,16 +169,21 @@ def pytest_collection_modifyitems(
     session: pytest.Session, config: pytest.Config, items: list[pytest.Item]
 ) -> None:
     """
-    Apply a default per-test timeout to non-integration tests.
+    Apply a default per-test timeout to all tests.
 
     This relies on `pytest-timeout` when installed; if it isn't installed, the
     marker is inert but still documents the intent.
     """
     _ = session, config
     for item in items:
-        if item.get_closest_marker("integration") is not None:
+        if item.get_closest_marker("timeout") is not None:
             continue
-        item.add_marker(pytest.mark.timeout(DEFAULT_NON_INTEGRATION_TIMEOUT_SECONDS))
+        if item.get_closest_marker("integration") is not None:
+            item.add_marker(pytest.mark.timeout(DEFAULT_INTEGRATION_TIMEOUT_SECONDS))
+        else:
+            item.add_marker(
+                pytest.mark.timeout(DEFAULT_NON_INTEGRATION_TIMEOUT_SECONDS)
+            )
 
 
 @pytest.fixture(autouse=True)
@@ -260,9 +270,6 @@ def _stub_surface_startup_handshakes_for_non_handshake_tests(
         async def list_surface_bindings(self, request):
             return self._service.list_surface_bindings(request)
 
-        async def list_surface_bindings(self, request):
-            return self._service.list_surface_bindings(request)
-
         async def get_thread_target(self, request):
             return self._service.get_thread_target(request)
 
@@ -308,12 +315,6 @@ def _stub_surface_startup_handshakes_for_non_handshake_tests(
         async def set_execution_backend_id(self, request) -> None:
             self._service.set_execution_backend_id(request)
 
-        async def persist_execution_timeline(self, request):
-            return self._service.persist_execution_timeline(request)
-
-        async def finalize_execution_cold_trace(self, request):
-            return self._service.finalize_execution_cold_trace(request)
-
         async def claim_next_queued_execution(self, request):
             return self._service.claim_next_queued_execution(request)
 
@@ -331,9 +332,6 @@ def _stub_surface_startup_handshakes_for_non_handshake_tests(
 
         async def set_thread_backend_id(self, request) -> None:
             self._service.set_thread_backend_id(request)
-
-        async def write_transcript(self, request):
-            return self._service.write_transcript(request)
 
         async def record_thread_activity(self, request) -> None:
             self._service.record_thread_activity(request)

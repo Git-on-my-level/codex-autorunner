@@ -125,6 +125,7 @@ from ...integrations.app_server.threads import (
 from ...integrations.chat.agents import (
     DEFAULT_CHAT_AGENT,
     chat_agent_supports_effort,
+    chat_hermes_profile_options,
     format_chat_agent_selection,
     normalize_chat_agent,
     normalize_hermes_profile,
@@ -5038,15 +5039,34 @@ class DiscordBotService:
         agent: str,
         agent_profile: Optional[str] = None,
     ) -> tuple[str, ...]:
+        agent_ids: list[str] = []
+        seen: set[str] = set()
+
+        def _add_agent_id(value: object) -> None:
+            normalized = str(value or "").strip().lower()
+            if not normalized or normalized in seen:
+                return
+            seen.add(normalized)
+            agent_ids.append(normalized)
+
         runtime_agent = resolve_chat_runtime_agent(
             agent,
             agent_profile,
             default=self.DEFAULT_AGENT,
             context=self,
         )
-        if runtime_agent == agent:
-            return (agent,)
-        return (agent, runtime_agent)
+        _add_agent_id(agent)
+        _add_agent_id(runtime_agent)
+        if agent == "hermes":
+            normalized_profile = normalize_hermes_profile(
+                agent_profile,
+                context=self,
+            )
+            if normalized_profile is not None:
+                for option in chat_hermes_profile_options(self):
+                    if option.profile == normalized_profile:
+                        _add_agent_id(option.runtime_agent)
+        return tuple(agent_ids)
 
     def _discord_thread_matches_agent(
         self,

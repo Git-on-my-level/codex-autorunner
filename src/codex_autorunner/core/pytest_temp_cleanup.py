@@ -77,6 +77,7 @@ def cleanup_repo_pytest_temp_runs(
     keep_run_tokens: set[str] | None = None,
     dry_run: bool = False,
     temp_base: Path | None = None,
+    min_age_seconds: float = 0.0,
 ) -> TempCleanupSummary:
     temp_root = repo_pytest_temp_root(repo_root, temp_base=temp_base)
     keep = {token for token in (keep_run_tokens or set()) if token}
@@ -89,11 +90,18 @@ def cleanup_repo_pytest_temp_runs(
             bytes_before=0,
             bytes_after=0,
         )
-    paths = [
-        path
-        for path in sorted(temp_root.iterdir())
-        if path.name not in keep and path.is_dir()
-    ]
+    cutoff = time.time() - max(0.0, float(min_age_seconds))
+    paths = []
+    for path in sorted(temp_root.iterdir()):
+        if path.name in keep or not path.is_dir():
+            continue
+        if min_age_seconds > 0.0:
+            try:
+                if path.stat().st_mtime >= cutoff:
+                    continue
+            except OSError:
+                continue
+        paths.append(path)
     summary = cleanup_temp_paths(paths, dry_run=dry_run)
     if not dry_run:
         _remove_empty_parent_dirs(
