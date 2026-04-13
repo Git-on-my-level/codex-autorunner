@@ -62,6 +62,49 @@ def test_subscription_idempotent_dedupe_and_lifecycle_matching(tmp_path) -> None
     assert matches[0]["subscription_id"] == first.subscription_id
 
 
+def test_list_state_filters_apply_to_subscriptions_and_timers(tmp_path) -> None:
+    store = PmaAutomationStore(tmp_path)
+
+    active_sub, _ = store.upsert_subscription(
+        event_types=["flow_failed"],
+        repo_id="repo-1",
+        idempotency_key="sub-active",
+    )
+    cancelled_sub, _ = store.upsert_subscription(
+        event_types=["flow_completed"],
+        repo_id="repo-1",
+        idempotency_key="sub-cancelled",
+    )
+    assert store.cancel_subscription(cancelled_sub.subscription_id) is True
+
+    pending_timer, _ = store.upsert_timer(
+        due_at="2099-01-01T00:00:00+00:00",
+        repo_id="repo-1",
+        idempotency_key="timer-pending",
+    )
+    fired_timer, _ = store.upsert_timer(
+        due_at="2000-01-01T00:00:00+00:00",
+        repo_id="repo-1",
+        idempotency_key="timer-fired",
+    )
+    due = store.dequeue_due_timers(limit=10)
+    assert [entry["timer_id"] for entry in due] == [fired_timer.timer_id]
+
+    assert [
+        entry["subscription_id"] for entry in store.list_subscriptions(state="active")
+    ] == [active_sub.subscription_id]
+    assert [
+        entry["subscription_id"]
+        for entry in store.list_subscriptions(state="cancelled")
+    ] == [cancelled_sub.subscription_id]
+    assert [entry["timer_id"] for entry in store.list_timers(state="pending")] == [
+        pending_timer.timer_id
+    ]
+    assert [entry["timer_id"] for entry in store.list_timers(state="fired")] == [
+        fired_timer.timer_id
+    ]
+
+
 def test_legacy_backfill_runs_once_per_store_instance(tmp_path, monkeypatch) -> None:
     call_count = 0
 

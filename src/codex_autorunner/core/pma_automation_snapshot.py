@@ -47,6 +47,13 @@ def _call_automation_list(
     return _coerce_automation_items(result, key=key)
 
 
+def _wakeup_sort_key(entry: dict[str, Any]) -> tuple[str, str, str]:
+    timestamp = str(entry.get("timestamp") or "").strip()
+    updated_at = str(entry.get("updated_at") or "").strip()
+    wakeup_id = str(entry.get("wakeup_id") or "").strip()
+    return (timestamp, updated_at, wakeup_id)
+
+
 def snapshot_pma_automation(
     supervisor: HubSupervisor, *, max_items: int = 10
 ) -> dict[str, Any]:
@@ -73,22 +80,15 @@ def snapshot_pma_automation(
     pending_wakeups = _call_automation_list(
         getattr(store, "list_wakeups", None), key="wakeups", state_filter="pending"
     )
-    pending_wakeups_sample = _call_automation_list(
-        getattr(store, "list_pending_wakeups", None),
-        key="wakeups",
-        limit=max_items,
-    )
     if not pending_wakeups:
         pending_wakeups = _call_automation_list(
             getattr(store, "list_pending_wakeups", None), key="wakeups"
         )
-    if not pending_wakeups_sample:
-        pending_wakeups_sample = _call_automation_list(
-            getattr(store, "list_wakeups", None),
-            key="wakeups",
-            state_filter="pending",
-            limit=max_items,
-        )
+    pending_wakeups_sample = sorted(
+        pending_wakeups,
+        key=_wakeup_sort_key,
+        reverse=True,
+    )[:max_items]
     dispatched_wakeups = _call_automation_list(
         getattr(store, "list_wakeups", None),
         key="wakeups",

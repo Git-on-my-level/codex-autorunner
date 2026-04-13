@@ -1235,6 +1235,7 @@ class PmaAutomationStore:
         self,
         *,
         include_inactive: bool = False,
+        state: Optional[str] = None,
         repo_id: Optional[str] = None,
         run_id: Optional[str] = None,
         thread_id: Optional[str] = None,
@@ -1242,15 +1243,18 @@ class PmaAutomationStore:
         limit: Optional[int] = None,
         **_: Any,
     ) -> list[dict[str, Any]]:
-        state = self.load()
-        subscriptions = self._normalize_subscriptions(state.get("subscriptions"))
+        loaded_state = self.load()
+        subscriptions = self._normalize_subscriptions(loaded_state.get("subscriptions"))
+        state_norm = _normalize_text(state)
         repo_id_norm = _normalize_text(repo_id)
         run_id_norm = _normalize_text(run_id)
         thread_id_norm = _normalize_text(thread_id)
         lane_id_norm = _normalize_text(lane_id)
         out: list[dict[str, Any]] = []
         for entry in subscriptions:
-            if not include_inactive and entry.state != "active":
+            if state_norm is not None and entry.state != state_norm:
+                continue
+            if state_norm is None and not include_inactive and entry.state != "active":
                 continue
             if repo_id_norm is not None and entry.repo_id != repo_id_norm:
                 continue
@@ -1480,6 +1484,7 @@ class PmaAutomationStore:
         self,
         *,
         include_inactive: bool = False,
+        state: Optional[str] = None,
         timer_type: Optional[str] = None,
         subscription_id: Optional[str] = None,
         repo_id: Optional[str] = None,
@@ -1489,8 +1494,9 @@ class PmaAutomationStore:
         limit: Optional[int] = None,
         **_: Any,
     ) -> list[dict[str, Any]]:
-        state = self.load()
-        timers = self._normalize_timers(state.get("timers"))
+        loaded_state = self.load()
+        timers = self._normalize_timers(loaded_state.get("timers"))
+        state_norm = _normalize_text(state)
         timer_type_norm = _normalize_text(timer_type)
         subscription_id_norm = _normalize_text(subscription_id)
         repo_id_norm = _normalize_text(repo_id)
@@ -1499,7 +1505,9 @@ class PmaAutomationStore:
         lane_id_norm = _normalize_text(lane_id)
         out: list[dict[str, Any]] = []
         for entry in timers:
-            if not include_inactive and entry.state != "pending":
+            if state_norm is not None and entry.state != state_norm:
+                continue
+            if state_norm is None and not include_inactive and entry.state != "pending":
                 continue
             if timer_type_norm is not None and entry.timer_type != timer_type_norm:
                 continue
