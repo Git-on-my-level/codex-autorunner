@@ -381,6 +381,58 @@ def test_pma_agents_endpoint_prefers_hermes_default_profile_over_global_default(
     assert hermes["metadata_profile"] == "m4"
 
 
+def test_pma_agents_endpoint_includes_unavailable_hermes_static_profile_metadata(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg.setdefault("pma", {})
+    cfg["pma"]["enabled"] = True
+    cfg.setdefault("agents", {})
+    cfg["agents"]["hermes"] = {
+        "binary": "hermes",
+        "profiles": {"m4": {"binary": "hermes-m4", "display_name": "M4 PMA"}},
+        "default_profile": "m4",
+    }
+    write_test_config(hub_env.hub_root / CONFIG_FILENAME, cfg)
+
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry.hermes_runtime_preflight",
+        lambda _config: type(
+            "Result",
+            (),
+            {
+                "status": "missing",
+                "version": None,
+                "launch_mode": "binary",
+                "message": "binary missing",
+                "fix": "install hermes",
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        hermes_supervisor_routes,
+        "build_hermes_supervisor_from_config",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("unavailable hermes should not resolve supervisor metadata")
+        ),
+    )
+
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        resp = client.get("/hub/pma/agents")
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    agents = {agent["id"]: agent for agent in payload["agents"]}
+    hermes = agents["hermes"]
+    assert hermes["default_profile"] == "m4"
+    assert hermes["profiles"] == [{"id": "m4", "display_name": "M4 PMA"}]
+    assert hermes["metadata_profile"] == "m4"
+    assert "session_controls" not in hermes
+    assert "advertised_commands" not in hermes
+
+
 def test_pma_chat_requires_message(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)

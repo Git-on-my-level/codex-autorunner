@@ -5,8 +5,13 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 
 from .....agents.registry import get_agent_descriptor, get_available_agents
+from .....core.orchestration.catalog import map_agent_capabilities
 from ...services.pma.common import pma_config_from_raw
-from ..agents import _available_agents, _serialize_model_catalog
+from ..agents import (
+    _available_agents,
+    _serialize_agent_profiles,
+    _serialize_model_catalog,
+)
 from .hermes_supervisors import resolve_cached_hermes_supervisor
 
 
@@ -15,6 +20,80 @@ def build_pma_meta_routes(
     get_runtime_state,
 ) -> None:
     """Build PMA metadata, audit, and model-catalog routes."""
+
+    def _hermes_is_configured(request: Request) -> bool:
+        config = getattr(request.app.state, "config", None)
+        backend_getter = getattr(config, "agent_backend", None)
+        if callable(backend_getter):
+            try:
+                return str(backend_getter("hermes")).strip().lower() == "hermes"
+            except (TypeError, ValueError, RuntimeError):
+                return False
+        return get_agent_descriptor("hermes", request.app.state) is not None
+
+    def _build_registered_hermes_payload(request: Request) -> dict[str, Any] | None:
+        if not _hermes_is_configured(request):
+            return None
+        descriptor = get_agent_descriptor("hermes", request.app.state)
+        if descriptor is None:
+            return None
+        agent_payload: dict[str, Any] = {
+            "id": descriptor.id,
+            "name": descriptor.name,
+            "capabilities": sorted(map_agent_capabilities(descriptor.capabilities)),
+        }
+        agent_profiles = _serialize_agent_profiles(request, "hermes")
+        if agent_profiles.get("profiles") or agent_profiles.get("default_profile"):
+            agent_payload.update(agent_profiles)
+        return agent_payload
+
+    async def _enrich_hermes_payload(
+        request: Request,
+        agent_payload: dict[str, Any],
+        *,
+        default_agent: str,
+        default_profile: str | None,
+        include_supervisor_metadata: bool,
+    ) -> dict[str, Any]:
+        metadata_profile = (
+            str(agent_payload.get("default_profile") or "").strip().lower() or None
+        )
+        if metadata_profile is None and default_agent == "hermes":
+            metadata_profile = default_profile
+        if include_supervisor_metadata:
+            supervisor = _resolve_hermes_supervisor(
+                request,
+                profile=metadata_profile,
+            )
+            if supervisor is not None:
+                try:
+                    session_caps = await supervisor.session_capabilities(
+                        request.app.state.config.root
+                    )
+                    commands = await supervisor.advertised_commands(
+                        request.app.state.config.root
+                    )
+                except Exception:  # intentional: optional runtime metadata
+                    session_caps = None
+                    commands = []
+                if session_caps is not None:
+                    agent_payload["session_controls"] = {
+                        "fork": bool(session_caps.fork),
+                        "set_model": bool(session_caps.set_model),
+                        "set_mode": bool(session_caps.set_mode),
+                        "list_sessions": bool(session_caps.list_sessions),
+                    }
+                if commands:
+                    agent_payload["advertised_commands"] = [
+                        {
+                            "name": command.name,
+                            "description": command.description,
+                        }
+                        for command in commands
+                    ]
+        if metadata_profile:
+            agent_payload["metadata_profile"] = metadata_profile
+        return agent_payload
 
     def _get_pma_config(request: Request) -> dict[str, Any]:
         raw = getattr(request.app.state.config, "raw", {})
@@ -39,51 +118,37 @@ def build_pma_meta_routes(
         agents, default_agent = _available_agents(request)
         defaults = _get_pma_config(request)
         default_profile = str(defaults.get("profile") or "").strip().lower() or None
+        available_agent_ids = {
+            str(agent.get("id") or "").strip().lower()
+            for agent in agents
+            if isinstance(agent, dict)
+        }
         enriched_agents: list[dict[str, Any]] = []
         for agent in agents:
             if not isinstance(agent, dict):
                 continue
             agent_payload = dict(agent)
             if str(agent_payload.get("id") or "").strip().lower() == "hermes":
-                metadata_profile = (
-                    str(agent_payload.get("default_profile") or "").strip().lower()
-                    or None
-                )
-                if metadata_profile is None and default_agent == "hermes":
-                    metadata_profile = default_profile
-                supervisor = _resolve_hermes_supervisor(
+                agent_payload = await _enrich_hermes_payload(
                     request,
-                    profile=metadata_profile,
+                    agent_payload,
+                    default_agent=default_agent,
+                    default_profile=default_profile,
+                    include_supervisor_metadata=True,
                 )
-                if supervisor is not None:
-                    try:
-                        session_caps = await supervisor.session_capabilities(
-                            request.app.state.config.root
-                        )
-                        commands = await supervisor.advertised_commands(
-                            request.app.state.config.root
-                        )
-                    except Exception:  # intentional: optional runtime metadata
-                        session_caps = None
-                        commands = []
-                    if session_caps is not None:
-                        agent_payload["session_controls"] = {
-                            "fork": bool(session_caps.fork),
-                            "set_model": bool(session_caps.set_model),
-                            "set_mode": bool(session_caps.set_mode),
-                            "list_sessions": bool(session_caps.list_sessions),
-                        }
-                    if commands:
-                        agent_payload["advertised_commands"] = [
-                            {
-                                "name": command.name,
-                                "description": command.description,
-                            }
-                            for command in commands
-                        ]
-                    if metadata_profile:
-                        agent_payload["metadata_profile"] = metadata_profile
             enriched_agents.append(agent_payload)
+        if "hermes" not in available_agent_ids:
+            hermes_payload = _build_registered_hermes_payload(request)
+            if hermes_payload is not None:
+                enriched_agents.append(
+                    await _enrich_hermes_payload(
+                        request,
+                        hermes_payload,
+                        default_agent=default_agent,
+                        default_profile=default_profile,
+                        include_supervisor_metadata=False,
+                    )
+                )
         payload: dict[str, Any] = {"agents": agents, "default": default_agent}
         payload["agents"] = enriched_agents
         if (
