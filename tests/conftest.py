@@ -257,6 +257,9 @@ def _stub_surface_startup_handshakes_for_non_handshake_tests(
         async def upsert_surface_binding(self, request):
             return self._service.upsert_surface_binding(request)
 
+        async def list_surface_bindings(self, request):
+            return self._service.list_surface_bindings(request)
+
         async def get_thread_target(self, request):
             return self._service.get_thread_target(request)
 
@@ -305,6 +308,12 @@ def _stub_surface_startup_handshakes_for_non_handshake_tests(
         async def claim_next_queued_execution(self, request):
             return self._service.claim_next_queued_execution(request)
 
+        async def persist_execution_timeline(self, request):
+            return self._service.persist_execution_timeline(request)
+
+        async def finalize_execution_cold_trace(self, request):
+            return self._service.finalize_execution_cold_trace(request)
+
         async def resume_thread_target(self, request):
             return self._service.resume_thread_target(request)
 
@@ -322,6 +331,9 @@ def _stub_surface_startup_handshakes_for_non_handshake_tests(
 
         async def get_transcript_history(self, request):
             return self._service.get_transcript_history(request)
+
+        async def write_transcript(self, request):
+            return self._service.write_transcript(request)
 
         async def get_pma_snapshot(self):
             return type(

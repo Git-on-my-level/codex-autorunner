@@ -128,6 +128,9 @@ class _InProcessHubControlPlaneClient:
     async def upsert_surface_binding(self, request: Any) -> Any:
         return self._service.upsert_surface_binding(request)
 
+    async def list_surface_bindings(self, request: Any) -> Any:
+        return self._service.list_surface_bindings(request)
+
     async def get_thread_target(self, request: Any) -> Any:
         return self._service.get_thread_target(request)
 
@@ -176,6 +179,12 @@ class _InProcessHubControlPlaneClient:
     async def claim_next_queued_execution(self, request: Any) -> Any:
         return self._service.claim_next_queued_execution(request)
 
+    async def persist_execution_timeline(self, request: Any) -> Any:
+        return self._service.persist_execution_timeline(request)
+
+    async def finalize_execution_cold_trace(self, request: Any) -> Any:
+        return self._service.finalize_execution_cold_trace(request)
+
     async def resume_thread_target(self, request: Any) -> Any:
         return self._service.resume_thread_target(request)
 
@@ -193,6 +202,9 @@ class _InProcessHubControlPlaneClient:
 
     async def get_transcript_history(self, request: Any) -> Any:
         return self._service.get_transcript_history(request)
+
+    async def write_transcript(self, request: Any) -> Any:
+        return self._service.write_transcript(request)
 
     async def get_pma_snapshot(self) -> Any:
         return type(
@@ -4201,7 +4213,6 @@ async def test_repo_message_ingress_callback_reaches_orchestrated_thread_executi
         "build_surface_orchestration_ingress",
         lambda **_: _IngressStub(),
     )
-
     message = TelegramMessage(
         update_id=1,
         message_id=2,
