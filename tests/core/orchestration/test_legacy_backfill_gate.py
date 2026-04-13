@@ -8,7 +8,7 @@ from codex_autorunner.core.orchestration.legacy_backfill_gate import (
     ensure_legacy_orchestration_backfill,
 )
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
-from codex_autorunner.core.pma_automation_store import PmaAutomationStore
+from codex_autorunner.core.pma_thread_store import prepare_pma_thread_store
 
 
 def test_ensure_legacy_orchestration_backfill_skips_work_when_marker_present(
@@ -36,7 +36,7 @@ def test_ensure_legacy_orchestration_backfill_skips_work_when_marker_present(
         mock_threads.assert_not_called()
 
 
-def test_two_automation_store_loads_call_thread_backfill_once_without_marker(
+def test_prepare_pma_thread_store_runs_thread_backfill_once_without_marker(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
@@ -45,6 +45,6 @@ def test_two_automation_store_loads_call_thread_backfill_once_without_marker(
         "codex_autorunner.core.orchestration.legacy_backfill_gate."
         "backfill_legacy_thread_state",
     ) as mock_threads:
-        PmaAutomationStore(hub_root).load()
-        PmaAutomationStore(hub_root).load()
+        prepare_pma_thread_store(hub_root, durable=False)
+        prepare_pma_thread_store(hub_root, durable=False)
         assert mock_threads.call_count == 1

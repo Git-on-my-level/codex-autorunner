@@ -73,29 +73,62 @@ def _list_manifest_repos(
 
 
 def _list_agent_workspaces(service: Any) -> list[tuple[str, str, str]]:
-    supervisor = getattr(service, "_hub_supervisor", None)
-    if supervisor is None:
+    hub_client = getattr(service, "_hub_client", None)
+    if hub_client is None:
         return []
     try:
-        snapshots = supervisor.list_agent_workspaces()
-    except Exception:  # intentional: external supervisor API, defensive fallback
-        return []
+        import asyncio
+        from concurrent.futures import (
+            ThreadPoolExecutor,
+        )
+        from concurrent.futures import (
+            TimeoutError as FuturesTimeoutError,
+        )
+
+        from ...core.hub_control_plane import AgentWorkspaceListRequest
+
+        request = AgentWorkspaceListRequest()
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # Cannot use run_coroutine_threadsafe on the same loop —
+            # it would deadlock. Run asyncio.run() in a worker thread
+            # with a fresh loop instead.
+            def _fetch() -> Any:
+                return asyncio.run(hub_client.list_agent_workspaces(request))
+
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(_fetch)
+                response = future.result(timeout=10)
+        else:
+            response = loop.run_until_complete(
+                hub_client.list_agent_workspaces(request)
+            )
+    except (Exception, FuturesTimeoutError):
+        return _list_agent_workspaces_from_cache(service)
     workspaces: list[tuple[str, str, str]] = []
-    for snapshot in snapshots:
-        workspace_id = str(getattr(snapshot, "id", "") or "").strip()
-        workspace_path = getattr(snapshot, "path", None)
-        if isinstance(workspace_path, str):
-            workspace_path = Path(workspace_path)
-        if not workspace_id or not isinstance(workspace_path, Path):
+    for descriptor in response.workspaces:
+        workspace_id = descriptor.workspace_id
+        workspace_path = descriptor.workspace_root
+        if not workspace_id or not workspace_path:
             continue
-        display_name = str(
-            getattr(snapshot, "display_name", "") or workspace_id
-        ).strip()
+        display_name = descriptor.display_name or workspace_id
         workspaces.append(
-            (workspace_id, str(canonicalize_path(workspace_path)), display_name)
+            (workspace_id, str(canonicalize_path(Path(workspace_path))), display_name)
         )
     workspaces.sort(key=lambda item: (item[2].lower(), item[0]))
+    service._agent_workspaces_cache = workspaces
     return workspaces
+
+
+def _list_agent_workspaces_from_cache(
+    service: Any,
+) -> list[tuple[str, str, str]]:
+    cached: list[tuple[str, str, str]] | None = getattr(
+        service, "_agent_workspaces_cache", None
+    )
+    if cached is not None:
+        return list(cached)
+    return []
 
 
 def _resource_owner_for_workspace(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -10,7 +11,6 @@ from typing import Any, Optional, cast
 
 from .chat_bindings import active_chat_binding_metadata_by_thread
 from .locks import file_lock
-from .orchestration.legacy_backfill_gate import ensure_legacy_orchestration_backfill
 from .orchestration.sqlite import open_orchestration_sqlite
 from .pma_automation_persistence import PmaAutomationPersistence
 from .pma_automation_types import (
@@ -377,17 +377,30 @@ class PmaAutomationStore:
 
     def load(self) -> dict[str, Any]:
         with file_lock(self._lock_path()):
-            return self._load_unlocked() or default_pma_automation_state()
-
-    def _migrate_legacy_if_needed(self) -> None:
-        ensure_legacy_orchestration_backfill(self._hub_root, durable=True)
+            state = self._load_unlocked()
+            if state is not None:
+                return state
+            state = self._persistence._load_unlocked()
+            if state is not None:
+                return state
+            state = default_pma_automation_state()
+            self._persistence._save_unlocked(state)
+            return state
 
     def _load_unlocked(self) -> Optional[dict[str, Any]]:
-        self._migrate_legacy_if_needed()
-        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
-            subscriptions = self._load_subscriptions_from_sqlite(conn)
-            timers = self._load_timers_from_sqlite(conn)
-            wakeups = self._load_wakeups_from_sqlite(conn)
+        try:
+            with open_orchestration_sqlite(
+                self._hub_root,
+                durable=True,
+                migrate=False,
+            ) as conn:
+                subscriptions = self._load_subscriptions_from_sqlite(conn)
+                timers = self._load_timers_from_sqlite(conn)
+                wakeups = self._load_wakeups_from_sqlite(conn)
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc).lower():
+                raise
+            return None
         updated_values: list[str] = []
         updated_values.extend(entry.updated_at for entry in subscriptions)
         updated_values.extend(entry.updated_at for entry in timers)
@@ -414,7 +427,11 @@ class PmaAutomationStore:
         list[PmaAutomationTimer],
         list[PmaAutomationWakeup],
     ]:
-        state = self._load_unlocked() or default_pma_automation_state()
+        state = self._load_unlocked()
+        if state is None:
+            state = self._persistence._load_unlocked()
+        if state is None:
+            state = default_pma_automation_state()
         return (
             state,
             self._normalize_subscriptions(state.get("subscriptions")),
@@ -429,7 +446,6 @@ class PmaAutomationStore:
         timers: list[PmaAutomationTimer],
         wakeups: list[PmaAutomationWakeup],
     ) -> None:
-        self._migrate_legacy_if_needed()
         subscription_ids = {
             entry.subscription_id
             for entry in subscriptions

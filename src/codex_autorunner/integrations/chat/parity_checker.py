@@ -21,10 +21,10 @@ _DISCORD_CAR_DISPATCH_PATH = Path(
 _DISCORD_INTERACTION_DISPATCH_PATH = Path(
     "src/codex_autorunner/integrations/discord/interaction_dispatch.py"
 )
+_DISCORD_INGRESS_PATH = Path("src/codex_autorunner/integrations/discord/ingress.py")
 _DISCORD_INTERACTION_REGISTRY_PATH = Path(
     "src/codex_autorunner/integrations/discord/interaction_registry.py"
 )
-_DISCORD_INGRESS_PATH = Path("src/codex_autorunner/integrations/discord/ingress.py")
 _DISCORD_COMMANDS_PATH = Path("src/codex_autorunner/integrations/discord/commands.py")
 _TELEGRAM_TRIGGER_MODE_PATH = Path(
     "src/codex_autorunner/integrations/telegram/trigger_mode.py"
@@ -83,16 +83,16 @@ def run_parity_checks(
             repo_relative_path=_DISCORD_INTERACTION_DISPATCH_PATH,
         )
     )
-    discord_interaction_registry_text = _read_text(
-        _resolve_source_path(
-            repo_root=repo_root,
-            repo_relative_path=_DISCORD_INTERACTION_REGISTRY_PATH,
-        )
-    )
     discord_ingress_text = _read_text(
         _resolve_source_path(
             repo_root=repo_root,
             repo_relative_path=_DISCORD_INGRESS_PATH,
+        )
+    )
+    discord_interaction_registry_text = _read_text(
+        _resolve_source_path(
+            repo_root=repo_root,
+            repo_relative_path=_DISCORD_INTERACTION_REGISTRY_PATH,
         )
     )
     telegram_trigger_mode_text = _read_text(source_paths["telegram_trigger_mode"])
@@ -113,8 +113,8 @@ def run_parity_checks(
     discord_service_ast = _parse_module(discord_service_text)
     discord_car_dispatch_ast = _parse_module(discord_car_dispatch_text)
     discord_interaction_dispatch_ast = _parse_module(discord_interaction_dispatch_text)
-    discord_interaction_registry_ast = _parse_module(discord_interaction_registry_text)
     discord_ingress_ast = _parse_module(discord_ingress_text)
+    discord_interaction_registry_ast = _parse_module(discord_interaction_registry_text)
     telegram_trigger_mode_ast = _parse_module(telegram_trigger_mode_text)
     telegram_messages_ast = _parse_module(telegram_messages_text)
     discord_commands_ast = _parse_module(discord_commands_text)
@@ -359,7 +359,7 @@ def _check_contract_registry_entries_cataloged(
     *,
     contract: Sequence[CommandContractEntry],
     discord_commands_ast: ast.Module | None,
-    discord_interaction_registry_ast: ast.Module | None,
+    discord_interaction_registry_ast: ast.Module | None = None,
     telegram_commands_spec_ast: ast.Module | None,
 ) -> ParityCheckResult:
     discord_registered_paths = _extract_discord_registered_command_paths(
@@ -453,7 +453,7 @@ def _check_discord_contract_commands_routed(
     contract: Sequence[CommandContractEntry],
     discord_service_ast: ast.Module | None,
     discord_car_dispatch_ast: ast.Module | None,
-    discord_interaction_registry_ast: ast.Module | None,
+    discord_interaction_registry_ast: ast.Module | None = None,
 ) -> ParityCheckResult:
     registry_paths = _extract_discord_canonical_paths_from_registry(
         discord_interaction_registry_ast
@@ -535,10 +535,23 @@ def _is_discord_path_routed_in_service(
     path: tuple[str, ...],
     discord_service_ast: ast.Module | None,
     discord_car_dispatch_ast: ast.Module | None,
+    discord_interaction_registry_ast: ast.Module | None = None,
 ) -> bool:
     normalized_path = _normalize_discord_contract_route_path(path)
-    if discord_service_ast is None and discord_car_dispatch_ast is None:
+    if (
+        discord_service_ast is None
+        and discord_car_dispatch_ast is None
+        and discord_interaction_registry_ast is None
+    ):
         return False
+
+    if _module_has_registered_path_route(discord_interaction_registry_ast, path) or (
+        normalized_path != path
+        and _module_has_registered_path_route(
+            discord_interaction_registry_ast, normalized_path
+        )
+    ):
+        return True
 
     prefix = normalized_path[0] if normalized_path else ""
 
@@ -570,12 +583,19 @@ def _check_discord_known_commands_not_in_generic_fallback(
     discord_interaction_dispatch_ast: ast.Module | None = None,
     discord_interaction_registry_ast: ast.Module | None = None,
 ) -> ParityCheckResult:
-    normalized_handlers = _find_functions_by_name(
-        discord_interaction_dispatch_ast,
-        "handle_normalized_interaction",
-    ) or _find_functions_by_name(
-        discord_service_ast,
-        "_handle_normalized_interaction",
+    normalized_handlers = (
+        _find_functions_by_name(
+            discord_interaction_dispatch_ast,
+            "handle_normalized_interaction",
+        )
+        or _find_functions_by_name(
+            discord_interaction_dispatch_ast,
+            "execute_ingressed_interaction",
+        )
+        or _find_functions_by_name(
+            discord_service_ast,
+            "_handle_normalized_interaction",
+        )
     )
 
     legacy_checks = {
@@ -604,9 +624,17 @@ def _check_discord_known_commands_not_in_generic_fallback(
         or _module_has_string_literal(
             discord_car_dispatch_ast,
             contains="Unknown car subcommand:",
+        )
+        or _module_has_string_literal(
+            discord_interaction_registry_ast,
+            contains="Unknown car subcommand:",
         ),
         "pma_specific_fallback_present": _module_has_string_literal(
             discord_service_ast,
+            exact="Unknown PMA subcommand. Use on, off, or status.",
+        )
+        or _module_has_string_literal(
+            discord_interaction_registry_ast,
             exact="Unknown PMA subcommand. Use on, off, or status.",
         ),
     }
@@ -658,44 +686,56 @@ def _check_discord_canonicalize_command_ingress_usage(
     discord_interaction_dispatch_ast: ast.Module | None = None,
     discord_ingress_ast: ast.Module | None = None,
 ) -> ParityCheckResult:
-    ingress_checks = {
-        "ingress_import_present": _module_imports_name(
-            discord_ingress_ast,
-            module_suffix="integrations.chat.command_ingress",
-            name="canonicalize_command_ingress",
-        ),
-        "ingress_calls_present": _count_calls(
-            discord_ingress_ast,
-            callee_name="canonicalize_command_ingress",
+    ingress_handlers = _find_functions_by_name(
+        discord_ingress_ast,
+        "_normalize",
+    )
+    normalized_handlers = (
+        ingress_handlers
+        or _find_functions_by_name(
+            discord_interaction_dispatch_ast,
+            "handle_normalized_interaction",
         )
-        >= 2,
-    }
-    if all(ingress_checks.values()):
-        return ParityCheckResult(
-            id="discord.canonical_command_ingress_usage",
-            passed=True,
-            message="Discord ingress paths use shared canonical command normalization.",
-            metadata={
-                "failed_predicates": [],
-                "predicates": ingress_checks,
-            },
+        or _find_functions_by_name(
+            discord_service_ast,
+            "_handle_normalized_interaction",
         )
-
-    normalized_handlers = _find_functions_by_name(
-        discord_interaction_dispatch_ast,
-        "handle_normalized_interaction",
-    ) or _find_functions_by_name(
-        discord_service_ast,
-        "_handle_normalized_interaction",
     )
 
     source_ast = (
-        discord_interaction_dispatch_ast
-        if discord_interaction_dispatch_ast is not None
-        and _find_functions_by_name(
-            discord_interaction_dispatch_ast, "handle_normalized_interaction"
-        )
-        else discord_service_ast
+        discord_ingress_ast
+        if ingress_handlers
+        else discord_interaction_dispatch_ast or discord_service_ast
+    )
+
+    normalized_call_present = _has_call_in_functions(
+        normalized_handlers,
+        callee_name="canonicalize_command_ingress",
+        required_keywords={
+            "command_path": lambda expr: isinstance(expr, ast.Name),
+            "options": lambda expr: isinstance(expr, ast.Name),
+        },
+    ) or _has_call_in_functions(
+        normalized_handlers,
+        callee_name="canonicalize_command_ingress",
+        required_keywords={
+            "command": lambda expr: (
+                _is_dict_get(
+                    expr,
+                    object_name="payload_data",
+                    key="command",
+                )
+                or isinstance(expr, ast.Name)
+            ),
+            "options": lambda expr: (
+                _is_dict_get(
+                    expr,
+                    object_name="payload_data",
+                    key="options",
+                )
+                or isinstance(expr, ast.Name)
+            ),
+        },
     )
 
     checks = {
@@ -703,29 +743,13 @@ def _check_discord_canonicalize_command_ingress_usage(
             source_ast,
             module_suffix="integrations.chat.command_ingress",
             name="canonicalize_command_ingress",
-        ),
-        "normalized_interaction_call_present": _has_call_in_functions(
-            normalized_handlers,
+        )
+        or _module_has_call(
+            source_ast,
             callee_name="canonicalize_command_ingress",
-            required_keywords={
-                "command": lambda expr: (
-                    _is_dict_get(
-                        expr,
-                        object_name="payload_data",
-                        key="command",
-                    )
-                    or isinstance(expr, ast.Name)
-                ),
-                "options": lambda expr: (
-                    _is_dict_get(
-                        expr,
-                        object_name="payload_data",
-                        key="options",
-                    )
-                    or isinstance(expr, ast.Name)
-                ),
-            },
-        ),
+        )
+        or normalized_call_present,
+        "normalized_interaction_call_present": normalized_call_present,
     }
 
     failed_predicates = [key for key, passed in checks.items() if not passed]
@@ -817,6 +841,10 @@ def _check_discord_interaction_component_guard_paths(
         discord_interaction_dispatch_ast,
         "execute_ingressed_interaction",
     )
+    slash_dispatch_handlers = _find_functions_by_name(
+        discord_interaction_registry_ast,
+        "dispatch_slash_command",
+    )
     interaction_handlers = normalized_interaction_handlers or execute_handlers
 
     normalized_component_handlers = _find_functions_by_name(
@@ -825,6 +853,18 @@ def _check_discord_interaction_component_guard_paths(
     ) or _find_functions_by_name(
         discord_service_ast,
         "_handle_component_interaction_normalized",
+    )
+    bind_select_handlers = _find_functions_by_name(
+        discord_interaction_registry_ast,
+        "_handle_bind_select_component",
+    )
+    flow_runs_select_handlers = _find_functions_by_name(
+        discord_interaction_registry_ast,
+        "_handle_flow_runs_select_component",
+    )
+    component_dispatch_handlers = _find_functions_by_name(
+        discord_interaction_registry_ast,
+        "dispatch_component_interaction",
     )
     component_handlers = normalized_component_handlers
 
@@ -852,7 +892,7 @@ def _check_discord_interaction_component_guard_paths(
     checks = {
         "interaction_parse_failure_response": _has_guard_response(
             interaction_handlers,
-            guard_predicate=_condition_has_ingress_is_none_guard,
+            guard_predicate=_condition_has_empty_command_path_guard,
             response_contains="could not parse this interaction",
         )
         or _has_call_with_string_argument(
@@ -861,8 +901,8 @@ def _check_discord_interaction_component_guard_paths(
             contains="could not parse this interaction",
         ),
         "interaction_unknown_command_fallback": _has_call_with_string_argument(
-            interaction_handlers,
-            callee_name="_respond_ephemeral",
+            interaction_handlers + slash_dispatch_handlers,
+            callee_name="respond_ephemeral",
             exact="Command not implemented yet for Discord.",
         )
         or _has_call_with_string_argument(
@@ -870,17 +910,16 @@ def _check_discord_interaction_component_guard_paths(
             callee_name="respond_ephemeral",
             exact="Command not implemented yet for Discord.",
         ),
-        "interaction_unhandled_error_logged": _has_log_event_call(
+        "interaction_unhandled_error_logged": _has_log_event_call_any(
             interaction_handlers,
-            event_name="discord.interaction.unhandled_error",
-        )
-        or _has_log_event_call(
-            interaction_handlers,
-            event_name="discord.runner.handler_error",
+            event_names=(
+                "discord.interaction.unhandled_error",
+                "discord.runner.handler_error",
+            ),
         ),
         "interaction_unhandled_error_response": _has_call_with_string_argument(
             interaction_handlers,
-            callee_name="_respond_ephemeral",
+            callee_name="respond_ephemeral",
             exact="An unexpected error occurred. Please try again later.",
         )
         or _has_call_with_string_argument(
@@ -890,8 +929,10 @@ def _check_discord_interaction_component_guard_paths(
         ),
         "component_missing_custom_id_response": _has_guard_response(
             component_missing_custom_id_functions,
-            guard_predicate=lambda test: _condition_has_name_negation(
-                test, name="custom_id"
+            guard_predicate=lambda test: _condition_has_attribute_negation(
+                test,
+                object_name="ctx",
+                attribute_name="custom_id",
             ),
             response_contains="could not identify this interaction action",
         )
@@ -900,11 +941,13 @@ def _check_discord_interaction_component_guard_paths(
             callee_name="respond_ephemeral",
             contains="could not identify this interaction action",
         ),
-        "component_bind_selection_requires_value": _has_nested_guard_response(
-            component_handlers,
-            outer_guard_name="custom_id",
-            outer_guard_value="bind_select",
-            nested_guard_name="values",
+        "component_bind_selection_requires_value": _has_guard_response(
+            bind_select_handlers,
+            guard_predicate=lambda test: _condition_has_attribute_negation(
+                test,
+                object_name="ctx",
+                attribute_name="values",
+            ),
             response_contains="select a repository",
         )
         or _has_call_with_string_argument(
@@ -912,11 +955,13 @@ def _check_discord_interaction_component_guard_paths(
             callee_name="respond_ephemeral",
             contains="select a repository",
         ),
-        "component_flow_runs_selection_requires_value": _has_nested_guard_response(
-            component_handlers,
-            outer_guard_name="custom_id",
-            outer_guard_value="flow_runs_select",
-            nested_guard_name="values",
+        "component_flow_runs_selection_requires_value": _has_guard_response(
+            flow_runs_select_handlers,
+            guard_predicate=lambda test: _condition_has_attribute_negation(
+                test,
+                object_name="ctx",
+                attribute_name="values",
+            ),
             response_contains="select a run",
         )
         or _has_call_with_string_argument(
@@ -925,8 +970,8 @@ def _check_discord_interaction_component_guard_paths(
             contains="select a run",
         ),
         "component_unknown_fallback": _has_call_with_string_argument(
-            component_handlers,
-            callee_name="_respond_ephemeral",
+            component_dispatch_handlers,
+            callee_name="respond_ephemeral",
             contains="Unknown component:",
         )
         or _has_call_with_string_argument(
@@ -934,13 +979,13 @@ def _check_discord_interaction_component_guard_paths(
             callee_name="respond_ephemeral",
             contains="Unknown component:",
         ),
-        "component_unhandled_error_logged": _has_log_event_call(
+        "component_unhandled_error_logged": _has_log_event_call_any(
             component_handlers,
-            event_name=component_unhandled_error_event,
+            event_names=(component_unhandled_error_event,),
         ),
         "component_unhandled_error_response": _has_call_with_string_argument(
             component_handlers,
-            callee_name="_respond_ephemeral",
+            callee_name="respond_ephemeral",
             exact="An unexpected error occurred. Please try again later.",
         )
         or _has_call_with_string_argument(
@@ -975,7 +1020,9 @@ def _check_discord_interaction_component_guard_paths(
             "interaction_handler": (
                 "normalized" if normalized_interaction_handlers else "execute_ingressed"
             ),
-            "component_handler": "normalized",
+            "component_handler": (
+                "normalized" if normalized_component_handlers else "registry"
+            ),
         },
     )
 
@@ -1275,6 +1322,17 @@ def _evaluate_static_expr(
     return _MISSING
 
 
+def _tuple_expr_matches_path(expr: ast.expr, path: tuple[str, ...]) -> bool:
+    if not isinstance(expr, ast.Tuple):
+        return False
+    values = tuple(
+        value
+        for value in (_string_constant_value(item) for item in expr.elts)
+        if value is not None
+    )
+    return values == path
+
+
 def _render_command_path(path: tuple[str, ...]) -> str:
     return ":".join(path)
 
@@ -1301,6 +1359,21 @@ def _module_has_command_path_route(
     for compare in _iter_compares(tree):
         if _compare_matches_command_path_eq_tuple(compare, path):
             return True
+    return False
+
+
+def _module_has_registered_path_route(
+    tree: ast.Module | None,
+    path: tuple[str, ...],
+) -> bool:
+    if tree is None:
+        return False
+    for call in _iter_calls(tree):
+        for keyword in call.keywords:
+            if keyword.arg not in {"registered_path", "command_path"}:
+                continue
+            if _tuple_expr_matches_path(keyword.value, path):
+                return True
     return False
 
 
@@ -1346,74 +1419,21 @@ def _has_prefix_guard_in_functions(
     require_ingress_not_none: bool,
 ) -> bool:
     for function in functions:
-        has_none_guard = (
-            _function_has_ingress_none_return_guard(function)
-            if require_ingress_not_none
-            else False
-        )
         for node in ast.walk(function):
             if not isinstance(node, ast.If):
                 continue
-            has_prefix = _condition_has_ingress_prefix_guard(node.test, prefix=prefix)
+            has_prefix = _condition_has_command_path_prefix_guard(
+                node.test, prefix=prefix
+            )
             if not has_prefix:
                 continue
-            if require_ingress_not_none and not _condition_has_ingress_not_none_guard(
-                node.test
-            ):
-                if not has_none_guard:
-                    continue
             return True
     return False
 
 
-def _condition_has_ingress_prefix_guard(test: ast.expr, *, prefix: str) -> bool:
+def _condition_has_command_path_prefix_guard(test: ast.expr, *, prefix: str) -> bool:
     for term in _iter_boolean_terms(test):
-        if _compare_matches_ingress_prefix(term, prefix):
-            return True
-    return False
-
-
-def _condition_has_ingress_not_none_guard(test: ast.expr) -> bool:
-    for term in _iter_boolean_terms(test):
-        if _is_name(term, "ingress"):
-            return True
-        if not isinstance(term, ast.Compare):
-            continue
-        if len(term.ops) != 1 or not isinstance(term.ops[0], ast.IsNot):
-            continue
-        left = term.left
-        right = term.comparators[0]
-        if (_is_name(left, "ingress") and _is_none(right)) or (
-            _is_name(right, "ingress") and _is_none(left)
-        ):
-            return True
-    return False
-
-
-def _condition_has_ingress_is_none_guard(test: ast.expr) -> bool:
-    for term in _iter_boolean_terms(test):
-        if not isinstance(term, ast.Compare):
-            continue
-        if len(term.ops) != 1 or not isinstance(term.ops[0], ast.Is):
-            continue
-        left = term.left
-        right = term.comparators[0]
-        if (_is_name(left, "ingress") and _is_none(right)) or (
-            _is_name(right, "ingress") and _is_none(left)
-        ):
-            return True
-    return False
-
-
-def _function_has_ingress_none_return_guard(
-    function: ast.FunctionDef | ast.AsyncFunctionDef,
-) -> bool:
-    for node in ast.walk(function):
-        if not isinstance(node, ast.If):
-            continue
-        if not _condition_has_ingress_is_none_guard(node.test):
-            continue
-        if any(isinstance(statement, ast.Return) for statement in node.body):
+        if _compare_matches_command_path_prefix(term, prefix):
             return True
     return False
 
@@ -1426,7 +1446,7 @@ def _iter_boolean_terms(expr: ast.expr) -> Iterable[ast.expr]:
     yield expr
 
 
-def _compare_matches_ingress_prefix(expr: ast.expr, prefix: str) -> bool:
+def _compare_matches_command_path_prefix(expr: ast.expr, prefix: str) -> bool:
     if not isinstance(expr, ast.Compare):
         return False
     if len(expr.ops) != 1 or not isinstance(expr.ops[0], ast.Eq):
@@ -1434,21 +1454,24 @@ def _compare_matches_ingress_prefix(expr: ast.expr, prefix: str) -> bool:
     left = expr.left
     right = expr.comparators[0]
     return (
-        _is_ingress_command_path_prefix_slice(left)
+        _is_command_path_prefix_slice(left)
         and _is_singleton_string_tuple(right, prefix)
     ) or (
-        _is_ingress_command_path_prefix_slice(right)
+        _is_command_path_prefix_slice(right)
         and _is_singleton_string_tuple(left, prefix)
     )
 
 
-def _is_ingress_command_path_prefix_slice(expr: ast.expr) -> bool:
+def _is_command_path_prefix_slice(expr: ast.expr) -> bool:
     if not isinstance(expr, ast.Subscript):
         return False
+    value = expr.value
+    if isinstance(value, ast.Name) and value.id == "command_path":
+        return _is_first_item_slice(expr.slice)
     if not (
-        isinstance(expr.value, ast.Attribute)
-        and expr.value.attr == "command_path"
-        and _is_name(expr.value.value, "ingress")
+        isinstance(value, ast.Attribute)
+        and value.attr == "command_path"
+        and (_is_name(value.value, "ingress") or _is_name(value.value, "ctx"))
     ):
         return False
     return _is_first_item_slice(expr.slice)
@@ -1593,9 +1616,12 @@ def _has_call_with_string_argument(
     exact: str | None = None,
     contains: str | None = None,
 ) -> bool:
+    allowed_names = {callee_name}
+    if not callee_name.startswith("_"):
+        allowed_names.add(f"_{callee_name}")
     for function in functions:
         for call in _iter_calls(function):
-            if _call_name(call.func) != callee_name:
+            if _call_name(call.func) not in allowed_names:
                 continue
             if _call_has_string_argument(call, exact=exact, contains=contains):
                 return True
@@ -1642,6 +1668,17 @@ def _has_log_event_call(
     )
 
 
+def _has_log_event_call_any(
+    functions: Sequence[ast.FunctionDef | ast.AsyncFunctionDef],
+    *,
+    event_names: Sequence[str],
+) -> bool:
+    return any(
+        _has_log_event_call(functions, event_name=event_name)
+        for event_name in event_names
+    )
+
+
 def _has_guard_response(
     functions: Sequence[ast.FunctionDef | ast.AsyncFunctionDef],
     *,
@@ -1659,44 +1696,37 @@ def _has_guard_response(
     return False
 
 
-def _has_nested_guard_response(
-    functions: Sequence[ast.FunctionDef | ast.AsyncFunctionDef],
-    *,
-    outer_guard_name: str,
-    outer_guard_value: str,
-    nested_guard_name: str,
-    response_contains: str,
-) -> bool:
-    for function in functions:
-        for node in ast.walk(function):
-            if not isinstance(node, ast.If):
-                continue
-            if not _condition_has_name_eq_string(
-                node.test,
-                name=outer_guard_name,
-                value=outer_guard_value,
-            ):
-                continue
-            for nested in ast.walk(node):
-                if not isinstance(nested, ast.If):
-                    continue
-                if not _condition_has_name_negation(
-                    nested.test, name=nested_guard_name
-                ):
-                    continue
-                if _body_has_response_call(nested.body, contains=response_contains):
-                    return True
-    return False
-
-
 def _body_has_response_call(statements: Sequence[ast.stmt], *, contains: str) -> bool:
     for statement in statements:
         for call in _iter_calls(statement):
-            if _call_name(call.func) != "_respond_ephemeral":
+            if _call_name(call.func) not in {"_respond_ephemeral", "respond_ephemeral"}:
                 continue
             if _call_has_string_argument(call, contains=contains):
                 return True
     return False
+
+
+def _condition_has_attribute_negation(
+    test: ast.expr,
+    *,
+    object_name: str,
+    attribute_name: str,
+) -> bool:
+    for term in _iter_boolean_terms(test):
+        if not isinstance(term, ast.UnaryOp) or not isinstance(term.op, ast.Not):
+            continue
+        operand = term.operand
+        if (
+            isinstance(operand, ast.Attribute)
+            and operand.attr == attribute_name
+            and _is_name(operand.value, object_name)
+        ):
+            return True
+    return False
+
+
+def _condition_has_empty_command_path_guard(test: ast.expr) -> bool:
+    return _condition_has_name_negation(test, name="command_path")
 
 
 def _condition_has_name_negation(test: ast.expr, *, name: str) -> bool:
@@ -1704,15 +1734,6 @@ def _condition_has_name_negation(test: ast.expr, *, name: str) -> bool:
         if not isinstance(term, ast.UnaryOp) or not isinstance(term.op, ast.Not):
             continue
         if _is_name(term.operand, name):
-            return True
-    return False
-
-
-def _condition_has_name_eq_string(test: ast.expr, *, name: str, value: str) -> bool:
-    for term in _iter_boolean_terms(test):
-        if not isinstance(term, ast.Compare):
-            continue
-        if _extract_name_eq_string(term, name) == value:
             return True
     return False
 
@@ -1824,6 +1845,12 @@ def _string_constant_value(expr: ast.expr) -> str | None:
     return None
 
 
+def _bool_constant_value(expr: ast.expr) -> bool | None:
+    if isinstance(expr, ast.Constant) and isinstance(expr.value, bool):
+        return expr.value
+    return None
+
+
 def _is_name(expr: ast.expr, expected: str) -> bool:
     return isinstance(expr, ast.Name) and expr.id == expected
 
@@ -1834,7 +1861,3 @@ def _is_string_constant(expr: ast.expr, expected: str) -> bool:
 
 def _is_int_constant(expr: ast.expr | None, expected: int) -> bool:
     return isinstance(expr, ast.Constant) and expr.value == expected
-
-
-def _is_none(expr: ast.expr) -> bool:
-    return isinstance(expr, ast.Constant) and expr.value is None

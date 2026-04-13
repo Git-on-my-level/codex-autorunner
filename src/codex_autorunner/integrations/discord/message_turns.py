@@ -21,6 +21,10 @@ from ...core.context_awareness import (
     maybe_inject_prompt_writing_hint,
 )
 from ...core.filebox import inbox_dir, outbox_dir, outbox_pending_dir
+from ...core.hub_control_plane import (
+    RemoteSurfaceBindingStore,
+    RemoteThreadExecutionStore,
+)
 from ...core.injected_context import wrap_injected_context
 from ...core.logging_utils import log_event
 from ...core.orchestration import (
@@ -31,6 +35,7 @@ from ...core.orchestration import (
     build_harness_backed_orchestration_service,
     build_surface_orchestration_ingress,
 )
+from ...core.orchestration.bindings import OrchestrationBindingStore
 from ...core.orchestration.runtime_thread_events import RuntimeThreadRunEventState
 from ...core.orchestration.runtime_threads import (
     RuntimeThreadExecution,
@@ -38,17 +43,15 @@ from ...core.orchestration.runtime_threads import (
     begin_runtime_thread_execution,
 )
 from ...core.pma_context import (
-    build_hub_snapshot,
+    build_hub_unavailable_snapshot,
     format_pma_discoverability_preamble,
     format_pma_prompt,
     load_pma_prompt,
 )
 from ...core.pma_notification_store import (
-    PmaNotificationStore,
     build_notification_context_block,
     notification_surface_key,
 )
-from ...core.pma_thread_store import PmaThreadStore
 from ...core.ports.run_event import TokenUsage
 from ...core.utils import canonicalize_path
 from ...integrations.chat.agents import resolve_chat_runtime_agent
@@ -1588,9 +1591,33 @@ async def _execute_discord_thread_message(
 
     if dispatch.effective_pma_enabled:
         try:
-            snapshot = await build_hub_snapshot(
-                dispatch.service._hub_supervisor, hub_root=dispatch.service._config.root
+            hub_client = getattr(dispatch.service, "_hub_client", None)
+            snapshot_detail = (
+                "Hub control plane is unavailable for Discord PMA prompt context."
             )
+            if hub_client is not None:
+                try:
+                    cp_snapshot = await hub_client.get_pma_snapshot()
+                    snapshot = cp_snapshot.snapshot
+                except Exception as exc:
+                    snapshot = build_hub_unavailable_snapshot(detail=snapshot_detail)
+                    dispatch.log_event_fn(
+                        dispatch.service._logger,
+                        logging.WARNING,
+                        "discord.pma.snapshot.control_plane_failed",
+                        channel_id=dispatch.channel_id,
+                        message_id=dispatch.event.message.message_id,
+                        exc=exc,
+                    )
+            else:
+                snapshot = build_hub_unavailable_snapshot(detail=snapshot_detail)
+                dispatch.log_event_fn(
+                    dispatch.service._logger,
+                    logging.WARNING,
+                    "discord.pma.snapshot.hub_client_unavailable",
+                    channel_id=dispatch.channel_id,
+                    message_id=dispatch.event.message.message_id,
+                )
             prompt_base = load_pma_prompt(dispatch.service._config.root)
             if dispatch.notification_reply is not None:
                 prompt_text = (
@@ -1745,17 +1772,44 @@ async def _handle_discord_notification_turn(
         dispatch=dispatch,
     )
     surface_key = notification_surface_key(dispatch.notification_reply.notification_id)
-    orch_binding = build_discord_thread_orchestration_service(
-        dispatch.service
-    ).get_binding(
-        surface_kind="discord",
-        surface_key=surface_key,
+    orch_service = build_discord_thread_orchestration_service(dispatch.service)
+    orch_binding = (
+        orch_service.get_binding(
+            surface_kind="discord",
+            surface_key=surface_key,
+        )
+        if orch_service is not None
+        else None
     )
     if orch_binding is not None:
-        PmaNotificationStore(dispatch.service._config.root).bind_continuation_thread(
-            notification_id=dispatch.notification_reply.notification_id,
-            thread_target_id=orch_binding.thread_target_id,
-        )
+        hub_client = getattr(dispatch.service, "_hub_client", None)
+        if hub_client is not None:
+            from ...core.hub_control_plane import (
+                NotificationContinuationBindRequest as _CPContinuationRequest,
+            )
+
+            try:
+                await hub_client.bind_notification_continuation(
+                    _CPContinuationRequest(
+                        notification_id=dispatch.notification_reply.notification_id,
+                        thread_target_id=orch_binding.thread_target_id,
+                    )
+                )
+            except Exception as exc:
+                dispatch.log_event_fn(
+                    dispatch.service._logger,
+                    logging.WARNING,
+                    "discord.notification.continuation_bind.control_plane_failed",
+                    notification_id=dispatch.notification_reply.notification_id,
+                    exc=exc,
+                )
+        else:
+            dispatch.log_event_fn(
+                dispatch.service._logger,
+                logging.WARNING,
+                "discord.notification.continuation_bind.hub_client_unavailable",
+                notification_id=dispatch.notification_reply.notification_id,
+            )
     return turn_result
 
 
@@ -1994,13 +2048,31 @@ async def handle_message_event(
 
     notification_reply = None
     if event.reply_to is not None:
-        notification_reply = PmaNotificationStore(
-            service._config.root
-        ).get_reply_target(
-            surface_kind="discord",
-            surface_key=channel_id,
-            delivered_message_id=event.reply_to.message_id,
-        )
+        hub_client = getattr(service, "_hub_client", None)
+        if hub_client is not None:
+            from ...core.hub_control_plane import (
+                NotificationReplyTargetLookupRequest as _CPReplyTargetRequest,
+            )
+
+            try:
+                cp_response = await hub_client.get_notification_reply_target(
+                    _CPReplyTargetRequest(
+                        surface_kind="discord",
+                        surface_key=channel_id,
+                        delivered_message_id=event.reply_to.message_id,
+                    )
+                )
+                if cp_response.record is not None:
+                    notification_reply = cp_response.record
+            except Exception as exc:
+                log_event(
+                    service._logger,
+                    logging.WARNING,
+                    "discord.notification.reply_target.control_plane_failed",
+                    channel_id=channel_id,
+                    message_id=event.reply_to.message_id,
+                    exc=exc,
+                )
     effective_pma_enabled = pma_enabled or notification_reply is not None
     agent, agent_profile = service._resolve_agent_state(binding)
     runtime_agent = service._runtime_agent_for_binding(binding)
@@ -2257,10 +2329,28 @@ def build_discord_thread_orchestration_service(service: Any) -> Any:
             )
         return harness
 
+    hub_client = getattr(service, "_hub_client", None)
+    handshake_compat = getattr(service, "_hub_handshake_compatibility", None)
+    handshake_ok = hub_client is not None and getattr(
+        handshake_compat, "compatible", False
+    )
+    if not handshake_ok:
+        log_event(
+            service._logger,
+            logging.WARNING,
+            "discord.orchestration.hub_client_unavailable",
+            message="Hub control-plane client not available; orchestration disabled",
+        )
+        return None
+    thread_store = RemoteThreadExecutionStore(cast(Any, hub_client))
+    binding_store: OrchestrationBindingStore = RemoteSurfaceBindingStore(  # type: ignore[assignment]
+        cast(Any, hub_client)
+    )
     created = build_harness_backed_orchestration_service(
         descriptors=cast(Any, descriptors),
         harness_factory=_make_harness,
-        pma_thread_store=PmaThreadStore(service._config.root),
+        thread_store=thread_store,
+        binding_store=binding_store,
     )
     service._discord_thread_orchestration_service = created
     service._discord_managed_thread_orchestration_service = created
@@ -2282,6 +2372,10 @@ def resolve_discord_thread_target(
     pma_enabled: bool,
 ) -> Any:
     orchestration_service = build_discord_thread_orchestration_service(service)
+    if orchestration_service is None:
+        raise RuntimeError(
+            "Discord orchestration service unavailable: hub control-plane client not connected"
+        )
     surface_key = managed_thread_surface_key or channel_id
     runtime_agent = resolve_chat_runtime_agent(
         agent,
@@ -2384,6 +2478,7 @@ def _build_discord_managed_thread_coordinator(
     return ManagedThreadTurnCoordinator(
         orchestration_service=orchestration_service,
         state_root=service._config.root,
+        hub_client=getattr(service, "_hub_client", None),
         surface=ManagedThreadSurfaceInfo(
             log_label="Discord",
             surface_kind="discord",

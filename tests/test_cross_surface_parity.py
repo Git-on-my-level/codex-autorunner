@@ -284,27 +284,17 @@ def test_cross_surface_parity_report(hub_env) -> None:
         )
     )
 
-    discord_commands_path = Path(
-        "src/codex_autorunner/integrations/discord/interaction_registry.py"
-    )
     discord_service_path = Path("src/codex_autorunner/integrations/discord/service.py")
-    discord_dispatch_path = Path(
+    discord_ingress_path = Path("src/codex_autorunner/integrations/discord/ingress.py")
+    discord_interaction_registry_path = Path(
         "src/codex_autorunner/integrations/discord/interaction_registry.py"
     )
-    discord_ingress_path = Path("src/codex_autorunner/integrations/discord/ingress.py")
-    discord_commands_text = (
-        discord_commands_path.read_text(encoding="utf-8")
-        if discord_commands_path.exists()
-        else ""
+    discord_interaction_dispatch_path = Path(
+        "src/codex_autorunner/integrations/discord/interaction_dispatch.py"
     )
     discord_service_text = (
         discord_service_path.read_text(encoding="utf-8")
         if discord_service_path.exists()
-        else ""
-    )
-    discord_dispatch_text = (
-        discord_dispatch_path.read_text(encoding="utf-8")
-        if discord_dispatch_path.exists()
         else ""
     )
     discord_ingress_text = (
@@ -312,9 +302,26 @@ def test_cross_surface_parity_report(hub_env) -> None:
         if discord_ingress_path.exists()
         else ""
     )
+    discord_interaction_registry_text = (
+        discord_interaction_registry_path.read_text(encoding="utf-8")
+        if discord_interaction_registry_path.exists()
+        else ""
+    )
+    discord_interaction_dispatch_text = (
+        discord_interaction_dispatch_path.read_text(encoding="utf-8")
+        if discord_interaction_dispatch_path.exists()
+        else ""
+    )
 
-    discord_pma_registered = (
-        '"pma"' in discord_commands_text or "'pma'" in discord_commands_text
+    discord_pma_registered = _contains_all(
+        discord_interaction_registry_text,
+        'canonical_path=("pma", "on")',
+        'canonical_path=("pma", "off")',
+        'canonical_path=("pma", "status")',
+    ) and _contains_all(
+        discord_interaction_dispatch_text,
+        'elif command_path[:1] == ("pma",):',
+        "await service._handle_pma_command(",
     )
     checks.append(
         ParityCheck(
@@ -335,14 +342,21 @@ def test_cross_surface_parity_report(hub_env) -> None:
         )
     )
 
-    discord_car_agent_support = _contains_all(
-        discord_commands_text,
-        'canonical_path=("car", "agent")',
-        'description="View or set the agent"',
-    ) and _contains_all(
-        discord_dispatch_text,
-        'canonical_path=("car", "agent")',
-        "_handle_car_agent(",
+    discord_car_agent_support = (
+        _contains_all(
+            discord_interaction_registry_text,
+            'canonical_path=("car", "agent")',
+            'description="View or set the agent"',
+        )
+        and _contains_all(
+            discord_interaction_registry_text,
+            'method_name="_handle_car_agent"',
+            "await service._handle_car_agent(",
+        )
+        and _contains_all(
+            discord_service_text,
+            "async def _handle_car_agent(",
+        )
     )
     checks.append(
         ParityCheck(
@@ -353,10 +367,9 @@ def test_cross_surface_parity_report(hub_env) -> None:
         )
     )
 
-    _combined_discord_text = discord_service_text + "\n" + discord_ingress_text
     discord_shared_command_ingress = (
         "integrations.chat.command_ingress import canonicalize_command_ingress"
-        in _combined_discord_text
+        in discord_ingress_text
         and discord_ingress_text.count("canonicalize_command_ingress(") >= 2
     )
     checks.append(

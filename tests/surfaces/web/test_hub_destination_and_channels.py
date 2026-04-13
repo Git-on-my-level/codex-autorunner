@@ -17,6 +17,9 @@ from codex_autorunner.core.flows import FlowEventType, FlowRunStatus, FlowStore
 from codex_autorunner.core.git_utils import run_git
 from codex_autorunner.core.hub import HubSupervisor
 from codex_autorunner.core.orchestration.bindings import OrchestrationBindingStore
+from codex_autorunner.core.orchestration.sqlite import (
+    resolve_orchestration_sqlite_path,
+)
 from codex_autorunner.core.pma_thread_store import (
     PmaThreadStore,
     default_pma_threads_db_path,
@@ -1375,23 +1378,23 @@ def test_hub_channel_directory_route_ignores_repo_mode_binding_for_pma_rows(
         repo_id="work",
         name="discord:chan-pma",
     )
-    db_path = default_pma_threads_db_path(hub_root)
+    db_path = resolve_orchestration_sqlite_path(hub_root)
     conn = sqlite3.connect(db_path)
     try:
         with conn:
             conn.execute(
                 """
-                UPDATE pma_managed_threads
+                UPDATE orch_thread_targets
                    SET updated_at = ?
-                 WHERE managed_thread_id = ?
+                 WHERE thread_target_id = ?
                 """,
                 ("2026-01-01T00:00:01Z", stale_repo_thread["managed_thread_id"]),
             )
             conn.execute(
                 """
-                UPDATE pma_managed_threads
+                UPDATE orch_thread_targets
                    SET updated_at = ?
-                 WHERE managed_thread_id = ?
+                 WHERE thread_target_id = ?
                 """,
                 ("2026-01-01T00:00:05Z", live_pma_thread["managed_thread_id"]),
             )

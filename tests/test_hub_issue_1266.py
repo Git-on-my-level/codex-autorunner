@@ -179,6 +179,46 @@ def test_hub_health_serves_before_deferred_startup_work_finishes(
     assert entered.is_set()
 
 
+@pytest.mark.skipif(
+    not _hub_lifespan_yields_before_blocking_startup_work(),
+    reason=(
+        "Hub lifespan does not yield before managed-thread recovery / repo lifespans yet; "
+        "merge early-yield startup sequencing for #1266 to enable this assertion."
+    ),
+)
+def test_hub_root_health_serves_before_deferred_startup_work_finishes(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Root `/health` must stay responsive while deferred startup recovery is active."""
+    _stub_opencode_supervisor(monkeypatch)
+    entered = threading.Event()
+
+    async def _hanging_recover(app: object) -> None:
+        entered.set()
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(
+        web_app_module,
+        "recover_orphaned_managed_thread_executions",
+        _hanging_recover,
+    )
+
+    app = create_hub_app(
+        hub_env.hub_root,
+        endpoint_host="127.0.0.1",
+        endpoint_port=4517,
+    )
+
+    with TestClient(app) as client:
+        assert entered.wait(
+            timeout=10.0
+        ), "deferred recovery should start after early yield"
+        response = client.get("/health")
+        assert response.status_code == 200
+
+    assert entered.is_set()
+
+
 def test_pma_automation_legacy_automation_backfill_runs_once_across_store_instances(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -186,6 +226,7 @@ def test_pma_automation_legacy_automation_backfill_runs_once_across_store_instan
     from codex_autorunner.bootstrap import seed_hub_files
     from codex_autorunner.core.config import CONFIG_FILENAME
     from codex_autorunner.core.pma_automation_store import PmaAutomationStore
+    from codex_autorunner.core.pma_thread_store import prepare_pma_thread_store
 
     hub_root = tmp_path / "hub"
     hub_root.mkdir()
@@ -207,9 +248,45 @@ def test_pma_automation_legacy_automation_backfill_runs_once_across_store_instan
         _counting_backfill,
     )
 
+    prepare_pma_thread_store(hub_root, durable=False)
     store_a = PmaAutomationStore(hub_root)
     store_a.load()
     store_b = PmaAutomationStore(hub_root)
     store_b.load()
 
     assert calls == [1], "durable marker must prevent a second automation backfill"
+
+
+def test_pma_automation_load_does_not_retrigger_backfill_after_explicit_prepare(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from codex_autorunner.bootstrap import seed_hub_files
+    from codex_autorunner.core.config import CONFIG_FILENAME
+    from codex_autorunner.core.pma_automation_store import PmaAutomationStore
+    from codex_autorunner.core.pma_thread_store import prepare_pma_thread_store
+
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    seed_hub_files(hub_root, force=True)
+    write_test_config(
+        hub_root / CONFIG_FILENAME,
+        {"mode": "hub"},
+    )
+
+    prepare_pma_thread_store(hub_root, durable=False)
+    calls: list[int] = []
+
+    def _counting_backfill(*args: object, **kwargs: object) -> dict[str, int]:
+        calls.append(1)
+        return {"subscriptions": 0, "timers": 0, "wakeups": 0}
+
+    monkeypatch.setattr(
+        legacy_backfill_gate_module,
+        "backfill_legacy_automation_state",
+        _counting_backfill,
+    )
+
+    PmaAutomationStore(hub_root).load()
+    PmaAutomationStore(hub_root).load()
+
+    assert calls == [], "routine loads must not retrigger legacy backfill after prepare"

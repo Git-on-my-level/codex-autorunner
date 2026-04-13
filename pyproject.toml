@@ -95,6 +95,7 @@ completions = true
 
 [tool.pytest.ini_options]
 cache_dir = ".codex-autorunner/pytest-cache"
+addopts = ["--timeout=30"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 norecursedirs = ["worktrees", ".git", ".venv", ".codex-autorunner"]

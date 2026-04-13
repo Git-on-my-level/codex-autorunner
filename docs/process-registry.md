@@ -64,3 +64,6 @@ that want hotter reuse can raise `max_handles` and `idle_ttl_seconds` explicitly
 If a process becomes orphaned or a previous run crashed before cleanup, these
 commands let operators confirm ownership and recover without resorting to manual
 `pkill`.
+
+For the hub shared-state single-owner rollout checks, see
+`docs/ops/hub-single-owner-verification.md`.

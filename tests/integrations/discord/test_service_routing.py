@@ -353,12 +353,6 @@ async def test_discord_message_turns_include_reply_context_in_prompt(
         "build_surface_orchestration_ingress",
         lambda **_: _IngressStub(),
     )
-    monkeypatch.setattr(
-        discord_message_turns,
-        "PmaNotificationStore",
-        lambda _root: SimpleNamespace(get_reply_target=lambda **_kwargs: None),
-    )
-
     thread = ChatThreadRef(platform="discord", chat_id="channel-1", thread_id=None)
     reply_message = ChatMessageRef(thread=thread, message_id="msg-0")
     event = ChatMessageEvent(
@@ -815,25 +809,18 @@ async def test_discord_notification_reply_routes_to_pma_thread_with_context(
         context={"wake_up": {"kind": "dispatch_paused"}},
     )
 
-    class _NotificationStoreStub:
-        def __init__(self, _root: Path) -> None:
-            return
+    class _HubClientStub:
+        async def get_notification_reply_target(self, request: object) -> object:
+            assert isinstance(request, SimpleNamespace) or hasattr(
+                request, "surface_key"
+            )
+            return SimpleNamespace(record=notification_reply)
 
-        def get_reply_target(
-            self, *, surface_kind: str, surface_key: str, delivered_message_id: object
-        ) -> object | None:
-            assert surface_kind == "discord"
-            assert surface_key == "channel-1"
-            assert delivered_message_id == "notif-msg-1"
-            return notification_reply
-
-        def bind_continuation_thread(
-            self, *, notification_id: str, thread_target_id: str
-        ) -> None:
+        async def bind_notification_continuation(self, request: object) -> None:
             bind_calls.append(
                 {
-                    "notification_id": notification_id,
-                    "thread_target_id": thread_target_id,
+                    "notification_id": getattr(request, "notification_id", None),
+                    "thread_target_id": getattr(request, "thread_target_id", None),
                 }
             )
 
@@ -857,6 +844,7 @@ async def test_discord_notification_reply_routes_to_pma_thread_with_context(
             self._logger = logging.getLogger("test")
             self._config = SimpleNamespace(root=tmp_path)
             self._hub_supervisor = object()
+            self._hub_client = _HubClientStub()
             self._background_tasks: set[asyncio.Task[Any]] = set()
 
         def _resolve_agent_state(self, binding: dict[str, object]) -> tuple[str, None]:
@@ -934,25 +922,10 @@ async def test_discord_notification_reply_routes_to_pma_thread_with_context(
         async def submit_message(self, *_args: object, **_kwargs: object) -> object:
             raise AssertionError("notification replies should bypass ingress routing")
 
-    async def _fake_build_hub_snapshot(
-        *_args: object, **_kwargs: object
-    ) -> dict[str, object]:
-        return {}
-
-    monkeypatch.setattr(
-        discord_message_turns,
-        "PmaNotificationStore",
-        _NotificationStoreStub,
-    )
     monkeypatch.setattr(
         discord_message_turns,
         "build_surface_orchestration_ingress",
         lambda **_: _IngressStub(),
-    )
-    monkeypatch.setattr(
-        discord_message_turns,
-        "build_hub_snapshot",
-        _fake_build_hub_snapshot,
     )
     monkeypatch.setattr(discord_message_turns, "load_pma_prompt", lambda _root: "base")
     monkeypatch.setattr(
@@ -3494,7 +3467,9 @@ async def test_component_interaction_cancel_queued_turn_cancels_selected_executi
         )
 
         original_clear = discord_message_turns.clear_discord_turn_progress_leases
-        discord_message_turns.clear_discord_turn_progress_leases = _clear_progress_leases  # type: ignore[assignment]
+        discord_message_turns.clear_discord_turn_progress_leases = (
+            _clear_progress_leases  # type: ignore[assignment]
+        )
         try:
             await service._handle_component_interaction_normalized(
                 "interaction-1",
@@ -7423,25 +7398,34 @@ async def test_car_newt_runs_hub_setup_commands_for_bound_workspace(
         discord_service_module, "reset_branch_from_origin_main", _fake_reset_branch
     )
 
-    class _HubSupervisorStub:
+    async def _fake_reset_thread_binding(**_kwargs: Any) -> tuple[bool, str]:
+        return False, "thread-newt-1"
+
+    service._reset_discord_thread_binding = _fake_reset_thread_binding  # type: ignore[method-assign]
+
+    class _FakeHubClient:
         def __init__(self) -> None:
-            self.calls: list[dict[str, object]] = []
+            self.setup_calls: list[dict[str, object]] = []
 
-        def run_setup_commands_for_workspace(
-            self, workspace_path: Path, *, repo_id_hint: str | None = None
-        ) -> int:
-            self.calls.append(
-                {"workspace_path": workspace_path, "repo_id_hint": repo_id_hint}
+        async def run_workspace_setup_commands(self, request: Any) -> Any:
+            self.setup_calls.append(
+                {
+                    "workspace_root": request.workspace_root,
+                    "repo_id_hint": request.repo_id_hint,
+                }
             )
-            return 1
+            return SimpleNamespace(setup_command_count=1)
 
-    hub_supervisor = _HubSupervisorStub()
-    service._hub_supervisor = hub_supervisor  # type: ignore[assignment]
+    hub_client = _FakeHubClient()
+    service._hub_client = hub_client  # type: ignore[assignment]
 
     try:
         await service.run_forever()
-        assert hub_supervisor.calls == [
-            {"workspace_path": workspace.resolve(), "repo_id_hint": "repo-1"}
+        assert hub_client.setup_calls == [
+            {
+                "workspace_root": str(workspace.resolve()),
+                "repo_id_hint": "repo-1",
+            }
         ]
         assert len(rest.followup_messages) == 1
         content = rest.followup_messages[0]["payload"]["content"].lower()

@@ -308,8 +308,11 @@ class TelegramOutboxManager:
                     )
                 if isinstance(response, int):
                     delivered_message_id = response
-            except (TelegramAPIError, OSError, RuntimeError) as exc:
+            except Exception as exc:
                 retry_after = _extract_retry_after_seconds(exc)
+                if not isinstance(exc, (TelegramAPIError, OSError, RuntimeError)):
+                    if retry_after is None:
+                        raise
                 record.attempts += 1
                 record.last_error = str(exc)[:500]
                 record.last_attempt_at = now_iso()

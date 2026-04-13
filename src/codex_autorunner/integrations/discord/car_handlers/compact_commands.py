@@ -6,8 +6,6 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 
-from ....core.orchestration.transcript_mirror import TranscriptMirrorStore
-from ....core.pma_thread_store import PmaThreadStore
 from ....core.utils import canonicalize_path
 from ...chat.compaction import build_compact_seed_prompt
 from ..errors import DiscordAPIError
@@ -24,20 +22,30 @@ COMPACT_FALLBACK_HISTORY_LIMIT = 5
 COMPACT_FALLBACK_PREVIEW_CHARS = 600
 
 
-def _build_fallback_compact_summary(
+async def _build_fallback_compact_summary(
     service: Any,
     *,
     thread_target_id: str,
 ) -> Optional[str]:
-    transcript_entries = TranscriptMirrorStore(
-        service._config.root
-    ).list_target_history(
-        target_kind="thread_target",
-        target_id=thread_target_id,
-        limit=COMPACT_FALLBACK_HISTORY_LIMIT,
+    hub_client = getattr(service, "_hub_client", None)
+    if hub_client is None:
+        return None
+    from ....core.hub_control_plane import (
+        TranscriptHistoryRequest as _CPTranscriptRequest,
     )
+
+    try:
+        response = await hub_client.get_transcript_history(
+            _CPTranscriptRequest(
+                target_kind="thread_target",
+                target_id=thread_target_id,
+                limit=COMPACT_FALLBACK_HISTORY_LIMIT,
+            )
+        )
+    except Exception:
+        return None
     sections: list[str] = []
-    for index, entry in enumerate(reversed(transcript_entries), start=1):
+    for index, entry in enumerate(reversed(response.entries), start=1):
         preview = str(entry.get("preview") or entry.get("content") or "").strip()
         if not preview:
             continue
@@ -175,7 +183,7 @@ async def handle_car_compact(
         )
         if not response_text:
             response_text = (
-                _build_fallback_compact_summary(
+                await _build_fallback_compact_summary(
                     service,
                     thread_target_id=previous_thread_id,
                 )
@@ -280,10 +288,26 @@ async def handle_car_compact(
             agent_profile=agent_profile,
         )
         try:
-            PmaThreadStore(service._config.root).set_thread_compact_seed(
-                next_thread_id,
-                response_text,
-            )
+            hub_client = getattr(service, "_hub_client", None)
+            if hub_client is not None:
+                from ....core.hub_control_plane import (
+                    ThreadCompactSeedUpdateRequest as _CPCompactSeedRequest,
+                )
+
+                await hub_client.update_thread_compact_seed(
+                    _CPCompactSeedRequest(
+                        thread_target_id=next_thread_id,
+                        compact_seed=response_text,
+                    )
+                )
+            else:
+                log_event(
+                    service._logger,
+                    logging.WARNING,
+                    "discord.compact.seed_save.hub_client_unavailable",
+                    channel_id=channel_id,
+                    next_thread_id=next_thread_id,
+                )
             await service._store.set_pending_compact_seed(
                 channel_id=channel_id,
                 seed_text=build_compact_seed_prompt(response_text),

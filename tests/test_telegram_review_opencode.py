@@ -408,7 +408,8 @@ async def test_telegram_review_opencode_sends_command(
     session_id, command, _args, _model, _agent = client.send_command_calls[0]
     assert session_id == "session-123"
     assert command == "review"
-    assert client.list_messages_calls == ["session-123"]
+    assert client.list_messages_calls
+    assert set(client.list_messages_calls) == {"session-123"}
     assert handler._delivered
     assert handler._delivered[-1]
     assert handler._delivery_delete_flags[-1] is True

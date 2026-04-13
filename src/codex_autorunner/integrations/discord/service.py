@@ -72,10 +72,24 @@ from ...core.git_utils import (  # noqa: F401 - kept for test monkeypatching
     GitError,
     reset_branch_from_origin_main,
 )
+from ...core.hub_control_plane import (
+    HandshakeCompatibility,
+    HttpHubControlPlaneClient,
+    HubControlPlaneError,
+    evaluate_handshake_compatibility,
+)
+from ...core.hub_control_plane.models import (
+    HandshakeRequest as _HandshakeRequest,
+)
+from ...core.hub_control_plane.service import (
+    CONTROL_PLANE_API_VERSION as _CONTROL_PLANE_API_VERSION,
+)
 from ...core.logging_utils import log_event
 from ...core.managed_processes import reap_managed_processes
-from ...core.orchestration import build_ticket_flow_orchestration_service
-from ...core.pma_notification_store import PmaNotificationStore
+from ...core.orchestration import (
+    ORCHESTRATION_SCHEMA_VERSION,
+    build_ticket_flow_orchestration_service,
+)
 from ...core.state_roots import resolve_global_state_root
 from ...core.update import (  # noqa: F401 - kept for test monkeypatching
     UpdateInProgressError,
@@ -111,6 +125,7 @@ from ...integrations.app_server.threads import (
 from ...integrations.chat.agents import (
     DEFAULT_CHAT_AGENT,
     chat_agent_supports_effort,
+    chat_hermes_profile_options,
     format_chat_agent_selection,
     normalize_chat_agent,
     normalize_hermes_profile,
@@ -745,22 +760,22 @@ class DiscordBotService:
                 self._hub_config_path = root_hub_config
 
         self._hub_supervisor = None
+        self._hub_client: Optional[HttpHubControlPlaneClient] = None
+        self._hub_handshake_compatibility: Optional[HandshakeCompatibility] = None
         try:
-            from ...core.hub import HubSupervisor
-            from ...integrations.github.polling import build_hub_scm_poll_processor
-
-            self._hub_supervisor = HubSupervisor.from_path(
-                self._config.root,
-                scm_poll_processor=build_hub_scm_poll_processor(
-                    hub_root=self._config.root,
-                    raw_config=load_hub_config(self._config.root).raw,
-                ),
+            hub_config = load_hub_config(self._config.root)
+            base_path = hub_config.server_base_path or ""
+            if base_path.endswith("/"):
+                base_path = base_path[:-1]
+            hub_base_url = (
+                f"http://{hub_config.server_host}:{hub_config.server_port}{base_path}"
             )
+            self._hub_client = HttpHubControlPlaneClient(base_url=hub_base_url)
         except (ConfigError, OSError, ValueError, ImportError, RuntimeError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
-                "discord.pma.hub_supervisor.unavailable",
+                "discord.hub_control_plane.client_init_failed",
                 hub_root=str(self._config.root),
                 exc=exc,
             )
@@ -822,6 +837,9 @@ class DiscordBotService:
 
     async def run_forever(self) -> None:
         self._service_started_at_monotonic = time.monotonic()
+        handshake_ok = await self._perform_hub_handshake()
+        if not handshake_ok:
+            raise SystemExit(1)
         self._reap_managed_processes(stage="startup")
         await self._store.initialize()
         await self._reconcile_discord_progress_leases_on_startup()
@@ -902,6 +920,83 @@ class DiscordBotService:
             return None
         current = time.monotonic() if now is None else now
         return round(max(0.0, (current - started_at) * 1000), 1)
+
+    async def _perform_hub_handshake(self) -> bool:
+        expected_schema_generation = ORCHESTRATION_SCHEMA_VERSION
+        if self._hub_client is None:
+            log_event(
+                self._logger,
+                logging.ERROR,
+                "discord.hub_control_plane.client_not_configured",
+                hub_root=str(self._config.root),
+                expected_schema_generation=expected_schema_generation,
+            )
+            return False
+
+        try:
+            response = await self._hub_client.handshake(
+                _HandshakeRequest(
+                    client_name="discord",
+                    client_api_version=_CONTROL_PLANE_API_VERSION,
+                    expected_schema_generation=expected_schema_generation,
+                )
+            )
+            compatibility = evaluate_handshake_compatibility(
+                response,
+                client_api_version=_CONTROL_PLANE_API_VERSION,
+                expected_schema_generation=expected_schema_generation,
+            )
+            self._hub_handshake_compatibility = compatibility
+            if compatibility.compatible:
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "discord.hub_control_plane.handshake_ok",
+                    hub_root=str(self._config.root),
+                    api_version=response.api_version,
+                    schema_generation=response.schema_generation,
+                    expected_schema_generation=expected_schema_generation,
+                )
+                return True
+            else:
+                log_event(
+                    self._logger,
+                    logging.ERROR,
+                    "discord.hub_control_plane.handshake_incompatible",
+                    hub_root=str(self._config.root),
+                    reason=compatibility.reason,
+                    server_api_version=compatibility.server_api_version,
+                    client_api_version=compatibility.client_api_version,
+                    server_schema_generation=compatibility.server_schema_generation,
+                    expected_schema_generation=compatibility.expected_schema_generation,
+                )
+                return False
+        except HubControlPlaneError as exc:
+            log_event(
+                self._logger,
+                logging.ERROR,
+                "discord.hub_control_plane.handshake_failed",
+                hub_root=str(self._config.root),
+                error_code=exc.code,
+                retryable=exc.retryable,
+                message=str(exc),
+                expected_schema_generation=expected_schema_generation,
+            )
+            return False
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.ERROR,
+                "discord.hub_control_plane.handshake_unexpected_error",
+                hub_root=str(self._config.root),
+                exc=exc,
+                expected_schema_generation=expected_schema_generation,
+            )
+            return False
+
+    @property
+    def hub_client(self) -> Optional[HttpHubControlPlaneClient]:
+        return self._hub_client
 
     def _is_within_cold_start_window(self, *, now: Optional[float] = None) -> bool:
         started_at_raw = getattr(self, "_service_started_at_monotonic", None)
@@ -1716,10 +1811,11 @@ class DiscordBotService:
         if not await self._can_start_message_turn_in_channel(event):
             return
         channel_id = dispatch_result.context.chat_id
-        notice_content, allow_interrupt = (
-            await self._queued_notice_config_for_conversation(
-                dispatch_result.context.conversation_id
-            )
+        (
+            notice_content,
+            allow_interrupt,
+        ) = await self._queued_notice_config_for_conversation(
+            dispatch_result.context.conversation_id
         )
         source_message_id = event.message.message_id
         queued_notice_payload = build_discord_queue_notice_message(
@@ -2472,6 +2568,10 @@ class DiscordBotService:
         mode: Optional[str] = None,
     ) -> tuple[Any, Any, Any]:
         orchestration_service = self._discord_thread_service()
+        if orchestration_service is None:
+            raise RuntimeError(
+                "Discord orchestration service unavailable: hub control-plane client not connected"
+            )
         resolved = resolve_surface_thread_binding(
             orchestration_service,
             surface_kind="discord",
@@ -3793,6 +3893,9 @@ class DiscordBotService:
                 await self._store.close()
         await self._close_all_app_server_supervisors()
         await self._close_all_opencode_supervisors()
+        if self._hub_client is not None:
+            with contextlib.suppress(Exception):
+                await self._hub_client.aclose()
         self._reap_managed_processes(stage="shutdown")
 
     async def _close_all_app_server_supervisors(self) -> None:
@@ -3939,10 +4042,33 @@ class DiscordBotService:
     ) -> None:
         if not isinstance(delivered_message_id, str) or not delivered_message_id:
             return
-        PmaNotificationStore(self._config.root).mark_delivered(
-            delivery_record_id=record.record_id,
-            delivered_message_id=delivered_message_id,
+        if self._hub_client is None:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.outbox.delivery_mark.hub_client_unavailable",
+                record_id=record.record_id,
+            )
+            return
+        from ...core.hub_control_plane import (
+            NotificationDeliveryMarkRequest as _CPDeliveryMarkRequest,
         )
+
+        try:
+            await self._hub_client.mark_notification_delivered(
+                _CPDeliveryMarkRequest(
+                    delivery_record_id=record.record_id,
+                    delivered_message_id=delivered_message_id,
+                )
+            )
+        except (HubControlPlaneError, OSError, ValueError) as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.outbox.delivery_mark.control_plane_failed",
+                record_id=record.record_id,
+                exc=exc,
+            )
 
     async def _delete_channel_message_safe(
         self,
@@ -4913,15 +5039,34 @@ class DiscordBotService:
         agent: str,
         agent_profile: Optional[str] = None,
     ) -> tuple[str, ...]:
+        agent_ids: list[str] = []
+        seen: set[str] = set()
+
+        def _add_agent_id(value: object) -> None:
+            normalized = str(value or "").strip().lower()
+            if not normalized or normalized in seen:
+                return
+            seen.add(normalized)
+            agent_ids.append(normalized)
+
         runtime_agent = resolve_chat_runtime_agent(
             agent,
             agent_profile,
             default=self.DEFAULT_AGENT,
             context=self,
         )
-        if runtime_agent == agent:
-            return (agent,)
-        return (agent, runtime_agent)
+        _add_agent_id(agent)
+        _add_agent_id(runtime_agent)
+        if agent == "hermes":
+            normalized_profile = normalize_hermes_profile(
+                agent_profile,
+                context=self,
+            )
+            if normalized_profile is not None:
+                for option in chat_hermes_profile_options(self):
+                    if option.profile == normalized_profile:
+                        _add_agent_id(option.runtime_agent)
+        return tuple(agent_ids)
 
     def _discord_thread_matches_agent(
         self,

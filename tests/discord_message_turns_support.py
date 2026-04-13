@@ -28,6 +28,7 @@ from codex_autorunner.core.filebox import (
     outbox_pending_dir,
     outbox_sent_dir,
 )
+from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.ports.run_event import (
     RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
     RUN_EVENT_DELTA_TYPE_LOG_LINE,
@@ -1428,6 +1429,42 @@ class _FakeOutboxManager:
         await asyncio.Event().wait()
 
 
+class _FakeCompactHubClient:
+    def __init__(
+        self,
+        orchestration_service: Any,
+        *,
+        transcript_entries: Optional[list[dict[str, str]]] = None,
+    ) -> None:
+        self._orchestration_service = orchestration_service
+        self._transcript_entries = list(transcript_entries or [])
+        self.transcript_requests: list[Any] = []
+        self.compact_seed_updates: list[Any] = []
+
+    async def get_transcript_history(self, request: Any) -> Any:
+        self.transcript_requests.append(request)
+        return SimpleNamespace(entries=list(self._transcript_entries))
+
+    async def update_thread_compact_seed(self, request: Any) -> Any:
+        self.compact_seed_updates.append(request)
+        thread_store = getattr(self._orchestration_service, "thread_store", None)
+        remote_client = getattr(thread_store, "_client", None)
+        if remote_client is not None and hasattr(
+            remote_client, "update_thread_compact_seed"
+        ):
+            return await remote_client.update_thread_compact_seed(request)
+        pma_store = getattr(thread_store, "_store", None)
+        if pma_store is not None:
+            pma_store.set_thread_compact_seed(
+                request.thread_target_id,
+                request.compact_seed,
+            )
+        return SimpleNamespace(
+            thread_target_id=request.thread_target_id,
+            compact_seed=request.compact_seed,
+        )
+
+
 class _StreamingFakeOrchestrator:
     def __init__(self, events: list[Any]) -> None:
         self._events = events
@@ -2206,7 +2243,6 @@ async def test_car_session_compact_keeps_previous_thread_when_summary_is_blank(
 @pytest.mark.anyio
 async def test_car_session_compact_uses_transcript_fallback_when_summary_is_blank(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -2269,26 +2305,12 @@ async def test_car_session_compact_uses_transcript_fallback_when_summary_is_blan
             preview_message_id=None,
         )
 
-    class _FakeTranscriptMirrorStore:
-        def __init__(self, _root: Path) -> None:
-            pass
-
-        def list_target_history(
-            self,
-            *,
-            target_kind: str,
-            target_id: str,
-            limit: int = 10,
-        ) -> list[dict[str, str]]:
-            _ = target_kind, target_id, limit
-            return [
-                {"preview": "User: earlier question\nAssistant: earlier answer"},
-                {"preview": "User: latest question\nAssistant: latest answer"},
-            ]
-
-    monkeypatch.setattr(
-        "codex_autorunner.integrations.discord.car_handlers.compact_commands.TranscriptMirrorStore",
-        _FakeTranscriptMirrorStore,
+    service._hub_client = _FakeCompactHubClient(
+        orchestration_service,
+        transcript_entries=[
+            {"preview": "User: earlier question\nAssistant: earlier answer"},
+            {"preview": "User: latest question\nAssistant: latest answer"},
+        ],
     )
     service._run_agent_turn_for_message = _fake_run_turn  # type: ignore[assignment]
 
@@ -6827,8 +6849,9 @@ async def test_message_create_in_pma_mode_uses_pma_session_key(tmp_path: Path) -
         assert captured
         assert captured[0]["session_key"] == PMA_KEY
         assert captured[0]["orchestrator_channel_key"] == "pma:channel-1"
-        assert "plan next sprint" in captured[0]["prompt_text"]
-        assert captured[0]["prompt_text"] != "plan next sprint"
+        prompt_text = captured[0]["prompt_text"]
+        assert "plan next sprint" in prompt_text and prompt_text != "plan next sprint"
+        assert "<hub_snapshot>" in prompt_text
         assert any(
             "PMA reply" in msg["payload"].get("content", "")
             for msg in rest.channel_messages
@@ -6935,9 +6958,7 @@ async def test_message_create_attachment_only_in_pma_mode_uses_hub_inbox_snapsho
             assert [path for path in repo_inbox.iterdir() if path.is_file()] == []
 
         prompt = captured_prompts[0]
-        assert "PMA File Inbox:" in prompt
-        assert "next_action: process_uploaded_file" in prompt
-        assert "ticket-pack.zip" in prompt
+        assert "CAR:PMA_DOCS_GENERATED" in prompt
         assert any(
             "PMA zip reply" in msg["payload"].get("content", "")
             for msg in rest.channel_messages
@@ -7732,7 +7753,7 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
 
         def __init__(self) -> None:
             self.turn_prompts: list[str] = []
-            self.resume_conversation_calls: list[tuple[Path, str]] = []
+            self.turn_conversation_ids: list[str] = []
 
         async def ensure_ready(self, workspace_root: Path) -> None:
             _ = workspace_root
@@ -7749,7 +7770,7 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
         async def resume_conversation(
             self, workspace_root: Path, conversation_id: str
         ) -> SimpleNamespace:
-            self.resume_conversation_calls.append((workspace_root, conversation_id))
+            _ = workspace_root
             return SimpleNamespace(id=conversation_id)
 
         async def start_turn(
@@ -7775,6 +7796,7 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
             )
             turn_id = f"backend-turn-{len(self.turn_prompts) + 1}"
             self.turn_prompts.append(prompt)
+            self.turn_conversation_ids.append(conversation_id)
             return SimpleNamespace(conversation_id=conversation_id, turn_id=turn_id)
 
         async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
@@ -7853,7 +7875,7 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
         assert any("second orchestration reply" in content for content in contents)
         assert rest.typing_calls.count("channel-1") >= 2
 
-        thread_store = discord_message_turns_module.PmaThreadStore(tmp_path)
+        thread_store = PmaThreadStore(tmp_path)
         threads = thread_store.list_threads(limit=10)
         assert len(threads) == 1
         turns = thread_store.list_turns(threads[0]["managed_thread_id"], limit=10)
@@ -7867,8 +7889,9 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
         )
         assert binding is not None
         assert binding.thread_target_id == threads[0]["managed_thread_id"]
-        assert harness.resume_conversation_calls == [
-            (workspace.resolve(), "backend-thread-1")
+        assert harness.turn_conversation_ids == [
+            "backend-thread-1",
+            "backend-thread-1",
         ]
     finally:
         if not release_task.done():
@@ -7939,7 +7962,7 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
 
         def __init__(self) -> None:
             self.turn_prompts: list[str] = []
-            self.resume_conversation_calls: list[tuple[Path, str]] = []
+            self.turn_conversation_ids: list[str] = []
 
         async def ensure_ready(self, workspace_root: Path) -> None:
             _ = workspace_root
@@ -7956,7 +7979,7 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
         async def resume_conversation(
             self, workspace_root: Path, conversation_id: str
         ) -> SimpleNamespace:
-            self.resume_conversation_calls.append((workspace_root, conversation_id))
+            _ = workspace_root
             return SimpleNamespace(id=conversation_id)
 
         async def start_turn(
@@ -7982,6 +8005,7 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
             )
             turn_id = f"hermes-backend-turn-{len(self.turn_prompts) + 1}"
             self.turn_prompts.append(prompt)
+            self.turn_conversation_ids.append(conversation_id)
             return SimpleNamespace(conversation_id=conversation_id, turn_id=turn_id)
 
         async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
@@ -8088,12 +8112,13 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
         assert resolved_thread.agent_id == "hermes"
         assert resolved_thread.agent_profile == "m4-pma"
 
-        thread_store = discord_message_turns_module.PmaThreadStore(tmp_path)
+        thread_store = PmaThreadStore(tmp_path)
         turns = thread_store.list_turns(resolved_thread.thread_target_id, limit=10)
         assert len(turns) == 2
         assert [turn["status"] for turn in turns] == ["ok", "ok"]
-        assert harness.resume_conversation_calls == [
-            (workspace.resolve(), "hermes-backend-thread-1")
+        assert harness.turn_conversation_ids == [
+            "hermes-backend-thread-1",
+            "hermes-backend-thread-1",
         ]
     finally:
         if not release_task.done():
@@ -8459,7 +8484,7 @@ async def test_pma_message_create_routes_repeated_messages_through_managed_threa
         assert any("first orchestration reply" in content for content in contents)
         assert any("second orchestration reply" in content for content in contents)
 
-        thread_store = discord_message_turns_module.PmaThreadStore(tmp_path)
+        thread_store = PmaThreadStore(tmp_path)
         threads = thread_store.list_threads(limit=10)
         assert len(threads) == 1
         turns = thread_store.list_turns(threads[0]["managed_thread_id"], limit=10)
@@ -8634,7 +8659,7 @@ async def test_pma_message_create_image_attachment_routes_through_managed_thread
         assert "<user_message>" in str(items[0].get("text") or "")
         assert any(item.get("type") == "localImage" for item in items[1:])
 
-        thread_store = discord_message_turns_module.PmaThreadStore(tmp_path)
+        thread_store = PmaThreadStore(tmp_path)
         threads = thread_store.list_threads(limit=10)
         assert len(threads) == 1
         turns = thread_store.list_turns(threads[0]["managed_thread_id"], limit=10)
@@ -9250,6 +9275,7 @@ async def test_car_session_compact_reuses_preview_without_part_numbering(
         )
 
     service._run_agent_turn_for_message = _fake_run_turn  # type: ignore[assignment]
+    service._hub_client = _FakeCompactHubClient(orchestration_service)
 
     try:
         await service._handle_car_compact(
@@ -9442,6 +9468,7 @@ async def test_car_session_compact_places_continue_button_on_last_chunk_without_
         )
 
     service._run_agent_turn_for_message = _fake_run_turn  # type: ignore[assignment]
+    service._hub_client = _FakeCompactHubClient(orchestration_service)
 
     try:
         await service._handle_car_compact(

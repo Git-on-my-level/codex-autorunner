@@ -178,6 +178,35 @@ def test_connect_readonly_skips_bootstrap_initialize(
     ]
 
 
+def test_connect_readonly_does_not_prepare_shared_state_on_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hub_root = tmp_path / "hub"
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+
+    created = PmaThreadStore(hub_root).create_thread("codex", workspace_root)
+
+    def _fail_prepare(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("readonly access must not prepare shared state")
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.pma_thread_store_bootstrap.ensure_legacy_orchestration_backfill",
+        _fail_prepare,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.pma_thread_store_bootstrap.prepare_orchestration_sqlite",
+        _fail_prepare,
+    )
+
+    store = PmaThreadStore.connect_readonly(hub_root)
+    fetched = store.get_thread(created["managed_thread_id"])
+
+    assert fetched is not None
+    assert fetched["managed_thread_id"] == created["managed_thread_id"]
+
+
 def test_create_finish_turn_and_query(tmp_path: Path) -> None:
     store = PmaThreadStore(tmp_path / "hub")
     thread = store.create_thread("codex", tmp_path / "workspace")

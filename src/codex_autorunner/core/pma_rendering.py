@@ -149,6 +149,31 @@ def _render_freshness_section(
     lines.append("")
 
 
+def _render_availability_section(
+    snapshot: dict[str, Any],
+    lines: list[str],
+    *,
+    max_field_chars: int,
+    max_text_chars: int,
+) -> None:
+    availability = snapshot.get("availability") or {}
+    if not isinstance(availability, Mapping) or not availability:
+        return
+    lines.append("Hub Snapshot Availability:")
+    status = _field(availability, "status", max_field_chars) or _truncate(
+        "unknown", max_field_chars
+    )
+    detail = _truncate(str(availability.get("detail") or ""), max_text_chars)
+    note = _truncate(str(availability.get("note") or ""), max_text_chars)
+    line = f"- status={status}"
+    if detail:
+        line += f" detail={detail}"
+    lines.append(line)
+    if note:
+        lines.append(f"- note: {note}")
+    lines.append("")
+
+
 def _render_action_queue_item(
     item: Mapping[str, Any],
     lines: list[str],
@@ -792,6 +817,12 @@ def _render_hub_snapshot(
 ) -> str:
     lines: list[str] = []
     fc = max_field_chars
+    _render_availability_section(
+        snapshot,
+        lines,
+        max_field_chars=fc,
+        max_text_chars=max_text_chars,
+    )
     _render_freshness_section(snapshot, lines, fc)
     _render_action_queue_section(
         snapshot,

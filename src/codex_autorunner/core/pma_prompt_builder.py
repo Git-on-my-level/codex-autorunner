@@ -246,6 +246,8 @@ def _render_pma_actionable_state(
     limits: PmaPromptRenderLimits,
 ) -> str:
     actionable_snapshot: dict[str, Any] = {}
+    if snapshot.get("availability") is not None:
+        actionable_snapshot["availability"] = snapshot.get("availability")
     if snapshot.get("generated_at") is not None:
         actionable_snapshot["generated_at"] = snapshot.get("generated_at")
     if snapshot.get("freshness") is not None:

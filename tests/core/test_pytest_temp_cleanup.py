@@ -38,6 +38,27 @@ def test_cleanup_repo_pytest_temp_runs_deletes_inactive_run_dirs(
     assert keep_run.exists() is True
 
 
+def test_cleanup_repo_pytest_temp_runs_skips_recent_run_dirs(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    temp_root = repo_pytest_temp_root(repo_root, temp_base=tmp_path / "tmp")
+    recent_run = temp_root / "recent"
+    (recent_run / "data").mkdir(parents=True)
+    (recent_run / "data" / "artifact.bin").write_bytes(b"1234")
+
+    summary = cleanup_repo_pytest_temp_runs(
+        repo_root,
+        temp_base=tmp_path / "tmp",
+        min_age_seconds=300,
+    )
+
+    assert summary.scanned == 0
+    assert summary.deleted == 0
+    assert recent_run.exists() is True
+
+
 def test_cleanup_temp_paths_skips_active_roots(tmp_path: Path) -> None:
     active_root = tmp_path / "active"
     active_root.mkdir()

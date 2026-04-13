@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import sqlite3
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -11,7 +12,6 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .locks import file_lock
-from .orchestration.legacy_backfill_gate import ensure_legacy_orchestration_backfill
 from .orchestration.sqlite import open_orchestration_sqlite
 from .text_utils import lock_path_for
 
@@ -175,10 +175,6 @@ class PmaAuditLog:
         entries = self._list_recent_sqlite(limit=limit, action_type=action_type)
         if entries:
             return entries
-        self._backfill_legacy_entries()
-        entries = self._list_recent_sqlite(limit=limit, action_type=action_type)
-        if entries:
-            return entries
         with file_lock(self._lock_path()):
             return self._list_recent_unlocked(limit=limit, action_type=action_type)
 
@@ -193,17 +189,25 @@ class PmaAuditLog:
         where = ""
         if clauses:
             where = "WHERE " + " AND ".join(clauses)
-        with open_orchestration_sqlite(self._hub_root) as conn:
-            rows = conn.execute(
-                f"""
-                SELECT audit_id, action_type, actor_id, target_id, payload_json, created_at, fingerprint
-                  FROM orch_audit_entries
-                  {where}
-                 ORDER BY rowid DESC
-                 LIMIT ?
-                """,
-                (*params, max(0, int(limit))),
-            ).fetchall()
+        try:
+            with open_orchestration_sqlite(
+                self._hub_root,
+                migrate=False,
+            ) as conn:
+                rows = conn.execute(
+                    f"""
+                    SELECT audit_id, action_type, actor_id, target_id, payload_json, created_at, fingerprint
+                      FROM orch_audit_entries
+                      {where}
+                     ORDER BY rowid DESC
+                     LIMIT ?
+                    """,
+                    (*params, max(0, int(limit))),
+                ).fetchall()
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc).lower():
+                raise
+            return []
         entries: list[PmaAuditEntry] = []
         for row in reversed(rows):
             parsed = self._row_to_entry(row)
@@ -323,9 +327,6 @@ class PmaAuditLog:
     ) -> int:
         entries = self._list_recent_sqlite(limit=10000)
         if not entries:
-            self._backfill_legacy_entries()
-            entries = self._list_recent_sqlite(limit=10000)
-        if not entries:
             entries = self._list_recent_unlocked(limit=10000)
         if not within_seconds:
             return sum(1 for e in entries if e.fingerprint == fingerprint)
@@ -339,9 +340,6 @@ class PmaAuditLog:
             except (ValueError, TypeError, AttributeError):
                 continue
         return count
-
-    def _backfill_legacy_entries(self) -> None:
-        ensure_legacy_orchestration_backfill(self._hub_root)
 
     @staticmethod
     def _row_to_entry(row: Any) -> Optional[PmaAuditEntry]:

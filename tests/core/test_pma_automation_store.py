@@ -9,7 +9,10 @@ from codex_autorunner.core.pma_automation_store import (
     PmaAutomationStore,
     PmaAutomationThreadNotFoundError,
 )
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
+from codex_autorunner.core.pma_thread_store import (
+    PmaThreadStore,
+    prepare_pma_thread_store,
+)
 
 
 def _create_managed_thread(tmp_path, *, surface_kind: str | None = None) -> str:
@@ -62,7 +65,7 @@ def test_subscription_idempotent_dedupe_and_lifecycle_matching(tmp_path) -> None
     assert matches[0]["subscription_id"] == first.subscription_id
 
 
-def test_legacy_backfill_runs_once_per_store_instance(tmp_path, monkeypatch) -> None:
+def test_explicit_prepare_runs_legacy_backfill_once(tmp_path, monkeypatch) -> None:
     call_count = 0
 
     def _fake_backfill(*args, **kwargs):
@@ -76,9 +79,11 @@ def test_legacy_backfill_runs_once_per_store_instance(tmp_path, monkeypatch) -> 
         _fake_backfill,
     )
 
-    store = PmaAutomationStore(tmp_path)
     thread_id = _create_managed_thread(tmp_path)
+    prepare_pma_thread_store(tmp_path, durable=False)
+    prepare_pma_thread_store(tmp_path, durable=False)
 
+    store = PmaAutomationStore(tmp_path)
     state = store.load()
     created, deduped = store.upsert_subscription(
         event_types=["flow_failed"],

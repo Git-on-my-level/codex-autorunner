@@ -25,10 +25,21 @@ from ...core.filebox_retention import (
 )
 from ...core.flows.models import FlowRunRecord
 from ...core.flows.pause_dispatch import format_pause_reason, latest_dispatch_seq
-from ...core.hub import HubSupervisor
+from ...core.hub_control_plane import (
+    HandshakeCompatibility,
+    HttpHubControlPlaneClient,
+    HubControlPlaneError,
+    evaluate_handshake_compatibility,
+)
+from ...core.hub_control_plane.models import (
+    HandshakeRequest as _HandshakeRequest,
+)
+from ...core.hub_control_plane.service import (
+    CONTROL_PLANE_API_VERSION as _CONTROL_PLANE_API_VERSION,
+)
 from ...core.locks import FileLock, FileLockBusy
 from ...core.logging_utils import log_event
-from ...core.pma_notification_store import PmaNotificationStore
+from ...core.orchestration import ORCHESTRATION_SCHEMA_VERSION
 from ...core.request_context import reset_conversation_id, set_conversation_id
 from ...core.runtime_services import RuntimeServices
 from ...core.state import now_iso
@@ -229,31 +240,6 @@ class TelegramBotService(
                 self._hub_config_path = root_hub_config
         if self._hub_root:
             try:
-                from ..github.polling import build_hub_scm_poll_processor
-
-                self._hub_supervisor = HubSupervisor.from_path(
-                    self._hub_root,
-                    scm_poll_processor=build_hub_scm_poll_processor(
-                        hub_root=self._hub_root,
-                        raw_config=load_hub_config(self._hub_root).raw,
-                    ),
-                )
-            except (
-                ImportError,
-                OSError,
-                ValueError,
-                TypeError,
-                RuntimeError,
-                ConfigError,
-            ) as exc:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "telegram.pma.hub_supervisor.unavailable",
-                    hub_root=str(self._hub_root),
-                    exc=exc,
-                )
-            try:
                 self._hub_thread_registry = AppServerThreadRegistry(
                     default_app_server_threads_path(self._hub_root)
                 )
@@ -265,6 +251,25 @@ class TelegramBotService(
                     hub_root=str(self._hub_root),
                     exc=exc,
                 )
+        self._hub_client: Optional[HttpHubControlPlaneClient] = None
+        self._hub_handshake_compatibility: Optional[HandshakeCompatibility] = None
+        try:
+            hub_config = load_hub_config(config_root)
+            base_path = hub_config.server_base_path or ""
+            if base_path.endswith("/"):
+                base_path = base_path[:-1]
+            hub_base_url = (
+                f"http://{hub_config.server_host}:{hub_config.server_port}{base_path}"
+            )
+            self._hub_client = HttpHubControlPlaneClient(base_url=hub_base_url)
+        except (ConfigError, OSError, ValueError, ImportError, RuntimeError) as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.hub_control_plane.client_init_failed",
+                hub_root=str(config_root),
+                exc=exc,
+            )
         self._update_repo_url = update_repo_url
         self._update_repo_ref = update_repo_ref
         self._update_skip_checks = update_skip_checks
@@ -464,10 +469,34 @@ class TelegramBotService(
     ) -> None:
         if not isinstance(delivered_message_id, int):
             return
-        PmaNotificationStore(self._config.root).mark_delivered(
-            delivery_record_id=record.record_id,
-            delivered_message_id=delivered_message_id,
+        delivered_id_str = str(delivered_message_id)
+        if self._hub_client is None:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.outbox.delivery_mark.hub_client_unavailable",
+                record_id=record.record_id,
+            )
+            return
+        from ...core.hub_control_plane import (
+            NotificationDeliveryMarkRequest as _CPDeliveryMarkRequest,
         )
+
+        try:
+            await self._hub_client.mark_notification_delivered(
+                _CPDeliveryMarkRequest(
+                    delivery_record_id=record.record_id,
+                    delivered_message_id=delivered_id_str,
+                )
+            )
+        except (HubControlPlaneError, OSError, ValueError) as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.outbox.delivery_mark.control_plane_failed",
+                record_id=record.record_id,
+                exc=exc,
+            )
 
     async def _housekeeping_roots(self) -> list[Path]:
         roots: set[Path] = set()
@@ -778,7 +807,87 @@ class TelegramBotService(
         return self._turn_semaphore
 
     async def run_polling(self) -> None:
+        handshake_ok = await self._perform_hub_handshake()
+        if not handshake_ok:
+            raise SystemExit(1)
         await self._chat_core.run()
+
+    @property
+    def hub_client(self) -> Optional[HttpHubControlPlaneClient]:
+        return self._hub_client
+
+    async def _perform_hub_handshake(self) -> bool:
+        expected_schema_generation = ORCHESTRATION_SCHEMA_VERSION
+        if self._hub_client is None:
+            log_event(
+                self._logger,
+                logging.ERROR,
+                "telegram.hub_control_plane.client_not_configured",
+                hub_root=str(self._hub_root or self._config.root),
+                expected_schema_generation=expected_schema_generation,
+            )
+            return False
+
+        try:
+            response = await self._hub_client.handshake(
+                _HandshakeRequest(
+                    client_name="telegram",
+                    client_api_version=_CONTROL_PLANE_API_VERSION,
+                    expected_schema_generation=expected_schema_generation,
+                )
+            )
+            compatibility = evaluate_handshake_compatibility(
+                response,
+                client_api_version=_CONTROL_PLANE_API_VERSION,
+                expected_schema_generation=expected_schema_generation,
+            )
+            self._hub_handshake_compatibility = compatibility
+            if compatibility.compatible:
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "telegram.hub_control_plane.handshake_ok",
+                    hub_root=str(self._hub_root or self._config.root),
+                    api_version=response.api_version,
+                    schema_generation=response.schema_generation,
+                    expected_schema_generation=expected_schema_generation,
+                )
+                return True
+            else:
+                log_event(
+                    self._logger,
+                    logging.ERROR,
+                    "telegram.hub_control_plane.handshake_incompatible",
+                    hub_root=str(self._hub_root or self._config.root),
+                    reason=compatibility.reason,
+                    server_api_version=compatibility.server_api_version,
+                    client_api_version=compatibility.client_api_version,
+                    server_schema_generation=compatibility.server_schema_generation,
+                    expected_schema_generation=compatibility.expected_schema_generation,
+                )
+                return False
+        except HubControlPlaneError as exc:
+            log_event(
+                self._logger,
+                logging.ERROR,
+                "telegram.hub_control_plane.handshake_failed",
+                hub_root=str(self._hub_root or self._config.root),
+                error_code=exc.code,
+                retryable=exc.retryable,
+                message=str(exc),
+                expected_schema_generation=expected_schema_generation,
+            )
+            return False
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.ERROR,
+                "telegram.hub_control_plane.handshake_unexpected_error",
+                hub_root=str(self._hub_root or self._config.root),
+                exc=exc,
+                expected_schema_generation=expected_schema_generation,
+            )
+            return False
 
     async def _dispatch_update(self, update: TelegramUpdate) -> None:
         await dispatch_update(self, update)
