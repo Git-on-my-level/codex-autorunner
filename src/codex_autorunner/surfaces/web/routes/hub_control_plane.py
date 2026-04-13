@@ -3,20 +3,33 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Callable, Mapping, Optional, Protocol, TypeVar
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
 from ....core.hub_control_plane import (
     AgentWorkspaceListRequest,
     AgentWorkspaceLookupRequest,
     AutomationRequest,
+    ExecutionBackendIdUpdateRequest,
+    ExecutionCancelAllRequest,
+    ExecutionCancelRequest,
+    ExecutionClaimNextRequest,
+    ExecutionCreateRequest,
+    ExecutionInterruptRecordRequest,
+    ExecutionLookupRequest,
+    ExecutionPromoteRequest,
+    ExecutionResultRecordRequest,
     HandshakeRequest,
     HubControlPlaneError,
     HubSharedStateService,
+    LatestExecutionLookupRequest,
     NotificationContinuationBindRequest,
     NotificationDeliveryMarkRequest,
     NotificationLookupRequest,
     NotificationReplyTargetLookupRequest,
+    QueueDepthRequest,
+    QueuedExecutionListRequest,
+    RunningExecutionLookupRequest,
     SurfaceBindingLookupRequest,
     SurfaceBindingUpsertRequest,
     ThreadCompactSeedUpdateRequest,
@@ -79,6 +92,24 @@ async def _run_control_plane_call(
     except ValueError as exc:
         return _error_response(HubControlPlaneError("hub_rejected", str(exc)))
     return JSONResponse(content=response_model.to_dict())
+
+
+async def _run_control_plane_command(
+    *,
+    request_factory: Callable[[], Any],
+    operation: Callable[[Any], None],
+) -> Response:
+    try:
+        request_model = request_factory()
+    except ValueError as exc:
+        return _error_response(HubControlPlaneError("hub_rejected", str(exc)))
+    try:
+        await asyncio.to_thread(operation, request_model)
+    except HubControlPlaneError as exc:
+        return _error_response(exc)
+    except ValueError as exc:
+        return _error_response(HubControlPlaneError("hub_rejected", str(exc)))
+    return Response(status_code=204)
 
 
 def build_hub_control_plane_routes() -> APIRouter:
@@ -238,6 +269,179 @@ def build_hub_control_plane_routes() -> APIRouter:
         return await _run_control_plane_call(
             request_factory=lambda: ThreadTargetCreateRequest.from_mapping(payload),
             operation=service.create_thread_target,
+        )
+
+    @router.get("/thread-targets/{thread_target_id}/executions/running")
+    async def get_running_execution(request: Request, thread_target_id: str):
+        service = _require_control_plane_service(request)
+        return await _run_control_plane_call(
+            request_factory=lambda: RunningExecutionLookupRequest.from_mapping(
+                {"thread_target_id": thread_target_id}
+            ),
+            operation=service.get_running_execution,
+        )
+
+    @router.get("/thread-targets/{thread_target_id}/executions/latest")
+    async def get_latest_execution(request: Request, thread_target_id: str):
+        service = _require_control_plane_service(request)
+        return await _run_control_plane_call(
+            request_factory=lambda: LatestExecutionLookupRequest.from_mapping(
+                {"thread_target_id": thread_target_id}
+            ),
+            operation=service.get_latest_execution,
+        )
+
+    @router.get("/thread-targets/{thread_target_id}/executions/queued")
+    async def list_queued_executions(
+        request: Request, thread_target_id: str, limit: int = 200
+    ):
+        service = _require_control_plane_service(request)
+        return await _run_control_plane_call(
+            request_factory=lambda: QueuedExecutionListRequest.from_mapping(
+                {
+                    "thread_target_id": thread_target_id,
+                    "limit": limit,
+                }
+            ),
+            operation=service.list_queued_executions,
+        )
+
+    @router.get("/thread-targets/{thread_target_id}/executions/queue-depth")
+    async def get_queue_depth(request: Request, thread_target_id: str):
+        service = _require_control_plane_service(request)
+        return await _run_control_plane_call(
+            request_factory=lambda: QueueDepthRequest.from_mapping(
+                {"thread_target_id": thread_target_id}
+            ),
+            operation=service.get_queue_depth,
+        )
+
+    @router.post("/thread-targets/{thread_target_id}/executions/claim-next")
+    async def claim_next_queued_execution(request: Request, thread_target_id: str):
+        service = _require_control_plane_service(request)
+        return await _run_control_plane_call(
+            request_factory=lambda: ExecutionClaimNextRequest.from_mapping(
+                {"thread_target_id": thread_target_id}
+            ),
+            operation=service.claim_next_queued_execution,
+        )
+
+    @router.post("/thread-targets/{thread_target_id}/executions/cancel-all")
+    async def cancel_queued_executions(request: Request, thread_target_id: str):
+        service = _require_control_plane_service(request)
+        return await _run_control_plane_call(
+            request_factory=lambda: ExecutionCancelAllRequest.from_mapping(
+                {"thread_target_id": thread_target_id}
+            ),
+            operation=service.cancel_queued_executions,
+        )
+
+    @router.get("/thread-targets/{thread_target_id}/executions/{execution_id}")
+    async def get_execution(request: Request, thread_target_id: str, execution_id: str):
+        service = _require_control_plane_service(request)
+        return await _run_control_plane_call(
+            request_factory=lambda: ExecutionLookupRequest.from_mapping(
+                {
+                    "thread_target_id": thread_target_id,
+                    "execution_id": execution_id,
+                }
+            ),
+            operation=service.get_execution,
+        )
+
+    @router.post("/thread-targets/{thread_target_id}/executions")
+    async def create_execution(
+        request: Request, thread_target_id: str, payload: dict[str, Any]
+    ):
+        service = _require_control_plane_service(request)
+        request_payload = dict(payload)
+        request_payload.setdefault("thread_target_id", thread_target_id)
+        return await _run_control_plane_call(
+            request_factory=lambda: ExecutionCreateRequest.from_mapping(
+                request_payload
+            ),
+            operation=service.create_execution,
+        )
+
+    @router.post("/thread-targets/{thread_target_id}/executions/{execution_id}/cancel")
+    async def cancel_queued_execution(
+        request: Request, thread_target_id: str, execution_id: str
+    ):
+        service = _require_control_plane_service(request)
+        return await _run_control_plane_call(
+            request_factory=lambda: ExecutionCancelRequest.from_mapping(
+                {
+                    "thread_target_id": thread_target_id,
+                    "execution_id": execution_id,
+                }
+            ),
+            operation=service.cancel_queued_execution,
+        )
+
+    @router.post("/thread-targets/{thread_target_id}/executions/{execution_id}/promote")
+    async def promote_queued_execution(
+        request: Request, thread_target_id: str, execution_id: str
+    ):
+        service = _require_control_plane_service(request)
+        return await _run_control_plane_call(
+            request_factory=lambda: ExecutionPromoteRequest.from_mapping(
+                {
+                    "thread_target_id": thread_target_id,
+                    "execution_id": execution_id,
+                }
+            ),
+            operation=service.promote_queued_execution,
+        )
+
+    @router.post("/thread-targets/{thread_target_id}/executions/{execution_id}/result")
+    async def record_execution_result(
+        request: Request,
+        thread_target_id: str,
+        execution_id: str,
+        payload: dict[str, Any],
+    ):
+        service = _require_control_plane_service(request)
+        request_payload = dict(payload)
+        request_payload.setdefault("thread_target_id", thread_target_id)
+        request_payload.setdefault("execution_id", execution_id)
+        return await _run_control_plane_call(
+            request_factory=lambda: ExecutionResultRecordRequest.from_mapping(
+                request_payload
+            ),
+            operation=service.record_execution_result,
+        )
+
+    @router.post(
+        "/thread-targets/{thread_target_id}/executions/{execution_id}/interrupt"
+    )
+    async def record_execution_interrupted(
+        request: Request, thread_target_id: str, execution_id: str
+    ):
+        service = _require_control_plane_service(request)
+        return await _run_control_plane_call(
+            request_factory=lambda: ExecutionInterruptRecordRequest.from_mapping(
+                {
+                    "thread_target_id": thread_target_id,
+                    "execution_id": execution_id,
+                }
+            ),
+            operation=service.record_execution_interrupted,
+        )
+
+    @router.put("/thread-executions/{execution_id}/backend-id", status_code=204)
+    async def set_execution_backend_id(
+        request: Request, execution_id: str, payload: Optional[dict[str, Any]] = None
+    ):
+        service = _require_control_plane_service(request)
+        request_payload: Mapping[str, Any] = {
+            "execution_id": execution_id,
+            **dict(payload or {}),
+        }
+        return await _run_control_plane_command(
+            request_factory=lambda: ExecutionBackendIdUpdateRequest.from_mapping(
+                request_payload
+            ),
+            operation=service.set_execution_backend_id,
         )
 
     @router.get("/transcript-history")

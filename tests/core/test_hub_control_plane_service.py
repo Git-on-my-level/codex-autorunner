@@ -6,9 +6,22 @@ from codex_autorunner.core.hub import AgentWorkspaceSnapshot
 from codex_autorunner.core.hub_control_plane import (
     AgentWorkspaceListRequest,
     AutomationRequest,
+    ExecutionBackendIdUpdateRequest,
+    ExecutionCancelAllRequest,
+    ExecutionCancelRequest,
+    ExecutionClaimNextRequest,
+    ExecutionCreateRequest,
+    ExecutionInterruptRecordRequest,
+    ExecutionLookupRequest,
+    ExecutionPromoteRequest,
+    ExecutionResultRecordRequest,
     HandshakeRequest,
     HubSharedStateService,
+    LatestExecutionLookupRequest,
     NotificationReplyTargetLookupRequest,
+    QueueDepthRequest,
+    QueuedExecutionListRequest,
+    RunningExecutionLookupRequest,
     SurfaceBindingUpsertRequest,
     WorkspaceSetupCommandRequest,
 )
@@ -195,3 +208,177 @@ def test_shared_state_service_workspace_setup_and_automation(tmp_path: Path) -> 
         "timers_processed": 0,
         "wakeups_dispatched": 7,
     }
+
+
+def test_shared_state_service_execution_lifecycle_delegates_to_thread_store(
+    tmp_path: Path,
+) -> None:
+    service, thread_target_id = _build_service(tmp_path)
+
+    first = service.create_execution(
+        ExecutionCreateRequest.from_mapping(
+            {
+                "thread_target_id": thread_target_id,
+                "prompt": "First turn",
+                "client_request_id": "client-1",
+            }
+        )
+    )
+    second = service.create_execution(
+        ExecutionCreateRequest.from_mapping(
+            {
+                "thread_target_id": thread_target_id,
+                "prompt": "Second turn",
+                "busy_policy": "queue",
+                "client_request_id": "client-2",
+                "queue_payload": {"priority": "normal"},
+            }
+        )
+    )
+
+    assert first.execution is not None
+    assert first.execution.status == "running"
+    assert second.execution is not None
+    assert second.execution.status == "queued"
+
+    running = service.get_running_execution(
+        RunningExecutionLookupRequest.from_mapping(
+            {"thread_target_id": thread_target_id}
+        )
+    )
+    latest = service.get_latest_execution(
+        LatestExecutionLookupRequest.from_mapping(
+            {"thread_target_id": thread_target_id}
+        )
+    )
+    queued = service.list_queued_executions(
+        QueuedExecutionListRequest.from_mapping(
+            {"thread_target_id": thread_target_id, "limit": 5}
+        )
+    )
+    queue_depth = service.get_queue_depth(
+        QueueDepthRequest.from_mapping({"thread_target_id": thread_target_id})
+    )
+
+    assert running.execution is not None
+    assert running.execution.execution_id == first.execution.execution_id
+    assert latest.execution is not None
+    assert latest.execution.execution_id == first.execution.execution_id
+    assert [execution.execution_id for execution in queued.executions] == [
+        second.execution.execution_id
+    ]
+    assert queue_depth.queue_depth == 1
+
+    service.set_execution_backend_id(
+        ExecutionBackendIdUpdateRequest.from_mapping(
+            {
+                "execution_id": first.execution.execution_id,
+                "backend_turn_id": "backend-1",
+            }
+        )
+    )
+    finished = service.record_execution_result(
+        ExecutionResultRecordRequest.from_mapping(
+            {
+                "thread_target_id": thread_target_id,
+                "execution_id": first.execution.execution_id,
+                "status": "ok",
+                "assistant_text": "done",
+                "backend_turn_id": "backend-1",
+                "transcript_turn_id": "tx-1",
+            }
+        )
+    )
+    claimed = service.claim_next_queued_execution(
+        ExecutionClaimNextRequest.from_mapping({"thread_target_id": thread_target_id})
+    )
+    interrupted = service.record_execution_interrupted(
+        ExecutionInterruptRecordRequest.from_mapping(
+            {
+                "thread_target_id": thread_target_id,
+                "execution_id": second.execution.execution_id,
+            }
+        )
+    )
+    lookup = service.get_execution(
+        ExecutionLookupRequest.from_mapping(
+            {
+                "thread_target_id": thread_target_id,
+                "execution_id": first.execution.execution_id,
+            }
+        )
+    )
+
+    assert finished.execution is not None
+    assert finished.execution.status == "ok"
+    assert lookup.execution is not None
+    assert lookup.execution.backend_id == "backend-1"
+    assert claimed.execution is not None
+    assert claimed.execution.execution_id == second.execution.execution_id
+    assert claimed.queue_payload == {"priority": "normal"}
+    assert interrupted.execution is not None
+    assert interrupted.execution.status == "interrupted"
+
+
+def test_shared_state_service_execution_queue_controls_delegate_to_thread_store(
+    tmp_path: Path,
+) -> None:
+    service, thread_target_id = _build_service(tmp_path)
+
+    running = service.create_execution(
+        ExecutionCreateRequest.from_mapping(
+            {
+                "thread_target_id": thread_target_id,
+                "prompt": "Running turn",
+            }
+        )
+    )
+    queued_one = service.create_execution(
+        ExecutionCreateRequest.from_mapping(
+            {
+                "thread_target_id": thread_target_id,
+                "prompt": "Queued one",
+                "busy_policy": "queue",
+            }
+        )
+    )
+    queued_two = service.create_execution(
+        ExecutionCreateRequest.from_mapping(
+            {
+                "thread_target_id": thread_target_id,
+                "prompt": "Queued two",
+                "busy_policy": "queue",
+            }
+        )
+    )
+
+    promote = service.promote_queued_execution(
+        ExecutionPromoteRequest.from_mapping(
+            {
+                "thread_target_id": thread_target_id,
+                "execution_id": queued_two.execution.execution_id,
+            }
+        )
+    )
+    cancel = service.cancel_queued_execution(
+        ExecutionCancelRequest.from_mapping(
+            {
+                "thread_target_id": thread_target_id,
+                "execution_id": queued_one.execution.execution_id,
+            }
+        )
+    )
+    cancel_all = service.cancel_queued_executions(
+        ExecutionCancelAllRequest.from_mapping({"thread_target_id": thread_target_id})
+    )
+    queue_depth = service.get_queue_depth(
+        QueueDepthRequest.from_mapping({"thread_target_id": thread_target_id})
+    )
+
+    assert running.execution is not None
+    assert queued_one.execution is not None
+    assert queued_two.execution is not None
+    assert promote.promoted is True
+    assert cancel.cancelled is True
+    assert cancel_all.cancelled_count == 1
+    assert queue_depth.queue_depth == 0

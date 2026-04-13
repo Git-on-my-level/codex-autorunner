@@ -3,7 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Literal, Mapping, Optional
 
-from ..orchestration.models import Binding, ThreadTarget
+from ..orchestration.models import (
+    Binding,
+    BusyThreadPolicy,
+    ExecutionRecord,
+    MessageRequestKind,
+    ThreadTarget,
+)
 
 HandshakeCompatibilityState = Literal["compatible", "incompatible"]
 
@@ -13,8 +19,12 @@ ControlPlaneCapability = Literal[
     "notification_reply_targets",
     "notification_continuations",
     "notification_delivery_ack",
+    "pma_snapshot",
     "surface_bindings",
+    "thread_execution_lifecycle",
+    "thread_target_creation",
     "thread_targets",
+    "transcript_history",
     "compact_seed_updates",
     "agent_workspaces",
     "workspace_setup_commands",
@@ -76,6 +86,22 @@ def _coerce_int(value: Any, *, field_name: str) -> int:
     if normalized < 0:
         raise ValueError(f"{field_name} must be >= 0")
     return normalized
+
+
+def _normalize_message_request_kind(value: Any) -> MessageRequestKind:
+    normalized = _normalize_optional_text(value)
+    if normalized == "review":
+        return "review"
+    return "message"
+
+
+def _normalize_busy_thread_policy(value: Any) -> BusyThreadPolicy:
+    normalized = _normalize_optional_text(value)
+    if normalized == "interrupt":
+        return "interrupt"
+    if normalized == "queue":
+        return "queue"
+    return "reject"
 
 
 @dataclass(frozen=True, order=True)
@@ -734,6 +760,323 @@ class ThreadTargetCreateRequest:
 
 
 @dataclass(frozen=True)
+class ExecutionCreateRequest:
+    thread_target_id: str
+    prompt: str
+    request_kind: MessageRequestKind = "message"
+    busy_policy: BusyThreadPolicy = "reject"
+    model: Optional[str] = None
+    reasoning: Optional[str] = None
+    client_request_id: Optional[str] = None
+    queue_payload: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> "ExecutionCreateRequest":
+        return cls(
+            thread_target_id=_normalize_required_text(
+                data.get("thread_target_id"),
+                field_name="thread_target_id",
+            ),
+            prompt=_normalize_required_text(
+                data.get("prompt"),
+                field_name="prompt",
+            ),
+            request_kind=_normalize_message_request_kind(data.get("request_kind")),
+            busy_policy=_normalize_busy_thread_policy(data.get("busy_policy")),
+            model=_normalize_optional_text(data.get("model")),
+            reasoning=_normalize_optional_text(data.get("reasoning")),
+            client_request_id=_normalize_optional_text(data.get("client_request_id")),
+            queue_payload=_copy_mapping(data.get("queue_payload")),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "thread_target_id": self.thread_target_id,
+            "prompt": self.prompt,
+            "request_kind": self.request_kind,
+            "busy_policy": self.busy_policy,
+            "model": self.model,
+            "reasoning": self.reasoning,
+            "client_request_id": self.client_request_id,
+            "queue_payload": dict(self.queue_payload),
+        }
+
+
+@dataclass(frozen=True)
+class ExecutionLookupRequest:
+    thread_target_id: str
+    execution_id: str
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> "ExecutionLookupRequest":
+        return cls(
+            thread_target_id=_normalize_required_text(
+                data.get("thread_target_id"),
+                field_name="thread_target_id",
+            ),
+            execution_id=_normalize_required_text(
+                data.get("execution_id"),
+                field_name="execution_id",
+            ),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "thread_target_id": self.thread_target_id,
+            "execution_id": self.execution_id,
+        }
+
+
+@dataclass(frozen=True)
+class RunningExecutionLookupRequest:
+    thread_target_id: str
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> "RunningExecutionLookupRequest":
+        return cls(
+            thread_target_id=_normalize_required_text(
+                data.get("thread_target_id"),
+                field_name="thread_target_id",
+            )
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"thread_target_id": self.thread_target_id}
+
+
+@dataclass(frozen=True)
+class LatestExecutionLookupRequest:
+    thread_target_id: str
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> "LatestExecutionLookupRequest":
+        return cls(
+            thread_target_id=_normalize_required_text(
+                data.get("thread_target_id"),
+                field_name="thread_target_id",
+            )
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"thread_target_id": self.thread_target_id}
+
+
+@dataclass(frozen=True)
+class QueuedExecutionListRequest:
+    thread_target_id: str
+    limit: int = 200
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> "QueuedExecutionListRequest":
+        return cls(
+            thread_target_id=_normalize_required_text(
+                data.get("thread_target_id"),
+                field_name="thread_target_id",
+            ),
+            limit=max(1, _coerce_int(data.get("limit", 200), field_name="limit")),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "thread_target_id": self.thread_target_id,
+            "limit": self.limit,
+        }
+
+
+@dataclass(frozen=True)
+class QueueDepthRequest:
+    thread_target_id: str
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> "QueueDepthRequest":
+        return cls(
+            thread_target_id=_normalize_required_text(
+                data.get("thread_target_id"),
+                field_name="thread_target_id",
+            )
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"thread_target_id": self.thread_target_id}
+
+
+@dataclass(frozen=True)
+class ExecutionCancelRequest:
+    thread_target_id: str
+    execution_id: str
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> "ExecutionCancelRequest":
+        return cls(
+            thread_target_id=_normalize_required_text(
+                data.get("thread_target_id"),
+                field_name="thread_target_id",
+            ),
+            execution_id=_normalize_required_text(
+                data.get("execution_id"),
+                field_name="execution_id",
+            ),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "thread_target_id": self.thread_target_id,
+            "execution_id": self.execution_id,
+        }
+
+
+@dataclass(frozen=True)
+class ExecutionPromoteRequest:
+    thread_target_id: str
+    execution_id: str
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> "ExecutionPromoteRequest":
+        return cls(
+            thread_target_id=_normalize_required_text(
+                data.get("thread_target_id"),
+                field_name="thread_target_id",
+            ),
+            execution_id=_normalize_required_text(
+                data.get("execution_id"),
+                field_name="execution_id",
+            ),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "thread_target_id": self.thread_target_id,
+            "execution_id": self.execution_id,
+        }
+
+
+@dataclass(frozen=True)
+class ExecutionResultRecordRequest:
+    thread_target_id: str
+    execution_id: str
+    status: str
+    assistant_text: Optional[str] = None
+    error: Optional[str] = None
+    backend_turn_id: Optional[str] = None
+    transcript_turn_id: Optional[str] = None
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> "ExecutionResultRecordRequest":
+        return cls(
+            thread_target_id=_normalize_required_text(
+                data.get("thread_target_id"),
+                field_name="thread_target_id",
+            ),
+            execution_id=_normalize_required_text(
+                data.get("execution_id"),
+                field_name="execution_id",
+            ),
+            status=_normalize_required_text(
+                data.get("status"),
+                field_name="status",
+            ),
+            assistant_text=_normalize_optional_text(data.get("assistant_text")),
+            error=_normalize_optional_text(data.get("error")),
+            backend_turn_id=_normalize_optional_text(data.get("backend_turn_id")),
+            transcript_turn_id=_normalize_optional_text(data.get("transcript_turn_id")),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "thread_target_id": self.thread_target_id,
+            "execution_id": self.execution_id,
+            "status": self.status,
+            "assistant_text": self.assistant_text,
+            "error": self.error,
+            "backend_turn_id": self.backend_turn_id,
+            "transcript_turn_id": self.transcript_turn_id,
+        }
+
+
+@dataclass(frozen=True)
+class ExecutionInterruptRecordRequest:
+    thread_target_id: str
+    execution_id: str
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> "ExecutionInterruptRecordRequest":
+        return cls(
+            thread_target_id=_normalize_required_text(
+                data.get("thread_target_id"),
+                field_name="thread_target_id",
+            ),
+            execution_id=_normalize_required_text(
+                data.get("execution_id"),
+                field_name="execution_id",
+            ),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "thread_target_id": self.thread_target_id,
+            "execution_id": self.execution_id,
+        }
+
+
+@dataclass(frozen=True)
+class ExecutionCancelAllRequest:
+    thread_target_id: str
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> "ExecutionCancelAllRequest":
+        return cls(
+            thread_target_id=_normalize_required_text(
+                data.get("thread_target_id"),
+                field_name="thread_target_id",
+            )
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"thread_target_id": self.thread_target_id}
+
+
+@dataclass(frozen=True)
+class ExecutionBackendIdUpdateRequest:
+    execution_id: str
+    backend_turn_id: Optional[str] = None
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> "ExecutionBackendIdUpdateRequest":
+        return cls(
+            execution_id=_normalize_required_text(
+                data.get("execution_id"),
+                field_name="execution_id",
+            ),
+            backend_turn_id=_normalize_optional_text(
+                data.get("backend_turn_id") or data.get("backend_id")
+            ),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "execution_id": self.execution_id,
+            "backend_turn_id": self.backend_turn_id,
+        }
+
+
+@dataclass(frozen=True)
+class ExecutionClaimNextRequest:
+    thread_target_id: str
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> "ExecutionClaimNextRequest":
+        return cls(
+            thread_target_id=_normalize_required_text(
+                data.get("thread_target_id"),
+                field_name="thread_target_id",
+            )
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"thread_target_id": self.thread_target_id}
+
+
+@dataclass(frozen=True)
 class TranscriptHistoryRequest:
     target_kind: str
     target_id: str
@@ -793,6 +1136,178 @@ class PmaSnapshotResponse:
 
     def to_dict(self) -> dict[str, Any]:
         return {"snapshot": dict(self.snapshot)}
+
+
+@dataclass(frozen=True)
+class ExecutionResponse:
+    execution: Optional[ExecutionRecord]
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> "ExecutionResponse":
+        raw_execution = data.get("execution")
+        execution = (
+            ExecutionRecord.from_mapping(raw_execution)
+            if isinstance(raw_execution, Mapping)
+            else None
+        )
+        return cls(execution=execution)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "execution": (None if self.execution is None else self.execution.to_dict())
+        }
+
+
+@dataclass(frozen=True)
+class ExecutionListResponse:
+    executions: tuple[ExecutionRecord, ...]
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> "ExecutionListResponse":
+        raw_executions = data.get("executions")
+        if not isinstance(raw_executions, list):
+            return cls(executions=())
+        return cls(
+            executions=tuple(
+                ExecutionRecord.from_mapping(item)
+                for item in raw_executions
+                if isinstance(item, Mapping)
+            )
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"executions": [execution.to_dict() for execution in self.executions]}
+
+
+@dataclass(frozen=True)
+class QueueDepthResponse:
+    thread_target_id: str
+    queue_depth: int
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> "QueueDepthResponse":
+        return cls(
+            thread_target_id=_normalize_required_text(
+                data.get("thread_target_id"),
+                field_name="thread_target_id",
+            ),
+            queue_depth=_coerce_int(
+                data.get("queue_depth"),
+                field_name="queue_depth",
+            ),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "thread_target_id": self.thread_target_id,
+            "queue_depth": self.queue_depth,
+        }
+
+
+@dataclass(frozen=True)
+class ExecutionCancelResponse:
+    thread_target_id: str
+    execution_id: str
+    cancelled: bool
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> "ExecutionCancelResponse":
+        return cls(
+            thread_target_id=_normalize_required_text(
+                data.get("thread_target_id"),
+                field_name="thread_target_id",
+            ),
+            execution_id=_normalize_required_text(
+                data.get("execution_id"),
+                field_name="execution_id",
+            ),
+            cancelled=bool(data.get("cancelled")),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "thread_target_id": self.thread_target_id,
+            "execution_id": self.execution_id,
+            "cancelled": self.cancelled,
+        }
+
+
+@dataclass(frozen=True)
+class ExecutionPromoteResponse:
+    thread_target_id: str
+    execution_id: str
+    promoted: bool
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> "ExecutionPromoteResponse":
+        return cls(
+            thread_target_id=_normalize_required_text(
+                data.get("thread_target_id"),
+                field_name="thread_target_id",
+            ),
+            execution_id=_normalize_required_text(
+                data.get("execution_id"),
+                field_name="execution_id",
+            ),
+            promoted=bool(data.get("promoted")),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "thread_target_id": self.thread_target_id,
+            "execution_id": self.execution_id,
+            "promoted": self.promoted,
+        }
+
+
+@dataclass(frozen=True)
+class ExecutionCancelAllResponse:
+    thread_target_id: str
+    cancelled_count: int
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> "ExecutionCancelAllResponse":
+        return cls(
+            thread_target_id=_normalize_required_text(
+                data.get("thread_target_id"),
+                field_name="thread_target_id",
+            ),
+            cancelled_count=_coerce_int(
+                data.get("cancelled_count"),
+                field_name="cancelled_count",
+            ),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "thread_target_id": self.thread_target_id,
+            "cancelled_count": self.cancelled_count,
+        }
+
+
+@dataclass(frozen=True)
+class ExecutionClaimNextResponse:
+    execution: Optional[ExecutionRecord]
+    queue_payload: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> "ExecutionClaimNextResponse":
+        raw_execution = data.get("execution")
+        execution = (
+            ExecutionRecord.from_mapping(raw_execution)
+            if isinstance(raw_execution, Mapping)
+            else None
+        )
+        return cls(
+            execution=execution,
+            queue_payload=_copy_mapping(data.get("queue_payload")),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "execution": (None if self.execution is None else self.execution.to_dict()),
+            "queue_payload": dict(self.queue_payload),
+        }
 
 
 @dataclass(frozen=True)
@@ -1074,6 +1589,26 @@ __all__ = [
     "Binding",
     "ControlPlaneCapability",
     "ControlPlaneVersion",
+    "ExecutionBackendIdUpdateRequest",
+    "ExecutionCancelAllRequest",
+    "ExecutionCancelAllResponse",
+    "ExecutionCancelRequest",
+    "ExecutionCancelResponse",
+    "ExecutionClaimNextRequest",
+    "ExecutionClaimNextResponse",
+    "ExecutionCreateRequest",
+    "ExecutionInterruptRecordRequest",
+    "ExecutionListResponse",
+    "ExecutionLookupRequest",
+    "ExecutionPromoteRequest",
+    "ExecutionPromoteResponse",
+    "ExecutionResponse",
+    "ExecutionResultRecordRequest",
+    "LatestExecutionLookupRequest",
+    "QueueDepthRequest",
+    "QueueDepthResponse",
+    "QueuedExecutionListRequest",
+    "RunningExecutionLookupRequest",
     "HandshakeCompatibility",
     "HandshakeCompatibilityState",
     "HandshakeRequest",

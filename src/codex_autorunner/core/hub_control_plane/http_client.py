@@ -14,14 +14,34 @@ from .models import (
     AgentWorkspaceResponse,
     AutomationRequest,
     AutomationResult,
+    ExecutionBackendIdUpdateRequest,
+    ExecutionCancelAllRequest,
+    ExecutionCancelAllResponse,
+    ExecutionCancelRequest,
+    ExecutionCancelResponse,
+    ExecutionClaimNextRequest,
+    ExecutionClaimNextResponse,
+    ExecutionCreateRequest,
+    ExecutionInterruptRecordRequest,
+    ExecutionListResponse,
+    ExecutionLookupRequest,
+    ExecutionPromoteRequest,
+    ExecutionPromoteResponse,
+    ExecutionResponse,
+    ExecutionResultRecordRequest,
     HandshakeRequest,
     HandshakeResponse,
+    LatestExecutionLookupRequest,
     NotificationContinuationBindRequest,
     NotificationDeliveryMarkRequest,
     NotificationLookupRequest,
     NotificationRecordResponse,
     NotificationReplyTargetLookupRequest,
     PmaSnapshotResponse,
+    QueueDepthRequest,
+    QueueDepthResponse,
+    QueuedExecutionListRequest,
+    RunningExecutionLookupRequest,
     SurfaceBindingLookupRequest,
     SurfaceBindingResponse,
     SurfaceBindingUpsertRequest,
@@ -124,6 +144,49 @@ class HttpHubControlPlaneClient(HubControlPlaneClient):
         if response.is_success:
             return payload
         error_payload = payload.get("error")
+        if isinstance(error_payload, Mapping):
+            info = HubControlPlaneErrorInfo.from_mapping(error_payload)
+            raise HubControlPlaneError.from_info(info)
+        raise HubControlPlaneError(
+            "protocol_failure",
+            f"Hub control-plane request failed with status {response.status_code}",
+            retryable=False,
+            details={"path": path, "status_code": response.status_code},
+        )
+
+    async def _request_no_content(
+        self,
+        *,
+        method: str,
+        path: str,
+        json_payload: Mapping[str, Any] | None = None,
+        params: Mapping[str, Any] | None = None,
+    ) -> None:
+        try:
+            response = await self._http_client.request(
+                method,
+                path,
+                json=dict(json_payload) if json_payload is not None else None,
+                params=dict(params) if params is not None else None,
+            )
+        except httpx.RequestError as exc:
+            raise HubControlPlaneError(
+                "transport_failure",
+                f"Hub control-plane transport request failed: {exc}",
+                details={"path": path, "method": method},
+            ) from exc
+        if response.is_success:
+            return
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise HubControlPlaneError(
+                "protocol_failure",
+                "Hub control-plane response was not valid JSON",
+                retryable=False,
+                details={"path": path, "status_code": response.status_code},
+            ) from exc
+        error_payload = payload.get("error") if isinstance(payload, Mapping) else None
         if isinstance(error_payload, Mapping):
             info = HubControlPlaneErrorInfo.from_mapping(error_payload)
             raise HubControlPlaneError.from_info(info)
@@ -259,6 +322,158 @@ class HttpHubControlPlaneClient(HubControlPlaneClient):
             json_payload=request.to_dict(),
         )
         return ThreadTargetResponse.from_mapping(payload)
+
+    async def create_execution(
+        self, request: ExecutionCreateRequest
+    ) -> ExecutionResponse:
+        payload = await self._request(
+            method="POST",
+            path=f"/hub/api/control-plane/thread-targets/{request.thread_target_id}/executions",
+            json_payload=request.to_dict(),
+        )
+        return ExecutionResponse.from_mapping(payload)
+
+    async def get_execution(self, request: ExecutionLookupRequest) -> ExecutionResponse:
+        payload = await self._request(
+            method="GET",
+            path=(
+                "/hub/api/control-plane/thread-targets/"
+                f"{request.thread_target_id}/executions/{request.execution_id}"
+            ),
+        )
+        return ExecutionResponse.from_mapping(payload)
+
+    async def get_running_execution(
+        self, request: RunningExecutionLookupRequest
+    ) -> ExecutionResponse:
+        payload = await self._request(
+            method="GET",
+            path=(
+                "/hub/api/control-plane/thread-targets/"
+                f"{request.thread_target_id}/executions/running"
+            ),
+        )
+        return ExecutionResponse.from_mapping(payload)
+
+    async def get_latest_execution(
+        self, request: LatestExecutionLookupRequest
+    ) -> ExecutionResponse:
+        payload = await self._request(
+            method="GET",
+            path=(
+                "/hub/api/control-plane/thread-targets/"
+                f"{request.thread_target_id}/executions/latest"
+            ),
+        )
+        return ExecutionResponse.from_mapping(payload)
+
+    async def list_queued_executions(
+        self, request: QueuedExecutionListRequest
+    ) -> ExecutionListResponse:
+        payload = await self._request(
+            method="GET",
+            path=(
+                "/hub/api/control-plane/thread-targets/"
+                f"{request.thread_target_id}/executions/queued"
+            ),
+            params={"limit": request.limit},
+        )
+        return ExecutionListResponse.from_mapping(payload)
+
+    async def get_queue_depth(self, request: QueueDepthRequest) -> QueueDepthResponse:
+        payload = await self._request(
+            method="GET",
+            path=(
+                "/hub/api/control-plane/thread-targets/"
+                f"{request.thread_target_id}/executions/queue-depth"
+            ),
+        )
+        return QueueDepthResponse.from_mapping(payload)
+
+    async def cancel_queued_execution(
+        self, request: ExecutionCancelRequest
+    ) -> ExecutionCancelResponse:
+        payload = await self._request(
+            method="POST",
+            path=(
+                "/hub/api/control-plane/thread-targets/"
+                f"{request.thread_target_id}/executions/{request.execution_id}/cancel"
+            ),
+        )
+        return ExecutionCancelResponse.from_mapping(payload)
+
+    async def promote_queued_execution(
+        self, request: ExecutionPromoteRequest
+    ) -> ExecutionPromoteResponse:
+        payload = await self._request(
+            method="POST",
+            path=(
+                "/hub/api/control-plane/thread-targets/"
+                f"{request.thread_target_id}/executions/{request.execution_id}/promote"
+            ),
+        )
+        return ExecutionPromoteResponse.from_mapping(payload)
+
+    async def record_execution_result(
+        self, request: ExecutionResultRecordRequest
+    ) -> ExecutionResponse:
+        payload = await self._request(
+            method="POST",
+            path=(
+                "/hub/api/control-plane/thread-targets/"
+                f"{request.thread_target_id}/executions/{request.execution_id}/result"
+            ),
+            json_payload=request.to_dict(),
+        )
+        return ExecutionResponse.from_mapping(payload)
+
+    async def record_execution_interrupted(
+        self, request: ExecutionInterruptRecordRequest
+    ) -> ExecutionResponse:
+        payload = await self._request(
+            method="POST",
+            path=(
+                "/hub/api/control-plane/thread-targets/"
+                f"{request.thread_target_id}/executions/{request.execution_id}/interrupt"
+            ),
+        )
+        return ExecutionResponse.from_mapping(payload)
+
+    async def cancel_queued_executions(
+        self, request: ExecutionCancelAllRequest
+    ) -> ExecutionCancelAllResponse:
+        payload = await self._request(
+            method="POST",
+            path=(
+                "/hub/api/control-plane/thread-targets/"
+                f"{request.thread_target_id}/executions/cancel-all"
+            ),
+        )
+        return ExecutionCancelAllResponse.from_mapping(payload)
+
+    async def set_execution_backend_id(
+        self, request: ExecutionBackendIdUpdateRequest
+    ) -> None:
+        await self._request_no_content(
+            method="PUT",
+            path=(
+                "/hub/api/control-plane/thread-executions/"
+                f"{request.execution_id}/backend-id"
+            ),
+            json_payload=request.to_dict(),
+        )
+
+    async def claim_next_queued_execution(
+        self, request: ExecutionClaimNextRequest
+    ) -> ExecutionClaimNextResponse:
+        payload = await self._request(
+            method="POST",
+            path=(
+                "/hub/api/control-plane/thread-targets/"
+                f"{request.thread_target_id}/executions/claim-next"
+            ),
+        )
+        return ExecutionClaimNextResponse.from_mapping(payload)
 
     async def get_transcript_history(
         self, request: TranscriptHistoryRequest

@@ -9,14 +9,34 @@ from .models import (
     AgentWorkspaceResponse,
     AutomationRequest,
     AutomationResult,
+    ExecutionBackendIdUpdateRequest,
+    ExecutionCancelAllRequest,
+    ExecutionCancelAllResponse,
+    ExecutionCancelRequest,
+    ExecutionCancelResponse,
+    ExecutionClaimNextRequest,
+    ExecutionClaimNextResponse,
+    ExecutionCreateRequest,
+    ExecutionInterruptRecordRequest,
+    ExecutionListResponse,
+    ExecutionLookupRequest,
+    ExecutionPromoteRequest,
+    ExecutionPromoteResponse,
+    ExecutionResponse,
+    ExecutionResultRecordRequest,
     HandshakeRequest,
     HandshakeResponse,
+    LatestExecutionLookupRequest,
     NotificationContinuationBindRequest,
     NotificationDeliveryMarkRequest,
     NotificationLookupRequest,
     NotificationRecordResponse,
     NotificationReplyTargetLookupRequest,
     PmaSnapshotResponse,
+    QueueDepthRequest,
+    QueueDepthResponse,
+    QueuedExecutionListRequest,
+    RunningExecutionLookupRequest,
     SurfaceBindingLookupRequest,
     SurfaceBindingResponse,
     SurfaceBindingUpsertRequest,
@@ -76,6 +96,58 @@ class HubControlPlaneClient(Protocol):
     async def create_thread_target(
         self, request: ThreadTargetCreateRequest
     ) -> ThreadTargetResponse: ...
+
+    async def create_execution(
+        self, request: ExecutionCreateRequest
+    ) -> ExecutionResponse: ...
+
+    async def get_execution(
+        self, request: ExecutionLookupRequest
+    ) -> ExecutionResponse: ...
+
+    async def get_running_execution(
+        self, request: RunningExecutionLookupRequest
+    ) -> ExecutionResponse: ...
+
+    async def get_latest_execution(
+        self, request: LatestExecutionLookupRequest
+    ) -> ExecutionResponse: ...
+
+    async def list_queued_executions(
+        self, request: QueuedExecutionListRequest
+    ) -> ExecutionListResponse: ...
+
+    async def get_queue_depth(
+        self, request: QueueDepthRequest
+    ) -> QueueDepthResponse: ...
+
+    async def cancel_queued_execution(
+        self, request: ExecutionCancelRequest
+    ) -> ExecutionCancelResponse: ...
+
+    async def promote_queued_execution(
+        self, request: ExecutionPromoteRequest
+    ) -> ExecutionPromoteResponse: ...
+
+    async def record_execution_result(
+        self, request: ExecutionResultRecordRequest
+    ) -> ExecutionResponse: ...
+
+    async def record_execution_interrupted(
+        self, request: ExecutionInterruptRecordRequest
+    ) -> ExecutionResponse: ...
+
+    async def cancel_queued_executions(
+        self, request: ExecutionCancelAllRequest
+    ) -> ExecutionCancelAllResponse: ...
+
+    async def set_execution_backend_id(
+        self, request: ExecutionBackendIdUpdateRequest
+    ) -> None: ...
+
+    async def claim_next_queued_execution(
+        self, request: ExecutionClaimNextRequest
+    ) -> ExecutionClaimNextResponse: ...
 
     async def resume_thread_target(
         self, request: ThreadTargetResumeRequest

@@ -7,7 +7,8 @@ from typing import Any, Iterable, Optional
 
 from ..hub import AgentWorkspaceSnapshot
 from ..orchestration.bindings import OrchestrationBindingStore
-from ..orchestration.models import ThreadTarget
+from ..orchestration.models import ExecutionRecord, ThreadTarget
+from ..orchestration.service import PmaThreadExecutionStore
 from ..orchestration.sqlite import read_orchestration_compatibility_metadata
 from ..pma_notification_store import NotificationConversation, PmaNotificationStore
 from ..pma_thread_store import PmaThreadStore
@@ -20,8 +21,24 @@ from .models import (
     AgentWorkspaceResponse,
     AutomationRequest,
     AutomationResult,
+    ExecutionBackendIdUpdateRequest,
+    ExecutionCancelAllRequest,
+    ExecutionCancelAllResponse,
+    ExecutionCancelRequest,
+    ExecutionCancelResponse,
+    ExecutionClaimNextRequest,
+    ExecutionClaimNextResponse,
+    ExecutionCreateRequest,
+    ExecutionInterruptRecordRequest,
+    ExecutionListResponse,
+    ExecutionLookupRequest,
+    ExecutionPromoteRequest,
+    ExecutionPromoteResponse,
+    ExecutionResponse,
+    ExecutionResultRecordRequest,
     HandshakeRequest,
     HandshakeResponse,
+    LatestExecutionLookupRequest,
     NotificationContinuationBindRequest,
     NotificationDeliveryMarkRequest,
     NotificationLookupRequest,
@@ -29,6 +46,10 @@ from .models import (
     NotificationRecordResponse,
     NotificationReplyTargetLookupRequest,
     PmaSnapshotResponse,
+    QueueDepthRequest,
+    QueueDepthResponse,
+    QueuedExecutionListRequest,
+    RunningExecutionLookupRequest,
     SurfaceBindingLookupRequest,
     SurfaceBindingResponse,
     SurfaceBindingUpsertRequest,
@@ -59,6 +80,7 @@ CONTROL_PLANE_CAPABILITIES: tuple[str, ...] = (
     "notification_reply_targets",
     "pma_snapshot",
     "surface_bindings",
+    "thread_execution_lifecycle",
     "thread_target_creation",
     "thread_targets",
     "transcript_history",
@@ -103,6 +125,16 @@ def _thread_target_from_row(record: dict[str, Any] | None) -> ThreadTarget | Non
     if record is None:
         return None
     return ThreadTarget.from_mapping(record)
+
+
+def _execution_from_record(record: ExecutionRecord | None) -> ExecutionRecord | None:
+    return record
+
+
+def _error_message(exc: BaseException) -> str:
+    if exc.args and isinstance(exc.args[0], str):
+        return exc.args[0]
+    return str(exc)
 
 
 def _notification_record_from_conversation(
@@ -158,6 +190,7 @@ class HubSharedStateService:
             durable=self._durable_writes,
             bootstrap_on_init=False,
         )
+        self._execution_store = PmaThreadExecutionStore(self._thread_store)
 
     @property
     def capabilities(self) -> tuple[str, ...]:
@@ -362,6 +395,161 @@ class HubSharedStateService:
             metadata=request.metadata or None,
         )
         return ThreadTargetResponse(thread=_thread_target_from_row(created))
+
+    def _execution_rejected(
+        self, *, operation: str, exc: BaseException
+    ) -> HubControlPlaneError:
+        return HubControlPlaneError(
+            "hub_rejected",
+            _error_message(exc),
+            details={"operation": operation},
+        )
+
+    def create_execution(self, request: ExecutionCreateRequest) -> ExecutionResponse:
+        try:
+            execution = self._execution_store.create_execution(
+                request.thread_target_id,
+                prompt=request.prompt,
+                request_kind=request.request_kind,
+                busy_policy=request.busy_policy,
+                model=request.model,
+                reasoning=request.reasoning,
+                client_request_id=request.client_request_id,
+                queue_payload=request.queue_payload or None,
+            )
+        except (KeyError, RuntimeError, ValueError) as exc:
+            raise self._execution_rejected(
+                operation="create_execution",
+                exc=exc,
+            ) from exc
+        return ExecutionResponse(execution=_execution_from_record(execution))
+
+    def get_execution(self, request: ExecutionLookupRequest) -> ExecutionResponse:
+        execution = self._execution_store.get_execution(
+            request.thread_target_id,
+            request.execution_id,
+        )
+        return ExecutionResponse(execution=_execution_from_record(execution))
+
+    def get_running_execution(
+        self, request: RunningExecutionLookupRequest
+    ) -> ExecutionResponse:
+        execution = self._execution_store.get_running_execution(
+            request.thread_target_id
+        )
+        return ExecutionResponse(execution=_execution_from_record(execution))
+
+    def get_latest_execution(
+        self, request: LatestExecutionLookupRequest
+    ) -> ExecutionResponse:
+        execution = self._execution_store.get_latest_execution(request.thread_target_id)
+        return ExecutionResponse(execution=_execution_from_record(execution))
+
+    def list_queued_executions(
+        self, request: QueuedExecutionListRequest
+    ) -> ExecutionListResponse:
+        executions = self._execution_store.list_queued_executions(
+            request.thread_target_id,
+            limit=request.limit,
+        )
+        return ExecutionListResponse(executions=tuple(executions))
+
+    def get_queue_depth(self, request: QueueDepthRequest) -> QueueDepthResponse:
+        return QueueDepthResponse(
+            thread_target_id=request.thread_target_id,
+            queue_depth=self._execution_store.get_queue_depth(request.thread_target_id),
+        )
+
+    def cancel_queued_execution(
+        self, request: ExecutionCancelRequest
+    ) -> ExecutionCancelResponse:
+        return ExecutionCancelResponse(
+            thread_target_id=request.thread_target_id,
+            execution_id=request.execution_id,
+            cancelled=self._execution_store.cancel_queued_execution(
+                request.thread_target_id,
+                request.execution_id,
+            ),
+        )
+
+    def promote_queued_execution(
+        self, request: ExecutionPromoteRequest
+    ) -> ExecutionPromoteResponse:
+        return ExecutionPromoteResponse(
+            thread_target_id=request.thread_target_id,
+            execution_id=request.execution_id,
+            promoted=self._execution_store.promote_queued_execution(
+                request.thread_target_id,
+                request.execution_id,
+            ),
+        )
+
+    def record_execution_result(
+        self, request: ExecutionResultRecordRequest
+    ) -> ExecutionResponse:
+        try:
+            execution = self._execution_store.record_execution_result(
+                request.thread_target_id,
+                request.execution_id,
+                status=request.status,
+                assistant_text=request.assistant_text,
+                error=request.error,
+                backend_turn_id=request.backend_turn_id,
+                transcript_turn_id=request.transcript_turn_id,
+            )
+        except (KeyError, RuntimeError, ValueError) as exc:
+            raise self._execution_rejected(
+                operation="record_execution_result",
+                exc=exc,
+            ) from exc
+        return ExecutionResponse(execution=_execution_from_record(execution))
+
+    def record_execution_interrupted(
+        self, request: ExecutionInterruptRecordRequest
+    ) -> ExecutionResponse:
+        try:
+            execution = self._execution_store.record_execution_interrupted(
+                request.thread_target_id,
+                request.execution_id,
+            )
+        except (KeyError, RuntimeError, ValueError) as exc:
+            raise self._execution_rejected(
+                operation="record_execution_interrupted",
+                exc=exc,
+            ) from exc
+        return ExecutionResponse(execution=_execution_from_record(execution))
+
+    def cancel_queued_executions(
+        self, request: ExecutionCancelAllRequest
+    ) -> ExecutionCancelAllResponse:
+        return ExecutionCancelAllResponse(
+            thread_target_id=request.thread_target_id,
+            cancelled_count=self._execution_store.cancel_queued_executions(
+                request.thread_target_id
+            ),
+        )
+
+    def set_execution_backend_id(
+        self, request: ExecutionBackendIdUpdateRequest
+    ) -> None:
+        self._execution_store.set_execution_backend_id(
+            request.execution_id,
+            request.backend_turn_id,
+        )
+
+    def claim_next_queued_execution(
+        self, request: ExecutionClaimNextRequest
+    ) -> ExecutionClaimNextResponse:
+        claimed = self._execution_store.claim_next_queued_execution(
+            request.thread_target_id
+        )
+        if claimed is None:
+            return ExecutionClaimNextResponse(execution=None, queue_payload={})
+        execution, queue_payload = claimed
+        return ExecutionClaimNextResponse(
+            execution=_execution_from_record(execution),
+            queue_payload=dict(queue_payload),
+        )
 
     def get_transcript_history(
         self, request: TranscriptHistoryRequest

@@ -10,11 +10,17 @@ from fastapi.testclient import TestClient
 from codex_autorunner.core.hub import AgentWorkspaceSnapshot
 from codex_autorunner.core.hub_control_plane import (
     AutomationRequest,
+    ExecutionBackendIdUpdateRequest,
+    ExecutionClaimNextRequest,
+    ExecutionCreateRequest,
+    ExecutionResultRecordRequest,
     HandshakeRequest,
     HttpHubControlPlaneClient,
     HubControlPlaneError,
     NotificationDeliveryMarkRequest,
     NotificationReplyTargetLookupRequest,
+    QueueDepthRequest,
+    QueuedExecutionListRequest,
     SurfaceBindingUpsertRequest,
     WorkspaceSetupCommandRequest,
 )
@@ -221,6 +227,55 @@ async def test_hub_control_plane_http_client_round_trip(tmp_path: Path) -> None:
                 }
             )
         )
+        running_execution = await client.create_execution(
+            ExecutionCreateRequest.from_mapping(
+                {
+                    "thread_target_id": thread_target_id,
+                    "prompt": "First remote turn",
+                }
+            )
+        )
+        queued_execution = await client.create_execution(
+            ExecutionCreateRequest.from_mapping(
+                {
+                    "thread_target_id": thread_target_id,
+                    "prompt": "Queued remote turn",
+                    "busy_policy": "queue",
+                    "queue_payload": {"source": "test"},
+                }
+            )
+        )
+        queued_list = await client.list_queued_executions(
+            QueuedExecutionListRequest.from_mapping(
+                {"thread_target_id": thread_target_id, "limit": 5}
+            )
+        )
+        queue_depth = await client.get_queue_depth(
+            QueueDepthRequest.from_mapping({"thread_target_id": thread_target_id})
+        )
+        await client.set_execution_backend_id(
+            ExecutionBackendIdUpdateRequest.from_mapping(
+                {
+                    "execution_id": running_execution.execution.execution_id,
+                    "backend_turn_id": "backend-77",
+                }
+            )
+        )
+        finalized = await client.record_execution_result(
+            ExecutionResultRecordRequest.from_mapping(
+                {
+                    "thread_target_id": thread_target_id,
+                    "execution_id": running_execution.execution.execution_id,
+                    "status": "ok",
+                    "backend_turn_id": "backend-77",
+                }
+            )
+        )
+        claimed = await client.claim_next_queued_execution(
+            ExecutionClaimNextRequest.from_mapping(
+                {"thread_target_id": thread_target_id}
+            )
+        )
         setup_result = await client.run_workspace_setup_commands(
             WorkspaceSetupCommandRequest.from_mapping(
                 {
@@ -241,6 +296,18 @@ async def test_hub_control_plane_http_client_round_trip(tmp_path: Path) -> None:
     assert second_delivery.record.delivered_message_id == "88"
     assert reply_target.record is not None
     assert reply_target.record.notification_id == "notif-1"
+    assert running_execution.execution is not None
+    assert queued_execution.execution is not None
+    assert (
+        queued_list.executions[0].execution_id
+        == queued_execution.execution.execution_id
+    )
+    assert queue_depth.queue_depth == 1
+    assert finalized.execution is not None
+    assert finalized.execution.backend_id == "backend-77"
+    assert claimed.execution is not None
+    assert claimed.execution.execution_id == queued_execution.execution.execution_id
+    assert claimed.queue_payload == {"source": "test"}
     assert setup_result.setup_command_count == 3
 
 

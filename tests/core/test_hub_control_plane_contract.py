@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from codex_autorunner.core.hub_control_plane import (
     ControlPlaneVersion,
+    ExecutionBackendIdUpdateRequest,
+    ExecutionClaimNextResponse,
+    ExecutionCreateRequest,
+    ExecutionListResponse,
+    ExecutionResponse,
     HandshakeRequest,
     HandshakeResponse,
     HubControlPlaneError,
@@ -235,6 +240,79 @@ def test_thread_target_response_uses_existing_generic_thread_model() -> None:
     assert response.thread is not None
     assert response.thread.thread_target_id == "thread-1"
     assert response.to_dict()["thread"]["thread_target_id"] == "thread-1"
+
+
+def test_execution_models_round_trip_with_existing_execution_record() -> None:
+    create_request = ExecutionCreateRequest.from_mapping(
+        {
+            "thread_target_id": "thread-1",
+            "prompt": "Summarize the latest run",
+            "request_kind": "message",
+            "busy_policy": "queue",
+            "model": "gpt-5.4",
+            "reasoning": "medium",
+            "client_request_id": "client-77",
+            "queue_payload": {"priority": "high"},
+        }
+    )
+    execution_response = ExecutionResponse.from_mapping(
+        {
+            "execution": {
+                "execution_id": "exec-1",
+                "thread_target_id": "thread-1",
+                "status": "running",
+                "request_kind": "message",
+                "backend_turn_id": "backend-1",
+                "started_at": "2026-04-12T01:02:03Z",
+            }
+        }
+    )
+    execution_list = ExecutionListResponse.from_mapping(
+        {
+            "executions": [
+                {
+                    "execution_id": "exec-1",
+                    "thread_target_id": "thread-1",
+                    "status": "queued",
+                    "request_kind": "message",
+                }
+            ]
+        }
+    )
+    claim_response = ExecutionClaimNextResponse.from_mapping(
+        {
+            "execution": {
+                "execution_id": "exec-2",
+                "thread_target_id": "thread-1",
+                "status": "running",
+                "request_kind": "message",
+            },
+            "queue_payload": {"source": "discord"},
+        }
+    )
+    backend_update = ExecutionBackendIdUpdateRequest.from_mapping(
+        {"execution_id": "exec-2", "backend_id": "backend-2"}
+    )
+
+    assert create_request.to_dict() == {
+        "thread_target_id": "thread-1",
+        "prompt": "Summarize the latest run",
+        "request_kind": "message",
+        "busy_policy": "queue",
+        "model": "gpt-5.4",
+        "reasoning": "medium",
+        "client_request_id": "client-77",
+        "queue_payload": {"priority": "high"},
+    }
+    assert execution_response.execution is not None
+    assert execution_response.execution.execution_id == "exec-1"
+    assert execution_response.to_dict()["execution"]["backend_id"] == "backend-1"
+    assert execution_list.executions[0].status == "queued"
+    assert claim_response.queue_payload == {"source": "discord"}
+    assert backend_update.to_dict() == {
+        "execution_id": "exec-2",
+        "backend_turn_id": "backend-2",
+    }
 
 
 def test_error_info_round_trip_preserves_taxonomy() -> None:
