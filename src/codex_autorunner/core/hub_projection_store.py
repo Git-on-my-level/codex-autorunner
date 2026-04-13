@@ -15,6 +15,11 @@ logger = logging.getLogger("codex_autorunner.core.hub_projection_store")
 
 _CACHE_TABLE = "projection_cache"
 
+REPO_RUNTIME_PROJECTION_NAMESPACE = "repo_runtime_v1"
+HUB_LISTING_PROJECTION_NAMESPACE = "hub_listing_v1"
+CHAT_BINDING_PROJECTION_NAMESPACE = "chat_binding_counts_v1"
+CHAT_BINDING_PROJECTION_KEY = "active_by_source"
+
 
 def _stable_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)

@@ -15,13 +15,12 @@ from .....core.freshness import (
     resolve_stale_threshold_seconds,
     summarize_section_freshness,
 )
-from .....core.hub_projection_store import path_stat_fingerprint
+from .....core.hub_projection_store import (
+    HUB_LISTING_PROJECTION_NAMESPACE,
+    path_stat_fingerprint,
+)
 from .....core.logging_utils import safe_log
-from .....core.pma_thread_store_bootstrap import default_pma_threads_db_path
 from .....core.request_context import get_request_id
-from .....core.state_roots import resolve_hub_orchestration_db_path
-from .....integrations.discord.config import DEFAULT_STATE_FILE as DISCORD_STATE_FILE
-from .....integrations.telegram.config import DEFAULT_STATE_FILE as TELEGRAM_STATE_FILE
 
 if TYPE_CHECKING:
     from fastapi import APIRouter
@@ -32,7 +31,6 @@ if TYPE_CHECKING:
 
 REPO_LISTING_SECTIONS = frozenset({"repos", "agent_workspaces", "freshness"})
 _REPO_LISTING_RESPONSE_CACHE_TTL_SECONDS = 20.0
-_HUB_LISTING_PROJECTION_NAMESPACE = "hub_listing_v1"
 _HUB_LISTING_PROJECTION_MAX_AGE_SECONDS = 60.0
 
 
@@ -81,69 +79,12 @@ class HubRepoListingService:
     def _projection_store(self):
         return getattr(self._context, "projection_store", None)
 
-    def _resolve_state_path(self, section: str, default_state_file: str) -> Path:
-        raw = (
-            self._context.config.raw
-            if isinstance(self._context.config.raw, dict)
-            else {}
-        )
-        section_cfg = raw.get(section)
-        state_file = default_state_file
-        if isinstance(section_cfg, dict):
-            candidate = section_cfg.get("state_file")
-            if isinstance(candidate, str) and candidate.strip():
-                state_file = candidate.strip()
-        path = Path(state_file)
-        if not path.is_absolute():
-            path = (self._context.config.root / path).resolve()
-        return path
-
-    def _chat_binding_counts_fingerprint(self) -> tuple[Any, ...]:
-        manifest_path = getattr(self._context.config, "manifest_path", None)
-        return (
-            (
-                path_stat_fingerprint(manifest_path)
-                if isinstance(manifest_path, Path)
-                else None
-            ),
-            path_stat_fingerprint(
-                default_pma_threads_db_path(self._context.config.root)
-            ),
-            path_stat_fingerprint(
-                resolve_hub_orchestration_db_path(self._context.config.root)
-            ),
-            path_stat_fingerprint(
-                self._resolve_state_path("discord_bot", DISCORD_STATE_FILE)
-            ),
-            path_stat_fingerprint(
-                self._resolve_state_path("telegram_bot", TELEGRAM_STATE_FILE)
-            ),
-        )
-
     def _repo_runtime_fingerprint(
         self, snapshot, *, stale_threshold_seconds: Optional[int]
     ) -> tuple[Any, ...]:
-        fingerprint_fn = getattr(self._enricher, "repo_state_fingerprint", None)
-        if callable(fingerprint_fn):
-            return cast(
-                tuple[Any, ...],
-                fingerprint_fn(
-                    snapshot,
-                    stale_threshold_seconds=stale_threshold_seconds,
-                ),
-            )
-        repo_root = getattr(snapshot, "path", None)
-        return (
-            str(getattr(snapshot, "id", "")),
-            str(repo_root) if isinstance(repo_root, Path) else str(repo_root),
-            bool(getattr(snapshot, "exists_on_disk", False)),
-            bool(getattr(snapshot, "initialized", False)),
-            getattr(snapshot, "last_run_id", None),
-            getattr(snapshot, "last_run_started_at", None),
-            getattr(snapshot, "last_run_finished_at", None),
-            getattr(snapshot, "last_exit_code", None),
-            getattr(snapshot, "runner_pid", None),
-            int(stale_threshold_seconds or 0),
+        return self._enricher.repo_state_fingerprint(
+            snapshot,
+            stale_threshold_seconds=stale_threshold_seconds,
         )
 
     def _listing_fingerprint(
@@ -344,7 +285,7 @@ class HubRepoListingService:
                             f"hub_listing:{','.join(cache_key)}",
                             refreshed_fingerprint,
                             payload,
-                            namespace=_HUB_LISTING_PROJECTION_NAMESPACE,
+                            namespace=HUB_LISTING_PROJECTION_NAMESPACE,
                         )
                     except Exception:
                         pass
@@ -537,7 +478,7 @@ class HubRepoListingService:
                     durable_cache_key,
                     fingerprint,
                     max_age_seconds=_HUB_LISTING_PROJECTION_MAX_AGE_SECONDS,
-                    namespace=_HUB_LISTING_PROJECTION_NAMESPACE,
+                    namespace=HUB_LISTING_PROJECTION_NAMESPACE,
                 )
             except Exception:
                 cached = None
@@ -566,7 +507,7 @@ class HubRepoListingService:
                     durable_cache_key,
                     fingerprint,
                     payload,
-                    namespace=_HUB_LISTING_PROJECTION_NAMESPACE,
+                    namespace=HUB_LISTING_PROJECTION_NAMESPACE,
                 )
             except Exception:
                 pass
@@ -651,7 +592,7 @@ class HubRepoListingService:
                     "hub_listing:agent_workspaces,freshness,repos",
                     listing_fingerprint,
                     payload,
-                    namespace=_HUB_LISTING_PROJECTION_NAMESPACE,
+                    namespace=HUB_LISTING_PROJECTION_NAMESPACE,
                 )
             except Exception:
                 pass

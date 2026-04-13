@@ -4,10 +4,12 @@ import copy
 import threading
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
-from .....core.hub_projection_store import path_stat_fingerprint
+from .....core.hub_projection_store import (
+    REPO_RUNTIME_PROJECTION_NAMESPACE,
+    path_stat_fingerprint,
+)
 
 if TYPE_CHECKING:
     from ...app_state import HubAppContext
@@ -15,7 +17,6 @@ if TYPE_CHECKING:
 
 
 _REPO_ENRICH_CACHE_TTL_SECONDS = 45.0
-_REPO_RUNTIME_PROJECTION_NAMESPACE = "repo_runtime_v1"
 _REPO_RUNTIME_PROJECTION_MAX_AGE_SECONDS = 300.0
 
 
@@ -56,7 +57,7 @@ class HubRepoEnricher:
         projection_store = getattr(self._context, "projection_store", None)
         if projection_store is not None:
             try:
-                projection_store.delete(namespace=_REPO_RUNTIME_PROJECTION_NAMESPACE)
+                projection_store.delete(namespace=REPO_RUNTIME_PROJECTION_NAMESPACE)
             except Exception:
                 pass
 
@@ -75,11 +76,6 @@ class HubRepoEnricher:
             self._unbound_thread_counts_cache = dict(counts)
             self._unbound_thread_counts_cached_at = now
             return dict(counts)
-
-    def _path_stat_fingerprint(
-        self, path: Path
-    ) -> tuple[bool, Optional[int], Optional[int]]:
-        return path_stat_fingerprint(path)
 
     def _repo_state_projection_key(self, snapshot) -> str:
         return f"{snapshot.id}:{snapshot.path}"
@@ -101,9 +97,9 @@ class HubRepoEnricher:
             snapshot.last_run_started_at,
             snapshot.last_run_finished_at,
             int(stale_threshold_seconds or 0),
-            self._path_stat_fingerprint(car_root),
-            self._path_stat_fingerprint(car_root / "tickets"),
-            self._path_stat_fingerprint(car_root / "runs"),
+            path_stat_fingerprint(car_root),
+            path_stat_fingerprint(car_root / "tickets"),
+            path_stat_fingerprint(car_root / "runs"),
         )
 
     def _compute_repo_state_payload(
@@ -246,7 +242,7 @@ class HubRepoEnricher:
                     cache_key,
                     fingerprint,
                     max_age_seconds=_REPO_RUNTIME_PROJECTION_MAX_AGE_SECONDS,
-                    namespace=_REPO_RUNTIME_PROJECTION_NAMESPACE,
+                    namespace=REPO_RUNTIME_PROJECTION_NAMESPACE,
                 )
             except Exception:
                 cached_payload = None
@@ -274,7 +270,7 @@ class HubRepoEnricher:
                     cache_key,
                     fingerprint,
                     payload,
-                    namespace=_REPO_RUNTIME_PROJECTION_NAMESPACE,
+                    namespace=REPO_RUNTIME_PROJECTION_NAMESPACE,
                 )
             except Exception:
                 pass
