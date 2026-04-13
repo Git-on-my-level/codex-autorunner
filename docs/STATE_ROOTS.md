@@ -238,19 +238,47 @@ Binding metadata for Discord and Telegram ordinary turns lives in hub
 `orchestration.sqlite3`, while **delivery state** remains in the transport
 databases.
 
-### Legacy PMA Artifacts (Migration/Compatibility)
+### PMA Persistence: Canonical vs Compatibility Mirrors
+
+All canonical PMA state lives in `orchestration.sqlite3` tables:
+
+| Table | Owner | Purpose |
+| --- | --- | --- |
+| `orch_thread_targets` | `PmaThreadStore` | Managed thread registrations and lifecycle |
+| `orch_thread_executions` | `PmaThreadStore` | Managed turn execution records |
+| `orch_thread_actions` | `PmaThreadStore` | Thread-level action records |
+| `orch_queue_items` | `PmaQueue` / `PmaThreadStore` | Lane items and thread-execution queue items |
+| `orch_automation_subscriptions` | `PmaAutomationStore` | Automation subscription state |
+| `orch_automation_timers` | `PmaAutomationStore` | Automation timer state |
+| `orch_automation_wakeups` | `PmaAutomationStore` | Automation wakeup state |
+| `orch_reactive_debounce_state` | `PmaReactiveStore` | Reactive debounce timestamps |
+
+Compatibility mirrors are rewritten after each canonical mutation for
+audit visibility and ad-hoc tooling, but they are **not** the source of truth:
+
+| Mirror path | Owner | Notes |
+| --- | --- | --- |
+| `.codex-autorunner/pma/queue/*.jsonl` | `PmaQueue` | Rewritten after every queue mutation; `replay_pending` reads from SQLite |
+| `.codex-autorunner/pma/automation_store.json` | `PmaAutomationStore` | Rewritten after every automation mutation |
+| `.codex-autorunner/pma/reactive_state.json` | `PmaReactiveStore` | Rewritten after every debounce update |
+| `.codex-autorunner/pma/threads.sqlite3` | `PmaThreadStore` | Legacy thread mirror, gated by `CAR_LEGACY_MIRROR_ENABLED` |
+
+Deleting any mirror file does not affect correctness; SQLite remains
+authoritative and mirrors are regenerated on the next write.
+
+Separate from persistence mirrors, `PmaStateStore` owns PMA UI runtime state
+in `.codex-autorunner/pma/state.json`. This file is not part of the canonical
+queue/thread/automation persistence path.
+
+### Pre-Orchestration Legacy Artifacts
 
 **Locations**:
 - `<repo_root>/.codex-autorunner/pma/deliveries.jsonl`
 - `<repo_root>/.codex-autorunner/pma/thread_*.json`
 - `<repo_root>/.codex-autorunner/pma/queue.json`
 
-These artifacts are now **compatibility inputs** rather than canonical stores:
-- Used only for migration to hub SQLite and orchestration bindings
-- No new data should be written to these paths
-- Over time, these will become read-only archives
-
-The canonical thread/binding state is now in `orchestration.sqlite3`.
+These are pre-orchestration artifacts used only for initial migration into
+hub SQLite. No new data should be written to these paths.
 
 ## No Shadow State Contract
 

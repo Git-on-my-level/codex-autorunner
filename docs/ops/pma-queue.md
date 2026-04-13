@@ -3,10 +3,16 @@
 ## Canonical store
 
 The PMA queue is backed by the ``orch_queue_items`` table in the orchestration
-SQLite database (``.codex-autorunner/state.sqlite3``).  SQLite is the single
-source of truth for all lane state: enqueues, status transitions (pending →
-running → completed/failed/cancelled/deduped), idempotency checks, and
-compaction all read from and write to ``orch_queue_items``.
+SQLite database.  SQLite is the single source of truth for all lane state:
+enqueues, status transitions (pending → running → completed/failed/cancelled/
+deduped), idempotency checks, and compaction all read from and write to
+``orch_queue_items``.
+
+``orch_queue_items`` is shared between ``PmaQueue`` (for generic PMA lane
+items) and ``PmaThreadStore`` (for ``source_kind='thread_execution'`` rows
+used in queued-turn scheduling).  Both use compatible row shapes; see
+``tests/core/test_pma_persistence_invariants.py`` for characterization
+coverage.
 
 When a lane worker starts, it replays pending items from SQLite into the
 in-memory ``asyncio.Queue`` and processes them.  Cross-process enqueue
