@@ -244,7 +244,7 @@ STANDARD_FUNCTION_BUDGETS = (
 TEST_FILE_CAPS = (
     FileBudget(
         path="tests/discord_message_turns_support.py",
-        max_lines=9800,
+        max_lines=9810,
         reason="The extracted Discord message-turn support module is still large, but obvious regrowth should fail while the split layout settles.",
     ),
     FileBudget(

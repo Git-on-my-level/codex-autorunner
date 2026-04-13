@@ -6844,8 +6844,16 @@ async def test_message_create_in_pma_mode_uses_pma_session_key(tmp_path: Path) -
         assert captured
         assert captured[0]["session_key"] == PMA_KEY
         assert captured[0]["orchestrator_channel_key"] == "pma:channel-1"
-        assert "plan next sprint" in captured[0]["prompt_text"]
-        assert captured[0]["prompt_text"] != "plan next sprint"
+        prompt_text = captured[0]["prompt_text"]
+        assert "plan next sprint" in prompt_text and prompt_text != "plan next sprint"
+        assert (
+            "Hub Snapshot Availability:" in prompt_text
+            and "status=hub_unavailable" in prompt_text
+        )
+        assert (
+            "Do not infer hub-root queue, thread, inbox, or automation state"
+            in prompt_text
+        )
         assert any(
             "PMA reply" in msg["payload"].get("content", "")
             for msg in rest.channel_messages

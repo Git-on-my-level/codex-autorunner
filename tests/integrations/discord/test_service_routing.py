@@ -922,20 +922,10 @@ async def test_discord_notification_reply_routes_to_pma_thread_with_context(
         async def submit_message(self, *_args: object, **_kwargs: object) -> object:
             raise AssertionError("notification replies should bypass ingress routing")
 
-    async def _fake_build_hub_snapshot(
-        *_args: object, **_kwargs: object
-    ) -> dict[str, object]:
-        return {}
-
     monkeypatch.setattr(
         discord_message_turns,
         "build_surface_orchestration_ingress",
         lambda **_: _IngressStub(),
-    )
-    monkeypatch.setattr(
-        discord_message_turns,
-        "build_hub_snapshot",
-        _fake_build_hub_snapshot,
     )
     monkeypatch.setattr(discord_message_turns, "load_pma_prompt", lambda _root: "base")
     monkeypatch.setattr(

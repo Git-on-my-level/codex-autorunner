@@ -52,7 +52,7 @@ from .....core.orchestration.runtime_threads import (
     begin_runtime_thread_execution,
 )
 from .....core.pma_context import (
-    build_hub_snapshot,
+    build_hub_unavailable_snapshot,
     format_pma_discoverability_preamble,
     format_pma_prompt,
     load_pma_prompt,
@@ -2924,16 +2924,34 @@ class ExecutionCommands(TelegramCommandSupportMixin):
             return None
         try:
             hub_client = getattr(self, "_hub_client", None)
-            snapshot = None
+            snapshot_detail = (
+                "Hub control plane is unavailable for Telegram PMA prompt context."
+            )
             if hub_client is not None:
                 try:
                     cp_snapshot = await hub_client.get_pma_snapshot()
                     snapshot = cp_snapshot.snapshot
-                except Exception:
-                    pass
-            if snapshot is None:
-                supervisor = getattr(self, "_hub_supervisor", None)
-                snapshot = await build_hub_snapshot(supervisor, hub_root=Path(hub_root))
+                except Exception as exc:
+                    snapshot = build_hub_unavailable_snapshot(detail=snapshot_detail)
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "telegram.pma.snapshot.control_plane_failed",
+                        chat_id=message.chat_id,
+                        thread_id=message.thread_id,
+                        message_id=message.message_id,
+                        exc=exc,
+                    )
+            else:
+                snapshot = build_hub_unavailable_snapshot(detail=snapshot_detail)
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.pma.snapshot.hub_client_unavailable",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    message_id=message.message_id,
+                )
             base_prompt = load_pma_prompt(hub_root)
             prompt_state_key = self._pma_registry_key(record, message)
             return format_pma_prompt(

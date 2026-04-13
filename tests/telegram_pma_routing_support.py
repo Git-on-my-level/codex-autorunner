@@ -203,21 +203,8 @@ async def test_pma_prompt_routing_uses_hub_root(tmp_path: Path) -> None:
     (inbox_dir / "input.txt").write_text("inbox", encoding="utf-8")
     (outbox_dir / "output.txt").write_text("outbox", encoding="utf-8")
 
-    class _LifecycleStoreStub:
-        def get_unprocessed(self, limit: int = 20) -> list:
-            return []
-
-    class _HubSupervisorStub:
-        def __init__(self) -> None:
-            self.hub_config = SimpleNamespace(pma=None)
-            self.lifecycle_store = _LifecycleStoreStub()
-
-        def list_repos(self) -> list:
-            return []
-
     record = TelegramTopicRecord(pma_enabled=True, workspace_path=None)
     handler = _ExecutionStub(record, hub_root)
-    handler._hub_supervisor = _HubSupervisorStub()
     message = TelegramMessage(
         update_id=1,
         message_id=10,
@@ -245,9 +232,12 @@ async def test_pma_prompt_routing_uses_hub_root(tmp_path: Path) -> None:
     snapshot_text = prompt_text.split("<hub_snapshot>\n", 1)[1].split(
         "\n</hub_snapshot>", 1
     )[0]
-    assert "PMA File Inbox:" in snapshot_text
-    assert "- inbox: [input.txt]" in snapshot_text
-    assert "- outbox: [output.txt]" in snapshot_text
+    assert "Hub Snapshot Availability:" in snapshot_text
+    assert "status=hub_unavailable" in snapshot_text
+    assert "Do not infer hub-root queue, thread, inbox, or automation state" in (
+        snapshot_text
+    )
+    assert "PMA File Inbox:" not in snapshot_text
 
 
 @pytest.mark.anyio

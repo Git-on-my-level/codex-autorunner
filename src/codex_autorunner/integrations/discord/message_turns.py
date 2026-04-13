@@ -39,7 +39,7 @@ from ...core.orchestration.runtime_threads import (
     begin_runtime_thread_execution,
 )
 from ...core.pma_context import (
-    build_hub_snapshot,
+    build_hub_unavailable_snapshot,
     format_pma_discoverability_preamble,
     format_pma_prompt,
     load_pma_prompt,
@@ -1588,16 +1588,31 @@ async def _execute_discord_thread_message(
     if dispatch.effective_pma_enabled:
         try:
             hub_client = getattr(dispatch.service, "_hub_client", None)
-            snapshot = None
+            snapshot_detail = (
+                "Hub control plane is unavailable for Discord PMA prompt context."
+            )
             if hub_client is not None:
                 try:
                     cp_snapshot = await hub_client.get_pma_snapshot()
                     snapshot = cp_snapshot.snapshot
-                except Exception:
-                    pass
-            if snapshot is None:
-                snapshot = await build_hub_snapshot(
-                    None, hub_root=dispatch.service._config.root
+                except Exception as exc:
+                    snapshot = build_hub_unavailable_snapshot(detail=snapshot_detail)
+                    dispatch.log_event_fn(
+                        dispatch.service._logger,
+                        logging.WARNING,
+                        "discord.pma.snapshot.control_plane_failed",
+                        channel_id=dispatch.channel_id,
+                        message_id=dispatch.event.message.message_id,
+                        exc=exc,
+                    )
+            else:
+                snapshot = build_hub_unavailable_snapshot(detail=snapshot_detail)
+                dispatch.log_event_fn(
+                    dispatch.service._logger,
+                    logging.WARNING,
+                    "discord.pma.snapshot.hub_client_unavailable",
+                    channel_id=dispatch.channel_id,
+                    message_id=dispatch.event.message.message_id,
                 )
             prompt_base = load_pma_prompt(dispatch.service._config.root)
             if dispatch.notification_reply is not None:

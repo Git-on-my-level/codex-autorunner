@@ -47,6 +47,7 @@ from .pma_snapshot_builder import (
 )
 from .pma_thread_snapshot import snapshot_pma_threads as _snapshot_pma_threads
 from .pma_workspace_docs import load_pma_prompt, load_pma_workspace_docs
+from .state import now_iso
 
 _logger = logging.getLogger(__name__)
 
@@ -135,6 +136,25 @@ def format_pma_prompt(
     )
 
 
+def build_hub_unavailable_snapshot(
+    *,
+    detail: str,
+    generated_at: Optional[str] = None,
+) -> dict[str, Any]:
+    return {
+        "generated_at": generated_at or now_iso(),
+        "availability": {
+            "status": "hub_unavailable",
+            "detail": detail,
+            "note": (
+                "Shared PMA state could not be loaded from the hub control plane. "
+                "Do not infer hub-root queue, thread, inbox, or automation state "
+                "from local files."
+            ),
+        },
+    }
+
+
 async def build_hub_snapshot(
     supervisor: Optional[HubSupervisor],
     hub_root: Optional[Path] = None,
@@ -201,6 +221,7 @@ __all__ = [
     "_ticket_flow_inbox_item_type_and_next_action",
     "_trim_extra",
     "_truncate",
+    "build_hub_unavailable_snapshot",
     "build_hub_snapshot",
     "build_hub_snapshot_payload",
     "build_pma_action_queue",
