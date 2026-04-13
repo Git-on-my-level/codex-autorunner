@@ -1768,11 +1768,14 @@ async def _handle_discord_notification_turn(
         dispatch=dispatch,
     )
     surface_key = notification_surface_key(dispatch.notification_reply.notification_id)
-    orch_binding = build_discord_thread_orchestration_service(
-        dispatch.service
-    ).get_binding(
-        surface_kind="discord",
-        surface_key=surface_key,
+    orch_service = build_discord_thread_orchestration_service(dispatch.service)
+    orch_binding = (
+        orch_service.get_binding(
+            surface_kind="discord",
+            surface_key=surface_key,
+        )
+        if orch_service is not None
+        else None
     )
     if orch_binding is not None:
         hub_client = getattr(dispatch.service, "_hub_client", None)
@@ -2327,27 +2330,20 @@ def build_discord_thread_orchestration_service(service: Any) -> Any:
     handshake_ok = hub_client is not None and getattr(
         handshake_compat, "compatible", False
     )
-    if handshake_ok:
-        thread_store = RemoteThreadExecutionStore(cast(Any, hub_client))
-        created = build_harness_backed_orchestration_service(
-            descriptors=cast(Any, descriptors),
-            harness_factory=_make_harness,
-            thread_store=thread_store,
-        )
-    else:
-        from ...core.pma_thread_store import PmaThreadStore
-
+    if not handshake_ok:
         log_event(
             service._logger,
             logging.WARNING,
             "discord.orchestration.hub_client_unavailable",
-            message="Falling back to local PmaThreadStore for orchestration",
+            message="Hub control-plane client not available; orchestration disabled",
         )
-        created = build_harness_backed_orchestration_service(
-            descriptors=cast(Any, descriptors),
-            harness_factory=_make_harness,
-            pma_thread_store=PmaThreadStore(service._config.root),
-        )
+        return None
+    thread_store = RemoteThreadExecutionStore(cast(Any, hub_client))
+    created = build_harness_backed_orchestration_service(
+        descriptors=cast(Any, descriptors),
+        harness_factory=_make_harness,
+        thread_store=thread_store,
+    )
     service._discord_thread_orchestration_service = created
     service._discord_managed_thread_orchestration_service = created
     return created
@@ -2368,6 +2364,10 @@ def resolve_discord_thread_target(
     pma_enabled: bool,
 ) -> Any:
     orchestration_service = build_discord_thread_orchestration_service(service)
+    if orchestration_service is None:
+        raise RuntimeError(
+            "Discord orchestration service unavailable: hub control-plane client not connected"
+        )
     surface_key = managed_thread_surface_key or channel_id
     runtime_agent = resolve_chat_runtime_agent(
         agent,

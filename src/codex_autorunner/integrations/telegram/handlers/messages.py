@@ -692,11 +692,14 @@ async def _bind_telegram_notification_continuation(
     notification_reply = dispatch.notification_reply
     if notification_reply is None:
         return
-    orch_binding = _build_telegram_thread_orchestration_service(
-        dispatch.handlers
-    ).get_binding(
-        surface_kind="telegram",
-        surface_key=notification_surface_key(notification_reply.notification_id),
+    orch_service = _build_telegram_thread_orchestration_service(dispatch.handlers)
+    orch_binding = (
+        orch_service.get_binding(
+            surface_kind="telegram",
+            surface_key=notification_surface_key(notification_reply.notification_id),
+        )
+        if orch_service is not None
+        else None
     )
     if orch_binding is not None:
         hub_client = getattr(dispatch.handlers, "_hub_client", None)
@@ -1722,11 +1725,16 @@ async def handle_media_message(
                 pma_enabled=True,
             )
         )
-        orch_binding = _build_telegram_thread_orchestration_service(
-            handlers
-        ).get_binding(
-            surface_kind="telegram",
-            surface_key=notification_surface_key(notification_reply.notification_id),
+        orch_service = _build_telegram_thread_orchestration_service(handlers)
+        orch_binding = (
+            orch_service.get_binding(
+                surface_kind="telegram",
+                surface_key=notification_surface_key(
+                    notification_reply.notification_id
+                ),
+            )
+            if orch_service is not None
+            else None
         )
         if orch_binding is not None:
             hub_client = getattr(handlers, "_hub_client", None)

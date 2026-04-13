@@ -371,28 +371,20 @@ def _build_telegram_thread_orchestration_service(handlers: Any) -> Any:
     handshake_ok = hub_client is not None and getattr(
         handshake_compat, "compatible", False
     )
-    if handshake_ok:
-        thread_store = RemoteThreadExecutionStore(hub_client)
-        created = build_harness_backed_orchestration_service(
-            descriptors=descriptors,
-            harness_factory=_make_harness,
-            thread_store=thread_store,
-        )
-    else:
-        from .....core.pma_thread_store import PmaThreadStore
-
+    if not handshake_ok:
         log_event(
             handlers._logger,
             logging.WARNING,
             "telegram.orchestration.hub_client_unavailable",
-            message="Falling back to local PmaThreadStore for orchestration",
+            message="Hub control-plane client not available; orchestration disabled",
         )
-        state_root = _telegram_state_root(handlers)
-        created = build_harness_backed_orchestration_service(
-            descriptors=descriptors,
-            harness_factory=_make_harness,
-            pma_thread_store=PmaThreadStore(state_root),
-        )
+        return None
+    thread_store = RemoteThreadExecutionStore(hub_client)
+    created = build_harness_backed_orchestration_service(
+        descriptors=descriptors,
+        harness_factory=_make_harness,
+        thread_store=thread_store,
+    )
     handlers._telegram_managed_thread_orchestration_service = created
     handlers._telegram_thread_orchestration_service = created
     return created
@@ -405,6 +397,10 @@ def _get_telegram_thread_binding(
     mode: Optional[str] = None,
 ) -> tuple[Any, Any, Any]:
     orchestration_service = _build_telegram_thread_orchestration_service(handlers)
+    if orchestration_service is None:
+        raise RuntimeError(
+            "Telegram orchestration service unavailable: hub control-plane client not connected"
+        )
     resolved = resolve_surface_thread_binding(
         orchestration_service,
         surface_kind="telegram",

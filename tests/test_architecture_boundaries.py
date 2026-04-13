@@ -382,6 +382,7 @@ _FORBIDDEN_SHARED_STATE_PATTERNS: tuple[str, ...] = (
     "open_orchestration_sqlite",
     "PmaAutomationStore",
     "PmaQueue",
+    "PmaThreadStore",
     "ScmPollingWatchStore",
 )
 
@@ -396,28 +397,19 @@ _FORBIDDEN_POLLING_OWNER_PATTERNS: tuple[str, ...] = (
 )
 
 _SIDE_PROCESS_BOUNDARY_ALLOWLIST: dict[str, list[str]] = {
-    "integrations/discord/message_turns.py": [
-        "build_hub_snapshot -- ALLOWED: fallback when hub client unavailable; hub_client path preferred",
-        "PmaThreadStore -- ALLOWED: lazy fallback when hub handshake not completed; RemoteThreadExecutionStore preferred",
-    ],
     "integrations/discord/service.py": [
         "build_ticket_flow_orchestration_service -- ALLOWED: ticket flow uses per-workspace orchestration SQLite",
         "seed_repo_files -- ALLOWED: bootstrap seeding runs during startup before hub handshake completes",
     ],
-    "integrations/discord/car_handlers/compact_commands.py": [],
     "integrations/telegram/service.py": [
         "AppServerThreadRegistry -- ALLOWED: protocol-local PMA thread ID mapping for topic routing",
     ],
     "integrations/telegram/handlers/commands/execution.py": [
-        "build_hub_snapshot -- ALLOWED: fallback when hub client unavailable; hub_client path preferred",
-        "PmaThreadStore -- ALLOWED: lazy fallback when hub handshake not completed; RemoteThreadExecutionStore preferred",
         "AppServerThreadRegistry -- ALLOWED: protocol-local PMA thread ID mapping for topic routing",
     ],
     "integrations/telegram/handlers/commands/flows.py": [
         "build_ticket_flow_orchestration_service -- ALLOWED: ticket flow uses per-workspace orchestration SQLite",
     ],
-    "integrations/telegram/handlers/commands_runtime.py": [],
-    "integrations/telegram/handlers/messages.py": [],
     "integrations/chat/managed_thread_turns.py": [
         "PmaThreadStore -- ALLOWED: shared module for execution finalization reads thread state directly",
     ],

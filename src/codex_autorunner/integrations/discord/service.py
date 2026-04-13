@@ -2567,6 +2567,10 @@ class DiscordBotService:
         mode: Optional[str] = None,
     ) -> tuple[Any, Any, Any]:
         orchestration_service = self._discord_thread_service()
+        if orchestration_service is None:
+            raise RuntimeError(
+                "Discord orchestration service unavailable: hub control-plane client not connected"
+            )
         resolved = resolve_surface_thread_binding(
             orchestration_service,
             surface_kind="discord",
