@@ -11091,7 +11091,7 @@ button.loading::after {
   display: none;
 }
 
-/* Legacy stat grid - deprecated but kept for compatibility */
+/* Thread meta strip hidden; primary stats live in the header row */
 .messages-thread-meta {
   display: none;
 }

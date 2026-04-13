@@ -11,6 +11,7 @@ from ...core.app_server_command import (
     DEFAULT_APP_SERVER_COMMAND as CORE_DEFAULT_APP_SERVER_COMMAND,
 )
 from ...core.app_server_command import (
+    GLOBAL_APP_SERVER_COMMAND_ENV,
     LEGACY_TELEGRAM_APP_SERVER_COMMAND_ENV,
     resolve_app_server_command,
 )
@@ -603,12 +604,16 @@ class TelegramBotConfig:
             )
 
         app_server_command_env = str(
-            cfg.get("app_server_command_env", LEGACY_TELEGRAM_APP_SERVER_COMMAND_ENV)
+            cfg.get("app_server_command_env", GLOBAL_APP_SERVER_COMMAND_ENV)
         )
-        extra_env_vars = [
-            app_server_command_env,
-            LEGACY_TELEGRAM_APP_SERVER_COMMAND_ENV,
-        ]
+        extra_env_vars = list(
+            dict.fromkeys(
+                (
+                    app_server_command_env,
+                    LEGACY_TELEGRAM_APP_SERVER_COMMAND_ENV,
+                )
+            )
+        )
         app_server_command = resolve_app_server_command(
             cfg.get("app_server_command"),
             env=env,

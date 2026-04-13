@@ -424,9 +424,6 @@ def register_flow_commands(
             "ticket_progress": snapshot.get("ticket_progress"),
             "reason_summary": normalized_reason_summary,
             "error_message": error_message,
-            # Compatibility aliases for downstream consumers expecting these keys.
-            "failure_reason": normalized_reason_summary,
-            "error": error_message,
             "worker": (
                 {
                     "status": health.status,

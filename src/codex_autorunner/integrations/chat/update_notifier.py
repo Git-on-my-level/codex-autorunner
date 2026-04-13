@@ -55,7 +55,6 @@ def build_update_notify_metadata(
     chat_id: int | str,
     thread_id: Optional[int | str] = None,
     reply_to: Optional[int | str] = None,
-    include_legacy_telegram_keys: bool = False,
 ) -> dict[str, Any]:
     platform_key = _normalize_platform(platform)
     context: dict[str, Any] = {"chat_id": chat_id}
@@ -67,21 +66,10 @@ def build_update_notify_metadata(
     if not platform_key or coerced is None:
         raise ValueError("Invalid update notification metadata.")
 
-    payload: dict[str, Any] = {
+    return {
         "notify_platform": platform_key,
         "notify_context": coerced,
     }
-    if include_legacy_telegram_keys and platform_key == "telegram":
-        chat_raw = coerced.get("chat_id")
-        if isinstance(chat_raw, int) and not isinstance(chat_raw, bool):
-            payload["notify_chat_id"] = chat_raw
-        thread_raw = coerced.get("thread_id")
-        if isinstance(thread_raw, int) and not isinstance(thread_raw, bool):
-            payload["notify_thread_id"] = thread_raw
-        reply_raw = coerced.get("reply_to")
-        if isinstance(reply_raw, int) and not isinstance(reply_raw, bool):
-            payload["notify_reply_to"] = reply_raw
-    return payload
 
 
 def extract_update_notify_context(
@@ -184,14 +172,12 @@ class ChatUpdateStatusNotifier:
         chat_id: int | str,
         thread_id: Optional[int | str] = None,
         reply_to: Optional[int | str] = None,
-        include_legacy_telegram_keys: bool = False,
     ) -> dict[str, Any]:
         return build_update_notify_metadata(
             platform=self._platform,
             chat_id=chat_id,
             thread_id=thread_id,
             reply_to=reply_to,
-            include_legacy_telegram_keys=include_legacy_telegram_keys,
         )
 
     def schedule_watch(

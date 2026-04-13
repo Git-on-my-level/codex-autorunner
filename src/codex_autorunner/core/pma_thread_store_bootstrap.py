@@ -12,7 +12,7 @@ from .orchestration.sqlite import (
     open_orchestration_sqlite,
     prepare_orchestration_sqlite,
 )
-from .pma_thread_mirror import legacy_mirror_enabled, sync_legacy_mirror
+from .pma_thread_mirror import sync_legacy_mirror
 from .time_utils import now_iso
 
 PMA_THREADS_DB_FILENAME = "threads.sqlite3"
@@ -52,8 +52,6 @@ class PmaThreadStoreBootstrap:
         self._ensure_legacy_schema = ensure_legacy_schema
 
     def _run_legacy_mirror(self, conn: Any) -> None:
-        if not legacy_mirror_enabled():
-            return
         sync_legacy_mirror(
             hub_root=self._hub_root,
             legacy_db_path=self._db_path,
