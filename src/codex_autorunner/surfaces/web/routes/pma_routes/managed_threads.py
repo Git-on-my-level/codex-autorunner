@@ -115,6 +115,10 @@ def _resolve_hermes_supervisor(request: Request, *, profile: Optional[str]):
     return resolve_cached_hermes_supervisor(request, profile=profile)
 
 
+def _resolve_fork_supervisor(request: Request, *, profile: Optional[str]):
+    return _resolve_hermes_supervisor(request, profile=profile)
+
+
 def build_automation_routes(
     router: APIRouter,
     get_runtime_state,
@@ -532,7 +536,7 @@ def build_managed_thread_crud_routes(
                 status_code=409,
                 detail="Managed thread has no backend session to fork",
             )
-        supervisor = _resolve_hermes_supervisor(
+        supervisor = _resolve_fork_supervisor(
             request,
             profile=runtime_resolution.logical_profile,
         )

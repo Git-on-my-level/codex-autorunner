@@ -17,7 +17,6 @@ from codex_autorunner.core.orchestration import (
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes.pma_routes import (
-    hermes_supervisors,
     managed_threads,
 )
 from tests.conftest import write_test_config
@@ -279,9 +278,9 @@ def test_fork_managed_thread_clones_hermes_backend_session(
     }
     write_test_config(hub_env.hub_root / CONFIG_FILENAME, cfg)
     monkeypatch.setattr(
-        hermes_supervisors,
-        "build_hermes_supervisor_from_config",
-        lambda *args, **kwargs: _HermesSupervisor(),
+        managed_threads,
+        "_resolve_fork_supervisor",
+        lambda request, *, profile=None: _HermesSupervisor(),
     )
     app = create_hub_app(hub_env.hub_root)
     observed: dict[str, object] = {}
