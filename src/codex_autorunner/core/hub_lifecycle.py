@@ -225,35 +225,56 @@ class HubLifecycleWorker:
         self._thread_name = thread_name
         self._logger = logger or logging.getLogger("codex_autorunner.hub")
         self._stop_event = threading.Event()
+        self._thread_lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
 
     @property
     def running(self) -> bool:
-        return self._thread is not None
+        with self._thread_lock:
+            thread = self._thread
+        return thread is not None and thread.is_alive()
 
     def start(self) -> None:
-        if self._thread is not None:
-            return
+        with self._thread_lock:
+            thread = self._thread
+            if thread is not None and thread.is_alive():
+                return
+            self._stop_event.clear()
 
-        def _process_loop() -> None:
-            while not self._stop_event.wait(self._poll_interval_seconds):
-                try:
-                    self._process_once()
-                except (
-                    Exception
-                ):  # intentional: process_once is a user-provided callback
-                    self._logger.exception("Error in lifecycle event processor")
+            def _process_loop() -> None:
+                while not self._stop_event.wait(self._poll_interval_seconds):
+                    try:
+                        self._process_once()
+                    except (
+                        Exception
+                    ) as exc:  # intentional: process_once is a user-provided callback
+                        if _is_unrecoverable_lifecycle_error(exc):
+                            self._logger.exception(
+                                "Stopping lifecycle event processor after unrecoverable error"
+                            )
+                            self._stop_event.set()
+                            break
+                        self._logger.exception("Error in lifecycle event processor")
 
-        self._thread = threading.Thread(
-            target=_process_loop,
-            daemon=True,
-            name=self._thread_name,
-        )
-        self._thread.start()
+            thread = threading.Thread(
+                target=_process_loop,
+                daemon=True,
+                name=self._thread_name,
+            )
+            self._thread = thread
+            thread.start()
 
     def stop(self) -> None:
-        if self._thread is None:
-            return
-        self._stop_event.set()
-        self._thread.join(timeout=self._join_timeout_seconds)
-        self._thread = None
+        with self._thread_lock:
+            thread = self._thread
+            if thread is None:
+                return
+            self._stop_event.set()
+        thread.join(timeout=self._join_timeout_seconds)
+        with self._thread_lock:
+            if self._thread is thread:
+                self._thread = None
+
+
+def _is_unrecoverable_lifecycle_error(exc: Exception) -> bool:
+    return "schema is newer than this build supports" in str(exc).lower()

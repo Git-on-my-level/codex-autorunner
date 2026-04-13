@@ -940,8 +940,8 @@ def _system_update_worker(
         if returncode != 0:
             if not existing or existing.get("status") not in ("rollback", "error"):
                 _write_update_status(
-                    "rollback",
-                    "Update failed; rollback attempted. Check hub logs for details.",
+                    "error",
+                    "Update failed; check hub logs for details.",
                     exit_code=returncode,
                 )
             return

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional
 from ...core.chat_bindings import (
     preferred_non_pma_chat_notification_sources_by_workspace,
 )
+from ...core.locks import file_lock
 from ...core.orchestration.sqlite import open_orchestration_sqlite
 from ...core.pma_thread_store import PmaThreadStore
 from ...core.pr_binding_runtime import backfill_pr_binding_thread_target_ids
@@ -19,7 +20,7 @@ from ...core.pr_bindings import PrBinding, PrBindingStore
 from ...core.scm_events import ScmEventStore
 from ...core.scm_polling_watches import ScmPollingWatch, ScmPollingWatchStore
 from ...core.scm_reaction_types import ScmReactionConfig
-from ...core.text_utils import _mapping, _normalize_text
+from ...core.text_utils import _mapping, _normalize_text, lock_path_for
 from ...core.time_utils import now_iso
 from ...core.utils import atomic_write, read_json
 from ...manifest import ManifestError, load_manifest
@@ -1769,14 +1770,15 @@ class GitHubScmPollingService:
     def _claim_discovery_cycle(self, *, polling_config: GitHubPollingConfig) -> bool:
         discovery_interval_seconds = max(1, polling_config.discovery_interval_seconds)
         cycle_slot = int(_utc_now().timestamp()) // discovery_interval_seconds
-        state = self._read_polling_state()
-        last_cycle_slot = state.get("last_discovery_cycle_slot")
-        if isinstance(last_cycle_slot, int) and last_cycle_slot == cycle_slot:
-            return False
-        state["last_discovery_cycle_slot"] = cycle_slot
-        state["last_discovery_claimed_at"] = now_iso()
-        self._write_polling_state(state)
-        return True
+        with file_lock(lock_path_for(self._polling_state_path)):
+            state = self._read_polling_state()
+            last_cycle_slot = state.get("last_discovery_cycle_slot")
+            if isinstance(last_cycle_slot, int) and last_cycle_slot == cycle_slot:
+                return False
+            state["last_discovery_cycle_slot"] = cycle_slot
+            state["last_discovery_claimed_at"] = now_iso()
+            self._write_polling_state(state)
+            return True
 
 
 def build_hub_scm_poll_processor(

@@ -365,7 +365,7 @@ class HermesSupervisor:
         async with self._lock:
             previous_turn_id = self._session_turns.get((workspace, session_id))
             if previous_turn_id:
-                previous_state = self._turn_states.pop(
+                previous_state = self._turn_states.get(
                     (workspace, previous_turn_id),
                     None,
                 )
@@ -378,7 +378,7 @@ class HermesSupervisor:
             self._turn_states[(workspace, handle.turn_id)] = state
             self._session_turns[(workspace, session_id)] = handle.turn_id
         if previous_state is not None:
-            await self._retire_turn_state(previous_state)
+            await self._cancel_pending_approval_task(previous_state)
         for event in await self._acp.prompt_events_snapshot(
             workspace_root, handle.turn_id
         ):
@@ -637,6 +637,10 @@ class HermesSupervisor:
             existing_events.append(payload)
 
     async def _retire_turn_state(self, state: _HermesTurnState) -> None:
+        await self._cancel_pending_approval_task(state)
+        await state.event_buffer.close()
+
+    async def _cancel_pending_approval_task(self, state: _HermesTurnState) -> None:
         async with self._lock:
             pending_task = state.pending_approval_task
             state.pending_approval_task = None
@@ -652,7 +656,6 @@ class HermesSupervisor:
                     state.turn_id,
                     exc_info=True,
                 )
-        await state.event_buffer.close()
 
     async def _handle_acp_event(
         self,
