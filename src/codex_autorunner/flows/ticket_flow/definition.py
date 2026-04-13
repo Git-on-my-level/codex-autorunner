@@ -20,6 +20,7 @@ def build_ticket_flow_definition(
     agent_pool: AgentPool,
     auto_commit_default: bool = False,
     include_previous_ticket_context_default: bool = False,
+    max_total_turns_default: int = DEFAULT_MAX_TOTAL_TURNS,
 ) -> FlowDefinition:
     """Build the single-step ticket runner flow.
 
@@ -54,7 +55,7 @@ def build_ticket_flow_definition(
 
         ticket_dir = (workspace_root / ".codex-autorunner" / "tickets").resolve()
         max_total_turns = int(
-            input_data.get("max_total_turns") or DEFAULT_MAX_TOTAL_TURNS
+            input_data.get("max_total_turns") or max_total_turns_default
         )
 
         repo_id = _resolve_ticket_flow_repo_id(workspace_root)

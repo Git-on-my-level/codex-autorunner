@@ -58,6 +58,7 @@ from ....flows.ticket_flow import build_ticket_flow_definition
 from ....flows.ticket_flow.runtime_helpers import normalize_ticket_flow_input_data
 from ....integrations.agents.build_agent_pool import build_agent_pool
 from ....integrations.github.service import GitHubError, GitHubService
+from ....tickets import DEFAULT_MAX_TOTAL_TURNS
 from ....tickets.bulk import (
     bulk_canonicalize_hermes_agents,
     bulk_clear_model_pin,
@@ -329,6 +330,11 @@ def _build_flow_definition(
             auto_commit_default=engine.config.git_auto_commit,
             include_previous_ticket_context_default=(
                 engine.config.ticket_flow.include_previous_ticket_context
+            ),
+            max_total_turns_default=(
+                engine.config.ticket_flow.max_total_turns
+                if engine.config.ticket_flow.max_total_turns is not None
+                else DEFAULT_MAX_TOTAL_TURNS
             ),
         )
     else:
