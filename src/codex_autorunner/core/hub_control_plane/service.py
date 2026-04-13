@@ -7,11 +7,17 @@ from typing import Any, Iterable, Optional
 
 from ..hub import AgentWorkspaceSnapshot
 from ..orchestration.bindings import OrchestrationBindingStore
+from ..orchestration.cold_trace_store import ColdTraceStore
 from ..orchestration.models import ExecutionRecord, ThreadTarget
 from ..orchestration.service import PmaThreadExecutionStore
 from ..orchestration.sqlite import read_orchestration_compatibility_metadata
+from ..orchestration.turn_timeline import (
+    append_turn_events_to_cold_trace,
+    persist_turn_timeline,
+)
 from ..pma_notification_store import NotificationConversation, PmaNotificationStore
 from ..pma_thread_store import PmaThreadStore
+from ..pma_transcripts import PmaTranscriptStore
 from .errors import HubControlPlaneError
 from .models import (
     AgentWorkspaceDescriptor,
@@ -28,6 +34,8 @@ from .models import (
     ExecutionCancelResponse,
     ExecutionClaimNextRequest,
     ExecutionClaimNextResponse,
+    ExecutionColdTraceFinalizeRequest,
+    ExecutionColdTraceFinalizeResponse,
     ExecutionCreateRequest,
     ExecutionInterruptRecordRequest,
     ExecutionListResponse,
@@ -36,6 +44,8 @@ from .models import (
     ExecutionPromoteResponse,
     ExecutionResponse,
     ExecutionResultRecordRequest,
+    ExecutionTimelinePersistRequest,
+    ExecutionTimelinePersistResponse,
     HandshakeRequest,
     HandshakeResponse,
     LatestExecutionLookupRequest,
@@ -50,6 +60,8 @@ from .models import (
     QueueDepthResponse,
     QueuedExecutionListRequest,
     RunningExecutionLookupRequest,
+    SurfaceBindingListRequest,
+    SurfaceBindingListResponse,
     SurfaceBindingLookupRequest,
     SurfaceBindingResponse,
     SurfaceBindingUpsertRequest,
@@ -65,8 +77,11 @@ from .models import (
     ThreadTargetResumeRequest,
     TranscriptHistoryRequest,
     TranscriptHistoryResponse,
+    TranscriptWriteRequest,
+    TranscriptWriteResponse,
     WorkspaceSetupCommandRequest,
     WorkspaceSetupCommandResult,
+    deserialize_run_event,
 )
 
 CONTROL_PLANE_API_VERSION = "1.0.0"
@@ -84,10 +99,13 @@ CONTROL_PLANE_CAPABILITIES: tuple[str, ...] = (
     "surface_bindings",
     "thread_activity_updates",
     "thread_backend_updates",
+    "execution_cold_trace_finalization",
+    "execution_timeline_persistence",
     "thread_execution_lifecycle",
     "thread_target_creation",
     "thread_targets",
     "transcript_history",
+    "transcript_writes",
     "workspace_setup_commands",
 )
 
@@ -324,6 +342,21 @@ class HubSharedStateService:
                 details={"operation": "upsert_surface_binding"},
             ) from exc
         return SurfaceBindingResponse(binding=binding)
+
+    def list_surface_bindings(
+        self, request: SurfaceBindingListRequest
+    ) -> SurfaceBindingListResponse:
+        bindings = self._binding_store.list_bindings(
+            thread_target_id=request.thread_target_id,
+            repo_id=request.repo_id,
+            resource_kind=request.resource_kind,
+            resource_id=request.resource_id,
+            agent_id=request.agent_id,
+            surface_kind=request.surface_kind,
+            include_disabled=request.include_disabled,
+            limit=request.limit,
+        )
+        return SurfaceBindingListResponse(bindings=tuple(bindings))
 
     def get_thread_target(
         self, request: ThreadTargetLookupRequest
@@ -586,6 +619,91 @@ class HubSharedStateService:
             execution=_execution_from_record(execution),
             queue_payload=dict(queue_payload),
         )
+
+    def persist_execution_timeline(
+        self, request: ExecutionTimelinePersistRequest
+    ) -> ExecutionTimelinePersistResponse:
+        try:
+            events = tuple(deserialize_run_event(event) for event in request.events)
+            count = persist_turn_timeline(
+                self._hub_root,
+                execution_id=request.execution_id,
+                target_kind=request.target_kind,
+                target_id=request.target_id,
+                repo_id=request.repo_id,
+                run_id=request.run_id,
+                resource_kind=request.resource_kind,
+                resource_id=request.resource_id,
+                metadata=dict(request.metadata),
+                events=events,
+                start_index=request.start_index,
+            )
+        except ValueError as exc:
+            raise HubControlPlaneError(
+                "hub_rejected",
+                str(exc),
+                details={"operation": "persist_execution_timeline"},
+            ) from exc
+        except OSError as exc:
+            raise HubControlPlaneError(
+                "hub_unavailable",
+                str(exc),
+                details={"operation": "persist_execution_timeline"},
+            ) from exc
+        return ExecutionTimelinePersistResponse(
+            execution_id=request.execution_id,
+            persisted_event_count=count,
+        )
+
+    def finalize_execution_cold_trace(
+        self, request: ExecutionColdTraceFinalizeRequest
+    ) -> ExecutionColdTraceFinalizeResponse:
+        try:
+            events = tuple(deserialize_run_event(event) for event in request.events)
+            writer = ColdTraceStore(self._hub_root).open_writer(
+                execution_id=request.execution_id,
+                backend_thread_id=request.backend_thread_id,
+                backend_turn_id=request.backend_turn_id,
+            )
+            try:
+                writer.open()
+                append_turn_events_to_cold_trace(writer, events=events)
+                manifest = writer.finalize()
+            finally:
+                writer.close()
+        except ValueError as exc:
+            raise HubControlPlaneError(
+                "hub_rejected",
+                str(exc),
+                details={"operation": "finalize_execution_cold_trace"},
+            ) from exc
+        except (OSError, RuntimeError) as exc:
+            raise HubControlPlaneError(
+                "hub_unavailable",
+                str(exc),
+                details={"operation": "finalize_execution_cold_trace"},
+            ) from exc
+        return ExecutionColdTraceFinalizeResponse(
+            execution_id=request.execution_id,
+            trace_manifest_id=manifest.trace_id,
+        )
+
+    def write_transcript(
+        self, request: TranscriptWriteRequest
+    ) -> TranscriptWriteResponse:
+        try:
+            PmaTranscriptStore(self._hub_root).write_transcript(
+                turn_id=request.turn_id,
+                metadata=dict(request.metadata),
+                assistant_text=request.assistant_text,
+            )
+        except OSError as exc:
+            raise HubControlPlaneError(
+                "hub_unavailable",
+                str(exc),
+                details={"operation": "write_transcript"},
+            ) from exc
+        return TranscriptWriteResponse(turn_id=request.turn_id)
 
     def get_transcript_history(
         self, request: TranscriptHistoryRequest

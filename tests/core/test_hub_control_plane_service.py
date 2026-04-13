@@ -10,11 +10,13 @@ from codex_autorunner.core.hub_control_plane import (
     ExecutionCancelAllRequest,
     ExecutionCancelRequest,
     ExecutionClaimNextRequest,
+    ExecutionColdTraceFinalizeRequest,
     ExecutionCreateRequest,
     ExecutionInterruptRecordRequest,
     ExecutionLookupRequest,
     ExecutionPromoteRequest,
     ExecutionResultRecordRequest,
+    ExecutionTimelinePersistRequest,
     HandshakeRequest,
     HubSharedStateService,
     LatestExecutionLookupRequest,
@@ -22,15 +24,21 @@ from codex_autorunner.core.hub_control_plane import (
     QueueDepthRequest,
     QueuedExecutionListRequest,
     RunningExecutionLookupRequest,
+    SurfaceBindingListRequest,
     SurfaceBindingUpsertRequest,
+    TranscriptWriteRequest,
     WorkspaceSetupCommandRequest,
+    serialize_run_event,
 )
+from codex_autorunner.core.orchestration.cold_trace_store import ColdTraceStore
 from codex_autorunner.core.orchestration.sqlite import prepare_orchestration_sqlite
 from codex_autorunner.core.pma_notification_store import PmaNotificationStore
 from codex_autorunner.core.pma_thread_store import (
     PmaThreadStore,
     prepare_pma_thread_store,
 )
+from codex_autorunner.core.pma_transcripts import PmaTranscriptStore
+from codex_autorunner.core.ports.run_event import Completed, Started
 
 
 class _SupervisorStub:
@@ -180,6 +188,90 @@ def test_shared_state_service_reply_lookup_and_binding_idempotency(
     assert reply_target.record.delivered_message_id == "99"
 
 
+def test_shared_state_service_lists_surface_bindings_with_filters(
+    tmp_path: Path,
+) -> None:
+    service, thread_target_id = _build_service(tmp_path)
+    workspace_root = tmp_path / "hub" / "agent-workspaces" / "zeroclaw" / "wksp-1"
+    second_thread = PmaThreadStore(
+        tmp_path / "hub", durable=False, bootstrap_on_init=False
+    ).create_thread(
+        "opencode",
+        workspace_root,
+        repo_id="repo-2",
+        resource_kind="repo",
+        resource_id="repo-2",
+        name="Repo Two Thread",
+    )
+
+    first_binding = service.upsert_surface_binding(
+        SurfaceBindingUpsertRequest.from_mapping(
+            {
+                "surface_kind": "telegram",
+                "surface_key": "chat:1",
+                "thread_target_id": thread_target_id,
+                "agent_id": "codex",
+                "repo_id": "repo-1",
+                "resource_kind": "agent_workspace",
+                "resource_id": "wksp-1",
+                "mode": "reuse",
+            }
+        )
+    )
+    second_binding = service.upsert_surface_binding(
+        SurfaceBindingUpsertRequest.from_mapping(
+            {
+                "surface_kind": "discord",
+                "surface_key": "channel:2",
+                "thread_target_id": str(second_thread["managed_thread_id"]),
+                "agent_id": "opencode",
+                "repo_id": "repo-2",
+                "resource_kind": "repo",
+                "resource_id": "repo-2",
+                "mode": "switch",
+            }
+        )
+    )
+    assert second_binding.binding is not None
+    service._binding_store.disable_binding(binding_id=second_binding.binding.binding_id)
+
+    visible = service.list_surface_bindings(
+        SurfaceBindingListRequest.from_mapping(
+            {
+                "repo_id": "repo-1",
+                "resource_kind": "agent_workspace",
+                "resource_id": "wksp-1",
+                "agent_id": "codex",
+                "surface_kind": "telegram",
+                "thread_target_id": thread_target_id,
+                "limit": 5,
+            }
+        )
+    )
+    include_disabled = service.list_surface_bindings(
+        SurfaceBindingListRequest.from_mapping(
+            {
+                "repo_id": "repo-2",
+                "resource_kind": "repo",
+                "resource_id": "repo-2",
+                "agent_id": "opencode",
+                "surface_kind": "discord",
+                "include_disabled": True,
+                "limit": 5,
+            }
+        )
+    )
+
+    assert first_binding.binding is not None
+    assert [binding.binding_id for binding in visible.bindings] == [
+        first_binding.binding.binding_id
+    ]
+    assert [binding.binding_id for binding in include_disabled.bindings] == [
+        second_binding.binding.binding_id
+    ]
+    assert include_disabled.bindings[0].disabled_at is not None
+
+
 def test_shared_state_service_workspace_setup_and_automation(tmp_path: Path) -> None:
     service, _thread_target_id = _build_service(tmp_path)
 
@@ -208,6 +300,77 @@ def test_shared_state_service_workspace_setup_and_automation(tmp_path: Path) -> 
         "timers_processed": 0,
         "wakeups_dispatched": 7,
     }
+
+
+def test_shared_state_service_persists_timeline_transcript_and_cold_trace(
+    tmp_path: Path,
+) -> None:
+    service, thread_target_id = _build_service(tmp_path)
+    events = (
+        serialize_run_event(
+            Started(
+                timestamp="2026-04-13T01:02:03Z",
+                session_id="session-1",
+                thread_id="backend-thread-1",
+                turn_id="backend-turn-1",
+            )
+        ),
+        serialize_run_event(
+            Completed(
+                timestamp="2026-04-13T01:02:04Z",
+                final_message="done",
+            )
+        ),
+    )
+
+    timeline_result = service.persist_execution_timeline(
+        ExecutionTimelinePersistRequest.from_mapping(
+            {
+                "execution_id": "exec-1",
+                "target_kind": "thread_target",
+                "target_id": thread_target_id,
+                "repo_id": "repo-1",
+                "resource_kind": "agent_workspace",
+                "resource_id": "wksp-1",
+                "metadata": {"status": "ok", "surface_kind": "discord"},
+                "events": list(events),
+                "start_index": 1,
+            }
+        )
+    )
+    trace_result = service.finalize_execution_cold_trace(
+        ExecutionColdTraceFinalizeRequest.from_mapping(
+            {
+                "execution_id": "exec-1",
+                "events": list(events),
+                "backend_thread_id": "backend-thread-1",
+                "backend_turn_id": "backend-turn-1",
+            }
+        )
+    )
+    transcript_result = service.write_transcript(
+        TranscriptWriteRequest.from_mapping(
+            {
+                "turn_id": "exec-1",
+                "metadata": {"managed_thread_id": thread_target_id},
+                "assistant_text": "done",
+            }
+        )
+    )
+
+    checkpoint = ColdTraceStore(tmp_path / "hub").load_checkpoint("exec-1")
+    manifest = ColdTraceStore(tmp_path / "hub").get_manifest("exec-1")
+    transcript = PmaTranscriptStore(tmp_path / "hub").read_transcript("exec-1")
+
+    assert timeline_result.persisted_event_count == 2
+    assert checkpoint is not None
+    assert checkpoint.execution_id == "exec-1"
+    assert trace_result.trace_manifest_id
+    assert manifest is not None
+    assert manifest.trace_id == trace_result.trace_manifest_id
+    assert transcript_result.turn_id == "exec-1"
+    assert transcript is not None
+    assert transcript["content"] == "done"
 
 
 def test_shared_state_service_execution_lifecycle_delegates_to_thread_store(

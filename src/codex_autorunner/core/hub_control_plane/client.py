@@ -16,6 +16,8 @@ from .models import (
     ExecutionCancelResponse,
     ExecutionClaimNextRequest,
     ExecutionClaimNextResponse,
+    ExecutionColdTraceFinalizeRequest,
+    ExecutionColdTraceFinalizeResponse,
     ExecutionCreateRequest,
     ExecutionInterruptRecordRequest,
     ExecutionListResponse,
@@ -24,6 +26,8 @@ from .models import (
     ExecutionPromoteResponse,
     ExecutionResponse,
     ExecutionResultRecordRequest,
+    ExecutionTimelinePersistRequest,
+    ExecutionTimelinePersistResponse,
     HandshakeRequest,
     HandshakeResponse,
     LatestExecutionLookupRequest,
@@ -37,6 +41,8 @@ from .models import (
     QueueDepthResponse,
     QueuedExecutionListRequest,
     RunningExecutionLookupRequest,
+    SurfaceBindingListRequest,
+    SurfaceBindingListResponse,
     SurfaceBindingLookupRequest,
     SurfaceBindingResponse,
     SurfaceBindingUpsertRequest,
@@ -52,6 +58,8 @@ from .models import (
     ThreadTargetResumeRequest,
     TranscriptHistoryRequest,
     TranscriptHistoryResponse,
+    TranscriptWriteRequest,
+    TranscriptWriteResponse,
     WorkspaceSetupCommandRequest,
     WorkspaceSetupCommandResult,
 )
@@ -86,6 +94,10 @@ class HubControlPlaneClient(Protocol):
     async def upsert_surface_binding(
         self, request: SurfaceBindingUpsertRequest
     ) -> SurfaceBindingResponse: ...
+
+    async def list_surface_bindings(
+        self, request: SurfaceBindingListRequest
+    ) -> SurfaceBindingListResponse: ...
 
     async def get_thread_target(
         self, request: ThreadTargetLookupRequest
@@ -151,6 +163,14 @@ class HubControlPlaneClient(Protocol):
         self, request: ExecutionClaimNextRequest
     ) -> ExecutionClaimNextResponse: ...
 
+    async def persist_execution_timeline(
+        self, request: ExecutionTimelinePersistRequest
+    ) -> ExecutionTimelinePersistResponse: ...
+
+    async def finalize_execution_cold_trace(
+        self, request: ExecutionColdTraceFinalizeRequest
+    ) -> ExecutionColdTraceFinalizeResponse: ...
+
     async def resume_thread_target(
         self, request: ThreadTargetResumeRequest
     ) -> ThreadTargetResponse: ...
@@ -174,6 +194,10 @@ class HubControlPlaneClient(Protocol):
     async def get_transcript_history(
         self, request: TranscriptHistoryRequest
     ) -> TranscriptHistoryResponse: ...
+
+    async def write_transcript(
+        self, request: TranscriptWriteRequest
+    ) -> TranscriptWriteResponse: ...
 
     async def get_pma_snapshot(self) -> PmaSnapshotResponse: ...
 

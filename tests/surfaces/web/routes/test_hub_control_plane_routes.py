@@ -12,8 +12,10 @@ from codex_autorunner.core.hub_control_plane import (
     AutomationRequest,
     ExecutionBackendIdUpdateRequest,
     ExecutionClaimNextRequest,
+    ExecutionColdTraceFinalizeRequest,
     ExecutionCreateRequest,
     ExecutionResultRecordRequest,
+    ExecutionTimelinePersistRequest,
     HandshakeRequest,
     HttpHubControlPlaneClient,
     HubControlPlaneError,
@@ -21,8 +23,11 @@ from codex_autorunner.core.hub_control_plane import (
     NotificationReplyTargetLookupRequest,
     QueueDepthRequest,
     QueuedExecutionListRequest,
+    SurfaceBindingListRequest,
     SurfaceBindingUpsertRequest,
+    TranscriptWriteRequest,
     WorkspaceSetupCommandRequest,
+    serialize_run_event,
 )
 from codex_autorunner.core.hub_control_plane.service import HubSharedStateService
 from codex_autorunner.core.orchestration.sqlite import prepare_orchestration_sqlite
@@ -31,6 +36,7 @@ from codex_autorunner.core.pma_thread_store import (
     PmaThreadStore,
     prepare_pma_thread_store,
 )
+from codex_autorunner.core.ports.run_event import Completed, Started
 from codex_autorunner.surfaces.web.routes.hub_control_plane import (
     build_hub_control_plane_routes,
 )
@@ -134,6 +140,22 @@ def test_hub_control_plane_routes_return_typed_validation_errors(
     assert "client_name is required" in response.json()["error"]["message"]
 
 
+def test_hub_control_plane_list_surface_bindings_route_validates_limit(
+    tmp_path: Path,
+) -> None:
+    app, _thread_target_id = _build_test_app(tmp_path)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/hub/api/control-plane/surface-bindings/query",
+            json={"limit": "oops"},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "hub_rejected"
+    assert "limit must be an integer" in response.json()["error"]["message"]
+
+
 @pytest.mark.parametrize(
     ("error", "expected_status"),
     [
@@ -202,6 +224,33 @@ async def test_hub_control_plane_http_client_round_trip(tmp_path: Path) -> None:
                 }
             )
         )
+        discord_binding = await client.upsert_surface_binding(
+            SurfaceBindingUpsertRequest.from_mapping(
+                {
+                    "surface_kind": "discord",
+                    "surface_key": "channel:2",
+                    "thread_target_id": thread_target_id,
+                    "agent_id": "codex",
+                    "repo_id": "repo-1",
+                    "resource_kind": "agent_workspace",
+                    "resource_id": "wksp-1",
+                    "mode": "switch",
+                }
+            )
+        )
+        listed_bindings = await client.list_surface_bindings(
+            SurfaceBindingListRequest.from_mapping(
+                {
+                    "thread_target_id": thread_target_id,
+                    "repo_id": "repo-1",
+                    "resource_kind": "agent_workspace",
+                    "resource_id": "wksp-1",
+                    "agent_id": "codex",
+                    "surface_kind": "discord",
+                    "limit": 10,
+                }
+            )
+        )
         first_delivery = await client.mark_notification_delivered(
             NotificationDeliveryMarkRequest.from_mapping(
                 {
@@ -253,6 +302,56 @@ async def test_hub_control_plane_http_client_round_trip(tmp_path: Path) -> None:
         queue_depth = await client.get_queue_depth(
             QueueDepthRequest.from_mapping({"thread_target_id": thread_target_id})
         )
+        timeline_events = [
+            serialize_run_event(
+                Started(
+                    timestamp="2026-04-13T01:02:03Z",
+                    session_id="session-1",
+                    thread_id="backend-thread-1",
+                    turn_id="backend-turn-1",
+                )
+            ),
+            serialize_run_event(
+                Completed(
+                    timestamp="2026-04-13T01:02:04Z",
+                    final_message="done",
+                )
+            ),
+        ]
+        timeline_result = await client.persist_execution_timeline(
+            ExecutionTimelinePersistRequest.from_mapping(
+                {
+                    "execution_id": running_execution.execution.execution_id,
+                    "target_kind": "thread_target",
+                    "target_id": thread_target_id,
+                    "repo_id": "repo-1",
+                    "resource_kind": "agent_workspace",
+                    "resource_id": "wksp-1",
+                    "metadata": {"status": "ok", "surface_kind": "telegram"},
+                    "events": timeline_events,
+                    "start_index": 1,
+                }
+            )
+        )
+        trace_result = await client.finalize_execution_cold_trace(
+            ExecutionColdTraceFinalizeRequest.from_mapping(
+                {
+                    "execution_id": running_execution.execution.execution_id,
+                    "events": timeline_events,
+                    "backend_thread_id": "backend-thread-1",
+                    "backend_turn_id": "backend-turn-1",
+                }
+            )
+        )
+        transcript_result = await client.write_transcript(
+            TranscriptWriteRequest.from_mapping(
+                {
+                    "turn_id": running_execution.execution.execution_id,
+                    "metadata": {"managed_thread_id": thread_target_id},
+                    "assistant_text": "done",
+                }
+            )
+        )
         await client.set_execution_backend_id(
             ExecutionBackendIdUpdateRequest.from_mapping(
                 {
@@ -294,6 +393,10 @@ async def test_hub_control_plane_http_client_round_trip(tmp_path: Path) -> None:
     assert second_delivery.record is not None
     assert first_delivery.record.delivered_message_id == "88"
     assert second_delivery.record.delivered_message_id == "88"
+    assert discord_binding.binding is not None
+    assert [binding.binding_id for binding in listed_bindings.bindings] == [
+        discord_binding.binding.binding_id
+    ]
     assert reply_target.record is not None
     assert reply_target.record.notification_id == "notif-1"
     assert running_execution.execution is not None
@@ -303,6 +406,9 @@ async def test_hub_control_plane_http_client_round_trip(tmp_path: Path) -> None:
         == queued_execution.execution.execution_id
     )
     assert queue_depth.queue_depth == 1
+    assert timeline_result.persisted_event_count == 2
+    assert trace_result.trace_manifest_id
+    assert transcript_result.turn_id == running_execution.execution.execution_id
     assert finalized.execution is not None
     assert finalized.execution.backend_id == "backend-77"
     assert claimed.execution is not None

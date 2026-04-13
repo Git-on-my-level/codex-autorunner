@@ -14,11 +14,13 @@ from ....core.hub_control_plane import (
     ExecutionCancelAllRequest,
     ExecutionCancelRequest,
     ExecutionClaimNextRequest,
+    ExecutionColdTraceFinalizeRequest,
     ExecutionCreateRequest,
     ExecutionInterruptRecordRequest,
     ExecutionLookupRequest,
     ExecutionPromoteRequest,
     ExecutionResultRecordRequest,
+    ExecutionTimelinePersistRequest,
     HandshakeRequest,
     HubControlPlaneError,
     HubSharedStateService,
@@ -30,6 +32,7 @@ from ....core.hub_control_plane import (
     QueueDepthRequest,
     QueuedExecutionListRequest,
     RunningExecutionLookupRequest,
+    SurfaceBindingListRequest,
     SurfaceBindingLookupRequest,
     SurfaceBindingUpsertRequest,
     ThreadActivityRecordRequest,
@@ -41,6 +44,7 @@ from ....core.hub_control_plane import (
     ThreadTargetLookupRequest,
     ThreadTargetResumeRequest,
     TranscriptHistoryRequest,
+    TranscriptWriteRequest,
     WorkspaceSetupCommandRequest,
 )
 
@@ -199,6 +203,14 @@ def build_hub_control_plane_routes() -> APIRouter:
         return await _run_control_plane_call(
             request_factory=lambda: SurfaceBindingUpsertRequest.from_mapping(payload),
             operation=service.upsert_surface_binding,
+        )
+
+    @router.post("/surface-bindings/query")
+    async def list_surface_bindings(request: Request, payload: dict[str, Any]):
+        service = _require_control_plane_service(request)
+        return await _run_control_plane_call(
+            request_factory=lambda: SurfaceBindingListRequest.from_mapping(payload),
+            operation=service.list_surface_bindings,
         )
 
     @router.get("/thread-targets/{thread_target_id}")
@@ -474,6 +486,34 @@ def build_hub_control_plane_routes() -> APIRouter:
             operation=service.set_execution_backend_id,
         )
 
+    @router.post("/thread-executions/{execution_id}/timeline")
+    async def persist_execution_timeline(
+        request: Request, execution_id: str, payload: dict[str, Any]
+    ):
+        service = _require_control_plane_service(request)
+        request_payload = dict(payload)
+        request_payload.setdefault("execution_id", execution_id)
+        return await _run_control_plane_call(
+            request_factory=lambda: ExecutionTimelinePersistRequest.from_mapping(
+                request_payload
+            ),
+            operation=service.persist_execution_timeline,
+        )
+
+    @router.post("/thread-executions/{execution_id}/cold-trace/finalize")
+    async def finalize_execution_cold_trace(
+        request: Request, execution_id: str, payload: dict[str, Any]
+    ):
+        service = _require_control_plane_service(request)
+        request_payload = dict(payload)
+        request_payload.setdefault("execution_id", execution_id)
+        return await _run_control_plane_call(
+            request_factory=lambda: ExecutionColdTraceFinalizeRequest.from_mapping(
+                request_payload
+            ),
+            operation=service.finalize_execution_cold_trace,
+        )
+
     @router.get("/transcript-history")
     async def get_transcript_history(
         request: Request,
@@ -491,6 +531,18 @@ def build_hub_control_plane_routes() -> APIRouter:
                 }
             ),
             operation=service.get_transcript_history,
+        )
+
+    @router.post("/transcripts/{turn_id}")
+    async def write_transcript(request: Request, turn_id: str, payload: dict[str, Any]):
+        service = _require_control_plane_service(request)
+        request_payload = dict(payload)
+        request_payload.setdefault("turn_id", turn_id)
+        return await _run_control_plane_call(
+            request_factory=lambda: TranscriptWriteRequest.from_mapping(
+                request_payload
+            ),
+            operation=service.write_transcript,
         )
 
     @router.get("/pma-snapshot")

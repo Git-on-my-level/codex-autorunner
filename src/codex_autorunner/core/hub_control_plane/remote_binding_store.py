@@ -7,7 +7,11 @@ from typing import Any, Callable, Coroutine, Optional, TypeVar
 
 from .client import HubControlPlaneClient
 from .errors import HubControlPlaneError
-from .models import SurfaceBindingLookupRequest, SurfaceBindingUpsertRequest
+from .models import (
+    SurfaceBindingListRequest,
+    SurfaceBindingLookupRequest,
+    SurfaceBindingUpsertRequest,
+)
 
 ResultT = TypeVar("ResultT")
 
@@ -15,10 +19,9 @@ ResultT = TypeVar("ResultT")
 class RemoteSurfaceBindingStore:
     """Best-effort surface binding adapter backed by the hub control plane.
 
-    The control plane currently exposes lookup and upsert operations for surface
-    bindings. This adapter mirrors those authoritative operations and maintains a
-    small local cache so read-only helpers like ``list_bindings`` continue to
-    work for bindings observed in the current process.
+    The control plane is authoritative for surface binding reads and writes. This
+    adapter maintains a small local cache for degraded hub-unavailable fallback
+    behavior so routing helpers can keep operating on recently observed bindings.
     """
 
     def __init__(
@@ -157,6 +160,91 @@ class RemoteSurfaceBindingStore:
         )
         return self._remember(response.binding)
 
+    @staticmethod
+    def _matches_filter(
+        binding: Any,
+        *,
+        thread_target_id: Optional[str] = None,
+        repo_id: Optional[str] = None,
+        resource_kind: Optional[str] = None,
+        resource_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        surface_kind: Optional[str] = None,
+        include_disabled: bool = False,
+    ) -> bool:
+        if (
+            not include_disabled
+            and str(getattr(binding, "disabled_at", "") or "").strip()
+        ):
+            return False
+        if (
+            thread_target_id is not None
+            and str(getattr(binding, "thread_target_id", "") or "").strip()
+            != str(thread_target_id).strip()
+        ):
+            return False
+        if (
+            repo_id is not None
+            and str(getattr(binding, "repo_id", "") or "").strip()
+            != str(repo_id).strip()
+        ):
+            return False
+        if (
+            resource_kind is not None
+            and str(getattr(binding, "resource_kind", "") or "").strip()
+            != str(resource_kind).strip()
+        ):
+            return False
+        if (
+            resource_id is not None
+            and str(getattr(binding, "resource_id", "") or "").strip()
+            != str(resource_id).strip()
+        ):
+            return False
+        if (
+            agent_id is not None
+            and str(getattr(binding, "agent_id", "") or "").strip()
+            != str(agent_id).strip()
+        ):
+            return False
+        if (
+            surface_kind is not None
+            and str(getattr(binding, "surface_kind", "") or "").strip()
+            != str(surface_kind).strip()
+        ):
+            return False
+        return True
+
+    def _filter_cached_bindings(
+        self,
+        *,
+        thread_target_id: Optional[str] = None,
+        repo_id: Optional[str] = None,
+        resource_kind: Optional[str] = None,
+        resource_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        surface_kind: Optional[str] = None,
+        include_disabled: bool = False,
+        limit: int = 200,
+    ) -> list[Any]:
+        filtered = []
+        for binding in self._bindings_by_key.values():
+            if not self._matches_filter(
+                binding,
+                thread_target_id=thread_target_id,
+                repo_id=repo_id,
+                resource_kind=resource_kind,
+                resource_id=resource_id,
+                agent_id=agent_id,
+                surface_kind=surface_kind,
+                include_disabled=include_disabled,
+            ):
+                continue
+            filtered.append(binding)
+            if len(filtered) >= max(1, int(limit)):
+                break
+        return filtered
+
     def list_bindings(
         self,
         *,
@@ -169,50 +257,36 @@ class RemoteSurfaceBindingStore:
         include_disabled: bool = False,
         limit: int = 200,
     ) -> list[Any]:
-        _ = include_disabled
-        bindings = list(self._bindings_by_key.values())
-        filtered = []
-        for binding in bindings:
-            if (
-                thread_target_id is not None
-                and str(getattr(binding, "thread_target_id", "") or "").strip()
-                != str(thread_target_id).strip()
-            ):
-                continue
-            if (
-                repo_id is not None
-                and str(getattr(binding, "repo_id", "") or "").strip()
-                != str(repo_id).strip()
-            ):
-                continue
-            if (
-                resource_kind is not None
-                and str(getattr(binding, "resource_kind", "") or "").strip()
-                != str(resource_kind).strip()
-            ):
-                continue
-            if (
-                resource_id is not None
-                and str(getattr(binding, "resource_id", "") or "").strip()
-                != str(resource_id).strip()
-            ):
-                continue
-            if (
-                agent_id is not None
-                and str(getattr(binding, "agent_id", "") or "").strip()
-                != str(agent_id).strip()
-            ):
-                continue
-            if (
-                surface_kind is not None
-                and str(getattr(binding, "surface_kind", "") or "").strip()
-                != str(surface_kind).strip()
-            ):
-                continue
-            filtered.append(binding)
-            if len(filtered) >= max(1, int(limit)):
-                break
-        return filtered
+        try:
+            response = self._run(
+                operation="list_surface_bindings",
+                action=lambda: self._client.list_surface_bindings(
+                    SurfaceBindingListRequest(
+                        thread_target_id=thread_target_id,
+                        repo_id=repo_id,
+                        resource_kind=resource_kind,
+                        resource_id=resource_id,
+                        agent_id=agent_id,
+                        surface_kind=surface_kind,
+                        include_disabled=include_disabled,
+                        limit=max(1, int(limit)),
+                    )
+                ),
+            )
+        except HubControlPlaneError as exc:
+            if exc.code != "hub_unavailable":
+                raise
+            return self._filter_cached_bindings(
+                thread_target_id=thread_target_id,
+                repo_id=repo_id,
+                resource_kind=resource_kind,
+                resource_id=resource_id,
+                agent_id=agent_id,
+                surface_kind=surface_kind,
+                include_disabled=include_disabled,
+                limit=limit,
+            )
+        return [self._remember(binding) for binding in response.bindings]
 
     def get_active_thread_for_binding(
         self, *, surface_kind: str, surface_key: str

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any, Iterable, Literal, Mapping, Optional
 
 from ..orchestration.models import (
@@ -9,6 +9,18 @@ from ..orchestration.models import (
     ExecutionRecord,
     MessageRequestKind,
     ThreadTarget,
+)
+from ..ports.run_event import (
+    ApprovalRequested,
+    Completed,
+    Failed,
+    OutputDelta,
+    RunEvent,
+    RunNotice,
+    Started,
+    TokenUsage,
+    ToolCall,
+    ToolResult,
 )
 
 HandshakeCompatibilityState = Literal["compatible", "incompatible"]
@@ -31,6 +43,9 @@ ControlPlaneCapability = Literal[
     "agent_workspaces",
     "workspace_setup_commands",
     "automation_requests",
+    "execution_timeline_persistence",
+    "execution_cold_trace_finalization",
+    "transcript_writes",
 ]
 
 
@@ -104,6 +119,73 @@ def _normalize_busy_thread_policy(value: Any) -> BusyThreadPolicy:
     if normalized == "queue":
         return "queue"
     return "reject"
+
+
+def _normalize_run_event_payloads(value: Any) -> tuple[dict[str, Any], ...]:
+    if not isinstance(value, list):
+        return ()
+    events: list[dict[str, Any]] = []
+    for item in value:
+        if isinstance(item, Mapping):
+            events.append(dict(item))
+    return tuple(events)
+
+
+def serialize_run_event(event: RunEvent) -> dict[str, Any]:
+    if isinstance(event, Started):
+        event_type = "started"
+    elif isinstance(event, OutputDelta):
+        event_type = "output_delta"
+    elif isinstance(event, ToolCall):
+        event_type = "tool_call"
+    elif isinstance(event, ToolResult):
+        event_type = "tool_result"
+    elif isinstance(event, ApprovalRequested):
+        event_type = "approval_requested"
+    elif isinstance(event, TokenUsage):
+        event_type = "token_usage"
+    elif isinstance(event, RunNotice):
+        event_type = "run_notice"
+    elif isinstance(event, Completed):
+        event_type = "completed"
+    elif isinstance(event, Failed):
+        event_type = "failed"
+    else:
+        raise ValueError(f"Unsupported run event payload: {type(event).__name__}")
+    return {
+        "event_type": event_type,
+        "payload": asdict(event),
+    }
+
+
+def deserialize_run_event(data: Mapping[str, Any]) -> RunEvent:
+    event_type = _normalize_required_text(
+        data.get("event_type"),
+        field_name="event_type",
+    )
+    payload = data.get("payload")
+    if not isinstance(payload, Mapping):
+        raise ValueError("payload is required")
+    event_payload = dict(payload)
+    if event_type == "started":
+        return Started(**event_payload)
+    if event_type == "output_delta":
+        return OutputDelta(**event_payload)
+    if event_type == "tool_call":
+        return ToolCall(**event_payload)
+    if event_type == "tool_result":
+        return ToolResult(**event_payload)
+    if event_type == "approval_requested":
+        return ApprovalRequested(**event_payload)
+    if event_type == "token_usage":
+        return TokenUsage(**event_payload)
+    if event_type == "run_notice":
+        return RunNotice(**event_payload)
+    if event_type == "completed":
+        return Completed(**event_payload)
+    if event_type == "failed":
+        return Failed(**event_payload)
+    raise ValueError(f"Unsupported run event type: {event_type}")
 
 
 @dataclass(frozen=True, order=True)
@@ -581,6 +663,43 @@ class SurfaceBindingUpsertRequest:
 
 
 @dataclass(frozen=True)
+class SurfaceBindingListRequest:
+    thread_target_id: Optional[str] = None
+    repo_id: Optional[str] = None
+    resource_kind: Optional[str] = None
+    resource_id: Optional[str] = None
+    agent_id: Optional[str] = None
+    surface_kind: Optional[str] = None
+    include_disabled: bool = False
+    limit: int = 200
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> "SurfaceBindingListRequest":
+        return cls(
+            thread_target_id=_normalize_optional_text(data.get("thread_target_id")),
+            repo_id=_normalize_optional_text(data.get("repo_id")),
+            resource_kind=_normalize_optional_text(data.get("resource_kind")),
+            resource_id=_normalize_optional_text(data.get("resource_id")),
+            agent_id=_normalize_optional_text(data.get("agent_id")),
+            surface_kind=_normalize_optional_text(data.get("surface_kind")),
+            include_disabled=bool(data.get("include_disabled")),
+            limit=max(1, _coerce_int(data.get("limit", 200), field_name="limit")),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "thread_target_id": self.thread_target_id,
+            "repo_id": self.repo_id,
+            "resource_kind": self.resource_kind,
+            "resource_id": self.resource_id,
+            "agent_id": self.agent_id,
+            "surface_kind": self.surface_kind,
+            "include_disabled": self.include_disabled,
+            "limit": self.limit,
+        }
+
+
+@dataclass(frozen=True)
 class SurfaceBindingResponse:
     binding: Optional[Binding]
 
@@ -596,6 +715,27 @@ class SurfaceBindingResponse:
 
     def to_dict(self) -> dict[str, Any]:
         return {"binding": None if self.binding is None else self.binding.to_dict()}
+
+
+@dataclass(frozen=True)
+class SurfaceBindingListResponse:
+    bindings: tuple[Binding, ...]
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> "SurfaceBindingListResponse":
+        raw_bindings = data.get("bindings")
+        if not isinstance(raw_bindings, list):
+            return cls(bindings=())
+        return cls(
+            bindings=tuple(
+                Binding.from_mapping(item)
+                for item in raw_bindings
+                if isinstance(item, Mapping)
+            )
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"bindings": [binding.to_dict() for binding in self.bindings]}
 
 
 @dataclass(frozen=True)
@@ -1131,6 +1271,178 @@ class ExecutionClaimNextRequest:
 
 
 @dataclass(frozen=True)
+class ExecutionTimelinePersistRequest:
+    execution_id: str
+    target_kind: Optional[str] = None
+    target_id: Optional[str] = None
+    repo_id: Optional[str] = None
+    run_id: Optional[str] = None
+    resource_kind: Optional[str] = None
+    resource_id: Optional[str] = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+    events: tuple[dict[str, Any], ...] = field(default_factory=tuple)
+    start_index: int = 1
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> "ExecutionTimelinePersistRequest":
+        return cls(
+            execution_id=_normalize_required_text(
+                data.get("execution_id"),
+                field_name="execution_id",
+            ),
+            target_kind=_normalize_optional_text(data.get("target_kind")),
+            target_id=_normalize_optional_text(data.get("target_id")),
+            repo_id=_normalize_optional_text(data.get("repo_id")),
+            run_id=_normalize_optional_text(data.get("run_id")),
+            resource_kind=_normalize_optional_text(data.get("resource_kind")),
+            resource_id=_normalize_optional_text(data.get("resource_id")),
+            metadata=_copy_mapping(data.get("metadata")),
+            events=_normalize_run_event_payloads(data.get("events")),
+            start_index=max(
+                1,
+                _coerce_int(data.get("start_index", 1), field_name="start_index"),
+            ),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "execution_id": self.execution_id,
+            "target_kind": self.target_kind,
+            "target_id": self.target_id,
+            "repo_id": self.repo_id,
+            "run_id": self.run_id,
+            "resource_kind": self.resource_kind,
+            "resource_id": self.resource_id,
+            "metadata": dict(self.metadata),
+            "events": [dict(event) for event in self.events],
+            "start_index": self.start_index,
+        }
+
+
+@dataclass(frozen=True)
+class ExecutionTimelinePersistResponse:
+    execution_id: str
+    persisted_event_count: int = 0
+
+    @classmethod
+    def from_mapping(
+        cls, data: Mapping[str, Any]
+    ) -> "ExecutionTimelinePersistResponse":
+        return cls(
+            execution_id=_normalize_required_text(
+                data.get("execution_id"),
+                field_name="execution_id",
+            ),
+            persisted_event_count=_coerce_int(
+                data.get("persisted_event_count", 0),
+                field_name="persisted_event_count",
+            ),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "execution_id": self.execution_id,
+            "persisted_event_count": self.persisted_event_count,
+        }
+
+
+@dataclass(frozen=True)
+class ExecutionColdTraceFinalizeRequest:
+    execution_id: str
+    events: tuple[dict[str, Any], ...] = field(default_factory=tuple)
+    backend_thread_id: Optional[str] = None
+    backend_turn_id: Optional[str] = None
+
+    @classmethod
+    def from_mapping(
+        cls, data: Mapping[str, Any]
+    ) -> "ExecutionColdTraceFinalizeRequest":
+        return cls(
+            execution_id=_normalize_required_text(
+                data.get("execution_id"),
+                field_name="execution_id",
+            ),
+            events=_normalize_run_event_payloads(data.get("events")),
+            backend_thread_id=_normalize_optional_text(data.get("backend_thread_id")),
+            backend_turn_id=_normalize_optional_text(data.get("backend_turn_id")),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "execution_id": self.execution_id,
+            "events": [dict(event) for event in self.events],
+            "backend_thread_id": self.backend_thread_id,
+            "backend_turn_id": self.backend_turn_id,
+        }
+
+
+@dataclass(frozen=True)
+class ExecutionColdTraceFinalizeResponse:
+    execution_id: str
+    trace_manifest_id: Optional[str] = None
+
+    @classmethod
+    def from_mapping(
+        cls, data: Mapping[str, Any]
+    ) -> "ExecutionColdTraceFinalizeResponse":
+        return cls(
+            execution_id=_normalize_required_text(
+                data.get("execution_id"),
+                field_name="execution_id",
+            ),
+            trace_manifest_id=_normalize_optional_text(data.get("trace_manifest_id")),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "execution_id": self.execution_id,
+            "trace_manifest_id": self.trace_manifest_id,
+        }
+
+
+@dataclass(frozen=True)
+class TranscriptWriteRequest:
+    turn_id: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+    assistant_text: str = ""
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> "TranscriptWriteRequest":
+        return cls(
+            turn_id=_normalize_required_text(
+                data.get("turn_id"),
+                field_name="turn_id",
+            ),
+            metadata=_copy_mapping(data.get("metadata")),
+            assistant_text=str(data.get("assistant_text") or ""),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "turn_id": self.turn_id,
+            "metadata": dict(self.metadata),
+            "assistant_text": self.assistant_text,
+        }
+
+
+@dataclass(frozen=True)
+class TranscriptWriteResponse:
+    turn_id: str
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> "TranscriptWriteResponse":
+        return cls(
+            turn_id=_normalize_required_text(
+                data.get("turn_id"),
+                field_name="turn_id",
+            )
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"turn_id": self.turn_id}
+
+
+@dataclass(frozen=True)
 class TranscriptHistoryRequest:
     target_kind: str
     target_id: str
@@ -1650,6 +1962,8 @@ __all__ = [
     "ExecutionCancelResponse",
     "ExecutionClaimNextRequest",
     "ExecutionClaimNextResponse",
+    "ExecutionColdTraceFinalizeRequest",
+    "ExecutionColdTraceFinalizeResponse",
     "ExecutionCreateRequest",
     "ExecutionInterruptRecordRequest",
     "ExecutionListResponse",
@@ -1658,6 +1972,8 @@ __all__ = [
     "ExecutionPromoteResponse",
     "ExecutionResponse",
     "ExecutionResultRecordRequest",
+    "ExecutionTimelinePersistRequest",
+    "ExecutionTimelinePersistResponse",
     "LatestExecutionLookupRequest",
     "QueueDepthRequest",
     "QueueDepthResponse",
@@ -1674,6 +1990,8 @@ __all__ = [
     "NotificationRecord",
     "NotificationRecordResponse",
     "PmaSnapshotResponse",
+    "SurfaceBindingListRequest",
+    "SurfaceBindingListResponse",
     "SurfaceBindingLookupRequest",
     "SurfaceBindingResponse",
     "SurfaceBindingUpsertRequest",
@@ -1690,7 +2008,11 @@ __all__ = [
     "ThreadTargetResumeRequest",
     "TranscriptHistoryRequest",
     "TranscriptHistoryResponse",
+    "TranscriptWriteRequest",
+    "TranscriptWriteResponse",
     "WorkspaceSetupCommandRequest",
     "WorkspaceSetupCommandResult",
+    "deserialize_run_event",
     "evaluate_handshake_compatibility",
+    "serialize_run_event",
 ]

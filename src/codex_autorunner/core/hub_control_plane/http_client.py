@@ -21,6 +21,8 @@ from .models import (
     ExecutionCancelResponse,
     ExecutionClaimNextRequest,
     ExecutionClaimNextResponse,
+    ExecutionColdTraceFinalizeRequest,
+    ExecutionColdTraceFinalizeResponse,
     ExecutionCreateRequest,
     ExecutionInterruptRecordRequest,
     ExecutionListResponse,
@@ -29,6 +31,8 @@ from .models import (
     ExecutionPromoteResponse,
     ExecutionResponse,
     ExecutionResultRecordRequest,
+    ExecutionTimelinePersistRequest,
+    ExecutionTimelinePersistResponse,
     HandshakeRequest,
     HandshakeResponse,
     LatestExecutionLookupRequest,
@@ -42,6 +46,8 @@ from .models import (
     QueueDepthResponse,
     QueuedExecutionListRequest,
     RunningExecutionLookupRequest,
+    SurfaceBindingListRequest,
+    SurfaceBindingListResponse,
     SurfaceBindingLookupRequest,
     SurfaceBindingResponse,
     SurfaceBindingUpsertRequest,
@@ -57,6 +63,8 @@ from .models import (
     ThreadTargetResumeRequest,
     TranscriptHistoryRequest,
     TranscriptHistoryResponse,
+    TranscriptWriteRequest,
+    TranscriptWriteResponse,
     WorkspaceSetupCommandRequest,
     WorkspaceSetupCommandResult,
 )
@@ -265,6 +273,16 @@ class HttpHubControlPlaneClient(HubControlPlaneClient):
             json_payload=request.to_dict(),
         )
         return SurfaceBindingResponse.from_mapping(payload)
+
+    async def list_surface_bindings(
+        self, request: SurfaceBindingListRequest
+    ) -> SurfaceBindingListResponse:
+        payload = await self._request(
+            method="POST",
+            path="/hub/api/control-plane/surface-bindings/query",
+            json_payload=request.to_dict(),
+        )
+        return SurfaceBindingListResponse.from_mapping(payload)
 
     async def get_thread_target(
         self, request: ThreadTargetLookupRequest
@@ -495,6 +513,32 @@ class HttpHubControlPlaneClient(HubControlPlaneClient):
         )
         return ExecutionClaimNextResponse.from_mapping(payload)
 
+    async def persist_execution_timeline(
+        self, request: ExecutionTimelinePersistRequest
+    ) -> ExecutionTimelinePersistResponse:
+        payload = await self._request(
+            method="POST",
+            path=(
+                "/hub/api/control-plane/thread-executions/"
+                f"{request.execution_id}/timeline"
+            ),
+            json_payload=request.to_dict(),
+        )
+        return ExecutionTimelinePersistResponse.from_mapping(payload)
+
+    async def finalize_execution_cold_trace(
+        self, request: ExecutionColdTraceFinalizeRequest
+    ) -> ExecutionColdTraceFinalizeResponse:
+        payload = await self._request(
+            method="POST",
+            path=(
+                "/hub/api/control-plane/thread-executions/"
+                f"{request.execution_id}/cold-trace/finalize"
+            ),
+            json_payload=request.to_dict(),
+        )
+        return ExecutionColdTraceFinalizeResponse.from_mapping(payload)
+
     async def get_transcript_history(
         self, request: TranscriptHistoryRequest
     ) -> TranscriptHistoryResponse:
@@ -504,6 +548,16 @@ class HttpHubControlPlaneClient(HubControlPlaneClient):
             params=request.to_dict(),
         )
         return TranscriptHistoryResponse.from_mapping(payload)
+
+    async def write_transcript(
+        self, request: TranscriptWriteRequest
+    ) -> TranscriptWriteResponse:
+        payload = await self._request(
+            method="POST",
+            path=f"/hub/api/control-plane/transcripts/{request.turn_id}",
+            json_payload=request.to_dict(),
+        )
+        return TranscriptWriteResponse.from_mapping(payload)
 
     async def get_pma_snapshot(self) -> PmaSnapshotResponse:
         payload = await self._request(
