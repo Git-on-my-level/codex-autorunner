@@ -1,3 +1,17 @@
+"""Reactive debounce store for PMA lifecycle event gating.
+
+Canonical ownership:
+  ``orch_reactive_debounce_state`` in the orchestration SQLite database is the
+  sole authoritative owner of debounce state.  Every read goes through SQLite,
+  and every write persists to SQLite first.
+
+Compatibility mirror:
+  After each canonical write the store also writes a JSON mirror to
+  ``.codex-autorunner/pma/reactive_state.json``.  This mirror exists solely for
+  backward compatibility and operator visibility; it must never be treated as a
+  source of truth.  Deleting the mirror does not affect correctness.
+"""
+
 from __future__ import annotations
 
 import json
@@ -26,14 +40,21 @@ def default_pma_reactive_state() -> dict[str, Any]:
 
 
 class PmaReactiveStore:
+    """Debounce gate for PMA reactive lifecycle events.
+
+    Reads always come from the canonical ``orch_reactive_debounce_state``
+    table.  Writes persist to that table first, then emit a best-effort JSON
+    mirror for compatibility.
+    """
+
     def __init__(self, hub_root: Path) -> None:
         self._hub_root = hub_root
-        self._path = (
+        self._compat_mirror_path = (
             hub_root / ".codex-autorunner" / "pma" / PMA_REACTIVE_STATE_FILENAME
         )
 
     def _lock_path(self) -> Path:
-        return lock_path_for(self._path)
+        return lock_path_for(self._compat_mirror_path)
 
     def load(self) -> dict[str, Any]:
         with file_lock(self._lock_path()):
@@ -41,7 +62,8 @@ class PmaReactiveStore:
             if state is not None:
                 return state
             state = default_pma_reactive_state()
-            self._save_unlocked(state)
+            self._persist_canonical_unlocked(state)
+            self._write_compat_mirror(state)
             return state
 
     def check_and_update(self, key: str, debounce_seconds: int) -> bool:
@@ -63,8 +85,13 @@ class PmaReactiveStore:
                     return False
 
             last_enqueued[key] = now
-            self._save_unlocked(state)
+            self._persist_canonical_unlocked(state)
+            self._write_compat_mirror(state)
         return True
+
+    # ------------------------------------------------------------------
+    # Canonical persistence (orchestration SQLite)
+    # ------------------------------------------------------------------
 
     def _load_unlocked(self) -> Optional[dict[str, Any]]:
         ensure_legacy_orchestration_backfill(self._hub_root, durable=True)
@@ -88,7 +115,7 @@ class PmaReactiveStore:
             },
         }
 
-    def _save_unlocked(self, state: dict[str, Any]) -> None:
+    def _persist_canonical_unlocked(self, state: dict[str, Any]) -> None:
         last_enqueued = state.get("last_enqueued")
         values = last_enqueued if isinstance(last_enqueued, dict) else {}
         stamp = now_iso()
@@ -120,8 +147,21 @@ class PmaReactiveStore:
                         """,
                         (key, None, None, None, None, None, "{}", stamp, stamp, parsed),
                     )
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write(self._path, json.dumps(state, indent=2) + "\n")
+
+    # ------------------------------------------------------------------
+    # Compatibility mirror (JSON file — not a source of truth)
+    # ------------------------------------------------------------------
+
+    def _write_compat_mirror(self, state: dict[str, Any]) -> None:
+        try:
+            self._compat_mirror_path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write(self._compat_mirror_path, json.dumps(state, indent=2) + "\n")
+        except OSError:
+            logger.debug(
+                "Failed to write reactive debounce compat mirror at %s",
+                self._compat_mirror_path,
+                exc_info=True,
+            )
 
 
 __all__ = [

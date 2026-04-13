@@ -788,3 +788,71 @@ class TestMirrorFileSyncInvariants:
         raw = json.loads(mirror.read_text())
         assert "key-a" in raw["last_enqueued"]
         assert "key-b" in raw["last_enqueued"]
+
+    def test_reactive_canonical_survives_mirror_write_failure(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        hub_root = tmp_path / "hub"
+        store = PmaReactiveStore(hub_root)
+        store.check_and_update("key-1", 10)
+
+        import codex_autorunner.core.pma_reactive as _mod
+
+        def _failing_atomic_write(path, content):
+            raise OSError("disk full (simulated)")
+
+        monkeypatch.setattr(_mod, "atomic_write", _failing_atomic_write)
+
+        assert store.check_and_update("key-2", 10) is True
+
+        with open_orchestration_sqlite(hub_root, durable=False) as conn:
+            rows = conn.execute(
+                "SELECT debounce_key FROM orch_reactive_debounce_state ORDER BY debounce_key"
+            ).fetchall()
+        keys = [r["debounce_key"] for r in rows]
+        assert "key-1" in keys
+        assert "key-2" in keys
+
+        mirror = _reactive_json_mirror_path(hub_root)
+        assert mirror.exists()
+        raw = json.loads(mirror.read_text())
+        assert "key-1" in raw["last_enqueued"]
+        assert "key-2" not in raw["last_enqueued"]
+
+
+class TestPmaStateStoreIsRuntimeOnly:
+    def test_pma_state_store_does_not_touch_orchestration_tables(
+        self, tmp_path: Path
+    ) -> None:
+        from codex_autorunner.core.pma_state import PmaStateStore
+
+        hub_root = tmp_path / "hub"
+        store = PmaStateStore(hub_root)
+        store.save(
+            {
+                "version": 1,
+                "active": True,
+                "current": {"turn_id": "t-1"},
+                "last_result": {},
+                "updated_at": "2025-01-01T00:00:00Z",
+            }
+        )
+        state = store.load()
+        assert state["active"] is True
+        assert state["current"]["turn_id"] == "t-1"
+
+        db_path = hub_root / ".codex-autorunner" / "orchestration.sqlite3"
+        if db_path.exists():
+            with open_orchestration_sqlite(hub_root, durable=False) as conn:
+                tables = {
+                    r["name"]
+                    for r in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    ).fetchall()
+                }
+            reactive_rows = 0
+            if "orch_reactive_debounce_state" in tables:
+                reactive_rows = conn.execute(
+                    "SELECT COUNT(*) AS c FROM orch_reactive_debounce_state"
+                ).fetchone()["c"]
+            assert reactive_rows == 0
