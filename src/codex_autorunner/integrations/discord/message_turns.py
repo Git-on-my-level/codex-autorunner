@@ -21,6 +21,7 @@ from ...core.context_awareness import (
     maybe_inject_prompt_writing_hint,
 )
 from ...core.filebox import inbox_dir, outbox_dir, outbox_pending_dir
+from ...core.hub_control_plane import RemoteThreadExecutionStore
 from ...core.injected_context import wrap_injected_context
 from ...core.logging_utils import log_event
 from ...core.orchestration import (
@@ -47,7 +48,6 @@ from ...core.pma_notification_store import (
     build_notification_context_block,
     notification_surface_key,
 )
-from ...core.pma_thread_store import PmaThreadStore
 from ...core.ports.run_event import TokenUsage
 from ...core.utils import canonicalize_path
 from ...integrations.chat.agents import resolve_chat_runtime_agent
@@ -2307,11 +2307,32 @@ def build_discord_thread_orchestration_service(service: Any) -> Any:
             )
         return harness
 
-    created = build_harness_backed_orchestration_service(
-        descriptors=cast(Any, descriptors),
-        harness_factory=_make_harness,
-        pma_thread_store=PmaThreadStore(service._config.root),
+    hub_client = getattr(service, "_hub_client", None)
+    handshake_compat = getattr(service, "_hub_handshake_compatibility", None)
+    handshake_ok = hub_client is not None and getattr(
+        handshake_compat, "compatible", False
     )
+    if handshake_ok:
+        thread_store = RemoteThreadExecutionStore(cast(Any, hub_client))
+        created = build_harness_backed_orchestration_service(
+            descriptors=cast(Any, descriptors),
+            harness_factory=_make_harness,
+            thread_store=thread_store,
+        )
+    else:
+        from ...core.pma_thread_store import PmaThreadStore
+
+        log_event(
+            service._logger,
+            logging.WARNING,
+            "discord.orchestration.hub_client_unavailable",
+            message="Falling back to local PmaThreadStore for orchestration",
+        )
+        created = build_harness_backed_orchestration_service(
+            descriptors=cast(Any, descriptors),
+            harness_factory=_make_harness,
+            pma_thread_store=PmaThreadStore(service._config.root),
+        )
     service._discord_thread_orchestration_service = created
     service._discord_managed_thread_orchestration_service = created
     return created

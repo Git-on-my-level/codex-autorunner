@@ -398,7 +398,7 @@ _FORBIDDEN_POLLING_OWNER_PATTERNS: tuple[str, ...] = (
 _SIDE_PROCESS_BOUNDARY_ALLOWLIST: dict[str, list[str]] = {
     "integrations/discord/message_turns.py": [
         "build_hub_snapshot -- ALLOWED: fallback when hub client unavailable; hub_client path preferred",
-        "PmaThreadStore -- ALLOWED: orchestration service execution lifecycle needs direct thread store",
+        "PmaThreadStore -- ALLOWED: lazy fallback when hub handshake not completed; RemoteThreadExecutionStore preferred",
     ],
     "integrations/discord/service.py": [
         "build_ticket_flow_orchestration_service -- ALLOWED: ticket flow uses per-workspace orchestration SQLite",
