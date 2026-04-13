@@ -227,6 +227,7 @@ async def _build_new_session_details(
     agent: Optional[str],
     profile: Optional[str],
     hub_root: Path,
+    stored_thread_id: Optional[str] = None,
 ) -> dict[str, Any]:
     return await _maybe_fork_hermes_pma_session(
         request,
@@ -234,13 +235,43 @@ async def _build_new_session_details(
         agent=agent,
         profile=profile,
         hub_root=hub_root,
-        stored_thread_id=_resolve_preclear_hermes_fork_thread_id(
+        stored_thread_id=stored_thread_id,
+    )
+
+
+async def _new_pma_session_response(
+    request: Request,
+    payload: Optional[PmaNewSessionRequest],
+    *,
+    current: dict[str, Any],
+    preclear_thread_id: Optional[str],
+) -> dict[str, Any]:
+    agent = _normalize_optional_text(payload.agent if payload else None)
+    profile = _normalize_optional_text(payload.profile if payload else None)
+    lane_id = ((payload.lane_id if payload else None) or "pma:default").strip()
+
+    hub_root = request.app.state.config.root
+    lifecycle_router = PmaLifecycleRouter(hub_root)
+    result = await lifecycle_router.new(
+        agent=agent,
+        profile=profile,
+        lane_id=lane_id,
+    )
+    if result.status != "ok":
+        raise HTTPException(status_code=500, detail=result.error)
+
+    details = dict(result.details)
+    details.update(
+        await _build_new_session_details(
             request,
             current=current,
             agent=agent,
             profile=profile,
-        ),
+            hub_root=hub_root,
+            stored_thread_id=preclear_thread_id,
+        )
     )
+    return _serialize_lifecycle_result(result, details=details)
 
 
 def _serialize_lifecycle_result(
@@ -1951,34 +1982,20 @@ def build_chat_runtime_router(
     ) -> dict[str, Any]:
         agent = _normalize_optional_text(payload.agent if payload else None)
         profile = _normalize_optional_text(payload.profile if payload else None)
-        lane_id = ((payload.lane_id if payload else None) or "pma:default").strip()
         runtime = get_runtime_state()
         current = await runtime.get_current_snapshot()
-
-        hub_root = request.app.state.config.root
-        lifecycle_router = PmaLifecycleRouter(hub_root)
-
-        result = await lifecycle_router.new(
+        preclear_thread_id = _resolve_preclear_hermes_fork_thread_id(
+            request,
+            current=current,
             agent=agent,
             profile=profile,
-            lane_id=lane_id,
         )
-
-        if result.status != "ok":
-            raise HTTPException(status_code=500, detail=result.error)
-
-        details = dict(result.details)
-        details.update(
-            await _build_new_session_details(
-                request,
-                current=current,
-                agent=agent,
-                profile=profile,
-                hub_root=hub_root,
-            )
+        return await _new_pma_session_response(
+            request,
+            payload,
+            current=current,
+            preclear_thread_id=preclear_thread_id,
         )
-
-        return _serialize_lifecycle_result(result, details=details)
 
     @router.post("/reset")
     async def reset_pma_session(

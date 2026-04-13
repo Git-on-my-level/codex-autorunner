@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 from pathlib import Path
 
 from codex_autorunner.core import pytest_temp_cleanup as cleanup_module
@@ -89,4 +90,33 @@ def test_cleanup_temp_paths_tolerates_path_vanishing_after_delete_failure(
     assert summary.deleted == 0
     assert summary.failed == 1
     assert summary.bytes_after == 0
+    assert target.exists() is False
+
+
+def test_cleanup_temp_paths_retries_transient_directory_not_empty(
+    tmp_path: Path, monkeypatch
+) -> None:
+    target = tmp_path / "stale"
+    (target / "data").mkdir(parents=True)
+    (target / "data" / "artifact.bin").write_bytes(b"1234")
+    original_rmtree = cleanup_module.shutil.rmtree
+    calls = {"count": 0}
+
+    def _scan(path: Path) -> TempPathScanResult:
+        return TempPathScanResult(path=path, bytes=4)
+
+    def _rmtree_retry_then_succeed(path: Path) -> None:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise OSError(errno.ENOTEMPTY, "Directory not empty")
+        original_rmtree(path)
+
+    monkeypatch.setattr(cleanup_module.shutil, "rmtree", _rmtree_retry_then_succeed)
+
+    summary = cleanup_temp_paths((target,), scan_fn=_scan)
+
+    assert calls["count"] == 2
+    assert summary.scanned == 1
+    assert summary.deleted == 1
+    assert summary.failed == 0
     assert target.exists() is False

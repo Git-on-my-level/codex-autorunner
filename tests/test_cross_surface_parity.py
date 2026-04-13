@@ -285,15 +285,13 @@ def test_cross_surface_parity_report(hub_env) -> None:
     )
 
     discord_commands_path = Path(
-        "src/codex_autorunner/integrations/discord/commands.py"
+        "src/codex_autorunner/integrations/discord/interaction_registry.py"
     )
     discord_service_path = Path("src/codex_autorunner/integrations/discord/service.py")
     discord_dispatch_path = Path(
-        "src/codex_autorunner/integrations/discord/car_command_dispatch.py"
+        "src/codex_autorunner/integrations/discord/interaction_registry.py"
     )
-    discord_interaction_dispatch_path = Path(
-        "src/codex_autorunner/integrations/discord/interaction_dispatch.py"
-    )
+    discord_ingress_path = Path("src/codex_autorunner/integrations/discord/ingress.py")
     discord_commands_text = (
         discord_commands_path.read_text(encoding="utf-8")
         if discord_commands_path.exists()
@@ -309,9 +307,9 @@ def test_cross_surface_parity_report(hub_env) -> None:
         if discord_dispatch_path.exists()
         else ""
     )
-    discord_interaction_dispatch_text = (
-        discord_interaction_dispatch_path.read_text(encoding="utf-8")
-        if discord_interaction_dispatch_path.exists()
+    discord_ingress_text = (
+        discord_ingress_path.read_text(encoding="utf-8")
+        if discord_ingress_path.exists()
         else ""
     )
 
@@ -339,12 +337,12 @@ def test_cross_surface_parity_report(hub_env) -> None:
 
     discord_car_agent_support = _contains_all(
         discord_commands_text,
-        '"name": "agent"',
-        '"description": "View or set the agent"',
+        'canonical_path=("car", "agent")',
+        'description="View or set the agent"',
     ) and _contains_all(
         discord_dispatch_text,
-        'if command_path == ("car", "agent"):',
-        "await service._handle_car_agent(",
+        'canonical_path=("car", "agent")',
+        "_handle_car_agent(",
     )
     checks.append(
         ParityCheck(
@@ -355,13 +353,11 @@ def test_cross_surface_parity_report(hub_env) -> None:
         )
     )
 
-    _combined_discord_text = (
-        discord_service_text + "\n" + discord_interaction_dispatch_text
-    )
+    _combined_discord_text = discord_service_text + "\n" + discord_ingress_text
     discord_shared_command_ingress = (
         "integrations.chat.command_ingress import canonicalize_command_ingress"
         in _combined_discord_text
-        and _combined_discord_text.count("canonicalize_command_ingress(") >= 2
+        and discord_ingress_text.count("canonicalize_command_ingress(") >= 2
     )
     checks.append(
         ParityCheck(

@@ -21,6 +21,10 @@ _DISCORD_CAR_DISPATCH_PATH = Path(
 _DISCORD_INTERACTION_DISPATCH_PATH = Path(
     "src/codex_autorunner/integrations/discord/interaction_dispatch.py"
 )
+_DISCORD_INTERACTION_REGISTRY_PATH = Path(
+    "src/codex_autorunner/integrations/discord/interaction_registry.py"
+)
+_DISCORD_INGRESS_PATH = Path("src/codex_autorunner/integrations/discord/ingress.py")
 _DISCORD_COMMANDS_PATH = Path("src/codex_autorunner/integrations/discord/commands.py")
 _TELEGRAM_TRIGGER_MODE_PATH = Path(
     "src/codex_autorunner/integrations/telegram/trigger_mode.py"
@@ -79,6 +83,18 @@ def run_parity_checks(
             repo_relative_path=_DISCORD_INTERACTION_DISPATCH_PATH,
         )
     )
+    discord_interaction_registry_text = _read_text(
+        _resolve_source_path(
+            repo_root=repo_root,
+            repo_relative_path=_DISCORD_INTERACTION_REGISTRY_PATH,
+        )
+    )
+    discord_ingress_text = _read_text(
+        _resolve_source_path(
+            repo_root=repo_root,
+            repo_relative_path=_DISCORD_INGRESS_PATH,
+        )
+    )
     telegram_trigger_mode_text = _read_text(source_paths["telegram_trigger_mode"])
     telegram_messages_text = _read_text(source_paths["telegram_messages"])
     discord_commands_text = _read_text(
@@ -97,6 +113,8 @@ def run_parity_checks(
     discord_service_ast = _parse_module(discord_service_text)
     discord_car_dispatch_ast = _parse_module(discord_car_dispatch_text)
     discord_interaction_dispatch_ast = _parse_module(discord_interaction_dispatch_text)
+    discord_interaction_registry_ast = _parse_module(discord_interaction_registry_text)
+    discord_ingress_ast = _parse_module(discord_ingress_text)
     telegram_trigger_mode_ast = _parse_module(telegram_trigger_mode_text)
     telegram_messages_ast = _parse_module(telegram_messages_text)
     discord_commands_ast = _parse_module(discord_commands_text)
@@ -108,25 +126,30 @@ def run_parity_checks(
         _check_contract_registry_entries_cataloged(
             contract=contract,
             discord_commands_ast=discord_commands_ast,
+            discord_interaction_registry_ast=discord_interaction_registry_ast,
             telegram_commands_spec_ast=telegram_commands_spec_ast,
         ),
         _check_discord_contract_commands_routed(
             contract=contract,
             discord_service_ast=discord_service_ast,
             discord_car_dispatch_ast=discord_car_dispatch_ast,
+            discord_interaction_registry_ast=discord_interaction_registry_ast,
         ),
         _check_discord_known_commands_not_in_generic_fallback(
             discord_service_ast=discord_service_ast,
             discord_car_dispatch_ast=discord_car_dispatch_ast,
             discord_interaction_dispatch_ast=discord_interaction_dispatch_ast,
+            discord_interaction_registry_ast=discord_interaction_registry_ast,
         ),
         _check_discord_canonicalize_command_ingress_usage(
             discord_service_ast=discord_service_ast,
             discord_interaction_dispatch_ast=discord_interaction_dispatch_ast,
+            discord_ingress_ast=discord_ingress_ast,
         ),
         _check_discord_interaction_component_guard_paths(
             discord_service_ast=discord_service_ast,
             discord_interaction_dispatch_ast=discord_interaction_dispatch_ast,
+            discord_interaction_registry_ast=discord_interaction_registry_ast,
         ),
         _check_shared_plain_text_turn_policy_usage(
             discord_service_ast=discord_service_ast,
@@ -336,10 +359,13 @@ def _check_contract_registry_entries_cataloged(
     *,
     contract: Sequence[CommandContractEntry],
     discord_commands_ast: ast.Module | None,
+    discord_interaction_registry_ast: ast.Module | None,
     telegram_commands_spec_ast: ast.Module | None,
 ) -> ParityCheckResult:
     discord_registered_paths = _extract_discord_registered_command_paths(
         discord_commands_ast
+    ) or _extract_discord_registered_paths_from_registry(
+        discord_interaction_registry_ast
     )
     telegram_registered_commands = _extract_telegram_registered_commands(
         telegram_commands_spec_ast
@@ -427,7 +453,11 @@ def _check_discord_contract_commands_routed(
     contract: Sequence[CommandContractEntry],
     discord_service_ast: ast.Module | None,
     discord_car_dispatch_ast: ast.Module | None,
+    discord_interaction_registry_ast: ast.Module | None,
 ) -> ParityCheckResult:
+    registry_paths = _extract_discord_canonical_paths_from_registry(
+        discord_interaction_registry_ast
+    )
     expected_stable_ids: list[str] = []
     missing_ids: list[str] = []
     missing_non_stable_ids: list[str] = []
@@ -440,10 +470,16 @@ def _check_discord_contract_commands_routed(
         missing_paths = [
             path
             for path in entry.discord_paths
-            if not _is_discord_path_routed_in_service(
-                path,
-                discord_service_ast,
-                discord_car_dispatch_ast,
+            if not (
+                (
+                    registry_paths is not None
+                    and _normalize_discord_contract_route_path(path) in registry_paths
+                )
+                or _is_discord_path_routed_in_service(
+                    path,
+                    discord_service_ast,
+                    discord_car_dispatch_ast,
+                )
             )
         ]
         if not missing_paths:
@@ -532,6 +568,7 @@ def _check_discord_known_commands_not_in_generic_fallback(
     discord_service_ast: ast.Module | None,
     discord_car_dispatch_ast: ast.Module | None,
     discord_interaction_dispatch_ast: ast.Module | None = None,
+    discord_interaction_registry_ast: ast.Module | None = None,
 ) -> ParityCheckResult:
     normalized_handlers = _find_functions_by_name(
         discord_interaction_dispatch_ast,
@@ -541,7 +578,7 @@ def _check_discord_known_commands_not_in_generic_fallback(
         "_handle_normalized_interaction",
     )
 
-    checks = {
+    legacy_checks = {
         "normalized_car_prefix_guard": _has_prefix_guard_in_functions(
             normalized_handlers,
             prefix="car",
@@ -573,9 +610,31 @@ def _check_discord_known_commands_not_in_generic_fallback(
             exact="Unknown PMA subcommand. Use on, off, or status.",
         ),
     }
+    registry_dispatch_handlers = _find_functions_by_name(
+        discord_interaction_registry_ast,
+        "dispatch_slash_command",
+    )
+    registry_checks = {
+        "registry_car_specific_fallback_present": _has_call_with_string_argument(
+            registry_dispatch_handlers,
+            callee_name="respond_ephemeral",
+            contains="Unknown car subcommand:",
+        ),
+        "registry_pma_specific_fallback_present": _has_call_with_string_argument(
+            registry_dispatch_handlers,
+            callee_name="respond_ephemeral",
+            exact="Unknown PMA subcommand. Use on, off, or status.",
+        ),
+        "registry_generic_fallback_present": _has_call_with_string_argument(
+            registry_dispatch_handlers,
+            callee_name="respond_ephemeral",
+            exact="Command not implemented yet for Discord.",
+        ),
+    }
+    checks = {**legacy_checks, **registry_checks}
 
     failed_predicates = [key for key, passed in checks.items() if not passed]
-    passed = not failed_predicates
+    passed = all(registry_checks.values()) or all(legacy_checks.values())
 
     if passed:
         message = "Known Discord command prefixes are guarded before generic fallback."
@@ -597,7 +656,31 @@ def _check_discord_canonicalize_command_ingress_usage(
     *,
     discord_service_ast: ast.Module | None,
     discord_interaction_dispatch_ast: ast.Module | None = None,
+    discord_ingress_ast: ast.Module | None = None,
 ) -> ParityCheckResult:
+    ingress_checks = {
+        "ingress_import_present": _module_imports_name(
+            discord_ingress_ast,
+            module_suffix="integrations.chat.command_ingress",
+            name="canonicalize_command_ingress",
+        ),
+        "ingress_calls_present": _count_calls(
+            discord_ingress_ast,
+            callee_name="canonicalize_command_ingress",
+        )
+        >= 2,
+    }
+    if all(ingress_checks.values()):
+        return ParityCheckResult(
+            id="discord.canonical_command_ingress_usage",
+            passed=True,
+            message="Discord ingress paths use shared canonical command normalization.",
+            metadata={
+                "failed_predicates": [],
+                "predicates": ingress_checks,
+            },
+        )
+
     normalized_handlers = _find_functions_by_name(
         discord_interaction_dispatch_ast,
         "handle_normalized_interaction",
@@ -721,6 +804,7 @@ def _check_discord_interaction_component_guard_paths(
     *,
     discord_service_ast: ast.Module | None,
     discord_interaction_dispatch_ast: ast.Module | None = None,
+    discord_interaction_registry_ast: ast.Module | None = None,
 ) -> ParityCheckResult:
     normalized_interaction_handlers = _find_functions_by_name(
         discord_interaction_dispatch_ast,
@@ -746,25 +830,62 @@ def _check_discord_interaction_component_guard_paths(
 
     component_unhandled_error_event = "discord.component.normalized.unhandled_error"
     component_missing_custom_id_functions = interaction_handlers + execute_handlers
+    registry_dispatch_handlers = _find_functions_by_name(
+        discord_interaction_registry_ast,
+        "dispatch_slash_command",
+    )
+    registry_component_handlers = (
+        _find_functions_by_name(
+            discord_interaction_registry_ast,
+            "_handle_bind_select_component",
+        )
+        + _find_functions_by_name(
+            discord_interaction_registry_ast,
+            "_handle_flow_runs_select_component",
+        )
+        + _find_functions_by_name(
+            discord_interaction_registry_ast,
+            "dispatch_component_interaction",
+        )
+    )
 
     checks = {
         "interaction_parse_failure_response": _has_guard_response(
             interaction_handlers,
             guard_predicate=_condition_has_ingress_is_none_guard,
             response_contains="could not parse this interaction",
+        )
+        or _has_call_with_string_argument(
+            interaction_handlers,
+            callee_name="respond_ephemeral",
+            contains="could not parse this interaction",
         ),
         "interaction_unknown_command_fallback": _has_call_with_string_argument(
             interaction_handlers,
             callee_name="_respond_ephemeral",
             exact="Command not implemented yet for Discord.",
+        )
+        or _has_call_with_string_argument(
+            registry_dispatch_handlers,
+            callee_name="respond_ephemeral",
+            exact="Command not implemented yet for Discord.",
         ),
         "interaction_unhandled_error_logged": _has_log_event_call(
             interaction_handlers,
             event_name="discord.interaction.unhandled_error",
+        )
+        or _has_log_event_call(
+            interaction_handlers,
+            event_name="discord.runner.handler_error",
         ),
         "interaction_unhandled_error_response": _has_call_with_string_argument(
             interaction_handlers,
             callee_name="_respond_ephemeral",
+            exact="An unexpected error occurred. Please try again later.",
+        )
+        or _has_call_with_string_argument(
+            interaction_handlers,
+            callee_name="respond_ephemeral",
             exact="An unexpected error occurred. Please try again later.",
         ),
         "component_missing_custom_id_response": _has_guard_response(
@@ -773,6 +894,11 @@ def _check_discord_interaction_component_guard_paths(
                 test, name="custom_id"
             ),
             response_contains="could not identify this interaction action",
+        )
+        or _has_call_with_string_argument(
+            component_missing_custom_id_functions,
+            callee_name="respond_ephemeral",
+            contains="could not identify this interaction action",
         ),
         "component_bind_selection_requires_value": _has_nested_guard_response(
             component_handlers,
@@ -780,6 +906,11 @@ def _check_discord_interaction_component_guard_paths(
             outer_guard_value="bind_select",
             nested_guard_name="values",
             response_contains="select a repository",
+        )
+        or _has_call_with_string_argument(
+            registry_component_handlers,
+            callee_name="respond_ephemeral",
+            contains="select a repository",
         ),
         "component_flow_runs_selection_requires_value": _has_nested_guard_response(
             component_handlers,
@@ -787,10 +918,20 @@ def _check_discord_interaction_component_guard_paths(
             outer_guard_value="flow_runs_select",
             nested_guard_name="values",
             response_contains="select a run",
+        )
+        or _has_call_with_string_argument(
+            registry_component_handlers,
+            callee_name="respond_ephemeral",
+            contains="select a run",
         ),
         "component_unknown_fallback": _has_call_with_string_argument(
             component_handlers,
             callee_name="_respond_ephemeral",
+            contains="Unknown component:",
+        )
+        or _has_call_with_string_argument(
+            registry_component_handlers,
+            callee_name="respond_ephemeral",
             contains="Unknown component:",
         ),
         "component_unhandled_error_logged": _has_log_event_call(
@@ -800,6 +941,11 @@ def _check_discord_interaction_component_guard_paths(
         "component_unhandled_error_response": _has_call_with_string_argument(
             component_handlers,
             callee_name="_respond_ephemeral",
+            exact="An unexpected error occurred. Please try again later.",
+        )
+        or _has_call_with_string_argument(
+            component_handlers,
+            callee_name="respond_ephemeral",
             exact="An unexpected error occurred. Please try again later.",
         ),
     }
@@ -900,6 +1046,66 @@ def _extract_discord_registered_command_paths(
                     paths.add((root_name, option_name, nested_name))
 
     return paths
+
+
+def _extract_discord_registered_paths_from_registry(
+    tree: ast.Module | None,
+) -> set[tuple[str, ...]] | None:
+    return _extract_discord_route_paths_from_registry(
+        tree,
+        keyword_name="registered_path",
+    )
+
+
+def _extract_discord_canonical_paths_from_registry(
+    tree: ast.Module | None,
+) -> set[tuple[str, ...]] | None:
+    return _extract_discord_route_paths_from_registry(
+        tree,
+        keyword_name="canonical_path",
+    )
+
+
+def _extract_discord_route_paths_from_registry(
+    tree: ast.Module | None,
+    *,
+    keyword_name: str,
+) -> set[tuple[str, ...]] | None:
+    if tree is None:
+        return None
+
+    paths: set[tuple[str, ...]] = set()
+    found_route = False
+    for node in ast.walk(tree):
+        if (
+            not isinstance(node, ast.Call)
+            or _call_name(node.func) != "SlashCommandRoute"
+        ):
+            continue
+        found_route = True
+        if any(
+            kw.arg == "include_in_payload"
+            and isinstance(kw.value, ast.Constant)
+            and kw.value.value is False
+            for kw in node.keywords
+        ):
+            continue
+        for kw in node.keywords:
+            if kw.arg != keyword_name:
+                continue
+            value = _evaluate_static_expr(
+                kw.value,
+                names={},
+                functions={},
+            )
+            if (
+                isinstance(value, tuple)
+                and value
+                and all(isinstance(item, str) for item in value)
+            ):
+                paths.add(value)
+            break
+    return paths if found_route else None
 
 
 def _extract_telegram_registered_commands(tree: ast.Module | None) -> set[str] | None:
@@ -1372,6 +1578,12 @@ def _module_has_call(tree: ast.Module | None, *, callee_name: str) -> bool:
         if _call_name(call.func) == callee_name:
             return True
     return False
+
+
+def _count_calls(tree: ast.Module | None, *, callee_name: str) -> int:
+    if tree is None:
+        return 0
+    return sum(1 for call in _iter_calls(tree) if _call_name(call.func) == callee_name)
 
 
 def _has_call_with_string_argument(

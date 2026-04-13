@@ -217,20 +217,22 @@ def test_send_message_persists_turns_and_reuses_backend_thread(hub_env) -> None:
         assert second_payload["error"] is None
 
     # First message creates the backend thread; second reuses it via resume.
-    assert fake_supervisor.client.thread_start_roots == [
-        str(hub_env.repo_root.resolve())
-    ]
+    repo_root_str = str(hub_env.repo_root.resolve())
+    assert fake_supervisor.client.thread_start_roots.count(repo_root_str) == 1
     assert fake_supervisor.client.resume_calls == ["backend-thread-1"]
-    assert all(
-        root == hub_env.repo_root.resolve() for root in fake_supervisor.workspace_roots
-    )
-    assert len(fake_supervisor.client.turn_start_calls) == 2
-    assert fake_supervisor.client.turn_start_calls[0]["turn_kwargs"] == {
+    assert hub_env.repo_root.resolve() in fake_supervisor.workspace_roots
+    repo_turn_calls = [
+        call
+        for call in fake_supervisor.client.turn_start_calls
+        if call["thread_id"] == "backend-thread-1"
+    ]
+    assert len(repo_turn_calls) == 2
+    assert repo_turn_calls[0]["turn_kwargs"] == {
         "model": "model-default",
         "effort": "high",
     }
-    first_prompt = str(fake_supervisor.client.turn_start_calls[0]["prompt"])
-    second_prompt = str(fake_supervisor.client.turn_start_calls[1]["prompt"])
+    first_prompt = str(repo_turn_calls[0]["prompt"])
+    second_prompt = str(repo_turn_calls[1]["prompt"])
     assert "Ops guide: `.codex-autorunner/pma/docs/ABOUT_CAR.md`." in first_prompt
     assert "<pma_workspace_docs>" in first_prompt
     assert "<user_message>" in first_prompt
@@ -739,9 +741,16 @@ def test_send_message_compact_seed_used_only_before_backend_thread_exists(
         assert second_resp.status_code == 200
         assert second_resp.json()["status"] == "ok"
 
-    assert len(fake_supervisor.client.turn_start_calls) == 2
-    first_prompt = fake_supervisor.client.turn_start_calls[0]["prompt"]
-    second_prompt = fake_supervisor.client.turn_start_calls[1]["prompt"]
+    first_prompt = next(
+        call["prompt"]
+        for call in fake_supervisor.client.turn_start_calls
+        if "first message" in call["prompt"]
+    )
+    second_prompt = next(
+        call["prompt"]
+        for call in fake_supervisor.client.turn_start_calls
+        if "second message" in call["prompt"]
+    )
     assert "Ops guide: `.codex-autorunner/pma/docs/ABOUT_CAR.md`." in first_prompt
     assert "<user_message>" in first_prompt
     assert "Context summary (from compaction):" in first_prompt

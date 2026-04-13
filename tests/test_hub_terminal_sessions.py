@@ -83,6 +83,8 @@ def test_hub_terminal_sessions_stay_isolated(
     )
 
     with TestClient(app) as client:
+        scan_response = client.post("/hub/repos/scan")
+        assert scan_response.status_code == 200
         with (
             client.websocket_connect("/repos/alpha/api/terminal") as ws_alpha,
             client.websocket_connect("/repos/beta/api/terminal") as ws_beta,
