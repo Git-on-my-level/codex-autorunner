@@ -45,10 +45,11 @@ First-turn routine:
       - diagnose_or_restart: Run failed or stopped - suggest diagnose or restart.
     - Always include the item.open_url so the user can jump to the repo Inbox tab.
 3) BRANCH B - Managed threads vs ticket flows:
-    - If request is exploratory/review/debug/quick-fix work in one managed resource, prefer managed threads.
+    - Managed threads are the default for straightforward work in one managed resource: exploratory work, reviews, bug fixes, focused refactors, and single-feature PRs that fit in one clear prompt.
     - If `hub_snapshot.pma_threads` has a relevant active thread, resume it instead of spawning a new one.
     - Treat `chat_bound=true` managed threads as continuity artifacts protected from cleanup by default. Broad requests like "clean up workspace" do not authorize archiving or removing them; only explicit user direction does.
     - For hub-scoped PMA CLI commands, include `--path <hub_root>` so they resolve the intended hub config instead of relying on the current working directory.
+    - Do not launch runtime CLIs directly (`codex`, `opencode`, `zeroclaw`, etc.) for PMA-managed work when a managed thread fits. Use CAR managed threads so lifecycle, progress, subscriptions, and wake-ups stay visible to PMA.
     - If no suitable thread exists, spawn one, run work, and keep it compact:
       - `car pma thread spawn --agent codex --repo <repo_id> --name <label> --path <hub_root>`
       - `car pma thread spawn --resource-kind agent_workspace --resource-id <workspace_id> --name <label> --path <hub_root>`
@@ -58,7 +59,8 @@ First-turn routine:
       - `car pma thread status --id <managed_thread_id> --path <hub_root>`
       - `car pma thread compact --id <id> --summary "..." --path <hub_root>`
       - `car pma thread archive --id <id> --path <hub_root>`
-    - If request is a multi-step deliverable or cross-repo change, prefer tickets/ticket_flow.
+    - Do not write ticket files as scaffolding for managed-thread work. If the task fits in one clear prompt, stay in a managed thread.
+    - Use tickets/ticket_flow when the work needs ordered multi-step structure: cross-repo changes, 3+ planned tickets, explicit acceptance-criteria tracking, or pause/resume/review handoffs.
 4) BRANCH C - PMA File Inbox (fresh uploads vs stale leftovers):
     - If PMA File Inbox shows next_action="process_uploaded_file" and hub_snapshot.inbox is empty:
       - Inspect files in `.codex-autorunner/filebox/inbox/` (read their contents).
@@ -94,7 +96,7 @@ First-turn routine:
     - Identify the target managed resource(s): repo(s) and/or agent workspace(s).
     - Prefer hub-owned worktrees for changes.
     - Prefer one-shot setup/repair commands: `car hub tickets setup-pack`, `car hub tickets fmt`, `car hub tickets doctor --fix`.
-    - Create/adjust repo tickets under each repo's `.codex-autorunner/tickets/` when the target resource is repo-backed.
+    - Only create/adjust repo tickets under each repo's `.codex-autorunner/tickets/` when you have already decided the work should run as ticket_flow.
 
 Web UI map (user perspective):
 - Hub root: `/` (repos list + global notifications).

@@ -44,7 +44,7 @@ from ....core.orchestration import build_ticket_flow_orchestration_service
 from ....core.orchestration.models import FlowRunTarget
 from ....core.runtime import RuntimeContext
 from ....core.utils import resolve_executable
-from ....tickets import AgentPool
+from ....tickets import DEFAULT_MAX_TOTAL_TURNS, AgentPool
 from ....tickets.files import list_ticket_paths, read_ticket, ticket_is_done
 from ....tickets.frontmatter import generate_ticket_id
 
@@ -539,6 +539,11 @@ def register_flow_commands(
             include_previous_ticket_context_default=(
                 engine.config.ticket_flow.include_previous_ticket_context
             ),
+            max_total_turns_default=(
+                engine.config.ticket_flow.max_total_turns
+                if engine.config.ticket_flow.max_total_turns is not None
+                else DEFAULT_MAX_TOTAL_TURNS
+            ),
         )
         definition.validate()
         controller = FlowController(
@@ -668,6 +673,10 @@ def register_flow_commands(
                         auto_commit_default=engine.config.git_auto_commit,
                         include_previous_ticket_context_default=(
                             engine.config.ticket_flow.include_previous_ticket_context
+                        ),
+                        max_total_turns_default=(
+                            engine.config.ticket_flow.max_total_turns
+                            or DEFAULT_MAX_TOTAL_TURNS
                         ),
                     )
                 raise_exit(f"Unknown flow type for run {worker_run_id}: {flow_type}")

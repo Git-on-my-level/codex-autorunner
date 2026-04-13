@@ -6,7 +6,6 @@ from typing import Any, Optional
 import pytest
 
 from codex_autorunner.agents.acp import ACPMissingSessionError
-from codex_autorunner.agents.base import UnsupportedAgentCapabilityError
 from codex_autorunner.agents.hermes.harness import HermesHarness
 from codex_autorunner.agents.registry import get_registered_agents
 from codex_autorunner.agents.types import TerminalTurnResult
@@ -37,19 +36,54 @@ class _StubSupervisor:
     ):
         _ = metadata
         self.created.append((workspace_root, title))
-        return type("Session", (), {"session_id": "hermes-session-1"})()
+        return type(
+            "Session",
+            (),
+            {
+                "session_id": "hermes-session-1",
+                "title": title,
+                "summary": "fresh conversation",
+                "raw": {"summary": "fresh conversation"},
+            },
+        )()
 
     async def resume_session(self, workspace_root: Path, session_id: str):
         self.resumed.append((workspace_root, session_id))
         if self.resume_error is not None:
             raise self.resume_error
-        return type("Session", (), {"session_id": session_id})()
+        return type(
+            "Session",
+            (),
+            {
+                "session_id": session_id,
+                "title": "Resumed Hermes session",
+                "summary": "resumed summary",
+                "raw": {"summary": "resumed summary"},
+            },
+        )()
 
     async def list_sessions(self, workspace_root: Path):
         _ = workspace_root
         return [
-            type("Session", (), {"session_id": "hermes-session-1"})(),
-            type("Session", (), {"session_id": "hermes-session-2"})(),
+            type(
+                "Session",
+                (),
+                {
+                    "session_id": "hermes-session-1",
+                    "title": "First Hermes session",
+                    "summary": "first summary",
+                    "raw": {"summary": "first summary"},
+                },
+            )(),
+            type(
+                "Session",
+                (),
+                {
+                    "session_id": "hermes-session-2",
+                    "title": "Second Hermes session",
+                    "raw": {"subtitle": "second summary"},
+                },
+            )(),
         ]
 
     async def start_turn(
@@ -130,7 +164,7 @@ async def test_hermes_harness_reports_capabilities_from_contract() -> None:
     assert harness.capabilities == get_registered_agents()["hermes"].capabilities
     assert harness.supports("durable_threads") is True
     assert harness.supports("message_turns") is True
-    assert harness.supports("active_thread_discovery") is False
+    assert harness.supports("active_thread_discovery") is True
     assert harness.supports("interrupt") is True
     assert harness.supports("event_streaming") is True
     assert harness.supports("approvals") is True
@@ -176,7 +210,11 @@ async def test_hermes_harness_session_lifecycle_and_model_override() -> None:
 
     assert supervisor.ready_workspace == workspace_root
     assert conversation.id == "hermes-session-1"
+    assert conversation.title == "Hermes Test"
+    assert conversation.summary == "fresh conversation"
     assert resumed.id == "hermes-session-1"
+    assert resumed.title == "Resumed Hermes session"
+    assert resumed.summary == "resumed summary"
     assert turn.turn_id == "hermes-turn-1"
     assert terminal.status == "completed"
     assert terminal.assistant_text == "Hermes reply"
@@ -201,13 +239,20 @@ async def test_hermes_harness_session_lifecycle_and_model_override() -> None:
 
 
 @pytest.mark.asyncio
-async def test_hermes_harness_list_conversations_requires_capability() -> None:
+async def test_hermes_harness_list_conversations_preserves_titles_and_summaries() -> (
+    None
+):
     harness = HermesHarness(_StubSupervisor())
 
-    with pytest.raises(
-        UnsupportedAgentCapabilityError, match="active_thread_discovery"
-    ):
-        await harness.list_conversations(Path("."))
+    conversations = await harness.list_conversations(Path("."))
+
+    assert [
+        (conversation.id, conversation.title, conversation.summary)
+        for conversation in conversations
+    ] == [
+        ("hermes-session-1", "First Hermes session", "first summary"),
+        ("hermes-session-2", "Second Hermes session", "second summary"),
+    ]
 
 
 @pytest.mark.asyncio

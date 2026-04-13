@@ -13,6 +13,7 @@ from codex_autorunner.integrations.app_server.threads import (
     PMA_PREFIX,
     AppServerThreadRegistry,
     file_chat_discord_key,
+    file_chat_target_key,
     normalize_feature_key,
     pma_base_key,
     pma_legacy_alias_keys,
@@ -365,6 +366,26 @@ class TestFileChatDiscordKeyHelper:
     def test_strips_channel_id_whitespace(self) -> None:
         key = file_chat_discord_key("codex", "  123456  ", "/workspace/repo")
         assert "123456" in key
+
+
+class TestFileChatTargetKeyHelper:
+    def test_includes_logical_agent_family(self) -> None:
+        assert file_chat_target_key("codex", "ticket.1") == "file_chat.ticket.1"
+        assert (
+            file_chat_target_key("opencode", "ticket.1")
+            == "file_chat.opencode.ticket.1"
+        )
+        assert file_chat_target_key("hermes", "ticket.1") == "file_chat.hermes.ticket.1"
+
+    def test_scopes_named_profiles(self) -> None:
+        assert (
+            file_chat_target_key("hermes", "ticket.1", "m4-pma")
+            == "file_chat.hermes.profile.m4-pma.ticket.1"
+        )
+        assert (
+            file_chat_target_key("codex", "contextspace.spec", "team-a")
+            == "file_chat.profile.team-a.contextspace.spec"
+        )
 
 
 class TestResetThreadsByPrefix:

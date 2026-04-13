@@ -8,6 +8,7 @@ from codex_autorunner.core.orchestration import (
     apply_orchestration_migrations,
     current_orchestration_schema_version,
 )
+from codex_autorunner.core.orchestration import migrations as migrations_module
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
@@ -119,6 +120,22 @@ def test_apply_orchestration_migrations_is_idempotent_at_latest_version(
     assert version == ORCHESTRATION_SCHEMA_VERSION
     assert int(first_run_count["count"] or 0) == 1
     assert int(second_run_count["count"] or 0) == 1
+
+
+def test_ensure_column_ignores_duplicate_column_races(monkeypatch) -> None:
+    class FakeConn:
+        def execute(self, sql: str):
+            raise sqlite3.OperationalError("duplicate column name: status_updated_at")
+
+    monkeypatch.setattr(migrations_module, "_table_exists", lambda *_args: True)
+    monkeypatch.setattr(migrations_module, "_table_columns", lambda *_args: set())
+
+    migrations_module._ensure_column(
+        FakeConn(),
+        "orch_threads",
+        "status_updated_at",
+        "status_updated_at TEXT",
+    )
 
 
 def test_apply_orchestration_migrations_adds_publish_journal_tables_from_v7(

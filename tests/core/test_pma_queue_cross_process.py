@@ -166,3 +166,79 @@ async def test_compact_lane_keeps_non_terminal_and_last_terminal_items(
         item.item_id for item in items if item.state == QueueItemState.COMPLETED
     ]
     assert kept_terminal_ids == terminal_ids[-keep_last:]
+
+
+@pytest.mark.anyio
+async def test_async_queue_operations_offload_blocking_store_calls(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lane_id = "pma:default"
+    queue = PmaQueue(tmp_path)
+    calls: list[str] = []
+    original_to_thread = asyncio.to_thread
+
+    async def _record_to_thread(func, /, *args, **kwargs):
+        calls.append(getattr(func, "__name__", repr(func)))
+        return await original_to_thread(func, *args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", _record_to_thread)
+
+    item, _ = await queue.enqueue(lane_id, "offload-key", {"message": "hello"})
+    items = await queue.list_items(lane_id)
+    assert items and items[0].item_id == item.item_id
+
+    dequeued = await queue.dequeue(lane_id)
+    assert dequeued is not None
+    await queue.complete_item(dequeued, {"status": "ok"})
+
+    lanes = await queue.get_all_lanes()
+    assert lane_id in lanes
+    assert "_append_to_file_sync" in calls
+    assert "_update_in_file_sync" in calls
+    assert "_get_all_lanes_sync" in calls
+
+
+@pytest.mark.anyio
+async def test_lane_write_cancellation_waits_for_offloaded_store_call(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lane_id = "pma:default"
+    queue = PmaQueue(tmp_path)
+    item, _ = await queue.enqueue(lane_id, "cancel-key", {"message": "hello"})
+    item.state = QueueItemState.RUNNING
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+    original_to_thread = asyncio.to_thread
+
+    async def _blocked_to_thread(func, /, *args, **kwargs):
+        if getattr(func, "__name__", "") == "_update_in_file_sync":
+            started.set()
+            await release.wait()
+        return await original_to_thread(func, *args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", _blocked_to_thread)
+
+    update_task = asyncio.create_task(queue._update_in_file(item))
+    await asyncio.wait_for(started.wait(), timeout=1.0)
+
+    update_task.cancel()
+
+    lock_reacquired = asyncio.Event()
+
+    async def _wait_for_lane_lock() -> None:
+        async with queue._ensure_lane_lock(lane_id):
+            lock_reacquired.set()
+
+    waiter = asyncio.create_task(_wait_for_lane_lock())
+    await asyncio.sleep(0)
+    assert lock_reacquired.is_set() is False
+
+    release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await update_task
+    await asyncio.wait_for(waiter, timeout=1.0)
+    assert lock_reacquired.is_set() is True

@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from ..agents.hermes_identity import canonicalize_hermes_identity
 from ..contextspace.paths import contextspace_doc_path
 from ..core.file_chat_keys import ticket_instance_token
 from ..core.flows.models import FlowEventType
@@ -22,14 +23,11 @@ from .replies import (
     dispatch_reply,
     ensure_reply_dirs,
     next_reply_seq,
-    parse_user_reply,
     resolve_reply_paths,
 )
 from .runner_execution import (
-    capture_git_state,
     capture_git_state_after,
     compute_loop_guard,
-    execute_turn,
     is_network_error,
     should_pause_for_loop,
 )
@@ -39,6 +37,20 @@ from .runner_prompt import (
     _preserve_ticket_structure,  # noqa: F401  # re-exported for backwards compatibility
     _shrink_prompt,
     _truncate_text_by_bytes,
+)
+from .runner_step_support import (
+    build_reply_context,
+    build_turn_options,
+    capture_pre_turn_git_state,
+    execute_turn_with_thread_binding_retry,
+    increment_turn_counters,
+    load_previous_ticket_content,
+    record_successful_turn_state,
+    record_turn_runtime_state,
+)
+from .runner_thread_bindings import (
+    clear_ticket_thread_binding,
+    normalize_profile,
 )
 
 _is_network_error = is_network_error
@@ -201,6 +213,11 @@ class TicketRunner:
         )
         commit_pending = bool(commit_state.get("pending"))
         commit_retries = int(commit_state.get("retries") or 0)
+        previous_ticket_id = (
+            state.get("current_ticket_id")
+            if isinstance(state.get("current_ticket_id"), str)
+            else None
+        )
         # Global counters.
         total_turns = int(state.get("total_turns") or 0)
 
@@ -268,20 +285,24 @@ class TicketRunner:
                 reason_code=selection_result.pause_reason_code or "needs_user_fix",
             )
         if selection_result.status == "completed":
+            if previous_ticket_id:
+                clear_ticket_thread_binding(
+                    state,
+                    ticket_id=previous_ticket_id,
+                    reason="ticket_completed_before_selection",
+                )
             state["status"] = "completed"
             return TicketResult(
                 status="completed",
                 state=state,
                 reason=selection_result.pause_reason or "All tickets done.",
             )
-
         if not selection_result.selected:
             return self._pause(
                 state,
                 reason="Ticket selection failed unexpectedly.",
                 reason_code="infra_error",
             )
-
         current_path = selection_result.selected.path
         _commit_raw = state.get("commit")
         commit_state = _commit_raw if isinstance(_commit_raw, dict) else {}
@@ -298,7 +319,6 @@ class TicketRunner:
             state.pop("reason_details", None)
             state.pop("reason_code", None)
             state.pop("pause_context", None)
-
         _lint_raw = state.get("lint")
         lint_state: dict[str, Any] = _lint_raw if isinstance(_lint_raw, dict) else {}
         _lint_errors_raw = lint_state.get("errors")
@@ -307,7 +327,7 @@ class TicketRunner:
         )
         lint_retries = int(lint_state.get("retries") or 0)
         _conv_id_raw = lint_state.get("conversation_id")
-        reuse_conversation_id: Optional[str] = (
+        lint_retry_conversation_id: Optional[str] = (
             _conv_id_raw if isinstance(_conv_id_raw, str) else None
         )
 
@@ -338,17 +358,57 @@ class TicketRunner:
                 current_ticket=current_ticket_path,
                 reason_code="infra_error",
             )
-
         ticket_doc = validation_result.validated.ticket_doc
         current_ticket_id = ticket_doc.frontmatter.ticket_id
         state["current_ticket_id"] = current_ticket_id
+        raw_profile = normalize_profile(ticket_doc.frontmatter.profile)
+        canonical = canonicalize_hermes_identity(
+            ticket_doc.frontmatter.agent,
+            raw_profile,
+            context=self._workspace_root,
+        )
+        current_ticket_profile = canonical.profile
+        canonical_agent_id = canonical.agent
+        lint_retry_ticket_id = lint_state.get("ticket_id")
+        lint_retry_ticket_path = lint_state.get("ticket_path")
+        lint_retry_agent_id = normalize_profile(lint_state.get("agent_id"))
+        lint_retry_profile = normalize_profile(lint_state.get("profile"))
+        if lint_retry_conversation_id is not None:
+            if (
+                (
+                    isinstance(lint_retry_ticket_path, str)
+                    and lint_retry_ticket_path != current_ticket_path
+                )
+                or (
+                    isinstance(lint_retry_ticket_id, str)
+                    and current_ticket_id != "lint-retry-ticket"
+                    and lint_retry_ticket_id != current_ticket_id
+                )
+                or (
+                    lint_retry_agent_id is not None
+                    and lint_retry_agent_id != canonical_agent_id
+                )
+                or (
+                    "profile" in lint_state
+                    and lint_retry_profile != current_ticket_profile
+                )
+            ):
+                lint_retry_conversation_id = None
+        if previous_ticket_id and previous_ticket_id != current_ticket_id:
+            clear_ticket_thread_binding(
+                state,
+                ticket_id=previous_ticket_id,
+                reason="ticket_changed",
+            )
         if validation_result.validated.skip_execution:
             return TicketResult(status="continue", state=state)
 
         ticket_turns = int(state.get("ticket_turns") or 0)
         reply_seq = int(state.get("reply_seq") or 0)
-        reply_context, reply_max_seq = self._build_reply_context(
-            reply_paths=reply_paths, last_seq=reply_seq
+        reply_context, reply_max_seq = build_reply_context(
+            reply_paths=reply_paths,
+            last_seq=reply_seq,
+            workspace_root=self._workspace_root,
         )
         ticket_paths = list_ticket_paths(ticket_dir)
         requested_context_block, missing_required_context = _load_ticket_context_block(
@@ -370,21 +430,11 @@ class TicketRunner:
                 reason_details=details,
                 current_ticket=safe_relpath(current_path, self._workspace_root),
             )
-
-        previous_ticket_content: Optional[str] = None
-        if self._config.include_previous_ticket_context:
-            try:
-                if current_path in ticket_paths:
-                    curr_idx = ticket_paths.index(current_path)
-                    if curr_idx > 0:
-                        prev_path = ticket_paths[curr_idx - 1]
-                        content = prev_path.read_text(encoding="utf-8")
-                        previous_ticket_content = _truncate_text_by_bytes(
-                            content, 16384
-                        )
-            except OSError:
-                _logger.debug("failed to read previous ticket content", exc_info=True)
-
+        previous_ticket_content = load_previous_ticket_content(
+            current_path=current_path,
+            ticket_paths=ticket_paths,
+            include_previous_ticket_context=self._config.include_previous_ticket_context,
+        )
         prompt = runner_prompt.build_prompt(
             ticket_path=current_path,
             workspace_root=self._workspace_root,
@@ -410,43 +460,44 @@ class TicketRunner:
             prior_no_change_turns=self._prior_no_change_turns(state, current_ticket_id),
             prompt_max_bytes=self._config.prompt_max_bytes,
         )
-
-        # Execute turn.
-        # Build options dict with model/reasoning from ticket frontmatter if set.
-        turn_options: dict[str, Any] = {}
-        if ticket_doc.frontmatter.model:
-            turn_options["model"] = ticket_doc.frontmatter.model
-        if ticket_doc.frontmatter.reasoning:
-            turn_options["reasoning"] = ticket_doc.frontmatter.reasoning
+        turn_options = build_turn_options(ticket_doc=ticket_doc)
         turn_options["ticket_flow_run_id"] = self._run_id
-
-        total_turns += 1
-        ticket_turns += 1
-        state["total_turns"] = total_turns
-        state["ticket_turns"] = ticket_turns
-
-        current_ticket_path = safe_relpath(current_path, self._workspace_root)
-
-        git_state_before = capture_git_state(workspace_root=self._workspace_root)
-        repo_fingerprint_before_turn = git_state_before["repo_fingerprint_before"]
-        head_before_turn = git_state_before["head_before_turn"]
-
-        result = await execute_turn(
+        turn_options["ticket_id"] = current_ticket_id
+        turn_options["ticket_path"] = current_ticket_path
+        if current_ticket_profile and "profile" not in turn_options:
+            turn_options["profile"] = current_ticket_profile
+        total_turns, ticket_turns = increment_turn_counters(
+            state=state,
+            ticket_turns=ticket_turns,
+        )
+        repo_fingerprint_before_turn, head_before_turn = capture_pre_turn_git_state(
+            workspace_root=self._workspace_root
+        )
+        result, binding_decision = await execute_turn_with_thread_binding_retry(
             agent_pool=self._agent_pool,
-            agent_id=ticket_doc.frontmatter.agent,
-            prompt=prompt,
             workspace_root=self._workspace_root,
-            conversation_id=reuse_conversation_id,
-            options=turn_options if turn_options else None,
+            state=state,
+            ticket_id=current_ticket_id,
+            ticket_path=current_ticket_path,
+            agent_id=canonical_agent_id,
+            profile=current_ticket_profile,
+            prompt=prompt,
+            lint_retry_conversation_id=lint_retry_conversation_id,
+            turn_options=turn_options if turn_options else None,
             emit_event=emit_event,
             max_network_retries=self._config.max_network_retries,
             current_network_retries=network_retries,
         )
         if not result.success:
-            state["last_agent_output"] = result.text
-            state["last_agent_id"] = result.agent_id
-            state["last_agent_conversation_id"] = result.conversation_id
-            state["last_agent_turn_id"] = result.turn_id
+            record_turn_runtime_state(
+                state=state,
+                result=result,
+                ticket_id=current_ticket_id,
+                ticket_path=current_ticket_path,
+                agent_id=canonical_agent_id,
+                profile=current_ticket_profile,
+                binding_decision=binding_decision,
+            )
 
             if result.should_retry:
                 state["network_retry"] = {
@@ -492,14 +543,17 @@ class TicketRunner:
                 reason_code="infra_error",
             )
 
-        # Mark replies as consumed only after a successful agent turn.
-        if reply_max_seq > reply_seq:
-            state["reply_seq"] = reply_max_seq
-        state["last_agent_output"] = result.text
-        state.pop("network_retry", None)
-        state["last_agent_id"] = result.agent_id
-        state["last_agent_conversation_id"] = result.conversation_id
-        state["last_agent_turn_id"] = result.turn_id
+        record_successful_turn_state(
+            state=state,
+            reply_seq=reply_seq,
+            reply_max_seq=reply_max_seq,
+            result=result,
+            ticket_id=current_ticket_id,
+            ticket_path=current_ticket_path,
+            agent_id=canonical_agent_id,
+            profile=current_ticket_profile,
+            binding_decision=binding_decision,
+        )
 
         git_state_after = capture_git_state_after(
             workspace_root=self._workspace_root,
@@ -539,63 +593,20 @@ class TicketRunner:
             state["dispatch_seq"] = dispatch.seq
             state.pop("outbox_lint", None)
 
-        # Create turn summary record for the agent's final output.
-        # This appears in dispatch history as a distinct "turn summary" entry.
         turn_summary_seq = int(state.get("dispatch_seq") or 0) + 1
-
-        # Compute diff stats for this turn (changes since head_before_turn).
-        # This captures both committed and uncommitted changes made by the agent.
-        turn_diff_stats = None
-        try:
-            if head_before_turn:
-                # Compare current state (HEAD + working tree) against pre-turn commit
-                turn_diff_stats = git_diff_stats(
-                    self._workspace_root, from_ref=head_before_turn
-                )
-            else:
-                # No reference commit; show all uncommitted changes
-                turn_diff_stats = git_diff_stats(
-                    self._workspace_root, from_ref=None, include_staged=True
-                )
-        except (OSError, ValueError, RuntimeError):
-            # Best-effort; don't block on stats computation errors
-            turn_diff_stats = None
-
-        turn_summary, turn_summary_errors = create_turn_summary(
-            outbox_paths,
-            next_seq=turn_summary_seq,
-            agent_output=result.text or "",
-            ticket_id=dispatch_ticket_id,
-            agent_id=result.agent_id,
-            turn_number=total_turns,
-            diff_stats=turn_diff_stats,
+        self._record_turn_summary(
+            state=state,
+            outbox_paths=outbox_paths,
+            turn_summary_seq=turn_summary_seq,
+            result=result,
+            dispatch_ticket_id=dispatch_ticket_id,
+            total_turns=total_turns,
+            head_before_turn=head_before_turn,
+            current_ticket_id=current_ticket_id,
+            current_ticket_key=current_ticket_key,
+            current_ticket_path=current_ticket_path,
+            emit_event=emit_event,
         )
-        if turn_summary is not None:
-            state["dispatch_seq"] = turn_summary.seq
-
-            # Persist per-turn diff stats in FlowStore as a structured event
-            # instead of embedding them into DISPATCH.md metadata.
-            if emit_event is not None and isinstance(turn_diff_stats, dict):
-                try:
-                    emit_event(
-                        FlowEventType.DIFF_UPDATED,
-                        {
-                            "ticket_id": current_ticket_id,
-                            "ticket_key": current_ticket_key,
-                            "ticket_path": current_ticket_path,
-                            "dispatch_seq": turn_summary.seq,
-                            "insertions": int(turn_diff_stats.get("insertions") or 0),
-                            "deletions": int(turn_diff_stats.get("deletions") or 0),
-                            "files_changed": int(
-                                turn_diff_stats.get("files_changed") or 0
-                            ),
-                        },
-                    )
-                except (
-                    Exception
-                ):  # intentional: best-effort event emission via callback
-                    # Best-effort; do not block ticket execution on event emission.
-                    pass
 
         # Loop guard: if the same ticket runs with no repository state change for
         # LOOP_NO_CHANGE_THRESHOLD consecutive successful turns, pause and ask for
@@ -674,6 +685,10 @@ class TicketRunner:
                 "errors": fm_errors,
                 "retries": lint_retries,
                 "conversation_id": result.conversation_id,
+                "ticket_id": current_ticket_id,
+                "ticket_path": current_ticket_path,
+                "agent_id": canonical_agent_id,
+                "profile": current_ticket_profile,
             }
             return TicketResult(
                 status="continue",
@@ -764,6 +779,11 @@ class TicketRunner:
 
             # Clean (or unknown) → commit satisfied (or no changes / cannot check).
             state.pop("commit", None)
+            clear_ticket_thread_binding(
+                state,
+                ticket_id=current_ticket_id,
+                reason="ticket_completed",
+            )
             state.pop("current_ticket", None)
             state.pop("current_ticket_id", None)
             state.pop("ticket_turns", None)
@@ -793,6 +813,64 @@ class TicketRunner:
 
     def _recheck_ticket_frontmatter(self, ticket_path: Path):
         return runner_post_turn.check_ticket_frontmatter(ticket_path=ticket_path)
+
+    def _record_turn_summary(
+        self,
+        *,
+        state: dict[str, Any],
+        outbox_paths: Any,
+        turn_summary_seq: int,
+        result: Any,
+        dispatch_ticket_id: str,
+        total_turns: int,
+        head_before_turn: Optional[str],
+        current_ticket_id: str,
+        current_ticket_key: str,
+        current_ticket_path: str,
+        emit_event: Optional[Callable[..., None]],
+    ) -> None:
+        turn_diff_stats: Optional[dict[str, Any]] = None
+        try:
+            if head_before_turn:
+                turn_diff_stats = git_diff_stats(
+                    self._workspace_root, from_ref=head_before_turn
+                )
+            else:
+                turn_diff_stats = git_diff_stats(
+                    self._workspace_root, from_ref=None, include_staged=True
+                )
+        except (OSError, ValueError, RuntimeError):
+            turn_diff_stats = None
+
+        turn_summary, _turn_summary_errors = create_turn_summary(
+            outbox_paths,
+            next_seq=turn_summary_seq,
+            agent_output=result.text or "",
+            ticket_id=dispatch_ticket_id,
+            agent_id=result.agent_id,
+            turn_number=total_turns,
+            diff_stats=turn_diff_stats,
+        )
+        if turn_summary is not None:
+            state["dispatch_seq"] = turn_summary.seq
+            if emit_event is not None and isinstance(turn_diff_stats, dict):
+                try:
+                    emit_event(
+                        FlowEventType.DIFF_UPDATED,
+                        {
+                            "ticket_id": current_ticket_id,
+                            "ticket_key": current_ticket_key,
+                            "ticket_path": current_ticket_path,
+                            "dispatch_seq": turn_summary.seq,
+                            "insertions": int(turn_diff_stats.get("insertions") or 0),
+                            "deletions": int(turn_diff_stats.get("deletions") or 0),
+                            "files_changed": int(
+                                turn_diff_stats.get("files_changed") or 0
+                            ),
+                        },
+                    )
+                except Exception:
+                    pass
 
     def _checkpoint_git(self, *, turn: int, agent: str) -> Optional[str]:
         """Create a best-effort git commit checkpoint.
@@ -869,84 +947,6 @@ class TicketRunner:
             title=title,
             body=body,
         )
-
-    def _build_reply_context(self, *, reply_paths, last_seq: int) -> tuple[str, int]:
-        """Render new human replies (reply_history) into a prompt block.
-
-        Returns (rendered_text, max_seq_seen).
-        """
-
-        history_dir = getattr(reply_paths, "reply_history_dir", None)
-        if history_dir is None:
-            return "", last_seq
-        if not history_dir.exists() or not history_dir.is_dir():
-            return "", last_seq
-
-        entries: list[tuple[int, Path]] = []
-        try:
-            for child in history_dir.iterdir():
-                try:
-                    if not child.is_dir():
-                        continue
-                    name = child.name
-                    if not (len(name) == 4 and name.isdigit()):
-                        continue
-                    seq = int(name)
-                    if seq <= last_seq:
-                        continue
-                    entries.append((seq, child))
-                except OSError:
-                    continue
-        except OSError:
-            return "", last_seq
-
-        if not entries:
-            return "", last_seq
-
-        entries.sort(key=lambda x: x[0])
-        max_seq = max(seq for seq, _ in entries)
-
-        blocks: list[str] = []
-        for seq, entry_dir in entries:
-            reply_path = entry_dir / "USER_REPLY.md"
-            reply, errors = (
-                parse_user_reply(reply_path)
-                if reply_path.exists()
-                else (None, ["USER_REPLY.md missing"])
-            )
-
-            block_lines: list[str] = [f"[USER_REPLY {seq:04d}]"]
-            if errors:
-                block_lines.append("Errors:\n- " + "\n- ".join(errors))
-            if reply is not None:
-                if reply.title:
-                    block_lines.append(f"Title: {reply.title}")
-                if reply.body:
-                    block_lines.append(reply.body)
-
-            attachments: list[str] = []
-            try:
-                for child in sorted(entry_dir.iterdir(), key=lambda p: p.name):
-                    try:
-                        if child.name.startswith("."):
-                            continue
-                        if child.name == "USER_REPLY.md":
-                            continue
-                        if child.is_dir():
-                            continue
-                        attachments.append(safe_relpath(child, self._workspace_root))
-                    except OSError:
-                        continue
-            except OSError:
-                attachments = []
-
-            if attachments:
-                block_lines.append("Attachments:\n- " + "\n- ".join(attachments))
-
-            blocks.append("\n".join(block_lines).strip())
-
-        rendered = "\n\n".join(blocks).strip()
-        return rendered, max_seq
 
     def _build_prompt(
         self,

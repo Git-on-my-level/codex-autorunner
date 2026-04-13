@@ -5,13 +5,25 @@
 import { api, confirmModal, flash, updateUrlParams, splitMarkdownFrontmatter } from "./utils.js";
 import { publish } from "./bus.js";
 import { clearTicketChatHistory } from "./ticketChatStorage.js";
-import { setTicketIndex, sendTicketChat, cancelTicketChat, applyTicketPatch, discardTicketPatch, loadTicketPending, renderTicketChat, resetTicketChatState, ticketChatState, resumeTicketPendingTurn, } from "./ticketChatActions.js";
-import { initAgentControls } from "./agentControls.js";
+import { setTicketIndex, sendTicketChat, cancelTicketChat, applyTicketPatch, discardTicketPatch, loadTicketPending, renderTicketChat, resetTicketChatState, restoreTicketChatSelectionToActiveTurn, syncTicketChatTargetToSelection, ticketChatState, resumeTicketPendingTurn, } from "./ticketChatActions.js";
+import { ensureAgentCatalog, getRegisteredAgents, getRegisteredAgentProfiles, initAgentControls, } from "./agentControls.js";
 import { initTicketVoice } from "./ticketVoice.js";
 import { initTicketChatEvents, renderTicketEvents, renderTicketMessages } from "./ticketChatEvents.js";
 import { initChatPasteUpload } from "./chatUploads.js";
 import { DocEditor } from "./docEditor.js";
 import { initTicketTemplates } from "./ticketTemplates.js";
+function sameUndoSnapshot(previous, next) {
+    if (!previous)
+        return false;
+    return (previous.body === next.body &&
+        previous.frontmatter.agent === next.frontmatter.agent &&
+        previous.frontmatter.done === next.frontmatter.done &&
+        previous.frontmatter.ticketId === next.frontmatter.ticketId &&
+        previous.frontmatter.title === next.frontmatter.title &&
+        previous.frontmatter.model === next.frontmatter.model &&
+        previous.frontmatter.reasoning === next.frontmatter.reasoning &&
+        previous.frontmatter.profile === next.frontmatter.profile);
+}
 const DEFAULT_FRONTMATTER = {
     agent: "codex",
     done: false,
@@ -19,6 +31,7 @@ const DEFAULT_FRONTMATTER = {
     title: "",
     model: "",
     reasoning: "",
+    profile: "",
 };
 const state = {
     isOpen: false,
@@ -125,6 +138,7 @@ function els() {
         fmAgent: document.getElementById("ticket-fm-agent"),
         fmModel: document.getElementById("ticket-fm-model"),
         fmReasoning: document.getElementById("ticket-fm-reasoning"),
+        fmProfile: document.getElementById("ticket-fm-profile"),
         fmDone: document.getElementById("ticket-fm-done"),
         fmTitle: document.getElementById("ticket-fm-title"),
         // Chat elements
@@ -221,18 +235,13 @@ function pushUndoState() {
     const { content, undoBtn } = els();
     const fm = getFrontmatterFromForm();
     const body = content?.value || "";
+    const nextState = { body, frontmatter: { ...fm } };
     // Don't push if same as last undo state
     const last = state.undoStack[state.undoStack.length - 1];
-    if (last && last.body === body &&
-        last.frontmatter.agent === fm.agent &&
-        last.frontmatter.done === fm.done &&
-        last.frontmatter.ticketId === fm.ticketId &&
-        last.frontmatter.title === fm.title &&
-        last.frontmatter.model === fm.model &&
-        last.frontmatter.reasoning === fm.reasoning) {
+    if (sameUndoSnapshot(last, nextState)) {
         return;
     }
-    state.undoStack.push({ body, frontmatter: { ...fm } });
+    state.undoStack.push(nextState);
     // Limit stack size
     if (state.undoStack.length > 50) {
         state.undoStack.shift();
@@ -276,7 +285,7 @@ function updateUndoButton() {
  * Get current frontmatter values from form fields
  */
 function getFrontmatterFromForm() {
-    const { fmAgent, fmModel, fmReasoning, fmDone, fmTitle } = els();
+    const { fmAgent, fmModel, fmReasoning, fmProfile, fmDone, fmTitle } = els();
     return {
         agent: fmAgent?.value || "codex",
         done: fmDone?.checked || false,
@@ -286,19 +295,22 @@ function getFrontmatterFromForm() {
         title: fmTitle?.value || "",
         model: fmModel?.value || "",
         reasoning: fmReasoning?.value || "",
+        profile: fmProfile?.value || "",
     };
 }
 /**
  * Set frontmatter form fields from values
  */
 function setFrontmatterForm(fm) {
-    const { fmAgent, fmModel, fmReasoning, fmDone, fmTitle } = els();
+    const { fmAgent, fmModel, fmReasoning, fmProfile, fmDone, fmTitle } = els();
     if (fmAgent)
         fmAgent.value = fm.agent;
     if (fmModel)
         fmModel.value = fm.model;
     if (fmReasoning)
         fmReasoning.value = fm.reasoning;
+    if (fmProfile)
+        fmProfile.value = fm.profile;
     if (fmDone)
         fmDone.checked = fm.done;
     if (fmTitle)
@@ -318,6 +330,7 @@ function extractFrontmatter(ticket) {
         title: fm.title || "",
         model: fm.model || "",
         reasoning: fm.reasoning || "",
+        profile: fm.profile || "",
     };
 }
 /**
@@ -326,6 +339,108 @@ function extractFrontmatter(ticket) {
 function yamlQuote(value) {
     // Use JSON.stringify for simple, safe double-quoted scalars (handles colons, quotes, newlines).
     return JSON.stringify(value ?? "");
+}
+function formatFrontmatterAgentLabel(agent, currentOnly = false) {
+    const base = agent.name && agent.name !== agent.id
+        ? `${agent.name} (${agent.id})`
+        : agent.id;
+    return currentOnly ? `${base} (current)` : base;
+}
+function formatFrontmatterProfileLabel(profile, currentOnly = false) {
+    const base = profile.display_name && profile.display_name !== profile.id
+        ? `${profile.display_name} (${profile.id})`
+        : profile.id;
+    return currentOnly ? `${base} (current)` : base;
+}
+function isHermesAliasAgentId(agentId) {
+    const normalized = (agentId || "").trim().toLowerCase();
+    if (!normalized || normalized === "hermes")
+        return false;
+    return normalized.startsWith("hermes-") || normalized.startsWith("hermes_");
+}
+function renderFmAgentOptions(selectedAgent) {
+    const { fmAgent } = els();
+    if (!fmAgent)
+        return selectedAgent || "codex";
+    const agents = getRegisteredAgents().filter((agent) => !isHermesAliasAgentId(agent.id));
+    const hasCatalogAgents = agents.length > 1 || (agents[0]?.id && agents[0].id !== "codex");
+    if (!hasCatalogAgents && fmAgent.options.length > 1) {
+        fmAgent.value = Array.from(fmAgent.options).some((option) => option.value === selectedAgent)
+            ? selectedAgent
+            : fmAgent.value || "codex";
+        return fmAgent.value || "codex";
+    }
+    const currentMissing = Boolean(selectedAgent) && !agents.some((agent) => agent.id === selectedAgent);
+    const nextValue = agents.some((agent) => agent.id === selectedAgent)
+        ? selectedAgent
+        : agents[0]?.id || "codex";
+    fmAgent.innerHTML = "";
+    for (const agent of agents) {
+        const option = document.createElement("option");
+        option.value = agent.id;
+        option.textContent = formatFrontmatterAgentLabel(agent);
+        fmAgent.appendChild(option);
+    }
+    if (currentMissing) {
+        const option = document.createElement("option");
+        option.value = selectedAgent;
+        option.textContent = formatFrontmatterAgentLabel({ id: selectedAgent }, true);
+        fmAgent.appendChild(option);
+    }
+    fmAgent.value = nextValue;
+    if (currentMissing) {
+        fmAgent.value = selectedAgent;
+    }
+    return fmAgent.value || nextValue;
+}
+function renderFmProfileOptions(agent, currentProfile) {
+    const { fmProfile } = els();
+    if (!fmProfile)
+        return;
+    const normalizedCurrent = currentProfile.trim();
+    const profiles = getRegisteredAgentProfiles(agent);
+    const currentMissing = Boolean(normalizedCurrent) &&
+        !profiles.some((profile) => profile.id === normalizedCurrent);
+    fmProfile.innerHTML = "";
+    const defaultOption = document.createElement("option");
+    defaultOption.value = "";
+    defaultOption.textContent = profiles.length || normalizedCurrent
+        ? "Default profile"
+        : "No profiles";
+    fmProfile.appendChild(defaultOption);
+    for (const profile of profiles) {
+        const option = document.createElement("option");
+        option.value = profile.id;
+        option.textContent = formatFrontmatterProfileLabel(profile);
+        fmProfile.appendChild(option);
+    }
+    if (currentMissing) {
+        const option = document.createElement("option");
+        option.value = normalizedCurrent;
+        option.textContent = formatFrontmatterProfileLabel({ id: normalizedCurrent }, true);
+        fmProfile.appendChild(option);
+    }
+    const shouldShow = profiles.length > 0 || Boolean(normalizedCurrent);
+    fmProfile.classList.toggle("hidden", !shouldShow);
+    fmProfile.disabled = !shouldShow;
+    fmProfile.value = normalizedCurrent;
+    if (fmProfile.value !== normalizedCurrent) {
+        fmProfile.value = "";
+    }
+}
+function refreshFrontmatterAgentProfileControls(agent, profile) {
+    const selectedAgent = renderFmAgentOptions(agent);
+    renderFmProfileOptions(selectedAgent, profile);
+}
+async function syncFrontmatterAgentProfileControls(agent, profile) {
+    refreshFrontmatterAgentProfileControls(agent, profile);
+    try {
+        await ensureAgentCatalog();
+    }
+    catch {
+        return;
+    }
+    refreshFrontmatterAgentProfileControls(agent, profile);
 }
 function buildTicketContent() {
     const { content } = els();
@@ -339,6 +454,8 @@ function buildTicketContent() {
         lines.push(`ticket_id: ${yamlQuote(fm.ticketId)}`);
     if (fm.title)
         lines.push(`title: ${yamlQuote(fm.title)}`);
+    if (fm.profile)
+        lines.push(`profile: ${yamlQuote(fm.profile)}`);
     if (fm.model)
         lines.push(`model: ${yamlQuote(fm.model)}`);
     if (fm.reasoning)
@@ -443,7 +560,8 @@ function hasUnsavedChanges() {
         currentFm.ticketId !== state.lastSavedFrontmatter.ticketId ||
         currentFm.title !== state.lastSavedFrontmatter.title ||
         currentFm.model !== state.lastSavedFrontmatter.model ||
-        currentFm.reasoning !== state.lastSavedFrontmatter.reasoning);
+        currentFm.reasoning !== state.lastSavedFrontmatter.reasoning ||
+        currentFm.profile !== state.lastSavedFrontmatter.profile);
 }
 /**
  * Schedule autosave with debounce
@@ -518,6 +636,7 @@ async function performAutosaveOnce(options = {}) {
                     agent: fm.agent,
                     title: fm.title || undefined,
                     body: content.value,
+                    profile: fm.profile || undefined,
                 },
             });
             if (createRes?.index != null) {
@@ -604,8 +723,12 @@ export function openTicketEditor(ticket) {
         const fm = extractFrontmatter(ticket);
         state.originalFrontmatter = { ...fm };
         state.lastSavedFrontmatter = { ...fm };
+        refreshFrontmatterAgentProfileControls(fm.agent, fm.profile);
         setFrontmatterForm(fm);
-        // Load model/reasoning options for the agent, then restore selections
+        // Load agent/profile catalogs plus model/reasoning options, then restore selections.
+        void syncFrontmatterAgentProfileControls(fm.agent, fm.profile).then(() => {
+            setFrontmatterForm(fm);
+        });
         void refreshFmModelOptions(fm.agent, false).then(() => {
             const { fmModel, fmReasoning } = els();
             if (fmModel && fm.model)
@@ -650,8 +773,12 @@ export function openTicketEditor(ticket) {
         // Reset frontmatter to defaults
         state.originalFrontmatter = { ...DEFAULT_FRONTMATTER };
         state.lastSavedFrontmatter = { ...DEFAULT_FRONTMATTER };
+        refreshFrontmatterAgentProfileControls(DEFAULT_FRONTMATTER.agent, DEFAULT_FRONTMATTER.profile);
         setFrontmatterForm(DEFAULT_FRONTMATTER);
-        // Load model/reasoning options for the default agent
+        // Load agent/profile catalogs plus model/reasoning options for the default agent.
+        void syncFrontmatterAgentProfileControls(DEFAULT_FRONTMATTER.agent, DEFAULT_FRONTMATTER.profile).then(() => {
+            setFrontmatterForm(DEFAULT_FRONTMATTER);
+        });
         void refreshFmModelOptions(DEFAULT_FRONTMATTER.agent, false);
         // Clear body
         state.originalBody = "";
@@ -794,7 +921,7 @@ export async function deleteTicket() {
  * Initialize the ticket editor - wire up event listeners
  */
 export function initTicketEditor() {
-    const { modal, content, deleteBtn, closeBtn, newBtn, insertCheckboxBtn, undoBtn, prevBtn, nextBtn, fmAgent, fmModel, fmReasoning, fmDone, fmTitle, chatInput, chatSendBtn, chatCancelBtn, patchApplyBtn, patchDiscardBtn, agentSelect, profileSelect, modelSelect, modelInput, reasoningSelect, } = els();
+    const { modal, content, deleteBtn, closeBtn, newBtn, insertCheckboxBtn, undoBtn, prevBtn, nextBtn, fmAgent, fmModel, fmReasoning, fmProfile, fmDone, fmTitle, chatInput, chatSendBtn, chatCancelBtn, patchApplyBtn, patchDiscardBtn, agentSelect, profileSelect, modelSelect, modelInput, reasoningSelect, } = els();
     if (!modal)
         return;
     // Prevent double initialization
@@ -843,9 +970,11 @@ export function initTicketEditor() {
     // Autosave on frontmatter changes
     if (fmAgent) {
         fmAgent.addEventListener("change", () => {
-            // Refresh model/reasoning options when agent changes
-            void refreshFmModelOptions(fmAgent.value, false);
-            onFrontmatterChange();
+            void (async () => {
+                await syncFrontmatterAgentProfileControls(fmAgent.value, "");
+                await refreshFmModelOptions(fmAgent.value, false);
+                onFrontmatterChange();
+            })();
         });
     }
     if (fmModel) {
@@ -862,6 +991,8 @@ export function initTicketEditor() {
         fmDone.addEventListener("change", onFrontmatterChange);
     if (fmTitle)
         fmTitle.addEventListener("input", onFrontmatterChange);
+    if (fmProfile)
+        fmProfile.addEventListener("change", onFrontmatterChange);
     // Chat button handlers
     if (chatSendBtn)
         chatSendBtn.addEventListener("click", () => void sendTicketChat());
@@ -871,6 +1002,28 @@ export function initTicketEditor() {
         patchApplyBtn.addEventListener("click", () => void applyTicketPatch());
     if (patchDiscardBtn)
         patchDiscardBtn.addEventListener("click", () => void discardTicketPatch());
+    if (agentSelect) {
+        agentSelect.addEventListener("change", () => {
+            if (ticketChatState.status === "running") {
+                flash("Finish or cancel the current ticket chat turn before switching agents.", "error");
+                void restoreTicketChatSelectionToActiveTurn();
+                return;
+            }
+            syncTicketChatTargetToSelection();
+            void resumeTicketPendingTurn(ticketChatState.ticketIndex, ticketChatState.ticketChatKey);
+        });
+    }
+    if (profileSelect) {
+        profileSelect.addEventListener("change", () => {
+            if (ticketChatState.status === "running") {
+                flash("Finish or cancel the current ticket chat turn before switching profiles.", "error");
+                void restoreTicketChatSelectionToActiveTurn();
+                return;
+            }
+            syncTicketChatTargetToSelection();
+            void resumeTicketPendingTurn(ticketChatState.ticketIndex, ticketChatState.ticketChatKey);
+        });
+    }
     // Cmd/Ctrl+Enter in chat input sends message
     if (chatInput) {
         chatInput.addEventListener("keydown", (e) => {
@@ -961,3 +1114,7 @@ export function initTicketEditor() {
         });
     }
 }
+export const __ticketEditorTest = {
+    isHermesAliasAgentId,
+    sameUndoSnapshot,
+};

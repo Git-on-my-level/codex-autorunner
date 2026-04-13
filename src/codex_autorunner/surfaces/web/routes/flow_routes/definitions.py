@@ -50,6 +50,7 @@ def build_flow_definition(
     from ....core.runtime import RuntimeContext
     from ....flows.ticket_flow import build_ticket_flow_definition
     from ....integrations.agents.build_agent_pool import build_agent_pool
+    from ....tickets import DEFAULT_MAX_TOTAL_TURNS
 
     if flow_type == "ticket_flow":
         config = load_repo_config(repo_root)
@@ -63,6 +64,11 @@ def build_flow_definition(
             auto_commit_default=engine.config.git_auto_commit,
             include_previous_ticket_context_default=(
                 engine.config.ticket_flow.include_previous_ticket_context
+            ),
+            max_total_turns_default=(
+                engine.config.ticket_flow.max_total_turns
+                if engine.config.ticket_flow.max_total_turns is not None
+                else DEFAULT_MAX_TOTAL_TURNS
             ),
         )
     else:

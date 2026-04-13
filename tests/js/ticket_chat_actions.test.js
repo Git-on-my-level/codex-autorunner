@@ -17,6 +17,7 @@ const dom = new JSDOM(
     <button id="ticket-chat-events-toggle"></button>
     <div id="ticket-chat-messages"></div>
     <select id="ticket-chat-agent-select"></select>
+    <select id="ticket-chat-profile-select"></select>
     <select id="ticket-chat-model-select"></select>
     <input id="ticket-chat-model-input" type="text" />
     <select id="ticket-chat-reasoning-select"></select>
@@ -68,5 +69,65 @@ test("ticket chat preserves manual model override when the select is disabled", 
       modelInput: manualInput,
     }),
     "hermes/stored-model"
+  );
+});
+
+test("ticket chat local keys are scoped by agent and profile", () => {
+  assert.notEqual(
+    __ticketChatActionsTest.buildScopedTicketChatTarget(
+      7,
+      "ticket-chat-key",
+      "hermes",
+      "m4-pma"
+    ),
+    __ticketChatActionsTest.buildScopedTicketChatTarget(
+      7,
+      "ticket-chat-key",
+      "hermes",
+      "fast"
+    )
+  );
+
+  assert.notEqual(
+    __ticketChatActionsTest.pendingKeyForTicket(7, "ticket-chat-key", "hermes", "m4-pma"),
+    __ticketChatActionsTest.pendingKeyForTicket(7, "ticket-chat-key", "hermes", "fast")
+  );
+});
+
+test("ticket chat can recover a pending turn even after the current selection changes", () => {
+  localStorage.clear();
+  const scopedTarget = __ticketChatActionsTest.buildScopedTicketChatTarget(
+    7,
+    "ticket-chat-key",
+    "hermes",
+    "m4-pma"
+  );
+  const pendingKey = `car.ticketChat.pending.${scopedTarget}`;
+  localStorage.setItem(
+    pendingKey,
+    JSON.stringify({
+      clientTurnId: "ticket-turn-1",
+      message: "continue",
+      startedAtMs: Date.now(),
+      target: scopedTarget,
+    })
+  );
+
+  const recovered = __ticketChatActionsTest.findPendingTicketTurn(
+    7,
+    "ticket-chat-key",
+    "codex",
+    ""
+  );
+  assert.ok(recovered);
+  assert.equal(recovered.pendingKey, pendingKey);
+  assert.equal(recovered.target, scopedTarget);
+  assert.deepEqual(
+    __ticketChatActionsTest.parseScopedTicketChatTarget(recovered.target),
+    {
+      baseTarget: "ticket-chat-key",
+      agent: "hermes",
+      profile: "m4-pma",
+    }
   );
 });

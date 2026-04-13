@@ -71,6 +71,7 @@ repo_defaults:
     # When enabled, previous ticket content is truncated to 16KB and clearly labeled.
     # Prefer using contextspace docs (active_context.md, decisions.md, spec.md) for cross-ticket context.
     include_previous_ticket_context: false
+    max_total_turns: 150
 
   git:
     # Auto-commit after a run.

@@ -74,8 +74,10 @@ from ...services.pma.common import (
     build_idempotency_key as service_build_idempotency_key,
 )
 from ...services.pma.common import pma_config_from_raw
+from ..agent_profile_validation import resolve_requested_agent_profile
 from ..agents import _available_agents
 from ..shared import SSE_HEADERS
+from .hermes_supervisors import resolve_cached_hermes_supervisor
 from .publish import publish_automation_result
 from .runtime_state import PmaRuntimeState
 from .tail_stream import resolve_resume_after
@@ -97,6 +99,192 @@ def _requires_fresh_pma_conversation(exc: Exception) -> bool:
 def _get_pma_config(request: Request) -> dict[str, Any]:
     raw = getattr(request.app.state.config, "raw", {})
     return pma_config_from_raw(raw)
+
+
+def _resolve_hermes_supervisor(
+    request: Request,
+    *,
+    profile: Optional[str],
+):
+    return resolve_cached_hermes_supervisor(request, profile=profile)
+
+
+async def _maybe_fork_hermes_pma_session(
+    request: Request,
+    *,
+    current: dict[str, Any],
+    agent: Optional[str],
+    profile: Optional[str],
+    hub_root: Path,
+    stored_thread_id: Optional[str] = None,
+) -> dict[str, Any]:
+    current_agent = _normalize_optional_text(current.get("agent"))
+    current_profile = _normalize_optional_text(current.get("profile"))
+    current_thread_id = _normalize_optional_text(current.get("thread_id"))
+    requested_runtime = resolve_agent_runtime(
+        agent or current_agent or "codex",
+        profile,
+        context=request.app.state,
+    )
+    if requested_runtime.logical_agent_id != "hermes":
+        return {}
+
+    current_runtime = None
+    if current_agent:
+        current_runtime = resolve_agent_runtime(
+            current_agent,
+            current_profile,
+            context=request.app.state,
+        )
+    if current_runtime is not None and (
+        current_runtime.logical_agent_id != requested_runtime.logical_agent_id
+        or current_runtime.logical_profile != requested_runtime.logical_profile
+    ):
+        return {}
+
+    if not current_thread_id:
+        current_thread_id = _normalize_optional_text(stored_thread_id)
+    if not current_thread_id:
+        current_thread_id = _normalize_optional_text(
+            request.app.state.app_server_threads.get_thread_id(
+                pma_base_key(
+                    requested_runtime.logical_agent_id,
+                    requested_runtime.logical_profile,
+                )
+            )
+        )
+    if not current_thread_id:
+        return {}
+
+    if (
+        current_runtime is not None
+        and current_runtime.logical_profile != requested_runtime.logical_profile
+    ):
+        return {}
+
+    supervisor = _resolve_hermes_supervisor(
+        request,
+        profile=requested_runtime.logical_profile,
+    )
+    if supervisor is None:
+        return {}
+
+    forked = await supervisor.fork_session(
+        hub_root,
+        current_thread_id,
+        title="PMA session",
+        metadata={
+            "flow_type": "pma_new_session",
+            "source_session_id": current_thread_id,
+            "agent_profile": requested_runtime.logical_profile,
+        },
+    )
+    if forked is None or not forked.session_id:
+        return {}
+
+    request.app.state.app_server_threads.set_thread_id(
+        pma_base_key(
+            requested_runtime.logical_agent_id,
+            requested_runtime.logical_profile,
+        ),
+        forked.session_id,
+    )
+    return {
+        "forked": True,
+        "source_thread_id": current_thread_id,
+        "thread_id": forked.session_id,
+    }
+
+
+def _resolve_preclear_hermes_fork_thread_id(
+    request: Request,
+    *,
+    current: dict[str, Any],
+    agent: Optional[str],
+    profile: Optional[str],
+) -> Optional[str]:
+    requested_runtime = resolve_agent_runtime(
+        agent or _normalize_optional_text(current.get("agent")) or "codex",
+        profile or _normalize_optional_text(current.get("profile")),
+        context=request.app.state,
+    )
+    if requested_runtime.logical_agent_id != "hermes":
+        return None
+    return _normalize_optional_text(
+        request.app.state.app_server_threads.get_thread_id(
+            pma_base_key(
+                requested_runtime.logical_agent_id,
+                requested_runtime.logical_profile,
+            )
+        )
+    )
+
+
+async def _build_new_session_details(
+    request: Request,
+    *,
+    current: dict[str, Any],
+    agent: Optional[str],
+    profile: Optional[str],
+    hub_root: Path,
+    stored_thread_id: Optional[str] = None,
+) -> dict[str, Any]:
+    return await _maybe_fork_hermes_pma_session(
+        request,
+        current=current,
+        agent=agent,
+        profile=profile,
+        hub_root=hub_root,
+        stored_thread_id=stored_thread_id,
+    )
+
+
+async def _new_pma_session_response(
+    request: Request,
+    payload: Optional[PmaNewSessionRequest],
+    *,
+    current: dict[str, Any],
+    preclear_thread_id: Optional[str],
+) -> dict[str, Any]:
+    agent = _normalize_optional_text(payload.agent if payload else None)
+    profile = _normalize_optional_text(payload.profile if payload else None)
+    lane_id = ((payload.lane_id if payload else None) or "pma:default").strip()
+
+    hub_root = request.app.state.config.root
+    lifecycle_router = PmaLifecycleRouter(hub_root)
+    result = await lifecycle_router.new(
+        agent=agent,
+        profile=profile,
+        lane_id=lane_id,
+    )
+    if result.status != "ok":
+        raise HTTPException(status_code=500, detail=result.error)
+
+    details = dict(result.details)
+    details.update(
+        await _build_new_session_details(
+            request,
+            current=current,
+            agent=agent,
+            profile=profile,
+            hub_root=hub_root,
+            stored_thread_id=preclear_thread_id,
+        )
+    )
+    return _serialize_lifecycle_result(result, details=details)
+
+
+def _serialize_lifecycle_result(
+    result: Any,
+    *,
+    details: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    return {
+        "status": result.status,
+        "message": result.message,
+        "artifact_path": str(result.artifact_path) if result.artifact_path else None,
+        "details": result.details if details is None else details,
+    }
 
 
 async def _resolve_terminal_queue_item_result(
@@ -160,84 +348,6 @@ async def _register_pma_result_future(
     if late_result is not None and not result_future.done():
         result_future.set_result(late_result)
     return result_future
-
-
-def _resolve_agent_profile(
-    request: Request,
-    agent_id: str,
-    requested_profile: Optional[str],
-    *,
-    default_profile: Optional[str] = None,
-) -> Optional[str]:
-    config = getattr(request.app.state, "config", None)
-    profile_getter = getattr(config, "agent_profiles", None)
-    default_profile_getter = getattr(config, "agent_default_profile", None)
-    available_profiles: dict[str, Any] = {}
-    if callable(profile_getter):
-        try:
-            available_profiles = profile_getter(agent_id) or {}
-        except (ValueError, TypeError, AttributeError):
-            available_profiles = {}
-    resolved_profile = _normalize_optional_text(requested_profile)
-    if resolved_profile is not None:
-        if agent_id == "hermes":
-            hermes_valid = set(available_profiles.keys())
-            try:
-                from .....integrations.chat.agents import chat_hermes_profile_options
-
-                hermes_valid |= {
-                    opt.profile
-                    for opt in chat_hermes_profile_options(request.app.state)
-                }
-            except (
-                ImportError,
-                AttributeError,
-                RuntimeError,
-            ):  # intentional: import and call of optional integration
-                logger.debug("Failed to resolve hermes profile options", exc_info=True)
-            if resolved_profile not in hermes_valid:
-                raise HTTPException(status_code=400, detail="profile is invalid")
-        elif resolved_profile not in available_profiles:
-            raise HTTPException(status_code=400, detail="profile is invalid")
-        return resolved_profile
-
-    fallback_profiles: list[Optional[str]] = [
-        _normalize_optional_text(default_profile),
-    ]
-    if callable(default_profile_getter):
-        try:
-            fallback_profiles.append(
-                _normalize_optional_text(default_profile_getter(agent_id))
-            )
-        except (ValueError, TypeError, AttributeError):
-            fallback_profiles.append(None)
-
-    fallback_keys: set[str] = set(available_profiles.keys())
-    if agent_id == "hermes":
-        try:
-            from .....integrations.chat.agents import chat_hermes_profile_options
-
-            fallback_keys |= {
-                opt.profile for opt in chat_hermes_profile_options(request.app.state)
-            }
-        except (
-            ImportError,
-            AttributeError,
-            RuntimeError,
-        ):  # intentional: import and call of optional integration
-            logger.debug(
-                "Failed to resolve hermes fallback profile options", exc_info=True
-            )
-
-    for fallback_profile in fallback_profiles:
-        if fallback_profile is not None:
-            if agent_id == "hermes":
-                if fallback_profile in fallback_keys:
-                    return fallback_profile
-            elif fallback_profile in available_profiles:
-                return fallback_profile
-
-    return None
 
 
 def _build_idempotency_key(
@@ -1466,7 +1576,7 @@ async def _execute_queue_item(
     except ValueError:
         agent_id = _resolve_default_agent(available_ids, available_default)
 
-    profile = _resolve_agent_profile(
+    profile = resolve_requested_agent_profile(
         request,
         agent_id,
         profile,
@@ -1864,14 +1974,7 @@ def build_chat_runtime_router(
             runtime, request, reason="Lane stopped", source="user_request"
         )
 
-        return {
-            "status": result.status,
-            "message": result.message,
-            "artifact_path": (
-                str(result.artifact_path) if result.artifact_path else None
-            ),
-            "details": result.details,
-        }
+        return _serialize_lifecycle_result(result)
 
     @router.post("/new")
     async def new_pma_session(
@@ -1879,28 +1982,20 @@ def build_chat_runtime_router(
     ) -> dict[str, Any]:
         agent = _normalize_optional_text(payload.agent if payload else None)
         profile = _normalize_optional_text(payload.profile if payload else None)
-        lane_id = ((payload.lane_id if payload else None) or "pma:default").strip()
-
-        hub_root = request.app.state.config.root
-        lifecycle_router = PmaLifecycleRouter(hub_root)
-
-        result = await lifecycle_router.new(
+        runtime = get_runtime_state()
+        current = await runtime.get_current_snapshot()
+        preclear_thread_id = _resolve_preclear_hermes_fork_thread_id(
+            request,
+            current=current,
             agent=agent,
             profile=profile,
-            lane_id=lane_id,
         )
-
-        if result.status != "ok":
-            raise HTTPException(status_code=500, detail=result.error)
-
-        return {
-            "status": result.status,
-            "message": result.message,
-            "artifact_path": (
-                str(result.artifact_path) if result.artifact_path else None
-            ),
-            "details": result.details,
-        }
+        return await _new_pma_session_response(
+            request,
+            payload,
+            current=current,
+            preclear_thread_id=preclear_thread_id,
+        )
 
     @router.post("/reset")
     async def reset_pma_session(

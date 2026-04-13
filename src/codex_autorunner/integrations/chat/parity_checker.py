@@ -364,7 +364,7 @@ def _check_contract_registry_entries_cataloged(
 ) -> ParityCheckResult:
     discord_registered_paths = _extract_discord_registered_command_paths(
         discord_commands_ast
-    ) or _extract_discord_registered_command_paths_from_registry(
+    ) or _extract_discord_registered_paths_from_registry(
         discord_interaction_registry_ast
     )
     telegram_registered_commands = _extract_telegram_registered_commands(
@@ -455,6 +455,9 @@ def _check_discord_contract_commands_routed(
     discord_car_dispatch_ast: ast.Module | None,
     discord_interaction_registry_ast: ast.Module | None = None,
 ) -> ParityCheckResult:
+    registry_paths = _extract_discord_canonical_paths_from_registry(
+        discord_interaction_registry_ast
+    )
     expected_stable_ids: list[str] = []
     missing_ids: list[str] = []
     missing_non_stable_ids: list[str] = []
@@ -467,11 +470,16 @@ def _check_discord_contract_commands_routed(
         missing_paths = [
             path
             for path in entry.discord_paths
-            if not _is_discord_path_routed_in_service(
-                path,
-                discord_service_ast,
-                discord_car_dispatch_ast,
-                discord_interaction_registry_ast,
+            if not (
+                (
+                    registry_paths is not None
+                    and _normalize_discord_contract_route_path(path) in registry_paths
+                )
+                or _is_discord_path_routed_in_service(
+                    path,
+                    discord_service_ast,
+                    discord_car_dispatch_ast,
+                )
             )
         ]
         if not missing_paths:
@@ -590,7 +598,7 @@ def _check_discord_known_commands_not_in_generic_fallback(
         )
     )
 
-    checks = {
+    legacy_checks = {
         "normalized_car_prefix_guard": _has_prefix_guard_in_functions(
             normalized_handlers,
             prefix="car",
@@ -630,9 +638,31 @@ def _check_discord_known_commands_not_in_generic_fallback(
             exact="Unknown PMA subcommand. Use on, off, or status.",
         ),
     }
+    registry_dispatch_handlers = _find_functions_by_name(
+        discord_interaction_registry_ast,
+        "dispatch_slash_command",
+    )
+    registry_checks = {
+        "registry_car_specific_fallback_present": _has_call_with_string_argument(
+            registry_dispatch_handlers,
+            callee_name="respond_ephemeral",
+            contains="Unknown car subcommand:",
+        ),
+        "registry_pma_specific_fallback_present": _has_call_with_string_argument(
+            registry_dispatch_handlers,
+            callee_name="respond_ephemeral",
+            exact="Unknown PMA subcommand. Use on, off, or status.",
+        ),
+        "registry_generic_fallback_present": _has_call_with_string_argument(
+            registry_dispatch_handlers,
+            callee_name="respond_ephemeral",
+            exact="Command not implemented yet for Discord.",
+        ),
+    }
+    checks = {**legacy_checks, **registry_checks}
 
     failed_predicates = [key for key, passed in checks.items() if not passed]
-    passed = not failed_predicates
+    passed = all(registry_checks.values()) or all(legacy_checks.values())
 
     if passed:
         message = "Known Discord command prefixes are guarded before generic fallback."
@@ -840,15 +870,43 @@ def _check_discord_interaction_component_guard_paths(
 
     component_unhandled_error_event = "discord.component.normalized.unhandled_error"
     component_missing_custom_id_functions = interaction_handlers + execute_handlers
+    registry_dispatch_handlers = _find_functions_by_name(
+        discord_interaction_registry_ast,
+        "dispatch_slash_command",
+    )
+    registry_component_handlers = (
+        _find_functions_by_name(
+            discord_interaction_registry_ast,
+            "_handle_bind_select_component",
+        )
+        + _find_functions_by_name(
+            discord_interaction_registry_ast,
+            "_handle_flow_runs_select_component",
+        )
+        + _find_functions_by_name(
+            discord_interaction_registry_ast,
+            "dispatch_component_interaction",
+        )
+    )
 
     checks = {
         "interaction_parse_failure_response": _has_guard_response(
             interaction_handlers,
             guard_predicate=_condition_has_empty_command_path_guard,
             response_contains="could not parse this interaction",
+        )
+        or _has_call_with_string_argument(
+            interaction_handlers,
+            callee_name="respond_ephemeral",
+            contains="could not parse this interaction",
         ),
         "interaction_unknown_command_fallback": _has_call_with_string_argument(
             interaction_handlers + slash_dispatch_handlers,
+            callee_name="respond_ephemeral",
+            exact="Command not implemented yet for Discord.",
+        )
+        or _has_call_with_string_argument(
+            registry_dispatch_handlers,
             callee_name="respond_ephemeral",
             exact="Command not implemented yet for Discord.",
         ),
@@ -863,6 +921,11 @@ def _check_discord_interaction_component_guard_paths(
             interaction_handlers,
             callee_name="respond_ephemeral",
             exact="An unexpected error occurred. Please try again later.",
+        )
+        or _has_call_with_string_argument(
+            interaction_handlers,
+            callee_name="respond_ephemeral",
+            exact="An unexpected error occurred. Please try again later.",
         ),
         "component_missing_custom_id_response": _has_guard_response(
             component_missing_custom_id_functions,
@@ -872,6 +935,11 @@ def _check_discord_interaction_component_guard_paths(
                 attribute_name="custom_id",
             ),
             response_contains="could not identify this interaction action",
+        )
+        or _has_call_with_string_argument(
+            component_missing_custom_id_functions,
+            callee_name="respond_ephemeral",
+            contains="could not identify this interaction action",
         ),
         "component_bind_selection_requires_value": _has_guard_response(
             bind_select_handlers,
@@ -881,6 +949,11 @@ def _check_discord_interaction_component_guard_paths(
                 attribute_name="values",
             ),
             response_contains="select a repository",
+        )
+        or _has_call_with_string_argument(
+            registry_component_handlers,
+            callee_name="respond_ephemeral",
+            contains="select a repository",
         ),
         "component_flow_runs_selection_requires_value": _has_guard_response(
             flow_runs_select_handlers,
@@ -890,9 +963,19 @@ def _check_discord_interaction_component_guard_paths(
                 attribute_name="values",
             ),
             response_contains="select a run",
+        )
+        or _has_call_with_string_argument(
+            registry_component_handlers,
+            callee_name="respond_ephemeral",
+            contains="select a run",
         ),
         "component_unknown_fallback": _has_call_with_string_argument(
             component_dispatch_handlers,
+            callee_name="respond_ephemeral",
+            contains="Unknown component:",
+        )
+        or _has_call_with_string_argument(
+            registry_component_handlers,
             callee_name="respond_ephemeral",
             contains="Unknown component:",
         ),
@@ -901,6 +984,11 @@ def _check_discord_interaction_component_guard_paths(
             event_names=(component_unhandled_error_event,),
         ),
         "component_unhandled_error_response": _has_call_with_string_argument(
+            component_handlers,
+            callee_name="respond_ephemeral",
+            exact="An unexpected error occurred. Please try again later.",
+        )
+        or _has_call_with_string_argument(
             component_handlers,
             callee_name="respond_ephemeral",
             exact="An unexpected error occurred. Please try again later.",
@@ -1007,39 +1095,64 @@ def _extract_discord_registered_command_paths(
     return paths
 
 
-def _extract_discord_registered_command_paths_from_registry(
+def _extract_discord_registered_paths_from_registry(
     tree: ast.Module | None,
+) -> set[tuple[str, ...]] | None:
+    return _extract_discord_route_paths_from_registry(
+        tree,
+        keyword_name="registered_path",
+    )
+
+
+def _extract_discord_canonical_paths_from_registry(
+    tree: ast.Module | None,
+) -> set[tuple[str, ...]] | None:
+    return _extract_discord_route_paths_from_registry(
+        tree,
+        keyword_name="canonical_path",
+    )
+
+
+def _extract_discord_route_paths_from_registry(
+    tree: ast.Module | None,
+    *,
+    keyword_name: str,
 ) -> set[tuple[str, ...]] | None:
     if tree is None:
         return None
 
     paths: set[tuple[str, ...]] = set()
-    for call in _iter_calls(tree):
-        callee_name = _call_name(call.func)
-        if callee_name != "SlashCommandRoute":
+    found_route = False
+    for node in ast.walk(tree):
+        if (
+            not isinstance(node, ast.Call)
+            or _call_name(node.func) != "SlashCommandRoute"
+        ):
             continue
-        include_in_payload = True
-        registered_path: tuple[str, ...] | None = None
-        for keyword in call.keywords:
-            if keyword.arg == "include_in_payload":
-                literal = _bool_constant_value(keyword.value)
-                if literal is False:
-                    include_in_payload = False
-            if keyword.arg == "registered_path" and isinstance(
-                keyword.value, ast.Tuple
+        found_route = True
+        if any(
+            kw.arg == "include_in_payload"
+            and isinstance(kw.value, ast.Constant)
+            and kw.value.value is False
+            for kw in node.keywords
+        ):
+            continue
+        for kw in node.keywords:
+            if kw.arg != keyword_name:
+                continue
+            value = _evaluate_static_expr(
+                kw.value,
+                names={},
+                functions={},
+            )
+            if (
+                isinstance(value, tuple)
+                and value
+                and all(isinstance(item, str) for item in value)
             ):
-                tuple_value = tuple(
-                    value
-                    for value in (
-                        _string_constant_value(item) for item in keyword.value.elts
-                    )
-                    if value is not None
-                )
-                if tuple_value:
-                    registered_path = tuple_value
-        if include_in_payload and registered_path is not None:
-            paths.add(registered_path)
-    return paths
+                paths.add(value)
+            break
+    return paths if found_route else None
 
 
 def _extract_telegram_registered_commands(tree: ast.Module | None) -> set[str] | None:
@@ -1488,6 +1601,12 @@ def _module_has_call(tree: ast.Module | None, *, callee_name: str) -> bool:
         if _call_name(call.func) == callee_name:
             return True
     return False
+
+
+def _count_calls(tree: ast.Module | None, *, callee_name: str) -> int:
+    if tree is None:
+        return 0
+    return sum(1 for call in _iter_calls(tree) if _call_name(call.func) == callee_name)
 
 
 def _has_call_with_string_argument(

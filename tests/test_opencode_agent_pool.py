@@ -172,6 +172,29 @@ class _FakeCloser:
         self.closed = True
 
 
+@dataclass
+class _ContextualHarnessFactory:
+    harnesses: dict[tuple[str, Optional[str]], _FakeHarness]
+    calls: list[tuple[str, Optional[str]]] = field(default_factory=list)
+
+    def make_harness(self, ctx: Any):
+        requested_agent = getattr(ctx, "_requested_agent_id", None)
+        requested_profile = getattr(ctx, "_requested_agent_profile", None)
+        key = (
+            str(requested_agent or "").strip().lower(),
+            (
+                str(requested_profile).strip().lower()
+                if isinstance(requested_profile, str) and requested_profile.strip()
+                else None
+            ),
+        )
+        self.calls.append(key)
+        harness = self.harnesses.get(key)
+        if harness is None:
+            raise AssertionError(f"Unexpected harness resolution request: {key!r}")
+        return harness
+
+
 def _build_descriptor(
     agent_id: str,
     *,
@@ -189,6 +212,29 @@ def _build_descriptor(
             }
         ),
         make_harness=lambda ctx: ctx.fake_harness,
+    )
+
+
+def _build_contextual_descriptor(
+    agent_id: str,
+    factory: _ContextualHarnessFactory,
+    *,
+    runtime_kind: Optional[str] = None,
+    capabilities: Optional[frozenset[RuntimeCapability]] = None,
+) -> AgentDescriptor:
+    return AgentDescriptor(
+        id=agent_id,
+        name=agent_id.title(),
+        capabilities=capabilities
+        or frozenset(
+            {
+                RuntimeCapability("durable_threads"),
+                RuntimeCapability("message_turns"),
+                RuntimeCapability("event_streaming"),
+            }
+        ),
+        make_harness=factory.make_harness,
+        runtime_kind=runtime_kind,
     )
 
 
@@ -949,6 +995,121 @@ async def test_run_turn_supports_runtime_backed_hermes_agent(tmp_path: Path):
     assert len(threads) == 1
     assert threads[0]["name"] == "ticket-flow:hermes"
     assert harness.calls[0]["conversation_id"] == "session-1"
+
+
+@pytest.mark.asyncio
+async def test_run_turn_uses_profile_aware_runtime_resolution_for_hermes_queue_drain(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    alias_harness = _FakeHarness(
+        [
+            _HarnessScript(
+                assistant_text="done-1",
+                started_event=first_started,
+                release_event=release_first,
+            ),
+            _HarnessScript(assistant_text="done-2"),
+        ]
+    )
+    factory = _ContextualHarnessFactory(
+        harnesses={("hermes-m4-pma", None): alias_harness}
+    )
+    pool = _make_pool(
+        tmp_path,
+        alias_harness,
+        approval_mode="review",
+        descriptors={
+            "hermes": _build_contextual_descriptor("hermes", factory),
+            "hermes-m4-pma": _build_contextual_descriptor(
+                "hermes-m4-pma",
+                factory,
+                runtime_kind="hermes",
+            ),
+        },
+    )
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.agents.agent_pool_impl.resolve_agent_runtime",
+        lambda agent_id, profile=None, context=None: (
+            SimpleNamespace(
+                logical_agent_id="hermes",
+                logical_profile="m4-pma",
+                runtime_agent_id="hermes-m4-pma",
+                runtime_profile=None,
+                resolution_kind="alias_profile",
+            )
+            if agent_id == "hermes" and profile == "m4-pma"
+            else SimpleNamespace(
+                logical_agent_id=agent_id,
+                logical_profile=profile,
+                runtime_agent_id=agent_id,
+                runtime_profile=profile,
+                resolution_kind="passthrough",
+            )
+        ),
+    )
+
+    options = {
+        "profile": "m4-pma",
+        "ticket_flow_run_id": "run-123",
+        "ticket_id": "tkt-123",
+        "ticket_path": ".codex-autorunner/tickets/TICKET-123.md",
+    }
+
+    first_task = asyncio.create_task(
+        pool.run_turn(
+            AgentTurnRequest(
+                agent_id="hermes",
+                prompt="first",
+                workspace_root=tmp_path,
+                options=options,
+            )
+        )
+    )
+    await first_started.wait()
+
+    thread = pool._thread_store.list_threads(agent="hermes", limit=1)[0]
+    thread_id = str(thread["managed_thread_id"])
+    assert thread["name"] == "ticket-flow:hermes@m4-pma"
+    assert thread["metadata"]["agent_profile"] == "m4-pma"
+    assert thread["metadata"]["run_id"] == "run-123"
+    assert thread["metadata"]["ticket_id"] == "tkt-123"
+    assert thread["metadata"]["ticket_path"] == options["ticket_path"]
+
+    second_task = asyncio.create_task(
+        pool.run_turn(
+            AgentTurnRequest(
+                agent_id="hermes",
+                prompt="second",
+                workspace_root=tmp_path,
+                conversation_id=thread_id,
+                options=options,
+            )
+        )
+    )
+    await asyncio.sleep(0)
+
+    service = pool._get_orchestration_service()  # type: ignore[attr-defined]
+    assert service.get_running_execution(thread_id) is not None
+    assert len(service.list_queued_executions(thread_id)) == 1
+
+    release_first.set()
+    first_result = await first_task
+    second_result = await second_task
+
+    assert first_result.text == "done-1"
+    assert second_result.text == "done-2"
+    assert first_result.conversation_id == second_result.conversation_id == thread_id
+    assert factory.calls == [
+        ("hermes-m4-pma", None),
+        ("hermes-m4-pma", None),
+        ("hermes-m4-pma", None),
+    ]
+    assert alias_harness.calls[0]["conversation_id"] == "session-1"
+    assert alias_harness.calls[1]["conversation_id"] == "session-1"
 
 
 @pytest.mark.asyncio

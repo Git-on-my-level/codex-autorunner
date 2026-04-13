@@ -9,7 +9,14 @@ from typing import Any, Awaitable, Callable, Optional, Sequence
 from ...workspace import canonical_workspace_root
 from .client import ACPClient, ACPPromptHandle
 from .events import ACPEvent, ACPPermissionRequestEvent
-from .protocol import ACPSessionDescriptor
+from .protocol import (
+    ACPAdvertisedCommand,
+    ACPSessionCapabilities,
+    ACPSessionDescriptor,
+    ACPSessionForkResult,
+    ACPSetModelResult,
+    ACPSetModeResult,
+)
 
 NotificationHandler = Callable[[Path, ACPEvent], Awaitable[None]]
 PermissionHandler = Callable[[Path, ACPPermissionRequestEvent], Awaitable[Any]]
@@ -98,6 +105,43 @@ class ACPSubprocessSupervisor:
     async def list_sessions(self, workspace_root: Path) -> list[ACPSessionDescriptor]:
         client = await self.get_client(workspace_root)
         return await client.list_sessions()
+
+    async def fork_session(
+        self,
+        workspace_root: Path,
+        session_id: str,
+        *,
+        title: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> ACPSessionForkResult:
+        client = await self.get_client(workspace_root)
+        return await client.fork_session(session_id, title=title, metadata=metadata)
+
+    async def set_session_model(
+        self, workspace_root: Path, session_id: str, model_id: str
+    ) -> ACPSetModelResult:
+        client = await self.get_client(workspace_root)
+        return await client.set_session_model(session_id, model_id)
+
+    async def set_session_mode(
+        self, workspace_root: Path, session_id: str, mode: str
+    ) -> ACPSetModeResult:
+        client = await self.get_client(workspace_root)
+        return await client.set_session_mode(session_id, mode)
+
+    async def advertised_commands(
+        self,
+        workspace_root: Path,
+    ) -> list[ACPAdvertisedCommand]:
+        client = await self.get_client(workspace_root)
+        return client.advertised_commands
+
+    async def session_capabilities(
+        self,
+        workspace_root: Path,
+    ) -> ACPSessionCapabilities:
+        client = await self.get_client(workspace_root)
+        return client.session_capabilities
 
     async def start_prompt(
         self,

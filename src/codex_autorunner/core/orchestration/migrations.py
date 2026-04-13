@@ -379,7 +379,12 @@ def _ensure_column(
         return
     if column_name in _table_columns(conn, table_name):
         return
-    conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {ddl}")
+    try:
+        conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {ddl}")
+    except sqlite3.OperationalError as exc:
+        message = str(exc).lower()
+        if f"duplicate column name: {column_name}".lower() not in message:
+            raise
 
 
 def _ensure_resource_owner_columns(

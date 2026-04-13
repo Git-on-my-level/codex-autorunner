@@ -32,6 +32,8 @@ class TicketFrontmatter:
     # Optional model/reasoning overrides for this ticket.
     model: Optional[str] = None
     reasoning: Optional[str] = None
+    # Optional runtime profile (e.g. Hermes profile).
+    profile: Optional[str] = None
     context: tuple[TicketContextEntry, ...] = ()
     extra: dict[str, Any] = field(default_factory=dict)
 

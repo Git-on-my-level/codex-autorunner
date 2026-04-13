@@ -19,6 +19,21 @@ interface AgentProfile {
   display_name?: string;
 }
 
+export interface RegisteredAgentProfile {
+  id: string;
+  display_name?: string;
+}
+
+export interface RegisteredAgent {
+  id: string;
+  name?: string;
+  version?: string;
+  protocol_version?: string;
+  capabilities?: string[];
+  default_profile?: string | null;
+  profiles?: RegisteredAgentProfile[];
+}
+
 interface ModelCatalogModel {
   id: string;
   display_name?: string;
@@ -180,6 +195,40 @@ function getAgentEntry(agentId: string): Agent | undefined {
 function agentProfiles(agentId: string): AgentProfile[] {
   const entry = getAgentEntry(agentId);
   return Array.isArray(entry?.profiles) ? entry.profiles : [];
+}
+
+function cloneProfile(profile: AgentProfile): RegisteredAgentProfile {
+  return {
+    id: profile.id,
+    display_name: profile.display_name,
+  };
+}
+
+function cloneAgent(agent: Agent): RegisteredAgent {
+  return {
+    id: agent.id,
+    name: agent.name,
+    version: agent.version,
+    protocol_version: agent.protocol_version,
+    capabilities: Array.isArray(agent.capabilities)
+      ? [...agent.capabilities]
+      : undefined,
+    default_profile: agent.default_profile ?? null,
+    profiles: Array.isArray(agent.profiles)
+      ? agent.profiles.map(cloneProfile)
+      : [],
+  };
+}
+
+export function getRegisteredAgents(): RegisteredAgent[] {
+  ensureFallbackAgents();
+  return agentList.map(cloneAgent);
+}
+
+export function getRegisteredAgentProfiles(
+  agentId: string
+): RegisteredAgentProfile[] {
+  return agentProfiles(agentId).map(cloneProfile);
 }
 
 async function loadAgents(): Promise<void> {
@@ -545,6 +594,15 @@ export async function refreshAgentControls(
   request: { force?: boolean; reason?: SmartRefreshReason } = {}
 ): Promise<void> {
   await agentControlsRefresh.refresh(loadAgentControlsPayload, request);
+}
+
+export async function setSelectedAgentProfile(
+  agent: string,
+  profile: string = ""
+): Promise<void> {
+  setSelectedAgent(agent);
+  setSelectedProfile(agent, profile);
+  await refreshAgentControls({ force: true, reason: "manual" });
 }
 
 async function handleAgentChange(nextAgent: string): Promise<void> {

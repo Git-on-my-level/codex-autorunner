@@ -599,6 +599,7 @@ function appendToLiveOutput(text: string): void {
   }
 
   scheduleLiveOutputTextUpdate();
+  scheduleLiveOutputRender();
 }
 
 function addLiveOutputEvent(parsed: ParsedAgentEvent): void {
@@ -742,17 +743,56 @@ function renderLiveOutputEvents(): void {
 function renderLiveOutputCompact(): void {
   const compactEl = document.getElementById("ticket-live-output-compact");
   if (!compactEl) return;
-  const summary = summarizeEvents(liveOutputEvents, {
-    maxActions: 1, // Show only 1 action + thinking to fit in 3-line compact view
-    maxTextLength: COMPACT_MAX_TEXT_LENGTH,
-    startTime: flowStartedAt?.getTime(),
-  });
-  const text = liveOutputEvents.length ? renderCompactSummary(summary) : "";
+  const text = renderCompactLiveOutputText();
   const newText = text || "Waiting for agent output...";
   
   if (compactEl.textContent !== newText) {
     compactEl.textContent = newText;
   }
+}
+
+function renderCompactLiveOutputText(): string {
+  if (liveOutputEvents.length) {
+    const summary = summarizeEvents(liveOutputEvents, {
+      maxActions: 1, // Show only 1 action + thinking to fit in 3-line compact view
+      maxTextLength: COMPACT_MAX_TEXT_LENGTH,
+      startTime: flowStartedAt?.getTime(),
+    });
+    return renderCompactSummary(summary);
+  }
+
+  const fallbackText = compactLiveOutputBufferText();
+  if (!fallbackText) return "";
+
+  const summary = summarizeEvents(
+    [
+      {
+        id: "ticket-live-output-fallback",
+        title: "Output",
+        summary: fallbackText,
+        detail: "",
+        kind: "output",
+        isSignificant: true,
+        time: flowStartedAt?.getTime() || Date.now(),
+        itemId: null,
+        method: "agent_stream_delta",
+      },
+    ],
+    {
+      maxActions: 1,
+      maxTextLength: COMPACT_MAX_TEXT_LENGTH,
+      startTime: flowStartedAt?.getTime(),
+    }
+  );
+  return renderCompactSummary(summary);
+}
+
+function compactLiveOutputBufferText(): string {
+  const recentLines = liveOutputBuffer
+    .map((line) => line.trim())
+    .filter((line) => line && !/^--- Step: .* ---$/.test(line));
+  if (!recentLines.length) return "";
+  return recentLines.slice(-3).join(" ").replace(/\s+/g, " ").trim();
 }
 
 function updateLiveOutputViewToggle(): void {
@@ -986,6 +1026,21 @@ function initReasonModal(): void {
     });
   }
 }
+
+export const __ticketFlowTest = {
+  clearLiveOutput(): void {
+    clearLiveOutput();
+    liveOutputDetailExpanded = false;
+    flowStartedAt = null;
+    renderLiveOutputView();
+  },
+  handleFlowEvent,
+  initLiveOutputPanel,
+  renderLiveOutputView,
+  setFlowStartedAt(value: number | null): void {
+    flowStartedAt = value == null ? null : new Date(value);
+  },
+};
 
 function els(): {
   card: HTMLElement | null;
@@ -1715,7 +1770,14 @@ async function bulkSetAgent(): Promise<void> {
     placeholder: "codex",
     confirmText: "Set agent",
   });
-  if (!agent) return;
+  const agentValue = agent?.trim() || "";
+  if (!agentValue) return;
+  const profile = await inputModal("Optional profile (e.g. Hermes profile). Leave blank to clear and use the default.", {
+    placeholder: "m4-pma",
+    confirmText: "Apply",
+    allowEmpty: true,
+  });
+  if (profile === null) return;
   const range = await inputModal("Optional range (A:B). Leave blank for all tickets.", {
     placeholder: "1:20",
     confirmText: "Apply",
@@ -1723,13 +1785,16 @@ async function bulkSetAgent(): Promise<void> {
   });
   if (range === null) return;
   const rangeValue = range.trim() || undefined;
+  const trimmedProfile = profile.trim();
+  const profileValue = trimmedProfile || null;
 
   setButtonLoading(bulkSetAgentBtn, true);
   try {
     const payload = (await api("/api/flows/ticket_flow/tickets/bulk-set-agent", {
       method: "POST",
       body: {
-        agent,
+        agent: agentValue,
+        profile: profileValue,
         range: rangeValue,
       },
     })) as TicketBulkUpdateResponse;
@@ -1774,6 +1839,41 @@ async function bulkClearModel(): Promise<void> {
     flash((err as Error).message || "Failed to clear model overrides", "error");
   } finally {
     setButtonLoading(bulkClearModelBtn, false);
+  }
+}
+
+async function bulkCanonicalizeHermes(): Promise<void> {
+  const range = await inputModal("Optional range (A:B). Leave blank for all tickets.", {
+    placeholder: "1:20",
+    confirmText: "Canonicalize",
+    allowEmpty: true,
+  });
+  if (range === null) return;
+  const rangeValue = range.trim() || undefined;
+
+  const confirmed = await confirmModal(
+    rangeValue
+      ? `Canonicalize Hermes aliases for tickets ${rangeValue}?`
+      : "Canonicalize Hermes aliases for all tickets?",
+    { confirmText: "Canonicalize", cancelText: "Cancel" }
+  );
+  if (!confirmed) return;
+
+  const btn = document.getElementById("ticket-bulk-canonicalize-hermes") as HTMLButtonElement | null;
+  setButtonLoading(btn, true);
+  try {
+    const payload = (await api("/api/flows/ticket_flow/tickets/bulk-canonicalize-hermes", {
+      method: "POST",
+      body: {
+        range: rangeValue,
+      },
+    })) as TicketBulkUpdateResponse;
+    summarizeBulkResult("Canonicalize Hermes", payload);
+    await loadTicketFiles({ reason: "manual" });
+  } catch (err) {
+    flash((err as Error).message || "Failed to canonicalize Hermes agents", "error");
+  } finally {
+    setButtonLoading(btn, false);
   }
 }
 
@@ -2472,6 +2572,10 @@ export function initTicketFlow(): void {
   if (recoverBtn) recoverBtn.addEventListener("click", recoverTicketFlow);
   if (bulkSetAgentBtn) bulkSetAgentBtn.addEventListener("click", () => void bulkSetAgent());
   if (bulkClearModelBtn) bulkClearModelBtn.addEventListener("click", () => void bulkClearModel());
+  {
+    const btn = document.getElementById("ticket-bulk-canonicalize-hermes") as HTMLButtonElement | null;
+    if (btn) btn.addEventListener("click", () => void bulkCanonicalizeHermes());
+  }
   if (refreshBtn) refreshBtn.addEventListener("click", () => {
     void loadTicketFlow({ reason: "manual" });
   });

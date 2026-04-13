@@ -1,46 +1,84 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
-import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 from fastapi import Request
 
-from .....agents.registry import validate_agent_id
+from .....agents.registry import has_capability, validate_agent_id
 from .....core import drafts as draft_utils
-from .....core.usage import persist_opencode_usage_snapshot
 from .....core.utils import atomic_write
+from .....integrations.app_server.threads import file_chat_target_key
+from .....integrations.chat.agents import resolve_chat_agent_and_profile
+from ..agent_profile_validation import resolve_requested_agent_profile
 from .draft_state import load_draft_snapshot, persist_draft, relative_to_repo
+from .execution_agents import execute_app_server as _execute_app_server_impl
+from .execution_agents import execute_harness_turn as _execute_harness_turn_impl
+from .execution_agents import execute_opencode as _execute_opencode_impl
 from .targets import _Target, build_file_chat_prompt, read_file
 
-logger = logging.getLogger(__name__)
-
 FILE_CHAT_TIMEOUT_SECONDS = 180
+_FILE_CHAT_REQUIRED_CAPABILITIES = ("durable_threads", "message_turns")
 
 
-class FileChatError(Exception):
-    """Base error for file chat failures."""
+@dataclass(frozen=True)
+class FileChatAgentSelection:
+    agent_id: str
+    profile: Optional[str]
+    thread_key: str
 
 
-async def execute_file_chat(
+def _normalize_optional_text(value: object) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    return normalized or None
+
+
+def resolve_file_chat_agent_selection(
     request: Request,
-    repo_root: Path,
     target: _Target,
-    message: str,
     *,
-    agent: str = "codex",
-    model: Optional[str] = None,
-    reasoning: Optional[str] = None,
-    on_meta: Optional[Callable[[str, str, str], Any]] = None,
-    on_usage: Optional[Callable[[Dict[str, Any]], Any]] = None,
-) -> Dict[str, Any]:
+    agent: object = "codex",
+    profile: object = None,
+) -> FileChatAgentSelection:
+    normalized_agent, normalized_profile = resolve_chat_agent_and_profile(
+        agent,
+        profile,
+        default="codex",
+        context=request.app.state,
+    )
+    try:
+        agent_id = validate_agent_id(normalized_agent or "", request.app.state)
+    except ValueError:
+        agent_id = "codex"
+
+    explicit_profile = _normalize_optional_text(profile)
+    requested_profile = (
+        normalized_profile if normalized_profile is not None else explicit_profile
+    )
+    validated_profile = resolve_requested_agent_profile(
+        request,
+        agent_id,
+        requested_profile,
+    )
+    return FileChatAgentSelection(
+        agent_id=agent_id,
+        profile=validated_profile,
+        thread_key=file_chat_target_key(agent_id, target.state_key, validated_profile),
+    )
+
+
+def _build_execution_context(
+    request: Request,
+) -> tuple[Any, Any, Any, Any, Optional[float]]:
     supervisor = getattr(request.app.state, "app_server_supervisor", None)
     threads = getattr(request.app.state, "app_server_threads", None)
     opencode = getattr(request.app.state, "opencode_supervisor", None)
-    engine = getattr(request.app.state, "engine", None)
     events = getattr(request.app.state, "app_server_events", None)
+    engine = getattr(request.app.state, "engine", None)
     stall_timeout_seconds = None
     try:
         stall_timeout_seconds = (
@@ -50,8 +88,191 @@ async def execute_file_chat(
         )
     except (AttributeError, TypeError):
         stall_timeout_seconds = None
-    if supervisor is None and opencode is None:
-        raise FileChatError("No agent supervisor available for file chat")
+    return supervisor, threads, opencode, events, stall_timeout_seconds
+
+
+def _missing_file_chat_capability(
+    agent_id: str,
+    *,
+    context: Any,
+) -> Optional[str]:
+    for capability in _FILE_CHAT_REQUIRED_CAPABILITIES:
+        if not has_capability(agent_id, capability, context):
+            return capability
+    return None
+
+
+async def _update_file_chat_turn_state(
+    request: Request, target: _Target, selection: FileChatAgentSelection
+) -> None:
+    from .runtime import update_turn_state
+
+    turn_state_updates: dict[str, Any] = {
+        "status": "running",
+        "agent": selection.agent_id,
+    }
+    if selection.profile is not None:
+        turn_state_updates["profile"] = selection.profile
+    await update_turn_state(request, target, **turn_state_updates)
+
+
+async def _execute_selected_agent(
+    request: Request,
+    repo_root: Path,
+    prompt: str,
+    interrupt_event: asyncio.Event,
+    selection: FileChatAgentSelection,
+    *,
+    supervisor: Any,
+    threads: Any,
+    opencode: Any,
+    events: Any,
+    stall_timeout_seconds: Optional[float],
+    model: Optional[str],
+    reasoning: Optional[str],
+    on_meta: Optional[Callable[[str, str, str], Any]],
+    on_usage: Optional[Callable[[Dict[str, Any]], Any]],
+) -> Dict[str, Any]:
+    if selection.agent_id == "opencode":
+        if opencode is None:
+            return {"status": "error", "detail": "OpenCode supervisor unavailable"}
+        return await execute_opencode(
+            opencode,
+            repo_root,
+            prompt,
+            interrupt_event,
+            model=model,
+            reasoning=reasoning,
+            thread_registry=threads,
+            thread_key=selection.thread_key,
+            stall_timeout_seconds=stall_timeout_seconds,
+            on_meta=on_meta,
+            on_usage=on_usage,
+        )
+    if selection.agent_id == "codex":
+        if supervisor is None:
+            return {"status": "error", "detail": "App-server supervisor unavailable"}
+        return await execute_app_server(
+            supervisor,
+            repo_root,
+            prompt,
+            interrupt_event,
+            agent_id=selection.agent_id,
+            model=model,
+            reasoning=reasoning,
+            thread_registry=threads,
+            thread_key=selection.thread_key,
+            on_meta=on_meta,
+            events=events,
+        )
+    missing_capability = _missing_file_chat_capability(
+        selection.agent_id,
+        context=request.app.state,
+    )
+    if missing_capability is not None:
+        return {
+            "status": "error",
+            "detail": (
+                f"Agent '{selection.agent_id}' does not support file-chat execution "
+                f"(missing capability: {missing_capability})"
+            ),
+        }
+    return await execute_harness_turn(
+        request,
+        repo_root,
+        prompt,
+        interrupt_event,
+        agent_id=selection.agent_id,
+        profile=selection.profile,
+        model=model,
+        reasoning=reasoning,
+        thread_registry=threads,
+        thread_key=selection.thread_key,
+        on_meta=on_meta,
+    )
+
+
+def _build_file_chat_success_result(
+    repo_root: Path,
+    target: _Target,
+    *,
+    state: dict[str, Any],
+    drafts: dict[str, Any],
+    live_before: str,
+    base_content: str,
+    base_hash: str,
+    created_at: str,
+    draft_path: Path,
+    agent_id: str,
+    profile: Optional[str],
+    result: Dict[str, Any],
+) -> Dict[str, Any]:
+    live_after = read_file(target.path)
+    after = read_file(draft_path)
+    agent_message = result.get("agent_message", "File updated")
+    response_text = result.get("message", agent_message)
+
+    if live_after != live_before:
+        atomic_write(target.path, live_before)
+
+    response: Dict[str, Any] = {
+        "status": "ok",
+        "target": target.target,
+        "agent": agent_id,
+        "agent_message": agent_message,
+        "message": response_text,
+        "thread_id": result.get("thread_id"),
+        "turn_id": result.get("turn_id"),
+    }
+    if profile is not None:
+        response["profile"] = profile
+    if result.get("raw_events"):
+        response["raw_events"] = result.get("raw_events")
+
+    if after == base_content:
+        draft_utils.remove_draft(repo_root, target.state_key)
+        response["has_draft"] = False
+        return response
+
+    draft = persist_draft(
+        repo_root,
+        target,
+        state=state,
+        drafts=drafts,
+        content=after,
+        base_content=base_content,
+        base_hash=base_hash,
+        created_at=created_at,
+        agent_message=agent_message,
+    )
+    response.update(
+        {
+            "has_draft": True,
+            "patch": draft["patch"],
+            "content": after,
+            "base_hash": base_hash,
+            "created_at": draft["created_at"],
+        }
+    )
+    return response
+
+
+async def execute_file_chat(
+    request: Request,
+    repo_root: Path,
+    target: _Target,
+    message: str,
+    *,
+    agent: str = "codex",
+    profile: Optional[str] = None,
+    model: Optional[str] = None,
+    reasoning: Optional[str] = None,
+    on_meta: Optional[Callable[[str, str, str], Any]] = None,
+    on_usage: Optional[Callable[[Dict[str, Any]], Any]] = None,
+) -> Dict[str, Any]:
+    supervisor, threads, opencode, events, stall_timeout_seconds = (
+        _build_execution_context(request)
+    )
 
     (
         state,
@@ -70,119 +291,53 @@ async def execute_file_chat(
         editable_rel_path=relative_to_repo(repo_root, draft_path),
     )
 
-    from .runtime import get_or_create_interrupt_event, update_turn_state
+    from .runtime import get_or_create_interrupt_event
 
     interrupt_event = await get_or_create_interrupt_event(request, target.state_key)
     if interrupt_event.is_set():
         return {"status": "interrupted", "detail": "File chat interrupted"}
 
-    try:
-        agent_id = validate_agent_id(agent or "", request.app.state)
-    except ValueError:
-        agent_id = "codex"
-
-    if agent_id not in ("codex", "opencode"):
-        return {
-            "status": "error",
-            "detail": f"Agent '{agent_id}' is not supported on file-chat surface yet",
-        }
-
-    thread_key = f"file_chat.{target.state_key}"
-    await update_turn_state(request, target, status="running", agent=agent_id)
-
-    if agent_id == "opencode":
-        if opencode is None:
-            return {"status": "error", "detail": "OpenCode supervisor unavailable"}
-        result = await execute_opencode(
-            opencode,
-            repo_root,
-            prompt,
-            interrupt_event,
-            model=model,
-            reasoning=reasoning,
-            thread_registry=threads,
-            thread_key=thread_key,
-            stall_timeout_seconds=stall_timeout_seconds,
-            on_meta=on_meta,
-            on_usage=on_usage,
-        )
-    else:
-        if supervisor is None:
-            return {"status": "error", "detail": "App-server supervisor unavailable"}
-        result = await execute_app_server(
-            supervisor,
-            repo_root,
-            prompt,
-            interrupt_event,
-            agent_id=agent_id,
-            model=model,
-            reasoning=reasoning,
-            thread_registry=threads,
-            thread_key=thread_key,
-            on_meta=on_meta,
-            events=events,
-        )
+    selection = resolve_file_chat_agent_selection(
+        request,
+        target,
+        agent=agent,
+        profile=profile,
+    )
+    await _update_file_chat_turn_state(request, target, selection)
+    result = await _execute_selected_agent(
+        request,
+        repo_root,
+        prompt,
+        interrupt_event,
+        selection,
+        supervisor=supervisor,
+        threads=threads,
+        opencode=opencode,
+        events=events,
+        stall_timeout_seconds=stall_timeout_seconds,
+        model=model,
+        reasoning=reasoning,
+        on_meta=on_meta,
+        on_usage=on_usage,
+    )
 
     if result.get("status") != "ok":
         return result
 
-    live_after = read_file(target.path)
-    after = read_file(draft_path)
-
-    agent_message = result.get("agent_message", "File updated")
-    response_text = result.get("message", agent_message)
-
-    if live_after != live_before:
-        # Safety guard: draft editing should not touch the live file before apply.
-        atomic_write(target.path, live_before)
-
-    if after != base_content:
-        draft = persist_draft(
-            repo_root,
-            target,
-            state=state,
-            drafts=drafts,
-            content=after,
-            base_content=base_content,
-            base_hash=base_hash,
-            created_at=created_at,
-            agent_message=agent_message,
-        )
-        return {
-            "status": "ok",
-            "target": target.target,
-            "agent": agent_id,
-            "agent_message": agent_message,
-            "message": response_text,
-            "has_draft": True,
-            "patch": draft["patch"],
-            "content": after,
-            "base_hash": base_hash,
-            "created_at": draft["created_at"],
-            "thread_id": result.get("thread_id"),
-            "turn_id": result.get("turn_id"),
-            **(
-                {"raw_events": result.get("raw_events")}
-                if result.get("raw_events")
-                else {}
-            ),
-        }
-
-    draft_utils.remove_draft(repo_root, target.state_key)
-
-    return {
-        "status": "ok",
-        "target": target.target,
-        "agent": agent_id,
-        "agent_message": agent_message,
-        "message": response_text,
-        "has_draft": False,
-        "thread_id": result.get("thread_id"),
-        "turn_id": result.get("turn_id"),
-        **(
-            {"raw_events": result.get("raw_events")} if result.get("raw_events") else {}
-        ),
-    }
+    return _build_file_chat_success_result(
+        repo_root,
+        target,
+        state=state,
+        drafts=drafts,
+        live_before=live_before,
+        base_content=base_content,
+        base_hash=base_hash,
+        created_at=created_at,
+        draft_path=draft_path,
+        agent_id=selection.agent_id,
+        profile=selection.profile,
+        result=result,
+    )
 
 
 async def execute_app_server(
@@ -199,94 +354,20 @@ async def execute_app_server(
     on_meta: Optional[Callable[[str, str, str], Any]] = None,
     events: Optional[Any] = None,
 ) -> Dict[str, Any]:
-    client = await supervisor.get_client(repo_root)
-
-    thread_id = None
-    if thread_registry is not None and thread_key:
-        thread_id = thread_registry.get_thread_id(thread_key)
-    if thread_id:
-        try:
-            await client.thread_resume(thread_id)
-        except (
-            Exception
-        ):  # intentional: thread_resume may fail with various client/network errors; fallback to new thread
-            thread_id = None
-
-    if not thread_id:
-        thread = await client.thread_start(str(repo_root))
-        thread_id = thread.get("id")
-        if not isinstance(thread_id, str) or not thread_id:
-            raise FileChatError("App-server did not return a thread id")
-        if thread_registry is not None and thread_key:
-            thread_registry.set_thread_id(thread_key, thread_id)
-
-    turn_kwargs: Dict[str, Any] = {}
-    if model:
-        turn_kwargs["model"] = model
-    if reasoning:
-        turn_kwargs["effort"] = reasoning
-
-    handle = await client.turn_start(
-        thread_id,
+    return await _execute_app_server_impl(
+        supervisor,
+        repo_root,
         prompt,
-        approval_policy="on-request",
-        sandbox_policy="dangerFullAccess",
-        **turn_kwargs,
+        interrupt_event,
+        model=model,
+        reasoning=reasoning,
+        agent_id=agent_id,
+        thread_registry=thread_registry,
+        thread_key=thread_key,
+        on_meta=on_meta,
+        events=events,
+        timeout_seconds=FILE_CHAT_TIMEOUT_SECONDS,
     )
-    if events is not None:
-        try:
-            await events.register_turn(thread_id, handle.turn_id)
-        except (
-            Exception
-        ):  # intentional: register_turn is best-effort non-critical observability
-            logger.debug("file chat register_turn failed", exc_info=True)
-    if on_meta is not None:
-        try:
-            maybe = on_meta(agent_id, thread_id, handle.turn_id)
-            if asyncio.iscoroutine(maybe):
-                await maybe
-        except (
-            Exception
-        ):  # intentional: user-provided callback must not crash execution
-            logger.debug("file chat meta callback failed", exc_info=True)
-
-    turn_task = asyncio.create_task(handle.wait(timeout=None))
-    timeout_task = asyncio.create_task(asyncio.sleep(FILE_CHAT_TIMEOUT_SECONDS))
-    interrupt_task = asyncio.create_task(interrupt_event.wait())
-    try:
-        done, _ = await asyncio.wait(
-            {turn_task, timeout_task, interrupt_task},
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        if timeout_task in done:
-            turn_task.cancel()
-            return {"status": "error", "detail": "File chat timed out"}
-        if interrupt_task in done:
-            turn_task.cancel()
-            return {"status": "interrupted", "detail": "File chat interrupted"}
-        turn_result = await turn_task
-    finally:
-        timeout_task.cancel()
-        interrupt_task.cancel()
-
-    if getattr(turn_result, "errors", None):
-        errors = turn_result.errors
-        raise FileChatError(errors[-1] if errors else "App-server error")
-
-    output = str(getattr(turn_result, "final_message", "") or "").strip()
-    if not output:
-        output = "\n".join(getattr(turn_result, "agent_messages", []) or []).strip()
-    agent_message = parse_agent_message(output)
-    raw_events = getattr(turn_result, "raw_events", []) or []
-    return {
-        "status": "ok",
-        "agent_message": agent_message,
-        "message": output,
-        "raw_events": raw_events,
-        "thread_id": thread_id,
-        "turn_id": getattr(handle, "turn_id", None),
-        "agent": agent_id,
-    }
 
 
 async def execute_opencode(
@@ -303,156 +384,50 @@ async def execute_opencode(
     on_meta: Optional[Callable[[str, str, str], Any]] = None,
     on_usage: Optional[Callable[[Dict[str, Any]], Any]] = None,
 ) -> Dict[str, Any]:
-    from .....agents.opencode.runtime import (
-        PERMISSION_ALLOW,
-        build_turn_id,
-        collect_opencode_output,
-        extract_session_id,
-        opencode_stream_timeouts,
-        parse_message_response,
-        split_model_id,
+    return await _execute_opencode_impl(
+        supervisor,
+        repo_root,
+        prompt,
+        interrupt_event,
+        model=model,
+        reasoning=reasoning,
+        thread_registry=thread_registry,
+        thread_key=thread_key,
+        stall_timeout_seconds=stall_timeout_seconds,
+        on_meta=on_meta,
+        on_usage=on_usage,
+        timeout_seconds=FILE_CHAT_TIMEOUT_SECONDS,
     )
 
-    client = await supervisor.get_client(repo_root)
-    session_id = None
-    if thread_registry is not None and thread_key:
-        session_id = thread_registry.get_thread_id(thread_key)
-    if not session_id:
-        session = await client.create_session(directory=str(repo_root))
-        session_id = extract_session_id(session, allow_fallback_id=True)
-        if not isinstance(session_id, str) or not session_id:
-            raise FileChatError("OpenCode did not return a session id")
-        if thread_registry is not None and thread_key:
-            thread_registry.set_thread_id(thread_key, session_id)
 
-    turn_id = build_turn_id(session_id)
-    if on_meta is not None:
-        try:
-            maybe = on_meta("opencode", session_id, turn_id)
-            if asyncio.iscoroutine(maybe):
-                await maybe
-        except (
-            Exception
-        ):  # intentional: user-provided callback must not crash execution
-            logger.debug("file chat opencode meta failed", exc_info=True)
-
-    model_payload = split_model_id(model)
-    await supervisor.mark_turn_started(repo_root)
-
-    usage_parts: list[Dict[str, Any]] = []
-
-    async def _part_handler(
-        part_type: str, part: Any, turn_id_arg: Optional[str] | None
-    ) -> None:
-        if part_type == "usage" and on_usage is not None:
-            usage_parts.append(part)
-            try:
-                maybe = on_usage(part)
-                if asyncio.iscoroutine(maybe):
-                    await maybe
-            except (
-                Exception
-            ):  # intentional: user-provided callback must not crash execution
-                logger.debug("file chat usage handler failed", exc_info=True)
-
-    ready_event = asyncio.Event()
-    stall_timeout, first_event_timeout = opencode_stream_timeouts(
-        stall_timeout_seconds,
+async def execute_harness_turn(
+    request: Request,
+    repo_root: Path,
+    prompt: str,
+    interrupt_event: asyncio.Event,
+    *,
+    agent_id: str,
+    profile: Optional[str],
+    model: Optional[str] = None,
+    reasoning: Optional[str] = None,
+    thread_registry: Optional[Any] = None,
+    thread_key: Optional[str] = None,
+    on_meta: Optional[Callable[[str, str, str], Any]] = None,
+) -> Dict[str, Any]:
+    return await _execute_harness_turn_impl(
+        request,
+        repo_root,
+        prompt,
+        interrupt_event,
+        agent_id=agent_id,
+        profile=profile,
+        model=model,
+        reasoning=reasoning,
+        thread_registry=thread_registry,
+        thread_key=thread_key,
+        on_meta=on_meta,
+        timeout_seconds=FILE_CHAT_TIMEOUT_SECONDS,
     )
-    output_task = asyncio.create_task(
-        collect_opencode_output(
-            client,
-            session_id=session_id,
-            workspace_path=str(repo_root),
-            model_payload=model_payload,
-            permission_policy=PERMISSION_ALLOW,
-            question_policy="auto_first_option",
-            should_stop=interrupt_event.is_set,
-            ready_event=ready_event,
-            part_handler=_part_handler,
-            stall_timeout_seconds=stall_timeout,
-            first_event_timeout_seconds=first_event_timeout,
-            logger=logger,
-        )
-    )
-    with contextlib.suppress(asyncio.TimeoutError):
-        await asyncio.wait_for(ready_event.wait(), timeout=2.0)
-
-    prompt_task = asyncio.create_task(
-        client.prompt_async(
-            session_id,
-            message=prompt,
-            model=model_payload,
-            variant=reasoning,
-        )
-    )
-    timeout_task = asyncio.create_task(asyncio.sleep(FILE_CHAT_TIMEOUT_SECONDS))
-    interrupt_task = asyncio.create_task(interrupt_event.wait())
-    try:
-        prompt_response = None
-        try:
-            prompt_response = await prompt_task
-        except (
-            Exception
-        ) as exc:  # intentional: rewrap any client failure as FileChatError
-            interrupt_event.set()
-            output_task.cancel()
-            raise FileChatError(f"OpenCode prompt failed: {exc}") from exc
-
-        done, _ = await asyncio.wait(
-            {output_task, timeout_task, interrupt_task},
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        if timeout_task in done:
-            output_task.cancel()
-            return {"status": "error", "detail": "File chat timed out"}
-        if interrupt_task in done:
-            output_task.cancel()
-            return {"status": "interrupted", "detail": "File chat interrupted"}
-        output_result = await output_task
-        if (not output_result.text) and prompt_response is not None:
-            fallback = parse_message_response(prompt_response)
-            if fallback.text:
-                output_result = type(output_result)(
-                    text=fallback.text,
-                    error=output_result.error or fallback.error,
-                    usage=output_result.usage,
-                )
-    finally:
-        timeout_task.cancel()
-        interrupt_task.cancel()
-        await supervisor.mark_turn_finished(repo_root)
-
-    if output_result.usage:
-        persist_opencode_usage_snapshot(
-            repo_root,
-            session_id=session_id,
-            turn_id=turn_id,
-            usage=output_result.usage,
-            source="live_stream",
-        )
-    if output_result.error:
-        raise FileChatError(output_result.error)
-    return {
-        "status": "ok",
-        "agent_message": parse_agent_message(output_result.text),
-        "message": output_result.text,
-        "thread_id": session_id,
-        "turn_id": turn_id,
-        "agent": "opencode",
-        **({"usage_parts": usage_parts} if usage_parts else {}),
-    }
-
-
-def parse_agent_message(output: str) -> str:
-    text = (output or "").strip()
-    if not text:
-        return "File updated via chat."
-    for line in text.splitlines():
-        if line.lower().startswith("agent:"):
-            return line[len("agent:") :].strip() or "File updated via chat."
-    first_line = text.splitlines()[0].strip()
-    return (first_line[:97] + "...") if len(first_line) > 100 else first_line
 
 
 _FILE_CHAT_EXECUTION_API = execute_file_chat

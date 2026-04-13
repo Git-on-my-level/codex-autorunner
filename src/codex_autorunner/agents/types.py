@@ -38,6 +38,8 @@ class ConversationRef:
 
     agent: AgentId
     id: str
+    title: Optional[str] = None
+    summary: Optional[str] = None
 
 
 @dataclass(frozen=True)

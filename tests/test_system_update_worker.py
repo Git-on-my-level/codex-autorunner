@@ -643,7 +643,7 @@ def test_system_update_worker_preserves_committed_ok_status_on_nonzero_exit(
     assert popen_calls == 1
 
 
-def test_system_update_worker_does_not_retry_non_packaging_refresh_failure(
+def test_system_update_worker_marks_non_packaging_refresh_failure_as_error(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -693,13 +693,14 @@ def test_system_update_worker_does_not_retry_non_packaging_refresh_failure(
     )
 
     payload = json.loads(system._update_status_path().read_text(encoding="utf-8"))
-    assert payload["status"] == "rollback"
+    assert payload["status"] == "error"
+    assert payload["message"] == "Update failed; check hub logs for details."
     assert payload["exit_code"] == 1
     assert popen_calls == 1
     assert run_cmd_calls.count(["git", "reset", "--hard", "FETCH_HEAD"]) == 1
 
 
-def test_system_update_worker_rolls_back_when_retryable_refresh_failure_persists(
+def test_system_update_worker_marks_persistent_packaging_failure_as_error(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -754,7 +755,8 @@ def test_system_update_worker_rolls_back_when_retryable_refresh_failure_persists
     )
 
     payload = json.loads(system._update_status_path().read_text(encoding="utf-8"))
-    assert payload["status"] == "rollback"
+    assert payload["status"] == "error"
+    assert payload["message"] == "Update failed; check hub logs for details."
     assert payload["exit_code"] == 1
     assert popen_calls == 2
     assert ["git", "reset", "--hard", "FETCH_HEAD"] in run_cmd_calls

@@ -7,6 +7,7 @@ from typing import Callable
 
 import pytest
 
+from codex_autorunner.agents.hermes_identity import CanonicalHermesIdentity
 from codex_autorunner.tickets import runner as runner_module
 from codex_autorunner.tickets import runner_selection as runner_selection_module
 from codex_autorunner.tickets.agent_pool import AgentTurnRequest, AgentTurnResult
@@ -53,6 +54,15 @@ def _corrupt_ticket_frontmatter(path: Path) -> None:
     # Make 'done' invalid.
     raw = raw.replace("done: false", "done: notabool")
     path.write_text(raw, encoding="utf-8")
+
+
+def _set_ticket_id(path: Path, ticket_id: str) -> None:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    for index, line in enumerate(lines):
+        if line.startswith("ticket_id:"):
+            lines[index] = f'ticket_id: "{ticket_id}"'
+            break
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _init_git_repo(path: Path) -> None:
@@ -559,9 +569,10 @@ async def test_ticket_runner_lint_retry_reuses_conversation_id(tmp_path: Path) -
     ticket_dir.mkdir(parents=True, exist_ok=True)
     ticket_path = ticket_dir / "TICKET-001.md"
     _write_ticket(ticket_path, done=False)
+    ticket_id_holder: list[str] = []
 
     def handler(req: AgentTurnRequest) -> AgentTurnResult:
-        if req.conversation_id is None:
+        if len(pool.requests) == 1:
             _corrupt_ticket_frontmatter(ticket_path)
             return AgentTurnResult(
                 agent_id=req.agent_id,
@@ -572,6 +583,8 @@ async def test_ticket_runner_lint_retry_reuses_conversation_id(tmp_path: Path) -
 
         # Second pass fixes the frontmatter.
         _write_ticket(ticket_path, done=False)
+        if ticket_id_holder:
+            _set_ticket_id(ticket_path, ticket_id_holder[0])
         return AgentTurnResult(
             agent_id=req.agent_id,
             conversation_id=req.conversation_id,
@@ -595,8 +608,12 @@ async def test_ticket_runner_lint_retry_reuses_conversation_id(tmp_path: Path) -
     r1 = await runner.step({})
     assert r1.status == "continue"
     assert isinstance(r1.state.get("lint"), dict)
+    ticket_id = r1.state["current_ticket_id"]
+    ticket_id_holder[:] = [ticket_id]
 
     # Second step should pass conversation id + include lint errors in the prompt.
+    _write_ticket(ticket_path, done=False)
+    _set_ticket_id(ticket_path, ticket_id)
     r2 = await runner.step(r1.state)
     assert r2.status == "continue"
     assert r2.state.get("lint") is None
@@ -604,6 +621,110 @@ async def test_ticket_runner_lint_retry_reuses_conversation_id(tmp_path: Path) -
     assert len(pool.requests) == 2
     assert pool.requests[1].conversation_id == "conv1"
     assert "Ticket frontmatter lint failed" in pool.requests[1].prompt
+
+
+@pytest.mark.asyncio
+async def test_ticket_runner_lint_retry_drops_conversation_after_profile_change(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    ticket_path = ticket_dir / "TICKET-001.md"
+    _write_ticket(ticket_path, agent="hermes", done=False)
+
+    def handler(req: AgentTurnRequest) -> AgentTurnResult:
+        if req.conversation_id is None and len(pool.requests) == 1:
+            _corrupt_ticket_frontmatter(ticket_path)
+            return AgentTurnResult(
+                agent_id=req.agent_id,
+                conversation_id="conv1",
+                turn_id="t1",
+                text="corrupted",
+            )
+
+        return AgentTurnResult(
+            agent_id=req.agent_id,
+            conversation_id=req.conversation_id or "conv2",
+            turn_id="t2",
+            text="fixed",
+        )
+
+    pool = FakeAgentPool(handler)
+    runner = TicketRunner(
+        workspace_root=workspace_root,
+        run_id="run-1",
+        config=TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            max_lint_retries=3,
+            auto_commit=False,
+        ),
+        agent_pool=pool,
+    )
+
+    r1 = await runner.step({})
+    assert r1.status == "continue"
+    assert isinstance(r1.state.get("lint"), dict)
+    ticket_id = r1.state["current_ticket_id"]
+
+    _write_ticket(
+        ticket_path,
+        agent="hermes",
+        done=False,
+        frontmatter_extra="profile: m4-pma\n",
+    )
+    _set_ticket_id(ticket_path, ticket_id)
+    r2 = await runner.step(r1.state)
+
+    assert r2.status == "continue"
+    assert pool.requests[1].conversation_id is None
+    assert r2.state.get("lint") is None
+
+
+@pytest.mark.asyncio
+async def test_ticket_runner_passes_workspace_root_to_hermes_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace_root = tmp_path
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    ticket_path = ticket_dir / "TICKET-001.md"
+    _write_ticket(ticket_path, agent="hermes", done=False)
+
+    observed: dict[str, object] = {}
+
+    def _canonicalize(agent_id: str, profile: str | None = None, *, context=None):
+        observed["agent_id"] = agent_id
+        observed["profile"] = profile
+        observed["context"] = context
+        return CanonicalHermesIdentity(agent="hermes", profile="m4-pma")
+
+    monkeypatch.setattr(runner_module, "canonicalize_hermes_identity", _canonicalize)
+
+    pool = FakeAgentPool(
+        lambda req: AgentTurnResult(
+            agent_id=req.agent_id,
+            conversation_id=req.conversation_id or "conv1",
+            turn_id="t1",
+            text="ok",
+        )
+    )
+    runner = TicketRunner(
+        workspace_root=workspace_root,
+        run_id="run-1",
+        config=TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            auto_commit=False,
+        ),
+        agent_pool=pool,
+    )
+
+    result = await runner.step({})
+
+    assert result.status == "continue"
+    assert observed["agent_id"] == "hermes"
+    assert observed["context"] == workspace_root
+    assert pool.requests[0].agent_id == "hermes"
 
 
 @pytest.mark.asyncio
@@ -687,6 +808,218 @@ async def test_ticket_runner_executes_hermes_ticket(tmp_path: Path) -> None:
     assert pool.requests[0].agent_id == "hermes"
     assert result.agent_id == "hermes"
     assert result.agent_conversation_id == "conv-hermes"
+
+
+@pytest.mark.asyncio
+async def test_ticket_runner_reuses_bound_thread_for_unfinished_ticket(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    ticket_path = ticket_dir / "TICKET-001.md"
+    _write_ticket(ticket_path, agent="hermes", done=False)
+
+    def handler(req: AgentTurnRequest) -> AgentTurnResult:
+        conversation_id = req.conversation_id or "thread-1"
+        return AgentTurnResult(
+            agent_id=req.agent_id,
+            conversation_id=conversation_id,
+            turn_id=f"turn-{len(pool.requests)}",
+            text="still working",
+        )
+
+    pool = FakeAgentPool(handler)
+    runner = TicketRunner(
+        workspace_root=workspace_root,
+        run_id="run-1",
+        config=TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            auto_commit=False,
+        ),
+        agent_pool=pool,
+    )
+
+    first = await runner.step({})
+    second = await runner.step(first.state)
+
+    assert first.status == "continue"
+    assert second.status == "continue"
+    assert len(pool.requests) == 2
+    assert pool.requests[0].conversation_id is None
+    assert pool.requests[1].conversation_id == "thread-1"
+    bindings = second.state.get("ticket_thread_bindings") or {}
+    ticket_id = second.state.get("current_ticket_id")
+    assert bindings[ticket_id]["thread_target_id"] == "thread-1"
+    assert second.state.get("ticket_thread_debug", {}).get("action") == "reused"
+
+
+@pytest.mark.asyncio
+async def test_ticket_runner_resets_binding_when_ticket_profile_changes(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    ticket_path = ticket_dir / "TICKET-001.md"
+    _write_ticket(ticket_path, agent="hermes", done=False)
+
+    def handler(req: AgentTurnRequest) -> AgentTurnResult:
+        if req.conversation_id is None and len(pool.requests) == 1:
+            return AgentTurnResult(
+                agent_id=req.agent_id,
+                conversation_id="thread-default",
+                turn_id="t1",
+                text="default profile turn",
+            )
+        assert req.conversation_id is None
+        return AgentTurnResult(
+            agent_id=req.agent_id,
+            conversation_id="thread-profile",
+            turn_id="t2",
+            text="named profile turn",
+        )
+
+    pool = FakeAgentPool(handler)
+    runner = TicketRunner(
+        workspace_root=workspace_root,
+        run_id="run-1",
+        config=TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            auto_commit=False,
+        ),
+        agent_pool=pool,
+    )
+
+    first = await runner.step({})
+    raw = ticket_path.read_text(encoding="utf-8")
+    ticket_path.write_text(
+        raw.replace("title: Test\n", "profile: m4-pma\ntitle: Test\n"),
+        encoding="utf-8",
+    )
+    second = await runner.step(first.state)
+
+    assert first.status == "continue"
+    assert second.status == "continue"
+    assert len(pool.requests) == 2
+    assert pool.requests[0].conversation_id is None
+    assert pool.requests[1].conversation_id is None
+    bindings = second.state.get("ticket_thread_bindings") or {}
+    ticket_id = second.state.get("current_ticket_id")
+    assert bindings[ticket_id]["thread_target_id"] == "thread-profile"
+    assert (
+        second.state.get("ticket_thread_debug", {}).get("reason") == "profile_changed"
+    )
+
+
+@pytest.mark.asyncio
+async def test_ticket_runner_refreshes_stale_bound_thread(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    ticket_path = ticket_dir / "TICKET-001.md"
+    _write_ticket(ticket_path, agent="hermes", done=False)
+
+    def handler(req: AgentTurnRequest) -> AgentTurnResult:
+        if req.conversation_id == "stale-thread":
+            raise KeyError("Unknown thread target 'stale-thread'")
+        return AgentTurnResult(
+            agent_id=req.agent_id,
+            conversation_id=req.conversation_id or "fresh-thread",
+            turn_id=f"t{len(pool.requests)}",
+            text="fresh thread turn",
+        )
+
+    pool = FakeAgentPool(handler)
+    runner = TicketRunner(
+        workspace_root=workspace_root,
+        run_id="run-1",
+        config=TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            auto_commit=False,
+        ),
+        agent_pool=pool,
+    )
+
+    seeded_state = {
+        "current_ticket": ".codex-autorunner/tickets/TICKET-001.md",
+        "current_ticket_id": "tkt_stale_thread",
+        "ticket_thread_bindings": {
+            "tkt_stale_thread": {
+                "thread_target_id": "stale-thread",
+                "agent_id": "hermes",
+                "ticket_path": ".codex-autorunner/tickets/TICKET-001.md",
+            }
+        },
+    }
+    _set_ticket_id(ticket_path, "tkt_stale_thread")
+
+    result = await runner.step(seeded_state)
+
+    assert result.status == "continue"
+    assert len(pool.requests) == 2
+    assert pool.requests[0].conversation_id == "stale-thread"
+    assert pool.requests[1].conversation_id is None
+    bindings = result.state.get("ticket_thread_bindings") or {}
+    assert bindings["tkt_stale_thread"]["thread_target_id"] == "fresh-thread"
+    assert result.state.get("ticket_thread_debug", {}).get("reason") == (
+        "stale_or_missing_thread_target"
+    )
+
+
+@pytest.mark.asyncio
+async def test_ticket_runner_clears_completed_ticket_binding_before_next_ticket(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    ticket_1 = ticket_dir / "TICKET-001.md"
+    ticket_2 = ticket_dir / "TICKET-002.md"
+    _write_ticket(ticket_1, agent="hermes", done=False)
+    _write_ticket(ticket_2, agent="hermes", done=False)
+
+    def handler(req: AgentTurnRequest) -> AgentTurnResult:
+        if len(pool.requests) == 1:
+            _set_ticket_done(ticket_1, done=True)
+            return AgentTurnResult(
+                agent_id=req.agent_id,
+                conversation_id="thread-1",
+                turn_id="t1",
+                text="ticket one done",
+            )
+        assert req.conversation_id is None
+        _set_ticket_done(ticket_2, done=True)
+        return AgentTurnResult(
+            agent_id=req.agent_id,
+            conversation_id="thread-2",
+            turn_id="t2",
+            text="ticket two done",
+        )
+
+    pool = FakeAgentPool(handler)
+    runner = TicketRunner(
+        workspace_root=workspace_root,
+        run_id="run-1",
+        config=TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            auto_commit=False,
+        ),
+        agent_pool=pool,
+    )
+
+    first = await runner.step({})
+    second = await runner.step(first.state)
+
+    assert first.status == "continue"
+    assert second.status == "continue"
+    assert len(pool.requests) == 2
+    assert pool.requests[0].conversation_id is None
+    assert pool.requests[1].conversation_id is None
+    assert "ticket_thread_bindings" not in first.state
+    assert "ticket_thread_bindings" not in second.state
 
 
 async def test_ticket_runner_pauses_on_duplicate_ticket_indices(tmp_path: Path) -> None:
@@ -903,6 +1236,63 @@ async def test_ticket_runner_retries_on_network_error(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_ticket_runner_persists_thread_binding_across_network_retry(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    ticket_path = ticket_dir / "TICKET-001.md"
+    _write_ticket(ticket_path, agent="hermes", done=False)
+
+    call_count = 0
+
+    def handler(req: AgentTurnRequest) -> AgentTurnResult:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            assert req.conversation_id is None
+            return AgentTurnResult(
+                agent_id=req.agent_id,
+                conversation_id="thread-1",
+                turn_id="t1",
+                text="failed",
+                error="Network error: stream disconnected",
+            )
+        assert req.conversation_id == "thread-1"
+        _set_ticket_done(ticket_path, done=True)
+        return AgentTurnResult(
+            agent_id=req.agent_id,
+            conversation_id="thread-1",
+            turn_id="t2",
+            text="done",
+        )
+
+    pool = FakeAgentPool(handler)
+    runner = TicketRunner(
+        workspace_root=workspace_root,
+        run_id="run-1",
+        config=TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            max_network_retries=5,
+            auto_commit=False,
+        ),
+        agent_pool=pool,
+    )
+
+    first = await runner.step({})
+    assert first.status == "continue"
+    ticket_id = first.state["current_ticket_id"]
+    bindings = first.state.get("ticket_thread_bindings") or {}
+    assert bindings[ticket_id]["thread_target_id"] == "thread-1"
+
+    second = await runner.step(first.state)
+    assert second.status == "continue"
+    assert len(pool.requests) == 2
+    assert pool.requests[1].conversation_id == "thread-1"
+
+
+@pytest.mark.asyncio
 async def test_ticket_runner_pauses_after_network_retries_exhausted(
     tmp_path: Path,
 ) -> None:
@@ -1009,6 +1399,62 @@ async def test_ticket_runner_clears_network_retry_on_non_network_error(
     assert r2.reason == "Agent turn failed. Fix the issue and resume."
     assert "Validation error" in r2.reason_details
     assert r2.state.get("network_retry") is None
+
+
+@pytest.mark.asyncio
+async def test_ticket_runner_persists_thread_binding_across_paused_failure(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    ticket_path = ticket_dir / "TICKET-001.md"
+    _write_ticket(ticket_path, agent="hermes", done=False)
+
+    call_count = 0
+
+    def handler(req: AgentTurnRequest) -> AgentTurnResult:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            assert req.conversation_id is None
+            return AgentTurnResult(
+                agent_id=req.agent_id,
+                conversation_id="thread-1",
+                turn_id="t1",
+                text="failed",
+                error="Validation error: still blocked",
+            )
+        assert req.conversation_id == "thread-1"
+        _set_ticket_done(ticket_path, done=True)
+        return AgentTurnResult(
+            agent_id=req.agent_id,
+            conversation_id="thread-1",
+            turn_id="t2",
+            text="done",
+        )
+
+    pool = FakeAgentPool(handler)
+    runner = TicketRunner(
+        workspace_root=workspace_root,
+        run_id="run-1",
+        config=TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            auto_commit=False,
+        ),
+        agent_pool=pool,
+    )
+
+    first = await runner.step({})
+    assert first.status == "paused"
+    ticket_id = first.state["current_ticket_id"]
+    bindings = first.state.get("ticket_thread_bindings") or {}
+    assert bindings[ticket_id]["thread_target_id"] == "thread-1"
+
+    second = await runner.step(first.state)
+    assert second.status == "continue"
+    assert len(pool.requests) == 2
+    assert pool.requests[1].conversation_id == "thread-1"
 
 
 @pytest.mark.asyncio

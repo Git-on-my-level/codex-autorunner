@@ -64,6 +64,7 @@ def test_pma_cli_thread_group_has_required_commands():
     assert "output" in output, "PMA thread should have 'output' command"
     assert "tail" in output, "PMA thread should have 'tail' command"
     assert "compact" in output, "PMA thread should have 'compact' command"
+    assert "fork" in output, "PMA thread should have 'fork' command"
     assert "resume" in output, "PMA thread should have 'resume' command"
     assert "archive" in output, "PMA thread should have 'archive' command"
     assert "interrupt" in output, "PMA thread should have 'interrupt' command"
@@ -110,6 +111,15 @@ def test_pma_cli_thread_status_help_shows_json_option():
     assert result.exit_code == 0
     output = result.stdout
     assert "--json" in output, "PMA thread status should support --json"
+
+
+def test_pma_cli_thread_fork_help_shows_json_option():
+    runner = CliRunner()
+    result = runner.invoke(pma_app, ["thread", "fork", "--help"])
+    assert result.exit_code == 0
+    output = result.stdout
+    assert "--json" in output
+    assert "--name" in output
 
 
 def test_pma_chat_help_shows_json_option():
@@ -2062,6 +2072,119 @@ def test_pma_cli_thread_list_rejects_json_and_ndjson_together(
 
     assert result.exit_code != 0
     assert "Choose only one of --json or --ndjson." in result.output
+
+
+def test_pma_cli_agents_renders_session_controls_and_commands(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        pma_cli,
+        "load_hub_config",
+        lambda hub_root: SimpleNamespace(
+            server_base_path="",
+            server_host="127.0.0.1",
+            server_port=4321,
+            server_auth_token_env=None,
+        ),
+    )
+
+    def _fake_request_json(
+        method: str,
+        url: str,
+        payload=None,
+        token_env=None,
+        params=None,
+    ):
+        _ = payload, token_env, params
+        assert method == "GET"
+        assert url == "http://127.0.0.1:4321/hub/pma/agents"
+        return {
+            "default": "hermes",
+            "agents": [
+                {
+                    "id": "hermes",
+                    "name": "Hermes",
+                    "capabilities": ["active_thread_discovery"],
+                    "session_controls": {
+                        "fork": True,
+                        "set_model": True,
+                        "set_mode": False,
+                        "list_sessions": True,
+                    },
+                    "advertised_commands": [
+                        {"name": "/fork", "description": "Fork current session"},
+                        {"name": "/model", "description": "Switch model"},
+                    ],
+                }
+            ],
+        }
+
+    monkeypatch.setattr(pma_cli, "_request_json", _fake_request_json)
+
+    runner = CliRunner()
+    result = runner.invoke(pma_app, ["agents", "--path", str(tmp_path)])
+
+    assert result.exit_code == 0
+    assert "Session controls: fork, list_sessions, set_model" in result.stdout
+    assert "/fork: Fork current session" in result.stdout
+    assert "/model: Switch model" in result.stdout
+
+
+def test_pma_cli_thread_fork_posts_to_api(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        pma_cli,
+        "load_hub_config",
+        lambda hub_root: SimpleNamespace(
+            server_base_path="",
+            server_host="127.0.0.1",
+            server_port=4321,
+            server_auth_token_env=None,
+        ),
+    )
+    calls: list[tuple[str, str, object]] = []
+
+    def _fake_request_json(
+        method: str,
+        url: str,
+        payload=None,
+        token_env=None,
+        params=None,
+    ):
+        _ = token_env, params
+        calls.append((method, url, payload))
+        return {
+            "thread": {
+                "managed_thread_id": "thread-forked-1",
+                "agent": "hermes",
+            }
+        }
+
+    monkeypatch.setattr(pma_cli, "_request_json", _fake_request_json)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        pma_app,
+        [
+            "thread",
+            "fork",
+            "--id",
+            "thread-source-1",
+            "--name",
+            "Forked Hermes thread",
+            "--path",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout.strip() == "thread-forked-1"
+    assert calls == [
+        (
+            "POST",
+            "http://127.0.0.1:4321/hub/pma/threads/thread-source-1/fork",
+            {"name": "Forked Hermes thread"},
+        )
+    ]
 
 
 def test_pma_cli_thread_spawn_rejects_invalid_context_profile(

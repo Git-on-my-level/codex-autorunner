@@ -110,6 +110,34 @@ function agentProfiles(agentId) {
     const entry = getAgentEntry(agentId);
     return Array.isArray(entry?.profiles) ? entry.profiles : [];
 }
+function cloneProfile(profile) {
+    return {
+        id: profile.id,
+        display_name: profile.display_name,
+    };
+}
+function cloneAgent(agent) {
+    return {
+        id: agent.id,
+        name: agent.name,
+        version: agent.version,
+        protocol_version: agent.protocol_version,
+        capabilities: Array.isArray(agent.capabilities)
+            ? [...agent.capabilities]
+            : undefined,
+        default_profile: agent.default_profile ?? null,
+        profiles: Array.isArray(agent.profiles)
+            ? agent.profiles.map(cloneProfile)
+            : [],
+    };
+}
+export function getRegisteredAgents() {
+    ensureFallbackAgents();
+    return agentList.map(cloneAgent);
+}
+export function getRegisteredAgentProfiles(agentId) {
+    return agentProfiles(agentId).map(cloneProfile);
+}
 async function loadAgents() {
     if (agentsLoaded)
         return;
@@ -432,6 +460,11 @@ function renderAgentControls(payload) {
 }
 export async function refreshAgentControls(request = {}) {
     await agentControlsRefresh.refresh(loadAgentControlsPayload, request);
+}
+export async function setSelectedAgentProfile(agent, profile = "") {
+    setSelectedAgent(agent);
+    setSelectedProfile(agent, profile);
+    await refreshAgentControls({ force: true, reason: "manual" });
 }
 async function handleAgentChange(nextAgent) {
     const previous = getSelectedAgent();

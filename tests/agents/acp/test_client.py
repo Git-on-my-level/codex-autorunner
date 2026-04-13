@@ -18,6 +18,13 @@ from codex_autorunner.agents.acp.errors import (
     ACPProcessCrashedError,
     ACPProtocolError,
 )
+from codex_autorunner.agents.acp.protocol import (
+    ACPSessionForkResult,
+    ACPSetModelResult,
+    ACPSetModeResult,
+    extract_advertised_commands,
+    extract_session_capabilities,
+)
 
 FIXTURE_PATH = Path(__file__).resolve().parents[2] / "fixtures" / "fake_acp_server.py"
 pytestmark = pytest.mark.slow
@@ -631,3 +638,151 @@ async def test_client_logs_background_permission_notification_task_failures(
         assert failures == ["background task boom"]
     finally:
         await client.close()
+
+
+@pytest.mark.asyncio
+async def test_client_fork_session_creates_new_session(tmp_path: Path) -> None:
+    client = ACPClient(fixture_command("official"), cwd=tmp_path)
+    try:
+        await client.start()
+        created = await client.create_session(cwd=str(tmp_path), title="Original")
+        forked = await client.fork_session(created.session_id, title="Forked Session")
+
+        assert isinstance(forked, ACPSessionForkResult)
+        assert forked.supported is True
+        assert forked.session_id is not None
+        assert forked.session_id != created.session_id
+        assert forked.title == "Forked Session"
+
+        listed = await client.list_sessions()
+        session_ids = [s.session_id for s in listed]
+        assert created.session_id in session_ids
+        assert forked.session_id in session_ids
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_client_fork_session_unsupported_returns_unsupported(
+    tmp_path: Path,
+) -> None:
+    result = ACPSessionForkResult.from_optional_response(None)
+    assert result.supported is False
+    assert result.session_id is None
+
+
+@pytest.mark.asyncio
+async def test_client_set_session_model_returns_supported(tmp_path: Path) -> None:
+    client = ACPClient(fixture_command("official"), cwd=tmp_path)
+    try:
+        await client.start()
+        created = await client.create_session(cwd=str(tmp_path))
+        result = await client.set_session_model(
+            created.session_id, "anthropic/claude-opus"
+        )
+
+        assert isinstance(result, ACPSetModelResult)
+        assert result.supported is True
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_client_set_session_model_unsupported_returns_unsupported(
+    tmp_path: Path,
+) -> None:
+    result = ACPSetModelResult.from_optional_response(None)
+    assert result.supported is False
+
+
+@pytest.mark.asyncio
+async def test_client_set_session_mode_returns_supported(tmp_path: Path) -> None:
+    client = ACPClient(fixture_command("official"), cwd=tmp_path)
+    try:
+        await client.start()
+        created = await client.create_session(cwd=str(tmp_path))
+        result = await client.set_session_mode(created.session_id, "code")
+
+        assert isinstance(result, ACPSetModeResult)
+        assert result.supported is True
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_client_set_session_mode_unsupported_returns_unsupported(
+    tmp_path: Path,
+) -> None:
+    result = ACPSetModeResult.from_optional_response(None)
+    assert result.supported is False
+
+
+@pytest.mark.asyncio
+async def test_client_advertised_commands_extracts_from_capabilities(
+    tmp_path: Path,
+) -> None:
+    client = ACPClient(fixture_command("official"), cwd=tmp_path)
+    try:
+        await client.start()
+        commands = client.advertised_commands
+
+        assert isinstance(commands, list)
+    finally:
+        await client.close()
+
+
+def test_extract_advertised_commands_from_various_payloads() -> None:
+    assert extract_advertised_commands({}) == []
+    assert extract_advertised_commands(None) == []
+
+    commands = extract_advertised_commands(
+        {
+            "commands": [
+                {"name": "/help", "description": "Show help"},
+                {"name": "/reset", "description": "Reset thread"},
+            ]
+        }
+    )
+    assert len(commands) == 2
+    assert commands[0].name == "/help"
+    assert commands[0].description == "Show help"
+    assert commands[1].name == "/reset"
+
+    commands = extract_advertised_commands(
+        {"slashCommands": [{"command": "/status", "desc": "Status"}]}
+    )
+    assert len(commands) == 1
+    assert commands[0].name == "/status"
+    assert commands[0].description == "Status"
+
+    commands = extract_advertised_commands(
+        {"sessionCapabilities": {"commands": [{"name": "/mode"}]}}
+    )
+    assert len(commands) == 1
+    assert commands[0].name == "/mode"
+
+    commands = extract_advertised_commands({"commands": [{"no_name": True}]})
+    assert len(commands) == 0
+
+
+def test_extract_session_capabilities_from_various_payloads() -> None:
+    caps = extract_session_capabilities({})
+    assert caps.fork is False
+    assert caps.set_model is False
+    assert caps.set_mode is False
+    assert caps.list_sessions is False
+
+    caps = extract_session_capabilities(
+        {
+            "sessionCapabilities": {
+                "list": {},
+                "fork": {},
+                "setModel": {},
+                "setMode": {},
+            }
+        }
+    )
+    assert caps.list_sessions is True
+    assert caps.fork is True
+    assert caps.set_model is True
+    assert caps.set_mode is True

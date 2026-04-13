@@ -659,6 +659,29 @@ def _cleanup_pytest_temp_runs_session() -> None:
 
 
 @pytest.fixture(autouse=True)
+def _cleanup_codex_app_server_clients_sync_per_test(
+    request: pytest.FixtureRequest,
+) -> None:
+    """
+    Reap app-server clients after sync tests as well.
+
+    The async cleanup fixture below only runs for async tests. Several sync
+    `TestClient` flows still exercise Codex app-server client paths, and if
+    they leak a client instance the subprocess transport can outlive the test
+    and wedge later teardown.
+    """
+    if request.node.get_closest_marker("anyio") is not None:
+        yield
+        return
+    yield
+    import anyio
+
+    from codex_autorunner.integrations.app_server.client import _close_all_clients
+
+    anyio.run(_close_all_clients)
+
+
+@pytest.fixture(autouse=True)
 async def _cleanup_codex_app_server_clients_per_test() -> None:
     """
     Per-test cleanup so pending restart tasks are cancelled before the event loop

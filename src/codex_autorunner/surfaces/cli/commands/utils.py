@@ -14,6 +14,7 @@ import typer
 import yaml
 
 from ....core.config import (
+    ACTIVE_HUB_ROOT_ENV,
     CONFIG_FILENAME,
     ConfigError,
     HubConfig,
@@ -411,6 +412,8 @@ def require_repo_config(repo: Optional[Path], hub: Optional[Path]):
             )
         raise_exit("No .git directory found for repo commands.", cause=exc)
     try:
+        if hub is not None:
+            os.environ[ACTIVE_HUB_ROOT_ENV] = str(hub.expanduser().resolve())
         config = load_repo_config(repo_root, hub_path=hub)
     except ConfigError as exc:
         raise_exit(str(exc), cause=exc)
@@ -420,11 +423,15 @@ def require_repo_config(repo: Optional[Path], hub: Optional[Path]):
 def require_hub_config(path: Optional[Path]) -> HubConfig:
     try:
         if path is None:
-            return load_hub_config(Path.cwd())
+            config = load_hub_config(Path.cwd())
+            os.environ[ACTIVE_HUB_ROOT_ENV] = str(config.root)
+            return config
         candidate = path
         if candidate.is_dir():
             candidate = candidate / CONFIG_FILENAME
-        return load_hub_config(candidate)
+        config = load_hub_config(candidate)
+        os.environ[ACTIVE_HUB_ROOT_ENV] = str(config.root)
+        return config
     except ConfigError as exc:
         raise_exit(str(exc), cause=exc)
 
