@@ -232,7 +232,7 @@ from .effects import (
     DiscordOriginalMessageEditEffect,
     DiscordResponseEffect,
 )
-from .errors import DiscordAPIError
+from .errors import DiscordAPIError, is_unknown_interaction_error
 from .flow_commands import (
     build_flow_archive_confirmation_components,
     flow_archive_prompt_text,
@@ -1455,6 +1455,10 @@ class DiscordBotService:
         ack_deadline_at = ingress_started_at + budget_seconds
         current_at = time.monotonic()
         if current_at >= ack_deadline_at and ack_policy not in (None, "immediate"):
+            self._mark_interaction_session_expired(
+                session,
+                error="expired_before_ack",
+            )
             ctx.timing = replace(ctx.timing, ack_finished_at=current_at)
             log_event(
                 self._logger,
@@ -1513,6 +1517,10 @@ class DiscordBotService:
         except asyncio.TimeoutError:
             acknowledged = False
             current_at = time.monotonic()
+            self._mark_interaction_session_expired(
+                session,
+                error="expired_before_ack",
+            )
             ctx.timing = replace(ctx.timing, ack_finished_at=current_at)
             log_event(
                 self._logger,
@@ -1539,6 +1547,11 @@ class DiscordBotService:
         except Exception as exc:
             acknowledged = False
             current_at = time.monotonic()
+            if current_at >= ack_deadline_at or is_unknown_interaction_error(exc):
+                self._mark_interaction_session_expired(
+                    session,
+                    error=str(exc) or "expired_before_ack",
+                )
             ctx.timing = replace(ctx.timing, ack_finished_at=current_at)
             log_event(
                 self._logger,
@@ -1587,6 +1600,11 @@ class DiscordBotService:
             )
         else:
             finished_at = time.monotonic()
+            if is_unknown_interaction_error(session.last_delivery_error):
+                self._mark_interaction_session_expired(
+                    session,
+                    error=session.last_delivery_error or "expired_before_ack",
+                )
             ctx.timing = replace(ctx.timing, ack_finished_at=finished_at)
             log_event(
                 self._logger,
@@ -1628,10 +1646,15 @@ class DiscordBotService:
             return False
 
         delivery_status = (session.last_delivery_status or "").strip()
-        delivery_error = (session.last_delivery_error or "").lower()
         if delivery_status != "ack_failed":
             return False
-        return "unknown interaction" in delivery_error or "10062" in delivery_error
+        return is_unknown_interaction_error(session.last_delivery_error)
+
+    @staticmethod
+    def _mark_interaction_session_expired(session: Any, *, error: str) -> None:
+        mark_expired = getattr(session, "mark_expired", None)
+        if callable(mark_expired):
+            mark_expired(error=error)
 
     async def acknowledge_runtime_envelope(
         self,

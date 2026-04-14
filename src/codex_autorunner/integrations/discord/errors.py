@@ -38,3 +38,10 @@ class DiscordPermanentError(DiscordAPIError, PermanentError):
 
     recoverable = PermanentError.recoverable
     severity = PermanentError.severity
+
+
+def is_unknown_interaction_error(error: BaseException | str | None) -> bool:
+    if error is None:
+        return False
+    normalized = str(error).lower()
+    return "unknown interaction" in normalized or "10062" in normalized
