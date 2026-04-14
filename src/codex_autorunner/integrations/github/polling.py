@@ -456,7 +456,8 @@ class GitHubPollingConfig:
             discovery_terminal_thread_lookback_minutes=(
                 int(discovery_terminal_thread_lookback_minutes)
                 if (
-                    isinstance(discovery_terminal_thread_lookback_minutes, int)
+                    not isinstance(discovery_terminal_thread_lookback_minutes, bool)
+                    and isinstance(discovery_terminal_thread_lookback_minutes, int)
                     and discovery_terminal_thread_lookback_minutes > 0
                 )
                 else _DEFAULT_DISCOVERY_TERMINAL_LOOKBACK_MINUTES
