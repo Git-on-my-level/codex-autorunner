@@ -37,6 +37,7 @@ from ....core.markdown_export import (
     rewrite_markdown_with_mermaid_images,
 )
 from ....core.utils import resolve_executable
+from ..hub_path_option import hub_render_context_option
 
 SUPPORTED_DIAGRAM_FORMATS = {"png", "pdf", "svg"}
 SUPPORTED_DOC_FORMATS = {"html", "pdf", "docx"}
@@ -650,9 +651,7 @@ def register_render_commands(
             help="Output directory (defaults to .codex-autorunner/filebox/outbox).",
         ),
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo root path."),
-        hub: Optional[Path] = typer.Option(
-            None, "--hub", "--hub-path", help="Hub root or config path."
-        ),
+        hub: Optional[Path] = hub_render_context_option(),
     ) -> None:
         """Capture a screenshot from URL mode or serve mode with guaranteed serve cleanup."""
         _require_render_feature(require_optional_feature)
@@ -840,9 +839,7 @@ def register_render_commands(
             help="Output directory (defaults to .codex-autorunner/filebox/outbox).",
         ),
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo root path."),
-        hub: Optional[Path] = typer.Option(
-            None, "--hub", "--hub-path", help="Hub root or config path."
-        ),
+        hub: Optional[Path] = hub_render_context_option(),
     ) -> None:
         """Run a deterministic demo manifest from URL or serve mode with guaranteed serve cleanup."""
         _require_render_feature(require_optional_feature)
@@ -1051,9 +1048,7 @@ def register_render_commands(
             help="Force workflow publish.enabled=false for this run.",
         ),
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo root path."),
-        hub: Optional[Path] = typer.Option(
-            None, "--hub", "--hub-path", help="Hub root or config path."
-        ),
+        hub: Optional[Path] = hub_render_context_option(),
     ) -> None:
         """Start workflow services in order, capture demo output, export artifacts, and optionally publish to outbox."""
         _require_render_feature(require_optional_feature)
@@ -1172,9 +1167,7 @@ def register_render_commands(
             help="Output directory (defaults to .codex-autorunner/filebox/outbox).",
         ),
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo root path."),
-        hub: Optional[Path] = typer.Option(
-            None, "--hub", "--hub-path", help="Hub root or config path."
-        ),
+        hub: Optional[Path] = hub_render_context_option(),
     ) -> None:
         """Capture deterministic, accessibility-first observations from URL or serve mode with guaranteed cleanup."""
         _require_render_feature(require_optional_feature)

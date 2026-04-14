@@ -18,6 +18,7 @@ from ....tickets.hub_pack import (
     parse_assignment_specs,
     setup_ticket_pack,
 )
+from ..hub_path_option import hub_root_path_option
 from .utils import (
     collect_ticket_indices,
     next_available_ticket_index,
@@ -181,7 +182,7 @@ def register_hub_tickets_commands(
             False, "--dry-run", help="Preview without writing"
         ),
         output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
-        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        hub: Optional[Path] = hub_root_path_option(),
     ):
         """Import a zipped ticket pack into a hub repo ticket directory."""
         config = require_hub_config_func(hub)
@@ -247,7 +248,7 @@ def register_hub_tickets_commands(
         range_spec: Optional[str] = typer.Option(
             None, "--range", help="Range of ticket indices in the form A:B"
         ),
-        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        hub: Optional[Path] = hub_root_path_option(),
     ):
         """Set `frontmatter.agent` (and optionally `profile`) for a ticket range."""
         config = require_hub_config_func(hub)
@@ -292,7 +293,7 @@ def register_hub_tickets_commands(
         range_spec: Optional[str] = typer.Option(
             None, "--range", help="Range of ticket indices in the form A:B"
         ),
-        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        hub: Optional[Path] = hub_root_path_option(),
     ):
         """Clear model/reasoning pins from ticket frontmatter for a range."""
         config = require_hub_config_func(hub)
@@ -332,7 +333,7 @@ def register_hub_tickets_commands(
             "codex", "--default-agent", help="Fallback agent for missing agent key"
         ),
         output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
-        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        hub: Optional[Path] = hub_root_path_option(),
     ):
         """Format ticket frontmatter and report lint drift."""
         config = require_hub_config_func(hub)
@@ -367,7 +368,7 @@ def register_hub_tickets_commands(
             "codex", "--default-agent", help="Fallback agent for missing agent key"
         ),
         output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
-        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        hub: Optional[Path] = hub_root_path_option(),
     ):
         """Check or auto-fix ticket frontmatter consistency issues."""
         config = require_hub_config_func(hub)
@@ -429,7 +430,7 @@ def register_hub_tickets_commands(
             help="Agent for open-pr ticket (with --append-final-tickets)",
         ),
         output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
-        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        hub: Optional[Path] = hub_root_path_option(),
     ):
         """Unpack a ticket pack zip into a repo and run ticket lint + flow preflight."""
 

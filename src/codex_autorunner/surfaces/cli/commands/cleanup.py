@@ -57,6 +57,7 @@ from ....integrations.app_server.retention import (
 )
 from ....manifest import load_manifest
 from ....workspace import workspace_id_for_path
+from ..hub_path_option import hub_root_path_option
 
 
 def _build_force_attestation(
@@ -79,7 +80,7 @@ def register_cleanup_commands(
     @cleanup_app.command("processes")
     def cleanup_processes(
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
-        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        hub: Optional[Path] = hub_root_path_option(),
         dry_run: bool = typer.Option(
             False, "--dry-run", help="Preview without sending signals"
         ),
@@ -116,7 +117,7 @@ def register_cleanup_commands(
     @cleanup_app.command("reports")
     def cleanup_reports(
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
-        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        hub: Optional[Path] = hub_root_path_option(),
         max_history_files: int = typer.Option(
             DEFAULT_REPORT_MAX_HISTORY_FILES,
             "--max-history-files",
@@ -145,7 +146,7 @@ def register_cleanup_commands(
     @cleanup_app.command("archives")
     def cleanup_archives(
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
-        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        hub: Optional[Path] = hub_root_path_option(),
         scope: str = typer.Option(
             "both",
             "--scope",
@@ -190,7 +191,7 @@ def register_cleanup_commands(
     @cleanup_app.command("filebox")
     def cleanup_filebox(
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
-        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        hub: Optional[Path] = hub_root_path_option(),
         scope: str = typer.Option(
             "both",
             "--scope",
@@ -227,7 +228,7 @@ def register_cleanup_commands(
     @cleanup_app.command("pytest-tmp")
     def cleanup_pytest_tmp(
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
-        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        hub: Optional[Path] = hub_root_path_option(),
         dry_run: bool = typer.Option(
             False,
             "--dry-run",
@@ -260,7 +261,7 @@ def register_cleanup_commands(
     @cleanup_app.command("state")
     def cleanup_state(
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
-        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        hub: Optional[Path] = hub_root_path_option(),
         dry_run: bool = typer.Option(
             False, "--dry-run", help="Preview cleanup without deleting files."
         ),

@@ -26,6 +26,7 @@ from ....core.force_attestation import (
 )
 from ....manifest import load_manifest
 from ....tickets.outbox import resolve_outbox_paths
+from ..hub_path_option import hub_root_path_option
 from .utils import parse_bool_text, parse_duration
 
 
@@ -245,9 +246,7 @@ def register_hub_runs_commands(
             "--force-attestation",
             help="Attestation text required with --force for dangerous actions.",
         ),
-        path: Optional[Path] = typer.Option(
-            None, "--path", "--hub", help="Hub root path"
-        ),
+        path: Optional[Path] = hub_root_path_option(),
         output_json: bool = typer.Option(
             True, "--json/--no-json", help="Emit JSON output (default: true)"
         ),

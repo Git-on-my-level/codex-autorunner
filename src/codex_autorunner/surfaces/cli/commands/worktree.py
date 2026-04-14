@@ -8,6 +8,7 @@ import typer
 from ....core.config import HubConfig
 from ....core.force_attestation import FORCE_ATTESTATION_REQUIRED_PHRASE
 from ....core.hub import HubSupervisor
+from ..hub_path_option import hub_root_path_option
 
 
 def _worktree_recommended_actions(
@@ -81,9 +82,7 @@ def register_worktree_commands(
     def hub_worktree_create(
         base_repo_id: str = typer.Argument(..., help="Base repo id to branch from"),
         branch: str = typer.Argument(..., help="Branch name for the new worktree"),
-        hub: Optional[Path] = typer.Option(
-            None, "--path", "--hub", help="Hub root path"
-        ),
+        hub: Optional[Path] = hub_root_path_option(),
         force: bool = typer.Option(False, "--force", help="Allow existing directory"),
         start_point: Optional[str] = typer.Option(
             None,
@@ -107,9 +106,7 @@ def register_worktree_commands(
 
     @worktree_app.command("list")
     def hub_worktree_list(
-        hub: Optional[Path] = typer.Option(
-            None, "--path", "--hub", help="Hub root path"
-        ),
+        hub: Optional[Path] = hub_root_path_option(),
         output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     ):
         """List hub worktrees and print canonical lifecycle commands."""
@@ -142,9 +139,7 @@ def register_worktree_commands(
 
     @worktree_app.command("scan")
     def hub_worktree_scan(
-        hub: Optional[Path] = typer.Option(
-            None, "--path", "--hub", help="Hub root path"
-        ),
+        hub: Optional[Path] = hub_root_path_option(),
         output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     ):
         """Rescan hub worktrees from disk and print canonical lifecycle commands."""
@@ -174,9 +169,7 @@ def register_worktree_commands(
     @worktree_app.command("cleanup")
     def hub_worktree_cleanup(
         worktree_repo_id: str = typer.Argument(..., help="Worktree repo id to remove"),
-        hub: Optional[Path] = typer.Option(
-            None, "--path", "--hub", help="Hub root path"
-        ),
+        hub: Optional[Path] = hub_root_path_option(),
         delete_branch: bool = typer.Option(
             False, "--delete-branch", help="Delete the local branch"
         ),
@@ -255,9 +248,7 @@ def register_worktree_commands(
     @worktree_app.command("archive")
     def hub_worktree_archive(
         worktree_repo_id: str = typer.Argument(..., help="Worktree repo id to archive"),
-        hub: Optional[Path] = typer.Option(
-            None, "--path", "--hub", help="Hub root path"
-        ),
+        hub: Optional[Path] = hub_root_path_option(),
         delete_branch: bool = typer.Option(
             False, "--delete-branch", help="Delete the local branch"
         ),
@@ -334,9 +325,7 @@ def register_worktree_commands(
         commands: Optional[List[str]] = typer.Argument(
             None, help="Commands to run after worktree creation (one per arg)"
         ),
-        hub: Optional[Path] = typer.Option(
-            None, "--path", "--hub", help="Hub root path"
-        ),
+        hub: Optional[Path] = hub_root_path_option(),
         clear: bool = typer.Option(
             False, "--clear", help="Clear all worktree setup commands"
         ),

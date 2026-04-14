@@ -133,12 +133,11 @@ def test_issue_828_flow_start_parity_matrix_characterization(
     cli_start = RUNNER.invoke(
         app,
         [
-            "flow",
-            "ticket_flow",
+            "ticket-flow",
             "start",
             "--repo",
             str(repo_root),
-            "--hub",
+            "--path",
             str(external_hub_root),
         ],
     )

@@ -24,7 +24,7 @@ def test_templates_repos_list_empty(hub_env) -> None:
     runner = CliRunner()
     result = runner.invoke(
         app,
-        ["templates", "repos", "list", "--hub", str(hub_env.hub_root)],
+        ["templates", "repos", "list", "--path", str(hub_env.hub_root)],
     )
 
     assert result.exit_code == 0
@@ -56,7 +56,7 @@ def test_templates_repos_list_json(hub_env) -> None:
     runner = CliRunner()
     result = runner.invoke(
         app,
-        ["templates", "repos", "list", "--hub", str(hub_env.hub_root), "--json"],
+        ["templates", "repos", "list", "--path", str(hub_env.hub_root), "--json"],
     )
 
     assert result.exit_code == 0
@@ -77,7 +77,7 @@ def test_templates_repos_add(hub_env) -> None:
             "add",
             "newrepo",
             "https://github.com/new/repo",
-            "--hub",
+            "--path",
             str(hub_env.hub_root),
         ],
     )
@@ -108,7 +108,7 @@ def test_templates_repos_add_with_trusted(hub_env) -> None:
             "trustedrepo",
             "https://github.com/trusted/repo",
             "--trusted",
-            "--hub",
+            "--path",
             str(hub_env.hub_root),
         ],
     )
@@ -140,7 +140,7 @@ def test_templates_repos_add_keeps_non_generated_sparse_config_sparse(hub_env) -
             "add",
             "newrepo",
             "https://github.com/new/repo",
-            "--hub",
+            "--path",
             str(hub_env.hub_root),
         ],
     )
@@ -180,7 +180,7 @@ def test_templates_repos_add_duplicate_id(hub_env) -> None:
             "add",
             "existing",
             "https://github.com/new/repo",
-            "--hub",
+            "--path",
             str(hub_env.hub_root),
         ],
     )
@@ -209,7 +209,7 @@ def test_templates_repos_remove(hub_env) -> None:
     runner = CliRunner()
     result = runner.invoke(
         app,
-        ["templates", "repos", "remove", "toremove", "--hub", str(hub_env.hub_root)],
+        ["templates", "repos", "remove", "toremove", "--path", str(hub_env.hub_root)],
     )
 
     assert result.exit_code == 0
@@ -231,7 +231,7 @@ def test_templates_repos_remove_not_found(hub_env) -> None:
             "repos",
             "remove",
             "nonexistent",
-            "--hub",
+            "--path",
             str(hub_env.hub_root),
         ],
     )
@@ -259,7 +259,7 @@ def test_templates_repos_trust(hub_env) -> None:
     runner = CliRunner()
     result = runner.invoke(
         app,
-        ["templates", "repos", "trust", "totrust", "--hub", str(hub_env.hub_root)],
+        ["templates", "repos", "trust", "totrust", "--path", str(hub_env.hub_root)],
     )
 
     assert result.exit_code == 0
@@ -283,7 +283,7 @@ def test_templates_repos_trust_not_found(hub_env) -> None:
             "repos",
             "trust",
             "nonexistent",
-            "--hub",
+            "--path",
             str(hub_env.hub_root),
         ],
     )
@@ -316,7 +316,7 @@ def test_templates_repos_untrust(hub_env) -> None:
             "repos",
             "untrust",
             "tountrust",
-            "--hub",
+            "--path",
             str(hub_env.hub_root),
         ],
     )
@@ -351,7 +351,7 @@ def test_templates_repos_add_when_disabled(hub_env) -> None:
             "add",
             "newrepo",
             "https://github.com/new/repo",
-            "--hub",
+            "--path",
             str(hub_env.hub_root),
         ],
     )

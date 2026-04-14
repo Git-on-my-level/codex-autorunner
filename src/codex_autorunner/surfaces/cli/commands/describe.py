@@ -10,6 +10,7 @@ from ....core.self_describe import (
     collect_describe_data,
     default_runtime_schema_path,
 )
+from ..hub_path_option import hub_root_path_option
 
 
 def _format_human(data: dict[str, Any]) -> str:
@@ -58,7 +59,7 @@ def register_describe_commands(
     @app.command()
     def describe(
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
-        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        hub: Optional[Path] = hub_root_path_option(),
         json_output: bool = typer.Option(False, "--json", help="Emit JSON output"),
         schema: bool = typer.Option(
             False, "--schema", help="Print schema location and exit"

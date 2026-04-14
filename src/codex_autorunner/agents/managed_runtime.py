@@ -358,7 +358,7 @@ def preflight_agent_workspace_runtime(
                 "is deferred until launch."
             ),
             fix=(
-                "Run `car doctor --hub` and validate the runtime contract again "
+                "Run `car doctor` from the hub directory (or pass `--repo`) and validate the runtime contract again "
                 "when launching the first managed thread."
             ),
         )

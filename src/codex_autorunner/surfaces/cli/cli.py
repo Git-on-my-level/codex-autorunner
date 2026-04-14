@@ -229,12 +229,6 @@ register_render_commands(
     raise_exit=_raise_exit,
 )
 app.add_typer(templates_app, name="templates")
-# UX alias: allow singular form (`car template ...`) in addition to `car templates ...`.
-app.add_typer(
-    templates_app,
-    name="template",
-    help="Alias of `templates` (canonical form: `car templates ...`).",
-)
 app.add_typer(cleanup_app, name="cleanup")
 app.add_typer(chat_app, name="chat")
 register_templates_commands(

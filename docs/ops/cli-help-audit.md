@@ -21,7 +21,6 @@ Reviewed help pages: 131 command/group pages.
 | `car telegram` | 4 | Complete | Group help + command docstrings added. |
 | `car discord` | 4 | Complete | Group help + command docstrings added. |
 | `car templates` | 12 | Complete | Group help + examples on fetch/apply; repos subcommands documented. |
-| `car template` (alias) | 12 | Complete | Alias help points to canonical `car templates ...`. |
 | `car cleanup` | 3 | Complete | Group help present; command summaries already present. |
 | `car chat` | 3 | Complete | Group help + `channels` subgroup help present. |
 | `car doctor` | 3 | Complete | Group help + `versions` command summary added. |
@@ -32,7 +31,6 @@ Reviewed help pages: 131 command/group pages.
 
 ## Canonical Discoverability Changes
 
-- `car template --help` now states canonical form: `car templates ...`.
 - `car ticket-flow --help` now states canonical form: `car ticket-flow ...`.
 - `car hub worktree list/scan` now emit canonical lifecycle hints:
   - Human output: `recommended: car hub worktree archive <repo_id>`

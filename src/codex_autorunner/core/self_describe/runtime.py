@@ -111,7 +111,6 @@ def _collect_template_info(
         ],
         "apply": [
             "car templates apply <repo_id>:<path>[@<ref>]",
-            "car template apply <repo_id>:<path>[@<ref>]",
         ],
     }
     try:

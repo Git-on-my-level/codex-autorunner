@@ -35,6 +35,7 @@ from ....core.orchestration.sqlite import open_orchestration_sqlite
 from ....core.pma_automation_store import PmaAutomationStore
 from ....manifest import Manifest, load_manifest, save_manifest
 from ...web.app import create_hub_app
+from ..hub_path_option import hub_root_path_option
 
 
 def register_hub_commands(
@@ -1353,9 +1354,7 @@ def register_hub_commands(
         dry_run: bool = typer.Option(
             False, "--dry-run", help="Preview only, don't archive anything"
         ),
-        path: Optional[Path] = typer.Option(
-            None, "--path", "--hub", help="Hub root path"
-        ),
+        path: Optional[Path] = hub_root_path_option(),
         output_json: bool = typer.Option(
             True, "--json/--no-json", help="Emit JSON output (default: true)"
         ),

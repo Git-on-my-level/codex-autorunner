@@ -15,6 +15,7 @@ from ....integrations.chat.queue_control import (
     ChatQueueControlStore,
     normalize_chat_thread_id,
 )
+from ..hub_path_option import hub_root_path_option
 
 
 def register_chat_commands(
@@ -40,9 +41,7 @@ def register_chat_commands(
         ),
         limit: int = typer.Option(100, "--limit", min=1, help="Maximum rows"),
         output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
-        path: Optional[Path] = typer.Option(
-            None, "--path", "--hub", help="Hub root path"
-        ),
+        path: Optional[Path] = hub_root_path_option(),
     ) -> None:
         """List cached chat channels/topics discovered from inbound traffic."""
         hub_root = resolve_hub_path(path)
@@ -85,9 +84,7 @@ def register_chat_commands(
             "discord", "--platform", help="Chat platform (default: discord)"
         ),
         output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
-        path: Optional[Path] = typer.Option(
-            None, "--path", "--hub", help="Hub root path"
-        ),
+        path: Optional[Path] = hub_root_path_option(),
     ) -> None:
         """Show persisted queue status for one channel/topic conversation."""
         hub_root = resolve_hub_path(path)
@@ -143,9 +140,7 @@ def register_chat_commands(
             None, "--reason", help="Optional operator note for the reset request"
         ),
         output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
-        path: Optional[Path] = typer.Option(
-            None, "--path", "--hub", help="Hub root path"
-        ),
+        path: Optional[Path] = hub_root_path_option(),
     ) -> None:
         """Request a live queue reset for one channel/topic conversation."""
         hub_root = resolve_hub_path(path)

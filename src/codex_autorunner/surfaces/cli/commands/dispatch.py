@@ -6,6 +6,7 @@ import httpx
 import typer
 
 from ....core.config import HubConfig
+from ..hub_path_option import hub_root_path_option
 from .utils import raise_exit
 
 
@@ -33,9 +34,7 @@ def register_dispatch_commands(
         idempotency_key: Optional[str] = typer.Option(
             None, "--idempotency-key", help="Optional key to avoid duplicate replies"
         ),
-        path: Optional[Path] = typer.Option(
-            None, "--path", "--hub", help="Hub root path"
-        ),
+        path: Optional[Path] = hub_root_path_option(),
         base_path: Optional[str] = typer.Option(
             None, "--base-path", help="Override hub server base path (e.g. /car)"
         ),

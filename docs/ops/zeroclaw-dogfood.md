@@ -45,7 +45,7 @@ The first-class CLI path is:
 ```bash
 car hub agent-workspace create zc-main --runtime zeroclaw --disabled --path <hub_root>
 car hub agent-workspace show zc-main --path <hub_root>
-car doctor --hub --path <hub_root>
+car doctor --repo <hub_root>
 ```
 
 `create --disabled` lets you preprovision the workspace manifest entry even when

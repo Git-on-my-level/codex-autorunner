@@ -178,7 +178,7 @@ def test_describe_env_knobs_are_names_only(repo):
 
 
 def test_describe_with_hub_option_uses_explicit_hub(tmp_path: Path, repo):
-    """Test that --hub overrides implicit hub lookup."""
+    """Test that --path overrides implicit hub lookup."""
     other_hub = tmp_path / "other-hub"
     seed_hub_files(other_hub, force=True)
 
@@ -194,7 +194,7 @@ def test_describe_with_hub_option_uses_explicit_hub(tmp_path: Path, repo):
 
     result = runner.invoke(
         app,
-        ["describe", "--repo", str(repo), "--hub", str(other_hub), "--json"],
+        ["describe", "--repo", str(repo), "--path", str(other_hub), "--json"],
     )
     assert result.exit_code == 0
 

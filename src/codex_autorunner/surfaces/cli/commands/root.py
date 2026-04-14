@@ -39,6 +39,7 @@ from ....core.usage import (
 from ....core.utils import RepoNotFoundError, default_editor, find_repo_root
 from ....manifest import load_manifest
 from ...web.app import create_hub_app
+from ..hub_path_option import hub_root_path_option
 from .utils import request_json
 
 logger = logging.getLogger("codex_autorunner.cli")
@@ -260,9 +261,7 @@ def register_root_commands(app: typer.Typer) -> None:
     @app.command()
     def status(
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
-        hub: Optional[Path] = typer.Option(
-            None, "--hub", "--path", help="Hub root path"
-        ),
+        hub: Optional[Path] = hub_root_path_option(),
         output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     ):
         """Show autorunner status."""
@@ -365,7 +364,7 @@ def register_root_commands(app: typer.Typer) -> None:
     @app.command()
     def sessions(
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
-        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        hub: Optional[Path] = hub_root_path_option(),
         output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     ):
         """List active terminal sessions."""
@@ -434,7 +433,7 @@ def register_root_commands(app: typer.Typer) -> None:
     @app.command("stop-session")
     def stop_session(
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
-        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        hub: Optional[Path] = hub_root_path_option(),
         session_id: Optional[str] = typer.Option(
             None, "--session", help="Session id to stop"
         ),
@@ -497,7 +496,7 @@ def register_root_commands(app: typer.Typer) -> None:
             "--repo",
             help="Repo or hub path; defaults to CWD",
         ),
-        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        hub: Optional[Path] = hub_root_path_option(),
         codex_home: Optional[Path] = typer.Option(
             None,
             "--codex-home",
@@ -628,7 +627,7 @@ def register_root_commands(app: typer.Typer) -> None:
     @app.command()
     def kill(
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
-        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        hub: Optional[Path] = hub_root_path_option(),
     ):
         """Force-kill a running autorunner and clear stale lock/state.
 
@@ -665,7 +664,7 @@ def register_root_commands(app: typer.Typer) -> None:
     @app.command()
     def log(
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
-        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        hub: Optional[Path] = hub_root_path_option(),
         run_id: Optional[int] = typer.Option(None, "--run", help="Show a specific run"),
         tail: Optional[int] = typer.Option(None, "--tail", help="Tail last N lines"),
     ):
@@ -699,7 +698,7 @@ def register_root_commands(app: typer.Typer) -> None:
     def edit(
         target: str = typer.Argument(..., help="active_context|decisions|spec"),
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
-        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        hub: Optional[Path] = hub_root_path_option(),
     ):
         """Open one of the docs in $EDITOR."""
         engine = _require_repo_config(repo, hub)
@@ -726,9 +725,7 @@ def register_root_commands(app: typer.Typer) -> None:
 
     @app.command()
     def serve(
-        path: Optional[Path] = typer.Option(
-            None, "--path", "--hub", help="Hub root path"
-        ),
+        path: Optional[Path] = hub_root_path_option(),
         host: Optional[str] = typer.Option(None, "--host", help="Host to bind"),
         port: Optional[int] = typer.Option(None, "--port", help="Port to bind"),
         base_path: Optional[str] = typer.Option(

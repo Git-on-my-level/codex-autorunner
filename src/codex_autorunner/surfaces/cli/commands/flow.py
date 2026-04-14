@@ -53,6 +53,7 @@ from ....core.utils import resolve_executable
 from ....tickets import DEFAULT_MAX_TOTAL_TURNS, AgentPool
 from ....tickets.files import list_ticket_paths, read_ticket, ticket_is_done
 from ....tickets.frontmatter import generate_ticket_id
+from ..hub_path_option import hub_root_path_option
 
 logger = logging.getLogger(__name__)
 
@@ -584,7 +585,7 @@ def register_flow_commands(
     @flow_app.command("worker")
     def flow_worker(
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
-        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        hub: Optional[Path] = hub_root_path_option(),
         run_id: Optional[str] = typer.Option(
             None, "--run-id", help="Flow run ID (required)"
         ),
@@ -796,7 +797,7 @@ def register_flow_commands(
     @ticket_flow_app.command("bootstrap")
     def ticket_flow_bootstrap(
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
-        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        hub: Optional[Path] = hub_root_path_option(),
         force_new: bool = typer.Option(
             False, "--force-new", help="Always create a new run"
         ),
@@ -903,7 +904,7 @@ You are the first ticket in a new ticket_flow run.
     @ticket_flow_app.command("preflight")
     def ticket_flow_preflight(
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
-        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        hub: Optional[Path] = hub_root_path_option(),
         output_json: bool = typer.Option(
             True, "--json/--no-json", help="Emit JSON output (default: true)"
         ),
@@ -927,7 +928,7 @@ You are the first ticket in a new ticket_flow run.
     @ticket_flow_app.command("start")
     def ticket_flow_start(
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
-        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        hub: Optional[Path] = hub_root_path_option(),
         force_new: bool = typer.Option(
             False, "--force-new", help="Always create a new run"
         ),
@@ -1013,7 +1014,7 @@ You are the first ticket in a new ticket_flow run.
     @ticket_flow_app.command("status")
     def ticket_flow_status(
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
-        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        hub: Optional[Path] = hub_root_path_option(),
         run_id: Optional[str] = typer.Option(None, "--run-id", help="Flow run ID"),
         output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     ):
@@ -1058,7 +1059,7 @@ You are the first ticket in a new ticket_flow run.
     @ticket_flow_app.command("stop")
     def ticket_flow_stop(
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
-        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        hub: Optional[Path] = hub_root_path_option(),
         run_id: Optional[str] = typer.Option(None, "--run-id", help="Flow run ID"),
     ):
         """Stop a ticket_flow run."""
@@ -1085,7 +1086,7 @@ You are the first ticket in a new ticket_flow run.
     @ticket_flow_app.command("archive")
     def ticket_flow_archive(
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
-        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        hub: Optional[Path] = hub_root_path_option(),
         run_id: Optional[str] = typer.Option(None, "--run-id", help="Flow run ID"),
         force: bool = typer.Option(
             False, "--force", help="Allow archiving paused/stopping runs"
@@ -1164,7 +1165,7 @@ You are the first ticket in a new ticket_flow run.
     @telemetry_app.command("export")
     def telemetry_export(
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
-        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        hub: Optional[Path] = hub_root_path_option(),
         dry_run: bool = typer.Option(
             False, "--dry-run", help="Preview what would be exported/pruned"
         ),
@@ -1266,7 +1267,7 @@ You are the first ticket in a new ticket_flow run.
     @flow_app.command("housekeep")
     def flow_housekeep(
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
-        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        hub: Optional[Path] = hub_root_path_option(),
         stats_only: bool = typer.Option(
             False, "--stats", help="Report DB stats only (no export/prune)"
         ),

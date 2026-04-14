@@ -31,6 +31,7 @@ from ....integrations.templates.scan_agent import (
 )
 from ....tickets.frontmatter import split_markdown_frontmatter
 from ....tickets.lint import parse_ticket_index
+from ..hub_path_option import hub_root_path_option
 from .utils import find_template_repo, resolve_hub_config_path_for_cli
 
 
@@ -52,7 +53,7 @@ def register_templates_commands(
         ),
         output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
-        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        hub: Optional[Path] = hub_root_path_option(),
     ):
         """Fetch template content from configured template repos.
 
@@ -108,7 +109,7 @@ def register_templates_commands(
             help="Embed template provenance in generated ticket(s)",
         ),
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
-        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        hub: Optional[Path] = hub_root_path_option(),
     ):
         """Apply a template to create a ticket file in `.codex-autorunner/tickets`.
 
@@ -341,7 +342,7 @@ def register_template_index_commands(
     @app.command("list")
     def templates_list(
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
-        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        hub: Optional[Path] = hub_root_path_option(),
         output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     ):
         """List available templates with id, name, and summary."""
@@ -388,7 +389,7 @@ def register_template_index_commands(
             ..., help="Template ref (REPO_ID:PATH[@REF])"
         ),
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
-        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        hub: Optional[Path] = hub_root_path_option(),
         output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     ):
         """Show details for a specific template."""
@@ -427,7 +428,7 @@ def register_template_index_commands(
     def templates_search(
         query: str = typer.Argument(..., help="Search query"),
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
-        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        hub: Optional[Path] = hub_root_path_option(),
         output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     ):
         """Search templates by name, path, or summary."""

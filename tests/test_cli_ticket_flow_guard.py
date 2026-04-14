@@ -28,7 +28,7 @@ def test_ticket_flow_start_rejects_unregistered_worktree(tmp_path) -> None:
             "start",
             "--repo",
             str(repo_root),
-            "--hub",
+            "--path",
             str(hub_root),
         ],
     )

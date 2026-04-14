@@ -39,6 +39,7 @@ from ...core.pma_hygiene import (
 )
 from ...core.text_utils import _truncate_text
 from .commands.utils import format_hub_request_error
+from .hub_path_option import hub_root_path_option
 
 logger = logging.getLogger(__name__)
 _MANAGED_THREAD_SEND_PREVIEW_LIMIT = 120
@@ -1363,7 +1364,7 @@ def pma_chat(
     ),
     stream: bool = typer.Option(False, "--stream", help="Stream response tokens"),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
-    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    path: Optional[Path] = hub_root_path_option(),
 ):
     """Send a message to the Project Management Assistant."""
     hub_root = _resolve_hub_path(path)
@@ -1516,7 +1517,7 @@ def pma_chat(
 @pma_app.command("interrupt")
 def pma_interrupt(
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
-    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    path: Optional[Path] = hub_root_path_option(),
 ):
     """Interrupt a running PMA chat."""
     hub_root = _resolve_hub_path(path)
@@ -1579,7 +1580,7 @@ def pma_reset(
         None, "--agent", help="Agent thread to reset (opencode|codex|hermes|all)"
     ),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
-    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    path: Optional[Path] = hub_root_path_option(),
 ):
     """Reset PMA thread state."""
     hub_root = _resolve_hub_path(path)
@@ -1621,7 +1622,7 @@ def pma_active(
         None, "--turn-id", help="Filter by client turn ID"
     ),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
-    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    path: Optional[Path] = hub_root_path_option(),
 ):
     """Show active PMA chat status."""
     hub_root = _resolve_hub_path(path)
@@ -1707,7 +1708,7 @@ def pma_hygiene(
         help="Override the stale-age threshold used for PMA hygiene classification.",
     ),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
-    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    path: Optional[Path] = hub_root_path_option(),
 ):
     """Review PMA hygiene candidates and optionally clean only the safe ones."""
     hub_root = _resolve_hub_path(path)
@@ -1770,7 +1771,7 @@ def pma_hygiene(
 @pma_app.command("agents")
 def pma_agents(
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
-    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    path: Optional[Path] = hub_root_path_option(),
 ):
     """List available PMA agents."""
     hub_root = _resolve_hub_path(path)
@@ -1840,7 +1841,7 @@ def pma_agents(
 def pma_models(
     agent: str = typer.Argument(..., help="Agent ID (codex|opencode|hermes)"),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
-    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    path: Optional[Path] = hub_root_path_option(),
 ):
     """List available models for an agent."""
     hub_root = _resolve_hub_path(path)
@@ -1929,7 +1930,7 @@ def pma_thread_spawn(
         help="Auto-cancel notification after first fire",
     ),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
-    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    path: Optional[Path] = hub_root_path_option(),
 ):
     """Create a managed PMA thread."""
     normalized_agent = _normalize_agent_option(agent)
@@ -2054,7 +2055,7 @@ def pma_thread_list(
     output_ndjson: bool = typer.Option(
         False, "--ndjson", help="Emit newline-delimited JSON output"
     ),
-    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    path: Optional[Path] = hub_root_path_option(),
 ):
     """List managed PMA threads."""
     if output_json and output_ndjson:
@@ -2136,7 +2137,7 @@ def pma_thread_info(
         ..., "--id", help="Managed PMA thread id", show_default=False
     ),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
-    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    path: Optional[Path] = hub_root_path_option(),
 ):
     """Show managed PMA thread details."""
     hub_root = _resolve_hub_path(path)
@@ -2178,7 +2179,7 @@ def pma_thread_status(
     ),
     level: str = typer.Option("info", "--level", help="Verbosity level (info|debug)"),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
-    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    path: Optional[Path] = hub_root_path_option(),
 ):
     """Show unified managed-thread status in one view."""
     hub_root = _resolve_hub_path(path)
@@ -2248,7 +2249,7 @@ def pma_thread_send(
         help="Auto-cancel notification after first fire",
     ),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
-    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    path: Optional[Path] = hub_root_path_option(),
 ):
     """Send a message to a managed PMA thread."""
     message_body = _resolve_message_body(
@@ -2408,7 +2409,7 @@ def pma_thread_turns(
     ),
     limit: int = typer.Option(50, "--limit", min=1, help="Maximum rows to return"),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
-    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    path: Optional[Path] = hub_root_path_option(),
 ):
     """List managed PMA thread turns."""
     hub_root = _resolve_hub_path(path)
@@ -2455,7 +2456,7 @@ def pma_thread_output(
     managed_thread_id: str = typer.Option(
         ..., "--id", help="Managed PMA thread id", show_default=False
     ),
-    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    path: Optional[Path] = hub_root_path_option(),
 ):
     """Print assistant_text for the latest turn of a managed PMA thread."""
     hub_root = _resolve_hub_path(path)
@@ -2511,7 +2512,7 @@ def pma_thread_tail(
     level: str = typer.Option("info", "--level", help="Verbosity level (info|debug)"),
     limit: int = typer.Option(50, "--limit", min=1, help="Maximum events to include"),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
-    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    path: Optional[Path] = hub_root_path_option(),
 ):
     """Show managed-thread tail/progress events."""
     hub_root = _resolve_hub_path(path)
@@ -2636,7 +2637,7 @@ def pma_thread_compact(
         1000, "--limit", min=1, help="Maximum bulk-selected threads to inspect"
     ),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
-    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    path: Optional[Path] = hub_root_path_option(),
 ):
     """Store a compaction seed on one or more managed PMA threads."""
     hub_root = _resolve_hub_path(path)
@@ -2829,7 +2830,7 @@ def pma_thread_resume(
         ..., "--id", help="Managed PMA thread id", show_default=False
     ),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
-    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    path: Optional[Path] = hub_root_path_option(),
 ):
     """Set a managed thread active."""
     hub_root = _resolve_hub_path(path)
@@ -2863,7 +2864,7 @@ def pma_thread_fork(
         None, "--name", help="Optional new thread label"
     ),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
-    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    path: Optional[Path] = hub_root_path_option(),
 ):
     """Fork a managed PMA thread when the backend runtime supports it."""
     hub_root = _resolve_hub_path(path)
@@ -2899,7 +2900,7 @@ def pma_thread_archive(
         ..., "--id", help="Managed PMA thread id", show_default=False
     ),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
-    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    path: Optional[Path] = hub_root_path_option(),
 ):
     """Archive a managed PMA thread."""
     hub_root = _resolve_hub_path(path)
@@ -2937,7 +2938,7 @@ def pma_thread_interrupt(
         ..., "--id", help="Managed PMA thread id", show_default=False
     ),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
-    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    path: Optional[Path] = hub_root_path_option(),
 ):
     """Interrupt a running managed PMA thread turn."""
     hub_root = _resolve_hub_path(path)
@@ -3008,7 +3009,7 @@ def pma_thread_interrupt(
 @pma_app.command("files")
 def pma_files(
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
-    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    path: Optional[Path] = hub_root_path_option(),
 ):
     """List files in PMA inbox and outbox (FileBox-backed via /hub/pma/files)."""
     hub_root = _resolve_hub_path(path)
@@ -3051,7 +3052,7 @@ def pma_files(
 @file_app.command("consume")
 def pma_file_consume(
     filename: str = typer.Argument(..., help="Inbox filename to mark as consumed"),
-    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    path: Optional[Path] = hub_root_path_option(),
 ):
     """Move a PMA inbox file into the recoverable consumed archive."""
     hub_root = _resolve_hub_path(path)
@@ -3073,7 +3074,7 @@ def pma_file_consume(
 @file_app.command("dismiss")
 def pma_file_dismiss(
     filename: str = typer.Argument(..., help="Inbox filename to mark as dismissed"),
-    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    path: Optional[Path] = hub_root_path_option(),
 ):
     """Move a PMA inbox file into the recoverable dismissed archive."""
     hub_root = _resolve_hub_path(path)
@@ -3095,7 +3096,7 @@ def pma_file_dismiss(
 @file_app.command("restore")
 def pma_file_restore(
     filename: str = typer.Argument(..., help="Archived filename to restore to inbox"),
-    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    path: Optional[Path] = hub_root_path_option(),
 ):
     """Restore a consumed or dismissed PMA file back to the inbox."""
     hub_root = _resolve_hub_path(path)
@@ -3122,7 +3123,7 @@ def pma_file_list(
         help=f"Box to list ({_file_lifecycle_box_choices_text()})",
     ),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
-    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    path: Optional[Path] = hub_root_path_option(),
 ):
     """List PMA inbox and archived lifecycle files from the local FileBox."""
     normalized_box = str(box or "").strip().lower()
@@ -3144,7 +3145,7 @@ def pma_upload(
     box: str = typer.Argument(..., help=f"Target box ({_box_choices_text()})"),
     files: list[Path] = typer.Argument(..., help="Files to upload"),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
-    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    path: Optional[Path] = hub_root_path_option(),
 ):
     """Upload files to PMA inbox or outbox (FileBox-backed via /hub/pma/files)."""
     hub_root = _resolve_hub_path(path)
@@ -3206,7 +3207,7 @@ def pma_download(
     output: Optional[Path] = typer.Option(
         None, "--output", "-o", help="Output path (default: current directory)"
     ),
-    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    path: Optional[Path] = hub_root_path_option(),
 ):
     """Download a file from PMA inbox or outbox (FileBox-backed via /hub/pma/files)."""
     hub_root = _resolve_hub_path(path)
@@ -3242,7 +3243,7 @@ def pma_delete(
     filename: Optional[str] = typer.Argument(None, help="File to delete"),
     all_files: bool = typer.Option(False, "--all", help="Delete all files in the box"),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
-    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    path: Optional[Path] = hub_root_path_option(),
 ):
     """Delete files from PMA inbox or outbox (FileBox-backed via /hub/pma/files)."""
     hub_root = _resolve_hub_path(path)
@@ -3296,7 +3297,7 @@ def pma_delete(
 @docs_app.command("show")
 def pma_docs_show(
     doc_type: str = typer.Argument(..., help="Document type: agents, active, or log"),
-    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    path: Optional[Path] = hub_root_path_option(),
 ):
     """Show PMA docs content to stdout."""
     hub_root = _resolve_hub_path(path)
@@ -3326,7 +3327,7 @@ def pma_docs_show(
 
 @context_app.command("reset")
 def pma_context_reset(
-    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    path: Optional[Path] = hub_root_path_option(),
 ):
     """Reset active_context.md to a minimal header."""
     hub_root = _resolve_hub_path(path)
@@ -3358,7 +3359,7 @@ Pruning guidance:
 
 @context_app.command("snapshot")
 def pma_context_snapshot(
-    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    path: Optional[Path] = hub_root_path_option(),
 ):
     """Snapshot active_context.md into context_log.md with ISO timestamp."""
     hub_root = _resolve_hub_path(path)
@@ -3392,7 +3393,7 @@ def pma_context_snapshot(
 
 @context_app.command("prune")
 def pma_context_prune(
-    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    path: Optional[Path] = hub_root_path_option(),
 ):
     """Prune active_context.md if over budget (snapshot first)."""
     hub_root = _resolve_hub_path(path)
@@ -3474,7 +3475,7 @@ def pma_context_compact(
         12, "--summary-lines", help="Max archived summary lines to keep"
     ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview only"),
-    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    path: Optional[Path] = hub_root_path_option(),
 ):
     """Snapshot then compact active_context.md into a deterministic short form."""
     hub_root = _resolve_hub_path(path)
@@ -3571,7 +3572,7 @@ def pma_binding_list(
     ),
     limit: int = typer.Option(200, "--limit", min=1, help="Maximum rows to return"),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
-    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    path: Optional[Path] = hub_root_path_option(),
 ):
     """List orchestration bindings for threads."""
     hub_root = _resolve_hub_path(path)
@@ -3647,7 +3648,7 @@ def pma_binding_active(
         ..., "--key", help="Surface-specific key (channel id, chat id, etc.)"
     ),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
-    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    path: Optional[Path] = hub_root_path_option(),
 ):
     """Get the active thread bound to a surface key."""
     hub_root = _resolve_hub_path(path)
@@ -3691,7 +3692,7 @@ def pma_binding_work(
     ),
     limit: int = typer.Option(200, "--limit", min=1, help="Maximum rows to return"),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
-    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    path: Optional[Path] = hub_root_path_option(),
 ):
     """List busy-work summaries (threads with running or queued work)."""
     hub_root = _resolve_hub_path(path)

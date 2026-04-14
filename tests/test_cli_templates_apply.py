@@ -281,7 +281,7 @@ def test_template_apply_rejects_removed_out_alias(hub_env, tmp_path: Path) -> No
     result = runner.invoke(
         app,
         [
-            "template",
+            "templates",
             "apply",
             "local:tickets/TICKET-REVIEW.md",
             "--repo",
@@ -298,7 +298,7 @@ def test_template_apply_rejects_removed_out_alias(hub_env, tmp_path: Path) -> No
     result = runner.invoke(
         app,
         [
-            "template",
+            "templates",
             "apply",
             "local:tickets/TICKET-REVIEW.md",
             "--repo",

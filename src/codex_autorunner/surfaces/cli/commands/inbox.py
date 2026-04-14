@@ -5,6 +5,7 @@ from typing import Any, Callable, Optional
 import httpx
 import typer
 
+from ..hub_path_option import hub_root_path_option
 from .utils import format_hub_request_error
 
 
@@ -80,9 +81,7 @@ def register_inbox_commands(
         reason: Optional[str] = typer.Option(
             None, "--reason", help="Resolution reason"
         ),
-        path: Optional[Path] = typer.Option(
-            None, "--path", "--hub", help="Hub root path"
-        ),
+        path: Optional[Path] = hub_root_path_option(),
         base_path: Optional[str] = typer.Option(
             None, "--base-path", help="Override hub server base path (e.g. /car)"
         ),
@@ -126,9 +125,7 @@ def register_inbox_commands(
             None, "--item-type", help="Inbox item type (auto-detected when omitted)"
         ),
         reason: Optional[str] = typer.Option(None, "--reason", help="Dismissal reason"),
-        path: Optional[Path] = typer.Option(
-            None, "--path", "--hub", help="Hub root path"
-        ),
+        path: Optional[Path] = hub_root_path_option(),
         base_path: Optional[str] = typer.Option(
             None, "--base-path", help="Override hub server base path (e.g. /car)"
         ),
@@ -169,9 +166,7 @@ def register_inbox_commands(
             None, "--seq", help="Dispatch sequence number"
         ),
         dry_run: bool = typer.Option(False, "--dry-run", help="Preview only"),
-        path: Optional[Path] = typer.Option(
-            None, "--path", "--hub", help="Hub root path"
-        ),
+        path: Optional[Path] = hub_root_path_option(),
         base_path: Optional[str] = typer.Option(
             None, "--base-path", help="Override hub server base path (e.g. /car)"
         ),

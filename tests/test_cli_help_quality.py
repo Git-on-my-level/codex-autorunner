@@ -96,10 +96,6 @@ def test_cli_help_shows_examples_on_key_commands() -> None:
 def test_cli_alias_help_points_to_canonical_commands() -> None:
     runner = CliRunner()
 
-    template_help = runner.invoke(app, ["template", "--help"])
-    assert template_help.exit_code == 0
-    assert "canonical form: `car templates ...`" in template_help.stdout
-
     ticket_flow_help = runner.invoke(app, ["ticket-flow", "--help"])
     assert ticket_flow_help.exit_code == 0
     assert "bootstrap" in ticket_flow_help.stdout

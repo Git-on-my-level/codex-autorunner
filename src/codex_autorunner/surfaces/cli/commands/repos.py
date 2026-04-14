@@ -4,6 +4,7 @@ from typing import Callable, Optional
 
 import typer
 
+from ..hub_path_option import hub_root_path_option
 from ..template_repos import TemplatesConfigError, load_template_repos_manager
 
 
@@ -14,7 +15,7 @@ def register_repos_commands(
 ) -> None:
     @repos_app.command("list")
     def repos_list(
-        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        hub: Optional[Path] = hub_root_path_option(),
         output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     ):
         """List configured template repositories."""
@@ -53,7 +54,7 @@ def register_repos_commands(
         default_ref: str = typer.Option(
             "main", "--default-ref", help="Default git ref"
         ),
-        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        hub: Optional[Path] = hub_root_path_option(),
     ):
         """Add a template repository to hub config."""
         manager = load_template_repos_manager(hub)
@@ -74,7 +75,7 @@ def register_repos_commands(
     @repos_app.command("remove")
     def repos_remove(
         repo_id: str = typer.Argument(..., help="Repo ID to remove"),
-        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        hub: Optional[Path] = hub_root_path_option(),
     ):
         """Remove a template repository from hub config."""
         manager = load_template_repos_manager(hub)
@@ -95,7 +96,7 @@ def register_repos_commands(
     @repos_app.command("trust")
     def repos_trust(
         repo_id: str = typer.Argument(..., help="Repo ID to trust"),
-        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        hub: Optional[Path] = hub_root_path_option(),
     ):
         """Mark a template repository as trusted."""
         manager = load_template_repos_manager(hub)
@@ -116,7 +117,7 @@ def register_repos_commands(
     @repos_app.command("untrust")
     def repos_untrust(
         repo_id: str = typer.Argument(..., help="Repo ID to untrust"),
-        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        hub: Optional[Path] = hub_root_path_option(),
     ):
         """Mark a template repository as untrusted (scan required on fetch)."""
         manager = load_template_repos_manager(hub)
