@@ -24,8 +24,7 @@ def test_ticket_flow_start_rejects_unregistered_worktree(tmp_path) -> None:
     result = runner.invoke(
         app,
         [
-            "flow",
-            "ticket_flow",
+            "ticket-flow",
             "start",
             "--repo",
             str(repo_root),

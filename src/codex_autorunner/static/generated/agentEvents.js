@@ -357,9 +357,24 @@ export function parseAppServerEvent(payload) {
         let summary = fileSummary;
         let detailText = detail;
         if (!files.length && fallbackPreview && fallbackPreview !== "diff updated") {
-            summary = fallbackPreview;
-            if (!detailText && diffCountLabel && fallbackPreview !== diffCountLabel) {
-                detailText = diffCountLabel;
+            const legacyDiffEntries = /^(\d+)\s+diff\s+entries$/i.exec(fallbackPreview.trim());
+            if (legacyDiffEntries) {
+                const legacyN = Number(legacyDiffEntries[1]);
+                if (diffCount == null || diffCount === legacyN) {
+                    summary = legacyN === 1 ? "1 file change" : `${legacyN} file changes`;
+                }
+                else {
+                    summary = fallbackPreview;
+                    if (!detailText && diffCountLabel && fallbackPreview !== diffCountLabel) {
+                        detailText = diffCountLabel;
+                    }
+                }
+            }
+            else {
+                summary = fallbackPreview;
+                if (!detailText && diffCountLabel && fallbackPreview !== diffCountLabel) {
+                    detailText = diffCountLabel;
+                }
             }
         }
         return {

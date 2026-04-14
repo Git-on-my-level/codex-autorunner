@@ -155,9 +155,7 @@ def test_ticket_flow_start_stale_warning_uses_existing_cli_commands(
     assert result.exit_code == 0, result.output
     assert "stale runs" in result.output
     assert f"car ticket-flow status --run-id {stale_run_id}" in result.output
-    assert (
-        f"car ticket-flow archive --run-id {stale_run_id} --force" in result.output
-    )
+    assert f"car ticket-flow archive --run-id {stale_run_id} --force" in result.output
     # Removed subcommand is `resume`; avoid embedding `car ... resume` (hint linter).
     assert "ticket_flow resume" not in result.output
 

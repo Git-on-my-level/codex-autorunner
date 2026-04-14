@@ -81,8 +81,7 @@ def _is_start_new_flow_action(action: str) -> bool:
     if " --run-id " in normalized:
         return False
     return (
-        " flow ticket_flow start " in normalized
-        or " ticket-flow start " in normalized
+        " flow ticket_flow start " in normalized or " ticket-flow start " in normalized
     )
 
 

@@ -677,7 +677,7 @@ def test_ticket_flow_archive_missing_repo_shows_repo_hint(tmp_path: Path) -> Non
         result = runner.invoke(
             app,
             [
-            "ticket-flow",
+                "ticket-flow",
                 "archive",
                 "--run-id",
                 "ffffffff-ffff-ffff-ffff-ffffffffffff",

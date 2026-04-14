@@ -6,7 +6,6 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from codex_autorunner.bootstrap import seed_repo_files
 from codex_autorunner.cli import app
 from codex_autorunner.surfaces.cli.cli import FLOW_COMMANDS
 
@@ -22,7 +21,9 @@ def _make_zip(path: Path, entries: dict[str, str]) -> None:
 def _ok_preflight():
     return FLOW_COMMANDS.PreflightReport(
         checks=[
-            FLOW_COMMANDS.PreflightCheck(check_id="frontmatter", status="ok", message="ok")
+            FLOW_COMMANDS.PreflightCheck(
+                check_id="frontmatter", status="ok", message="ok"
+            )
         ]
     )
 

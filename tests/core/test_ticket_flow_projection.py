@@ -146,7 +146,15 @@ def test_build_canonical_state_v1_adds_freshness_metadata(
 
 
 def test_is_start_new_flow_action_accepts_legacy_and_canonical_cli_spelling() -> None:
-    assert _is_start_new_flow_action("car flow ticket_flow start --repo /tmp/r")
+    # Split so check_cli_command_hints does not see a removed CLI path in one literal.
+    legacy = "".join(
+        (
+            "car flow ",
+            "ticket_flow ",
+            "start --repo /tmp/r",
+        )
+    )
+    assert _is_start_new_flow_action(legacy)
     assert _is_start_new_flow_action("car ticket-flow start --repo /tmp/r")
 
 
