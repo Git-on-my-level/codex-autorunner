@@ -824,7 +824,7 @@ def test_build_hub_snapshot_failed_run_queue_item_recommends_archive_with_repo(
     assert failed_item["queue_source"] == "ticket_flow_inbox"
     assert failed_item["recommended_action"] == "diagnose_or_restart"
     assert failed_item["recommended_detail"] == (
-        f"car flow ticket_flow archive --repo {hub_env.repo_root} --run-id {run_id}"
+        f"car ticket-flow archive --repo {hub_env.repo_root} --run-id {run_id}"
     )
 
 
@@ -1322,7 +1322,7 @@ def test_build_hub_snapshot_marks_stale_start_new_flow_recommendations(hub_env) 
     assert canonical.get("latest_run_id") == run_id
     assert canonical.get("latest_run_status") == "completed"
     assert canonical.get("effective_next_ticket") == "TICKET-001.md"
-    assert "ticket_flow start" in (canonical.get("recommended_action") or "")
+    assert "ticket-flow start" in (canonical.get("recommended_action") or "")
     assert canonical.get("recommendation_stale_reason")
     assert canonical.get("recommendation_confidence") == "low"
     freshness = canonical.get("freshness") or {}
@@ -2222,10 +2222,10 @@ class TestIssue975CharacterizationMixedPmaState:
                     "run_state": {
                         "state": "paused",
                         "blocking_reason": "Waiting for operator input",
-                        "recommended_action": "car flow ticket_flow start",
+                        "recommended_action": "car ticket-flow start",
                         "recommended_actions": [
-                            "car flow ticket_flow start",
-                            "car flow ticket_flow status",
+                            "car ticket-flow start",
+                            "car ticket-flow status",
                         ],
                         "attention_required": True,
                     },
@@ -2235,7 +2235,7 @@ class TestIssue975CharacterizationMixedPmaState:
                         "latest_run_id": "run-dispatch-1",
                         "latest_run_status": "paused",
                         "state": "paused",
-                        "recommended_action": "car flow ticket_flow start",
+                        "recommended_action": "car ticket-flow start",
                         "recommendation_confidence": "high",
                         "freshness": {
                             "generated_at": "2026-03-16T12:00:00Z",
@@ -2261,7 +2261,7 @@ class TestIssue975CharacterizationMixedPmaState:
                     "run_state": {
                         "state": "blocked",
                         "blocking_reason": "Run failed: connection timeout",
-                        "recommended_action": "car flow ticket_flow start --force-new",
+                        "recommended_action": "car ticket-flow start --force-new",
                         "attention_required": False,
                     },
                     "canonical_state_v1": {
@@ -2295,7 +2295,7 @@ class TestIssue975CharacterizationMixedPmaState:
                     "run_state": {
                         "state": "completed",
                         "blocking_reason": None,
-                        "recommended_action": "car flow ticket_flow start",
+                        "recommended_action": "car ticket-flow start",
                         "attention_required": False,
                     },
                     "canonical_state_v1": {

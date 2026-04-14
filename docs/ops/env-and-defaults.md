@@ -58,8 +58,9 @@ Set the referenced env vars to deliver notifications.
 Env overrides that take precedence over config:
 
 - `CAR_OPENCODE_COMMAND` overrides `telegram_bot.opencode_command`
-- `CAR_TELEGRAM_APP_SERVER_COMMAND` overrides `telegram_bot.app_server_command`
-  - The env var name can be changed via `telegram_bot.app_server_command_env`.
+- `CAR_APP_SERVER_COMMAND` overrides `telegram_bot.app_server_command` (checked first)
+- `CAR_TELEGRAM_APP_SERVER_COMMAND` is still honored as a fallback when the global env is unset
+  - The preferred env var name is configurable via `telegram_bot.app_server_command_env` (default `CAR_APP_SERVER_COMMAND`).
 
 Telegram auth envs (names configurable via `telegram_bot.*_env`):
 

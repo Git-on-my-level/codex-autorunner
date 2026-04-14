@@ -289,7 +289,6 @@ function initRepoSettingsModal() {
     const updateBtn = document.getElementById("repo-update-btn");
     const updateTarget = document.getElementById("repo-update-target");
     void loadUpdateTargetOptions(updateTarget ? updateTarget.id : null);
-    // If the gear button exists in HTML, wire it up (backwards compatibility)
     if (settingsBtn) {
         settingsBtn.addEventListener("click", () => {
             openRepoSettings(settingsBtn);

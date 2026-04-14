@@ -121,25 +121,25 @@ def _build_ticket_flow_app(
 
 
 def test_ticket_flow_start_help_includes_discoverability_breadcrumbs() -> None:
-    result = CliRunner().invoke(app, ["flow", "ticket_flow", "start", "--help"])
+    result = CliRunner().invoke(app, ["ticket-flow", "start", "--help"])
     assert result.exit_code == 0
     clean = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
     clean = " ".join(clean.split())
     assert "Run preflight checks first:" in clean
-    assert "car flow ticket_flow preflight" in clean
+    assert "car ticket-flow preflight" in clean
     assert "Inspect run details:" in clean
-    assert "car flow ticket_flow status --run-id <run_id>" in clean
+    assert "car ticket-flow status --run-id <run_id>" in clean
 
 
 def test_ticket_flow_bootstrap_help_includes_discoverability_breadcrumbs() -> None:
-    result = CliRunner().invoke(app, ["flow", "ticket_flow", "bootstrap", "--help"])
+    result = CliRunner().invoke(app, ["ticket-flow", "bootstrap", "--help"])
     assert result.exit_code == 0
     clean = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
     clean = " ".join(clean.split())
     assert "Inspect all ticket_flow commands:" in clean
-    assert "car flow ticket_flow --help" in clean
+    assert "car ticket-flow --help" in clean
     assert "Check run health:" in clean
-    assert "car flow ticket_flow status --run-id <run_id>" in clean
+    assert "car ticket-flow status --run-id <run_id>" in clean
 
 
 def test_ticket_flow_start_stale_warning_uses_existing_cli_commands(
@@ -154,10 +154,8 @@ def test_ticket_flow_start_stale_warning_uses_existing_cli_commands(
 
     assert result.exit_code == 0, result.output
     assert "stale runs" in result.output
-    assert f"car flow ticket_flow status --run-id {stale_run_id}" in result.output
-    assert (
-        f"car flow ticket_flow archive --run-id {stale_run_id} --force" in result.output
-    )
+    assert f"car ticket-flow status --run-id {stale_run_id}" in result.output
+    assert f"car ticket-flow archive --run-id {stale_run_id} --force" in result.output
     # Removed subcommand is `resume`; avoid embedding `car ... resume` (hint linter).
     assert "ticket_flow resume" not in result.output
 

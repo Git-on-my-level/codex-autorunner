@@ -227,9 +227,9 @@ done: false
 ```
 
 Then run ticket flow normally. CAR routes the turn through the Hermes harness
-instead of the Codex or OpenCode backends. Ticket flow canonicalizes legacy
-alias agents (for example `hermes-m4-pma`) into `agent: hermes, profile: m4-pma`
-before binding threads.
+instead of the Codex or OpenCode backends. Incoming agent selections and ticket
+frontmatter are normalized so Hermes profile aliases resolve consistently before
+binding threads.
 
 Durable thread binding persists per ticket and is reused across turns. The
 binding resets when the agent or profile changes, or when the managed thread is

@@ -178,35 +178,3 @@ def bulk_clear_model_pin(
         fm.pop("reasoning", None)
 
     return _bulk_update(ticket_dir, range_spec, mutate, repo_root)
-
-
-def bulk_canonicalize_hermes_agents(
-    ticket_dir: Path,
-    range_spec: Optional[str],
-    *,
-    repo_root: Path,
-) -> TicketBulkEditResult:
-    """Migrate legacy Hermes alias agents to canonical ``agent + profile`` form."""
-
-    from ..agents.hermes_identity import (
-        canonicalize_hermes_identity,
-        is_hermes_alias_agent,
-    )
-
-    def mutate(fm: dict[str, Any]) -> None:
-        raw_agent = fm.get("agent")
-        if not isinstance(raw_agent, str) or not is_hermes_alias_agent(raw_agent):
-            return
-        raw_profile = fm.get("profile")
-        canonical = canonicalize_hermes_identity(
-            raw_agent,
-            raw_profile,
-            context=repo_root,
-        )
-        fm["agent"] = canonical.agent
-        if canonical.profile is not None:
-            fm["profile"] = canonical.profile
-        elif "profile" in fm and fm["profile"] is None:
-            fm.pop("profile", None)
-
-    return _bulk_update(ticket_dir, range_spec, mutate, repo_root)

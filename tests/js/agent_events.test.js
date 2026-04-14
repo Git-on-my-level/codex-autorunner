@@ -373,6 +373,29 @@ test("falls back from legacy diff updated statuses to semantic file text", () =>
   assert.equal(parsed.event.detail, "");
 });
 
+test("normalizes singular legacy diff entry preview when diff_count matches", () => {
+  resetOpenCodeEventState();
+  const parsed = parseAppServerEvent({
+    id: "diff-legacy-singular",
+    received_at: 1005.05,
+    preview: "1 diff entry",
+    message: {
+      method: "session.diff",
+      params: {
+        status: "diff updated",
+        properties: {
+          diff_count: 1,
+        },
+      },
+    },
+  });
+
+  assert.ok(parsed);
+  assert.equal(parsed.event.kind, "file");
+  assert.equal(parsed.event.summary, "1 file change");
+  assert.equal(parsed.event.detail, "");
+});
+
 test("parses legacy diff entry previews without diff_count", () => {
   resetOpenCodeEventState();
   const parsed = parseAppServerEvent({

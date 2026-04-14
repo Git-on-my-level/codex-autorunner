@@ -31,7 +31,8 @@ This repo dogfoods codex-autorunner to build itself. Read this before running th
 - Config precedence: built-ins < `codex-autorunner.yml` < override < `.codex-autorunner/config.yml` < env.
 
 ## CLI commands
-- init/run/once/status/log/edit/doctor/resume/kill
+- init/run/once/status/log/edit/doctor/kill
+- ticket-flow (bootstrap/start/status/stop/archive; canonical ticket runner CLI)
 - usage
 - sessions/stop-session
 - serve (API/UI)

@@ -60,7 +60,6 @@ from ....integrations.agents.build_agent_pool import build_agent_pool
 from ....integrations.github.service import GitHubError, GitHubService
 from ....tickets import DEFAULT_MAX_TOTAL_TURNS
 from ....tickets.bulk import (
-    bulk_canonicalize_hermes_agents,
     bulk_clear_model_pin,
     bulk_set_agent,
 )
@@ -1491,35 +1490,6 @@ You are the first ticket in a new ticket_flow run.
         ticket_dir = repo_root / ".codex-autorunner" / "tickets"
         try:
             result = bulk_clear_model_pin(
-                ticket_dir,
-                request.range,
-                repo_root=repo_root,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from None
-
-        lint_errors = _lint_after_ticket_update(ticket_dir)
-        status = "ok" if not result.errors and not lint_errors else "error"
-        return TicketBulkUpdateResponse(
-            status=status,
-            updated=result.updated,
-            skipped=result.skipped,
-            errors=result.errors,
-            lint_errors=lint_errors,
-        )
-
-    @router.post(
-        "/ticket_flow/tickets/bulk-canonicalize-hermes",
-        response_model=TicketBulkUpdateResponse,
-    )
-    async def bulk_canonicalize_hermes_route(
-        request: TicketBulkClearModelRequest,
-    ):
-        """Migrate legacy Hermes alias agents to canonical agent+profile form."""
-        repo_root = find_repo_root()
-        ticket_dir = repo_root / ".codex-autorunner" / "tickets"
-        try:
-            result = bulk_canonicalize_hermes_agents(
                 ticket_dir,
                 request.range,
                 repo_root=repo_root,

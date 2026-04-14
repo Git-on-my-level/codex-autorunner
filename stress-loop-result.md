@@ -11,8 +11,8 @@
 
 ```bash
 for i in {1..20}; do
-  ./car flow ticket_flow start --repo "/Users/dazheng/car-workspace/worktrees/codex-autorunner--process-opencode-leak-remediation" --force-new
-  ./car flow ticket_flow stop --repo "/Users/dazheng/car-workspace/worktrees/codex-autorunner--process-opencode-leak-remediation" --run-id "<run_id_from_start_output>"
+  ./car ticket-flow start --repo "/Users/dazheng/car-workspace/worktrees/codex-autorunner--process-opencode-leak-remediation" --force-new
+  ./car ticket-flow stop --repo "/Users/dazheng/car-workspace/worktrees/codex-autorunner--process-opencode-leak-remediation" --run-id "<run_id_from_start_output>"
   ./car doctor processes --repo "/Users/dazheng/car-workspace/worktrees/codex-autorunner--process-opencode-leak-remediation"
   pgrep -fl opencode | wc -l
 done

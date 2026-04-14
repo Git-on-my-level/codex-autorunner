@@ -55,7 +55,14 @@ try:
 except Exception:
     existing = None
 if isinstance(existing, dict):
-    for key in ("notify_chat_id", "notify_thread_id", "notify_reply_to", "notify_sent_at"):
+    for key in (
+        "notify_platform",
+        "notify_context",
+        "notify_chat_id",
+        "notify_thread_id",
+        "notify_reply_to",
+        "notify_sent_at",
+    ):
         if key not in payload and key in existing:
             payload[key] = existing[key]
 path.write_text(json.dumps(payload), encoding="utf-8")

@@ -18,7 +18,7 @@ def test_repo_busy_reason_with_stale_state_no_pid(repo: Path, monkeypatch) -> No
 
     busy_reason = manager.repo_busy_reason()
     assert busy_reason == (
-        "Autorunner state is stale; use 'car flow ticket_flow start' to "
+        "Autorunner state is stale; use 'car ticket-flow start' to "
         "resume existing flows."
     )
 
@@ -38,7 +38,7 @@ def test_repo_busy_reason_with_stale_state_dead_pid(repo: Path, monkeypatch) -> 
 
     busy_reason = manager.repo_busy_reason()
     assert busy_reason == (
-        "Autorunner state is stale; use 'car flow ticket_flow start' to "
+        "Autorunner state is stale; use 'car ticket-flow start' to "
         "resume existing flows."
     )
 

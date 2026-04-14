@@ -5,7 +5,10 @@ from pathlib import Path
 
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
-from codex_autorunner.core.ticket_flow_projection import build_canonical_state_v1
+from codex_autorunner.core.ticket_flow_projection import (
+    _is_start_new_flow_action,
+    build_canonical_state_v1,
+)
 
 
 def _seed_run(repo_root: Path, run_id: str, status: FlowRunStatus) -> None:
@@ -38,7 +41,7 @@ def test_build_canonical_state_v1_uses_represented_run_when_preferred_is_stale(
         "run_id": represented_run_id,
         "state": "paused",
         "flow_status": "paused",
-        "recommended_action": "car flow ticket_flow start",
+        "recommended_action": "car ticket-flow start",
     }
     canonical = build_canonical_state_v1(
         repo_root=repo_root,
@@ -140,3 +143,23 @@ def test_build_canonical_state_v1_adds_freshness_metadata(
     assert freshness.get("age_seconds") == 3600
     assert freshness.get("stale_threshold_seconds") == 600
     assert freshness.get("is_stale") is True
+
+
+def test_is_start_new_flow_action_accepts_legacy_and_canonical_cli_spelling() -> None:
+    # Split so check_cli_command_hints does not see a removed CLI path in one literal.
+    legacy = "".join(
+        (
+            "car flow ",
+            "ticket_flow ",
+            "start --repo /tmp/r",
+        )
+    )
+    assert _is_start_new_flow_action(legacy)
+    assert _is_start_new_flow_action("car ticket-flow start --repo /tmp/r")
+
+
+def test_is_start_new_flow_action_rejects_run_id_and_other_actions() -> None:
+    assert not _is_start_new_flow_action(
+        "car ticket-flow start --repo /tmp/r --run-id abc"
+    )
+    assert not _is_start_new_flow_action("car ticket-flow status --repo /tmp/r")

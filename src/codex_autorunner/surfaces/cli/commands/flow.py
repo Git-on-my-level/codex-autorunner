@@ -203,7 +203,7 @@ def register_flow_commands(
                     check_id="ticket_dir",
                     status="error",
                     message="Ticket directory missing.",
-                    fix="Run `car flow ticket_flow bootstrap` to create the ticket dir and seed TICKET-001.",
+                    fix="Run `car ticket-flow bootstrap` to create the ticket dir and seed TICKET-001.",
                 )
             )
 
@@ -222,7 +222,7 @@ def register_flow_commands(
                     check_id="tickets_present",
                     status="error",
                     message="No tickets found.",
-                    fix="Create tickets under .codex-autorunner/tickets or run `car flow ticket_flow bootstrap`.",
+                    fix="Create tickets under .codex-autorunner/tickets or run `car ticket-flow bootstrap`.",
                 )
             )
 
@@ -424,9 +424,6 @@ def register_flow_commands(
             "ticket_progress": snapshot.get("ticket_progress"),
             "reason_summary": normalized_reason_summary,
             "error_message": error_message,
-            # Compatibility aliases for downstream consumers expecting these keys.
-            "failure_reason": normalized_reason_summary,
-            "error": error_message,
             "worker": (
                 {
                     "status": health.status,
@@ -803,8 +800,8 @@ def register_flow_commands(
         """Bootstrap ticket_flow (seed TICKET-001 if needed) and start a run.
 
         Breadcrumbs:
-        - Inspect all ticket_flow commands: `car flow ticket_flow --help`
-        - Check run health: `car flow ticket_flow status --run-id <run_id>`
+        - Inspect all ticket_flow commands: `car ticket-flow --help`
+        - Check run health: `car ticket-flow status --run-id <run_id>`
         """
         engine = require_repo_config(repo, hub)
         guard_unregistered_hub_repo(engine.repo_root, hub)
@@ -824,7 +821,7 @@ def register_flow_commands(
                     engine.repo_root, existing_run.id, is_terminal=False
                 )
                 typer.echo(
-                    f"reused run={existing_run.id} | car flow ticket_flow status --run-id {existing_run.id}"
+                    f"reused run={existing_run.id} | car ticket-flow status --run-id {existing_run.id}"
                 )
                 return
             elif existing_run and reason == "completed_pending":
@@ -843,8 +840,8 @@ def register_flow_commands(
             stale_id = stale_terminal[0].id
             typer.echo(
                 f"warning: {len(stale_terminal)} stale runs (FAILED/STOPPED). "
-                f"inspect: car flow ticket_flow status --run-id {stale_id}. "
-                f"archive: car flow ticket_flow archive --run-id {stale_id} --force. "
+                f"inspect: car ticket-flow status --run-id {stale_id}. "
+                f"archive: car ticket-flow archive --run-id {stale_id} --force. "
                 f"use --force-new to suppress."
             )
 
@@ -891,7 +888,7 @@ You are the first ticket in a new ticket_flow run.
             )
         )
 
-        typer.echo(f"run={run_id} | car flow ticket_flow status --run-id {run_id}")
+        typer.echo(f"run={run_id} | car ticket-flow status --run-id {run_id}")
 
     @ticket_flow_app.command("preflight")
     def ticket_flow_preflight(
@@ -934,8 +931,8 @@ You are the first ticket in a new ticket_flow run.
         """Start or resume the latest ticket_flow run.
 
         Breadcrumbs:
-        - Run preflight checks first: `car flow ticket_flow preflight`
-        - Inspect run details: `car flow ticket_flow status --run-id <run_id>`
+        - Run preflight checks first: `car ticket-flow preflight`
+        - Inspect run details: `car ticket-flow status --run-id <run_id>`
         """
         engine = require_repo_config(repo, hub)
         guard_unregistered_hub_repo(engine.repo_root, hub)
@@ -959,7 +956,7 @@ You are the first ticket in a new ticket_flow run.
                     engine.repo_root, existing_run.id, is_terminal=False
                 )
                 typer.echo(
-                    f"reused run={existing_run.id} | car flow ticket_flow status --run-id {existing_run.id}"
+                    f"reused run={existing_run.id} | car ticket-flow status --run-id {existing_run.id}"
                 )
                 return
             elif existing_run and reason == "completed_pending":
@@ -978,8 +975,8 @@ You are the first ticket in a new ticket_flow run.
             stale_id = stale_terminal[0].id
             typer.echo(
                 f"warning: {len(stale_terminal)} stale runs (FAILED/STOPPED). "
-                f"inspect: car flow ticket_flow status --run-id {stale_id}. "
-                f"archive: car flow ticket_flow archive --run-id {stale_id} --force. "
+                f"inspect: car ticket-flow status --run-id {stale_id}. "
+                f"archive: car ticket-flow archive --run-id {stale_id} --force. "
                 f"use --force-new to suppress."
             )
 
@@ -1001,7 +998,7 @@ You are the first ticket in a new ticket_flow run.
             )
         )
 
-        typer.echo(f"run={run_id} | car flow ticket_flow status --run-id {run_id}")
+        typer.echo(f"run={run_id} | car ticket-flow status --run-id {run_id}")
 
     @ticket_flow_app.command("status")
     def ticket_flow_status(

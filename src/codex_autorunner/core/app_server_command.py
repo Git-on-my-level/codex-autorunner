@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import shlex
-import warnings
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
 GLOBAL_APP_SERVER_COMMAND_ENV = "CAR_APP_SERVER_COMMAND"
@@ -50,13 +49,6 @@ def resolve_app_server_command(
         env_value = source.get(env_name)
         command = parse_command(env_value)
         if command:
-            if env_name == LEGACY_TELEGRAM_APP_SERVER_COMMAND_ENV:
-                warnings.warn(
-                    "CAR_TELEGRAM_APP_SERVER_COMMAND is deprecated. "
-                    "Use CAR_APP_SERVER_COMMAND instead.",
-                    DeprecationWarning,
-                    stacklevel=3,
-                )
             return command
     configured = parse_command(configured_command)
     if configured:

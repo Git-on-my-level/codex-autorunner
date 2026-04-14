@@ -2683,7 +2683,6 @@ Summary applied.""",
             chat_id=chat_id,
             thread_id=thread_id,
             reply_to=notify_reply_to,
-            include_legacy_telegram_keys=True,
         )
         callback_answered = False
         if callback is not None:
