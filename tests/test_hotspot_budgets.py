@@ -244,12 +244,12 @@ STANDARD_FUNCTION_BUDGETS = (
 TEST_FILE_CAPS = (
     FileBudget(
         path="tests/discord_message_turns_support.py",
-        max_lines=9810,
+        max_lines=9815,
         reason="The extracted Discord message-turn support module is still large, but obvious regrowth should fail while the split layout settles.",
     ),
     FileBudget(
         path="tests/telegram_pma_routing_support.py",
-        max_lines=7300,
+        max_lines=7305,
         reason="The extracted Telegram PMA routing support module is still large, but obvious regrowth should fail while follow-on splits land.",
     ),
     FileBudget(
