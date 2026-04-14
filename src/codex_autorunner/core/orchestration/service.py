@@ -1855,6 +1855,22 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         sandbox_policy: Optional[Any] = None,
         harness: Optional[RuntimeThreadHarness] = None,
     ) -> ExecutionRecord:
+        execution, _resolved_harness = await self.send_message_with_started_harness(
+            request,
+            client_request_id=client_request_id,
+            sandbox_policy=sandbox_policy,
+            harness=harness,
+        )
+        return execution
+
+    async def send_message_with_started_harness(
+        self,
+        request: MessageRequest,
+        *,
+        client_request_id: Optional[str] = None,
+        sandbox_policy: Optional[Any] = None,
+        harness: Optional[RuntimeThreadHarness] = None,
+    ) -> tuple[ExecutionRecord, Optional[RuntimeThreadHarness]]:
         if request.target_kind != "thread":
             raise ValueError("Thread orchestration service only handles thread targets")
 
@@ -1927,19 +1943,20 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             message_preview=_truncate_text(request.message_text, MessagePreviewLimit),
         )
         if execution.status != "running":
-            return execution
-        harness = harness or self._harness_for_agent(
+            return execution, None
+        resolved_harness = harness or self._harness_for_agent(
             definition.agent_id,
             request.agent_profile,
         )
-        return await self._start_execution(
+        started = await self._start_execution(
             thread,
             request,
             execution,
-            harness=harness,
+            harness=resolved_harness,
             workspace_root=workspace_root,
             sandbox_policy=sandbox_policy,
         )
+        return started, resolved_harness
 
     def claim_next_queued_execution_context(
         self, thread_target_id: str
