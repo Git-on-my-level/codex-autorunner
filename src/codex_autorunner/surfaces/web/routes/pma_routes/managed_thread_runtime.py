@@ -16,6 +16,7 @@ from .....agents.base import (
     harness_progress_event_stream,
     harness_supports_progress_event_stream,
 )
+from .....core.config import ConfigError, load_repo_config
 from .....core.orchestration import MessageRequest
 from .....core.orchestration.cold_trace_store import ColdTraceWriter
 from .....core.orchestration.runtime_thread_events import (
@@ -254,8 +255,10 @@ def _arm_scm_polling_watch_for_binding(
     binding: PrBinding,
     workspace_root: Path,
 ) -> None:
-    raw_config = getattr(getattr(request.app.state, "config", None), "raw", {})
-    normalized_raw_config = raw_config if isinstance(raw_config, dict) else None
+    normalized_raw_config = _resolve_repo_raw_config_for_workspace(
+        request,
+        workspace_root=workspace_root,
+    )
     GitHubScmPollingService(
         request.app.state.config.root,
         raw_config=normalized_raw_config,
@@ -263,6 +266,37 @@ def _arm_scm_polling_watch_for_binding(
         binding=binding,
         workspace_root=workspace_root,
         reaction_config=normalized_raw_config,
+    )
+
+
+def _resolve_repo_raw_config_for_workspace(
+    request: Request,
+    *,
+    workspace_root: Path,
+) -> Optional[dict[str, Any]]:
+    app_config = getattr(request.app.state, "config", None)
+    raw_config = getattr(app_config, "raw", {})
+    normalized_raw_config = raw_config if isinstance(raw_config, dict) else None
+    config_mode = str(getattr(app_config, "mode", "") or "").strip().lower()
+    if config_mode != "hub":
+        return normalized_raw_config
+    config_root = getattr(app_config, "root", None)
+    if not isinstance(config_root, Path):
+        return normalized_raw_config
+    try:
+        repo_config = load_repo_config(workspace_root, hub_path=config_root)
+    except (ConfigError, OSError, ValueError):
+        logger.debug(
+            "Failed resolving repo config for SCM polling watch arm (workspace_root=%s)",
+            workspace_root,
+            exc_info=True,
+        )
+        return normalized_raw_config
+    resolved_raw_config = getattr(repo_config, "raw", None)
+    return (
+        resolved_raw_config
+        if isinstance(resolved_raw_config, dict)
+        else normalized_raw_config
     )
 
 
