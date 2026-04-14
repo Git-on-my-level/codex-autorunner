@@ -392,7 +392,22 @@ def _resume_managed_thread_target(
     desired_runtime_instance_id: Optional[str],
 ) -> Any:
     resume_kwargs: dict[str, Any] = {}
-    if desired_backend_thread_id is not None or current_backend_thread_id is not None:
+    if desired_backend_thread_id is None and current_backend_thread_id is not None:
+        clear_backend_thread_id = getattr(
+            orchestration_service, "set_thread_backend_id", None
+        )
+        if not callable(clear_backend_thread_id):
+            thread_store = getattr(orchestration_service, "thread_store", None)
+            clear_backend_thread_id = getattr(
+                thread_store, "set_thread_backend_id", None
+            )
+        if callable(clear_backend_thread_id):
+            clear_backend_thread_id(
+                thread.thread_target_id,
+                None,
+                backend_runtime_instance_id=desired_runtime_instance_id,
+            )
+    elif desired_backend_thread_id is not None or current_backend_thread_id is not None:
         resume_kwargs["backend_thread_id"] = desired_backend_thread_id
     resume_kwargs["backend_runtime_instance_id"] = desired_runtime_instance_id
     return orchestration_service.resume_thread_target(
