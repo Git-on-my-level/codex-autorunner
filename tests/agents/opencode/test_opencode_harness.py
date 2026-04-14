@@ -43,6 +43,7 @@ class _StubClient:
         self.session_responses: dict[str, Any] = {}
         self.list_messages_calls: list[str] = []
         self.messages_response: Any = []
+        self.list_messages_error: Exception | None = None
         self.get_session_error: Exception | None = None
         self.prompt_error: Exception | None = None
         self.send_command_error: Exception | None = None
@@ -88,6 +89,8 @@ class _StubClient:
 
     async def list_messages(self, session_id: str, **_kwargs: Any) -> Any:
         self.list_messages_calls.append(session_id)
+        if self.list_messages_error is not None:
+            raise self.list_messages_error
         return self.messages_response
 
     async def send_command(self, session_id: str, **kwargs: object) -> dict[str, str]:
@@ -1320,6 +1323,34 @@ async def test_opencode_harness_wait_for_turn_still_raises_without_terminal_comp
 
     with pytest.raises(RuntimeError, match="stream dropped"):
         await harness.wait_for_turn(Path("."), "session-1", "turn-1")
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_wait_for_turn_no_pending_list_messages_failure_best_effort(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """No-pending path: list_messages recovery must not fail the turn on RPC errors."""
+    client = _StubClient(
+        [
+            SSEEvent(
+                event="session.status",
+                data='{"sessionID":"session-1","properties":{"status":{"type":"idle"}}}',
+            ),
+        ],
+    )
+    client.list_messages_error = httpx.ConnectError("transport failed", request=None)
+    harness = OpenCodeHarness(_StubSupervisor(client))
+
+    with caplog.at_level(logging.WARNING, logger=harness_module._logger.name):
+        result = await harness.wait_for_turn(Path("."), "session-1", "turn-1")
+
+    assert result.status == "ok"
+    assert result.assistant_text == ""
+    assert result.errors == []
+    assert client.list_messages_calls == ["session-1"]
+    assert any(
+        "wait_for_turn.list_messages_failed" in r.getMessage() for r in caplog.records
+    )
 
 
 @pytest.mark.asyncio

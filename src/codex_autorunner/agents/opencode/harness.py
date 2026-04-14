@@ -1009,9 +1009,27 @@ class OpenCodeHarness(AgentHarness):
                     else []
                 )
                 if not assistant_text and not errors:
-                    recovered = recover_last_assistant_message(
-                        await client.list_messages(conversation_id, limit=10)
-                    )
+                    messages_payload: Any = None
+                    try:
+                        messages_payload = await client.list_messages(
+                            conversation_id, limit=10
+                        )
+                    except (
+                        RuntimeError,
+                        OSError,
+                        ProcessLookupError,
+                        BrokenPipeError,
+                        httpx.HTTPError,
+                    ) as exc:
+                        log_event(
+                            _logger,
+                            logging.WARNING,
+                            "opencode.harness.wait_for_turn.list_messages_failed",
+                            conversation_id=conversation_id,
+                            turn_id=turn_id or "",
+                            error=str(exc),
+                        )
+                    recovered = recover_last_assistant_message(messages_payload)
                     if recovered.text:
                         assistant_text = recovered.text
                     if recovered.error:
