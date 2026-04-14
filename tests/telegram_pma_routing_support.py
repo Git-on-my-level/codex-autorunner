@@ -1883,6 +1883,7 @@ async def test_managed_thread_queue_worker_wraps_execution_with_typing_indicator
         ),
         timeout_error=execution_commands_module.TELEGRAM_PMA_TIMEOUT_ERROR,
         interrupted_error=execution_commands_module.TELEGRAM_PMA_INTERRUPTED_ERROR,
+        pma_enabled=True,
     )
 
     async def _run_with_telegram_typing_indicator(work: Any) -> None:

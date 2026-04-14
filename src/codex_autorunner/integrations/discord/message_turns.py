@@ -2528,8 +2528,13 @@ def _build_discord_managed_thread_coordinator(
     public_execution_error: str,
     timeout_error: str,
     interrupted_error: str,
+    pma_enabled: bool,
 ) -> ManagedThreadTurnCoordinator:
-    timeout_seconds = _load_discord_pma_turn_timeout_seconds(service)
+    timeout_seconds = (
+        _load_discord_pma_turn_timeout_seconds(service)
+        if pma_enabled
+        else float(_DEFAULT_DISCORD_PMA_TIMEOUT_SECONDS)
+    )
     return ManagedThreadTurnCoordinator(
         orchestration_service=orchestration_service,
         state_root=service._config.root,
@@ -2742,6 +2747,7 @@ async def _run_discord_orchestrated_turn_for_message(
         public_execution_error=public_execution_error,
         timeout_error=timeout_error,
         interrupted_error=interrupted_error,
+        pma_enabled=pma_enabled,
     )
     tracker = TurnProgressTracker(
         started_at=time.monotonic(),
