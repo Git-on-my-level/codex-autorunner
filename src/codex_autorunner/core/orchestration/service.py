@@ -852,16 +852,8 @@ class _ThreadExecutionLifecycle:
                     backend_thread_id=conversation_id,
                     stored_runtime_instance_id=runtime_binding.backend_runtime_instance_id,
                     current_runtime_instance_id=runtime_instance_id,
-                    action="start_new_conversation",
+                    action="attempt_resume",
                 )
-                fresh_backend_session_reason = "stale_runtime_instance"
-                previous_backend_thread_id = conversation_id
-                self.thread_store.set_thread_backend_id(
-                    thread.thread_target_id,
-                    None,
-                    backend_runtime_instance_id=None,
-                )
-                conversation_id = None
             while True:
                 used_existing_conversation = conversation_id is not None
                 try:
