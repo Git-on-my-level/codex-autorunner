@@ -103,6 +103,8 @@ def shrink_prompt(
         new_limit = max(value_bytes - overflow, 0)
         if 0 < new_limit < value_bytes:
             new_limit = max(new_limit - marker_bytes, 0)
+        if new_limit == 0 and value_bytes > 0:
+            new_limit = min(value_bytes, marker_bytes + 1)
         sections[key] = (
             preserve_ticket_structure(value, new_limit)
             if key == "ticket_block"
@@ -110,11 +112,67 @@ def shrink_prompt(
         )
         prompt = render()
 
-    return (
-        prompt
-        if len(prompt.encode("utf-8")) <= max_bytes
-        else truncate_text_by_bytes(prompt, max_bytes)
-    )
+    # Never tail-truncate the assembled prompt: the ticket shell places
+    # ``<CAR_PREVIOUS_AGENT_OUTPUT>`` near the end, so a single cut from the
+    # start would drop the marker while leaving earlier XML intact.
+    while len(prompt.encode("utf-8")) > max_bytes:
+        progressed = False
+        for key in order:
+            if len(prompt.encode("utf-8")) <= max_bytes:
+                break
+            value = sections.get(key, "")
+            if not value:
+                continue
+            value_bytes = len(value.encode("utf-8"))
+            if value_bytes <= 1:
+                sections[key] = ""
+            else:
+                new_limit = max(value_bytes // 2, 1)
+                sections[key] = (
+                    preserve_ticket_structure(value, new_limit)
+                    if key == "ticket_block"
+                    else truncate_text_by_bytes(value, new_limit)
+                )
+            prompt = render()
+            progressed = True
+            break
+        if not progressed:
+            break
+
+    # Static shell text (instructions, HUD, etc.) is not in ``sections``; if the
+    # prompt is still over budget, clear variable sections entirely, then tighten
+    # the ticket block while preserving frontmatter (never keep only the tail of
+    # the rendered prompt — that drops YAML ``agent``/``done`` lines near the
+    # start of ``<TICKET_MARKDOWN>``).
+    while len(prompt.encode("utf-8")) > max_bytes:
+        progressed = False
+        for key in order:
+            if sections.get(key, ""):
+                sections[key] = ""
+                prompt = render()
+                progressed = True
+                break
+        if not progressed:
+            break
+
+    ticket_key = "ticket_block"
+    while len(prompt.encode("utf-8")) > max_bytes:
+        tb = sections.get(ticket_key, "")
+        if not tb:
+            break
+        tb_bytes = len(tb.encode("utf-8"))
+        if tb_bytes <= 1:
+            sections[ticket_key] = ""
+            prompt = render()
+            break
+        new_limit = max(tb_bytes // 2, 1)
+        sections[ticket_key] = preserve_ticket_structure(tb, new_limit)
+        prompt = render()
+
+    if len(prompt.encode("utf-8")) > max_bytes:
+        prompt = truncate_text_by_bytes(prompt, max_bytes)
+
+    return prompt
 
 
 def build_checkpoint_block(last_checkpoint_error: str | None) -> str:
@@ -359,13 +417,14 @@ def build_ticket_first_fallback_prompt(
         sections=sections,
         order=FALLBACK_SECTION_ORDER,
     )
-    return (
-        prompt
-        if len(prompt.encode("utf-8")) <= max_bytes
+    if (
+        len(prompt.encode("utf-8")) <= max_bytes
         and "<CAR_CURRENT_TICKET_FILE>" in prompt
         and "<TICKET_MARKDOWN>" in prompt
-        else preserve_ticket_structure(ticket_block, max_bytes)
-    )
+    ):
+        return prompt
+
+    return preserve_ticket_structure(ticket_block, max_bytes)
 
 
 def prompt_has_ticket_control_plane(prompt: str, ticket_doc: Any) -> bool:

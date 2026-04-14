@@ -126,7 +126,6 @@ def select_ticket(
                 },
             )
         state_updates["ticket_turns"] = 0
-        state_updates["last_agent_output"] = None
         state_updates["lint"] = None
         state_updates["loop_guard"] = None
         state_updates["commit"] = None

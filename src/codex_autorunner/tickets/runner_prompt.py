@@ -21,6 +21,9 @@ from .runner_prompt_support import (
 
 CAR_HUD_MAX_LINES = 14
 CAR_HUD_MAX_CHARS = 900
+# Upper bound on static template bytes outside ``prev_block`` so huge
+# ``last_agent_output`` can be capped once before section shrinking runs.
+_PREVIOUS_OUTPUT_HEADROOM_BYTES = 1200
 
 _truncate_text_by_bytes = _support.truncate_text_by_bytes
 _preserve_ticket_structure = _support.preserve_ticket_structure
@@ -78,6 +81,10 @@ def build_prompt(
     loop_guard_block = build_loop_guard_block(prior_no_change_turns)
     ticket_block = build_ticket_block(ticket_path, rel_ticket)
     prev_block = last_agent_output or ""
+    if prev_block:
+        cap = max(prompt_max_bytes - _PREVIOUS_OUTPUT_HEADROOM_BYTES, 1)
+        if len(prev_block.encode("utf-8")) > cap:
+            prev_block = _truncate_text_by_bytes(prev_block, cap)
     sections = {
         "prev_block": prev_block,
         "prev_ticket_block": build_previous_ticket_block(previous_ticket_content),
@@ -103,11 +110,16 @@ def build_prompt(
         order=MAIN_SECTION_ORDER,
     )
     if not prompt_has_ticket_control_plane(prompt, ticket_doc):
+        cap = max(prompt_max_bytes - _PREVIOUS_OUTPUT_HEADROOM_BYTES, 1)
+        fallback_prev = sections["prev_block"]
+        raw_prev = last_agent_output if isinstance(last_agent_output, str) else ""
+        if raw_prev and len(raw_prev.encode("utf-8")) > cap:
+            fallback_prev = _truncate_text_by_bytes(raw_prev, cap)
         prompt = build_ticket_first_fallback_prompt(
             max_bytes=prompt_max_bytes,
             rel_ticket=rel_ticket,
             rel_dispatch_path=rel_dispatch_path,
-            prev_block=prev_block,
+            prev_block=fallback_prev,
             checkpoint_block=checkpoint_block,
             commit_block=commit_block,
             lint_block=lint_block,

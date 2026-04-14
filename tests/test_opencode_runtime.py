@@ -5,6 +5,9 @@ import time
 import pytest
 
 from codex_autorunner.agents.opencode import runtime as opencode_runtime
+from codex_autorunner.agents.opencode import (
+    stream_lifecycle as opencode_stream_lifecycle,
+)
 from codex_autorunner.agents.opencode.runtime import (
     collect_opencode_output,
     collect_opencode_output_from_events,
@@ -711,7 +714,7 @@ async def test_collect_output_exits_after_completion_without_idle_when_stream_st
             )
 
     monkeypatch.setattr(
-        opencode_runtime,
+        opencode_stream_lifecycle,
         "_OPENCODE_POST_COMPLETION_GRACE_SECONDS",
         0.01,
     )
@@ -753,7 +756,7 @@ async def test_collect_output_does_not_start_grace_on_user_completion(
         yield SSEEvent(event="session.idle", data='{"sessionID":"s1"}')
 
     monkeypatch.setattr(
-        opencode_runtime,
+        opencode_stream_lifecycle,
         "_OPENCODE_POST_COMPLETION_GRACE_SECONDS",
         0.01,
     )
@@ -1131,17 +1134,17 @@ async def test_collect_output_bounds_stall_reconnect_loop_if_session_missing(
             yield SSEEvent(event="keepalive", data="{}")
 
     monkeypatch.setattr(
-        opencode_runtime,
+        opencode_stream_lifecycle,
         "_OPENCODE_STREAM_RECONNECT_BACKOFF_SECONDS",
         (0.0, 0.0),
     )
     monkeypatch.setattr(
-        opencode_runtime,
+        opencode_stream_lifecycle,
         "_OPENCODE_STREAM_MAX_STALL_RECONNECT_ATTEMPTS",
         2,
     )
     monkeypatch.setattr(
-        opencode_runtime,
+        opencode_stream_lifecycle,
         "_OPENCODE_STREAM_MAX_STALL_RECONNECT_SECONDS",
         999.0,
     )
@@ -1189,25 +1192,27 @@ async def test_collect_output_waits_if_session_busy(monkeypatch) -> None:
             yield SSEEvent(event="keepalive", data="{}")
 
     monkeypatch.setattr(
-        opencode_runtime,
+        opencode_stream_lifecycle,
         "_OPENCODE_STREAM_RECONNECT_BACKOFF_SECONDS",
         (0.0, 0.0),
     )
     monkeypatch.setattr(
-        opencode_runtime,
+        opencode_stream_lifecycle,
         "_OPENCODE_STREAM_MAX_STALL_RECONNECT_ATTEMPTS",
         2,
     )
     monkeypatch.setattr(
-        opencode_runtime,
+        opencode_stream_lifecycle,
         "_OPENCODE_STREAM_MAX_STALL_RECONNECT_SECONDS",
         999.0,
     )
 
-    # Patch the sleep inside opencode_runtime so the test runs fast
+    # Patch the sleep inside stream_lifecycle so the test runs fast
     original_sleep = asyncio.sleep
     monkeypatch.setattr(
-        opencode_runtime.asyncio, "sleep", lambda x: original_sleep(0.001)
+        opencode_stream_lifecycle.asyncio,
+        "sleep",
+        lambda x: original_sleep(0.001),
     )
 
     output = await collect_opencode_output_from_events(
@@ -1257,17 +1262,17 @@ async def test_collect_output_uses_stall_timeout_after_first_relevant_event(
             yield SSEEvent(event="keepalive", data="{}")
 
     monkeypatch.setattr(
-        opencode_runtime,
+        opencode_stream_lifecycle,
         "_OPENCODE_STREAM_RECONNECT_BACKOFF_SECONDS",
         (0.0, 0.0),
     )
     monkeypatch.setattr(
-        opencode_runtime,
+        opencode_stream_lifecycle,
         "_OPENCODE_STREAM_MAX_STALL_RECONNECT_ATTEMPTS",
         2,
     )
     monkeypatch.setattr(
-        opencode_runtime,
+        opencode_stream_lifecycle,
         "_OPENCODE_STREAM_MAX_STALL_RECONNECT_SECONDS",
         999.0,
     )
