@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from pathlib import Path
@@ -76,10 +77,27 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
         self,
         *,
         operation: str,
-        action: Callable[[], Coroutine[Any, Any, ResultT]],
+        action: Callable[[HubControlPlaneClient], Coroutine[Any, Any, ResultT]],
     ) -> ResultT:
         def _invoke() -> ResultT:
-            return asyncio.run(action())
+            background_client = self._client
+            clone = getattr(type(self._client), "clone_for_background_loop", None)
+            if callable(clone) and not inspect.iscoroutinefunction(clone):
+                cloned_client = clone(self._client)
+                if cloned_client is not None and not inspect.isawaitable(cloned_client):
+                    background_client = cloned_client
+
+            async def _run_action() -> ResultT:
+                try:
+                    return await action(background_client)
+                finally:
+                    close = getattr(background_client, "aclose", None)
+                    if callable(close) and background_client is not self._client:
+                        result = close()
+                        if inspect.isawaitable(result):
+                            await result
+
+            return asyncio.run(_run_action())
 
         try:
             with ThreadPoolExecutor(max_workers=1) as pool:
@@ -154,7 +172,7 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
             metadata_payload["context_profile"] = normalized_context_profile
         response = self._run(
             operation="create_thread_target",
-            action=lambda: self._client.create_thread_target(
+            action=lambda client: client.create_thread_target(
                 ThreadTargetCreateRequest(
                     agent_id=agent_id,
                     workspace_root=str(workspace_root),
@@ -175,7 +193,7 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
     def get_thread_target(self, thread_target_id: str) -> Optional[ThreadTarget]:
         response = self._run(
             operation="get_thread_target",
-            action=lambda: self._client.get_thread_target(
+            action=lambda client: client.get_thread_target(
                 ThreadTargetLookupRequest(thread_target_id=thread_target_id)
             ),
         )
@@ -211,7 +229,7 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
     ) -> list[ThreadTarget]:
         response = self._run(
             operation="list_thread_targets",
-            action=lambda: self._client.list_thread_targets(
+            action=lambda client: client.list_thread_targets(
                 ThreadTargetListRequest(
                     agent_id=agent_id,
                     lifecycle_status=lifecycle_status,
@@ -234,7 +252,7 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
     ) -> Optional[ThreadTarget]:
         response = self._run(
             operation="resume_thread_target",
-            action=lambda: self._client.resume_thread_target(
+            action=lambda client: client.resume_thread_target(
                 ThreadTargetResumeRequest(
                     thread_target_id=thread_target_id,
                     backend_thread_id=backend_thread_id,
@@ -247,7 +265,7 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
     def archive_thread_target(self, thread_target_id: str) -> Optional[ThreadTarget]:
         response = self._run(
             operation="archive_thread_target",
-            action=lambda: self._client.archive_thread_target(
+            action=lambda client: client.archive_thread_target(
                 ThreadTargetArchiveRequest(thread_target_id=thread_target_id)
             ),
         )
@@ -262,7 +280,7 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
     ) -> None:
         self._run(
             operation="set_thread_backend_id",
-            action=lambda: self._client.set_thread_backend_id(
+            action=lambda client: client.set_thread_backend_id(
                 ThreadBackendIdUpdateRequest(
                     thread_target_id=thread_target_id,
                     backend_thread_id=backend_thread_id,
@@ -285,7 +303,7 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
     ) -> ExecutionRecord:
         response = self._run(
             operation="create_execution",
-            action=lambda: self._client.create_execution(
+            action=lambda client: client.create_execution(
                 ExecutionCreateRequest(
                     thread_target_id=thread_target_id,
                     prompt=prompt,
@@ -308,7 +326,7 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
     ) -> Optional[ExecutionRecord]:
         response = self._run(
             operation="get_execution",
-            action=lambda: self._client.get_execution(
+            action=lambda client: client.get_execution(
                 ExecutionLookupRequest(
                     thread_target_id=thread_target_id,
                     execution_id=execution_id,
@@ -320,7 +338,7 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
     def get_running_execution(self, thread_target_id: str) -> Optional[ExecutionRecord]:
         response = self._run(
             operation="get_running_execution",
-            action=lambda: self._client.get_running_execution(
+            action=lambda client: client.get_running_execution(
                 RunningExecutionLookupRequest(thread_target_id=thread_target_id)
             ),
         )
@@ -329,7 +347,7 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
     def get_latest_execution(self, thread_target_id: str) -> Optional[ExecutionRecord]:
         response = self._run(
             operation="get_latest_execution",
-            action=lambda: self._client.get_latest_execution(
+            action=lambda client: client.get_latest_execution(
                 LatestExecutionLookupRequest(thread_target_id=thread_target_id)
             ),
         )
@@ -340,7 +358,7 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
     ) -> list[ExecutionRecord]:
         response = self._run(
             operation="list_queued_executions",
-            action=lambda: self._client.list_queued_executions(
+            action=lambda client: client.list_queued_executions(
                 QueuedExecutionListRequest(
                     thread_target_id=thread_target_id,
                     limit=limit,
@@ -352,7 +370,7 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
     def get_queue_depth(self, thread_target_id: str) -> int:
         response = self._run(
             operation="get_queue_depth",
-            action=lambda: self._client.get_queue_depth(
+            action=lambda client: client.get_queue_depth(
                 QueueDepthRequest(thread_target_id=thread_target_id)
             ),
         )
@@ -361,7 +379,7 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
     def cancel_queued_execution(self, thread_target_id: str, execution_id: str) -> bool:
         response = self._run(
             operation="cancel_queued_execution",
-            action=lambda: self._client.cancel_queued_execution(
+            action=lambda client: client.cancel_queued_execution(
                 ExecutionCancelRequest(
                     thread_target_id=thread_target_id,
                     execution_id=execution_id,
@@ -375,7 +393,7 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
     ) -> bool:
         response = self._run(
             operation="promote_queued_execution",
-            action=lambda: self._client.promote_queued_execution(
+            action=lambda client: client.promote_queued_execution(
                 ExecutionPromoteRequest(
                     thread_target_id=thread_target_id,
                     execution_id=execution_id,
@@ -389,7 +407,7 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
     ) -> Optional[tuple[ExecutionRecord, dict[str, Any]]]:
         response = self._run(
             operation="claim_next_queued_execution",
-            action=lambda: self._client.claim_next_queued_execution(
+            action=lambda client: client.claim_next_queued_execution(
                 ExecutionClaimNextRequest(thread_target_id=thread_target_id)
             ),
         )
@@ -402,7 +420,7 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
     ) -> None:
         self._run(
             operation="set_execution_backend_id",
-            action=lambda: self._client.set_execution_backend_id(
+            action=lambda client: client.set_execution_backend_id(
                 ExecutionBackendIdUpdateRequest(
                     execution_id=execution_id,
                     backend_turn_id=backend_turn_id,
@@ -423,7 +441,7 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
     ) -> ExecutionRecord:
         response = self._run(
             operation="record_execution_result",
-            action=lambda: self._client.record_execution_result(
+            action=lambda client: client.record_execution_result(
                 ExecutionResultRecordRequest(
                     thread_target_id=thread_target_id,
                     execution_id=execution_id,
@@ -445,7 +463,7 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
     ) -> ExecutionRecord:
         response = self._run(
             operation="record_execution_interrupted",
-            action=lambda: self._client.record_execution_interrupted(
+            action=lambda client: client.record_execution_interrupted(
                 ExecutionInterruptRecordRequest(
                     thread_target_id=thread_target_id,
                     execution_id=execution_id,
@@ -460,7 +478,7 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
     def cancel_queued_executions(self, thread_target_id: str) -> int:
         response = self._run(
             operation="cancel_queued_executions",
-            action=lambda: self._client.cancel_queued_executions(
+            action=lambda client: client.cancel_queued_executions(
                 ExecutionCancelAllRequest(thread_target_id=thread_target_id)
             ),
         )
@@ -475,7 +493,7 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
     ) -> None:
         self._run(
             operation="record_thread_activity",
-            action=lambda: self._client.record_thread_activity(
+            action=lambda client: client.record_thread_activity(
                 ThreadActivityRecordRequest(
                     thread_target_id=thread_target_id,
                     execution_id=execution_id,
