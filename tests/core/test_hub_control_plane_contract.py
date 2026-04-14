@@ -391,3 +391,71 @@ async def test_http_client_context_manager_closes() -> None:
     async with client:
         assert not client._http_client.is_closed
     assert client._http_client.is_closed
+
+
+async def test_http_client_uses_extended_timeout_for_workspace_setup_commands() -> None:
+    from codex_autorunner.core.hub_control_plane.http_client import (
+        HttpHubControlPlaneClient,
+    )
+    from codex_autorunner.core.hub_control_plane.models import (
+        WorkspaceSetupCommandRequest,
+    )
+
+    class _FakeAsyncClient:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        async def request(
+            self,
+            method: str,
+            path: str,
+            *,
+            json: dict[str, object] | None = None,
+            params: dict[str, object] | None = None,
+            timeout: float | None = None,
+        ) -> httpx.Response:
+            self.calls.append(
+                {
+                    "method": method,
+                    "path": path,
+                    "json": json,
+                    "params": params,
+                    "timeout": timeout,
+                }
+            )
+            return httpx.Response(
+                200,
+                json={
+                    "workspace_root": (json or {}).get("workspace_root", ""),
+                    "repo_id_hint": (json or {}).get("repo_id_hint"),
+                    "setup_command_count": 1,
+                },
+            )
+
+    fake_client = _FakeAsyncClient()
+    client = HttpHubControlPlaneClient(
+        base_url="http://localhost:9999",
+        timeout=10.0,
+        http_client=fake_client,  # type: ignore[arg-type]
+    )
+
+    result = await client.run_workspace_setup_commands(
+        WorkspaceSetupCommandRequest(
+            workspace_root="/tmp/workspace",
+            repo_id_hint="repo-1",
+        )
+    )
+
+    assert result.setup_command_count == 1
+    assert fake_client.calls == [
+        {
+            "method": "POST",
+            "path": "/hub/api/control-plane/workspace-setup-commands",
+            "json": {
+                "workspace_root": "/tmp/workspace",
+                "repo_id_hint": "repo-1",
+            },
+            "params": None,
+            "timeout": None,
+        }
+    ]

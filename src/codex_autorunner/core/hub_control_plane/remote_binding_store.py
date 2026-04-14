@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from typing import Any, Callable, Coroutine, Optional, TypeVar
@@ -29,11 +30,14 @@ class RemoteSurfaceBindingStore:
         self,
         client: HubControlPlaneClient,
         *,
-        timeout_seconds: float = 10.0,
+        timeout_seconds: float = 30.0,
+        cache_fallback_ttl_seconds: float = 300.0,
     ) -> None:
         self._client = client
         self._timeout_seconds = timeout_seconds
+        self._cache_fallback_ttl_seconds = max(0.0, float(cache_fallback_ttl_seconds))
         self._bindings_by_key: dict[tuple[str, str], Any] = {}
+        self._binding_cached_at_by_key: dict[tuple[str, str], float] = {}
 
     def _hub_unavailable(
         self,
@@ -78,11 +82,12 @@ class RemoteSurfaceBindingStore:
 
             return asyncio.run(_run_action())
 
+        pool = ThreadPoolExecutor(max_workers=1)
+        future = pool.submit(_invoke)
         try:
-            with ThreadPoolExecutor(max_workers=1) as pool:
-                future = pool.submit(_invoke)
-                return future.result(timeout=self._timeout_seconds)
+            return future.result(timeout=self._timeout_seconds)
         except FuturesTimeoutError as exc:
+            future.cancel()
             raise self._hub_unavailable(
                 operation=operation,
                 message=f"request timed out after {self._timeout_seconds:g}s",
@@ -105,6 +110,8 @@ class RemoteSurfaceBindingStore:
                 message=str(exc) or exc.__class__.__name__,
                 details={"cause_type": exc.__class__.__name__},
             ) from exc
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
 
     @staticmethod
     def _normalize_key(surface_kind: str, surface_key: str) -> tuple[str, str]:
@@ -119,7 +126,34 @@ class RemoteSurfaceBindingStore:
         )
         if all(key):
             self._bindings_by_key[key] = binding
+            self._binding_cached_at_by_key[key] = time.monotonic()
         return binding
+
+    def _get_cached_binding(
+        self,
+        *,
+        surface_kind: str,
+        surface_key: str,
+        include_disabled: bool = False,
+    ) -> Any:
+        key = self._normalize_key(surface_kind, surface_key)
+        cached = self._bindings_by_key.get(key)
+        if cached is None:
+            return None
+        cached_at = self._binding_cached_at_by_key.get(key)
+        if cached_at is None:
+            return None
+        if (
+            self._cache_fallback_ttl_seconds > 0.0
+            and time.monotonic() - cached_at > self._cache_fallback_ttl_seconds
+        ):
+            return None
+        if (
+            not include_disabled
+            and str(getattr(cached, "disabled_at", "") or "").strip()
+        ):
+            return None
+        return cached
 
     def upsert_binding(
         self,
@@ -166,16 +200,28 @@ class RemoteSurfaceBindingStore:
         surface_key: str,
         include_disabled: bool = False,
     ) -> Any:
-        response = self._run(
-            operation="get_surface_binding",
-            action=lambda client: client.get_surface_binding(
-                SurfaceBindingLookupRequest(
-                    surface_kind=surface_kind,
-                    surface_key=surface_key,
-                    include_disabled=include_disabled,
-                )
-            ),
-        )
+        try:
+            response = self._run(
+                operation="get_surface_binding",
+                action=lambda client: client.get_surface_binding(
+                    SurfaceBindingLookupRequest(
+                        surface_kind=surface_kind,
+                        surface_key=surface_key,
+                        include_disabled=include_disabled,
+                    )
+                ),
+            )
+        except HubControlPlaneError as exc:
+            if exc.code != "hub_unavailable":
+                raise
+            cached = self._get_cached_binding(
+                surface_kind=surface_kind,
+                surface_key=surface_key,
+                include_disabled=include_disabled,
+            )
+            if cached is None:
+                raise
+            return cached
         return self._remember(response.binding)
 
     @staticmethod

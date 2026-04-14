@@ -7546,6 +7546,7 @@ async def test_hub_client_setup_commands_survive_loop_switch_after_workspace_loo
             *,
             json: dict[str, Any] | None = None,
             params: dict[str, Any] | None = None,
+            timeout: float | None = None,
         ) -> httpx.Response:
             _ = method, params
             current_loop = asyncio.get_running_loop()
@@ -7553,7 +7554,7 @@ async def test_hub_client_setup_commands_survive_loop_switch_after_workspace_loo
                 self.bound_loop = current_loop
             elif self.bound_loop is not current_loop:
                 raise RuntimeError("Event loop is closed")
-            self.calls.append(path)
+            self.calls.append(f"{path}|timeout={timeout}")
             if path == "/hub/api/control-plane/agent-workspaces":
                 return httpx.Response(
                     200,
@@ -7616,11 +7617,17 @@ async def test_hub_client_setup_commands_survive_loop_switch_after_workspace_loo
 
         assert setup_result.setup_command_count == 1
         assert any(
-            "/hub/api/control-plane/agent-workspaces" in instance.calls
+            any(
+                call.startswith("/hub/api/control-plane/agent-workspaces")
+                for call in instance.calls
+            )
             for instance in _LoopStickyAsyncClient.instances
         )
         assert any(
-            "/hub/api/control-plane/workspace-setup-commands" in instance.calls
+            any(
+                call == "/hub/api/control-plane/workspace-setup-commands|timeout=None"
+                for call in instance.calls
+            )
             for instance in _LoopStickyAsyncClient.instances
         )
     finally:

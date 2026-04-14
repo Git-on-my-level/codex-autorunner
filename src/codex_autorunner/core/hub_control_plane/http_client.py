@@ -71,6 +71,8 @@ from .models import (
     WorkspaceSetupCommandResult,
 )
 
+_USE_CLIENT_DEFAULT_TIMEOUT = object()
+
 
 def _normalize_base_url(base_url: str) -> str:
     normalized = str(base_url or "").strip().rstrip("/")
@@ -170,13 +172,19 @@ class HttpHubControlPlaneClient(HubControlPlaneClient):
         path: str,
         json_payload: Mapping[str, Any] | None = None,
         params: Mapping[str, Any] | None = None,
+        timeout: object = _USE_CLIENT_DEFAULT_TIMEOUT,
     ) -> dict[str, Any]:
+        request_kwargs: dict[str, Any] = {
+            "json": dict(json_payload) if json_payload is not None else None,
+            "params": dict(params) if params is not None else None,
+        }
+        if timeout is not _USE_CLIENT_DEFAULT_TIMEOUT:
+            request_kwargs["timeout"] = timeout
         try:
             response = await (await self._get_http_client()).request(
                 method,
                 path,
-                json=dict(json_payload) if json_payload is not None else None,
-                params=dict(params) if params is not None else None,
+                **request_kwargs,
             )
         except httpx.RequestError as exc:
             raise HubControlPlaneError(
@@ -220,13 +228,19 @@ class HttpHubControlPlaneClient(HubControlPlaneClient):
         path: str,
         json_payload: Mapping[str, Any] | None = None,
         params: Mapping[str, Any] | None = None,
+        timeout: object = _USE_CLIENT_DEFAULT_TIMEOUT,
     ) -> None:
+        request_kwargs: dict[str, Any] = {
+            "json": dict(json_payload) if json_payload is not None else None,
+            "params": dict(params) if params is not None else None,
+        }
+        if timeout is not _USE_CLIENT_DEFAULT_TIMEOUT:
+            request_kwargs["timeout"] = timeout
         try:
             response = await (await self._get_http_client()).request(
                 method,
                 path,
-                json=dict(json_payload) if json_payload is not None else None,
-                params=dict(params) if params is not None else None,
+                **request_kwargs,
             )
         except httpx.RequestError as exc:
             raise HubControlPlaneError(
@@ -641,6 +655,8 @@ class HttpHubControlPlaneClient(HubControlPlaneClient):
             method="POST",
             path="/hub/api/control-plane/workspace-setup-commands",
             json_payload=request.to_dict(),
+            # Setup commands may run for an unbounded sequence of user-defined steps.
+            timeout=None,
         )
         return WorkspaceSetupCommandResult.from_mapping(payload)
 
