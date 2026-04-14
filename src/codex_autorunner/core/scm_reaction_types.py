@@ -55,6 +55,34 @@ def _int_from_mapping(
     return max(normalized, minimum)
 
 
+def _normalize_login(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    return normalized or None
+
+
+def _login_list_from_mapping(mapping: Mapping[str, Any], *keys: str) -> tuple[str, ...]:
+    seen: set[str] = set()
+    logins: list[str] = []
+    for key in keys:
+        raw_value = mapping.get(key)
+        candidates: list[Any]
+        if isinstance(raw_value, str):
+            candidates = [raw_value]
+        elif isinstance(raw_value, (list, tuple, set)):
+            candidates = list(raw_value)
+        else:
+            continue
+        for candidate in candidates:
+            normalized = _normalize_login(candidate)
+            if normalized is None or normalized in seen:
+                continue
+            seen.add(normalized)
+            logins.append(normalized)
+    return tuple(logins)
+
+
 @dataclass(frozen=True)
 class ScmReactionConfig:
     ci_failed: bool = True
@@ -64,6 +92,8 @@ class ScmReactionConfig:
     merged: bool = True
     duplicate_escalation_threshold: int = 3
     delivery_failure_escalation_threshold: int = 3
+    github_login_whitelist: tuple[str, ...] = ()
+    github_login_blacklist: tuple[str, ...] = ()
 
     @classmethod
     def from_mapping(
@@ -134,6 +164,20 @@ class ScmReactionConfig:
                 "delivery_failure_escalation_threshold",
                 default=3,
             ),
+            github_login_whitelist=_login_list_from_mapping(
+                mapping,
+                "github_login_whitelist",
+                "github_login_allowlist",
+                "whitelist",
+                "allowlist",
+            ),
+            github_login_blacklist=_login_list_from_mapping(
+                mapping,
+                "github_login_blacklist",
+                "github_login_denylist",
+                "blacklist",
+                "denylist",
+            ),
         )
 
     @staticmethod
@@ -166,6 +210,15 @@ class ScmReactionConfig:
 
     def is_enabled(self, reaction_kind: ReactionKind) -> bool:
         return bool(getattr(self, reaction_kind))
+
+    def github_login_allowed(self, login: Any) -> bool:
+        normalized = _normalize_login(login)
+        if self.github_login_whitelist:
+            if normalized is None or normalized not in self.github_login_whitelist:
+                return False
+        if normalized is not None and normalized in self.github_login_blacklist:
+            return False
+        return True
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

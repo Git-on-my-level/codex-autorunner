@@ -395,6 +395,8 @@ def _default_github_automation_section() -> Dict[str, Any]:
             "merged": True,
             "duplicate_escalation_threshold": 3,
             "delivery_failure_escalation_threshold": 3,
+            "github_login_whitelist": [],
+            "github_login_blacklist": [],
         },
         "polling": {
             "enabled": False,

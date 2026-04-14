@@ -484,6 +484,50 @@ def test_route_scm_reactions_still_reacts_to_review_comment_without_chat_target(
     assert intents[0].payload["repo_slug"] == "acme/widgets"
 
 
+def test_route_scm_reactions_blocks_non_whitelisted_review_authors() -> None:
+    event = _event(
+        "pull_request_review",
+        event_id="github:event-whitelist-blocked",
+        payload={
+            "action": "submitted",
+            "review_state": "changes_requested",
+            "author_login": "reviewer",
+            "body": "Please split this helper.",
+        },
+    )
+
+    intents = route_scm_reactions(
+        event,
+        binding=_binding(),
+        config=ScmReactionConfig(github_login_whitelist=("trusted-reviewer",)),
+    )
+
+    assert intents == []
+
+
+def test_route_scm_reactions_blocks_blacklisted_review_authors() -> None:
+    event = _event(
+        "pull_request_review_comment",
+        event_id="github:event-blacklist-blocked",
+        payload={
+            "action": "created",
+            "comment_id": "999",
+            "author_login": "reviewer",
+            "author_type": "User",
+            "issue_author_login": "pr-author",
+            "body": "Please cover the blacklist path.",
+        },
+    )
+
+    intents = route_scm_reactions(
+        event,
+        binding=_binding(thread_target_id="thread-inline"),
+        config=ScmReactionConfig(github_login_blacklist=("reviewer",)),
+    )
+
+    assert intents == []
+
+
 def test_route_scm_reactions_returns_no_intents_for_irrelevant_events() -> None:
     opened = _event(
         "pull_request",

@@ -747,6 +747,28 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
                         raise ConfigError(
                             "github.automation.reactions.profile must be 'all' or 'minimal_noise'"
                         )
+                for key in (
+                    "github_login_whitelist",
+                    "github_login_blacklist",
+                    "github_login_allowlist",
+                    "github_login_denylist",
+                    "whitelist",
+                    "blacklist",
+                    "allowlist",
+                    "denylist",
+                ):
+                    raw_logins = reactions.get(key)
+                    if raw_logins is None:
+                        continue
+                    if not isinstance(raw_logins, list):
+                        raise ConfigError(
+                            f"github.automation.reactions.{key} must be a list of strings"
+                        )
+                    for login in raw_logins:
+                        if not isinstance(login, str):
+                            raise ConfigError(
+                                f"github.automation.reactions.{key} must be a list of strings"
+                            )
             policy = automation.get("policy")
             if policy is not None and not isinstance(policy, dict):
                 raise ConfigError(
