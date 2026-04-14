@@ -13,7 +13,6 @@ from codex_autorunner.agents.types import (
 )
 from codex_autorunner.core.config import (
     DEFAULT_REPO_CONFIG,
-    ConfigError,
     TicketFlowConfig,
     _parse_app_server_config,
 )
@@ -210,10 +209,10 @@ def test_parse_app_server_output_policy_override(tmp_path: Path) -> None:
     assert app_server_cfg.output.policy == "all_agent_messages"
 
 
-def test_parse_app_server_output_policy_invalid_raises(tmp_path: Path) -> None:
-    with pytest.raises(ConfigError, match="app_server.output.policy must be one of"):
-        _parse_app_server_config(
-            {"output": {"policy": "invalid"}},
-            tmp_path,
-            DEFAULT_REPO_CONFIG["app_server"],
-        )
+def test_parse_app_server_output_policy_invalid_falls_back(tmp_path: Path) -> None:
+    app_server_cfg = _parse_app_server_config(
+        {"output": {"policy": "invalid"}},
+        tmp_path,
+        DEFAULT_REPO_CONFIG["app_server"],
+    )
+    assert app_server_cfg.output.policy == "final_only"

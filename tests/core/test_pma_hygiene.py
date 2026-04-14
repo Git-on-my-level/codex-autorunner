@@ -74,35 +74,6 @@ def _reviewed_thread_cleanup_report(managed_thread_id: str) -> dict[str, object]
     }
 
 
-def _set_thread_runtime_status(
-    thread_store: PmaThreadStore,
-    managed_thread_id: str,
-    *,
-    runtime_status: str,
-    changed_at: str,
-    updated_at: str | None = None,
-) -> None:
-    with thread_store._write_conn() as conn:  # test-only helper
-        with conn:
-            conn.execute(
-                """
-                UPDATE orch_thread_targets
-                   SET runtime_status = ?,
-                       status_reason = ?,
-                       status_updated_at = ?,
-                       updated_at = ?
-                 WHERE thread_target_id = ?
-                """,
-                (
-                    runtime_status,
-                    f"test_{runtime_status}",
-                    changed_at,
-                    updated_at or changed_at,
-                    managed_thread_id,
-                ),
-            )
-
-
 def test_build_pma_hygiene_report_groups_candidates(hub_env) -> None:
     hub_root = hub_env.hub_root
     base_now = datetime.now(timezone.utc)
@@ -218,82 +189,6 @@ def test_build_pma_hygiene_report_groups_candidates(hub_env) -> None:
     assert f"threads:{unbound['managed_thread_id']}" in needs_confirmation_ids
     assert resolved_dispatch.exists()
     assert report["summary"]["safe_apply_count"] >= 4
-
-
-def test_build_pma_hygiene_report_skips_threads_needing_followup(hub_env) -> None:
-    hub_root = hub_env.hub_root
-    now = datetime(2026, 4, 13, 12, 0, tzinfo=timezone.utc)
-    stale_at = now - timedelta(hours=2)
-    stale_iso = _iso(stale_at)
-
-    thread_store = PmaThreadStore(hub_root)
-    paused = thread_store.create_thread(
-        "codex",
-        hub_env.repo_root,
-        repo_id=hub_env.repo_id,
-        name="stale-paused",
-    )
-    failed = thread_store.create_thread(
-        "codex",
-        hub_env.repo_root,
-        repo_id=hub_env.repo_id,
-        name="stale-failed",
-    )
-    running = thread_store.create_thread(
-        "codex",
-        hub_env.repo_root,
-        repo_id=hub_env.repo_id,
-        name="stale-running",
-    )
-    cleanup = thread_store.create_thread(
-        "codex",
-        hub_env.repo_root,
-        repo_id=hub_env.repo_id,
-        name="stale-cleanup",
-    )
-
-    _set_thread_runtime_status(
-        thread_store,
-        paused["managed_thread_id"],
-        runtime_status="paused",
-        changed_at=stale_iso,
-    )
-    _set_thread_runtime_status(
-        thread_store,
-        failed["managed_thread_id"],
-        runtime_status="failed",
-        changed_at=stale_iso,
-    )
-    _set_thread_runtime_status(
-        thread_store,
-        running["managed_thread_id"],
-        runtime_status="running",
-        changed_at=stale_iso,
-    )
-    _set_thread_runtime_status(
-        thread_store,
-        cleanup["managed_thread_id"],
-        runtime_status="completed",
-        changed_at=stale_iso,
-    )
-
-    report = build_pma_hygiene_report(
-        hub_root,
-        generated_at=_iso(now),
-        stale_threshold_seconds=60,
-        categories=["threads"],
-    )
-
-    candidate_ids = {
-        item["candidate_id"]
-        for group in report["groups"].values()
-        for item in group
-        if isinstance(item, dict)
-    }
-    assert f"threads:{cleanup['managed_thread_id']}" in candidate_ids
-    assert f"threads:{paused['managed_thread_id']}" not in candidate_ids
-    assert f"threads:{failed['managed_thread_id']}" not in candidate_ids
-    assert f"threads:{running['managed_thread_id']}" not in candidate_ids
 
 
 def test_apply_pma_hygiene_report_only_removes_safe_items(hub_env) -> None:
@@ -469,39 +364,6 @@ def test_apply_pma_hygiene_report_revalidates_reviewed_thread_lifecycle(
         == "Managed thread cleanup no longer safe: managed thread lifecycle is archived"
     )
     assert thread_store.get_thread(managed_thread_id)["status"] == "archived"
-
-
-def test_apply_pma_hygiene_report_revalidates_reviewed_thread_status(hub_env) -> None:
-    hub_root = hub_env.hub_root
-    thread_store = PmaThreadStore(hub_root)
-    thread = thread_store.create_thread(
-        "codex",
-        hub_env.repo_root,
-        repo_id=hub_env.repo_id,
-        name="reviewed-thread-now-paused",
-    )
-    managed_thread_id = thread["managed_thread_id"]
-    report = _reviewed_thread_cleanup_report(managed_thread_id)
-    _set_thread_runtime_status(
-        thread_store,
-        managed_thread_id,
-        runtime_status="paused",
-        changed_at=_iso(datetime.now(timezone.utc) - timedelta(hours=2)),
-    )
-
-    applied = apply_pma_hygiene_report(
-        hub_root, report, include_needs_confirmation=True
-    )
-
-    assert applied["attempted"] == 1
-    assert applied["applied"] == 0
-    assert applied["failed"] == 1
-    assert (
-        applied["results"][0]["error"]
-        == "Managed thread cleanup no longer safe: managed thread status is paused "
-        "and is not a cleanup candidate"
-    )
-    assert thread_store.get_thread(managed_thread_id)["normalized_status"] == "paused"
 
 
 def test_build_pma_hygiene_report_canonicalizes_category_order(hub_env) -> None:

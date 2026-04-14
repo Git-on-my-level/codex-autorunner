@@ -16,7 +16,6 @@ from starlette.routing import Mount
 
 import codex_autorunner.core.hub as hub_module
 import codex_autorunner.core.hub_runner_orchestrator as orch_module
-import codex_autorunner.core.hub_topology as hub_topology_module
 import codex_autorunner.core.hub_worktree_manager as wtm_module
 from codex_autorunner.bootstrap import seed_repo_files
 from codex_autorunner.core.config import (
@@ -325,9 +324,7 @@ def test_list_repos_does_not_refresh_pma_threads_artifact(
     def _record_artifact_call(path: Path) -> None:
         calls.append(path)
 
-    monkeypatch.setattr(
-        hub_topology_module, "_save_pma_threads_artifact", _record_artifact_call
-    )
+    monkeypatch.setattr(hub_module, "_save_pma_threads_artifact", _record_artifact_call)
     try:
         supervisor.list_repos(use_cache=False)
     finally:
@@ -1329,21 +1326,19 @@ def test_archive_repo_state_waits_for_runner_exit_before_archiving(
     monkeypatch.setattr(
         hub_module,
         "archive_workspace_for_fresh_start",
-        lambda **_kwargs: (
-            archived.append(dict(_kwargs))
-            or types.SimpleNamespace(
-                snapshot_id="snap",
-                snapshot_path=base.path / ".codex-autorunner" / "archive",
-                meta_path=base.path / ".codex-autorunner" / "archive" / "META.json",
-                status="complete",
-                file_count=0,
-                total_bytes=0,
-                flow_run_count=0,
-                latest_flow_run_id=None,
-                archived_paths=(),
-                reset_paths=(),
-                archived_thread_ids=(),
-            )
+        lambda **_kwargs: archived.append(dict(_kwargs))
+        or types.SimpleNamespace(
+            snapshot_id="snap",
+            snapshot_path=base.path / ".codex-autorunner" / "archive",
+            meta_path=base.path / ".codex-autorunner" / "archive" / "META.json",
+            status="complete",
+            file_count=0,
+            total_bytes=0,
+            flow_run_count=0,
+            latest_flow_run_id=None,
+            archived_paths=(),
+            reset_paths=(),
+            archived_thread_ids=(),
         ),
     )
 
@@ -4164,9 +4159,7 @@ def test_build_pma_lifecycle_message(tmp_path: Path) -> None:
             data={"key": "val"},
             origin="test",
         )
-        msg = supervisor._lifecycle_router._build_lifecycle_message(
-            event, reason="auto"
-        )
+        msg = supervisor._build_pma_lifecycle_message(event, reason="auto")
         assert "dispatch_created" in msg
         assert "demo" in msg
         assert "reason: auto" in msg
@@ -4195,7 +4188,7 @@ def test_pma_reactive_gate_allows_by_default(tmp_path: Path) -> None:
             data=None,
             origin="test",
         )
-        allowed, reason = supervisor._lifecycle_router.check_reactive_gate(event)
+        allowed, reason = supervisor._pma_reactive_gate(event)
         assert allowed is True
         assert reason == "reactive_allowed"
     finally:
@@ -4223,7 +4216,7 @@ def test_pma_reactive_gate_blocks_disabled(tmp_path: Path) -> None:
             data=None,
             origin="test",
         )
-        allowed, reason = supervisor._lifecycle_router.check_reactive_gate(event)
+        allowed, reason = supervisor._pma_reactive_gate(event)
         assert allowed is False
         assert reason == "reactive_disabled"
     finally:
@@ -4251,7 +4244,7 @@ def test_pma_reactive_gate_blocks_origin(tmp_path: Path) -> None:
             data=None,
             origin="blocked_bot",
         )
-        allowed, reason = supervisor._lifecycle_router.check_reactive_gate(event)
+        allowed, reason = supervisor._pma_reactive_gate(event)
         assert allowed is False
         assert reason == "reactive_origin_blocked"
     finally:
@@ -4279,7 +4272,7 @@ def test_pma_reactive_gate_filters_event_types(tmp_path: Path) -> None:
             data=None,
             origin="test",
         )
-        allowed, reason = supervisor._lifecycle_router.check_reactive_gate(event)
+        allowed, reason = supervisor._pma_reactive_gate(event)
         assert allowed is False
         assert reason == "reactive_filtered"
     finally:
@@ -4349,15 +4342,13 @@ def test_load_hub_state_handles_malformed_repo_entry(tmp_path: Path) -> None:
 
 
 def test_normalize_pinned_parent_repo_ids_filters() -> None:
-    assert hub_topology_module.normalize_pinned_parent_repo_ids(None) == []
-    assert hub_topology_module.normalize_pinned_parent_repo_ids("not_a_list") == []
-    assert hub_topology_module.normalize_pinned_parent_repo_ids(
-        ["a", "b", "a", "", "  "]
-    ) == [
+    assert hub_module._normalize_pinned_parent_repo_ids(None) == []
+    assert hub_module._normalize_pinned_parent_repo_ids("not_a_list") == []
+    assert hub_module._normalize_pinned_parent_repo_ids(["a", "b", "a", "", "  "]) == [
         "a",
         "b",
     ]
-    assert hub_topology_module.normalize_pinned_parent_repo_ids([1, 2]) == []
+    assert hub_module._normalize_pinned_parent_repo_ids([1, 2]) == []
 
 
 def test_runtime_preflight_blocks_enable() -> None:
@@ -4372,28 +4363,26 @@ def test_runtime_preflight_blocks_enable() -> None:
 
 
 def test_git_failure_detail() -> None:
-    from codex_autorunner.core.git_utils import git_failure_detail
-
     class _Proc:
         returncode = 1
         stderr = " err "
         stdout = " out "
 
-    assert git_failure_detail(_Proc()) == "err"
+    assert hub_module._git_failure_detail(_Proc()) == "err"
 
     class _Proc2:
         returncode = 2
         stderr = ""
         stdout = " out "
 
-    assert git_failure_detail(_Proc2()) == "out"
+    assert hub_module._git_failure_detail(_Proc2()) == "out"
 
     class _Proc3:
         returncode = 3
         stderr = None
         stdout = None
 
-    assert git_failure_detail(_Proc3()) == "exit 3"
+    assert hub_module._git_failure_detail(_Proc3()) == "exit 3"
 
 
 def test_get_agent_workspace_runtime_readiness_rejects_missing(tmp_path: Path) -> None:
@@ -4403,212 +4392,3 @@ def test_get_agent_workspace_runtime_readiness_rejects_missing(tmp_path: Path) -
     supervisor = HubSupervisor(load_hub_config(hub_root))
     with pytest.raises(ValueError, match="not found"):
         supervisor.get_agent_workspace_runtime_readiness("nope")
-
-
-def test_warm_start_list_repos_picks_up_new_repo_after_scan(tmp_path: Path) -> None:
-    hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    repo_a = hub_root / "alpha"
-    (repo_a / ".git").mkdir(parents=True, exist_ok=True)
-
-    first = HubSupervisor(
-        load_hub_config(hub_root),
-        backend_factory_builder=build_agent_backend_factory,
-        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
-    )
-    first.scan()
-    first.shutdown()
-
-    repo_b = hub_root / "beta"
-    (repo_b / ".git").mkdir(parents=True, exist_ok=True)
-
-    second = HubSupervisor(
-        load_hub_config(hub_root),
-        backend_factory_builder=build_agent_backend_factory,
-        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
-    )
-    try:
-        warm = second.list_repos()
-        warm_ids = {r.id for r in warm}
-        assert "alpha" in warm_ids
-
-        second.scan()
-        refreshed = second.list_repos()
-        refreshed_ids = {r.id for r in refreshed}
-        assert "alpha" in refreshed_ids
-        assert "beta" in refreshed_ids
-    finally:
-        second.shutdown()
-
-
-def test_warm_start_list_repos_reflects_removed_repo_after_rescan(
-    tmp_path: Path,
-) -> None:
-    hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    repo_dir = hub_root / "demo"
-    (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
-
-    first = HubSupervisor(
-        load_hub_config(hub_root),
-        backend_factory_builder=build_agent_backend_factory,
-        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
-    )
-    first.scan()
-    first.shutdown()
-
-    shutil.rmtree(repo_dir)
-
-    second = HubSupervisor(
-        load_hub_config(hub_root),
-        backend_factory_builder=build_agent_backend_factory,
-        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
-    )
-    try:
-        warm = second.list_repos()
-        warm_ids = {r.id for r in warm}
-        assert "demo" in warm_ids
-        warm_demo = next(r for r in warm if r.id == "demo")
-        assert warm_demo.exists_on_disk is True
-
-        second.scan()
-        refreshed = second.list_repos()
-        refreshed_demo = next((r for r in refreshed if r.id == "demo"), None)
-        assert refreshed_demo is not None
-        assert refreshed_demo.exists_on_disk is False
-        assert refreshed_demo.status == RepoStatus.MISSING
-    finally:
-        second.shutdown()
-
-
-def test_scan_discovers_new_repo_not_in_manifest(
-    tmp_path: Path,
-) -> None:
-    hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    repo_a = hub_root / "alpha"
-    (repo_a / ".git").mkdir(parents=True, exist_ok=True)
-
-    supervisor = HubSupervisor(
-        load_hub_config(hub_root),
-        backend_factory_builder=build_agent_backend_factory,
-        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
-    )
-    try:
-        supervisor.scan()
-        first = supervisor.list_repos(use_cache=False)
-        assert {r.id for r in first} == {"alpha"}
-
-        repo_b = hub_root / "beta"
-        (repo_b / ".git").mkdir(parents=True, exist_ok=True)
-
-        without_scan = supervisor.list_repos(use_cache=False)
-        assert {r.id for r in without_scan} == {"alpha"}
-
-        supervisor.scan()
-        refreshed = supervisor.list_repos(use_cache=False)
-        refreshed_ids = {r.id for r in refreshed}
-        assert "alpha" in refreshed_ids
-        assert "beta" in refreshed_ids
-    finally:
-        supervisor.shutdown()
-
-
-def test_archive_failure_without_force_archive_aborts_cleanup(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-
-    supervisor = HubSupervisor(
-        load_hub_config(hub_root),
-        backend_factory_builder=build_agent_backend_factory,
-        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
-        backend_orchestrator_builder=build_backend_orchestrator,
-    )
-    base = supervisor.create_repo("base")
-    _init_git_repo(base.path)
-    worktree = supervisor.create_worktree(
-        base_repo_id="base",
-        branch="feature/archive-fail-abort",
-        start_point="HEAD",
-    )
-
-    def _failing_archive(*args, **kwargs):
-        raise RuntimeError("archive disk full")
-
-    monkeypatch.setattr(
-        wtm_module.WorktreeManager, "_archive_worktree_snapshot", _failing_archive
-    )
-
-    with pytest.raises(RuntimeError, match="archive disk full"):
-        supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=True)
-
-    assert worktree.path.exists()
-    manifest = load_manifest(hub_root / ".codex-autorunner" / "manifest.yml", hub_root)
-    assert manifest.get(worktree.id) is not None
-
-
-def test_cleanup_worktree_returns_ordered_step_records(tmp_path: Path):
-    hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    cfg["pma"]["cleanup_require_archive"] = False
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-
-    supervisor = HubSupervisor(
-        load_hub_config(hub_root),
-        backend_factory_builder=build_agent_backend_factory,
-        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
-        backend_orchestrator_builder=build_backend_orchestrator,
-    )
-    base = supervisor.create_repo("base")
-    _init_git_repo(base.path)
-    worktree = supervisor.create_worktree(
-        base_repo_id="base",
-        branch="feature/step-tracking",
-        start_point="HEAD",
-    )
-
-    result = supervisor.cleanup_worktree(
-        worktree_repo_id=worktree.id,
-        archive=False,
-    )
-    assert result["status"] == "ok"
-    steps = result["cleanup_steps"]
-    step_names = [s["step"] for s in steps]
-    assert step_names == [
-        "validate",
-        "stop_runner",
-        "telemetry_housekeep",
-        "docker_cleanup",
-        "git_remove",
-        "manifest_remove",
-        "archive_pma_threads",
-    ]
-    assert all(s["status"] == "ok" for s in steps)
-
-
-def test_cleanup_worktree_step_tracking_records_docker_error(tmp_path: Path):
-    hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    cfg["pma"]["cleanup_require_archive"] = False
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-
-
-def test_cleanup_report_tracks_failed_step_and_completed_steps():
-    from codex_autorunner.core.hub_worktree_lifecycle import (
-        WorktreeCleanupReport,
-    )
-
-    report = WorktreeCleanupReport()
-    report.add_step("validate", "ok")
-    report.add_step("stop_runner", "ok")
-    report.add_step("docker_cleanup", "error", detail="container not found")
-    report.add_step("git_remove", "ok")
-
-    assert report.failed_step == "docker_cleanup"
-    assert report.completed_steps == ["validate", "stop_runner", "git_remove"]

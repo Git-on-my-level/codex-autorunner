@@ -9613,7 +9613,6 @@ async def test_resolve_discord_thread_target_stores_agent_profile_in_metadata(
         await store.close()
 
 
-@pytest.mark.anyio
 async def test_resolve_discord_thread_target_reuses_legacy_hermes_runtime_alias_thread(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

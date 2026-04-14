@@ -4,10 +4,11 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from codex_autorunner.tickets.files import read_ticket
-from codex_autorunner.tickets.runner_prompt import (
+from codex_autorunner.tickets.models import TicketRunConfig
+from codex_autorunner.tickets.runner import (
     CAR_HUD_MAX_CHARS,
     CAR_HUD_MAX_LINES,
-    build_prompt,
+    TicketRunner,
 )
 
 
@@ -21,6 +22,16 @@ def test_ticket_flow_prompt_boundaries(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
+    runner = TicketRunner(
+        workspace_root=workspace_root,
+        run_id="run-1",
+        config=TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            auto_commit=False,
+        ),
+        agent_pool=MagicMock(),
+    )
+
     outbox_paths = MagicMock()
     outbox_paths.dispatch_dir = (
         workspace_root / ".codex-autorunner" / "runs" / "run-1" / "dispatch"
@@ -30,9 +41,8 @@ def test_ticket_flow_prompt_boundaries(tmp_path: Path) -> None:
     )
 
     ticket_doc, _ = read_ticket(ticket_path)
-    prompt = build_prompt(
+    prompt = runner._build_prompt(
         ticket_path=ticket_path,
-        workspace_root=workspace_root,
         ticket_doc=ticket_doc,
         last_agent_output=None,
         outbox_paths=outbox_paths,

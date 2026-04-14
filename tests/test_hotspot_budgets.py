@@ -81,13 +81,13 @@ STANDARD_FILE_BUDGETS = (
     ),
     FileBudget(
         path="src/codex_autorunner/tickets/runner_types.py",
-        max_lines=300,
+        max_lines=285,
         reason="Typed runner state belongs in a compact seam, not another catch-all module.",
     ),
     FileBudget(
         path="src/codex_autorunner/tickets/runner_selection.py",
-        max_lines=700,
-        reason="Ticket selection, context loading, and pre-turn planning extracted from TicketRunner.step().",
+        max_lines=640,
+        reason="Ticket selection should stay extracted from TicketRunner.step().",
     ),
     FileBudget(
         path="src/codex_autorunner/tickets/runner_execution.py",
@@ -96,8 +96,8 @@ STANDARD_FILE_BUDGETS = (
     ),
     FileBudget(
         path="src/codex_autorunner/tickets/runner_post_turn.py",
-        max_lines=480,
-        reason="Post-turn reconciliation and state-transition helpers extracted from TicketRunner.step().",
+        max_lines=466,
+        reason="Post-turn reconciliation should stay extracted from TicketRunner.step().",
     ),
     FileBudget(
         path="src/codex_autorunner/tickets/runner_prompt.py",
@@ -322,7 +322,7 @@ LEGACY_FILE_CAPS = (
     ),
     FileBudget(
         path="src/codex_autorunner/tickets/runner.py",
-        max_lines=1180,
+        max_lines=1185,
         reason="TicketRunner still owns remaining orchestration glue while extracted runner seams stabilize.",
     ),
 )
@@ -369,6 +369,12 @@ LEGACY_FUNCTION_CAPS = (
         qualname="TicketRunner.step",
         max_lines=625,
         reason="TicketRunner.step() is still a legacy orchestration hotspot, but new growth should fail.",
+    ),
+    FunctionBudget(
+        path="src/codex_autorunner/tickets/runner.py",
+        qualname="TicketRunner._build_prompt",
+        max_lines=240,
+        reason="The remaining prompt glue in runner.py should keep shrinking toward runner_prompt.py, not regrow.",
     ),
 )
 

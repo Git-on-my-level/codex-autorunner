@@ -89,7 +89,7 @@ class WorktreeManager:
         force: bool = False,
         start_point: Optional[str] = None,
     ) -> RepoSnapshot:
-        self._ctx()
+        self._ctx.invalidate_cache()
         branch = (branch or "").strip()
         if not branch:
             raise ValueError("branch is required")
@@ -597,7 +597,7 @@ class WorktreeManager:
             logger=logger,
             action="hub.cleanup_worktree",
         )
-        self._ctx()
+        self._ctx.invalidate_cache()
         manifest = load_manifest(self._hub_config.manifest_path, self._hub_config.root)
         entry = manifest.get(worktree_repo_id)
         if not entry or entry.kind != "worktree":
@@ -717,7 +717,8 @@ class WorktreeManager:
             detail=(
                 str(docker_cleanup.get("message")) if docker_status == "error" else None
             ),
-        )(
+        )
+        self._remove_worktree_git_refs(
             worktree_path=worktree_path,
             base_path=base_path,
             branch=entry.branch,
@@ -970,7 +971,7 @@ class WorktreeManager:
         if not dry_run and (
             total_thread_count or len(worktree_items) or total_flow_count
         ):
-            self._ctx()
+            self._ctx.invalidate_cache()
 
         if dry_run:
             if total_thread_count or len(worktree_items) or total_flow_count:

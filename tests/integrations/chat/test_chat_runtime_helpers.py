@@ -73,6 +73,32 @@ async def test_resolve_chat_thread_runtime_binding_reuses_existing_binding_when_
 
 
 @pytest.mark.anyio
+async def test_resolve_chat_thread_runtime_binding_reuses_existing_binding_without_requested_backend_id(
+    tmp_path: Path,
+) -> None:
+    service = _RuntimeService("runtime-1")
+    existing_thread = SimpleNamespace(
+        agent_id="opencode",
+        agent_profile=None,
+        workspace_root=str(tmp_path.resolve()),
+        backend_thread_id="backend-old",
+    )
+
+    binding = await resolve_chat_thread_runtime_binding(
+        service,
+        agent_id="opencode",
+        workspace_root=tmp_path,
+        requested_backend_thread_id=None,
+        existing_thread=existing_thread,
+    )
+
+    assert binding.backend_thread_id == "backend-old"
+    assert binding.backend_runtime_instance_id == "runtime-1"
+    assert binding.runtime_available is True
+    assert binding.used_requested_backend_thread_id is False
+
+
+@pytest.mark.anyio
 async def test_resolve_chat_thread_runtime_binding_keeps_requested_binding_for_nonmatching_thread(
     tmp_path: Path,
 ) -> None:

@@ -96,6 +96,14 @@ def normalize_agent_capabilities(
     return normalize_runtime_capabilities(capabilities)
 
 
+def _normalize_optional_text(value: object) -> Optional[str]:
+    """Normalize an optional text value: strip, lowercase, or return None."""
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    return normalized or None
+
+
 def _make_codex_harness(ctx: Any) -> AgentHarness:
     supervisor = ctx.app_server_supervisor
     events = ctx.app_server_events

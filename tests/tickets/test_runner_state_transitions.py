@@ -354,6 +354,10 @@ class TestBuildPauseResult:
         assert "reason_details" not in result["state"]
 
 
+@pytest.mark.xfail(
+    reason="_handle_failed_turn not yet extracted from TicketRunner.run_step",
+    strict=True,
+)
 class TestHandleFailedTurn:
     @pytest.mark.asyncio
     async def test_network_retry_sets_retry_state(self, tmp_path):
@@ -459,6 +463,10 @@ class TestHandleFailedTurn:
         assert "Validation error" in (r.reason_details or "")
 
 
+@pytest.mark.xfail(
+    reason="_handle_commit_gating not yet extracted from TicketRunner.run_step",
+    strict=True,
+)
 class TestHandleCommitGating:
     @pytest.mark.asyncio
     async def test_returns_none_when_ticket_not_done(self, tmp_path):

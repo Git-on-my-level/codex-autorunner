@@ -1,8 +1,10 @@
 """Tests for the shared missing-thread error classifier."""
 
-from codex_autorunner.integrations.app_server import is_missing_thread_error
 from codex_autorunner.integrations.app_server.client import (
     CodexAppServerResponseError,
+)
+from codex_autorunner.integrations.app_server.errors import (
+    is_missing_thread_error,
 )
 
 

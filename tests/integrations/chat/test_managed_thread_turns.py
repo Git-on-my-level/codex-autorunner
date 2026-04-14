@@ -74,6 +74,22 @@ def _replace_started_execution(
     )
 
 
+def test_render_managed_thread_response_text_prepends_session_notice() -> None:
+    rendered = managed_thread_turns_module.render_managed_thread_response_text(
+        managed_thread_turns_module.ManagedThreadFinalizationResult(
+            status="ok",
+            assistant_text="Recovered answer",
+            error=None,
+            managed_thread_id="thread-1",
+            managed_turn_id="turn-1",
+            backend_thread_id="backend-1",
+            session_notice="Notice: a new session was started.",
+        )
+    )
+
+    assert rendered == "Notice: a new session was started.\n\nRecovered answer"
+
+
 @pytest.mark.anyio
 async def test_managed_thread_turn_coordinator_runs_lifecycle_hooks(
     tmp_path: Path,
@@ -653,6 +669,11 @@ def test_resolve_managed_thread_target_clears_stale_backend_for_fresh_pma_sessio
         def resume_thread_target(self, thread_target_id: str, **kwargs: Any) -> Any:
             assert thread_target_id == "thread-1"
             resume_calls.append(kwargs)
+            if kwargs.get("backend_thread_id") is not None:
+                thread.backend_thread_id = kwargs.get("backend_thread_id")
+            thread.backend_runtime_instance_id = kwargs.get(
+                "backend_runtime_instance_id"
+            )
             return SimpleNamespace(
                 thread_target_id="thread-1",
                 agent_id="codex",
@@ -683,14 +704,15 @@ def test_resolve_managed_thread_target_clears_stale_backend_for_fresh_pma_sessio
     )
 
     assert resolved_thread is not None
-    assert clear_calls == [
+    assert resume_calls == [
         {
             "backend_thread_id": None,
             "backend_runtime_instance_id": None,
         }
     ]
-    assert resume_calls == [
+    assert clear_calls == [
         {
+            "backend_thread_id": None,
             "backend_runtime_instance_id": None,
         }
     ]
@@ -772,8 +794,66 @@ def test_resolve_managed_thread_target_keeps_backend_for_repo_resume_without_reb
 
     assert resolved_thread is not None
     assert clear_calls == []
-    assert resume_calls == [{"backend_runtime_instance_id": None}]
+    assert resume_calls == [
+        {
+            "backend_thread_id": "backend-existing",
+            "backend_runtime_instance_id": None,
+        }
+    ]
     assert resolved_thread.backend_thread_id == "backend-existing"
+
+
+def test_resolve_managed_thread_target_keeps_active_repo_binding_without_resume(
+    tmp_path: Path,
+) -> None:
+    canonical_workspace = str(tmp_path.resolve())
+    thread = SimpleNamespace(
+        thread_target_id="thread-1",
+        agent_id="codex",
+        agent_profile=None,
+        workspace_root=canonical_workspace,
+        lifecycle_status="active",
+        backend_thread_id="backend-existing",
+        backend_runtime_instance_id="runtime-1",
+    )
+    binding = SimpleNamespace(thread_target_id="thread-1", mode="repo")
+    resume_calls: list[dict[str, Any]] = []
+
+    class _Service:
+        def get_binding(self, *, surface_kind: str, surface_key: str) -> Any:
+            _ = surface_kind, surface_key
+            return binding
+
+        def get_thread_target(self, thread_target_id: str) -> Any:
+            assert thread_target_id == "thread-1"
+            return thread
+
+        def resume_thread_target(self, thread_target_id: str, **kwargs: Any) -> Any:
+            _ = thread_target_id
+            resume_calls.append(kwargs)
+            raise AssertionError("resume_thread_target should not be called")
+
+        def create_thread_target(self, *args: Any, **kwargs: Any) -> Any:
+            raise AssertionError("create_thread_target should not be called")
+
+        def upsert_binding(self, **kwargs: Any) -> None:
+            _ = kwargs
+
+    _, resolved_thread = managed_thread_turns_module.resolve_managed_thread_target(
+        _Service(),
+        request=managed_thread_turns_module.ManagedThreadTargetRequest(
+            surface_kind="discord",
+            surface_key="discord:channel-1",
+            mode="repo",
+            agent="codex",
+            workspace_root=tmp_path,
+            display_name="discord:surface",
+            binding_metadata={"channel_id": "channel-1"},
+        ),
+    )
+
+    assert resolved_thread is thread
+    assert resume_calls == []
 
 
 def test_resolve_managed_thread_target_reuses_backend_matched_thread(
@@ -1047,6 +1127,100 @@ async def test_finalize_managed_thread_execution_logs_timeout_source(
     assert fake_hub_client.trace_requests[0].backend_turn_id == "turn-1"
     assert fake_hub_client.transcript_requests == []
     assert fake_hub_client.activity_requests == []
+
+
+@pytest.mark.anyio
+async def test_finalize_managed_thread_execution_propagates_session_recovery_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = _started_execution_with_backend_ids(tmp_path)
+    started.request.metadata["fresh_backend_session_started"] = True
+    started.request.metadata["fresh_backend_session_reason"] = "missing_backend_binding"
+    started.request.metadata["fresh_backend_session_notice"] = (
+        "Notice: the previous live session was unavailable, so I started a new "
+        "session and recovered context from durable history."
+    )
+    fake_hub_client = _FakeHubPersistenceClient()
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "harness_supports_progress_event_stream",
+        lambda _harness: False,
+    )
+
+    async def _successful_outcome(*args: Any, **kwargs: Any) -> RuntimeThreadOutcome:
+        return RuntimeThreadOutcome(
+            status="ok",
+            assistant_text="fixture reply",
+            error=None,
+            backend_thread_id="session-2",
+            backend_turn_id="turn-2",
+        )
+
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "await_runtime_thread_outcome",
+        _successful_outcome,
+    )
+
+    orchestration_service = SimpleNamespace(
+        get_thread_target=lambda managed_thread_id: SimpleNamespace(
+            backend_thread_id="session-2"
+        ),
+        get_thread_runtime_binding=lambda managed_thread_id: SimpleNamespace(
+            backend_thread_id="session-2"
+        ),
+        record_execution_result=lambda *args, **kwargs: SimpleNamespace(
+            status="ok",
+            error=None,
+        ),
+    )
+
+    result = await managed_thread_turns_module.finalize_managed_thread_execution(
+        orchestration_service=orchestration_service,
+        started=started,
+        state_root=tmp_path,
+        hub_client=fake_hub_client,
+        surface=managed_thread_turns_module.ManagedThreadSurfaceInfo(
+            log_label="Telegram",
+            surface_kind="telegram",
+            surface_key="telegram:-1001:101",
+        ),
+        errors=managed_thread_turns_module.ManagedThreadErrorMessages(
+            public_execution_error="Telegram PMA execution failed",
+            timeout_error="Telegram PMA turn timed out",
+            interrupted_error="Telegram PMA turn interrupted",
+            timeout_seconds=5,
+        ),
+        logger=logging.getLogger("test.managed_thread.session_recovery"),
+        turn_preview="preview",
+    )
+
+    assert result.status == "ok"
+    assert (
+        result.session_notice
+        == "Notice: the previous live session was unavailable, so I started a new "
+        "session and recovered context from durable history."
+    )
+    assert result.fresh_backend_session_reason == "missing_backend_binding"
+    assert len(fake_hub_client.timeline_requests) == 1
+    assert (
+        fake_hub_client.timeline_requests[0].metadata["fresh_backend_session_started"]
+        is True
+    )
+    assert (
+        fake_hub_client.timeline_requests[0].metadata["fresh_backend_session_reason"]
+        == "missing_backend_binding"
+    )
+    assert len(fake_hub_client.transcript_requests) == 1
+    assert (
+        fake_hub_client.transcript_requests[0].metadata["fresh_backend_session_started"]
+        is True
+    )
+    assert (
+        fake_hub_client.transcript_requests[0].metadata["fresh_backend_session_reason"]
+        == "missing_backend_binding"
+    )
 
 
 @pytest.mark.anyio
