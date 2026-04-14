@@ -3365,8 +3365,7 @@ async def test_component_interaction_queue_cancel_cancels_selected_pending_messa
             == "Queued request cancelled."
         )
         assert (
-            rest.edited_original_interaction_responses[-1]["payload"]["content"]
-            == "Queued request cancelled."
+            rest.edited_original_interaction_responses[-1]["payload"]["components"] == []
         )
     finally:
         await store.close()
