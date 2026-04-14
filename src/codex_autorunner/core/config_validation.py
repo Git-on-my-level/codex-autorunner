@@ -1186,6 +1186,8 @@ def _validate_optional_type(
         value = mapping.get(key)
         if value is None and allow_none:
             return
+        if expected is int and isinstance(value, bool):
+            raise ConfigError(f"{path}.{key} must be int if provided")
         if isinstance(value, expected):
             return
         type_name = (
@@ -1201,7 +1203,7 @@ def _validate_optional_int_ge(
 ) -> None:
     if key in mapping:
         value = mapping.get(key)
-        if isinstance(value, int) and value < min_value:
+        if _is_strict_int(value) and value < min_value:
             if min_value == 0:
                 raise ConfigError(f"{path}.{key} must be >= 0")
             elif min_value == 1:

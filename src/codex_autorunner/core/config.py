@@ -2212,6 +2212,8 @@ def _parse_pma_config(
 
     def _parse_positive_int(key: str, fallback: int) -> int:
         raw = cfg.get(key, defaults.get(key, fallback))
+        if isinstance(raw, bool):
+            return fallback
         try:
             value = int(raw)
         except (ValueError, TypeError):
