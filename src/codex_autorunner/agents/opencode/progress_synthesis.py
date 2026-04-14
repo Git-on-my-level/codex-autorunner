@@ -127,6 +127,8 @@ def synthetic_descendant_reasoning_event(
                     "id": synthetic_part_id,
                     "type": "reasoning",
                     "text": text,
+                    "messageID": synthetic_message_id,
+                    "sessionID": session_id,
                 },
             },
         },
