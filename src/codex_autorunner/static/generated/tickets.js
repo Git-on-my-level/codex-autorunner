@@ -1309,12 +1309,12 @@ function renderDispatchHistory(runId, data) {
             statsEl.title = `${ins} insertions, ${del} deletions${diffStats.files_changed ? `, ${diffStats.files_changed} files` : ""}`;
             head.appendChild(statsEl);
         }
-        // Turn duration: time from this dispatch to the next (chronologically later) one
+        // Turn duration until chronologically next dispatch (newer neighbor: index - 1; newest-first list).
         const thisTime = entry.created_at ? new Date(entry.created_at).getTime() : 0;
-        const nextEntry = entries[index + 1];
-        const nextTime = nextEntry?.created_at ? new Date(nextEntry.created_at).getTime() : 0;
-        if (thisTime && nextTime && nextTime > thisTime) {
-            const durSecs = Math.max(0, Math.round((nextTime - thisTime) / 1000));
+        const prevEntry = entries[index - 1];
+        const prevTime = prevEntry?.created_at ? new Date(prevEntry.created_at).getTime() : 0;
+        if (thisTime && prevTime && prevTime > thisTime) {
+            const durSecs = Math.max(0, Math.round((prevTime - thisTime) / 1000));
             const durEl = document.createElement("span");
             durEl.className = "dispatch-duration";
             durEl.textContent = formatElapsedSeconds(durSecs);
