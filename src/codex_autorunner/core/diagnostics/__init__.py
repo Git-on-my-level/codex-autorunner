@@ -4,7 +4,6 @@ from .process_monitor import (
     ProcessMonitorStore,
     build_process_monitor_summary,
     capture_process_monitor_sample,
-    format_process_monitor_compact,
 )
 from .process_snapshot import (
     ProcessCategory,
@@ -25,5 +24,4 @@ __all__ = [
     "capture_process_monitor_sample",
     "collect_processes",
     "enrich_with_ownership",
-    "format_process_monitor_compact",
 ]

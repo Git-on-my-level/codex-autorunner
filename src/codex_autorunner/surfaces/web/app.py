@@ -576,29 +576,29 @@ def create_hub_app(
                             exc,
                         )
 
-                async def _process_monitor_loop() -> None:
-                    while True:
-                        try:
-                            await asyncio.to_thread(
-                                _record_process_monitor_sample,
-                                app.state.config.root,
-                            )
-                        except (
-                            RuntimeError,
-                            OSError,
-                            ConnectionError,
-                            ValueError,
-                            TypeError,
-                        ) as exc:  # intentional: background loop must not crash
-                            safe_log(
-                                app.state.logger,
-                                logging.WARNING,
-                                "Hub process monitor sampling failed",
-                                exc,
-                            )
-                        await asyncio.sleep(DEFAULT_PROCESS_MONITOR_CADENCE_SECONDS)
+            async def _process_monitor_loop() -> None:
+                while True:
+                    try:
+                        await asyncio.to_thread(
+                            _record_process_monitor_sample,
+                            app.state.config.root,
+                        )
+                    except (
+                        RuntimeError,
+                        OSError,
+                        ConnectionError,
+                        ValueError,
+                        TypeError,
+                    ) as exc:  # intentional: background loop must not crash
+                        safe_log(
+                            app.state.logger,
+                            logging.WARNING,
+                            "Hub process monitor sampling failed",
+                            exc,
+                        )
+                    await asyncio.sleep(DEFAULT_PROCESS_MONITOR_CADENCE_SECONDS)
 
-                tasks.append(asyncio.create_task(_process_monitor_loop()))
+            tasks.append(asyncio.create_task(_process_monitor_loop()))
             # Default lane worker starts in _deferred_hub_startup so /health is not blocked.
             # Eager repo lifespans run there too; until then, /repos/* still activates via
             # _LazyRepoApp._ensure_ready when hub_started is True.

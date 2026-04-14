@@ -10,7 +10,7 @@ from typing import Any, Optional
 
 from ..locks import file_lock
 from ..runtime import summarize_opencode_lifecycle
-from ..text_utils import _parse_iso_timestamp, _truncate_text, lock_path_for
+from ..text_utils import _parse_iso_timestamp, lock_path_for
 from ..utils import atomic_write
 from .process_snapshot import ProcessOwnership, collect_processes, enrich_with_ownership
 
@@ -428,43 +428,6 @@ def build_process_monitor_summary(
     }
 
 
-def format_process_metric_compact(
-    label: str,
-    payload: dict[str, Any],
-    *,
-    include_history: bool,
-) -> str:
-    current = _coerce_int(payload.get("current"))
-    if not include_history:
-        return f"{label}: {current}"
-    average = float(payload.get("average") or 0.0)
-    p95 = _coerce_int(payload.get("p95"))
-    peak = _coerce_int(payload.get("peak"))
-    return f"{label}: {current} (avg {average:.1f}, tp95 {p95}, peak {peak})"
-
-
-def format_process_monitor_compact(
-    summary: dict[str, Any], *, max_chars: int = 240
-) -> str:
-    metrics = summary.get("metrics") or {}
-    include_history = bool(summary.get("status") != "ok")
-    parts = [
-        f"status={summary.get('status') or 'unknown'}",
-        format_process_metric_compact(
-            "opencode",
-            dict(metrics.get("opencode") or {}),
-            include_history=include_history,
-        ),
-        format_process_metric_compact(
-            "app-server",
-            dict(metrics.get("app_server") or {}),
-            include_history=include_history,
-        ),
-    ]
-    text = " | ".join(parts)
-    return _truncate_text(text, max_chars)
-
-
 __all__ = [
     "DEFAULT_PROCESS_MONITOR_CADENCE_SECONDS",
     "DEFAULT_PROCESS_MONITOR_WINDOW_SECONDS",
@@ -473,5 +436,4 @@ __all__ = [
     "ProcessMonitorStore",
     "build_process_monitor_summary",
     "capture_process_monitor_sample",
-    "format_process_monitor_compact",
 ]
