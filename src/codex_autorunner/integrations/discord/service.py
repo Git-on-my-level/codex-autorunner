@@ -285,6 +285,7 @@ from .interaction_registry import (
     slash_command_route_for_path,
     slash_command_workspace_lock_policy,
 )
+from .interaction_runtime import ensure_ephemeral_response_deferred
 from .interaction_session import (
     DiscordInteractionSession,
     InteractionSessionKind,
@@ -8764,6 +8765,24 @@ class DiscordBotService:
             source_user_id=source_user_id,
         )
 
+    async def _send_interrupt_component_response(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        text: str,
+    ) -> None:
+        deferred = await ensure_ephemeral_response_deferred(
+            self,
+            interaction_id,
+            interaction_token,
+        )
+        await self.send_or_respond_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text=text,
+        )
+
     async def _handle_cancel_turn_button(
         self,
         interaction_id: str,
@@ -8876,7 +8895,7 @@ class DiscordBotService:
             custom_id
         )
         if not execution_id or not source_message_id:
-            await self._respond_ephemeral(
+            await self._send_interrupt_component_response(
                 interaction_id,
                 interaction_token,
                 "Queued request is unavailable.",
@@ -8889,7 +8908,7 @@ class DiscordBotService:
             self._get_discord_thread_binding(channel_id=channel_id, mode=mode)
         )
         if current_thread is None:
-            await self._respond_ephemeral(
+            await self._send_interrupt_component_response(
                 interaction_id,
                 interaction_token,
                 "Queued request is unavailable.",
@@ -8900,7 +8919,7 @@ class DiscordBotService:
             execution_id,
         )
         if not promoted:
-            await self._respond_ephemeral(
+            await self._send_interrupt_component_response(
                 interaction_id,
                 interaction_token,
                 "Queued request is no longer pending.",
@@ -8914,7 +8933,7 @@ class DiscordBotService:
         if callable(get_running_execution):
             running_execution = get_running_execution(current_thread.thread_target_id)
             if running_execution is None:
-                await self._respond_ephemeral(
+                await self._send_interrupt_component_response(
                     interaction_id,
                     interaction_token,
                     "Queued request moved to the front.",
@@ -8947,7 +8966,7 @@ class DiscordBotService:
     ) -> None:
         source_message_id = custom_id.split(":", 1)[1].strip()
         if not source_message_id:
-            await self._respond_ephemeral(
+            await self._send_interrupt_component_response(
                 interaction_id,
                 interaction_token,
                 "Queued request is unavailable.",
@@ -9009,7 +9028,7 @@ class DiscordBotService:
             source_message_id,
         )
         if not promoted:
-            await self._respond_ephemeral(
+            await self._send_interrupt_component_response(
                 interaction_id,
                 interaction_token,
                 "Queued request is no longer pending.",
@@ -9022,7 +9041,7 @@ class DiscordBotService:
             self._get_discord_thread_binding(channel_id=channel_id, mode=mode)
         )
         if current_thread is None:
-            await self._respond_ephemeral(
+            await self._send_interrupt_component_response(
                 interaction_id,
                 interaction_token,
                 "Queued request moved to the front.",

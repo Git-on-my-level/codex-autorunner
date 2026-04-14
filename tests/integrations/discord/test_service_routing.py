@@ -3638,8 +3638,71 @@ async def test_component_interaction_queued_turn_interrupt_send_acknowledges_whe
         )
 
         assert interrupt_called is False
+        assert rest.followup_messages[-1]["payload"]["content"] == (
+            "Queued request moved to the front."
+        )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_queued_turn_interrupt_send_uses_followup_after_predefer(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    class _FakeThreadService:
+        def promote_queued_execution(
+            self, thread_target_id: str, execution_id: str
+        ) -> bool:
+            assert thread_target_id == "thread-1"
+            assert execution_id == "turn-2"
+            return True
+
+        def get_running_execution(self, thread_target_id: str) -> Any:
+            assert thread_target_id == "thread-1"
+            return None
+
+    try:
+        await store.upsert_binding(
+            channel_id="channel-1",
+            guild_id="guild-1",
+            workspace_path=str(tmp_path),
+            repo_id="repo-1",
+        )
+
+        service._get_discord_thread_binding = lambda **_kwargs: (  # type: ignore[method-assign]
+            _FakeThreadService(),
+            None,
+            SimpleNamespace(thread_target_id="thread-1"),
+        )
+
+        await service.defer_ephemeral(
+            interaction_id="interaction-1",
+            interaction_token="token-1",
+        )
+        await service._handle_queued_turn_interrupt_send_button(
+            "interaction-1",
+            "token-1",
+            channel_id="channel-1",
+            custom_id="qis:turn-2:m-2",
+            user_id="user-1",
+            message_id="progress-2",
+        )
+
+        assert len(rest.followup_messages) == 1
         assert (
-            rest.interaction_responses[-1]["payload"]["data"]["content"]
+            rest.followup_messages[0]["payload"]["content"]
             == "Queued request moved to the front."
         )
     finally:
