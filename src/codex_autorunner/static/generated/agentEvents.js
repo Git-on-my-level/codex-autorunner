@@ -357,7 +357,7 @@ export function parseAppServerEvent(payload) {
         let summary = fileSummary;
         let detailText = detail;
         if (!files.length && fallbackPreview && fallbackPreview !== "diff updated") {
-            const legacyDiffEntries = /^(\d+)\s+diff\s+entries$/i.exec(fallbackPreview.trim());
+            const legacyDiffEntries = /^(\d+)\s+diff\s+(?:entry|entries)$/i.exec(fallbackPreview.trim());
             if (legacyDiffEntries) {
                 const legacyN = Number(legacyDiffEntries[1]);
                 if (diffCount == null || diffCount === legacyN) {
