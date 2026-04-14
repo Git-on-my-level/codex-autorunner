@@ -2377,6 +2377,37 @@ def resolve_discord_thread_target(
             "Discord orchestration service unavailable: hub control-plane client not connected"
         )
     surface_key = managed_thread_surface_key or channel_id
+    existing_binding = None
+    existing_thread = None
+    get_binding = getattr(orchestration_service, "get_binding", None)
+    get_thread_target = getattr(orchestration_service, "get_thread_target", None)
+    if callable(get_binding):
+        with contextlib.suppress(
+            RuntimeError, ValueError, TypeError, KeyError, AttributeError
+        ):
+            existing_binding = get_binding(
+                surface_kind="discord",
+                surface_key=surface_key,
+            )
+    normalized_mode = str(mode or "").strip().lower()
+    existing_thread_target_id = (
+        str(getattr(existing_binding, "thread_target_id", "") or "").strip()
+        if str(getattr(existing_binding, "mode", "") or "").strip().lower()
+        == normalized_mode
+        else ""
+    )
+    if callable(get_thread_target) and existing_thread_target_id:
+        with contextlib.suppress(
+            RuntimeError, ValueError, TypeError, KeyError, AttributeError
+        ):
+            existing_thread = get_thread_target(existing_thread_target_id)
+    current_backend_thread_id = (
+        str(getattr(existing_thread, "backend_thread_id", "") or "").strip() or None
+    )
+    current_runtime_instance_id = (
+        str(getattr(existing_thread, "backend_runtime_instance_id", "") or "").strip()
+        or None
+    )
     runtime_agent = resolve_chat_runtime_agent(
         agent,
         agent_profile,
@@ -2404,6 +2435,10 @@ def resolve_discord_thread_target(
             resource_id=owner_id,
             binding_metadata={"channel_id": channel_id, "pma_enabled": pma_enabled},
             reusable_agent_ids=(runtime_agent,),
+            backend_thread_id=current_backend_thread_id,
+            backend_runtime_instance_id=current_runtime_instance_id,
+            existing_binding=existing_binding,
+            existing_thread=existing_thread,
         ),
     )
 

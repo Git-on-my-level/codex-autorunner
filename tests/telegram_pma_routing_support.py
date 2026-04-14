@@ -4010,7 +4010,7 @@ async def test_repo_interrupt_uses_orchestration_binding_for_text_turns(
         )
         with anyio.fail_after(2):
             while (
-                "Recovered stale session after backend thread was lost. Cancelled 1 queued turn(s)."
+                "Interrupted active turn. Cancelled 1 queued turn(s)."
                 not in handler._sent
             ):
                 await anyio.sleep(0.05)
@@ -4018,11 +4018,12 @@ async def test_repo_interrupt_uses_orchestration_binding_for_text_turns(
         await first_task
 
         assert handler._client.thread_start_calls == []
-        assert harness.interrupt_calls == []
-        assert (
-            "Recovered stale session after backend thread was lost. Cancelled 1 queued turn(s)."
-            in handler._sent
+        assert len(harness.interrupt_calls) == 1
+        assert harness.interrupt_calls[0][1:] == (
+            "repo-backend-thread-1",
+            "repo-backend-turn-1",
         )
+        assert "Interrupted active turn. Cancelled 1 queued turn(s)." in handler._sent
         assert "unexpected queued repo reply" not in handler._sent
     finally:
         release_first.set()
@@ -4618,7 +4619,7 @@ async def test_repo_interrupt_uses_orchestration_binding_for_hermes_text_turns(
         )
         with anyio.fail_after(2):
             while (
-                "Recovered stale session after backend thread was lost. Cancelled 1 queued turn(s)."
+                "Interrupted active turn. Cancelled 1 queued turn(s)."
                 not in handler._sent
             ):
                 await anyio.sleep(0.05)
@@ -4626,11 +4627,9 @@ async def test_repo_interrupt_uses_orchestration_binding_for_hermes_text_turns(
         await first_task
 
         assert handler._client.thread_start_calls == []
-        assert harness.interrupt_calls == []
-        assert (
-            "Recovered stale session after backend thread was lost. Cancelled 1 queued turn(s)."
-            in handler._sent
-        )
+        assert len(harness.interrupt_calls) == 1
+        assert harness.interrupt_calls[0][1:] == ("hermes-fresh-1", "hermes-turn-1")
+        assert "Interrupted active turn. Cancelled 1 queued turn(s)." in handler._sent
         assert "unexpected hermes queued reply" not in handler._sent
     finally:
         release_first.set()

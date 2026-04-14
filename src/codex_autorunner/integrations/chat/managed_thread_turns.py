@@ -428,6 +428,8 @@ def _resume_managed_thread_target(
         resume_kwargs["backend_thread_id"] = None
     elif desired_backend_thread_id is not None:
         resume_kwargs["backend_thread_id"] = desired_backend_thread_id
+    elif current_backend_thread_id is not None:
+        resume_kwargs["backend_thread_id"] = current_backend_thread_id
     resume_kwargs["backend_runtime_instance_id"] = desired_runtime_instance_id
     resumed_thread = orchestration_service.resume_thread_target(
         thread.thread_target_id,
@@ -641,9 +643,18 @@ def resolve_managed_thread_target(
                 reusable_agent_ids=reusable_agent_ids,
                 canonical_workspace=canonical_workspace,
             )
+    clear_backend_thread_id = (
+        request.mode == "pma"
+        and desired_backend_thread_id is None
+        and current_backend_thread_id is not None
+    )
     should_resume_reusable = reusable_thread and (
         str(getattr(thread, "lifecycle_status", "") or "").strip().lower() != "active"
-        or current_backend_thread_id != desired_backend_thread_id
+        or clear_backend_thread_id
+        or (
+            desired_backend_thread_id is not None
+            and current_backend_thread_id != desired_backend_thread_id
+        )
         or (
             desired_runtime_instance_id is not None
             and current_runtime_instance_id != desired_runtime_instance_id
@@ -654,9 +665,7 @@ def resolve_managed_thread_target(
         thread = _resume_managed_thread_target(
             orchestration_service,
             thread,
-            clear_backend_thread_id=(
-                request.mode == "pma" and desired_backend_thread_id is None
-            ),
+            clear_backend_thread_id=clear_backend_thread_id,
             desired_backend_thread_id=desired_backend_thread_id,
             current_backend_thread_id=current_backend_thread_id,
             desired_runtime_instance_id=desired_runtime_instance_id,
