@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import logging
@@ -2457,7 +2458,8 @@ Compact canceled.""",
 Applying summary...""",
             reply_markup=None,
         )
-        status = self._write_compact_status(
+        status = await asyncio.to_thread(
+            self._write_compact_status,
             "running",
             "Applying summary...",
             chat_id=callback.chat_id,
@@ -2481,7 +2483,8 @@ Applying summary...""",
             message, record, state.summary_text
         )
         if not success:
-            status = self._write_compact_status(
+            status = await asyncio.to_thread(
+                self._write_compact_status,
                 "error",
                 failure_message or "Failed to start new thread with summary.",
                 chat_id=callback.chat_id,
@@ -2507,7 +2510,8 @@ Failed to start new thread with summary.""",
                     callback.chat_id, failure_message, thread_id=callback.thread_id
                 )
             return
-        status = self._write_compact_status(
+        status = await asyncio.to_thread(
+            self._write_compact_status,
             "ok",
             "Summary applied.",
             chat_id=callback.chat_id,
@@ -2689,7 +2693,8 @@ Summary applied.""",
             await self._answer_callback(callback, "Starting update...")
             callback_answered = True
         try:
-            _spawn_update_process(
+            await asyncio.to_thread(
+                _spawn_update_process,
                 repo_url=repo_url,
                 repo_ref=repo_ref,
                 update_dir=update_dir,
@@ -3037,7 +3042,8 @@ Summary applied.""",
         message = status.message
         if state == "running":
             message = "Compact apply interrupted by restart. Please retry."
-            status = self._write_compact_status(
+            status = await asyncio.to_thread(
+                self._write_compact_status,
                 "interrupted",
                 message,
                 chat_id=chat_id,
