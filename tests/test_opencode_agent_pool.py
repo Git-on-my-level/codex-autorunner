@@ -195,6 +195,29 @@ class _ContextualHarnessFactory:
         return harness
 
 
+@dataclass
+class _SequentialContextualHarnessFactory:
+    harnesses: dict[tuple[str, Optional[str]], list[_FakeHarness]]
+    calls: list[tuple[str, Optional[str]]] = field(default_factory=list)
+
+    def make_harness(self, ctx: Any):
+        requested_agent = getattr(ctx, "_requested_agent_id", None)
+        requested_profile = getattr(ctx, "_requested_agent_profile", None)
+        key = (
+            str(requested_agent or "").strip().lower(),
+            (
+                str(requested_profile).strip().lower()
+                if isinstance(requested_profile, str) and requested_profile.strip()
+                else None
+            ),
+        )
+        self.calls.append(key)
+        harnesses = self.harnesses.get(key)
+        if not harnesses:
+            raise AssertionError(f"Unexpected harness resolution request: {key!r}")
+        return harnesses.pop(0)
+
+
 def _build_descriptor(
     agent_id: str,
     *,
@@ -963,6 +986,37 @@ async def test_run_turn_passes_model_reasoning_and_reuses_thread_target(
     assert harness.calls[1]["prompt"] == "main\n\nmore\n\nend"
     assert harness.calls[1]["approval_mode"] == "on-request"
     assert harness.calls[1]["sandbox_policy"] == "workspaceWrite"
+
+
+@pytest.mark.asyncio
+async def test_run_turn_reuses_started_harness_instance_for_wait_for_turn(
+    tmp_path: Path,
+):
+    started_harness = _FakeHarness([_HarnessScript(assistant_text="done")])
+    mismatched_harness = _FakeHarness([])
+    factory = _SequentialContextualHarnessFactory(
+        harnesses={("codex", None): [started_harness, mismatched_harness]}
+    )
+    pool = _make_pool(
+        tmp_path,
+        started_harness,
+        approval_mode="yolo",
+        descriptors={"codex": _build_contextual_descriptor("codex", factory)},
+    )
+
+    result = await pool.run_turn(
+        AgentTurnRequest(
+            agent_id="codex",
+            prompt="main prompt",
+            workspace_root=tmp_path,
+        )
+    )
+
+    assert result.text == "done"
+    assert result.error is None
+    assert factory.calls == [("codex", None)]
+    assert len(started_harness.calls) == 1
+    assert mismatched_harness.calls == []
 
 
 @pytest.mark.asyncio
