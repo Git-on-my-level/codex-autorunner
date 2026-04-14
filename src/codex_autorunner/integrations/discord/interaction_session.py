@@ -6,7 +6,7 @@ from collections import OrderedDict
 from typing import Any, Optional
 
 from .components import DISCORD_SELECT_OPTION_MAX_OPTIONS
-from .errors import DiscordAPIError
+from .errors import DiscordAPIError, is_unknown_interaction_error
 from .rendering import truncate_for_discord
 from .rest import DiscordRestClient
 
@@ -57,6 +57,7 @@ class DiscordInteractionSession:
         self.last_delivery_status: Optional[str] = None
         self.last_delivery_error: Optional[str] = None
         self.last_delivery_message_id: Optional[str] = None
+        self._expired_interaction_error: Optional[str] = None
 
     def refresh(
         self,
@@ -72,6 +73,9 @@ class DiscordInteractionSession:
 
     def has_initial_response(self) -> bool:
         return self.initial_response is not None
+
+    def interaction_has_expired(self) -> bool:
+        return self._expired_interaction_error is not None
 
     def is_deferred(self) -> bool:
         return self.initial_response in {
@@ -115,6 +119,13 @@ class DiscordInteractionSession:
         if self.initial_response is None:
             self.initial_response = mode
 
+    def mark_expired(self, *, error: Optional[str] = None) -> None:
+        if self._expired_interaction_error is None:
+            self._expired_interaction_error = error or "interaction expired"
+            return
+        if error is not None and error.strip():
+            self._expired_interaction_error = error
+
     def _note_delivery(
         self,
         status: str,
@@ -125,6 +136,28 @@ class DiscordInteractionSession:
         self.last_delivery_status = status
         self.last_delivery_message_id = message_id
         self.last_delivery_error = error
+        if is_unknown_interaction_error(error):
+            self.mark_expired(error=error)
+
+    def _skip_if_expired(
+        self,
+        *,
+        operation: str,
+        failure_status: Optional[str] = None,
+    ) -> bool:
+        if not self.interaction_has_expired():
+            return False
+        if failure_status is not None and self.last_delivery_status is None:
+            self._note_delivery(
+                failure_status,
+                error=self._expired_interaction_error,
+            )
+        self._logger.warning(
+            "Skipping %s for expired interaction_id=%s",
+            operation,
+            self.interaction_id,
+        )
+        return True
 
     def _require_unacknowledged(
         self,
@@ -204,6 +237,8 @@ class DiscordInteractionSession:
         return True
 
     async def defer_public(self) -> bool:
+        if self._skip_if_expired(operation="defer_public", failure_status="ack_failed"):
+            return False
         self._require_unacknowledged(operation="defer_public")
         try:
             created = await self._create_initial_response(
@@ -223,6 +258,11 @@ class DiscordInteractionSession:
             return False
 
     async def defer_ephemeral(self) -> bool:
+        if self._skip_if_expired(
+            operation="defer_ephemeral",
+            failure_status="ack_failed",
+        ):
+            return False
         self._require_unacknowledged(operation="defer_ephemeral")
         try:
             created = await self._create_initial_response(
@@ -242,6 +282,11 @@ class DiscordInteractionSession:
             return False
 
     async def defer_component_update(self) -> bool:
+        if self._skip_if_expired(
+            operation="defer_component_update",
+            failure_status="ack_failed",
+        ):
+            return False
         self._require_unacknowledged(
             operation="defer_component_update",
             allowed_kinds={InteractionSessionKind.COMPONENT},
@@ -270,6 +315,11 @@ class DiscordInteractionSession:
         ephemeral: bool = False,
         components: Optional[list[dict[str, Any]]] = None,
     ) -> None:
+        if self._skip_if_expired(
+            operation="send_message",
+            failure_status="initial_response_failed",
+        ):
+            return
         content = self._sanitize_content(text)
         if self.initial_response is None:
             data: dict[str, Any] = {"content": content}
@@ -285,6 +335,9 @@ class DiscordInteractionSession:
                 self._note_delivery("initial_response_sent")
                 return
             except Exception as exc:
+                self._note_delivery("initial_response_failed", error=str(exc))
+                if self._skip_if_expired(operation="send_message_followup"):
+                    return
                 sent_followup = await self._send_followup_payload(
                     self._followup_payload(
                         content=content,
@@ -296,7 +349,6 @@ class DiscordInteractionSession:
                     self.initial_response = InteractionInitialResponse.IMMEDIATE_MESSAGE
                     return
                 label = "ephemeral" if ephemeral else "public"
-                self._note_delivery("initial_response_failed", error=str(exc))
                 self._logger.error(
                     "Failed to send %s response: %s (interaction_id=%s)",
                     label,
@@ -336,6 +388,11 @@ class DiscordInteractionSession:
         components: Optional[list[dict[str, Any]]] = None,
         ephemeral: bool = False,
     ) -> bool:
+        if self._skip_if_expired(
+            operation="send_followup",
+            failure_status="followup_failed",
+        ):
+            return False
         self._require_followup_allowed(operation="send_followup")
         return await self._send_followup_payload(
             self._followup_payload(
@@ -351,6 +408,11 @@ class DiscordInteractionSession:
         text: str,
         components: Optional[list[dict[str, Any]]] = None,
     ) -> bool:
+        if self._skip_if_expired(
+            operation="edit_original_message",
+            failure_status="original_response_edit_failed",
+        ):
+            return False
         self._require_original_edit_allowed(operation="edit_original_message")
         application_id = self._application_id()
         if not application_id:
@@ -381,6 +443,11 @@ class DiscordInteractionSession:
         text: str,
         components: list[dict[str, Any]],
     ) -> None:
+        if self._skip_if_expired(
+            operation="update_component_message",
+            failure_status="component_update_failed",
+        ):
+            return
         content = self._sanitize_content(text)
         if self.initial_response is None:
             self._require_unacknowledged(
@@ -401,6 +468,9 @@ class DiscordInteractionSession:
                 self._note_delivery("component_update_sent")
                 return
             except DiscordAPIError as exc:
+                self._note_delivery("component_update_failed", error=str(exc))
+                if self._skip_if_expired(operation="update_component_followup"):
+                    return
                 sent_followup = await self._send_followup_payload(
                     self._followup_payload(
                         content=content,
@@ -411,7 +481,6 @@ class DiscordInteractionSession:
                 if sent_followup:
                     self.initial_response = InteractionInitialResponse.COMPONENT_UPDATE
                     return
-                self._note_delivery("component_update_failed", error=str(exc))
                 self._logger.error(
                     "Failed to update component message: %s (interaction_id=%s)",
                     exc,
@@ -439,6 +508,11 @@ class DiscordInteractionSession:
         *,
         choices: list[dict[str, str]],
     ) -> None:
+        if self._skip_if_expired(
+            operation="respond_autocomplete",
+            failure_status="autocomplete_failed",
+        ):
+            return
         self._require_unacknowledged(
             operation="respond_autocomplete",
             allowed_kinds={InteractionSessionKind.AUTOCOMPLETE},
@@ -480,6 +554,11 @@ class DiscordInteractionSession:
         title: str,
         components: list[dict[str, Any]],
     ) -> None:
+        if self._skip_if_expired(
+            operation="respond_modal",
+            failure_status="modal_failed",
+        ):
+            return
         self._require_unacknowledged(
             operation="respond_modal",
             allowed_kinds={
