@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from ...core.diagnostics import build_process_monitor_summary
 from ...core.text_utils import _parse_iso_timestamp
 
 
@@ -254,3 +255,138 @@ def build_status_block_lines(context: StatusBlockContext) -> list[str]:
     _append_status_line(lines, "Active turn", context.turn_id)
     lines.extend(line for line in context.extra_lines if _clean_line(line))
     return lines
+
+
+def format_process_monitor_lines(
+    summary: Optional[dict[str, Any]],
+    *,
+    include_history: bool = False,
+    include_header: bool = True,
+) -> list[str]:
+    if not isinstance(summary, dict):
+        return []
+    metrics = summary.get("metrics")
+    if not isinstance(metrics, dict):
+        return []
+    lines: list[str] = []
+    status = _clean_line(summary.get("status")) or "unknown"
+    sample_count = _coerce_number(summary.get("sample_count"))
+    cadence_seconds = _coerce_number(summary.get("cadence_seconds"))
+    window_seconds = _coerce_number(summary.get("window_seconds"))
+    header_bits = [f"Process monitor: {status}"]
+    if include_header:
+        detail_bits: list[str] = []
+        if isinstance(window_seconds, float) and window_seconds > 0:
+            detail_bits.append(f"window={int(round(window_seconds / 3600))}h")
+        if isinstance(sample_count, float) and sample_count > 0:
+            detail_bits.append(f"samples={int(sample_count)}")
+        if isinstance(cadence_seconds, float) and cadence_seconds > 0:
+            detail_bits.append(f"cadence={int(cadence_seconds)}s")
+        if detail_bits:
+            header_bits.append(f"({' '.join(detail_bits)})")
+    lines.append(" ".join(header_bits))
+
+    def _metric_line(label: str, payload: Any) -> Optional[str]:
+        if not isinstance(payload, dict):
+            return None
+        current = _coerce_number(payload.get("current"))
+        if current is None:
+            return None
+        line = f"{label}: {int(current) if current.is_integer() else current}"
+        if include_history:
+            average = _coerce_number(payload.get("average"))
+            p95 = _coerce_number(payload.get("p95"))
+            peak = _coerce_number(payload.get("peak"))
+            history_bits: list[str] = []
+            if average is not None:
+                history_bits.append(f"avg {average:.1f}")
+            if p95 is not None:
+                history_bits.append(
+                    f"tp95 {int(p95) if p95.is_integer() else f'{p95:.1f}'}"
+                )
+            if peak is not None:
+                history_bits.append(
+                    f"peak {int(peak) if peak.is_integer() else f'{peak:.1f}'}"
+                )
+            if history_bits:
+                line += f" ({', '.join(history_bits)})"
+        reason = _clean_line(payload.get("reason"))
+        if reason and payload.get("abnormal") is True:
+            line += " high"
+        return line
+
+    for label, key in (
+        ("OpenCode", "opencode"),
+        ("App server", "app_server"),
+        ("Total", "total"),
+    ):
+        rendered = _metric_line(label, metrics.get(key))
+        if rendered:
+            lines.append(rendered)
+
+    latest = summary.get("latest")
+    if isinstance(latest, dict):
+        lifecycle = latest.get("opencode_lifecycle")
+        counts = lifecycle.get("counts") if isinstance(lifecycle, dict) else None
+        if isinstance(counts, dict) and counts:
+            active = int(counts.get("active") or 0)
+            stale = int(counts.get("stale") or 0)
+            spawned = int(counts.get("spawned_local") or 0)
+            reuse = int(counts.get("registry_reuse") or 0)
+            lines.append(
+                "OpenCode lifecycle: "
+                f"active={active} stale={stale} spawned_local={spawned} "
+                f"registry_reuse={reuse}"
+            )
+        ownership = latest.get("ownership")
+        if isinstance(ownership, dict):
+            opencode = ownership.get("opencode")
+            app_server = ownership.get("app_server")
+            ownership_parts: list[str] = []
+            if isinstance(opencode, dict):
+                ownership_parts.append(
+                    "opencode "
+                    + ", ".join(
+                        f"{key}={int(value)}"
+                        for key, value in sorted(opencode.items())
+                        if _coerce_number(value)
+                    )
+                )
+            if isinstance(app_server, dict):
+                ownership_parts.append(
+                    "app-server "
+                    + ", ".join(
+                        f"{key}={int(value)}"
+                        for key, value in sorted(app_server.items())
+                        if _coerce_number(value)
+                    )
+                )
+            ownership_parts = [
+                part for part in ownership_parts if not part.endswith(" ")
+            ]
+            if ownership_parts:
+                lines.append("Ownership: " + " | ".join(ownership_parts))
+    return lines
+
+
+def build_process_monitor_lines_for_root(
+    root: Any,
+    *,
+    include_history: bool,
+    capture_if_stale: bool = True,
+) -> list[str]:
+    if root is None:
+        return []
+    try:
+        summary = build_process_monitor_summary(
+            root,
+            capture_if_stale=capture_if_stale,
+        )
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return []
+    if not include_history and summary.get("status") == "ok":
+        return []
+    return format_process_monitor_lines(
+        summary,
+        include_history=include_history,
+    )

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 
+from .diagnostics import build_process_monitor_summary
 from .filebox import BOXES, empty_listing, list_filebox
 from .flows.models import flow_run_duration_seconds
 from .freshness import (
@@ -400,6 +401,15 @@ async def build_hub_snapshot_payload(
     *,
     gather_inbox: Callable[..., list[dict[str, Any]]],
 ) -> dict[str, Any]:
+    async def _build_process_monitor_payload() -> Optional[dict[str, Any]]:
+        if hub_root is None:
+            return None
+        return await asyncio.to_thread(
+            build_process_monitor_summary,
+            hub_root,
+            capture_if_stale=False,
+        )
+
     generated_at = iso_now()
     stale_threshold_seconds = _resolve_pma_freshness_threshold_seconds(supervisor)
     if supervisor is None:
@@ -414,6 +424,7 @@ async def build_hub_snapshot_payload(
             "lifecycle_events": [],
             "pma_files_detail": empty_files,
             "pma_threads": [],
+            "process_monitor": None,
             "automation": {
                 "subscriptions": {"active_count": 0, "sample": []},
                 "timers": {"pending_count": 0, "sample": []},
@@ -436,26 +447,29 @@ async def build_hub_snapshot_payload(
         }
 
     limits = PmaSnapshotLimits.from_supervisor(supervisor)
-    repos, agent_workspaces, inbox, lifecycle_events = await asyncio.gather(
-        asyncio.to_thread(
-            _build_repo_summaries,
-            supervisor,
-            stale_threshold_seconds=stale_threshold_seconds,
-            limits=limits,
-        ),
-        asyncio.to_thread(
-            _build_agent_workspace_summaries,
-            supervisor,
-            hub_root=hub_root,
-            limits=limits,
-        ),
-        asyncio.to_thread(
-            gather_inbox,
-            supervisor,
-            max_text_chars=limits.max_text_chars,
-            stale_threshold_seconds=stale_threshold_seconds,
-        ),
-        asyncio.to_thread(_gather_lifecycle_events, supervisor, limit=20),
+    repos, agent_workspaces, inbox, lifecycle_events, process_monitor = (
+        await asyncio.gather(
+            asyncio.to_thread(
+                _build_repo_summaries,
+                supervisor,
+                stale_threshold_seconds=stale_threshold_seconds,
+                limits=limits,
+            ),
+            asyncio.to_thread(
+                _build_agent_workspace_summaries,
+                supervisor,
+                hub_root=hub_root,
+                limits=limits,
+            ),
+            asyncio.to_thread(
+                gather_inbox,
+                supervisor,
+                max_text_chars=limits.max_text_chars,
+                stale_threshold_seconds=stale_threshold_seconds,
+            ),
+            asyncio.to_thread(_gather_lifecycle_events, supervisor, limit=20),
+            _build_process_monitor_payload(),
+        )
     )
     inbox = inbox[: limits.max_messages]
 
@@ -496,6 +510,7 @@ async def build_hub_snapshot_payload(
         "pma_files": pma_files,
         "pma_files_detail": pma_files_detail,
         "pma_threads": pma_threads,
+        "process_monitor": process_monitor,
         "automation": automation,
         "lifecycle_events": lifecycle_events,
         "freshness": freshness,

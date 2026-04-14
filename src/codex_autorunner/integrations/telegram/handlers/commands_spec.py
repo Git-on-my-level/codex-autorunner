@@ -118,6 +118,11 @@ def build_command_specs(handlers: Any) -> dict[str, CommandSpec]:
             "show current binding, thread, and collaboration status",
             handlers._handle_status,
         ),
+        "processes": _spec(
+            "processes",
+            "show process monitor summary",
+            handlers._handle_processes,
+        ),
         "files": _spec(
             "files",
             "list or manage Telegram file inbox/outbox",

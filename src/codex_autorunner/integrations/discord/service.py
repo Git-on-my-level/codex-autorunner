@@ -346,6 +346,7 @@ from .workspace_commands import (
     handle_debug,
     handle_help,
     handle_ids,
+    handle_processes,
     handle_status,
 )
 
@@ -6025,6 +6026,21 @@ class DiscordBotService:
             channel_id=channel_id,
             guild_id=guild_id,
             user_id=user_id,
+        )
+
+    async def _handle_processes(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+    ) -> None:
+        await DiscordBotService._run_effectful_handler(
+            self,
+            handle_processes,
+            interaction_id,
+            interaction_token,
+            channel_id=channel_id,
         )
 
     async def _get_active_flow_info(

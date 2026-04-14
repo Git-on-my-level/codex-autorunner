@@ -686,6 +686,20 @@ _SLASH_ROUTES: tuple[SlashCommandRoute, ...] = (
         exposure="public",
     ),
     SlashCommandRoute(
+        id="car.processes",
+        canonical_path=("car", "processes"),
+        registered_path=("car", "processes"),
+        description="Show process monitor summary",
+        handler=lambda *args, **kwargs: _dispatch_service_method(
+            *args,
+            **kwargs,
+            method_name="_handle_processes",
+            include_channel_id=True,
+        ),
+        ack_policy="defer_ephemeral",
+        exposure="public",
+    ),
+    SlashCommandRoute(
         id="car.new",
         canonical_path=("car", "new"),
         registered_path=("car", "new"),

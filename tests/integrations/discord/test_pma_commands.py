@@ -18,6 +18,7 @@ from codex_autorunner.integrations.discord.state import DiscordStateStore
 class _FakeRest:
     def __init__(self) -> None:
         self.interaction_responses: list[dict[str, Any]] = []
+        self.followup_messages: list[dict[str, Any]] = []
         self.command_sync_calls: list[dict[str, Any]] = []
 
     async def create_interaction_response(
@@ -39,6 +40,23 @@ class _FakeRest:
         self, *, channel_id: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
         return {"id": "msg-1", "channel_id": channel_id, "payload": payload}
+
+    async def create_followup_message(
+        self,
+        *,
+        application_id: str | None = None,
+        interaction_token: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        self.followup_messages.append(
+            {
+                "application_id": application_id,
+                "interaction_token": interaction_token,
+                "payload": payload,
+            }
+        )
+        return {"id": "followup-1", "payload": payload}
 
     async def bulk_overwrite_application_commands(
         self,
@@ -140,6 +158,20 @@ def _bind_interaction(*, path: str, user_id: str = "user-1") -> dict[str, Any]:
                     "options": [{"type": 3, "name": "workspace", "value": path}],
                 }
             ],
+        },
+    }
+
+
+def _car_processes_interaction(*, user_id: str = "user-1") -> dict[str, Any]:
+    return {
+        "id": "inter-processes",
+        "token": "token-processes",
+        "channel_id": "channel-1",
+        "guild_id": "guild-1",
+        "member": {"user": {"id": user_id}},
+        "data": {
+            "name": "car",
+            "options": [{"type": 1, "name": "processes", "options": []}],
         },
     }
 
@@ -369,6 +401,57 @@ async def test_pma_status_unbound_channel_reports_disabled(tmp_path: Path) -> No
 
 
 @pytest.mark.anyio
+async def test_pma_status_includes_process_summary_when_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+    await store.update_pma_state(
+        channel_id="channel-1",
+        pma_enabled=True,
+        pma_prev_workspace_path=str(workspace),
+        pma_prev_repo_id="repo-1",
+    )
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.discord.pma_commands.build_process_monitor_lines_for_root",
+        lambda *_args, **_kwargs: [
+            "Process monitor: warning (window=3h samples=6 cadence=120s)",
+            "OpenCode: 18 (avg 7.0, tp95 14, peak 18) high",
+        ],
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway([_pma_interaction(subcommand="status")])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        assert "PMA mode: enabled" in content
+        assert "Process monitor: warning" in content
+        assert "tp95 14" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_pma_off_unbound_channel_is_idempotent(tmp_path: Path) -> None:
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
     await store.initialize()
@@ -491,5 +574,42 @@ async def test_pma_target_group_returns_unknown_subcommand(tmp_path: Path) -> No
         assert len(rest.interaction_responses) == 1
         content = rest.interaction_responses[0]["payload"]["data"]["content"]
         assert content == "Unknown PMA subcommand. Use on, off, or status."
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_processes_returns_process_summary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.discord.workspace_commands.build_process_monitor_lines_for_root",
+        lambda *_args, **_kwargs: [
+            "Process monitor: warning (window=3h samples=8 cadence=120s)",
+            "OpenCode: 12 (avg 5.0, tp95 9, peak 12) high",
+            "Total: 16 (avg 7.0, tp95 13, peak 16) high",
+        ],
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway([_car_processes_interaction()])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        content = rest.followup_messages[0]["payload"]["content"]
+        assert "Process monitor root:" in content
+        assert "Process monitor: warning" in content
+        assert "tp95 9" in content
     finally:
         await store.close()

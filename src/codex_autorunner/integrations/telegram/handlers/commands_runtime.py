@@ -39,6 +39,7 @@ from ...chat.session_messages import (
     format_update_started_message,
     format_update_status_message,
 )
+from ...chat.status_diagnostics import build_process_monitor_lines_for_root
 from ...chat.turn_metrics import compose_turn_response_with_footer
 from ...chat.update_notifier import mark_update_status_notified
 from ..adapter import (
@@ -1434,9 +1435,17 @@ class TelegramCommandHandlers(
         elif action in ("off", "disable", "false"):
             enabled = False
         elif action in ("status", "show", ""):
+            text = status_text(record)
+            if record is not None and record.pma_enabled and self._hub_root is not None:
+                process_lines = build_process_monitor_lines_for_root(
+                    self._hub_root,
+                    include_history=False,
+                )
+                if process_lines:
+                    text = "\n".join([text, *process_lines])
             await self._send_message(
                 message.chat_id,
-                status_text(record),
+                text,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )

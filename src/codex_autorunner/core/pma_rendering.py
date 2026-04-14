@@ -174,6 +174,68 @@ def _render_availability_section(
     lines.append("")
 
 
+def _render_process_monitor_section(
+    snapshot: dict[str, Any],
+    lines: list[str],
+    *,
+    max_field_chars: int,
+) -> None:
+    payload = snapshot.get("process_monitor")
+    if not isinstance(payload, Mapping):
+        return
+    status = _field(payload, "status", max_field_chars) or "unknown"
+    if status == "ok":
+        return
+    metrics = payload.get("metrics") or {}
+    if not isinstance(metrics, Mapping):
+        return
+    cadence_seconds = _field(payload, "cadence_seconds", max_field_chars)
+    window_seconds = payload.get("window_seconds")
+    sample_count = _field(payload, "sample_count", max_field_chars)
+    latest_at = _field(payload, "latest_at", max_field_chars)
+    lines.append("Process Monitor:")
+    header = f"- status={status}"
+    if cadence_seconds:
+        header += f" cadence_seconds={cadence_seconds}"
+    if isinstance(window_seconds, (int, float)) and int(window_seconds) > 0:
+        header += f" window_hours={int(window_seconds) // 3600}"
+    if sample_count:
+        header += f" samples={sample_count}"
+    if latest_at:
+        header += f" latest_at={latest_at}"
+    lines.append(header)
+    for label, key in (
+        ("opencode", "opencode"),
+        ("app_server", "app_server"),
+        ("total", "total"),
+    ):
+        metric = metrics.get(key)
+        if not isinstance(metric, Mapping):
+            continue
+        current = _field(metric, "current", max_field_chars)
+        average = metric.get("average")
+        tp95 = _field(metric, "p95", max_field_chars)
+        peak = _field(metric, "peak", max_field_chars)
+        abnormal = bool(metric.get("abnormal"))
+        line = f"- {label}={current or '0'}"
+        if average is not None:
+            line += f" avg={float(average):.1f}"
+        if tp95:
+            line += f" tp95={tp95}"
+        if peak:
+            line += f" peak={peak}"
+        if abnormal:
+            line += " HIGH"
+        lines.append(line)
+    reasons = payload.get("reasons")
+    if isinstance(reasons, Sequence):
+        for reason in reasons:
+            text = _truncate(str(reason or ""), max_field_chars * 4)
+            if text:
+                lines.append(f"- reason: {text}")
+    lines.append("")
+
+
 def _render_action_queue_item(
     item: Mapping[str, Any],
     lines: list[str],
@@ -824,6 +886,7 @@ def _render_hub_snapshot(
         max_text_chars=max_text_chars,
     )
     _render_freshness_section(snapshot, lines, fc)
+    _render_process_monitor_section(snapshot, lines, max_field_chars=fc)
     _render_action_queue_section(
         snapshot,
         lines,

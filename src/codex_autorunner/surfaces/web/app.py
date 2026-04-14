@@ -13,6 +13,12 @@ from starlette.middleware.gzip import GZipMiddleware
 from starlette.types import ASGIApp
 
 from ...core.config import parse_flow_retention_config
+from ...core.diagnostics import (
+    DEFAULT_PROCESS_MONITOR_CADENCE_SECONDS,
+    DEFAULT_PROCESS_MONITOR_WINDOW_SECONDS,
+    ProcessMonitorStore,
+    capture_process_monitor_sample,
+)
 from ...core.filebox_retention import (
     prune_filebox_root,
     resolve_filebox_retention_policy,
@@ -118,6 +124,15 @@ async def _run_prune_loop(
                 safe_log(logger, logging.WARNING, failure_message, exc)
     except asyncio.CancelledError:
         return
+
+
+def _record_process_monitor_sample(root: Path) -> None:
+    store = ProcessMonitorStore(root)
+    store.record_sample(
+        capture_process_monitor_sample(root),
+        cadence_seconds=DEFAULT_PROCESS_MONITOR_CADENCE_SECONDS,
+        window_seconds=DEFAULT_PROCESS_MONITOR_WINDOW_SECONDS,
+    )
 
 
 def create_hub_app(
@@ -560,6 +575,30 @@ def create_hub_app(
                             "PMA lane worker registration failed",
                             exc,
                         )
+
+                async def _process_monitor_loop() -> None:
+                    while True:
+                        try:
+                            await asyncio.to_thread(
+                                _record_process_monitor_sample,
+                                app.state.config.root,
+                            )
+                        except (
+                            RuntimeError,
+                            OSError,
+                            ConnectionError,
+                            ValueError,
+                            TypeError,
+                        ) as exc:  # intentional: background loop must not crash
+                            safe_log(
+                                app.state.logger,
+                                logging.WARNING,
+                                "Hub process monitor sampling failed",
+                                exc,
+                            )
+                        await asyncio.sleep(DEFAULT_PROCESS_MONITOR_CADENCE_SECONDS)
+
+                tasks.append(asyncio.create_task(_process_monitor_loop()))
             # Default lane worker starts in _deferred_hub_startup so /health is not blocked.
             # Eager repo lifespans run there too; until then, /repos/* still activates via
             # _LazyRepoApp._ensure_ready when hub_started is True.

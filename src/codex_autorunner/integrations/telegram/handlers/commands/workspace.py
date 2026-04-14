@@ -43,6 +43,7 @@ from ....chat.session_messages import (
 )
 from ....chat.status_diagnostics import (
     StatusBlockContext,
+    build_process_monitor_lines_for_root,
     build_status_block_lines,
 )
 from ....chat.thread_summaries import _format_resume_timestamp
@@ -171,6 +172,24 @@ def _telegram_status_base_lines(
 
 
 class WorkspaceCommands(TelegramCommandSupportMixin):
+    def _process_monitor_root(
+        self,
+        record: Optional["TelegramTopicRecord"],
+        *,
+        allow_fallback: bool = False,
+    ) -> Optional[Path]:
+        if record is not None and getattr(record, "pma_enabled", False):
+            hub_root = getattr(self, "_hub_root", None)
+            if hub_root is not None:
+                return Path(hub_root)
+        if record is not None and record.workspace_path:
+            return Path(record.workspace_path)
+        if allow_fallback:
+            config_root = getattr(getattr(self, "_config", None), "root", None)
+            if config_root is not None:
+                return Path(config_root)
+        return None
+
     def _resolve_workspace_path(
         self,
         record: Optional["TelegramTopicRecord"],
@@ -3615,6 +3634,12 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                 self._logger.debug(
                     "status: hub repo status aggregation failed", exc_info=True
                 )
+        lines.extend(
+            build_process_monitor_lines_for_root(
+                self._process_monitor_root(record),
+                include_history=False,
+            )
+        )
 
         if not record.workspace_path and not is_pma:
             lines.append("Use /bind <repo_id> or /bind <path>.")
@@ -3642,6 +3667,32 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                 finally:
                     store.close()
 
+        await self._send_message(
+            message.chat_id,
+            "\n".join(lines),
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+
+    async def _handle_processes(
+        self, message: TelegramMessage, _args: str = "", _runtime: Optional[Any] = None
+    ) -> None:
+        key = await self._resolve_topic_key(message.chat_id, message.thread_id)
+        record = await self._router.get_topic(key)
+        root = self._process_monitor_root(record, allow_fallback=True)
+        if root is None:
+            await self._send_message(
+                message.chat_id,
+                "Process monitor unavailable; no workspace or hub root is bound.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        lines = [f"Process monitor root: {root}"]
+        lines.extend(
+            build_process_monitor_lines_for_root(root, include_history=True)
+            or ["Process monitor unavailable."]
+        )
         await self._send_message(
             message.chat_id,
             "\n".join(lines),

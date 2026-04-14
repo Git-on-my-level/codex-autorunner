@@ -191,7 +191,8 @@ def test_connect_readonly_skips_bootstrap_initialize(
     initialize_calls: list[str] = []
 
     def _record_initialize(self) -> None:  # type: ignore[no-untyped-def]
-        initialize_calls.append("called")
+        if Path(self.hub_root) == hub_root.resolve():
+            initialize_calls.append("called")
 
     monkeypatch.setattr(
         "codex_autorunner.core.pma_thread_store.PmaThreadStoreBootstrap.initialize",

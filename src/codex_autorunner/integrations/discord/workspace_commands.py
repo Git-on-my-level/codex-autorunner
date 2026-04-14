@@ -11,6 +11,9 @@ from ...integrations.chat.command_diagnostics import (
     build_status_text,
 )
 from ...integrations.chat.help_catalog import build_discord_help_lines
+from ...integrations.chat.status_diagnostics import (
+    build_process_monitor_lines_for_root,
+)
 from ...manifest import ManifestError, load_manifest
 from ..chat.approval_modes import (
     normalize_approval_mode,
@@ -44,6 +47,30 @@ from .interaction_runtime import (
 from .rendering import format_discord_message
 
 _logger = logging.getLogger(__name__)
+
+
+def _resolve_process_monitor_root(
+    service: Any,
+    binding: Optional[Mapping[str, Any]],
+    *,
+    allow_fallback: bool = False,
+) -> Optional[Path]:
+    if binding is not None and binding.get("pma_enabled", False):
+        config_root = getattr(getattr(service, "_config", None), "root", None)
+        if config_root is not None:
+            return Path(config_root)
+    workspace_path = (
+        str(binding.get("workspace_path")).strip()
+        if binding is not None and binding.get("workspace_path")
+        else ""
+    )
+    if workspace_path:
+        return Path(workspace_path)
+    if allow_fallback:
+        config_root = getattr(getattr(service, "_config", None), "root", None)
+        if config_root is not None:
+            return Path(config_root)
+    return None
 
 
 def _list_manifest_repos(
@@ -771,7 +798,43 @@ async def handle_status(
         extra_lines=tuple(extra_lines),
     )
     lines.extend(build_status_block_lines(status_block))
+    lines.extend(
+        build_process_monitor_lines_for_root(
+            _resolve_process_monitor_root(service, binding),
+            include_history=False,
+        )
+    )
     lines.append("Use /flow status for ticket flow details.")
+    await send_runtime_ephemeral(
+        service,
+        interaction_id,
+        interaction_token,
+        "\n".join(lines),
+    )
+
+
+async def handle_processes(
+    service: Any,
+    interaction_id: str,
+    interaction_token: str,
+    *,
+    channel_id: str,
+) -> None:
+    binding = await service._store.get_binding(channel_id=channel_id)
+    root = _resolve_process_monitor_root(service, binding, allow_fallback=True)
+    if root is None:
+        await send_runtime_ephemeral(
+            service,
+            interaction_id,
+            interaction_token,
+            "Process monitor unavailable; no workspace or hub root is available.",
+        )
+        return
+    lines = [f"Process monitor root: {root}"]
+    lines.extend(
+        build_process_monitor_lines_for_root(root, include_history=True)
+        or ["Process monitor unavailable."]
+    )
     await send_runtime_ephemeral(
         service,
         interaction_id,
