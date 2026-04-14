@@ -2882,7 +2882,6 @@ async def test_resolve_telegram_managed_thread_reuses_archived_thread(
         pma_enabled=True,
         allow_new_thread=False,
     )
-
     assert resolved is not None
     assert resolved.thread_target_id == current_thread.thread_target_id
     assert resolved.lifecycle_status == "active"
@@ -2900,9 +2899,8 @@ async def test_resolve_telegram_managed_thread_ignores_backend_thread_id_binding
         async def resolve_backend_runtime_instance_id(
             self, agent_id: str, workspace_root: Path
         ) -> Optional[str]:
-            raise AssertionError(
-                "runtime instance lookup should be skipped in PMA mode"
-            )
+            _ = agent_id, workspace_root
+            return "runtime-test-1"
 
         def resume_thread_target(self, thread_target_id: str, **kwargs: Any) -> Any:
             calls.append((thread_target_id, dict(kwargs)))
@@ -2938,19 +2936,18 @@ async def test_resolve_telegram_managed_thread_ignores_backend_thread_id_binding
         ),
     )
 
-    (
-        _service,
-        resolved,
-    ) = await execution_commands_module._resolve_telegram_managed_thread(
-        SimpleNamespace(_logger=logging.getLogger("test")),
-        surface_key="telegram:-1001:101",
-        workspace_root=workspace.resolve(),
-        agent="codex",
-        repo_id="repo-1",
-        mode="pma",
-        pma_enabled=True,
-        backend_thread_id="stale-backend",
-        allow_new_thread=False,
+    _service, resolved = (
+        await execution_commands_module._resolve_telegram_managed_thread(
+            SimpleNamespace(_logger=logging.getLogger("test")),
+            surface_key="telegram:-1001:101",
+            workspace_root=workspace.resolve(),
+            agent="codex",
+            repo_id="repo-1",
+            mode="pma",
+            pma_enabled=True,
+            backend_thread_id="stale-backend",
+            allow_new_thread=False,
+        )
     )
 
     assert resolved is not None
@@ -2959,8 +2956,8 @@ async def test_resolve_telegram_managed_thread_ignores_backend_thread_id_binding
         (
             "thread-1",
             {
-                "backend_thread_id": None,
-                "backend_runtime_instance_id": None,
+                "backend_thread_id": "legacy-backend",
+                "backend_runtime_instance_id": "runtime-test-1",
             },
         )
     ]
@@ -3292,16 +3289,20 @@ async def test_pma_interrupt_uses_managed_thread_orchestration_for_text_turns(
         )
         with anyio.fail_after(2):
             while (
-                "Recovered stale PMA session after backend thread was lost. Cancelled 1 queued PMA turn(s)."
+                "Interrupted active PMA turn. Cancelled 1 queued PMA turn(s)."
                 not in handler._sent
             ):
                 await anyio.sleep(0.05)
         release_first.set()
         await first_task
 
-        assert harness.interrupt_calls == []
+        assert len(harness.interrupt_calls) == 1
+        assert harness.interrupt_calls[0][1:] == (
+            "telegram-backend-thread-1",
+            "telegram-backend-turn-1",
+        )
         assert (
-            "Recovered stale PMA session after backend thread was lost. Cancelled 1 queued PMA turn(s)."
+            "Interrupted active PMA turn. Cancelled 1 queued PMA turn(s)."
             in handler._sent
         )
         assert "unexpected queued reply" not in handler._sent

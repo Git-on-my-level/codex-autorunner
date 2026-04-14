@@ -74,6 +74,22 @@ def _replace_started_execution(
     )
 
 
+def test_render_managed_thread_response_text_prepends_session_notice() -> None:
+    rendered = managed_thread_turns_module.render_managed_thread_response_text(
+        managed_thread_turns_module.ManagedThreadFinalizationResult(
+            status="ok",
+            assistant_text="Recovered answer",
+            error=None,
+            managed_thread_id="thread-1",
+            managed_turn_id="turn-1",
+            backend_thread_id="backend-1",
+            session_notice="Notice: a new session was started.",
+        )
+    )
+
+    assert rendered == "Notice: a new session was started.\n\nRecovered answer"
+
+
 @pytest.mark.anyio
 async def test_managed_thread_turn_coordinator_runs_lifecycle_hooks(
     tmp_path: Path,
@@ -1111,6 +1127,100 @@ async def test_finalize_managed_thread_execution_logs_timeout_source(
     assert fake_hub_client.trace_requests[0].backend_turn_id == "turn-1"
     assert fake_hub_client.transcript_requests == []
     assert fake_hub_client.activity_requests == []
+
+
+@pytest.mark.anyio
+async def test_finalize_managed_thread_execution_propagates_session_recovery_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = _started_execution_with_backend_ids(tmp_path)
+    started.request.metadata["fresh_backend_session_started"] = True
+    started.request.metadata["fresh_backend_session_reason"] = "missing_backend_binding"
+    started.request.metadata["fresh_backend_session_notice"] = (
+        "Notice: the previous live session was unavailable, so I started a new "
+        "session and recovered context from durable history."
+    )
+    fake_hub_client = _FakeHubPersistenceClient()
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "harness_supports_progress_event_stream",
+        lambda _harness: False,
+    )
+
+    async def _successful_outcome(*args: Any, **kwargs: Any) -> RuntimeThreadOutcome:
+        return RuntimeThreadOutcome(
+            status="ok",
+            assistant_text="fixture reply",
+            error=None,
+            backend_thread_id="session-2",
+            backend_turn_id="turn-2",
+        )
+
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "await_runtime_thread_outcome",
+        _successful_outcome,
+    )
+
+    orchestration_service = SimpleNamespace(
+        get_thread_target=lambda managed_thread_id: SimpleNamespace(
+            backend_thread_id="session-2"
+        ),
+        get_thread_runtime_binding=lambda managed_thread_id: SimpleNamespace(
+            backend_thread_id="session-2"
+        ),
+        record_execution_result=lambda *args, **kwargs: SimpleNamespace(
+            status="ok",
+            error=None,
+        ),
+    )
+
+    result = await managed_thread_turns_module.finalize_managed_thread_execution(
+        orchestration_service=orchestration_service,
+        started=started,
+        state_root=tmp_path,
+        hub_client=fake_hub_client,
+        surface=managed_thread_turns_module.ManagedThreadSurfaceInfo(
+            log_label="Telegram",
+            surface_kind="telegram",
+            surface_key="telegram:-1001:101",
+        ),
+        errors=managed_thread_turns_module.ManagedThreadErrorMessages(
+            public_execution_error="Telegram PMA execution failed",
+            timeout_error="Telegram PMA turn timed out",
+            interrupted_error="Telegram PMA turn interrupted",
+            timeout_seconds=5,
+        ),
+        logger=logging.getLogger("test.managed_thread.session_recovery"),
+        turn_preview="preview",
+    )
+
+    assert result.status == "ok"
+    assert (
+        result.session_notice
+        == "Notice: the previous live session was unavailable, so I started a new "
+        "session and recovered context from durable history."
+    )
+    assert result.fresh_backend_session_reason == "missing_backend_binding"
+    assert len(fake_hub_client.timeline_requests) == 1
+    assert (
+        fake_hub_client.timeline_requests[0].metadata["fresh_backend_session_started"]
+        is True
+    )
+    assert (
+        fake_hub_client.timeline_requests[0].metadata["fresh_backend_session_reason"]
+        == "missing_backend_binding"
+    )
+    assert len(fake_hub_client.transcript_requests) == 1
+    assert (
+        fake_hub_client.transcript_requests[0].metadata["fresh_backend_session_started"]
+        is True
+    )
+    assert (
+        fake_hub_client.transcript_requests[0].metadata["fresh_backend_session_reason"]
+        == "missing_backend_binding"
+    )
 
 
 @pytest.mark.anyio

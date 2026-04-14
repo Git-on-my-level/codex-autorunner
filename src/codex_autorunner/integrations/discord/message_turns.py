@@ -80,6 +80,7 @@ from ..chat.managed_thread_turns import (
     ManagedThreadTargetRequest,
     ManagedThreadTurnCoordinator,
     complete_managed_thread_execution,
+    render_managed_thread_response_text,
 )
 from ..chat.managed_thread_turns import (
     build_managed_thread_input_items as _shared_build_managed_thread_input_items,
@@ -2567,7 +2568,7 @@ def _build_discord_runner_hooks(
 
     async def _deliver_result(finalized: ManagedThreadFinalizationResult) -> None:
         if finalized.status == "ok":
-            assistant_text = finalized.assistant_text.strip()
+            assistant_text = render_managed_thread_response_text(finalized)
             formatted = (
                 format_discord_message(assistant_text)
                 if assistant_text
@@ -3215,7 +3216,7 @@ async def _run_discord_orchestrated_turn_for_message(
                 render_mode="final",
             )
         return DiscordMessageTurnResult(
-            final_message=finalized.assistant_text,
+            final_message=render_managed_thread_response_text(finalized),
             preview_message_id=progress_message_id,
             execution_id=progress_execution_id,
             intermediate_message=intermediate_message,

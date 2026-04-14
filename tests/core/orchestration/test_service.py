@@ -929,13 +929,12 @@ async def test_send_message_rehydrates_from_transcripts_after_runtime_binding_re
     harness.start_turn_calls.clear()
 
     restarted_service = _build_service(tmp_path, harness)
-    next_execution = await restarted_service.send_message(
-        MessageRequest(
-            target_id=thread.thread_target_id,
-            target_kind="thread",
-            message_text="second question",
-        )
+    request = MessageRequest(
+        target_id=thread.thread_target_id,
+        target_kind="thread",
+        message_text="second question",
     )
+    next_execution = await restarted_service.send_message(request)
 
     prompt = harness.start_turn_calls[0]["prompt"]
     assert next_execution.status == "running"
@@ -945,6 +944,13 @@ async def test_send_message_rehydrates_from_transcripts_after_runtime_binding_re
     assert "first question" in prompt
     assert "first answer" in prompt
     assert "second question" in prompt
+    assert request.metadata["fresh_backend_session_started"] is True
+    assert request.metadata["fresh_backend_session_reason"] == "missing_backend_binding"
+    assert (
+        request.metadata["fresh_backend_session_notice"]
+        == "Notice: the previous live session was unavailable, so I started a new "
+        "session and recovered context from durable history."
+    )
 
 
 async def test_start_next_queued_execution_starts_fresh_after_runtime_binding_restart(

@@ -89,11 +89,38 @@ async def resolve_chat_thread_runtime_binding(
     normalized_requested_backend_thread_id = _normalized_optional_text(
         requested_backend_thread_id
     )
+    existing_backend_thread_id = _normalized_optional_text(
+        getattr(existing_thread, "backend_thread_id", None)
+    )
+    existing_thread_matches_runtime_owner = (
+        existing_backend_thread_id is not None
+        and _thread_matches_runtime_owner(
+            existing_thread,
+            workspace_root=workspace_root,
+            agent_id=agent_id,
+            agent_profile=agent_profile,
+        )
+    )
     if normalized_requested_backend_thread_id is None:
+        if not existing_thread_matches_runtime_owner:
+            return ChatThreadRuntimeBinding(
+                backend_thread_id=None,
+                backend_runtime_instance_id=None,
+                runtime_available=False,
+                used_requested_backend_thread_id=False,
+            )
+        runtime = await acquire_chat_workspace_runtime(
+            orchestration_service,
+            agent_id=agent_id,
+            workspace_root=workspace_root,
+        )
+        runtime_instance_id = _normalized_optional_text(
+            runtime.backend_runtime_instance_id
+        )
         return ChatThreadRuntimeBinding(
-            backend_thread_id=None,
-            backend_runtime_instance_id=None,
-            runtime_available=False,
+            backend_thread_id=existing_backend_thread_id,
+            backend_runtime_instance_id=runtime_instance_id,
+            runtime_available=runtime_instance_id is not None,
             used_requested_backend_thread_id=False,
         )
     runtime = await acquire_chat_workspace_runtime(
@@ -109,18 +136,9 @@ async def resolve_chat_thread_runtime_binding(
             runtime_available=True,
             used_requested_backend_thread_id=True,
         )
-    existing_backend_thread_id = _normalized_optional_text(
-        getattr(existing_thread, "backend_thread_id", None)
-    )
     if (
-        existing_backend_thread_id is not None
+        existing_thread_matches_runtime_owner
         and existing_backend_thread_id != normalized_requested_backend_thread_id
-        and _thread_matches_runtime_owner(
-            existing_thread,
-            workspace_root=workspace_root,
-            agent_id=agent_id,
-            agent_profile=agent_profile,
-        )
     ):
         return ChatThreadRuntimeBinding(
             backend_thread_id=existing_backend_thread_id,
