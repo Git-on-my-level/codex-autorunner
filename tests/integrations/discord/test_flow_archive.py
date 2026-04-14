@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sqlite3
 import uuid
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,7 @@ from codex_autorunner.integrations.discord.config import (
     DiscordBotConfig,
     DiscordCommandRegistration,
 )
+from codex_autorunner.integrations.discord.errors import DiscordTransientError
 from codex_autorunner.integrations.discord.service import DiscordBotService
 from codex_autorunner.integrations.discord.state import DiscordStateStore
 
@@ -458,6 +460,50 @@ async def test_flow_archive_button_real_archive_renders_archived_state(
     assert "Status: archived" in edited["content"]
     assert f"Archive path: .codex-autorunner/archive/runs/{run_id}" in edited["content"]
     assert edited["components"] == []
+
+
+@pytest.mark.anyio
+async def test_flow_archive_button_classifies_open_sqlite_errors_as_store_open_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = _workspace(tmp_path)
+    run_id = str(uuid.uuid4())
+
+    rest = _FakeRest()
+    service = _service(tmp_path, rest)
+    logged_events: list[str] = []
+    logged_payloads: list[dict[str, Any]] = []
+
+    def _fake_log_event(_logger: Any, _level: int, event: str, **kwargs: Any) -> None:
+        logged_events.append(event)
+        logged_payloads.append(kwargs)
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.discord.flow_commands.log_event",
+        _fake_log_event,
+    )
+
+    def _raise_open_store(_workspace_root: Path) -> FlowStore:
+        raise sqlite3.OperationalError("open failed")
+
+    service._open_flow_store = _raise_open_store  # type: ignore[assignment]
+
+    try:
+        with pytest.raises(DiscordTransientError, match="Failed to open flow database"):
+            await service._handle_flow_button(
+                "interaction-archive-db-open-fail",
+                "token-archive-db-open-fail",
+                workspace_root=workspace,
+                custom_id=f"flow:{run_id}:archive",
+                channel_id="channel-1",
+                guild_id="guild-1",
+            )
+    finally:
+        await service._store.close()
+
+    assert logged_events == ["discord.flow.store_open_failed"]
+    assert logged_payloads[0]["workspace_root"] == str(workspace)
+    assert isinstance(logged_payloads[0]["exc"], sqlite3.OperationalError)
 
 
 @pytest.mark.anyio

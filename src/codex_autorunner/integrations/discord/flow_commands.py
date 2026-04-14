@@ -2177,49 +2177,44 @@ async def handle_flow_button(
             return
 
         def _resolve_archive_target() -> Optional[FlowRunRecord]:
-            store = service._open_flow_store(workspace_root)
             try:
-                return cast(
-                    Optional[FlowRunRecord],
-                    service._resolve_flow_run_by_id(store, run_id=run_id),
+                store = service._open_flow_store(workspace_root)
+            except (sqlite3.Error, OSError, RuntimeError, ConfigError) as exc:
+                log_event(
+                    service._logger,
+                    logging.ERROR,
+                    "discord.flow.store_open_failed",
+                    workspace_root=str(workspace_root),
+                    exc=exc,
                 )
+                raise DiscordTransientError(
+                    f"Failed to open flow database: {exc}",
+                    user_message="Unable to access flow database. Please try again later.",
+                ) from None
+            try:
+                try:
+                    return cast(
+                        Optional[FlowRunRecord],
+                        service._resolve_flow_run_by_id(store, run_id=run_id),
+                    )
+                except (sqlite3.Error, OSError) as exc:
+                    log_event(
+                        service._logger,
+                        logging.ERROR,
+                        "discord.flow.query_failed",
+                        exc=exc,
+                        run_id=run_id,
+                    )
+                    raise DiscordTransientError(
+                        f"Failed to query flow run: {exc}",
+                        user_message=(
+                            "Unable to query flow database. Please try again later."
+                        ),
+                    ) from None
             finally:
                 store.close()
 
-        try:
-            target = await asyncio.to_thread(_resolve_archive_target)
-        except (sqlite3.Error, OSError, RuntimeError, ConfigError) as exc:
-            event = (
-                "discord.flow.store_open_failed"
-                if isinstance(exc, (RuntimeError, ConfigError))
-                else "discord.flow.query_failed"
-            )
-            payload: dict[str, Any] = {
-                "exc": exc,
-                "workspace_root": str(workspace_root),
-            }
-            if isinstance(exc, (sqlite3.Error, OSError)):
-                payload = {"exc": exc, "run_id": run_id}
-            log_event(
-                service._logger,
-                logging.ERROR,
-                event,
-                **payload,
-            )
-            user_message = (
-                "Unable to access flow database. Please try again later."
-                if isinstance(exc, (RuntimeError, ConfigError))
-                else "Unable to query flow database. Please try again later."
-            )
-            failed_action = (
-                "open flow database"
-                if event.endswith("store_open_failed")
-                else "query flow run"
-            )
-            raise DiscordTransientError(
-                f"Failed to {failed_action}: {exc}",
-                user_message=user_message,
-            ) from None
+        target = await asyncio.to_thread(_resolve_archive_target)
 
         if target is None:
             stale_text = (
