@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from typing import Any, Callable, Coroutine, Optional, TypeVar
@@ -55,10 +56,27 @@ class RemoteSurfaceBindingStore:
         self,
         *,
         operation: str,
-        action: Callable[[], Coroutine[Any, Any, ResultT]],
+        action: Callable[[HubControlPlaneClient], Coroutine[Any, Any, ResultT]],
     ) -> ResultT:
         def _invoke() -> ResultT:
-            return asyncio.run(action())
+            background_client = self._client
+            clone = getattr(type(self._client), "clone_for_background_loop", None)
+            if callable(clone) and not inspect.iscoroutinefunction(clone):
+                cloned_client = clone(self._client)
+                if cloned_client is not None and not inspect.isawaitable(cloned_client):
+                    background_client = cloned_client
+
+            async def _run_action() -> ResultT:
+                try:
+                    return await action(background_client)
+                finally:
+                    close = getattr(background_client, "aclose", None)
+                    if callable(close) and background_client is not self._client:
+                        result = close()
+                        if inspect.isawaitable(result):
+                            await result
+
+            return asyncio.run(_run_action())
 
         try:
             with ThreadPoolExecutor(max_workers=1) as pool:
@@ -118,7 +136,7 @@ class RemoteSurfaceBindingStore:
     ) -> Any:
         response = self._run(
             operation="upsert_surface_binding",
-            action=lambda: self._client.upsert_surface_binding(
+            action=lambda client: client.upsert_surface_binding(
                 SurfaceBindingUpsertRequest(
                     surface_kind=surface_kind,
                     surface_key=surface_key,
@@ -150,7 +168,7 @@ class RemoteSurfaceBindingStore:
     ) -> Any:
         response = self._run(
             operation="get_surface_binding",
-            action=lambda: self._client.get_surface_binding(
+            action=lambda client: client.get_surface_binding(
                 SurfaceBindingLookupRequest(
                     surface_kind=surface_kind,
                     surface_key=surface_key,
@@ -260,7 +278,7 @@ class RemoteSurfaceBindingStore:
         try:
             response = self._run(
                 operation="list_surface_bindings",
-                action=lambda: self._client.list_surface_bindings(
+                action=lambda client: client.list_surface_bindings(
                     SurfaceBindingListRequest(
                         thread_target_id=thread_target_id,
                         repo_id=repo_id,

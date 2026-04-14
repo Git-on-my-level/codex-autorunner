@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 import pytest
 
 from codex_autorunner.core.hub_control_plane import (
@@ -42,6 +44,20 @@ class _ListingClient:
 class _UnavailableListingClient:
     async def list_surface_bindings(self, request):
         raise HubControlPlaneError("hub_unavailable", "hub offline")
+
+
+class _LoopBoundListingClient(_ListingClient):
+    def __init__(self, bindings: list[Binding]) -> None:
+        super().__init__(bindings)
+        self._owner_thread_id = threading.get_ident()
+
+    def clone_for_background_loop(self):
+        return _ListingClient(list(self.bindings))
+
+    async def list_surface_bindings(self, request):
+        if threading.get_ident() != self._owner_thread_id:
+            raise RuntimeError("Event loop is closed")
+        return await super().list_surface_bindings(request)
 
 
 def test_remote_surface_binding_store_lists_bindings_from_hub_authoritatively() -> None:
@@ -145,3 +161,15 @@ def test_remote_surface_binding_store_preserves_non_transport_hub_errors() -> No
 
     assert exc_info.value.code == "hub_rejected"
     assert str(exc_info.value) == "invalid filter payload"
+
+
+def test_remote_surface_binding_store_clones_loop_bound_client_for_background_calls() -> (
+    None
+):
+    store = RemoteSurfaceBindingStore(
+        _LoopBoundListingClient([_binding_from_mapping(binding_id="binding-hub")])
+    )
+
+    listed = store.list_bindings(limit=5)
+
+    assert [binding.binding_id for binding in listed] == ["binding-hub"]

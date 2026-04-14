@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -417,6 +418,20 @@ class _ConnectionErrorClient(_FakeHubClient):
         raise OSError("hub socket missing")
 
 
+class _LoopBoundThreadClient(_FakeHubClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self._owner_thread_id = threading.get_ident()
+
+    def clone_for_background_loop(self):
+        return _FakeHubClient()
+
+    async def get_thread_target(self, request):
+        if threading.get_ident() != self._owner_thread_id:
+            raise RuntimeError("Event loop is closed")
+        return await super().get_thread_target(request)
+
+
 def test_remote_execution_store_translates_transport_failures_to_hub_unavailable() -> (
     None
 ):
@@ -452,3 +467,12 @@ def test_remote_execution_store_translates_connection_errors_to_hub_unavailable(
     assert exc_info.value.code == "hub_unavailable"
     assert exc_info.value.details["operation"] == "get_thread_target"
     assert exc_info.value.details["cause_type"] == "OSError"
+
+
+def test_remote_execution_store_clones_loop_bound_client_for_background_calls() -> None:
+    store = RemoteThreadExecutionStore(_LoopBoundThreadClient())
+
+    thread = store.get_thread_target("thread-1")
+
+    assert thread is not None
+    assert thread.thread_target_id == "thread-1"

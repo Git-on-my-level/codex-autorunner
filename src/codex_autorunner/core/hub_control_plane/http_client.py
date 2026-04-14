@@ -89,15 +89,25 @@ class HttpHubControlPlaneClient(HubControlPlaneClient):
         http_client: Optional[httpx.AsyncClient] = None,
     ) -> None:
         self._base_url = _normalize_base_url(base_url)
+        self._timeout = timeout
+        self._headers = dict(headers or {})
         self._owns_client = http_client is None
         if http_client is None:
             self._http_client = httpx.AsyncClient(
                 base_url=self._base_url,
                 timeout=timeout,
-                headers=dict(headers or {}),
+                headers=dict(self._headers),
             )
         else:
             self._http_client = http_client
+
+    def clone_for_background_loop(self) -> "HttpHubControlPlaneClient":
+        """Return a client copy with its own AsyncClient for a separate event loop."""
+        return HttpHubControlPlaneClient(
+            base_url=self._base_url,
+            timeout=self._timeout,
+            headers=self._headers,
+        )
 
     async def __aenter__(self) -> "HttpHubControlPlaneClient":
         return self
