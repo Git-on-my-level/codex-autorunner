@@ -19,6 +19,17 @@ def _assert_process_gone(pid: int) -> None:
             return
         except PermissionError:
             return
+        # Linux zombies still answer signal 0 until reaped; treat as terminated.
+        if os.path.isdir("/proc"):
+            stat_path = f"/proc/{pid}/stat"
+            try:
+                with open(stat_path, encoding="utf-8") as f:
+                    data = f.read()
+            except (FileNotFoundError, OSError):
+                return
+            rparen = data.rfind(")")
+            if rparen != -1 and data[rparen + 2 : rparen + 3] == "Z":
+                return
         time.sleep(0.05)
     pytest.fail(f"process {pid} still running after termination")
 

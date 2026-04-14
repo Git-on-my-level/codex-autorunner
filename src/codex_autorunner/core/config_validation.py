@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 from pathlib import Path
-from typing import Any, Dict, Tuple, Type, Union
+from typing import Any, Dict, Tuple, Type, Union, cast
 
 from .config_contract import (
     _TICKET_FLOW_APPROVAL_MODE_ALIASES,
@@ -1203,7 +1203,7 @@ def _validate_optional_int_ge(
 ) -> None:
     if key in mapping:
         value = mapping.get(key)
-        if _is_strict_int(value) and value < min_value:
+        if _is_strict_int(value) and cast(int, value) < min_value:
             if min_value == 0:
                 raise ConfigError(f"{path}.{key} must be >= 0")
             elif min_value == 1:
