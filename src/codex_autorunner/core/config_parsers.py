@@ -262,11 +262,22 @@ def _parse_ticket_flow_config(
     auto_resume = cfg.get("auto_resume", defaults.get("auto_resume", False))
     if not isinstance(auto_resume, bool):
         raise ConfigError("ticket_flow.auto_resume must be boolean")
+    max_total_turns = cfg.get("max_total_turns", defaults.get("max_total_turns"))
+    if max_total_turns is not None:
+        if (
+            isinstance(max_total_turns, bool)
+            or not isinstance(max_total_turns, int)
+            or max_total_turns < 1
+        ):
+            raise ConfigError(
+                "ticket_flow.max_total_turns must be a positive integer or null"
+            )
     return TicketFlowConfig(
         approval_mode=approval_mode,
         default_approval_decision=default_approval_decision,
         include_previous_ticket_context=include_previous_ticket_context,
         auto_resume=auto_resume,
+        max_total_turns=max_total_turns,
     )
 
 

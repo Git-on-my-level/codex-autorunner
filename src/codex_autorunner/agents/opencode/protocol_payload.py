@@ -558,7 +558,7 @@ def extract_total_tokens(usage: dict[str, Any]) -> Optional[int]:
     output_tokens = extract_usage_field(usage, OPENCODE_USAGE_OUTPUT_KEYS) or 0
     reasoning_tokens = extract_usage_field(usage, OPENCODE_USAGE_REASONING_KEYS) or 0
     if input_tokens or cached_tokens or output_tokens or reasoning_tokens:
-        return input_tokens + cached_tokens + output_tokens + reasoning_tokens
+        return input_tokens + output_tokens
     return None
 
 
