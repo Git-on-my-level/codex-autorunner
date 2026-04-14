@@ -2402,13 +2402,6 @@ def resolve_discord_thread_target(
             RuntimeError, ValueError, TypeError, KeyError, AttributeError
         ):
             existing_thread = get_thread_target(existing_thread_target_id)
-    current_backend_thread_id = (
-        str(getattr(existing_thread, "backend_thread_id", "") or "").strip() or None
-    )
-    current_runtime_instance_id = (
-        str(getattr(existing_thread, "backend_runtime_instance_id", "") or "").strip()
-        or None
-    )
     runtime_agent = resolve_chat_runtime_agent(
         agent,
         agent_profile,
@@ -2420,6 +2413,28 @@ def resolve_discord_thread_target(
         repo_id=repo_id,
         resource_kind=resource_kind,
         resource_id=resource_id,
+    )
+    canonical_workspace = str(workspace_root.resolve())
+    reusable_agent_ids = tuple(dict.fromkeys((agent, runtime_agent)))
+    existing_thread_reusable = (
+        existing_thread is not None
+        and str(getattr(existing_thread, "agent_id", "") or "").strip()
+        in reusable_agent_ids
+        and (getattr(existing_thread, "agent_profile", None) or None)
+        == (agent_profile or None)
+        and str(getattr(existing_thread, "workspace_root", "") or "").strip()
+        == canonical_workspace
+    )
+    current_backend_thread_id = (
+        str(getattr(existing_thread, "backend_thread_id", "") or "").strip() or None
+        if existing_thread_reusable
+        else None
+    )
+    current_runtime_instance_id = (
+        str(getattr(existing_thread, "backend_runtime_instance_id", "") or "").strip()
+        or None
+        if existing_thread_reusable
+        else None
     )
     return _shared_resolve_managed_thread_target(
         orchestration_service,
