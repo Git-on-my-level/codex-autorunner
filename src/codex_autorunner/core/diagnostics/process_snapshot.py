@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -119,8 +120,13 @@ class ProcessSnapshot:
         return self.car_service_count + self.managed_runtime_count
 
 
+# Match underscore-named binary only as the argv0 segment (not a parent dir like
+# .../codex_autorunner/.venv/bin/codex), which would misclassify app-server/opencode.
+_CODEX_AUTORUNNER_UNDERSCORE_EXE_RE = re.compile(
+    r"(?:^|[/\\])codex_autorunner(?=\s|$)",
+)
+
 CAR_SERVICE_MARKERS = (
-    "codex_autorunner",
     "codex-autorunner hub ",
     "codex-autorunner discord ",
     "codex-autorunner telegram ",
@@ -140,6 +146,8 @@ APP_SERVER_MARKERS = (
 
 def _classify_process(command: str) -> ProcessCategory:
     command_lc = command.lower()
+    if _CODEX_AUTORUNNER_UNDERSCORE_EXE_RE.search(command_lc):
+        return ProcessCategory.CAR_SERVICE
     if any(marker in command_lc for marker in CAR_SERVICE_MARKERS):
         return ProcessCategory.CAR_SERVICE
     if any(marker in command_lc for marker in APP_SERVER_MARKERS):

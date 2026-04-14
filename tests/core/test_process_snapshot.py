@@ -53,6 +53,20 @@ class TestClassifyProcess:
             == ProcessCategory.APP_SERVER
         )
 
+    def test_app_server_not_misclassified_when_path_contains_codex_autorunner_dir(self):
+        assert (
+            _classify_process(
+                "/opt/codex_autorunner/.venv/bin/codex app-server --port 9000"
+            )
+            == ProcessCategory.APP_SERVER
+        )
+
+    def test_opencode_not_misclassified_when_path_contains_codex_autorunner_dir(self):
+        assert (
+            _classify_process("/home/user/codex_autorunner/bin/opencode serve")
+            == ProcessCategory.OPENCODE
+        )
+
     def test_other_process(self):
         assert _classify_process("/usr/bin/some-other-process") == ProcessCategory.OTHER
         assert _classify_process("bash -c echo hello") == ProcessCategory.OTHER
