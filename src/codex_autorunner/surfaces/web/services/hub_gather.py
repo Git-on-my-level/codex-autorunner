@@ -11,6 +11,12 @@ from ....core.capability_hints import (
     build_hub_capability_hints,
     build_repo_capability_hints,
 )
+from ....core.config import (
+    CONFIG_FILENAME,
+    REPO_OVERRIDE_FILENAME,
+    ROOT_CONFIG_FILENAME,
+    ROOT_OVERRIDE_FILENAME,
+)
 from ....core.filebox import BOXES, empty_listing
 from ....core.flows.workspace_root import resolve_ticket_flow_workspace_root
 from ....core.freshness import (
@@ -46,6 +52,8 @@ from ..schemas import (
 
 _HUB_SNAPSHOT_CACHE_TTL_SECONDS = 2.0
 _hub_snapshot_cache_lock = threading.Lock()
+_REPO_CAPABILITY_HINT_CACHE_TTL_SECONDS = 30.0
+_repo_capability_hint_cache_lock = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -56,6 +64,18 @@ class _HubSnapshotCacheEntry:
 
 
 _hub_snapshot_cache: dict[tuple[int, str], _HubSnapshotCacheEntry] = {}
+
+
+@dataclass(frozen=True)
+class _RepoCapabilityHintCacheEntry:
+    fingerprint: tuple[Any, ...]
+    expires_at: float
+    items: list[dict[str, Any]]
+
+
+_repo_capability_hint_cache: dict[
+    tuple[str, str, str, str], _RepoCapabilityHintCacheEntry
+] = {}
 
 
 @dataclass(frozen=True)
@@ -406,6 +426,89 @@ def _serialize_resolvable_item(item: dict[str, Any], item_type: str) -> dict[str
     }
 
 
+def _repo_capability_hint_fingerprint(
+    *,
+    hub_root: Optional[Path],
+    repo_id: str,
+    repo_root: Path,
+    repo_display_name: str,
+) -> tuple[Any, ...]:
+    hub_config_root = hub_root if isinstance(hub_root, Path) else None
+    return (
+        repo_id,
+        repo_display_name,
+        str(repo_root),
+        str(hub_config_root) if hub_config_root is not None else "",
+        _path_stat_fingerprint(repo_root / REPO_OVERRIDE_FILENAME),
+        _path_stat_fingerprint(repo_root / ".env"),
+        _path_stat_fingerprint(repo_root / ".codex-autorunner" / ".env"),
+        _path_stat_fingerprint(repo_root / CONFIG_FILENAME),
+        _path_stat_fingerprint(
+            hub_config_root / ROOT_CONFIG_FILENAME
+            if hub_config_root is not None
+            else Path(ROOT_CONFIG_FILENAME)
+        ),
+        _path_stat_fingerprint(
+            hub_config_root / ROOT_OVERRIDE_FILENAME
+            if hub_config_root is not None
+            else Path(ROOT_OVERRIDE_FILENAME)
+        ),
+        _path_stat_fingerprint(
+            hub_config_root / CONFIG_FILENAME
+            if hub_config_root is not None
+            else Path(CONFIG_FILENAME)
+        ),
+    )
+
+
+def _cached_repo_capability_hints(
+    context: HubAppContext,
+    *,
+    repo_id: str,
+    repo_root: Path,
+    repo_display_name: str,
+) -> list[dict[str, Any]]:
+    hub_root = getattr(getattr(context, "config", None), "root", None)
+    cache_key = (
+        str(hub_root) if isinstance(hub_root, Path) else "",
+        str(repo_root),
+        repo_id,
+        repo_display_name,
+    )
+    fingerprint = _repo_capability_hint_fingerprint(
+        hub_root=hub_root,
+        repo_id=repo_id,
+        repo_root=repo_root,
+        repo_display_name=repo_display_name,
+    )
+    now = time.monotonic()
+    with _repo_capability_hint_cache_lock:
+        cached = _repo_capability_hint_cache.get(cache_key)
+        if (
+            cached is not None
+            and cached.expires_at > now
+            and cached.fingerprint == fingerprint
+        ):
+            return list(cached.items)
+    try:
+        hint_items = build_repo_capability_hints(
+            hub_config=context.config,
+            repo_id=repo_id,
+            repo_root=repo_root,
+            repo_display_name=repo_display_name,
+        )
+    except (AttributeError, OSError, ValueError, RuntimeError):
+        hint_items = []
+    stored_items = [dict(item) for item in hint_items]
+    with _repo_capability_hint_cache_lock:
+        _repo_capability_hint_cache[cache_key] = _RepoCapabilityHintCacheEntry(
+            fingerprint=fingerprint,
+            expires_at=now + _REPO_CAPABILITY_HINT_CACHE_TTL_SECONDS,
+            items=stored_items,
+        )
+    return [dict(item) for item in stored_items]
+
+
 def _filter_action_queue_items(
     action_queue: list[dict[str, Any]],
     *,
@@ -517,18 +620,16 @@ def _collect_inbox_messages(
         repo_root = getattr(snap, "path", None)
         if not repo_id or not isinstance(repo_root, Path):
             continue
-        try:
-            hint_items = build_repo_capability_hints(
-                hub_config=context.config,
-                repo_id=repo_id,
-                repo_root=repo_root,
-                repo_display_name=str(
-                    getattr(snap, "display_name", None) or getattr(snap, "id", "")
-                ).strip()
-                or repo_id,
-            )
-        except (AttributeError, OSError, ValueError, RuntimeError):
-            hint_items = []
+        repo_display_name = (
+            str(getattr(snap, "display_name", None) or getattr(snap, "id", "")).strip()
+            or repo_id
+        )
+        hint_items = _cached_repo_capability_hints(
+            context,
+            repo_id=repo_id,
+            repo_root=repo_root,
+            repo_display_name=repo_display_name,
+        )
         dismissals = _repo_dismissals(repo_context, repo_id, repo_root)
         for item in hint_items:
             item_type = str(item.get("item_type") or "")

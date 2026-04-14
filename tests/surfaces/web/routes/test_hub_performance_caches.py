@@ -837,3 +837,94 @@ def test_gather_hub_message_snapshot_reuses_short_ttl_cache(
     assert first["items"] == []
     assert second["items"] == []
     assert calls["list_repos"] == 1
+
+
+def test_gather_hub_message_snapshot_reuses_repo_hint_cache_across_snapshot_misses(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    hub_root = tmp_path / "hub"
+    repo_root = hub_root / "demo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    snapshot = _repo_snapshot(repo_root)
+    state = SimpleNamespace(last_scan_at="2026-04-05T00:00:00Z")
+    context = SimpleNamespace(
+        supervisor=SimpleNamespace(list_repos=lambda: [snapshot], state=state),
+        config=SimpleNamespace(root=hub_root),
+    )
+    calls = {"repo_hints": 0}
+
+    def fake_repo_hints(**_kwargs) -> list[dict[str, object]]:
+        calls["repo_hints"] += 1
+        return []
+
+    monkeypatch.setattr(
+        hub_gather_service, "_gather_inbox", lambda *_args, **_kwargs: []
+    )
+    monkeypatch.setattr(
+        hub_gather_service, "build_hub_capability_hints", lambda **_kwargs: []
+    )
+    monkeypatch.setattr(
+        hub_gather_service, "build_repo_capability_hints", fake_repo_hints
+    )
+    monkeypatch.setattr(
+        hub_gather_service, "load_hub_inbox_dismissals", lambda _root: {}
+    )
+
+    first = hub_gather_service.gather_hub_message_snapshot(context, sections={"inbox"})
+    state.last_scan_at = "2026-04-05T00:00:01Z"
+    second = hub_gather_service.gather_hub_message_snapshot(
+        context,
+        sections={"inbox"},
+    )
+
+    assert first["items"] == []
+    assert second["items"] == []
+    assert calls["repo_hints"] == 1
+
+
+def test_gather_hub_message_snapshot_refreshes_repo_hint_cache_when_repo_inputs_change(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    hub_root = tmp_path / "hub"
+    repo_root = hub_root / "demo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    snapshot = _repo_snapshot(repo_root)
+    state = SimpleNamespace(last_scan_at="2026-04-05T00:00:00Z")
+    context = SimpleNamespace(
+        supervisor=SimpleNamespace(list_repos=lambda: [snapshot], state=state),
+        config=SimpleNamespace(root=hub_root),
+    )
+    calls = {"repo_hints": 0}
+
+    def fake_repo_hints(**_kwargs) -> list[dict[str, object]]:
+        calls["repo_hints"] += 1
+        return []
+
+    monkeypatch.setattr(
+        hub_gather_service, "_gather_inbox", lambda *_args, **_kwargs: []
+    )
+    monkeypatch.setattr(
+        hub_gather_service, "build_hub_capability_hints", lambda **_kwargs: []
+    )
+    monkeypatch.setattr(
+        hub_gather_service, "build_repo_capability_hints", fake_repo_hints
+    )
+    monkeypatch.setattr(
+        hub_gather_service, "load_hub_inbox_dismissals", lambda _root: {}
+    )
+
+    first = hub_gather_service.gather_hub_message_snapshot(context, sections={"inbox"})
+    repo_override = repo_root / ".codex-autorunner" / "repo.override.yml"
+    repo_override.parent.mkdir(parents=True, exist_ok=True)
+    repo_override.write_text("voice:\n  enabled: false\n", encoding="utf-8")
+    state.last_scan_at = "2026-04-05T00:00:01Z"
+    second = hub_gather_service.gather_hub_message_snapshot(
+        context,
+        sections={"inbox"},
+    )
+
+    assert first["items"] == []
+    assert second["items"] == []
+    assert calls["repo_hints"] == 2
