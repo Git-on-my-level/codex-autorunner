@@ -197,9 +197,21 @@ def _run_hermes_preflight(
         return hermes_runtime_preflight(config)
 
 
-def _make_hermes_harness(ctx: Any) -> AgentHarness:
+def _resolve_hermes_runtime_request(ctx: Any) -> tuple[str, Optional[str]]:
     requested_agent_id = _resolve_requested_agent_id(ctx, default="hermes")
     requested_profile = _resolve_requested_agent_profile(ctx)
+    resolved = resolve_agent_runtime(
+        requested_agent_id,
+        requested_profile,
+        context=ctx,
+    )
+    if resolved.logical_agent_id == "hermes":
+        return resolved.logical_agent_id, resolved.logical_profile
+    return requested_agent_id, requested_profile
+
+
+def _make_hermes_harness(ctx: Any) -> AgentHarness:
+    requested_agent_id, requested_profile = _resolve_hermes_runtime_request(ctx)
     cache = _runtime_supervisor_cache(ctx)
     cache_key = ("hermes", requested_agent_id, requested_profile or "")
     supervisor = cache.get(cache_key)
@@ -234,8 +246,7 @@ def _make_hermes_harness(ctx: Any) -> AgentHarness:
 
 
 def _check_hermes_health(ctx: Any) -> bool:
-    requested_agent_id = _resolve_requested_agent_id(ctx, default="hermes")
-    requested_profile = _resolve_requested_agent_profile(ctx)
+    requested_agent_id, requested_profile = _resolve_hermes_runtime_request(ctx)
     cache = _runtime_supervisor_cache(ctx)
     supervisor = cache.get(("hermes", requested_agent_id, requested_profile or ""))
     if (

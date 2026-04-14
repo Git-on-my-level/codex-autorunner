@@ -239,6 +239,7 @@
     "run_archive_max_age_days": 30,
     "run_archive_max_entries": 200,
     "run_archive_max_total_bytes": 1000000000,
+    "turn_timeout_seconds": 7200,
     "worktree_archive_max_age_days": 30,
     "worktree_archive_max_snapshots_per_repo": 10,
     "worktree_archive_max_total_bytes": 1000000000,
