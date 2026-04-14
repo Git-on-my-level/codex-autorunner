@@ -29,6 +29,7 @@ from ....core.flows import (
     FlowStore,
     archive_flow_run_artifacts,
     flow_run_duration_seconds,
+    parse_flow_timestamp,
 )
 from ....core.flows.reconciler import reconcile_flow_run
 from ....core.flows.start_policy import (
@@ -1142,10 +1143,13 @@ You are the first ticket in a new ticket_flow run.
             repo_root, flow_type="ticket_flow", recover_stuck=True
         )
         diff_by_ref: dict[str, dict[str, int]] = {}
+        duration_by_ref: dict[str, Optional[float]] = {}
         if runs:
             store = _require_flow_store(repo_root)
             if store is not None:
                 try:
+                    first_ts_by_ref: dict[str, datetime] = {}
+                    last_ts_by_ref: dict[str, datetime] = {}
                     for run in runs:
                         try:
                             events = store.get_events_by_type(
@@ -1171,6 +1175,24 @@ You are the first ticket in a new ticket_flow run.
                             stats["files_changed"] += int(
                                 data.get("files_changed") or 0
                             )
+                            ev_dt = parse_flow_timestamp(ev.timestamp)
+                            if ev_dt is not None:
+                                if (
+                                    ref not in first_ts_by_ref
+                                    or ev_dt < first_ts_by_ref[ref]
+                                ):
+                                    first_ts_by_ref[ref] = ev_dt
+                                if (
+                                    ref not in last_ts_by_ref
+                                    or ev_dt > last_ts_by_ref[ref]
+                                ):
+                                    last_ts_by_ref[ref] = ev_dt
+                    for ref, first_dt in first_ts_by_ref.items():
+                        last_dt = last_ts_by_ref.get(ref)
+                        if last_dt is not None:
+                            duration_by_ref[ref] = max(
+                                0.0, (last_dt - first_dt).total_seconds()
+                            )
                 finally:
                     try:
                         store.close()
@@ -1195,6 +1217,11 @@ You are the first ticket in a new ticket_flow run.
             rel_path = safe_relpath(path, repo_root)
             stable_ticket_id = ticket_stable_id(path)
             diff_refs = [stable_ticket_id] if stable_ticket_id else []
+            ticket_duration: Optional[float] = None
+            for _dref in diff_refs:
+                if _dref in duration_by_ref:
+                    ticket_duration = duration_by_ref[_dref]
+                    break
             tickets.append(
                 {
                     "path": rel_path,
@@ -1204,6 +1231,7 @@ You are the first ticket in a new ticket_flow run.
                     "body": doc.body if doc else parsed_body,
                     "errors": errors,
                     "diff_stats": _merge_ticket_diff_stats(diff_refs, diff_by_ref),
+                    "duration_seconds": ticket_duration,
                 }
             )
         return {"tickets": tickets}

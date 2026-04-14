@@ -72,6 +72,7 @@ type TicketFile = {
     deletions: number;
     files_changed: number;
   } | null;
+  duration_seconds?: number | null;
 };
 
 type DispatchAttachment = {
@@ -1417,6 +1418,14 @@ function renderTickets(data: { tickets?: TicketFile[]; lint_errors?: string[] } 
       head.appendChild(statsEl);
     }
 
+    if (typeof ticket.duration_seconds === "number" && ticket.duration_seconds > 0) {
+      const durEl = document.createElement("span");
+      durEl.className = "ticket-duration";
+      durEl.textContent = formatElapsedSeconds(ticket.duration_seconds);
+      durEl.title = `Time taken: ${formatElapsedSeconds(ticket.duration_seconds)}`;
+      head.appendChild(durEl);
+    }
+
     head.appendChild(badges);
     item.appendChild(head);
 
@@ -1569,6 +1578,19 @@ function renderDispatchHistory(
       statsEl.innerHTML = `<span class="diff-add">+${formatNumber(ins)}</span><span class="diff-del">-${formatNumber(del)}</span>`;
       statsEl.title = `${ins} insertions, ${del} deletions${diffStats.files_changed ? `, ${diffStats.files_changed} files` : ""}`;
       head.appendChild(statsEl);
+    }
+
+    // Turn duration: time from this dispatch to the next (chronologically later) one
+    const thisTime = entry.created_at ? new Date(entry.created_at).getTime() : 0;
+    const nextEntry = entries[index + 1];
+    const nextTime = nextEntry?.created_at ? new Date(nextEntry.created_at).getTime() : 0;
+    if (thisTime && nextTime && nextTime > thisTime) {
+      const durSecs = Math.max(0, Math.round((nextTime - thisTime) / 1000));
+      const durEl = document.createElement("span");
+      durEl.className = "dispatch-duration";
+      durEl.textContent = formatElapsedSeconds(durSecs);
+      durEl.title = `Turn duration: ${formatElapsedSeconds(durSecs)}`;
+      head.appendChild(durEl);
     }
     
     // Add ticket reference if present
