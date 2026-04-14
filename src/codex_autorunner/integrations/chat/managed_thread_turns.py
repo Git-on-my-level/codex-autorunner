@@ -1793,23 +1793,9 @@ async def finalize_managed_thread_execution(
                 backend_thread_id=resolved_backend_thread_id,
                 token_usage=event_state.token_usage,
             )
-        try:
-            if resolved_hub_client is None:
-                raise RuntimeError("Hub control-plane client unavailable")
-            await _record_thread_activity_via_hub(
-                resolved_hub_client,
-                thread_target_id=managed_thread_id,
-                execution_id=managed_turn_id,
-                message_preview=turn_preview,
-            )
-        except (HubControlPlaneError, RuntimeError, OSError):
-            logger.warning(
-                "%s Failed to persist thread activity via hub control plane (thread=%s turn=%s)",
-                surface.log_label,
-                managed_thread_id,
-                managed_turn_id,
-                exc_info=True,
-            )
+        # Log turn_finalized immediately after orchestration acknowledges ok so log-plane
+        # correlates with orch_thread_executions even if optional hub calls below fail or
+        # raise an exception type we do not catch.
         log_event(
             logger,
             logging.INFO,
@@ -1828,6 +1814,23 @@ async def finalize_managed_thread_execution(
             token_usage=event_state.token_usage,
             **_managed_thread_runtime_trace_fields(event_state),
         )
+        try:
+            if resolved_hub_client is None:
+                raise RuntimeError("Hub control-plane client unavailable")
+            await _record_thread_activity_via_hub(
+                resolved_hub_client,
+                thread_target_id=managed_thread_id,
+                execution_id=managed_turn_id,
+                message_preview=turn_preview,
+            )
+        except (HubControlPlaneError, RuntimeError, OSError):
+            logger.warning(
+                "%s Failed to persist thread activity via hub control plane (thread=%s turn=%s)",
+                surface.log_label,
+                managed_thread_id,
+                managed_turn_id,
+                exc_info=True,
+            )
         return _build_finalization_result(
             status="ok",
             assistant_text=resolved_assistant_text,
