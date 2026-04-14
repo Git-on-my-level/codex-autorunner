@@ -489,7 +489,7 @@ def _cached_repo_capability_hints(
             and cached.expires_at > now
             and cached.fingerprint == fingerprint
         ):
-            return list(cached.items)
+            return [dict(item) for item in cached.items]
     try:
         hint_items = build_repo_capability_hints(
             hub_config=context.config,
