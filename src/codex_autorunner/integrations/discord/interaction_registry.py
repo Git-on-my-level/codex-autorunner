@@ -24,6 +24,7 @@ from ..chat.model_selection import (
     reasoning_effort_description,
 )
 from .interaction_runtime import (
+    defer_and_update_runtime_component_message,
     ensure_ephemeral_response_deferred,
 )
 
@@ -1791,8 +1792,16 @@ async def _handle_flow_action_select_component(service: Any, ctx: Any) -> None:
                 text="Reply selection expired. Re-run `/flow reply text:<...>`.",
             )
             return
+        await defer_and_update_runtime_component_message(
+            service,
+            ctx.interaction_id,
+            ctx.interaction_token,
+            f"Saving reply and resuming run {run_id}...",
+            components=[],
+        )
         kwargs["options"] = {"run_id": run_id, "text": pending_text}
         kwargs["user_id"] = ctx.user_id
+        kwargs["component_response"] = True
     await getattr(service, handler_name)(
         ctx.interaction_id,
         ctx.interaction_token,

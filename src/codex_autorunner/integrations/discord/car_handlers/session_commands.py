@@ -27,6 +27,7 @@ from ..components import (
 )
 from ..interaction_registry import NEWT_CANCEL_CUSTOM_ID, NEWT_HARD_RESET_CUSTOM_ID
 from ..interaction_runtime import (
+    defer_and_update_runtime_component_message,
     ensure_component_response_deferred,
     ensure_ephemeral_response_deferred,
     ensure_public_response_deferred,
@@ -97,6 +98,12 @@ def _format_newt_reject_message(reasons: list[str]) -> str:
         "Choose **Hard reset** to discard local changes and continue, or **Cancel** to keep them.",
     ]
     return format_discord_message("\n".join(lines))
+
+
+def _format_newt_hard_reset_progress_message() -> str:
+    return format_discord_message(
+        "Discarding local changes and starting a fresh `/car newt`..."
+    )
 
 
 async def _send_newt_response(
@@ -625,6 +632,13 @@ async def handle_car_newt_hard_reset(
         )
         return
 
+    deferred = await defer_and_update_runtime_component_message(
+        service,
+        interaction_id,
+        interaction_token,
+        _format_newt_hard_reset_progress_message(),
+        components=[],
+    )
     branch_name = _newt_branch_name(channel_id, workspace_root)
     try:
         await asyncio.to_thread(reset_worktree_to_head, workspace_root)
