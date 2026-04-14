@@ -1993,7 +1993,6 @@ class DiscordBotService:
         began = False
         try:
             await self._begin_typing_indicator(channel_id)
-            began = True
         except (RuntimeError, TypeError) as exc:
             log_event(
                 self._logger,
@@ -2002,6 +2001,16 @@ class DiscordBotService:
                 channel_id=channel_id,
                 exc=exc,
             )
+        except BaseException:
+            with contextlib.suppress(
+                RuntimeError,
+                TypeError,
+                asyncio.CancelledError,
+            ):
+                await asyncio.shield(self._end_typing_indicator(channel_id))
+            raise
+        else:
+            began = True
         try:
             await work()
         finally:
