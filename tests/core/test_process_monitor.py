@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
+
+from codex_autorunner.core.config_contract import ConfigError
 from codex_autorunner.core.diagnostics.process_monitor import (
     ProcessMonitorStore,
     build_process_monitor_summary,
@@ -92,3 +96,40 @@ def test_build_process_monitor_summary_flags_high_outlier(tmp_path: Path) -> Non
     assert opencode["average"] > 3.0
     assert opencode["p95"] == 15
     assert "absolute alert floor" in (opencode["reason"] or "")
+
+
+def test_build_process_monitor_summary_skips_lifecycle_when_repo_config_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "workspace"
+    root.mkdir()
+
+    def _fake_collect_processes() -> SimpleNamespace:
+        return SimpleNamespace(
+            opencode_processes=[],
+            app_server_processes=[],
+            opencode_count=0,
+            app_server_count=0,
+        )
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.diagnostics.process_monitor.collect_processes",
+        _fake_collect_processes,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.diagnostics.process_monitor.enrich_with_ownership",
+        lambda snapshot, _root: snapshot,
+    )
+
+    def _raise_missing_config(_root: Path) -> None:
+        raise ConfigError("missing hub config")
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.diagnostics.process_monitor.summarize_opencode_lifecycle",
+        _raise_missing_config,
+    )
+
+    summary = build_process_monitor_summary(root)
+
+    assert summary["status"] == "ok"
+    assert summary["latest"]["opencode_lifecycle"] == {}

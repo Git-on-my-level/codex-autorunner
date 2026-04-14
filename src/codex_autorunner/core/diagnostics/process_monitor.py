@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from ..config_contract import ConfigError
 from ..locks import file_lock
 from ..runtime import summarize_opencode_lifecycle
 from ..text_utils import _parse_iso_timestamp, lock_path_for
@@ -120,7 +121,7 @@ def capture_process_monitor_sample(root: Path) -> dict[str, Any]:
 
     try:
         lifecycle = summarize_opencode_lifecycle(resolved_root)
-    except (OSError, RuntimeError, TypeError, ValueError):
+    except (ConfigError, OSError, RuntimeError, TypeError, ValueError):
         lifecycle = {}
     if lifecycle:
         sample["opencode_lifecycle"] = {
