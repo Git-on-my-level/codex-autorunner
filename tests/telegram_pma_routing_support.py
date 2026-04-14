@@ -2959,6 +2959,7 @@ async def test_resolve_telegram_managed_thread_ignores_backend_thread_id_binding
         (
             "thread-1",
             {
+                "backend_thread_id": None,
                 "backend_runtime_instance_id": None,
             },
         )

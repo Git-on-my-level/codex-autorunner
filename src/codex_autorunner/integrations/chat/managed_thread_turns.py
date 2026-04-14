@@ -394,20 +394,9 @@ def _resume_managed_thread_target(
 ) -> Any:
     resume_kwargs: dict[str, Any] = {}
     if clear_backend_thread_id and current_backend_thread_id is not None:
-        clear_backend_thread_id_fn = getattr(
-            orchestration_service, "set_thread_backend_id", None
-        )
-        if not callable(clear_backend_thread_id_fn):
-            thread_store = getattr(orchestration_service, "thread_store", None)
-            clear_backend_thread_id_fn = getattr(
-                thread_store, "set_thread_backend_id", None
-            )
-        if callable(clear_backend_thread_id_fn):
-            clear_backend_thread_id_fn(
-                thread.thread_target_id,
-                None,
-                backend_runtime_instance_id=desired_runtime_instance_id,
-            )
+        # Avoid a separate control-plane write before resume; resume can clear
+        # the backend binding in the same request.
+        resume_kwargs["backend_thread_id"] = None
     elif desired_backend_thread_id is not None:
         resume_kwargs["backend_thread_id"] = desired_backend_thread_id
     resume_kwargs["backend_runtime_instance_id"] = desired_runtime_instance_id
