@@ -1736,27 +1736,31 @@ async def finalize_managed_thread_execution(
                 with contextlib.suppress(asyncio.CancelledError):
                     await stream_task
             except asyncio.CancelledError as exc:
+                # Decide before any await: Task.cancelling() resets after yield on 3.11+,
+                # and is absent on 3.9–3.10. Completion of stream_task with CancelledError
+                # means wait_for propagated the pump's cancellation, not this task's.
+                pump_completed_cancelled = False
+                if stream_task.done():
+                    try:
+                        pump_exc = stream_task.exception()
+                        pump_completed_cancelled = isinstance(
+                            pump_exc, asyncio.CancelledError
+                        )
+                    except asyncio.CancelledError:
+                        pump_completed_cancelled = True
                 stream_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await stream_task
-                current = asyncio.current_task()
-                is_currently_cancelling = False
-                if current is not None:
-                    current_cancelling = getattr(current, "cancelling", None)
-                    if callable(current_cancelling):
-                        try:
-                            is_currently_cancelling = bool(current_cancelling())
-                        except (RuntimeError, TypeError, ValueError):
-                            is_currently_cancelling = False
-                if is_currently_cancelling:
+                if pump_completed_cancelled:
+                    logger.warning(
+                        "%s progress event pump cancelled during finalization; continuing with terminal-state recovery (thread=%s turn=%s)",
+                        surface.log_label,
+                        managed_thread_id,
+                        managed_turn_id,
+                        exc_info=True,
+                    )
+                else:
                     raise exc
-                logger.warning(
-                    "%s progress event pump cancelled during finalization; continuing with terminal-state recovery (thread=%s turn=%s)",
-                    surface.log_label,
-                    managed_thread_id,
-                    managed_turn_id,
-                    exc_info=True,
-                )
 
     recovered_outcome = recover_post_completion_outcome(outcome, event_state)
     recovered_after_completion = recovered_outcome is not outcome
