@@ -924,6 +924,7 @@ def _load_timeline_rows(conn: Any, execution_id: str) -> list[dict[str, Any]]:
         )
     return parsed_rows
 
+
 def _count_baseline_timeline_rows(conn: Any, execution_id: str) -> int:
     row = conn.execute(
         """
