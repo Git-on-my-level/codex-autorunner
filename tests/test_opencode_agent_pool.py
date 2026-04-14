@@ -195,6 +195,29 @@ class _ContextualHarnessFactory:
         return harness
 
 
+@dataclass
+class _SequentialContextualHarnessFactory:
+    harnesses: dict[tuple[str, Optional[str]], list[_FakeHarness]]
+    calls: list[tuple[str, Optional[str]]] = field(default_factory=list)
+
+    def make_harness(self, ctx: Any):
+        requested_agent = getattr(ctx, "_requested_agent_id", None)
+        requested_profile = getattr(ctx, "_requested_agent_profile", None)
+        key = (
+            str(requested_agent or "").strip().lower(),
+            (
+                str(requested_profile).strip().lower()
+                if isinstance(requested_profile, str) and requested_profile.strip()
+                else None
+            ),
+        )
+        self.calls.append(key)
+        harnesses = self.harnesses.get(key)
+        if not harnesses:
+            raise AssertionError(f"Unexpected harness resolution request: {key!r}")
+        return harnesses.pop(0)
+
+
 def _build_descriptor(
     agent_id: str,
     *,
@@ -966,6 +989,104 @@ async def test_run_turn_passes_model_reasoning_and_reuses_thread_target(
 
 
 @pytest.mark.asyncio
+async def test_run_turn_reuses_started_harness_instance_for_wait_for_turn(
+    tmp_path: Path,
+):
+    started_harness = _FakeHarness([_HarnessScript(assistant_text="done")])
+    mismatched_harness = _FakeHarness([])
+    factory = _SequentialContextualHarnessFactory(
+        harnesses={("codex", None): [started_harness, mismatched_harness]}
+    )
+    pool = _make_pool(
+        tmp_path,
+        started_harness,
+        approval_mode="yolo",
+        descriptors={"codex": _build_contextual_descriptor("codex", factory)},
+    )
+
+    result = await pool.run_turn(
+        AgentTurnRequest(
+            agent_id="codex",
+            prompt="main prompt",
+            workspace_root=tmp_path,
+        )
+    )
+
+    assert result.text == "done"
+    assert result.error is None
+    assert factory.calls == [("codex", None)]
+    assert len(started_harness.calls) == 1
+    assert mismatched_harness.calls == []
+
+
+@pytest.mark.asyncio
+async def test_run_turn_defers_queued_harness_resolution_until_queue_drain(
+    tmp_path: Path,
+):
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    first_harness = _FakeHarness(
+        [
+            _HarnessScript(
+                assistant_text="done-1",
+                started_event=first_started,
+                release_event=release_first,
+            )
+        ]
+    )
+    second_harness = _FakeHarness([_HarnessScript(assistant_text="done-2")])
+    factory = _SequentialContextualHarnessFactory(
+        harnesses={("codex", None): [first_harness, second_harness]}
+    )
+    pool = _make_pool(
+        tmp_path,
+        first_harness,
+        approval_mode="yolo",
+        descriptors={"codex": _build_contextual_descriptor("codex", factory)},
+    )
+
+    first_task = asyncio.create_task(
+        pool.run_turn(
+            AgentTurnRequest(
+                agent_id="codex",
+                prompt="first prompt",
+                workspace_root=tmp_path,
+            )
+        )
+    )
+    await first_started.wait()
+    thread = pool._thread_store.list_threads(agent="codex", limit=1)[0]
+    thread_id = str(thread["managed_thread_id"])
+
+    second_task = asyncio.create_task(
+        pool.run_turn(
+            AgentTurnRequest(
+                agent_id="codex",
+                prompt="second prompt",
+                workspace_root=tmp_path,
+                conversation_id=thread_id,
+            )
+        )
+    )
+
+    await asyncio.sleep(0)
+    service = pool._get_orchestration_service()  # type: ignore[attr-defined]
+    assert service.get_running_execution(thread_id) is not None
+    assert len(service.list_queued_executions(thread_id)) == 1
+    assert factory.calls == [("codex", None)]
+
+    release_first.set()
+    first_result = await first_task
+    second_result = await second_task
+
+    assert first_result.text == "done-1"
+    assert second_result.text == "done-2"
+    assert factory.calls == [("codex", None), ("codex", None)]
+    assert len(first_harness.calls) == 1
+    assert len(second_harness.calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_run_turn_supports_runtime_backed_hermes_agent(tmp_path: Path):
     harness = _FakeHarness([_HarnessScript(assistant_text="hermes response")])
     pool = _make_pool(
@@ -1103,11 +1224,7 @@ async def test_run_turn_uses_profile_aware_runtime_resolution_for_hermes_queue_d
     assert first_result.text == "done-1"
     assert second_result.text == "done-2"
     assert first_result.conversation_id == second_result.conversation_id == thread_id
-    assert factory.calls == [
-        ("hermes-m4-pma", None),
-        ("hermes-m4-pma", None),
-        ("hermes-m4-pma", None),
-    ]
+    assert factory.calls == [("hermes-m4-pma", None), ("hermes-m4-pma", None)]
     assert alias_harness.calls[0]["conversation_id"] == "session-1"
     assert alias_harness.calls[1]["conversation_id"] == "session-1"
 

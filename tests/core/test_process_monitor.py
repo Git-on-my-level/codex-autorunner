@@ -28,8 +28,10 @@ def test_process_monitor_store_keeps_recent_tail(tmp_path: Path) -> None:
         store.record_sample(
             {
                 "captured_at": _iso(captured_at),
+                "car_service_count": 0,
+                "managed_runtime_count": offset,
                 "opencode_count": offset,
-                "app_server_count": 0,
+                "codex_app_server_count": 0,
                 "total_count": offset,
             },
             cadence_seconds=120,
@@ -43,9 +45,11 @@ def test_process_monitor_store_keeps_recent_tail(tmp_path: Path) -> None:
     store.record_sample(
         {
             "captured_at": _iso(now + timedelta(minutes=1)),
+            "car_service_count": 1,
+            "managed_runtime_count": 99,
             "opencode_count": 99,
-            "app_server_count": 0,
-            "total_count": 99,
+            "codex_app_server_count": 0,
+            "total_count": 100,
         },
         cadence_seconds=120,
         window_seconds=30 * 60,
@@ -68,9 +72,11 @@ def test_build_process_monitor_summary_flags_high_outlier(tmp_path: Path) -> Non
         store.record_sample(
             {
                 "captured_at": _iso(captured_at),
+                "car_service_count": 3,
+                "managed_runtime_count": 3,
                 "opencode_count": 2,
-                "app_server_count": 1,
-                "total_count": 3,
+                "codex_app_server_count": 1,
+                "total_count": 6,
             },
             cadence_seconds=120,
             window_seconds=3 * 60 * 60,
@@ -79,9 +85,11 @@ def test_build_process_monitor_summary_flags_high_outlier(tmp_path: Path) -> Non
     store.record_sample(
         {
             "captured_at": _iso(now + timedelta(minutes=12)),
+            "car_service_count": 3,
+            "managed_runtime_count": 16,
             "opencode_count": 15,
-            "app_server_count": 1,
-            "total_count": 16,
+            "codex_app_server_count": 1,
+            "total_count": 19,
         },
         cadence_seconds=120,
         window_seconds=3 * 60 * 60,
@@ -90,6 +98,10 @@ def test_build_process_monitor_summary_flags_high_outlier(tmp_path: Path) -> Non
     summary = build_process_monitor_summary(root, capture_if_stale=False)
 
     assert summary["status"] == "warning"
+    assert summary["metrics"]["car_services"]["current"] == 3
+    managed = summary["metrics"]["managed_runtimes"]
+    assert managed["abnormal"] is True
+    assert managed["current"] == 16
     opencode = summary["metrics"]["opencode"]
     assert opencode["abnormal"] is True
     assert opencode["current"] == 15
@@ -106,10 +118,15 @@ def test_build_process_monitor_summary_skips_lifecycle_when_repo_config_missing(
 
     def _fake_collect_processes() -> SimpleNamespace:
         return SimpleNamespace(
+            car_service_processes=[],
             opencode_processes=[],
             app_server_processes=[],
+            car_service_count=0,
+            managed_runtime_count=0,
             opencode_count=0,
             app_server_count=0,
+            codex_app_server_count=0,
+            total_count=0,
         )
 
     monkeypatch.setattr(
@@ -133,3 +150,21 @@ def test_build_process_monitor_summary_skips_lifecycle_when_repo_config_missing(
 
     assert summary["status"] == "ok"
     assert summary["latest"]["opencode_lifecycle"] == {}
+
+
+def test_process_monitor_store_discards_prior_schema_version(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    diagnostics = root / ".codex-autorunner" / "diagnostics"
+    diagnostics.mkdir(parents=True)
+    (diagnostics / "process-monitor.json").write_text(
+        '{"version": 1, "samples": [{"captured_at": "2026-01-01T00:00:00Z", "total_count": 5}]}',
+        encoding="utf-8",
+    )
+
+    store = ProcessMonitorStore(root)
+
+    payload = store.load()
+
+    assert payload["version"] == 2
+    assert payload["samples"] == []

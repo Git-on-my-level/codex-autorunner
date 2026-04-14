@@ -5,6 +5,7 @@ import logging
 import re
 import subprocess
 from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, Optional, cast
 from urllib.parse import quote
@@ -223,6 +224,15 @@ def build_status_history_routes(
                             "url": f"api/flows/{normalized}/dispatch_history/{entry.name}/{quote(rel)}",
                         }
                     )
+                created_at: Optional[str] = None
+                for _cand in (dispatch_path, entry):
+                    try:
+                        created_at = datetime.fromtimestamp(
+                            _cand.stat().st_mtime, tz=timezone.utc
+                        ).isoformat()
+                        break
+                    except OSError:
+                        continue
                 history_entries.append(
                     {
                         "seq": entry.name,
@@ -230,6 +240,7 @@ def build_status_history_routes(
                         "errors": errors,
                         "attachments": attachments,
                         "path": safe_relpath(entry, repo_root),
+                        "created_at": created_at,
                     }
                 )
 

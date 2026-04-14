@@ -80,6 +80,7 @@ from ..chat.managed_thread_turns import (
     ManagedThreadTargetRequest,
     ManagedThreadTurnCoordinator,
     complete_managed_thread_execution,
+    render_managed_thread_response_text,
 )
 from ..chat.managed_thread_turns import (
     build_managed_thread_input_items as _shared_build_managed_thread_input_items,
@@ -2377,6 +2378,30 @@ def resolve_discord_thread_target(
             "Discord orchestration service unavailable: hub control-plane client not connected"
         )
     surface_key = managed_thread_surface_key or channel_id
+    existing_binding = None
+    existing_thread = None
+    get_binding = getattr(orchestration_service, "get_binding", None)
+    get_thread_target = getattr(orchestration_service, "get_thread_target", None)
+    if callable(get_binding):
+        with contextlib.suppress(
+            RuntimeError, ValueError, TypeError, KeyError, AttributeError
+        ):
+            existing_binding = get_binding(
+                surface_kind="discord",
+                surface_key=surface_key,
+            )
+    normalized_mode = str(mode or "").strip().lower()
+    existing_thread_target_id = (
+        str(getattr(existing_binding, "thread_target_id", "") or "").strip()
+        if str(getattr(existing_binding, "mode", "") or "").strip().lower()
+        == normalized_mode
+        else ""
+    )
+    if callable(get_thread_target) and existing_thread_target_id:
+        with contextlib.suppress(
+            RuntimeError, ValueError, TypeError, KeyError, AttributeError
+        ):
+            existing_thread = get_thread_target(existing_thread_target_id)
     runtime_agent = resolve_chat_runtime_agent(
         agent,
         agent_profile,
@@ -2388,6 +2413,28 @@ def resolve_discord_thread_target(
         repo_id=repo_id,
         resource_kind=resource_kind,
         resource_id=resource_id,
+    )
+    canonical_workspace = str(workspace_root.resolve())
+    reusable_agent_ids = tuple(dict.fromkeys((agent, runtime_agent)))
+    existing_thread_reusable = (
+        existing_thread is not None
+        and str(getattr(existing_thread, "agent_id", "") or "").strip()
+        in reusable_agent_ids
+        and (getattr(existing_thread, "agent_profile", None) or None)
+        == (agent_profile or None)
+        and str(getattr(existing_thread, "workspace_root", "") or "").strip()
+        == canonical_workspace
+    )
+    current_backend_thread_id = (
+        str(getattr(existing_thread, "backend_thread_id", "") or "").strip() or None
+        if existing_thread_reusable
+        else None
+    )
+    current_runtime_instance_id = (
+        str(getattr(existing_thread, "backend_runtime_instance_id", "") or "").strip()
+        or None
+        if existing_thread_reusable
+        else None
     )
     return _shared_resolve_managed_thread_target(
         orchestration_service,
@@ -2404,6 +2451,10 @@ def resolve_discord_thread_target(
             resource_id=owner_id,
             binding_metadata={"channel_id": channel_id, "pma_enabled": pma_enabled},
             reusable_agent_ids=(runtime_agent,),
+            backend_thread_id=current_backend_thread_id,
+            backend_runtime_instance_id=current_runtime_instance_id,
+            existing_binding=existing_binding,
+            existing_thread=existing_thread,
         ),
     )
 
@@ -2532,7 +2583,7 @@ def _build_discord_runner_hooks(
 
     async def _deliver_result(finalized: ManagedThreadFinalizationResult) -> None:
         if finalized.status == "ok":
-            assistant_text = finalized.assistant_text.strip()
+            assistant_text = render_managed_thread_response_text(finalized)
             formatted = (
                 format_discord_message(assistant_text)
                 if assistant_text
@@ -3180,7 +3231,7 @@ async def _run_discord_orchestrated_turn_for_message(
                 render_mode="final",
             )
         return DiscordMessageTurnResult(
-            final_message=finalized.assistant_text,
+            final_message=render_managed_thread_response_text(finalized),
             preview_message_id=progress_message_id,
             execution_id=progress_execution_id,
             intermediate_message=intermediate_message,

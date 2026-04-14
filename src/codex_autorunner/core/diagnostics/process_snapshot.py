@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -12,6 +13,7 @@ from ...core.managed_processes import ProcessRecord, list_process_records
 
 
 class ProcessCategory(Enum):
+    CAR_SERVICE = "car_service"
     OPENCODE = "opencode"
     APP_SERVER = "app_server"
     OTHER = "other"
@@ -39,6 +41,7 @@ class ProcessInfo:
 
 @dataclass
 class ProcessSnapshot:
+    car_service_processes: list[ProcessInfo] = field(default_factory=list)
     opencode_processes: list[ProcessInfo] = field(default_factory=list)
     app_server_processes: list[ProcessInfo] = field(default_factory=list)
     other_processes: list[ProcessInfo] = field(default_factory=list)
@@ -73,10 +76,28 @@ class ProcessSnapshot:
 
         return {
             "collected_at": self.collected_at,
+            "counts": {
+                "car_services": self.car_service_count,
+                "managed_runtimes": self.managed_runtime_count,
+                "opencode": self.opencode_count,
+                "codex_app_server": self.codex_app_server_count,
+                "app_server": self.codex_app_server_count,
+                "total": self.total_count,
+            },
+            "car_services": [
+                _process_info_to_dict(p) for p in self.car_service_processes
+            ],
             "opencode": [_process_info_to_dict(p) for p in self.opencode_processes],
+            "codex_app_server": [
+                _process_info_to_dict(p) for p in self.app_server_processes
+            ],
             "app_server": [_process_info_to_dict(p) for p in self.app_server_processes],
             "other": [_process_info_to_dict(p) for p in self.other_processes],
         }
+
+    @property
+    def car_service_count(self) -> int:
+        return len(self.car_service_processes)
 
     @property
     def opencode_count(self) -> int:
@@ -86,11 +107,34 @@ class ProcessSnapshot:
     def app_server_count(self) -> int:
         return len(self.app_server_processes)
 
+    @property
+    def codex_app_server_count(self) -> int:
+        return len(self.app_server_processes)
 
-OPENCODE_MARKERS = (
-    "opencode",
-    "codex_autorunner",
+    @property
+    def managed_runtime_count(self) -> int:
+        return self.opencode_count + self.codex_app_server_count
+
+    @property
+    def total_count(self) -> int:
+        return self.car_service_count + self.managed_runtime_count
+
+
+# Match underscore-named binary only as the argv0 segment (not a parent dir like
+# .../codex_autorunner/.venv/bin/codex), which would misclassify app-server/opencode.
+_CODEX_AUTORUNNER_UNDERSCORE_EXE_RE = re.compile(
+    r"(?:^|[/\\])codex_autorunner(?=\s|$)",
 )
+
+CAR_SERVICE_MARKERS = (
+    "codex-autorunner hub ",
+    "codex-autorunner discord ",
+    "codex-autorunner telegram ",
+    "codex-autorunner flow ",
+    "codex-autorunner serve ",
+)
+
+OPENCODE_MARKERS = ("opencode",)
 
 APP_SERVER_MARKERS = (
     "codex app-server",
@@ -102,6 +146,10 @@ APP_SERVER_MARKERS = (
 
 def _classify_process(command: str) -> ProcessCategory:
     command_lc = command.lower()
+    if _CODEX_AUTORUNNER_UNDERSCORE_EXE_RE.search(command_lc):
+        return ProcessCategory.CAR_SERVICE
+    if any(marker in command_lc for marker in CAR_SERVICE_MARKERS):
+        return ProcessCategory.CAR_SERVICE
     if any(marker in command_lc for marker in APP_SERVER_MARKERS):
         return ProcessCategory.APP_SERVER
     if any(marker in command_lc for marker in OPENCODE_MARKERS):
@@ -145,7 +193,9 @@ def parse_ps_output(
             rss_kb=rss_kb,
             elapsed=elapsed or None,
         )
-        if category == ProcessCategory.OPENCODE:
+        if category == ProcessCategory.CAR_SERVICE:
+            snapshot.car_service_processes.append(info)
+        elif category == ProcessCategory.OPENCODE:
             snapshot.opencode_processes.append(info)
         elif category == ProcessCategory.APP_SERVER:
             snapshot.app_server_processes.append(info)

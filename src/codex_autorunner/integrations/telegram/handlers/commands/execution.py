@@ -85,6 +85,7 @@ from .....integrations.chat.managed_thread_turns import (
     ManagedThreadTargetRequest,
     ManagedThreadTurnCoordinator,
     complete_managed_thread_execution,
+    render_managed_thread_response_text,
 )
 from .....integrations.chat.managed_thread_turns import (
     build_managed_thread_input_items as _shared_build_managed_thread_input_items,
@@ -879,9 +880,7 @@ async def _run_telegram_managed_thread_turn(
         finalized: ManagedThreadFinalizationResult,
     ) -> None:
         if finalized.status == "ok":
-            message_text = finalized.assistant_text.strip()
-            if not message_text:
-                message_text = "(No response text returned.)"
+            message_text = render_managed_thread_response_text(finalized)
             await handlers._send_message(
                 message.chat_id,
                 message_text,
@@ -1164,7 +1163,7 @@ async def _run_telegram_managed_thread_turn(
             record=record,
             thread_id=resolved_backend_thread_id,
             turn_id=backend_turn_id or None,
-            response=finalized.assistant_text,
+            response=render_managed_thread_response_text(finalized),
             placeholder_id=prepared_placeholder_id,
             elapsed_seconds=None,
             token_usage=finalized.token_usage,

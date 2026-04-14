@@ -9,7 +9,7 @@ import sys
 import time
 from collections import deque
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Union
 from urllib.parse import unquote, urlparse
 
 from .git_utils import GitError, run_git
@@ -31,6 +31,15 @@ _UPDATE_LOCK_STARTUP_GRACE_SECONDS = 10.0
 _UPDATE_LOCK_CMD_HINTS = ("codex_autorunner.core.update_runner",)
 _UPDATE_BUILD_ARTIFACT_DIRS = ("build", "dist", ".eggs")
 _UPDATE_BUILD_ARTIFACT_GLOBS = ("*.egg-info", "src/*.egg-info")
+_UPDATE_CACHE_RECOVERY_HINTS = (
+    "unresolved deltas left after unpacking",
+    "unpack-objects failed",
+    "pack has bad object",
+    "bad object",
+    "index file corrupt",
+    "object file is empty",
+    "unable to read sha1 file",
+)
 _UPDATE_CMD_TIMEOUT_SECONDS = 300
 _SERVICE_STATUS_CHECK_TIMEOUT_SECONDS = 2
 _GIT_FETCH_UPDATE_TIMEOUT_SECONDS = 60
@@ -126,6 +135,13 @@ def _reset_update_cache_for_retry(
         )
         return False
     return True
+
+
+def _update_cache_refresh_failure_is_retryable(
+    error: Union[BaseException, str],
+) -> bool:
+    message = str(error).lower()
+    return any(hint in message for hint in _UPDATE_CACHE_RECOVERY_HINTS)
 
 
 def _run_refresh_script(
@@ -842,18 +858,28 @@ def _system_update_worker(
                     repo_ref,
                 )
                 try:
-                    _run_cmd(
-                        ["git", "remote", "set-url", "origin", repo_url],
-                        cwd=update_dir,
+                    try:
+                        _run_cmd(
+                            ["git", "remote", "set-url", "origin", repo_url],
+                            cwd=update_dir,
+                        )
+                    except (RuntimeError, OSError):
+                        _run_cmd(
+                            ["git", "remote", "add", "origin", repo_url],
+                            cwd=update_dir,
+                        )
+                    _run_cmd(["git", "fetch", "origin", repo_ref], cwd=update_dir)
+                    _run_cmd(["git", "reset", "--hard", "FETCH_HEAD"], cwd=update_dir)
+                    updated = True
+                except (RuntimeError, OSError) as exc:
+                    if not _update_cache_refresh_failure_is_retryable(exc):
+                        raise
+                    logger.warning(
+                        "Update cache refresh failed with recoverable git corruption; removing %s and recloning. %s",
+                        update_dir,
+                        exc,
                     )
-                except (RuntimeError, OSError):
-                    _run_cmd(
-                        ["git", "remote", "add", "origin", repo_url],
-                        cwd=update_dir,
-                    )
-                _run_cmd(["git", "fetch", "origin", repo_ref], cwd=update_dir)
-                _run_cmd(["git", "reset", "--hard", "FETCH_HEAD"], cwd=update_dir)
-                updated = True
+                    shutil.rmtree(update_dir)
         if not updated:
             if update_dir.exists():
                 shutil.rmtree(update_dir)

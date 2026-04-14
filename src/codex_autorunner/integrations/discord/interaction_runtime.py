@@ -281,3 +281,26 @@ async def update_runtime_component_message(
         text=text,
         components=components or [],
     )
+
+
+async def defer_and_update_runtime_component_message(
+    runtime: DiscordInteractionRuntime,
+    interaction_id: str,
+    interaction_token: str,
+    text: str,
+    *,
+    components: Optional[list[dict[str, Any]]] = None,
+) -> bool:
+    deferred = await ensure_component_response_deferred(
+        runtime,
+        interaction_id,
+        interaction_token,
+    )
+    await runtime.send_or_update_component_message(
+        interaction_id=interaction_id,
+        interaction_token=interaction_token,
+        deferred=deferred,
+        text=text,
+        components=components,
+    )
+    return deferred

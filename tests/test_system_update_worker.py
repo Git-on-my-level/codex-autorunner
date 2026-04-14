@@ -316,6 +316,15 @@ def test_refresh_failure_is_retryable_only_for_packaging_style_errors() -> None:
     )
 
 
+def test_update_cache_refresh_failure_is_retryable_detects_git_corruption() -> None:
+    assert system.update_core._update_cache_refresh_failure_is_retryable(
+        "fatal: unresolved deltas left after unpacking\nfatal: unpack-objects failed"
+    )
+    assert not system.update_core._update_cache_refresh_failure_is_retryable(
+        "fatal: unable to access 'https://example.com/repo.git/': Could not resolve host"
+    )
+
+
 def test_spawn_update_process_writes_status(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     calls: dict[str, object] = {}
@@ -502,6 +511,72 @@ def test_system_update_worker_sets_helper_python_for_refresh_script(
 
     assert captured_env["HELPER_PYTHON"] == "/opt/car/bin/python3"
     assert captured_env["UPDATE_DISCORD_SERVICE_NAME"] == "car-discord"
+
+
+def test_system_update_worker_reclones_when_cached_repo_fetch_is_corrupt(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    update_dir = tmp_path / "update"
+    (update_dir / ".git").mkdir(parents=True)
+    (update_dir / "stale.txt").write_text("stale", encoding="utf-8")
+    refresh_script = tmp_path / "safe-refresh-local-linux-hub.sh"
+    refresh_script.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+
+    monkeypatch.setattr(system.shutil, "which", lambda cmd: f"/usr/bin/{cmd}")
+    monkeypatch.setattr(system.update_core, "_is_valid_git_repo", lambda _path: True)
+    monkeypatch.setattr(
+        system.update_core,
+        "_refresh_script",
+        lambda *_args, **_kwargs: refresh_script,
+    )
+    monkeypatch.setattr(
+        system.update_core,
+        "_run_refresh_script",
+        lambda **_kwargs: (0, ["Health check OK; update successful."]),
+    )
+
+    run_cmd_calls: list[tuple[list[str], Path]] = []
+    failed_fetch = False
+
+    def fake_run_cmd(cmd: list[str], cwd: Path) -> None:
+        nonlocal failed_fetch
+        run_cmd_calls.append((list(cmd), cwd))
+        if (
+            cmd == ["git", "fetch", "origin", "main"]
+            and cwd == update_dir
+            and not failed_fetch
+        ):
+            failed_fetch = True
+            raise RuntimeError(
+                "Command failed: git fetch origin main\n"
+                "Stdout: \n"
+                "Stderr: fatal: unresolved deltas left after unpacking\n"
+                "fatal: unpack-objects failed\n"
+            )
+
+    monkeypatch.setattr(system.update_core, "_run_cmd", fake_run_cmd)
+    logger = logging.getLogger("test")
+
+    system._system_update_worker(
+        repo_url="https://example.com/repo.git",
+        repo_ref="main",
+        update_dir=update_dir,
+        logger=logger,
+        update_target="web",
+        update_backend="systemd-user",
+        skip_checks=True,
+    )
+
+    payload = json.loads(system._update_status_path().read_text(encoding="utf-8"))
+    assert payload["status"] == "ok"
+    assert failed_fetch is True
+    assert not update_dir.exists()
+    assert (
+        ["git", "clone", "https://example.com/repo.git", str(update_dir)],
+        update_dir.parent,
+    ) in run_cmd_calls
 
 
 def test_system_update_worker_retries_refresh_after_packaging_failure(

@@ -913,10 +913,13 @@ async def test_flow_refresh_button_updates_existing_status_message(
         assert "Status: running" in initial_payload["content"]
 
         assert refresh_payload["type"] == 6
-        assert len(rest.edited_original_interaction_responses) == 1
+        assert len(rest.edited_original_interaction_responses) == 2
+        progress_payload = rest.edited_original_interaction_responses[0]["payload"]
+        assert progress_payload["content"] == f"Refreshing run {run_id}..."
+        assert progress_payload["components"] == []
         assert (
             "Status: completed"
-            in rest.edited_original_interaction_responses[0]["payload"]["content"]
+            in rest.edited_original_interaction_responses[-1]["payload"]["content"]
         )
     finally:
         await store.close()
@@ -1320,11 +1323,252 @@ async def test_flow_restart_button_uses_component_safe_response_path(
         assert len(rest.interaction_responses) == 1
         payload = rest.interaction_responses[0]["payload"]
         assert payload["type"] == 6
-        assert len(rest.followup_messages) == 1
+        assert rest.followup_messages == []
+        assert len(rest.edited_original_interaction_responses) == 2
+        progress_payload = rest.edited_original_interaction_responses[0]["payload"]
+        assert progress_payload["content"] == f"Restarting run {failed_run_id}..."
+        assert progress_payload["components"] == []
         assert (
             f"Started new ticket_flow run {new_run_id}."
-            in rest.followup_messages[0]["payload"]["content"]
+            in rest.edited_original_interaction_responses[-1]["payload"]["content"]
         )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_flow_resume_button_updates_existing_status_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = _workspace(tmp_path)
+    paused_run_id = str(uuid.uuid4())
+    _create_run(workspace, paused_run_id, status=FlowRunStatus.PAUSED)
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+
+    flow_service = _FlowServiceStub()
+
+    async def _resume_flow_run(run_id: str, *, force: bool = False) -> SimpleNamespace:
+        _ = force
+        flow_service.resume_calls.append(run_id)
+        with FlowStore(workspace / ".codex-autorunner" / "flows.db") as db:
+            db.update_flow_run_status(run_id, FlowRunStatus.RUNNING)
+        return SimpleNamespace(run_id=run_id, status="running")
+
+    flow_service.resume_flow_run = _resume_flow_run  # type: ignore[method-assign]
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.discord.service.build_ticket_flow_orchestration_service",
+        lambda *, workspace_root: flow_service,
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [_flow_component_interaction(f"flow:{paused_run_id}:resume")]
+    )
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert flow_service.resume_calls == [paused_run_id]
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 6
+        assert rest.followup_messages == []
+        assert len(rest.edited_original_interaction_responses) == 2
+        progress_payload = rest.edited_original_interaction_responses[0]["payload"]
+        assert progress_payload["content"] == f"Resuming run {paused_run_id}..."
+        assert progress_payload["components"] == []
+        final_payload = rest.edited_original_interaction_responses[-1]["payload"]
+        assert f"Resumed run {paused_run_id}." in final_payload["content"]
+        assert "Status:" in final_payload["content"]
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_flow_resume_button_reports_stale_run_after_progress_update(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = _workspace(tmp_path)
+    paused_run_id = str(uuid.uuid4())
+    _create_run(workspace, paused_run_id, status=FlowRunStatus.PAUSED)
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+
+    flow_service = _FlowServiceStub()
+
+    async def _resume_flow_run(run_id: str, *, force: bool = False) -> SimpleNamespace:
+        _ = force
+        flow_service.resume_calls.append(run_id)
+        raise KeyError(f"Unknown flow run '{run_id}'")
+
+    flow_service.resume_flow_run = _resume_flow_run  # type: ignore[method-assign]
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.discord.service.build_ticket_flow_orchestration_service",
+        lambda *, workspace_root: flow_service,
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [_flow_component_interaction(f"flow:{paused_run_id}:resume")]
+    )
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert flow_service.resume_calls == [paused_run_id]
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 6
+        assert len(rest.edited_original_interaction_responses) == 2
+        progress_payload = rest.edited_original_interaction_responses[0]["payload"]
+        assert progress_payload["content"] == f"Resuming run {paused_run_id}..."
+        assert progress_payload["components"] == []
+        final_payload = rest.edited_original_interaction_responses[-1]["payload"]
+        assert final_payload["content"] == f"\"Unknown flow run '{paused_run_id}'\""
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_flow_stop_button_updates_existing_status_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = _workspace(tmp_path)
+    running_run_id = str(uuid.uuid4())
+    _create_run(workspace, running_run_id, status=FlowRunStatus.RUNNING)
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+
+    flow_service = _FlowServiceStub()
+
+    async def _stop_flow_run(run_id: str) -> SimpleNamespace:
+        flow_service.stop_calls.append(run_id)
+        with FlowStore(workspace / ".codex-autorunner" / "flows.db") as db:
+            db.update_flow_run_status(run_id, FlowRunStatus.STOPPED)
+        return SimpleNamespace(run_id=run_id, status="stopped")
+
+    flow_service.stop_flow_run = _stop_flow_run  # type: ignore[method-assign]
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.discord.service.build_ticket_flow_orchestration_service",
+        lambda *, workspace_root: flow_service,
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway([_flow_component_interaction(f"flow:{running_run_id}:stop")])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert flow_service.stop_calls == [running_run_id]
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 6
+        assert rest.followup_messages == []
+        assert len(rest.edited_original_interaction_responses) == 2
+        progress_payload = rest.edited_original_interaction_responses[0]["payload"]
+        assert progress_payload["content"] == f"Stopping run {running_run_id}..."
+        assert progress_payload["components"] == []
+        final_payload = rest.edited_original_interaction_responses[-1]["payload"]
+        assert (
+            f"Stop requested for run {running_run_id} (stopped)."
+            in final_payload["content"]
+        )
+        assert "Status: stopped" in final_payload["content"]
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_flow_stop_button_reports_stale_run_after_progress_update(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = _workspace(tmp_path)
+    running_run_id = str(uuid.uuid4())
+    _create_run(workspace, running_run_id, status=FlowRunStatus.RUNNING)
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+
+    flow_service = _FlowServiceStub()
+
+    async def _stop_flow_run(run_id: str) -> SimpleNamespace:
+        flow_service.stop_calls.append(run_id)
+        raise KeyError(f"Unknown flow run '{run_id}'")
+
+    flow_service.stop_flow_run = _stop_flow_run  # type: ignore[method-assign]
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.discord.service.build_ticket_flow_orchestration_service",
+        lambda *, workspace_root: flow_service,
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway([_flow_component_interaction(f"flow:{running_run_id}:stop")])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert flow_service.stop_calls == [running_run_id]
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 6
+        assert len(rest.edited_original_interaction_responses) == 2
+        progress_payload = rest.edited_original_interaction_responses[0]["payload"]
+        assert progress_payload["content"] == f"Stopping run {running_run_id}..."
+        assert progress_payload["components"] == []
+        final_payload = rest.edited_original_interaction_responses[-1]["payload"]
+        assert final_payload["content"] == f"\"Unknown flow run '{running_run_id}'\""
     finally:
         await store.close()
 

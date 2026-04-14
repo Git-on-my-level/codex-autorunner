@@ -88,6 +88,8 @@ class ManagedThreadFinalizationResult:
     managed_turn_id: str
     backend_thread_id: Optional[str]
     token_usage: Optional[dict[str, Any]] = None
+    session_notice: Optional[str] = None
+    fresh_backend_session_reason: Optional[str] = None
 
 
 FinalizeQueuedExecution = Callable[
@@ -383,6 +385,34 @@ def _thread_matches_reuse_constraints(
     )
 
 
+def _force_clear_backend_thread_binding(
+    orchestration_service: Any,
+    *,
+    thread_target_id: str,
+    backend_runtime_instance_id: Optional[str],
+) -> bool:
+    set_thread_backend_id = getattr(
+        orchestration_service, "set_thread_backend_id", None
+    )
+    if callable(set_thread_backend_id):
+        set_thread_backend_id(
+            thread_target_id,
+            None,
+            backend_runtime_instance_id=backend_runtime_instance_id,
+        )
+        return True
+    thread_store = getattr(orchestration_service, "thread_store", None)
+    store_set_thread_backend_id = getattr(thread_store, "set_thread_backend_id", None)
+    if callable(store_set_thread_backend_id):
+        store_set_thread_backend_id(
+            thread_target_id,
+            None,
+            backend_runtime_instance_id=backend_runtime_instance_id,
+        )
+        return True
+    return False
+
+
 def _resume_managed_thread_target(
     orchestration_service: Any,
     thread: Any,
@@ -393,28 +423,38 @@ def _resume_managed_thread_target(
     desired_runtime_instance_id: Optional[str],
 ) -> Any:
     resume_kwargs: dict[str, Any] = {}
-    if clear_backend_thread_id and current_backend_thread_id is not None:
-        clear_backend_thread_id_fn = getattr(
-            orchestration_service, "set_thread_backend_id", None
-        )
-        if not callable(clear_backend_thread_id_fn):
-            thread_store = getattr(orchestration_service, "thread_store", None)
-            clear_backend_thread_id_fn = getattr(
-                thread_store, "set_thread_backend_id", None
-            )
-        if callable(clear_backend_thread_id_fn):
-            clear_backend_thread_id_fn(
-                thread.thread_target_id,
-                None,
-                backend_runtime_instance_id=desired_runtime_instance_id,
-            )
+    requested_backend_clear = (
+        clear_backend_thread_id and current_backend_thread_id is not None
+    )
+    if requested_backend_clear:
+        resume_kwargs["backend_thread_id"] = None
     elif desired_backend_thread_id is not None:
         resume_kwargs["backend_thread_id"] = desired_backend_thread_id
+    elif current_backend_thread_id is not None:
+        resume_kwargs["backend_thread_id"] = current_backend_thread_id
     resume_kwargs["backend_runtime_instance_id"] = desired_runtime_instance_id
-    return orchestration_service.resume_thread_target(
+    resumed_thread = orchestration_service.resume_thread_target(
         thread.thread_target_id,
         **resume_kwargs,
     )
+    if (
+        not requested_backend_clear
+        or resumed_thread is None
+        or _normalized_optional_text(getattr(resumed_thread, "backend_thread_id", None))
+        is None
+    ):
+        return resumed_thread
+    if not _force_clear_backend_thread_binding(
+        orchestration_service,
+        thread_target_id=thread.thread_target_id,
+        backend_runtime_instance_id=desired_runtime_instance_id,
+    ):
+        return resumed_thread
+    get_thread_target = getattr(orchestration_service, "get_thread_target", None)
+    if not callable(get_thread_target):
+        return resumed_thread
+    refreshed_thread = get_thread_target(thread.thread_target_id)
+    return resumed_thread if refreshed_thread is None else refreshed_thread
 
 
 def _create_managed_thread_target(
@@ -501,6 +541,8 @@ def _build_finalization_result(
     managed_turn_id: str,
     backend_thread_id: Optional[str],
     token_usage: Optional[dict[str, Any]],
+    session_notice: Optional[str] = None,
+    fresh_backend_session_reason: Optional[str] = None,
 ) -> ManagedThreadFinalizationResult:
     return ManagedThreadFinalizationResult(
         status=status,
@@ -510,6 +552,8 @@ def _build_finalization_result(
         managed_turn_id=managed_turn_id,
         backend_thread_id=backend_thread_id,
         token_usage=token_usage,
+        session_notice=session_notice,
+        fresh_backend_session_reason=fresh_backend_session_reason,
     )
 
 
@@ -545,7 +589,57 @@ def coerce_managed_thread_finalization_result(
             str(finalized.get("backend_thread_id") or "").strip() or None
         ),
         token_usage=normalized_token_usage,
+        session_notice=(str(finalized.get("session_notice") or "").strip() or None),
+        fresh_backend_session_reason=(
+            str(finalized.get("fresh_backend_session_reason") or "").strip() or None
+        ),
     )
+
+
+def _normalized_session_metadata_text(
+    metadata: Mapping[str, Any], key: str
+) -> Optional[str]:
+    return str(metadata.get(key) or "").strip() or None
+
+
+def managed_thread_session_metadata(
+    request: MessageRequest,
+) -> tuple[Optional[str], Optional[str], bool]:
+    metadata = getattr(request, "metadata", {})
+    if not isinstance(metadata, Mapping):
+        return None, None, False
+    session_notice = _normalized_session_metadata_text(
+        metadata, "fresh_backend_session_notice"
+    )
+    fresh_backend_session_reason = _normalized_session_metadata_text(
+        metadata, "fresh_backend_session_reason"
+    )
+    fresh_backend_session_started = bool(
+        metadata.get("fresh_backend_session_started")
+        or session_notice
+        or fresh_backend_session_reason
+    )
+    return (
+        session_notice,
+        fresh_backend_session_reason,
+        fresh_backend_session_started,
+    )
+
+
+def render_managed_thread_response_text(
+    finalized: ManagedThreadFinalizationResult,
+    *,
+    no_response_fallback: str = "(No response text returned.)",
+) -> str:
+    assistant_text = str(finalized.assistant_text or "").strip()
+    session_notice = str(finalized.session_notice or "").strip()
+    if session_notice and assistant_text:
+        return f"{session_notice}\n\n{assistant_text}"
+    if session_notice:
+        return session_notice
+    if assistant_text:
+        return assistant_text
+    return no_response_fallback
 
 
 def resolve_managed_thread_target(
@@ -605,9 +699,18 @@ def resolve_managed_thread_target(
                 reusable_agent_ids=reusable_agent_ids,
                 canonical_workspace=canonical_workspace,
             )
+    clear_backend_thread_id = (
+        request.mode == "pma"
+        and desired_backend_thread_id is None
+        and current_backend_thread_id is not None
+    )
     should_resume_reusable = reusable_thread and (
         str(getattr(thread, "lifecycle_status", "") or "").strip().lower() != "active"
-        or current_backend_thread_id != desired_backend_thread_id
+        or clear_backend_thread_id
+        or (
+            desired_backend_thread_id is not None
+            and current_backend_thread_id != desired_backend_thread_id
+        )
         or (
             desired_runtime_instance_id is not None
             and current_runtime_instance_id != desired_runtime_instance_id
@@ -618,9 +721,7 @@ def resolve_managed_thread_target(
         thread = _resume_managed_thread_target(
             orchestration_service,
             thread,
-            clear_backend_thread_id=(
-                request.mode == "pma" and desired_backend_thread_id is None
-            ),
+            clear_backend_thread_id=clear_backend_thread_id,
             desired_backend_thread_id=desired_backend_thread_id,
             current_backend_thread_id=current_backend_thread_id,
             desired_runtime_instance_id=desired_runtime_instance_id,
@@ -1173,6 +1274,9 @@ def _surface_metadata(
     backend_turn_id: Optional[str],
     status: str,
 ) -> dict[str, Any]:
+    _, fresh_backend_session_reason, fresh_backend_session_started = (
+        managed_thread_session_metadata(started.request)
+    )
     metadata = {
         "agent": getattr(started.thread, "agent_id", None),
         "execution_id": started.execution.execution_id,
@@ -1186,6 +1290,10 @@ def _surface_metadata(
         "surface_kind": surface.surface_kind,
         "surface_key": surface.surface_key,
     }
+    if fresh_backend_session_started:
+        metadata["fresh_backend_session_started"] = True
+    if fresh_backend_session_reason:
+        metadata["fresh_backend_session_reason"] = fresh_backend_session_reason
     metadata.update(dict(surface.metadata))
     return metadata
 
@@ -1685,6 +1793,11 @@ async def finalize_managed_thread_execution(
         orchestration_service,
         managed_thread_id,
     )
+    (
+        session_notice,
+        fresh_backend_session_reason,
+        fresh_backend_session_started,
+    ) = managed_thread_session_metadata(started.request)
     resolved_backend_thread_id = (
         str(
             getattr(finalized_runtime_binding, "backend_thread_id", None)
@@ -1718,6 +1831,12 @@ async def finalize_managed_thread_execution(
             "surface_kind": surface.surface_kind,
             "surface_key": surface.surface_key,
         }
+        if fresh_backend_session_started:
+            transcript_metadata["fresh_backend_session_started"] = True
+        if fresh_backend_session_reason:
+            transcript_metadata["fresh_backend_session_reason"] = (
+                fresh_backend_session_reason
+            )
         transcript_metadata.update(dict(surface.metadata))
         try:
             if resolved_hub_client is None:
@@ -1782,6 +1901,8 @@ async def finalize_managed_thread_execution(
                 finalized_status=finalized_status or None,
                 detail=detail,
                 event_error=event_state.last_error_message,
+                fresh_backend_session_started=fresh_backend_session_started,
+                fresh_backend_session_reason=fresh_backend_session_reason,
                 **_managed_thread_runtime_trace_fields(event_state),
             )
             return _build_finalization_result(
@@ -1792,6 +1913,8 @@ async def finalize_managed_thread_execution(
                 managed_turn_id=managed_turn_id,
                 backend_thread_id=resolved_backend_thread_id,
                 token_usage=event_state.token_usage,
+                session_notice=session_notice,
+                fresh_backend_session_reason=fresh_backend_session_reason,
             )
         # Log turn_finalized immediately after orchestration acknowledges ok so log-plane
         # correlates with orch_thread_executions even if optional hub calls below fail or
@@ -1812,6 +1935,8 @@ async def finalize_managed_thread_execution(
             assistant_chars=len(resolved_assistant_text),
             event_error=event_state.last_error_message,
             token_usage=event_state.token_usage,
+            fresh_backend_session_started=fresh_backend_session_started,
+            fresh_backend_session_reason=fresh_backend_session_reason,
             **_managed_thread_runtime_trace_fields(event_state),
         )
         try:
@@ -1839,6 +1964,8 @@ async def finalize_managed_thread_execution(
             managed_turn_id=managed_turn_id,
             backend_thread_id=resolved_backend_thread_id,
             token_usage=event_state.token_usage,
+            session_notice=session_notice,
+            fresh_backend_session_reason=fresh_backend_session_reason,
         )
 
     if outcome.status == "interrupted":
@@ -1865,6 +1992,8 @@ async def finalize_managed_thread_execution(
             detail=errors.interrupted_error,
             event_error=event_state.last_error_message,
             token_usage=event_state.token_usage,
+            fresh_backend_session_started=fresh_backend_session_started,
+            fresh_backend_session_reason=fresh_backend_session_reason,
             **_managed_thread_runtime_trace_fields(event_state),
         )
         return _build_finalization_result(
@@ -1875,6 +2004,8 @@ async def finalize_managed_thread_execution(
             managed_turn_id=managed_turn_id,
             backend_thread_id=resolved_backend_thread_id,
             token_usage=event_state.token_usage,
+            session_notice=session_notice,
+            fresh_backend_session_reason=fresh_backend_session_reason,
         )
 
     detail = resolve_runtime_thread_error_detail(
@@ -1913,6 +2044,8 @@ async def finalize_managed_thread_execution(
         outcome_error=outcome.error,
         event_error=event_state.last_error_message,
         token_usage=event_state.token_usage,
+        fresh_backend_session_started=fresh_backend_session_started,
+        fresh_backend_session_reason=fresh_backend_session_reason,
         **_managed_thread_runtime_trace_fields(event_state),
     )
     return _build_finalization_result(
@@ -1923,4 +2056,6 @@ async def finalize_managed_thread_execution(
         managed_turn_id=managed_turn_id,
         backend_thread_id=resolved_backend_thread_id,
         token_usage=event_state.token_usage,
+        session_notice=session_notice,
+        fresh_backend_session_reason=fresh_backend_session_reason,
     )

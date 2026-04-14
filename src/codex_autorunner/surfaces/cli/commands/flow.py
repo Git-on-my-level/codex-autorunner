@@ -24,7 +24,13 @@ from ....core.flows.flow_housekeeping import (
     gather_stats,
     parse_flow_retention_config,
 )
-from ....core.flows.models import FlowEventType, FlowRunRecord, FlowRunStatus
+from ....core.flows.models import (
+    FlowEventType,
+    FlowRunRecord,
+    FlowRunStatus,
+    flow_run_duration_seconds,
+    format_flow_duration,
+)
 from ....core.flows.start_policy import evaluate_ticket_start_policy
 from ....core.flows.telemetry_export import export_all_runs
 from ....core.flows.ux_helpers import build_flow_status_snapshot, ensure_worker
@@ -418,6 +424,7 @@ def register_flow_commands(
             "created_at": record.created_at,
             "started_at": record.started_at,
             "finished_at": record.finished_at,
+            "duration_seconds": flow_run_duration_seconds(record),
             "last_event_seq": snapshot.get("last_event_seq"),
             "last_event_at": snapshot.get("last_event_at"),
             "current_ticket": effective_ticket,
@@ -455,6 +462,9 @@ def register_flow_commands(
             f"created={payload.get('created_at')} started={payload.get('started_at')} "
             f"finished={payload.get('finished_at')}"
         )
+        duration_str = format_flow_duration(payload.get("duration_seconds"))
+        if duration_str:
+            typer.echo(f"duration={duration_str}")
         typer.echo(
             f"last_event={payload.get('last_event_at')} seq={payload.get('last_event_seq')}"
         )

@@ -3292,6 +3292,14 @@ button.icon-btn {
   color: #f85149;
 }
 
+.dispatch-duration {
+  font-family: 'JetBrains Mono', 'SF Mono', Monaco, monospace;
+  font-size: 11px;
+  color: var(--muted, #8b949e);
+  white-space: nowrap;
+  margin-left: 6px;
+}
+
 /* Diff stats on ticket items (cumulative per ticket) */
 .ticket-diff-stats {
   display: inline-flex;
@@ -3308,6 +3316,14 @@ button.icon-btn {
 
 .ticket-diff-stats .diff-del {
   color: #f85149;
+}
+
+.ticket-duration {
+  font-family: 'JetBrains Mono', 'SF Mono', Monaco, monospace;
+  font-size: 11px;
+  color: var(--muted, #8b949e);
+  white-space: nowrap;
+  margin-left: 6px;
 }
 
 /* Diff stats in analytics metrics */

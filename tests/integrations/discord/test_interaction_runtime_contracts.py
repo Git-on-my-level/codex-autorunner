@@ -115,6 +115,32 @@ def _module_function_names(relative_path: str) -> set[str]:
     }
 
 
+def _function_node(relative_path: str, function_name: str) -> ast.AST:
+    repo_root = DISCORD_DIR.parents[3]
+    path = repo_root / relative_path
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name == function_name:
+                return node
+    raise AssertionError(f"Function {function_name!r} not found in {relative_path}")
+
+
+def _function_has_call(
+    relative_path: str, function_name: str, callee_name: str
+) -> bool:
+    node = _function_node(relative_path, function_name)
+    for child in ast.walk(node):
+        if not isinstance(child, ast.Call):
+            continue
+        func = child.func
+        if isinstance(func, ast.Name) and func.id == callee_name:
+            return True
+        if isinstance(func, ast.Attribute) and func.attr == callee_name:
+            return True
+    return False
+
+
 def test_contract_only_boundary_modules_touch_raw_discord_response_primitives() -> None:
     users = _raw_response_users()
 
@@ -188,3 +214,37 @@ def test_contract_legacy_normalized_interaction_path_is_removed() -> None:
     assert "_handle_normalized_interaction" not in _module_function_names(
         "src/codex_autorunner/integrations/discord/service.py"
     )
+
+
+def test_contract_long_running_component_handlers_show_immediate_progress() -> None:
+    required_helper = "defer_and_update_runtime_component_message"
+    targets = {
+        "src/codex_autorunner/integrations/discord/car_handlers/session_commands.py": (
+            "handle_car_newt_hard_reset",
+        ),
+        "src/codex_autorunner/integrations/discord/flow_commands.py": (
+            "handle_flow_button",
+        ),
+        "src/codex_autorunner/integrations/discord/interaction_registry.py": (
+            "_handle_flow_action_select_component",
+        ),
+        "src/codex_autorunner/integrations/discord/service.py": (
+            "_handle_cancel_turn_button",
+            "_handle_cancel_queued_turn_button",
+            "_handle_queued_turn_interrupt_send_button",
+            "_handle_queue_cancel_button",
+            "_handle_queue_interrupt_send_button",
+        ),
+    }
+
+    missing = {
+        relative_path: [
+            function_name
+            for function_name in function_names
+            if not _function_has_call(relative_path, function_name, required_helper)
+        ]
+        for relative_path, function_names in targets.items()
+    }
+    missing = {path: names for path, names in missing.items() if names}
+
+    assert missing == {}

@@ -61,6 +61,13 @@ _MISSING_THREAD_MARKERS = (
 _RECOVERABLE_BACKEND_MARKERS = _MISSING_THREAD_MARKERS + ("event loop is closed",)
 _REHYDRATION_TRANSCRIPT_LIMIT = 3
 _REHYDRATION_TEXT_LIMIT = 4_000
+_FRESH_BACKEND_SESSION_NOTICE = (
+    "Notice: the previous live session was unavailable, so I started a new " "session."
+)
+_FRESH_BACKEND_SESSION_REHYDRATED_NOTICE = (
+    "Notice: the previous live session was unavailable, so I started a new "
+    "session and recovered context from durable history."
+)
 logger = logging.getLogger(__name__)
 
 HarnessFactory = Callable[..., RuntimeThreadHarness]
@@ -796,6 +803,21 @@ class _ThreadExecutionLifecycle:
             return runtime_prompt
         return f"{prefix}\n\n{runtime_prompt}"
 
+    @staticmethod
+    def mark_fresh_backend_session(
+        request: MessageRequest,
+        *,
+        reason: str,
+        rehydrated: bool,
+    ) -> None:
+        request.metadata["fresh_backend_session_started"] = True
+        request.metadata["fresh_backend_session_reason"] = reason
+        request.metadata["fresh_backend_session_notice"] = (
+            _FRESH_BACKEND_SESSION_REHYDRATED_NOTICE
+            if rehydrated
+            else _FRESH_BACKEND_SESSION_NOTICE
+        )
+
     async def start_execution(
         self,
         thread: ThreadTarget,
@@ -809,6 +831,8 @@ class _ThreadExecutionLifecycle:
         runtime_prompt = self.resolve_runtime_prompt(request)
         fresh_conversation_retry_attempted = False
         rehydrated_runtime_prompt = False
+        fresh_backend_session_reason: Optional[str] = None
+        previous_backend_thread_id: Optional[str] = None
         runtime_instance_id: Optional[str] = None
         conversation_id: Optional[str] = None
         used_existing_conversation = False
@@ -831,6 +855,8 @@ class _ThreadExecutionLifecycle:
                     backend_thread_id=conversation_id,
                     runtime_instance_id=runtime_instance_id,
                 ):
+                    fresh_backend_session_reason = "stale_runtime_instance"
+                    previous_backend_thread_id = conversation_id
                     conversation_id = None
             while True:
                 used_existing_conversation = conversation_id is not None
@@ -859,6 +885,8 @@ class _ThreadExecutionLifecycle:
                                 backend_thread_id=conversation_id,
                                 action="start_new_conversation",
                             )
+                            fresh_backend_session_reason = "resume_recoverable_error"
+                            previous_backend_thread_id = conversation_id
                             self.thread_store.set_thread_backend_id(
                                 thread.thread_target_id,
                                 None,
@@ -891,9 +919,45 @@ class _ThreadExecutionLifecycle:
                             )
                     else:
                         if not rehydrated_runtime_prompt:
-                            runtime_prompt = self.rehydrated_runtime_prompt(
-                                thread, runtime_prompt
+                            prefix = self.build_rehydration_prefix(
+                                thread,
+                                include_compact_seed="Context summary (from compaction):"
+                                not in runtime_prompt,
                             )
+                            should_mark_fresh_backend_session = bool(
+                                previous_backend_thread_id
+                                or str(
+                                    getattr(thread, "last_execution_id", "") or ""
+                                ).strip()
+                                or str(
+                                    getattr(thread, "compact_seed", "") or ""
+                                ).strip()
+                            )
+                            if should_mark_fresh_backend_session:
+                                fresh_backend_session_reason = (
+                                    fresh_backend_session_reason
+                                    or "missing_backend_binding"
+                                )
+                                self.mark_fresh_backend_session(
+                                    request,
+                                    reason=fresh_backend_session_reason,
+                                    rehydrated=bool(prefix),
+                                )
+                                log_event(
+                                    logger,
+                                    logging.INFO,
+                                    "orchestration.thread.fresh_backend_session_started",
+                                    thread_target_id=thread.thread_target_id,
+                                    execution_id=execution.execution_id,
+                                    previous_backend_thread_id=(
+                                        previous_backend_thread_id
+                                    ),
+                                    request_kind=request.kind,
+                                    reason=fresh_backend_session_reason,
+                                    rehydrated=bool(prefix),
+                                )
+                            if prefix:
+                                runtime_prompt = f"{prefix}\n\n{runtime_prompt}"
                             rehydrated_runtime_prompt = True
                         conversation = await harness.new_conversation(
                             workspace_root,
@@ -967,6 +1031,8 @@ class _ThreadExecutionLifecycle:
                         status_code=exc.status_code,
                         reason=str(exc),
                     )
+                    fresh_backend_session_reason = "fresh_conversation_required"
+                    previous_backend_thread_id = conversation_id
                     self.thread_store.set_thread_backend_id(
                         thread.thread_target_id,
                         None,
@@ -1002,6 +1068,8 @@ class _ThreadExecutionLifecycle:
                         status_code=None,
                         reason=str(exc),
                     )
+                    fresh_backend_session_reason = "start_turn_recoverable_error"
+                    previous_backend_thread_id = conversation_id
                     self.thread_store.set_thread_backend_id(
                         thread.thread_target_id,
                         None,
@@ -1842,6 +1910,22 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         sandbox_policy: Optional[Any] = None,
         harness: Optional[RuntimeThreadHarness] = None,
     ) -> ExecutionRecord:
+        execution, _resolved_harness = await self.send_message_with_started_harness(
+            request,
+            client_request_id=client_request_id,
+            sandbox_policy=sandbox_policy,
+            harness=harness,
+        )
+        return execution
+
+    async def send_message_with_started_harness(
+        self,
+        request: MessageRequest,
+        *,
+        client_request_id: Optional[str] = None,
+        sandbox_policy: Optional[Any] = None,
+        harness: Optional[RuntimeThreadHarness] = None,
+    ) -> tuple[ExecutionRecord, Optional[RuntimeThreadHarness]]:
         if request.target_kind != "thread":
             raise ValueError("Thread orchestration service only handles thread targets")
 
@@ -1914,19 +1998,20 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             message_preview=_truncate_text(request.message_text, MessagePreviewLimit),
         )
         if execution.status != "running":
-            return execution
-        harness = harness or self._harness_for_agent(
+            return execution, None
+        resolved_harness = harness or self._harness_for_agent(
             definition.agent_id,
             request.agent_profile,
         )
-        return await self._start_execution(
+        started = await self._start_execution(
             thread,
             request,
             execution,
-            harness=harness,
+            harness=resolved_harness,
             workspace_root=workspace_root,
             sandbox_policy=sandbox_policy,
         )
+        return started, resolved_harness
 
     def claim_next_queued_execution_context(
         self, thread_target_id: str

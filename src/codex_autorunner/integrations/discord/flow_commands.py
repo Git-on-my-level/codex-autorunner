@@ -46,6 +46,7 @@ from .components import (
 from .errors import DiscordTransientError
 from .interaction_registry import FLOW_ACTION_SELECT_PREFIX
 from .interaction_runtime import (
+    defer_and_update_runtime_component_message,
     ensure_component_response_deferred,
     ensure_public_response_deferred,
     interaction_response_deferred,
@@ -82,6 +83,94 @@ def flow_archive_prompt_text(record: FlowRunRecord) -> str:
 
 def flow_archive_in_progress_text(run_id: str) -> str:
     return f"Archiving run {run_id}... This can take a few seconds."
+
+
+def flow_restart_in_progress_text(run_id: str) -> str:
+    return f"Restarting run {run_id}..."
+
+
+def flow_resume_in_progress_text(run_id: str) -> str:
+    return f"Resuming run {run_id}..."
+
+
+def flow_stop_in_progress_text(run_id: str) -> str:
+    return f"Stopping run {run_id}..."
+
+
+def flow_refresh_in_progress_text(run_id: str) -> str:
+    return f"Refreshing run {run_id}..."
+
+
+async def _send_flow_public_response(
+    service: Any,
+    interaction_id: str,
+    interaction_token: str,
+    *,
+    deferred: bool,
+    text: str,
+    component_response: bool = False,
+    components: Optional[list[dict[str, Any]]] = None,
+) -> None:
+    if component_response:
+        await service.send_or_update_component_message(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text=text,
+            components=components,
+        )
+        return
+    if components is not None:
+        await service.send_or_respond_public_with_components(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text=text,
+            components=components,
+        )
+        return
+    await service.send_or_respond_public(
+        interaction_id=interaction_id,
+        interaction_token=interaction_token,
+        deferred=deferred,
+        text=text,
+    )
+
+
+async def _send_flow_ephemeral_response(
+    service: Any,
+    interaction_id: str,
+    interaction_token: str,
+    *,
+    deferred: bool,
+    text: str,
+    component_response: bool = False,
+    components: Optional[list[dict[str, Any]]] = None,
+) -> None:
+    if component_response:
+        await service.send_or_update_component_message(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text=text,
+            components=components,
+        )
+        return
+    if components is not None:
+        await service.send_or_respond_ephemeral_with_components(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text=text,
+            components=components,
+        )
+        return
+    await service.send_or_respond_ephemeral(
+        interaction_id=interaction_id,
+        interaction_token=interaction_token,
+        deferred=deferred,
+        text=text,
+    )
 
 
 def _normalize_run_id(value: str) -> Optional[str]:
@@ -978,6 +1067,7 @@ async def handle_flow_start(
     workspace_root: Path,
     options: dict[str, Any],
     deferred_public: Optional[bool] = None,
+    component_response: bool = False,
 ) -> None:
     force_new = bool(options.get("force_new"))
     restart_from = options.get("restart_from")
@@ -1068,10 +1158,12 @@ async def handle_flow_start(
                         user_message="Unable to query flow database. Please try again later.",
                     ) from None
                 if record is None:
-                    await service.send_or_respond_public(
-                        interaction_id=interaction_id,
-                        interaction_token=interaction_token,
+                    await _send_flow_public_response(
+                        service,
+                        interaction_id,
+                        interaction_token,
                         deferred=deferred_public,
+                        component_response=component_response,
                         text=(
                             "Reusing ticket_flow run "
                             f"{active_or_paused.id} ({active_or_paused.status.value})."
@@ -1083,10 +1175,12 @@ async def handle_flow_start(
                         workspace_root, record, store
                     )
                     if locked:
-                        await service.send_or_respond_ephemeral(
-                            interaction_id=interaction_id,
-                            interaction_token=interaction_token,
+                        await _send_flow_ephemeral_response(
+                            service,
+                            interaction_id,
+                            interaction_token,
                             deferred=deferred_public,
+                            component_response=component_response,
                             text=f"Run {record.id} is locked for reconcile; try again.",
                         )
                         return
@@ -1126,21 +1220,15 @@ async def handle_flow_start(
                     f"Reusing ticket_flow run {record.id} ({record.status.value})."
                 ),
             )
-            if status_buttons:
-                await service.send_or_respond_public_with_components(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    deferred=deferred_public,
-                    text=response_text,
-                    components=status_buttons,
-                )
-            else:
-                await service.send_or_respond_public(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    deferred=deferred_public,
-                    text=response_text,
-                )
+            await _send_flow_public_response(
+                service,
+                interaction_id,
+                interaction_token,
+                deferred=deferred_public,
+                component_response=component_response,
+                text=response_text,
+                components=status_buttons or [],
+            )
             return
 
     metadata: dict[str, Any] = {"origin": "discord", "force_new": force_new}
@@ -1154,10 +1242,12 @@ async def handle_flow_start(
             metadata=metadata,
         )
     except ValueError as exc:
-        await service.send_or_respond_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
+        await _send_flow_ephemeral_response(
+            service,
+            interaction_id,
+            interaction_token,
             deferred=deferred_public,
+            component_response=component_response,
             text=str(exc),
         )
         return
@@ -1194,20 +1284,24 @@ async def handle_flow_start(
             ) from None
         if record is None:
             prefix = "Started new" if force_new else "Started"
-            await service.send_or_respond_public(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
+            await _send_flow_public_response(
+                service,
+                interaction_id,
+                interaction_token,
                 deferred=deferred_public,
+                component_response=component_response,
                 text=f"{prefix} ticket_flow run {started.run_id}.",
             )
             return
         try:
             record, _updated, locked = reconcile_flow_run(workspace_root, record, store)
             if locked:
-                await service.send_or_respond_ephemeral(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
+                await _send_flow_ephemeral_response(
+                    service,
+                    interaction_id,
+                    interaction_token,
                     deferred=deferred_public,
+                    component_response=component_response,
                     text=f"Run {record.id} is locked for reconcile; try again.",
                 )
                 return
@@ -1247,21 +1341,15 @@ async def handle_flow_start(
         snapshot=snapshot,
         prefix=f"{prefix} ticket_flow run {record.id}.",
     )
-    if status_buttons:
-        await service.send_or_respond_public_with_components(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            deferred=deferred_public,
-            text=response_text,
-            components=status_buttons,
-        )
-    else:
-        await service.send_or_respond_public(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            deferred=deferred_public,
-            text=response_text,
-        )
+    await _send_flow_public_response(
+        service,
+        interaction_id,
+        interaction_token,
+        deferred=deferred_public,
+        component_response=component_response,
+        text=response_text,
+        components=status_buttons or [],
+    )
 
 
 async def handle_flow_restart(
@@ -1272,6 +1360,7 @@ async def handle_flow_restart(
     workspace_root: Path,
     options: dict[str, Any],
     deferred_public: Optional[bool] = None,
+    component_response: bool = False,
 ) -> None:
     if deferred_public is None:
         deferred_public = await ensure_public_response_deferred(
@@ -1343,10 +1432,12 @@ async def handle_flow_restart(
         store.close()
 
     if isinstance(run_id_opt, str) and run_id_opt.strip() and target is None:
-        await service.send_or_respond_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
+        await _send_flow_ephemeral_response(
+            service,
+            interaction_id,
+            interaction_token,
             deferred=deferred_public,
+            component_response=component_response,
             text=f"No ticket_flow run found for run_id {run_id_opt.strip()}.",
         )
         return
@@ -1356,10 +1447,12 @@ async def handle_flow_restart(
         try:
             await flow_service.stop_flow_run(target.id)
         except ValueError as exc:
-            await service.send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
+            await _send_flow_ephemeral_response(
+                service,
+                interaction_id,
+                interaction_token,
                 deferred=deferred_public,
+                component_response=component_response,
                 text=str(exc),
             )
             return
@@ -1370,10 +1463,12 @@ async def handle_flow_restart(
             "failed",
         }:
             status_value = latest.status if latest is not None else "unknown"
-            await service.send_or_respond_public(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
+            await _send_flow_public_response(
+                service,
+                interaction_id,
+                interaction_token,
                 deferred=deferred_public,
+                component_response=component_response,
                 text=(
                     f"Run {target.id} is still active ({status_value}); "
                     "restart aborted to avoid concurrent workers. Try again after it stops."
@@ -1391,6 +1486,7 @@ async def handle_flow_restart(
             "restart_from": target.id if target is not None else None,
         },
         deferred_public=deferred_public,
+        component_response=component_response,
     )
 
 
@@ -1507,6 +1603,7 @@ async def handle_flow_resume(
     options: dict[str, Any],
     channel_id: Optional[str] = None,
     guild_id: Optional[str] = None,
+    component_response: bool = False,
 ) -> None:
     deferred = await ensure_public_response_deferred(
         service,
@@ -1576,10 +1673,12 @@ async def handle_flow_resume(
         store.close()
 
     if target is None:
-        await service.send_or_respond_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
+        await _send_flow_ephemeral_response(
+            service,
+            interaction_id,
+            interaction_token,
             deferred=deferred,
+            component_response=component_response,
             text="No paused ticket_flow run found to resume.",
         )
         return
@@ -1599,22 +1698,37 @@ async def handle_flow_resume(
     flow_service = service._ticket_flow_orchestration_service(workspace_root)
     try:
         updated = await flow_service.resume_flow_run(target.id)
-    except ValueError as exc:
-        await service.send_or_respond_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
+    except (KeyError, ValueError) as exc:
+        await _send_flow_ephemeral_response(
+            service,
+            interaction_id,
+            interaction_token,
             deferred=deferred,
+            component_response=component_response,
             text=str(exc),
         )
         return
 
     outbound_text = f"Resumed run {updated.run_id}."
-    await service.send_or_respond_ephemeral(
-        interaction_id=interaction_id,
-        interaction_token=interaction_token,
-        deferred=deferred,
-        text=outbound_text,
-    )
+    if component_response:
+        await handle_flow_status(
+            service,
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
+            options={"run_id": updated.run_id},
+            channel_id=channel_id,
+            guild_id=guild_id,
+            update_message=True,
+            prefix=outbound_text,
+        )
+    else:
+        await service.send_or_respond_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text=outbound_text,
+        )
     run_mirror.mirror_outbound(
         run_id=updated.run_id,
         platform="discord",
@@ -1636,6 +1750,7 @@ async def handle_flow_stop(
     options: dict[str, Any],
     channel_id: Optional[str] = None,
     guild_id: Optional[str] = None,
+    component_response: bool = False,
 ) -> None:
     deferred = await ensure_public_response_deferred(
         service,
@@ -1705,10 +1820,12 @@ async def handle_flow_stop(
         store.close()
 
     if target is None:
-        await service.send_or_respond_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
+        await _send_flow_ephemeral_response(
+            service,
+            interaction_id,
+            interaction_token,
             deferred=deferred,
+            component_response=component_response,
             text="No active ticket_flow run found to stop.",
         )
         return
@@ -1728,22 +1845,37 @@ async def handle_flow_stop(
     flow_service = service._ticket_flow_orchestration_service(workspace_root)
     try:
         updated = await flow_service.stop_flow_run(target.id)
-    except ValueError as exc:
-        await service.send_or_respond_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
+    except (KeyError, ValueError) as exc:
+        await _send_flow_ephemeral_response(
+            service,
+            interaction_id,
+            interaction_token,
             deferred=deferred,
+            component_response=component_response,
             text=str(exc),
         )
         return
 
     outbound_text = f"Stop requested for run {updated.run_id} ({updated.status})."
-    await service.send_or_respond_ephemeral(
-        interaction_id=interaction_id,
-        interaction_token=interaction_token,
-        deferred=deferred,
-        text=outbound_text,
-    )
+    if component_response:
+        await handle_flow_status(
+            service,
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
+            options={"run_id": updated.run_id},
+            channel_id=channel_id,
+            guild_id=guild_id,
+            update_message=True,
+            prefix=outbound_text,
+        )
+    else:
+        await service.send_or_respond_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text=outbound_text,
+        )
     run_mirror.mirror_outbound(
         run_id=updated.run_id,
         platform="discord",
@@ -1927,6 +2059,7 @@ async def handle_flow_reply(
     channel_id: Optional[str] = None,
     guild_id: Optional[str] = None,
     user_id: Optional[str] = None,
+    component_response: bool = False,
 ) -> None:
     text = options.get("text")
     if not isinstance(text, str) or not text.strip():
@@ -2027,10 +2160,12 @@ async def handle_flow_reply(
         store.close()
 
     if target is None:
-        await service.send_or_respond_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
+        await _send_flow_ephemeral_response(
+            service,
+            interaction_id,
+            interaction_token,
             deferred=deferred,
+            component_response=component_response,
             text="No paused ticket_flow run found for reply.",
         )
         return
@@ -2053,10 +2188,12 @@ async def handle_flow_reply(
     try:
         updated = await flow_service.resume_flow_run(target.id)
     except ValueError as exc:
-        await service.send_or_respond_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
+        await _send_flow_ephemeral_response(
+            service,
+            interaction_id,
+            interaction_token,
             deferred=deferred,
+            component_response=component_response,
             text=str(exc),
         )
         return
@@ -2064,10 +2201,12 @@ async def handle_flow_reply(
     outbound_text = (
         f"Reply saved to {reply_path.name} and resumed run {updated.run_id}."
     )
-    await service.send_or_respond_ephemeral(
-        interaction_id=interaction_id,
-        interaction_token=interaction_token,
+    await _send_flow_ephemeral_response(
+        service,
+        interaction_id,
+        interaction_token,
         deferred=deferred,
+        component_response=component_response,
         text=outbound_text,
     )
     run_mirror.mirror_outbound(
@@ -2104,43 +2243,41 @@ async def handle_flow_button(
 
     run_id = parts[1]
     action = parts[2]
-    flow_service = service._ticket_flow_orchestration_service(workspace_root)
-
     if action == "resume":
-        try:
-            updated = await flow_service.resume_flow_run(run_id)
-        except (KeyError, ValueError) as exc:
-            await send_runtime_ephemeral(
-                service,
-                interaction_id,
-                interaction_token,
-                str(exc),
-            )
-            return
-
-        await send_runtime_ephemeral(
+        await defer_and_update_runtime_component_message(
             service,
             interaction_id,
             interaction_token,
-            f"Resumed run {updated.run_id}.",
+            flow_resume_in_progress_text(run_id),
+            components=[],
+        )
+        await handle_flow_resume(
+            service,
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
+            options={"run_id": run_id},
+            channel_id=channel_id,
+            guild_id=guild_id,
+            component_response=True,
         )
     elif action == "stop":
-        try:
-            updated = await flow_service.stop_flow_run(run_id)
-        except (KeyError, ValueError) as exc:
-            await send_runtime_ephemeral(
-                service,
-                interaction_id,
-                interaction_token,
-                str(exc),
-            )
-            return
-
-        await send_runtime_ephemeral(
+        await defer_and_update_runtime_component_message(
             service,
             interaction_id,
             interaction_token,
-            f"Stop requested for run {updated.run_id} ({updated.status}).",
+            flow_stop_in_progress_text(run_id),
+            components=[],
+        )
+        await handle_flow_stop(
+            service,
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
+            options={"run_id": run_id},
+            channel_id=channel_id,
+            guild_id=guild_id,
+            component_response=True,
         )
     elif action in {
         "archive",
@@ -2149,6 +2286,7 @@ async def handle_flow_button(
         "archive_confirm_prompt",
         "archive_cancel_prompt",
     }:
+        flow_service = service._ticket_flow_orchestration_service(workspace_root)
         deferred = await ensure_component_response_deferred(
             service,
             interaction_id,
@@ -2177,49 +2315,44 @@ async def handle_flow_button(
             return
 
         def _resolve_archive_target() -> Optional[FlowRunRecord]:
-            store = service._open_flow_store(workspace_root)
             try:
-                return cast(
-                    Optional[FlowRunRecord],
-                    service._resolve_flow_run_by_id(store, run_id=run_id),
+                store = service._open_flow_store(workspace_root)
+            except (sqlite3.Error, OSError, RuntimeError, ConfigError) as exc:
+                log_event(
+                    service._logger,
+                    logging.ERROR,
+                    "discord.flow.store_open_failed",
+                    workspace_root=str(workspace_root),
+                    exc=exc,
                 )
+                raise DiscordTransientError(
+                    f"Failed to open flow database: {exc}",
+                    user_message="Unable to access flow database. Please try again later.",
+                ) from None
+            try:
+                try:
+                    return cast(
+                        Optional[FlowRunRecord],
+                        service._resolve_flow_run_by_id(store, run_id=run_id),
+                    )
+                except (sqlite3.Error, OSError) as exc:
+                    log_event(
+                        service._logger,
+                        logging.ERROR,
+                        "discord.flow.query_failed",
+                        exc=exc,
+                        run_id=run_id,
+                    )
+                    raise DiscordTransientError(
+                        f"Failed to query flow run: {exc}",
+                        user_message=(
+                            "Unable to query flow database. Please try again later."
+                        ),
+                    ) from None
             finally:
                 store.close()
 
-        try:
-            target = await asyncio.to_thread(_resolve_archive_target)
-        except (sqlite3.Error, OSError, RuntimeError, ConfigError) as exc:
-            event = (
-                "discord.flow.store_open_failed"
-                if isinstance(exc, (RuntimeError, ConfigError))
-                else "discord.flow.query_failed"
-            )
-            payload: dict[str, Any] = {
-                "exc": exc,
-                "workspace_root": str(workspace_root),
-            }
-            if isinstance(exc, (sqlite3.Error, OSError)):
-                payload = {"exc": exc, "run_id": run_id}
-            log_event(
-                service._logger,
-                logging.ERROR,
-                event,
-                **payload,
-            )
-            user_message = (
-                "Unable to access flow database. Please try again later."
-                if isinstance(exc, (RuntimeError, ConfigError))
-                else "Unable to query flow database. Please try again later."
-            )
-            failed_action = (
-                "open flow database"
-                if event.endswith("store_open_failed")
-                else "query flow run"
-            )
-            raise DiscordTransientError(
-                f"Failed to {failed_action}: {exc}",
-                user_message=user_message,
-            ) from None
+        target = await asyncio.to_thread(_resolve_archive_target)
 
         if target is None:
             stale_text = (
@@ -2314,6 +2447,13 @@ async def handle_flow_button(
         )
         return
     elif action == "restart":
+        await defer_and_update_runtime_component_message(
+            service,
+            interaction_id,
+            interaction_token,
+            flow_restart_in_progress_text(run_id),
+            components=[],
+        )
         await handle_flow_restart(
             service,
             interaction_id,
@@ -2325,8 +2465,16 @@ async def handle_flow_button(
                 interaction_id,
                 interaction_token,
             ),
+            component_response=True,
         )
     elif action == "refresh":
+        await defer_and_update_runtime_component_message(
+            service,
+            interaction_id,
+            interaction_token,
+            flow_refresh_in_progress_text(run_id),
+            components=[],
+        )
         await handle_flow_status(
             service,
             interaction_id,

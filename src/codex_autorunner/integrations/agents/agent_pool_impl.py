@@ -979,7 +979,7 @@ class DefaultAgentPool:
             approval_mode=state.autorunner_approval_policy,
             metadata={"execution_error_message": _DEFAULT_EXECUTION_ERROR},
         )
-        execution = await service.send_message(
+        execution, harness = await service.send_message_with_started_harness(
             request,
             sandbox_policy=state.autorunner_sandbox_mode,
         )
@@ -991,13 +991,11 @@ class DefaultAgentPool:
         self._execution_emitters[execution_id] = req.emit_event
 
         if execution.status == "running":
+            if harness is None:
+                raise RuntimeError("Runtime thread execution started without a harness")
             refreshed_thread = service.get_thread_target(thread.thread_target_id)
             if refreshed_thread is None or not refreshed_thread.workspace_root:
                 raise RuntimeError("Thread target is missing workspace_root")
-            harness = service.harness_factory(
-                refreshed_thread.agent_id,
-                refreshed_thread.agent_profile,
-            )
             await self._ensure_thread_worker(
                 thread.thread_target_id,
                 initial=RuntimeThreadExecution(
