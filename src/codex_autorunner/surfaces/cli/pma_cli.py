@@ -942,7 +942,10 @@ def _recover_managed_thread_send_timeout(
                 )
             )
         except (httpx.HTTPError, ValueError, OSError, TypeError):
-            return None
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(_MANAGED_THREAD_SEND_TIMEOUT_RECOVERY_POLL_SECONDS)
+            continue
 
         recovered_turn_id = ""
         queued = False
