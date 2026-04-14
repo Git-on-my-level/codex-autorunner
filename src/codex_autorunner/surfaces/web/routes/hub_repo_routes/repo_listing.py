@@ -199,16 +199,36 @@ class HubRepoListingService:
         snapshots: list[Any],
         chat_binding_counts: dict[str, int],
         chat_binding_counts_by_source: dict[str, dict[str, int]],
+        unbound_thread_counts: Optional[dict[str, int]] = None,
     ) -> list[dict[str, Any]]:
-        tasks = [
-            asyncio.to_thread(
-                self._enricher.enrich_repo,
-                snap,
-                chat_binding_counts,
-                chat_binding_counts_by_source,
+        supports_unbound_counts = unbound_thread_counts is not None and callable(
+            getattr(
+                self._enricher,
+                "unbound_repo_thread_counts_snapshot",
+                None,
             )
-            for snap in snapshots
-        ]
+        )
+        if supports_unbound_counts:
+            tasks = [
+                asyncio.to_thread(
+                    self._enricher.enrich_repo,
+                    snap,
+                    chat_binding_counts,
+                    chat_binding_counts_by_source,
+                    unbound_thread_counts,
+                )
+                for snap in snapshots
+            ]
+        else:
+            tasks = [
+                asyncio.to_thread(
+                    self._enricher.enrich_repo,
+                    snap,
+                    chat_binding_counts,
+                    chat_binding_counts_by_source,
+                )
+                for snap in snapshots
+            ]
         return cast(list[dict[str, Any]], await asyncio.gather(*tasks))
 
     def _active_chat_binding_counts_by_source(self) -> dict[str, dict[str, int]]:
@@ -227,6 +247,16 @@ class HubRepoListingService:
                 exc=exc,
             )
             return {}
+
+    async def _unbound_thread_counts_snapshot(self) -> Optional[dict[str, int]]:
+        snapshot_fn = getattr(
+            self._enricher,
+            "unbound_repo_thread_counts_snapshot",
+            None,
+        )
+        if not callable(snapshot_fn):
+            return None
+        return cast(dict[str, int], await asyncio.to_thread(snapshot_fn))
 
     def _store_response_cache(
         self,
@@ -406,11 +436,13 @@ class HubRepoListingService:
                 repo_id: sum(source_counts.values())
                 for repo_id, source_counts in chat_binding_counts_by_source.items()
             }
+            unbound_thread_counts = await self._unbound_thread_counts_snapshot()
             await self._mount_manager.refresh_mounts(snapshots)
             repos = await self._enrich_repos(
                 snapshots,
                 chat_binding_counts,
                 chat_binding_counts_by_source,
+                unbound_thread_counts,
             )
             if needs_agent_workspaces:
                 agent_workspaces = [
@@ -592,11 +624,13 @@ class HubRepoListingService:
             repo_id: sum(source_counts.values())
             for repo_id, source_counts in chat_binding_counts_by_source.items()
         }
+        unbound_thread_counts = await self._unbound_thread_counts_snapshot()
         await self._mount_manager.refresh_mounts(snapshots)
         repos = await self._enrich_repos(
             snapshots,
             chat_binding_counts,
             chat_binding_counts_by_source,
+            unbound_thread_counts,
         )
         agent_workspaces = [
             workspace.to_dict(self._context.config.root)

@@ -315,6 +315,60 @@ def test_set_thread_backend_id_preserves_runtime_tag_when_omitted(
     assert row["backend_thread_id"] == "backend-2"
 
 
+def test_set_thread_backend_id_skips_noop_write_when_binding_matches(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = PmaThreadStore(tmp_path / "hub")
+    thread = store.create_thread(
+        "codex",
+        tmp_path / "workspace",
+        backend_thread_id="backend-1",
+        metadata={"backend_runtime_instance_id": "runtime-1"},
+    )
+
+    def _fail_write_conn():  # type: ignore[no-untyped-def]
+        raise AssertionError("no-op backend binding update should not write")
+
+    monkeypatch.setattr(store, "_write_conn", _fail_write_conn)
+
+    store.set_thread_backend_id(
+        thread["managed_thread_id"],
+        "backend-1",
+        backend_runtime_instance_id="runtime-1",
+    )
+
+    binding = store.get_thread_runtime_binding(thread["managed_thread_id"])
+    assert binding is not None
+    assert binding.backend_thread_id == "backend-1"
+    assert binding.backend_runtime_instance_id == "runtime-1"
+
+
+def test_set_thread_backend_id_skips_noop_write_when_runtime_tag_is_omitted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = PmaThreadStore(tmp_path / "hub")
+    thread = store.create_thread(
+        "codex",
+        tmp_path / "workspace",
+        backend_thread_id="backend-1",
+        metadata={"backend_runtime_instance_id": "runtime-1"},
+    )
+
+    def _fail_write_conn():  # type: ignore[no-untyped-def]
+        raise AssertionError("no-op backend binding update should not write")
+
+    monkeypatch.setattr(store, "_write_conn", _fail_write_conn)
+
+    store.set_thread_backend_id(thread["managed_thread_id"], "backend-1")
+
+    binding = store.get_thread_runtime_binding(thread["managed_thread_id"])
+    assert binding is not None
+    assert binding.backend_thread_id == "backend-1"
+    assert binding.backend_runtime_instance_id == "runtime-1"
+
+
 def test_create_turn_rejects_when_running_turn_exists(tmp_path: Path) -> None:
     store = PmaThreadStore(tmp_path / "hub")
     thread = store.create_thread("codex", tmp_path / "workspace")

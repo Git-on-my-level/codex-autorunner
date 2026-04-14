@@ -76,6 +76,9 @@ class HubRepoEnricher:
             self._unbound_thread_counts_cached_at = now
             return dict(counts)
 
+    def unbound_repo_thread_counts_snapshot(self) -> dict[str, int]:
+        return self._unbound_repo_thread_counts()
+
     def _path_stat_fingerprint(
         self, path: Path
     ) -> tuple[bool, Optional[int], Optional[int]]:
@@ -278,6 +281,7 @@ class HubRepoEnricher:
         snapshot,
         chat_binding_counts: Optional[dict[str, int]] = None,
         chat_binding_counts_by_source: Optional[dict[str, dict[str, int]]] = None,
+        unbound_thread_counts: Optional[dict[str, int]] = None,
     ) -> dict:
         from .....core.freshness import resolve_stale_threshold_seconds
 
@@ -305,9 +309,12 @@ class HubRepoEnricher:
         repo_dict["cleanup_blocked_by_chat_binding"] = non_pma_binding_count > 0
         unbound_thread_count = 0
         if snapshot.kind == "base":
-            unbound_thread_count = int(
-                self._unbound_repo_thread_counts().get(snapshot.id, 0)
+            counts = (
+                dict(unbound_thread_counts)
+                if unbound_thread_counts is not None
+                else self._unbound_repo_thread_counts()
             )
+            unbound_thread_count = int(counts.get(snapshot.id, 0))
         repo_dict["unbound_managed_thread_count"] = max(0, unbound_thread_count)
         repo_dict.update(
             self._repo_state_payload(
