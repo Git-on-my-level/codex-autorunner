@@ -383,6 +383,34 @@ def _thread_matches_reuse_constraints(
     )
 
 
+def _force_clear_backend_thread_binding(
+    orchestration_service: Any,
+    *,
+    thread_target_id: str,
+    backend_runtime_instance_id: Optional[str],
+) -> bool:
+    set_thread_backend_id = getattr(
+        orchestration_service, "set_thread_backend_id", None
+    )
+    if callable(set_thread_backend_id):
+        set_thread_backend_id(
+            thread_target_id,
+            None,
+            backend_runtime_instance_id=backend_runtime_instance_id,
+        )
+        return True
+    thread_store = getattr(orchestration_service, "thread_store", None)
+    store_set_thread_backend_id = getattr(thread_store, "set_thread_backend_id", None)
+    if callable(store_set_thread_backend_id):
+        store_set_thread_backend_id(
+            thread_target_id,
+            None,
+            backend_runtime_instance_id=backend_runtime_instance_id,
+        )
+        return True
+    return False
+
+
 def _resume_managed_thread_target(
     orchestration_service: Any,
     thread: Any,
@@ -393,17 +421,36 @@ def _resume_managed_thread_target(
     desired_runtime_instance_id: Optional[str],
 ) -> Any:
     resume_kwargs: dict[str, Any] = {}
-    if clear_backend_thread_id and current_backend_thread_id is not None:
-        # Avoid a separate control-plane write before resume; resume can clear
-        # the backend binding in the same request.
+    requested_backend_clear = (
+        clear_backend_thread_id and current_backend_thread_id is not None
+    )
+    if requested_backend_clear:
         resume_kwargs["backend_thread_id"] = None
     elif desired_backend_thread_id is not None:
         resume_kwargs["backend_thread_id"] = desired_backend_thread_id
     resume_kwargs["backend_runtime_instance_id"] = desired_runtime_instance_id
-    return orchestration_service.resume_thread_target(
+    resumed_thread = orchestration_service.resume_thread_target(
         thread.thread_target_id,
         **resume_kwargs,
     )
+    if (
+        not requested_backend_clear
+        or resumed_thread is None
+        or _normalized_optional_text(getattr(resumed_thread, "backend_thread_id", None))
+        is None
+    ):
+        return resumed_thread
+    if not _force_clear_backend_thread_binding(
+        orchestration_service,
+        thread_target_id=thread.thread_target_id,
+        backend_runtime_instance_id=desired_runtime_instance_id,
+    ):
+        return resumed_thread
+    get_thread_target = getattr(orchestration_service, "get_thread_target", None)
+    if not callable(get_thread_target):
+        return resumed_thread
+    refreshed_thread = get_thread_target(thread.thread_target_id)
+    return resumed_thread if refreshed_thread is None else refreshed_thread
 
 
 def _create_managed_thread_target(
