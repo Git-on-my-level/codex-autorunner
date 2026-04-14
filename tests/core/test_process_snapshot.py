@@ -7,24 +7,32 @@ from codex_autorunner.core.diagnostics.process_snapshot import (
 SAMPLE_PS_OUTPUT = """\
 1234 1000 1000  1024  00:05:30 /usr/bin/opencode serve --port 8080
 1235 1000 1000  2048  00:10:15 /usr/bin/codex_autorunner run
-1236 1100 1100  5120  01:30:00 /usr/bin/codex app-server --port 9000
+1236 1000 1000  2048  00:10:15 /usr/local/bin/codex-autorunner hub serve
+1243 1100 1100  5120  01:30:00 /usr/bin/codex app-server --port 9000
 1237 1100 1100   256  00:02:45 /usr/bin/some-other-process --arg
 1238 1200 1200  1536  00:08:20 /Users/user/.local/bin/opencode
 1239 1200 1200  4096  00:45:00 /opt/codex/bin/codex app-server --workspace /tmp/ws
 1240 1300 1300   512  00:12:00 /bin/bash -c /usr/bin/opencode
 1241 1300 1300   128  00:01:30 /usr/bin/other-tool
+1242 1300 1300   768  00:06:00 /bin/sh -lc PATH=/foo; /Users/user/.local/bin/codex-autorunner discord start
 """
 
 
 class TestClassifyProcess:
-    def test_opencode_in_command(self):
-        assert _classify_process("/usr/bin/opencode serve") == ProcessCategory.OPENCODE
-
     def test_codex_autorunner_in_command(self):
         assert (
             _classify_process("/usr/bin/codex_autorunner run")
-            == ProcessCategory.OPENCODE
+            == ProcessCategory.CAR_SERVICE
         )
+
+    def test_codex_autorunner_hyphenated_binary_in_command(self):
+        assert (
+            _classify_process("/usr/local/bin/codex-autorunner hub serve")
+            == ProcessCategory.CAR_SERVICE
+        )
+
+    def test_opencode_in_command(self):
+        assert _classify_process("/usr/bin/opencode serve") == ProcessCategory.OPENCODE
 
     def test_app_server_classic_format(self):
         assert (
@@ -53,19 +61,25 @@ class TestClassifyProcess:
 class TestParsePsOutput:
     def test_parse_sample_output(self):
         snapshot = parse_ps_output(SAMPLE_PS_OUTPUT)
-        assert snapshot.opencode_count == 4
+        assert snapshot.car_service_count == 3
+        assert snapshot.opencode_count == 3
         assert snapshot.app_server_count == 2
         assert len(snapshot.other_processes) == 2
+
+    def test_car_service_processes_correct(self):
+        snapshot = parse_ps_output(SAMPLE_PS_OUTPUT)
+        pids = {p.pid for p in snapshot.car_service_processes}
+        assert pids == {1235, 1236, 1242}
 
     def test_opencode_processes_correct(self):
         snapshot = parse_ps_output(SAMPLE_PS_OUTPUT)
         pids = {p.pid for p in snapshot.opencode_processes}
-        assert pids == {1234, 1235, 1238, 1240}
+        assert pids == {1234, 1238, 1240}
 
     def test_app_server_processes_correct(self):
         snapshot = parse_ps_output(SAMPLE_PS_OUTPUT)
         pids = {p.pid for p in snapshot.app_server_processes}
-        assert pids == {1236, 1239}
+        assert pids == {1239, 1243}
 
     def test_other_processes_correct(self):
         snapshot = parse_ps_output(SAMPLE_PS_OUTPUT)
@@ -74,6 +88,7 @@ class TestParsePsOutput:
 
     def test_empty_output(self):
         snapshot = parse_ps_output("")
+        assert snapshot.car_service_count == 0
         assert snapshot.opencode_count == 0
         assert snapshot.app_server_count == 0
         assert len(snapshot.other_processes) == 0
@@ -85,24 +100,35 @@ not_a_pid 1000 1000  100 00:01:00 bad line
 1235 1000 1000  100 00:01:00 another good command
 """
         snapshot = parse_ps_output(malformed)
-        assert len(snapshot.opencode_processes) + len(snapshot.other_processes) == 2
+        assert (
+            len(snapshot.car_service_processes)
+            + len(snapshot.opencode_processes)
+            + len(snapshot.other_processes)
+            == 2
+        )
 
     def test_to_dict(self):
         snapshot = parse_ps_output(SAMPLE_PS_OUTPUT)
         d = snapshot.to_dict()
         assert "collected_at" in d
+        assert "counts" in d
+        assert "car_services" in d
         assert "opencode" in d
-        assert "app_server" in d
+        assert "codex_app_server" in d
         assert "other" in d
-        assert len(d["opencode"]) == 4
-        assert len(d["app_server"]) == 2
+        assert len(d["car_services"]) == 3
+        assert len(d["opencode"]) == 3
+        assert len(d["codex_app_server"]) == 2
 
 
 class TestProcessSnapshot:
     def test_counts(self):
         snapshot = parse_ps_output(SAMPLE_PS_OUTPUT)
-        assert snapshot.opencode_count == 4
+        assert snapshot.car_service_count == 3
+        assert snapshot.opencode_count == 3
         assert snapshot.app_server_count == 2
+        assert snapshot.managed_runtime_count == 5
+        assert snapshot.total_count == 8
 
 
 class TestProcessInfoFields:
@@ -127,7 +153,9 @@ class TestProcessInfoFields:
     def test_to_dict_includes_category(self):
         snapshot = parse_ps_output(SAMPLE_PS_OUTPUT)
         d = snapshot.to_dict()
+        car_services = d["car_services"]
         opencode = d["opencode"]
+        assert all(p["category"] == "car_service" for p in car_services)
         assert all(p["category"] == "opencode" for p in opencode)
 
     def test_missing_rss_handled(self):

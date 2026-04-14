@@ -316,8 +316,10 @@ def format_process_monitor_lines(
         return line
 
     for label, key in (
+        ("CAR services", "car_services"),
+        ("Managed runtimes", "managed_runtimes"),
         ("OpenCode", "opencode"),
-        ("App server", "app_server"),
+        ("Codex app-server", "codex_app_server"),
         ("Total", "total"),
     ):
         rendered = _metric_line(label, metrics.get(key))
@@ -340,9 +342,19 @@ def format_process_monitor_lines(
             )
         ownership = latest.get("ownership")
         if isinstance(ownership, dict):
+            managed_runtimes = ownership.get("managed_runtimes")
             opencode = ownership.get("opencode")
-            app_server = ownership.get("app_server")
+            codex_app_server = ownership.get("codex_app_server")
             ownership_parts: list[str] = []
+            if isinstance(managed_runtimes, dict):
+                ownership_parts.append(
+                    "managed-runtimes "
+                    + ", ".join(
+                        f"{key}={int(value)}"
+                        for key, value in sorted(managed_runtimes.items())
+                        if _coerce_number(value)
+                    )
+                )
             if isinstance(opencode, dict):
                 ownership_parts.append(
                     "opencode "
@@ -352,12 +364,12 @@ def format_process_monitor_lines(
                         if _coerce_number(value)
                     )
                 )
-            if isinstance(app_server, dict):
+            if isinstance(codex_app_server, dict):
                 ownership_parts.append(
-                    "app-server "
+                    "codex-app-server "
                     + ", ".join(
                         f"{key}={int(value)}"
-                        for key, value in sorted(app_server.items())
+                        for key, value in sorted(codex_app_server.items())
                         if _coerce_number(value)
                     )
                 )

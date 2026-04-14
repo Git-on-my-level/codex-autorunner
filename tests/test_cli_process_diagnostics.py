@@ -40,6 +40,15 @@ def test_doctor_processes_json_includes_snapshot_and_registry(
     from codex_autorunner.surfaces.cli.commands import doctor as doctor_cmd
 
     snapshot = ProcessSnapshot(
+        car_service_processes=[
+            ProcessInfo(
+                pid=1200,
+                ppid=1,
+                pgid=1200,
+                command="codex-autorunner hub serve",
+                category=ProcessCategory.CAR_SERVICE,
+            )
+        ],
         opencode_processes=[
             ProcessInfo(
                 pid=1234,
@@ -84,7 +93,9 @@ def test_doctor_processes_json_includes_snapshot_and_registry(
 
     payload = json.loads(result.output)
     assert "snapshot" in payload
+    assert payload["snapshot"]["car_services"][0]["pid"] == 1200
     assert payload["snapshot"]["opencode"][0]["pid"] == 1234
+    assert payload["snapshot"]["counts"]["managed_runtimes"] == 1
     assert "registry" in payload
     assert payload["registry"]["counts_by_kind"]["opencode"] == 1
     assert payload["registry"]["records"][0]["record_key"] == "ws"
@@ -304,7 +315,10 @@ def test_doctor_processes_skips_opencode_lifecycle_when_repo_config_missing(
     from codex_autorunner.surfaces.cli.commands import doctor as doctor_cmd
 
     snapshot = ProcessSnapshot(
-        opencode_processes=[], app_server_processes=[], other_processes=[]
+        car_service_processes=[],
+        opencode_processes=[],
+        app_server_processes=[],
+        other_processes=[],
     )
 
     monkeypatch.setattr(doctor_cmd, "collect_processes", lambda: snapshot)

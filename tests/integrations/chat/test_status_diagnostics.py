@@ -87,6 +87,22 @@ class TestFormatProcessMonitorLines:
                 "cadence_seconds": 120,
                 "window_seconds": 3 * 60 * 60,
                 "metrics": {
+                    "car_services": {
+                        "current": 6,
+                        "average": 4.0,
+                        "p95": 5,
+                        "peak": 6,
+                        "abnormal": False,
+                        "reason": None,
+                    },
+                    "managed_runtimes": {
+                        "current": 16,
+                        "average": 5.25,
+                        "p95": 12,
+                        "peak": 16,
+                        "abnormal": True,
+                        "reason": "high",
+                    },
                     "opencode": {
                         "current": 18,
                         "average": 7.25,
@@ -95,7 +111,7 @@ class TestFormatProcessMonitorLines:
                         "abnormal": True,
                         "reason": "high",
                     },
-                    "app_server": {
+                    "codex_app_server": {
                         "current": 4,
                         "average": 2.0,
                         "p95": 3,
@@ -120,6 +136,8 @@ class TestFormatProcessMonitorLines:
         assert (
             lines[0] == "Process monitor: warning (window=3h samples=42 cadence=120s)"
         )
+        assert "CAR services: 6 (avg 4.0, tp95 5, peak 6)" in lines
+        assert "Managed runtimes: 16 (avg 5.2, tp95 12, peak 16) high" in lines
         assert "OpenCode: 18 (avg 7.2, tp95 14, peak 18) high" in lines
-        assert "App server: 4 (avg 2.0, tp95 3, peak 4)" in lines
+        assert "Codex app-server: 4 (avg 2.0, tp95 3, peak 4)" in lines
         assert "Total: 22 (avg 9.2, tp95 17, peak 22) high" in lines

@@ -17,25 +17,31 @@ from .process_snapshot import ProcessOwnership, collect_processes, enrich_with_o
 
 logger = logging.getLogger(__name__)
 
-PROCESS_MONITOR_VERSION = 1
+PROCESS_MONITOR_VERSION = 2
 DEFAULT_PROCESS_MONITOR_CADENCE_SECONDS = 120
 DEFAULT_PROCESS_MONITOR_WINDOW_SECONDS = 3 * 60 * 60
 _DEFAULT_PROCESS_MONITOR_SAMPLE_LIMIT = 120
 _PROCESS_MONITOR_FILENAME = "process-monitor.json"
 
 _ABSOLUTE_ALERT_FLOORS = {
+    "car_services": 12,
+    "managed_runtimes": 12,
     "opencode": 12,
-    "app_server": 12,
+    "codex_app_server": 12,
     "total": 18,
 }
 _RELATIVE_ALERT_MINIMUMS = {
+    "car_services": 6,
+    "managed_runtimes": 6,
     "opencode": 6,
-    "app_server": 6,
+    "codex_app_server": 6,
     "total": 10,
 }
 _DELTA_ALERT_FLOORS = {
+    "car_services": 3,
+    "managed_runtimes": 3,
     "opencode": 3,
-    "app_server": 3,
+    "codex_app_server": 3,
     "total": 4,
 }
 _MIN_BASELINE_SAMPLES = 5
@@ -100,22 +106,52 @@ def _ownership_counts(snapshot_items: list[Any]) -> dict[str, int]:
     return counts
 
 
+def _merge_ownership_counts(*groups: dict[str, int]) -> dict[str, int]:
+    merged: dict[str, int] = {}
+    for group in groups:
+        for key, value in group.items():
+            merged[key] = merged.get(key, 0) + int(value or 0)
+    return merged
+
+
+def _sample_count(
+    sample: dict[str, Any],
+    key: str,
+    *,
+    legacy_keys: tuple[str, ...] = (),
+    default: int = 0,
+) -> int:
+    for candidate in (key, *legacy_keys):
+        if candidate in sample and sample.get(candidate) is not None:
+            return _coerce_int(sample.get(candidate), default=default)
+    return default
+
+
 def capture_process_monitor_sample(root: Path) -> dict[str, Any]:
     resolved_root = Path(root).resolve()
     snapshot = collect_processes()
     snapshot = enrich_with_ownership(snapshot, resolved_root)
 
     opencode_ownership = _ownership_counts(snapshot.opencode_processes)
-    app_server_ownership = _ownership_counts(snapshot.app_server_processes)
+    codex_app_server_ownership = _ownership_counts(snapshot.app_server_processes)
+    managed_runtime_ownership = _merge_ownership_counts(
+        opencode_ownership,
+        codex_app_server_ownership,
+    )
 
     sample: dict[str, Any] = {
         "captured_at": _utc_iso(_utc_now()),
+        "car_service_count": int(snapshot.car_service_count),
+        "managed_runtime_count": int(snapshot.managed_runtime_count),
         "opencode_count": int(snapshot.opencode_count),
-        "app_server_count": int(snapshot.app_server_count),
-        "total_count": int(snapshot.opencode_count + snapshot.app_server_count),
+        "app_server_count": int(snapshot.codex_app_server_count),
+        "codex_app_server_count": int(snapshot.codex_app_server_count),
+        "total_count": int(snapshot.total_count),
         "ownership": {
+            "managed_runtimes": managed_runtime_ownership,
             "opencode": opencode_ownership,
-            "app_server": app_server_ownership,
+            "app_server": codex_app_server_ownership,
+            "codex_app_server": codex_app_server_ownership,
         },
     }
 
@@ -172,6 +208,8 @@ class ProcessMonitorStore:
             logger.warning("Failed to read process monitor store %s", self._path)
             return self._default_payload()
         if not isinstance(payload, dict):
+            return self._default_payload()
+        if _coerce_int(payload.get("version")) != PROCESS_MONITOR_VERSION:
             return self._default_payload()
         samples = payload.get("samples")
         if not isinstance(samples, list):
@@ -376,38 +414,90 @@ def build_process_monitor_summary(
         )
 
     opencode_values = [_coerce_int(entry.get("opencode_count")) for entry in samples]
-    app_server_values = [
-        _coerce_int(entry.get("app_server_count")) for entry in samples
+    car_service_values = [
+        _sample_count(entry, "car_service_count") for entry in samples
     ]
-    total_values = [_coerce_int(entry.get("total_count")) for entry in samples]
+    managed_runtime_values = [
+        _sample_count(
+            entry,
+            "managed_runtime_count",
+            legacy_keys=("total_count",),
+        )
+        for entry in samples
+    ]
+    codex_app_server_values = [
+        _sample_count(
+            entry,
+            "codex_app_server_count",
+            legacy_keys=("app_server_count",),
+        )
+        for entry in samples
+    ]
+    total_values = [
+        _sample_count(
+            entry,
+            "total_count",
+            default=(
+                _sample_count(entry, "car_service_count")
+                + _sample_count(
+                    entry,
+                    "managed_runtime_count",
+                    legacy_keys=("total_count",),
+                )
+            ),
+        )
+        for entry in samples
+    ]
     latest_sample = latest if isinstance(latest, dict) else {}
+    latest_car_services = _sample_count(latest_sample, "car_service_count")
+    latest_managed_runtimes = _sample_count(
+        latest_sample,
+        "managed_runtime_count",
+        legacy_keys=("total_count",),
+    )
     latest_opencode = _coerce_int(latest_sample.get("opencode_count"))
-    latest_app_server = _coerce_int(latest_sample.get("app_server_count"))
-    latest_total = _coerce_int(latest_sample.get("total_count"))
+    latest_codex_app_server = _sample_count(
+        latest_sample,
+        "codex_app_server_count",
+        legacy_keys=("app_server_count",),
+    )
+    latest_total = _sample_count(
+        latest_sample,
+        "total_count",
+        default=(latest_car_services + latest_managed_runtimes),
+    )
 
     metrics = {
+        "car_services": _summarize_metric(
+            "car_services", latest_car_services, car_service_values
+        ),
+        "managed_runtimes": _summarize_metric(
+            "managed_runtimes",
+            latest_managed_runtimes,
+            managed_runtime_values,
+        ),
         "opencode": _summarize_metric("opencode", latest_opencode, opencode_values),
-        "app_server": _summarize_metric(
-            "app_server",
-            latest_app_server,
-            app_server_values,
+        "codex_app_server": _summarize_metric(
+            "codex_app_server",
+            latest_codex_app_server,
+            codex_app_server_values,
         ),
         "total": _summarize_metric("total", latest_total, total_values),
     }
+    primary_metrics = tuple(metrics.values())
     lifecycle_counts = dict(
         ((latest_sample.get("opencode_lifecycle") or {}).get("counts") or {})
     )
     stale_records = _coerce_int(lifecycle_counts.get("stale"))
-    status = "warning" if any(metric.abnormal for metric in metrics.values()) else "ok"
+    status = "warning" if any(metric.abnormal for metric in primary_metrics) else "ok"
     if stale_records > 0:
         status = "warning"
     reasons = [
-        metric.reason
-        for metric in metrics.values()
-        if metric.abnormal and metric.reason
+        metric.reason for metric in primary_metrics if metric.abnormal and metric.reason
     ]
     if stale_records > 0:
         reasons.append(f"OpenCode lifecycle reports stale={stale_records}")
+    metrics["app_server"] = metrics["codex_app_server"]
 
     return {
         "status": status,
@@ -419,10 +509,23 @@ def build_process_monitor_summary(
         "latest_at": _utc_iso(latest_at) if latest_at is not None else None,
         "metrics": {name: metric.to_dict() for name, metric in metrics.items()},
         "latest": {
+            "car_service_count": latest_car_services,
+            "managed_runtime_count": latest_managed_runtimes,
             "opencode_count": latest_opencode,
-            "app_server_count": latest_app_server,
+            "app_server_count": latest_codex_app_server,
+            "codex_app_server_count": latest_codex_app_server,
             "total_count": latest_total,
-            "ownership": dict(latest_sample.get("ownership") or {}),
+            "ownership": {
+                **dict(latest_sample.get("ownership") or {}),
+                "app_server": dict(
+                    (
+                        dict(latest_sample.get("ownership") or {}).get(
+                            "codex_app_server"
+                        )
+                        or {}
+                    )
+                ),
+            },
             "opencode_lifecycle": dict(latest_sample.get("opencode_lifecycle") or {}),
         },
         "reasons": reasons,

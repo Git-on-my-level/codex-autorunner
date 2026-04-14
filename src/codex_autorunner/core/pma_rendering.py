@@ -205,8 +205,10 @@ def _render_process_monitor_section(
         header += f" latest_at={latest_at}"
     lines.append(header)
     for label, key in (
+        ("car_services", "car_services"),
+        ("managed_runtimes", "managed_runtimes"),
         ("opencode", "opencode"),
-        ("app_server", "app_server"),
+        ("codex_app_server", "codex_app_server"),
         ("total", "total"),
     ):
         metric = metrics.get(key)

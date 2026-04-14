@@ -408,7 +408,7 @@ def register_doctor_commands(
         ),
     ):
         """
-        Capture a snapshot of CAR-related processes (opencode, codex app-server).
+        Capture a snapshot of CAR-related processes.
 
         Useful for diagnosing process leaks. Repro steps:
         1. Start a ticket_flow worker
@@ -416,8 +416,9 @@ def register_doctor_commands(
         3. Run this command before and after to compare process counts
 
         This command shows counts and top N cmdlines for:
-        - opencode processes
-        - codex app-server processes
+        - CAR service processes
+        - OpenCode runtime processes
+        - Codex app-server processes
         """
         try:
             start_path = repo or Path.cwd()
@@ -459,6 +460,13 @@ def register_doctor_commands(
             return
 
         typer.echo(f"snapshot collected={snapshot.collected_at}")
+        typer.echo(f"car_services({snapshot.car_service_count}):")
+        for proc in snapshot.car_service_processes[:top_n]:
+            mem = f" rss={proc.rss_kb}KB" if proc.rss_kb else ""
+            own = f" [{proc.ownership.value}]" if proc.ownership else ""
+            typer.echo(
+                f"  pid={proc.pid} ppid={proc.ppid} pgid={proc.pgid}{mem}{own}: {proc.command[:80]}"
+            )
         typer.echo(f"opencode({snapshot.opencode_count}):")
         for proc in snapshot.opencode_processes[:top_n]:
             mem = f" rss={proc.rss_kb}KB" if proc.rss_kb else ""
@@ -466,13 +474,17 @@ def register_doctor_commands(
             typer.echo(
                 f"  pid={proc.pid} ppid={proc.ppid} pgid={proc.pgid}{mem}{own}: {proc.command[:80]}"
             )
-        typer.echo(f"app_server({snapshot.app_server_count}):")
+        typer.echo(f"codex_app_server({snapshot.codex_app_server_count}):")
         for proc in snapshot.app_server_processes[:top_n]:
             mem = f" rss={proc.rss_kb}KB" if proc.rss_kb else ""
             own = f" [{proc.ownership.value}]" if proc.ownership else ""
             typer.echo(
                 f"  pid={proc.pid} ppid={proc.ppid} pgid={proc.pgid}{mem}{own}: {proc.command[:80]}"
             )
+        typer.echo(
+            "summary: "
+            f"managed_runtimes={snapshot.managed_runtime_count} total={snapshot.total_count}"
+        )
         if not registry_counts:
             typer.echo("registry: none")
         else:
