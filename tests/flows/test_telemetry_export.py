@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import codex_autorunner.core.flows.store as flow_store_module
 from codex_autorunner.core.flows.models import FlowEventType, FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.core.flows.telemetry_export import (
@@ -614,3 +615,58 @@ def test_export_run_handles_both_tables(temp_dir):
     assert len(remaining_events) == 0
     remaining_telemetry = store.get_telemetry(run_id)
     assert len(remaining_telemetry) == 0
+
+
+def test_export_run_prunes_large_seq_sets_in_batches(temp_dir, monkeypatch):
+    monkeypatch.setattr(flow_store_module, "_DELETE_SEQ_BATCH_SIZE", 2)
+
+    store = _make_store(temp_dir)
+    run_id = _create_terminal_run(store)
+
+    for idx in range(5):
+        _add_event(
+            store,
+            run_id,
+            FlowEventType.APP_SERVER_EVENT,
+            {
+                "message": {
+                    "method": "message.part.updated",
+                    "params": {"index": idx},
+                },
+                "turn_id": f"t-app-{idx}",
+            },
+            event_id=f"evt-app-{idx}",
+        )
+
+    for idx in range(4):
+        _add_event(
+            store,
+            run_id,
+            FlowEventType.AGENT_STREAM_DELTA,
+            {"delta": f"chunk-{idx}", "turn_id": f"t-delta-{idx}"},
+            event_id=f"evt-delta-{idx}",
+        )
+
+    for idx in range(3):
+        _add_telemetry(
+            store,
+            run_id,
+            FlowEventType.APP_SERVER_EVENT,
+            {
+                "message": {
+                    "method": "message.part.updated",
+                    "params": {"index": idx},
+                },
+                "turn_id": f"t-tel-{idx}",
+            },
+            telemetry_id=f"tel-app-{idx}",
+        )
+
+    record = store.get_flow_run(run_id)
+    assert record is not None
+
+    result = export_run(temp_dir, store, record, dry_run=False)
+    assert result.prunable_app_server_events == 8
+    assert result.prunable_stream_deltas == 4
+    assert store.get_events(run_id) == []
+    assert store.get_telemetry(run_id) == []
