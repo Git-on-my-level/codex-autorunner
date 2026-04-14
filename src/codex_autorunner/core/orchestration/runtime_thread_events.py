@@ -306,7 +306,21 @@ def recover_post_completion_outcome(
     outcome: RuntimeThreadOutcome,
     state: RuntimeThreadRunEventState,
 ) -> RuntimeThreadOutcome:
-    """Prefer a streamed completion over a later transport error or interrupt."""
+    """Prefer a streamed completion over a later transport error or interrupt.
+
+    Bounded compatibility contract:
+    - This function may upgrade an ``error`` or ``interrupted`` outcome to
+      ``ok`` **only** when all three conditions hold:
+      1. ``state.completed_seen`` is True (a terminal completion signal was
+         observed in the event stream).
+      2. The outcome status is ``error`` or ``interrupted`` (not already ``ok``).
+      3. Non-empty assistant text exists (either from the outcome or from the
+         event state).
+    - It must **not** widen into a general fallback matrix.  Missing evidence
+      (no completion signal, no assistant text) means the original outcome is
+      returned unchanged.
+    - An already-ok outcome passes through unchanged.
+    """
 
     if outcome.status not in {"error", "interrupted"} or not state.completed_seen:
         return outcome

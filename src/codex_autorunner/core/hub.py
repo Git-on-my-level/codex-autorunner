@@ -34,9 +34,11 @@ from .git_utils import (
     git_available,
     git_branch,
     git_default_branch,
+    git_failure_detail,
     git_head_sha,
     git_is_clean,
     git_upstream_status,
+    resolve_ref_sha,
     run_git,
 )
 from .hub_lifecycle import (
@@ -94,21 +96,66 @@ AppServerSupervisorFactoryBuilder = Callable[[RepoConfig], AppServerSupervisorFa
 BackendOrchestratorBuilder = Callable[[Path, RepoConfig], BackendOrchestratorProtocol]
 
 
-def _git_failure_detail(proc) -> str:
-    return (proc.stderr or proc.stdout or "").strip() or f"exit {proc.returncode}"
+class _HubWorktreeBridge:
+    """Concrete WorktreeHubContext that delegates to HubSupervisor."""
 
+    def __init__(self, supervisor: "HubSupervisor") -> None:
+        self._supervisor = supervisor
 
-def _resolve_ref_sha(repo_root: Path, ref: str) -> str:
-    try:
-        proc = run_git(["rev-parse", "--verify", ref], repo_root, check=False)
-    except GitError as exc:
-        raise ValueError(f"git rev-parse failed for {ref}: {exc}") from exc
-    if proc.returncode != 0:
-        raise ValueError(f"Unable to resolve ref {ref}: {_git_failure_detail(proc)}")
-    sha = (proc.stdout or "").strip()
-    if not sha:
-        raise ValueError(f"Unable to resolve ref {ref}: empty output")
-    return sha
+    def invalidate_cache(self) -> None:
+        self._supervisor._invalidate_list_cache()
+
+    def snapshot_for_repo(self, repo_id: str) -> "RepoSnapshot":
+        return self._supervisor._snapshot_for_repo(repo_id)
+
+    def stop_runner(
+        self,
+        *,
+        repo_id: str,
+        repo_path: Path,
+        timeout_seconds: float = 30.0,
+        poll_interval_seconds: float = 0.2,
+    ) -> None:
+        self._supervisor._stop_runner_and_wait_for_exit(
+            repo_id=repo_id,
+            repo_path=repo_path,
+            timeout_seconds=timeout_seconds,
+            poll_interval_seconds=poll_interval_seconds,
+        )
+
+    def archive_repo_state(
+        self,
+        *,
+        repo_id: str,
+        archive_note: Optional[str] = None,
+        archive_profile: Optional[str] = None,
+    ) -> Dict[str, object]:
+        return self._supervisor.archive_repo_state(
+            repo_id=repo_id,
+            archive_note=archive_note,
+            archive_profile=archive_profile,
+        )
+
+    def base_repo_paths(self, manifest: "Manifest") -> dict[str, Path]:
+        return self._supervisor._base_repo_paths(manifest)
+
+    def collect_unbound_repo_threads(
+        self,
+        *,
+        manifest: Optional["Manifest"] = None,
+    ) -> dict[str, list[str]]:
+        return self._supervisor._collect_unbound_repo_threads(manifest=manifest)
+
+    def archive_unbound_repo_threads(
+        self,
+        *,
+        repo_id: str,
+        unbound_threads_by_repo: Optional[dict[str, list[str]]] = None,
+    ) -> list[str]:
+        return self._supervisor._archive_unbound_repo_threads(
+            repo_id=repo_id,
+            unbound_threads_by_repo=unbound_threads_by_repo,
+        )
 
 
 def _load_managed_runtime_module() -> Any:
@@ -319,15 +366,10 @@ class HubSupervisor:
             on_list_repos=self.list_repos,
             runners=self._runner_orchestrator.runners,
         )
+        self._worktree_bridge = _HubWorktreeBridge(self)
         self._worktree_manager = WorktreeManager(
             hub_config,
-            on_invalidate_cache=self._invalidate_list_cache,
-            on_snapshot_for_repo=self._snapshot_for_repo,
-            on_stop_runner=self._stop_runner_and_wait_for_exit,
-            on_archive_repo_state=self.archive_repo_state,
-            on_base_repo_paths=self._base_repo_paths,
-            on_collect_unbound_repo_threads=self._collect_unbound_repo_threads,
-            on_archive_unbound_repo_threads=self._archive_unbound_repo_threads,
+            ctx=self._worktree_bridge,
         )
         self._wire_outbox_lifecycle()
         self._reconcile_startup()
@@ -683,7 +725,7 @@ class HubSupervisor:
         except GitError as exc:
             raise ValueError(f"git fetch failed: {exc}") from exc
         if proc.returncode != 0:
-            raise ValueError(f"git fetch failed: {_git_failure_detail(proc)}")
+            raise ValueError(f"git fetch failed: {git_failure_detail(proc)}")
 
         default_branch = git_default_branch(repo_root)
         if not default_branch:
@@ -703,7 +745,7 @@ class HubSupervisor:
             except GitError as exc:
                 raise ValueError(f"git checkout failed: {exc}") from exc
             if proc.returncode != 0:
-                raise ValueError(f"git checkout failed: {_git_failure_detail(proc)}")
+                raise ValueError(f"git checkout failed: {git_failure_detail(proc)}")
 
         try:
             proc = run_git(
@@ -715,12 +757,12 @@ class HubSupervisor:
         except GitError as exc:
             raise ValueError(f"git pull failed: {exc}") from exc
         if proc.returncode != 0:
-            raise ValueError(f"git pull failed: {_git_failure_detail(proc)}")
+            raise ValueError(f"git pull failed: {git_failure_detail(proc)}")
         local_sha = git_head_sha(repo_root)
         if not local_sha:
             raise ValueError("Unable to resolve local HEAD after sync")
         origin_ref = f"refs/remotes/origin/{default_branch}"
-        origin_sha = _resolve_ref_sha(repo_root, origin_ref)
+        origin_sha = resolve_ref_sha(repo_root, origin_ref)
         if local_sha != origin_sha:
             raise ValueError(
                 "Sync main did not land on origin/%s: local=%s origin=%s. "

@@ -1653,3 +1653,104 @@ async def test_message_completed_commentary_does_not_override_stream_text() -> N
     )
 
     assert state.best_assistant_text() == "final reply"
+
+
+async def test_recover_post_completion_outcome_passes_ok_outcome_unchanged() -> None:
+    outcome = RuntimeThreadOutcome(
+        status="ok",
+        assistant_text="already done",
+        error=None,
+        backend_thread_id="thread-1",
+        backend_turn_id="turn-1",
+    )
+    state = RuntimeThreadRunEventState(completed_seen=True)
+
+    recovered = recover_post_completion_outcome(outcome, state)
+
+    assert recovered is outcome
+    assert recovered.status == "ok"
+    assert recovered.assistant_text == "already done"
+
+
+async def test_recover_post_completion_outcome_does_not_recover_whitespace_only_text() -> (
+    None
+):
+    outcome = RuntimeThreadOutcome(
+        status="error",
+        assistant_text="   ",
+        error="App-server disconnected",
+        backend_thread_id="thread-1",
+        backend_turn_id="turn-1",
+    )
+    state = RuntimeThreadRunEventState(
+        assistant_stream_text="   ",
+        completed_seen=True,
+    )
+
+    recovered = recover_post_completion_outcome(outcome, state)
+
+    assert recovered is outcome
+    assert recovered.status == "error"
+
+
+async def test_recover_post_completion_outcome_does_not_recover_with_empty_assistant_text() -> (
+    None
+):
+    outcome = RuntimeThreadOutcome(
+        status="interrupted",
+        assistant_text="",
+        error="Runtime thread interrupted",
+        backend_thread_id="thread-1",
+        backend_turn_id="turn-1",
+    )
+    state = RuntimeThreadRunEventState(
+        assistant_stream_text="",
+        assistant_message_text="",
+        completed_seen=True,
+    )
+
+    recovered = recover_post_completion_outcome(outcome, state)
+
+    assert recovered is outcome
+    assert recovered.status == "interrupted"
+
+
+async def test_recover_post_completion_outcome_chain_with_terminal_event() -> None:
+    outcome = RuntimeThreadOutcome(
+        status="error",
+        assistant_text="",
+        error="Transport error after completion",
+        backend_thread_id="thread-1",
+        backend_turn_id="turn-1",
+    )
+    state = RuntimeThreadRunEventState(
+        assistant_message_text="recovered output",
+        completed_seen=True,
+    )
+
+    recovered = recover_post_completion_outcome(outcome, state)
+    terminal = terminal_run_event_from_outcome(recovered, state)
+
+    assert isinstance(terminal, Completed)
+    assert terminal.final_message == "recovered output"
+
+
+async def test_recover_post_completion_outcome_does_not_recover_error_without_completion_signal() -> (
+    None
+):
+    outcome = RuntimeThreadOutcome(
+        status="error",
+        assistant_text="",
+        error="Early error before any completion",
+        backend_thread_id="thread-1",
+        backend_turn_id="turn-1",
+    )
+    state = RuntimeThreadRunEventState(
+        assistant_message_text="some output happened",
+        completed_seen=False,
+    )
+
+    recovered = recover_post_completion_outcome(outcome, state)
+
+    assert recovered is outcome
+    assert recovered.status == "error"

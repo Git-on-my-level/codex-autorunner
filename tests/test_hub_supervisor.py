@@ -4365,26 +4365,28 @@ def test_runtime_preflight_blocks_enable() -> None:
 
 
 def test_git_failure_detail() -> None:
+    from codex_autorunner.core.git_utils import git_failure_detail
+
     class _Proc:
         returncode = 1
         stderr = " err "
         stdout = " out "
 
-    assert hub_module._git_failure_detail(_Proc()) == "err"
+    assert git_failure_detail(_Proc()) == "err"
 
     class _Proc2:
         returncode = 2
         stderr = ""
         stdout = " out "
 
-    assert hub_module._git_failure_detail(_Proc2()) == "out"
+    assert git_failure_detail(_Proc2()) == "out"
 
     class _Proc3:
         returncode = 3
         stderr = None
         stdout = None
 
-    assert hub_module._git_failure_detail(_Proc3()) == "exit 3"
+    assert git_failure_detail(_Proc3()) == "exit 3"
 
 
 def test_get_agent_workspace_runtime_readiness_rejects_missing(tmp_path: Path) -> None:
@@ -4542,3 +4544,64 @@ def test_archive_failure_without_force_archive_aborts_cleanup(
     assert worktree.path.exists()
     manifest = load_manifest(hub_root / ".codex-autorunner" / "manifest.yml", hub_root)
     assert manifest.get(worktree.id) is not None
+
+
+def test_cleanup_worktree_returns_ordered_step_records(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg["pma"]["cleanup_require_archive"] = False
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/step-tracking",
+        start_point="HEAD",
+    )
+
+    result = supervisor.cleanup_worktree(
+        worktree_repo_id=worktree.id,
+        archive=False,
+    )
+    assert result["status"] == "ok"
+    steps = result["cleanup_steps"]
+    step_names = [s["step"] for s in steps]
+    assert step_names == [
+        "validate",
+        "stop_runner",
+        "telemetry_housekeep",
+        "docker_cleanup",
+        "git_remove",
+        "manifest_remove",
+        "archive_pma_threads",
+    ]
+    assert all(s["status"] == "ok" for s in steps)
+
+
+def test_cleanup_worktree_step_tracking_records_docker_error(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg["pma"]["cleanup_require_archive"] = False
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+
+def test_cleanup_report_tracks_failed_step_and_completed_steps():
+    from codex_autorunner.core.hub_worktree_lifecycle import (
+        WorktreeCleanupReport,
+    )
+
+    report = WorktreeCleanupReport()
+    report.add_step("validate", "ok")
+    report.add_step("stop_runner", "ok")
+    report.add_step("docker_cleanup", "error", detail="container not found")
+    report.add_step("git_remove", "ok")
+
+    assert report.failed_step == "docker_cleanup"
+    assert report.completed_steps == ["validate", "stop_runner", "git_remove"]

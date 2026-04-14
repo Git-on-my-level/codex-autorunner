@@ -29,6 +29,7 @@ from codex_autorunner.core.orchestration.runtime_bindings import (
     clear_runtime_thread_binding,
 )
 from codex_autorunner.core.orchestration.service import (
+    _ThreadRecoveryHelper,
     build_harness_backed_orchestration_service,
     build_surface_orchestration_ingress,
     get_surface_orchestration_ingress,
@@ -2069,3 +2070,258 @@ async def test_send_message_after_stop_resumes_existing_conversation(
     assert first_exec.status == "interrupted"
     assert second_exec is not None
     assert second_exec.status == "running"
+
+
+class TestThreadRecoveryHelperBoundary:
+    """Direct tests for _ThreadRecoveryHelper ownership-boundary invariants."""
+
+    def _build_recovery_helper(
+        self, tmp_path: Path, harness: _FakeHarness
+    ) -> tuple[_ThreadRecoveryHelper, HarnessBackedOrchestrationService]:
+        service = _build_service(tmp_path, harness)
+        return service._recovery_helper, service
+
+    def test_clear_stale_backend_binding_returns_true_when_stale(
+        self, tmp_path: Path
+    ) -> None:
+        harness = _FakeHarness(backend_runtime_instance_id_value="runtime-old")
+        helper, service = self._build_recovery_helper(tmp_path, harness)
+        workspace_root = tmp_path / "workspace"
+        workspace_root.mkdir()
+        thread = service.create_thread_target(
+            "codex",
+            workspace_root,
+            metadata={"backend_runtime_instance_id": "runtime-old"},
+        )
+
+        asyncio.get_event_loop().run_until_complete(
+            service.send_message(
+                MessageRequest(
+                    target_id=thread.thread_target_id,
+                    target_kind="thread",
+                    message_text="start execution",
+                )
+            )
+        )
+
+        harness.backend_runtime_instance_id_value = "runtime-new"
+
+        result = helper.clear_stale_backend_binding(
+            thread_target_id=thread.thread_target_id,
+            backend_thread_id="backend-conversation-1",
+            runtime_instance_id="runtime-new",
+        )
+
+        assert result is True
+        binding = _thread_runtime_binding(service, thread.thread_target_id)
+        assert binding is None
+
+    def test_clear_stale_backend_binding_returns_false_when_current(
+        self, tmp_path: Path
+    ) -> None:
+        harness = _FakeHarness(backend_runtime_instance_id_value="runtime-same")
+        helper, service = self._build_recovery_helper(tmp_path, harness)
+        workspace_root = tmp_path / "workspace"
+        workspace_root.mkdir()
+        thread = service.create_thread_target(
+            "codex",
+            workspace_root,
+            metadata={"backend_runtime_instance_id": "runtime-same"},
+        )
+
+        asyncio.get_event_loop().run_until_complete(
+            service.send_message(
+                MessageRequest(
+                    target_id=thread.thread_target_id,
+                    target_kind="thread",
+                    message_text="start execution",
+                )
+            )
+        )
+
+        result = helper.clear_stale_backend_binding(
+            thread_target_id=thread.thread_target_id,
+            backend_thread_id="backend-conversation-1",
+            runtime_instance_id="runtime-same",
+        )
+
+        assert result is False
+        binding = _thread_runtime_binding(service, thread.thread_target_id)
+        assert binding is not None
+
+    def test_clear_stale_backend_binding_returns_false_when_no_binding(
+        self, tmp_path: Path
+    ) -> None:
+        harness = _FakeHarness()
+        helper, service = self._build_recovery_helper(tmp_path, harness)
+        workspace_root = tmp_path / "workspace"
+        workspace_root.mkdir()
+        thread = service.create_thread_target("codex", workspace_root)
+
+        result = helper.clear_stale_backend_binding(
+            thread_target_id=thread.thread_target_id,
+            backend_thread_id=None,
+            runtime_instance_id="runtime-new",
+        )
+
+        assert result is False
+
+    def test_clear_stale_backend_binding_returns_false_when_no_runtime_instance(
+        self, tmp_path: Path
+    ) -> None:
+        harness = _FakeHarness(backend_runtime_instance_id_value=None)
+        helper, service = self._build_recovery_helper(tmp_path, harness)
+        workspace_root = tmp_path / "workspace"
+        workspace_root.mkdir()
+        thread = service.create_thread_target(
+            "codex",
+            workspace_root,
+            metadata={"backend_runtime_instance_id": "old-instance"},
+        )
+
+        result = helper.clear_stale_backend_binding(
+            thread_target_id=thread.thread_target_id,
+            backend_thread_id="backend-conversation-1",
+            runtime_instance_id=None,
+        )
+
+        assert result is False
+
+    async def test_recover_lost_backend_always_records_error(
+        self, tmp_path: Path
+    ) -> None:
+        harness = _FakeHarness()
+        helper, service = self._build_recovery_helper(tmp_path, harness)
+        workspace_root = tmp_path / "workspace"
+        workspace_root.mkdir()
+        thread = service.create_thread_target("codex", workspace_root)
+        execution = await service.send_message(
+            MessageRequest(
+                target_id=thread.thread_target_id,
+                target_kind="thread",
+                message_text="in-flight",
+            )
+        )
+
+        recovered = helper.recover_lost_backend_execution(
+            thread_target_id=thread.thread_target_id,
+            execution=execution,
+            backend_thread_id="backend-conversation-1",
+            error_message="Backend thread lost after restart",
+            reason="test_lost_backend",
+        )
+
+        assert recovered.status == "error"
+        assert recovered.error == "Backend thread lost after restart"
+        assert service.get_running_execution(thread.thread_target_id) is None
+
+    async def test_interrupt_lost_backend_always_records_interrupted(
+        self, tmp_path: Path
+    ) -> None:
+        harness = _FakeHarness()
+        helper, service = self._build_recovery_helper(tmp_path, harness)
+        workspace_root = tmp_path / "workspace"
+        workspace_root.mkdir()
+        thread = service.create_thread_target("codex", workspace_root)
+        execution = await service.send_message(
+            MessageRequest(
+                target_id=thread.thread_target_id,
+                target_kind="thread",
+                message_text="in-flight",
+            )
+        )
+
+        interrupted = helper.interrupt_lost_backend_execution(
+            thread_target_id=thread.thread_target_id,
+            execution=execution,
+            backend_thread_id=None,
+            reason="test_missing_backend",
+        )
+
+        assert interrupted.status == "interrupted"
+        assert service.get_running_execution(thread.thread_target_id) is None
+        binding = _thread_runtime_binding(service, thread.thread_target_id)
+        assert binding is None
+
+    async def test_recover_running_after_restart_with_stale_binding_records_error(
+        self, tmp_path: Path
+    ) -> None:
+        harness = _FakeHarness(backend_runtime_instance_id_value="runtime-old")
+        service = _build_service(tmp_path, harness)
+        workspace_root = tmp_path / "workspace"
+        workspace_root.mkdir()
+        thread = service.create_thread_target(
+            "codex",
+            workspace_root,
+            metadata={"backend_runtime_instance_id": "runtime-old"},
+        )
+        await service.send_message(
+            MessageRequest(
+                target_id=thread.thread_target_id,
+                target_kind="thread",
+                message_text="in-flight",
+            )
+        )
+
+        restarted = _build_service(tmp_path, harness)
+        recovered = restarted.recover_running_execution_after_restart(
+            thread.thread_target_id
+        )
+
+        assert recovered is not None
+        assert recovered.status == "error"
+        assert "lost" in recovered.error.lower()
+        assert restarted.get_running_execution(thread.thread_target_id) is None
+
+    async def test_stop_thread_never_records_success_status(
+        self, tmp_path: Path
+    ) -> None:
+        harness = _FakeHarness()
+        service = _build_service(tmp_path, harness)
+        workspace_root = tmp_path / "workspace"
+        workspace_root.mkdir()
+        thread = service.create_thread_target("codex", workspace_root)
+        await service.send_message(
+            MessageRequest(
+                target_id=thread.thread_target_id,
+                target_kind="thread",
+                message_text="running work",
+            )
+        )
+
+        outcome = await service.stop_thread(thread.thread_target_id)
+
+        assert outcome.execution is not None
+        assert outcome.execution.status in {"interrupted", "error"}
+        assert outcome.execution.status != "ok"
+
+    async def test_stop_thread_with_cancel_queued_false_preserves_queued(
+        self, tmp_path: Path
+    ) -> None:
+        harness = _FakeHarness()
+        service = _build_service(tmp_path, harness)
+        workspace_root = tmp_path / "workspace"
+        workspace_root.mkdir()
+        thread = service.create_thread_target("codex", workspace_root)
+        await service.send_message(
+            MessageRequest(
+                target_id=thread.thread_target_id,
+                target_kind="thread",
+                message_text="running",
+            )
+        )
+        await service.send_message(
+            MessageRequest(
+                target_id=thread.thread_target_id,
+                target_kind="thread",
+                message_text="queued",
+            )
+        )
+
+        outcome = await service.stop_thread(
+            thread.thread_target_id, cancel_queued=False
+        )
+
+        assert outcome.cancelled_queued == 0
+        remaining_queued = service.list_queued_executions(thread.thread_target_id)
+        assert len(remaining_queued) == 1

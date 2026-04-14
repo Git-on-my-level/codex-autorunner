@@ -4,7 +4,7 @@ Centralized Git utilities for consistent git operations across the codebase.
 
 import subprocess
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from .utils import subprocess_env
 
@@ -59,6 +59,23 @@ def run_git(
         raise GitError(f"git {args[0]} failed: {detail}", returncode=proc.returncode)
 
     return proc
+
+
+def git_failure_detail(proc: Any) -> str:
+    return (proc.stderr or proc.stdout or "").strip() or f"exit {proc.returncode}"
+
+
+def resolve_ref_sha(repo_root: Path, ref: str) -> str:
+    try:
+        proc = run_git(["rev-parse", "--verify", ref], repo_root, check=False)
+    except GitError as exc:
+        raise ValueError(f"git rev-parse failed for {ref}: {exc}") from exc
+    if proc.returncode != 0:
+        raise ValueError(f"Unable to resolve ref {ref}: {git_failure_detail(proc)}")
+    sha = (proc.stdout or "").strip()
+    if not sha:
+        raise ValueError(f"Unable to resolve ref {ref}: empty output")
+    return sha
 
 
 def git_available(repo_root: Path) -> bool:
