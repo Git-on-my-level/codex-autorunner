@@ -8966,7 +8966,7 @@ class DiscordBotService:
     ) -> None:
         source_message_id = custom_id.split(":", 1)[1].strip()
         if not source_message_id:
-            await self._send_interrupt_component_response(
+            await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
                 "Queued request is unavailable.",
@@ -9013,7 +9013,7 @@ class DiscordBotService:
     ) -> None:
         source_message_id = custom_id.split(":", 1)[1].strip()
         if not source_message_id:
-            await self._respond_ephemeral(
+            await self._send_interrupt_component_response(
                 interaction_id,
                 interaction_token,
                 "Queued request is unavailable.",
