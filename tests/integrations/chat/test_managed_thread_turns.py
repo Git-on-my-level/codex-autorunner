@@ -697,6 +697,85 @@ def test_resolve_managed_thread_target_clears_stale_backend_for_fresh_pma_sessio
     assert resolved_thread.backend_thread_id is None
 
 
+def test_resolve_managed_thread_target_keeps_backend_for_repo_resume_without_rebind(
+    tmp_path: Path,
+) -> None:
+    canonical_workspace = str(tmp_path.resolve())
+    thread = SimpleNamespace(
+        thread_target_id="thread-1",
+        agent_id="codex",
+        agent_profile=None,
+        workspace_root=canonical_workspace,
+        lifecycle_status="archived",
+        backend_thread_id="backend-existing",
+        backend_runtime_instance_id=None,
+    )
+    binding = SimpleNamespace(thread_target_id="thread-1", mode="repo")
+    clear_calls: list[dict[str, Any]] = []
+    resume_calls: list[dict[str, Any]] = []
+
+    class _Service:
+        def get_binding(self, *, surface_kind: str, surface_key: str) -> Any:
+            _ = surface_kind, surface_key
+            return binding
+
+        def get_thread_target(self, thread_target_id: str) -> Any:
+            assert thread_target_id == "thread-1"
+            return thread
+
+        def set_thread_backend_id(
+            self,
+            thread_target_id: str,
+            backend_thread_id: Optional[str],
+            *,
+            backend_runtime_instance_id: Optional[str] = None,
+        ) -> None:
+            assert thread_target_id == "thread-1"
+            clear_calls.append(
+                {
+                    "backend_thread_id": backend_thread_id,
+                    "backend_runtime_instance_id": backend_runtime_instance_id,
+                }
+            )
+
+        def resume_thread_target(self, thread_target_id: str, **kwargs: Any) -> Any:
+            assert thread_target_id == "thread-1"
+            resume_calls.append(kwargs)
+            return SimpleNamespace(
+                thread_target_id="thread-1",
+                agent_id="codex",
+                agent_profile=None,
+                workspace_root=canonical_workspace,
+                lifecycle_status="active",
+                backend_thread_id=thread.backend_thread_id,
+                backend_runtime_instance_id=thread.backend_runtime_instance_id,
+            )
+
+        def create_thread_target(self, *args: Any, **kwargs: Any) -> Any:
+            raise AssertionError("create_thread_target should not be called")
+
+        def upsert_binding(self, **kwargs: Any) -> None:
+            pass
+
+    _, resolved_thread = managed_thread_turns_module.resolve_managed_thread_target(
+        _Service(),
+        request=managed_thread_turns_module.ManagedThreadTargetRequest(
+            surface_kind="discord",
+            surface_key="discord:channel-1",
+            mode="repo",
+            agent="codex",
+            workspace_root=tmp_path,
+            display_name="discord:surface",
+            binding_metadata={"channel_id": "channel-1"},
+        ),
+    )
+
+    assert resolved_thread is not None
+    assert clear_calls == []
+    assert resume_calls == [{"backend_runtime_instance_id": None}]
+    assert resolved_thread.backend_thread_id == "backend-existing"
+
+
 def test_resolve_managed_thread_target_reuses_backend_matched_thread(
     tmp_path: Path,
 ) -> None:
