@@ -2211,13 +2211,13 @@ async def handle_flow_button(
                 if isinstance(exc, (RuntimeError, ConfigError))
                 else "Unable to query flow database. Please try again later."
             )
-            action = (
+            failed_action = (
                 "open flow database"
                 if event.endswith("store_open_failed")
                 else "query flow run"
             )
             raise DiscordTransientError(
-                f"Failed to {action}: {exc}",
+                f"Failed to {failed_action}: {exc}",
                 user_message=user_message,
             ) from None
 
