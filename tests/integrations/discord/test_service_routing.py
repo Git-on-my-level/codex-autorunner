@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 
 from codex_autorunner.core.filebox import (
@@ -20,6 +21,7 @@ from codex_autorunner.core.filebox import (
     outbox_sent_dir,
 )
 from codex_autorunner.core.flows import FlowRunStatus
+from codex_autorunner.core.hub_control_plane import WorkspaceSetupCommandRequest
 from codex_autorunner.core.update import UpdateInProgressError
 from codex_autorunner.integrations.app_server.client import CodexAppServerResponseError
 from codex_autorunner.integrations.chat.collaboration_policy import (
@@ -37,6 +39,9 @@ from codex_autorunner.integrations.chat.models import (
 )
 from codex_autorunner.integrations.discord import message_turns as discord_message_turns
 from codex_autorunner.integrations.discord import service as discord_service_module
+from codex_autorunner.integrations.discord import (
+    workspace_commands as discord_workspace_commands_module,
+)
 from codex_autorunner.integrations.discord.car_autocomplete import (
     repo_autocomplete_value,
     workspace_autocomplete_value,
@@ -7430,6 +7435,131 @@ async def test_car_newt_runs_hub_setup_commands_for_bound_workspace(
         assert len(rest.followup_messages) == 1
         content = rest.followup_messages[0]["payload"]["content"].lower()
         assert "ran 1 setup command" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_hub_client_setup_commands_survive_loop_switch_after_workspace_lookup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway([_interaction(name="newt", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    class _LoopStickyAsyncClient:
+        instances: list["_LoopStickyAsyncClient"] = []
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            _ = args
+            self.base_url = str(kwargs.get("base_url") or "")
+            self.bound_loop: asyncio.AbstractEventLoop | None = None
+            self.calls: list[str] = []
+            type(self).instances.append(self)
+
+        async def request(
+            self,
+            method: str,
+            path: str,
+            *,
+            json: dict[str, Any] | None = None,
+            params: dict[str, Any] | None = None,
+        ) -> httpx.Response:
+            _ = method, params
+            current_loop = asyncio.get_running_loop()
+            if self.bound_loop is None:
+                self.bound_loop = current_loop
+            elif self.bound_loop is not current_loop:
+                raise RuntimeError("Event loop is closed")
+            self.calls.append(path)
+            if path == "/hub/api/control-plane/agent-workspaces":
+                return httpx.Response(
+                    200,
+                    json={
+                        "workspaces": [
+                            {
+                                "workspace_id": "wksp-1",
+                                "runtime_kind": "hermes",
+                                "workspace_root": str(workspace.resolve()),
+                                "display_name": "Workspace One",
+                                "enabled": True,
+                                "exists_on_disk": True,
+                                "resource_kind": "agent_workspace",
+                            }
+                        ]
+                    },
+                )
+            if path == "/hub/api/control-plane/handshake":
+                return httpx.Response(
+                    200,
+                    json={
+                        "api_version": "1.0.0",
+                        "minimum_client_api_version": "1.0.0",
+                        "schema_generation": discord_service_module.ORCHESTRATION_SCHEMA_VERSION,
+                        "capabilities": [],
+                    },
+                )
+            if path == "/hub/api/control-plane/workspace-setup-commands":
+                return httpx.Response(
+                    200,
+                    json={
+                        "workspace_root": json["workspace_root"] if json else "",
+                        "repo_id_hint": json.get("repo_id_hint") if json else None,
+                        "setup_command_count": 1,
+                    },
+                )
+            raise AssertionError(f"Unexpected control-plane request path: {path}")
+
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.hub_control_plane.http_client.httpx.AsyncClient",
+        _LoopStickyAsyncClient,
+    )
+    service._hub_client = discord_service_module.HttpHubControlPlaneClient(
+        base_url="http://testserver"
+    )
+
+    try:
+        workspaces = discord_workspace_commands_module._list_agent_workspaces(service)
+        assert workspaces == [("wksp-1", str(workspace.resolve()), "Workspace One")]
+
+        setup_result = await service._hub_client.run_workspace_setup_commands(
+            WorkspaceSetupCommandRequest(
+                workspace_root=str(workspace.resolve()),
+                repo_id_hint="repo-1",
+            )
+        )
+
+        assert setup_result.setup_command_count == 1
+        assert any(
+            "/hub/api/control-plane/agent-workspaces" in instance.calls
+            for instance in _LoopStickyAsyncClient.instances
+        )
+        assert any(
+            "/hub/api/control-plane/workspace-setup-commands" in instance.calls
+            for instance in _LoopStickyAsyncClient.instances
+        )
     finally:
         await store.close()
 

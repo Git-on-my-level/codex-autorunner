@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from types import TracebackType
 from typing import Any, Mapping, Optional
 
@@ -92,14 +94,45 @@ class HttpHubControlPlaneClient(HubControlPlaneClient):
         self._timeout = timeout
         self._headers = dict(headers or {})
         self._owns_client = http_client is None
-        if http_client is None:
-            self._http_client = httpx.AsyncClient(
-                base_url=self._base_url,
-                timeout=timeout,
-                headers=dict(self._headers),
-            )
-        else:
-            self._http_client = http_client
+        self._client_loop: asyncio.AbstractEventLoop | None = None
+        self._http_client: Optional[httpx.AsyncClient] = (
+            self._build_http_client() if http_client is None else http_client
+        )
+        with contextlib.suppress(RuntimeError):
+            self._client_loop = asyncio.get_running_loop()
+
+    def _build_http_client(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            base_url=self._base_url,
+            timeout=self._timeout,
+            headers=dict(self._headers),
+        )
+
+    async def _get_http_client(self) -> httpx.AsyncClient:
+        current_loop = asyncio.get_running_loop()
+        client = self._http_client
+        if client is None or (
+            self._owns_client and getattr(client, "is_closed", False)
+        ):
+            client = self._build_http_client()
+            self._http_client = client
+            self._client_loop = current_loop
+            return client
+        if (
+            self._owns_client
+            and self._client_loop is not None
+            and self._client_loop is not current_loop
+        ):
+            stale_client = client
+            client = self._build_http_client()
+            self._http_client = client
+            self._client_loop = current_loop
+            with contextlib.suppress(RuntimeError, OSError):
+                await stale_client.aclose()
+            return client
+        if self._owns_client and self._client_loop is None:
+            self._client_loop = current_loop
+        return client
 
     def clone_for_background_loop(self) -> "HttpHubControlPlaneClient":
         """Return a client copy with its own AsyncClient for a separate event loop."""
@@ -121,8 +154,14 @@ class HttpHubControlPlaneClient(HubControlPlaneClient):
         await self.aclose()
 
     async def aclose(self) -> None:
-        if self._owns_client:
-            await self._http_client.aclose()
+        if not self._owns_client:
+            return
+        client = self._http_client
+        self._client_loop = None
+        if client is None:
+            return
+        with contextlib.suppress(RuntimeError, OSError):
+            await client.aclose()
 
     async def _request(
         self,
@@ -133,7 +172,7 @@ class HttpHubControlPlaneClient(HubControlPlaneClient):
         params: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         try:
-            response = await self._http_client.request(
+            response = await (await self._get_http_client()).request(
                 method,
                 path,
                 json=dict(json_payload) if json_payload is not None else None,
@@ -183,7 +222,7 @@ class HttpHubControlPlaneClient(HubControlPlaneClient):
         params: Mapping[str, Any] | None = None,
     ) -> None:
         try:
-            response = await self._http_client.request(
+            response = await (await self._get_http_client()).request(
                 method,
                 path,
                 json=dict(json_payload) if json_payload is not None else None,

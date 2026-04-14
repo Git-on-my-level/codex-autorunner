@@ -162,7 +162,15 @@ class ThreadTarget:
         )
         if thread_target_id is None:
             raise ValueError("ThreadTarget requires an orchestration-owned thread id")
-        agent = _normalize_optional_text(data.get("agent")) or "unknown"
+        agent = (
+            _normalize_optional_text(
+                data.get("agent_id")
+                or data.get("agent")
+                or metadata.get("agent_id")
+                or metadata.get("agent")
+            )
+            or "unknown"
+        )
         resource_kind, resource_id, repo_id = normalize_resource_owner_fields(
             resource_kind=data.get("resource_kind"),
             resource_id=data.get("resource_id"),

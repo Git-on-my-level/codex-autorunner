@@ -25,6 +25,8 @@ from codex_autorunner.core.hub_control_plane import (
     QueuedExecutionListRequest,
     SurfaceBindingListRequest,
     SurfaceBindingUpsertRequest,
+    ThreadTargetListRequest,
+    ThreadTargetLookupRequest,
     TranscriptWriteRequest,
     WorkspaceSetupCommandRequest,
     serialize_run_event,
@@ -238,6 +240,21 @@ async def test_hub_control_plane_http_client_round_trip(tmp_path: Path) -> None:
                 }
             )
         )
+        fetched_thread = await client.get_thread_target(
+            ThreadTargetLookupRequest.from_mapping(
+                {"thread_target_id": thread_target_id}
+            )
+        )
+        listed_threads = await client.list_thread_targets(
+            ThreadTargetListRequest.from_mapping(
+                {
+                    "agent_id": "codex",
+                    "resource_kind": "agent_workspace",
+                    "resource_id": "wksp-1",
+                    "limit": 10,
+                }
+            )
+        )
         listed_bindings = await client.list_surface_bindings(
             SurfaceBindingListRequest.from_mapping(
                 {
@@ -393,6 +410,10 @@ async def test_hub_control_plane_http_client_round_trip(tmp_path: Path) -> None:
     assert second_delivery.record is not None
     assert first_delivery.record.delivered_message_id == "88"
     assert second_delivery.record.delivered_message_id == "88"
+    assert fetched_thread.thread is not None
+    assert fetched_thread.thread.agent_id == "codex"
+    assert listed_threads.threads
+    assert listed_threads.threads[0].agent_id == "codex"
     assert discord_binding.binding is not None
     assert [binding.binding_id for binding in listed_bindings.bindings] == [
         discord_binding.binding.binding_id

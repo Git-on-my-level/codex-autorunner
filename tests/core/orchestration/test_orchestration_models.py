@@ -57,6 +57,20 @@ def test_thread_target_normalizes_managed_thread_mapping() -> None:
     assert "backend_thread_id" not in target.to_dict()
 
 
+def test_thread_target_normalizes_agent_id_round_trip_field() -> None:
+    target = ThreadTarget.from_mapping(
+        {
+            "thread_target_id": "mt-2",
+            "agent_id": "hermes",
+            "workspace_root": "/tmp/repo",
+            "metadata": {"agent_profile": "m4-pma"},
+        }
+    )
+
+    assert target.agent_id == AgentId("hermes")
+    assert target.agent_profile == "m4-pma"
+
+
 def test_binding_normalizes_surface_mapping() -> None:
     binding = Binding.from_mapping(
         {
