@@ -2214,10 +2214,7 @@ async def handle_flow_button(
             finally:
                 store.close()
 
-        try:
-            target = await asyncio.to_thread(_resolve_archive_target)
-        except DiscordTransientError:
-            raise
+        target = await asyncio.to_thread(_resolve_archive_target)
 
         if target is None:
             stale_text = (
