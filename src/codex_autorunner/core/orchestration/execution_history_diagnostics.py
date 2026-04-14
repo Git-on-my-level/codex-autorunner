@@ -9,6 +9,7 @@ from typing import Any, Optional
 from ..text_utils import _json_dumps
 from ..time_utils import now_iso
 from .cold_trace_store import ColdTraceStore
+from .execution_history import timeline_hot_family_for_event_type
 from .execution_history_maintenance import (
     ExecutionHistoryMaintenancePolicy,
 )
@@ -17,21 +18,6 @@ from .sqlite import open_orchestration_sqlite
 logger = logging.getLogger("codex_autorunner.execution_history_diagnostics")
 
 _TIMELINE_EVENT_FAMILY = "turn.timeline"
-
-
-def _timeline_hot_family_for_event_type(event_type: Any) -> Optional[str]:
-    normalized = str(event_type or "").strip()
-    return {
-        "turn_started": "run_notice",
-        "output_delta": "output_delta",
-        "tool_call": "tool_call",
-        "tool_result": "tool_result",
-        "approval_requested": "run_notice",
-        "token_usage": "token_usage",
-        "run_notice": "run_notice",
-        "turn_completed": "terminal",
-        "turn_failed": "terminal",
-    }.get(normalized)
 
 
 def _collect_timeline_family_counts(conn: Any) -> dict[str, int]:
@@ -48,7 +34,7 @@ def _collect_timeline_family_counts(conn: Any) -> dict[str, int]:
         (_TIMELINE_EVENT_FAMILY,),
     ).fetchall()
     for row in rows:
-        family = _timeline_hot_family_for_event_type(row["event_type"])
+        family = timeline_hot_family_for_event_type(str(row["event_type"] or ""))
         if family:
             family_counts[family] = family_counts.get(family, 0) + int(row["cnt"] or 0)
     return dict(sorted(family_counts.items()))

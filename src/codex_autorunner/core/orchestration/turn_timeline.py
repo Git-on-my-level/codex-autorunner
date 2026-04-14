@@ -28,6 +28,7 @@ from .execution_history import (
     ExecutionCheckpointSignal,
     build_hot_projection_envelope,
     route_run_event,
+    timeline_hot_family_for_event_type,
 )
 from .execution_history_diagnostics import (
     log_dedupe,
@@ -129,7 +130,7 @@ def _collect_execution_family_hot_rows(
         ).fetchall()
     family_hot_rows: dict[str, int] = {}
     for row in rows:
-        family = _event_family_for_event_type(str(row["event_type"] or "").strip())
+        family = timeline_hot_family_for_event_type(str(row["event_type"] or ""))
         if family:
             family_hot_rows[family] = family_hot_rows.get(family, 0) + int(
                 row["cnt"] or 0
@@ -491,20 +492,6 @@ class _CheckpointAccumulator:
             terminal_signals=tuple(self._terminal_signals),
             trace_manifest_id=self.trace_manifest_id,
         )
-
-
-def _event_family_for_event_type(event_type: str) -> Optional[str]:
-    return {
-        "turn_started": "run_notice",
-        "output_delta": "output_delta",
-        "tool_call": "tool_call",
-        "tool_result": "tool_result",
-        "approval_requested": "run_notice",
-        "token_usage": "token_usage",
-        "run_notice": "run_notice",
-        "turn_completed": "terminal",
-        "turn_failed": "terminal",
-    }.get(str(event_type or "").strip())
 
 
 def _maybe_coalesce_hot_event(

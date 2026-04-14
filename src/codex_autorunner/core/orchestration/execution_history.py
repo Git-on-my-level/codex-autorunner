@@ -35,6 +35,23 @@ HotProjectionPayloadContract = Literal[
 CheckpointSignalStatus = Literal["ok", "error", "interrupted"]
 ExecutionTraceManifestStatus = Literal["open", "finalized", "archived"]
 
+_TIMELINE_HOT_FAMILY_BY_EVENT_TYPE: dict[str, str] = {
+    "turn_started": "run_notice",
+    "output_delta": "output_delta",
+    "tool_call": "tool_call",
+    "tool_result": "tool_result",
+    "approval_requested": "run_notice",
+    "token_usage": "token_usage",
+    "run_notice": "run_notice",
+    "turn_completed": "terminal",
+    "turn_failed": "terminal",
+}
+
+
+def timeline_hot_family_for_event_type(event_type: str) -> Optional[str]:
+    return _TIMELINE_HOT_FAMILY_BY_EVENT_TYPE.get(str(event_type or "").strip())
+
+
 _HOT_TOOL_INPUT_MAX_CHARS = 2048
 _HOT_TOOL_RESULT_MAX_CHARS = 2048
 _HOT_TEXT_PREVIEW_CHARS = 240
