@@ -23,9 +23,12 @@ from ...core.config import (
     resolve_env_for_root,
 )
 from ...core.flows.workspace_root import resolve_ticket_flow_workspace_root
+from ...core.hub_control_plane.service import HubSharedStateService
 from ...core.hub_projection_store import HubProjectionStore
 from ...core.logging_utils import safe_log, setup_rotating_logger
 from ...core.optional_dependencies import require_optional_dependencies
+from ...core.orchestration.sqlite import prepare_orchestration_sqlite
+from ...core.pma_thread_store import prepare_pma_thread_store
 from ...core.runtime import RuntimeContext
 from ...core.runtime_services import RuntimeServices
 from ...core.state import load_state
@@ -110,6 +113,7 @@ class HubAppContext:
     opencode_prune_interval: Optional[float]
     runtime_services: RuntimeServices
     projection_store: HubProjectionStore
+    shared_state_service: HubSharedStateService
     static_dir: Path
     static_assets_context: Optional[object]
     asset_version: str
@@ -667,6 +671,9 @@ def build_hub_context(
         if base_path is not None
         else config.server_base_path
     )
+    durable_writes = bool(getattr(config, "durable_writes", False))
+    prepare_orchestration_sqlite(config.root, durable=durable_writes)
+    prepare_pma_thread_store(config.root, durable=durable_writes)
     supervisor = HubSupervisor(
         config,
         backend_factory_builder=build_agent_backend_factory,
@@ -677,6 +684,7 @@ def build_hub_context(
             hub_root=config.root,
             raw_config=config.raw,
         ),
+        start_lifecycle_worker=False,
     )
     logger = setup_rotating_logger(f"hub[{config.root}]", config.server_log)
     env_overrides = collect_env_overrides()
@@ -771,6 +779,14 @@ def build_hub_context(
             exc=exc,
         )
         raise
+    resolved_asset_version = asset_version(static_dir)
+    shared_state_service = HubSharedStateService(
+        hub_root=config.root,
+        supervisor=supervisor,
+        hub_asset_version=resolved_asset_version,
+        durable_writes=durable_writes,
+        logger=logger,
+    )
     return HubAppContext(
         base_path=normalized_base,
         config=config,
@@ -784,9 +800,10 @@ def build_hub_context(
         opencode_prune_interval=opencode_prune_interval,
         runtime_services=runtime_services,
         projection_store=projection_store,
+        shared_state_service=shared_state_service,
         static_dir=static_dir,
         static_assets_context=static_context,
-        asset_version=asset_version(static_dir),
+        asset_version=resolved_asset_version,
         logger=logger,
     )
 
@@ -804,6 +821,7 @@ def apply_hub_context(app, context: HubAppContext) -> None:
     app.state.opencode_prune_interval = context.opencode_prune_interval
     app.state.runtime_services = context.runtime_services
     app.state.hub_projection_store = context.projection_store
+    app.state.hub_control_plane_service = context.shared_state_service
     app.state.static_dir = context.static_dir
     app.state.static_assets_context = context.static_assets_context
     app.state.asset_version = context.asset_version

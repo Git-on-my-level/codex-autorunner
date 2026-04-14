@@ -10,7 +10,7 @@ This repo dogfoods codex-autorunner to build itself. Read this before running th
 
 ## Layout and key files
 - Core package: `src/codex_autorunner/` (engine, CLI, server/API, UI assets).
-- Frontend JS is generated from TypeScript: edit `static_src/*.ts`, not `static/*.js` (run `pnpm run build` after).
+- Frontend JS is generated from TypeScript: edit `src/codex_autorunner/static_src/*.ts`, not `src/codex_autorunner/static/*.js` (run `pnpm run build` after).
 - Runtime/config/state live under `.codex-autorunner/` (not at repo root):
   - Primary work surface: `.codex-autorunner/tickets/TICKET-###.md` (required).
   - Optional contextspace docs (auto-created on write; missing is OK):
@@ -31,7 +31,8 @@ This repo dogfoods codex-autorunner to build itself. Read this before running th
 - Config precedence: built-ins < `codex-autorunner.yml` < override < `.codex-autorunner/config.yml` < env.
 
 ## CLI commands
-- init/run/once/status/log/edit/doctor/resume/kill
+- init/run/once/status/log/edit/doctor/kill
+- ticket-flow (bootstrap/start/status/stop/archive; canonical ticket runner CLI)
 - usage
 - sessions/stop-session
 - serve (API/UI)

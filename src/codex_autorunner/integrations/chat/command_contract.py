@@ -85,6 +85,16 @@ _COMMAND_CONTRACT_BASE: tuple[CommandContractEntry, ...] = (
         discord_exposure="public",
     ),
     CommandContractEntry(
+        id="car.processes",
+        path=("car", "processes"),
+        requires_bound_workspace=False,
+        status="stable",
+        telegram_commands=("processes",),
+        discord_paths=(("car", "processes"),),
+        discord_ack_policy="defer_ephemeral",
+        discord_exposure="public",
+    ),
+    CommandContractEntry(
         id="car.new",
         path=("car", "new"),
         requires_bound_workspace=True,
@@ -643,6 +653,11 @@ _TELEGRAM_COMMAND_METADATA: dict[str, TelegramCommandMetadata] = {
         allow_during_turn=True,
     ),
     "status": TelegramCommandMetadata(
+        exposure="public",
+        response_policy="typing",
+        allow_during_turn=True,
+    ),
+    "processes": TelegramCommandMetadata(
         exposure="public",
         response_policy="typing",
         allow_during_turn=True,

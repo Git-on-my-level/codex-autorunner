@@ -18,6 +18,7 @@ from .execution_history import (
     ExecutionCheckpointSignal,
     ExecutionHistoryEventFamily,
     ExecutionTraceManifest,
+    timeline_hot_family_for_event_type,
 )
 from .sqlite import open_orchestration_sqlite, resolve_orchestration_sqlite_path
 
@@ -377,12 +378,16 @@ def compact_completed_execution_history(
         if not execution_id or not _is_terminal_execution_row(execution_row):
             continue
         with open_orchestration_sqlite(hub_root) as conn:
+            timeline_row_count = _count_baseline_timeline_rows(conn, execution_id)
+            if (
+                timeline_row_count
+                <= resolved_policy.max_hot_rows_per_completed_execution
+            ):
+                continue
             timeline_rows = _load_timeline_rows(conn, execution_id)
         baseline_rows = [
             row for row in timeline_rows if not _is_compaction_summary_row(row)
         ]
-        if len(baseline_rows) <= resolved_policy.max_hot_rows_per_completed_execution:
-            continue
 
         compacted_ids.append(execution_id)
         rows_before += len(baseline_rows)
@@ -892,6 +897,7 @@ def _load_timeline_rows(conn: Any, execution_id: str) -> list[dict[str, Any]]:
                status,
                payload_json
           FROM orch_event_projections
+         INDEXED BY idx_orch_event_projections_family_execution_order
          WHERE event_family = ?
            AND execution_id = ?
          ORDER BY timestamp ASC, event_id ASC
@@ -917,6 +923,23 @@ def _load_timeline_rows(conn: Any, execution_id: str) -> list[dict[str, Any]]:
             }
         )
     return parsed_rows
+
+
+def _count_baseline_timeline_rows(conn: Any, execution_id: str) -> int:
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS cnt
+          FROM orch_event_projections
+         INDEXED BY idx_orch_event_projections_family_execution_order
+         WHERE event_family = ?
+           AND execution_id = ?
+           AND event_id NOT LIKE ?
+        """,
+        (_TIMELINE_EVENT_FAMILY, execution_id, f"%{_COMPACTION_SUMMARY_SUFFIX}"),
+    ).fetchone()
+    if row is None:
+        return 0
+    return int(row["cnt"] or 0)
 
 
 def _decode_payload(raw: Any) -> dict[str, Any]:
@@ -960,17 +983,7 @@ def _infer_trace_event_family(
         return cast(ExecutionHistoryEventFamily, payload_family)
     return cast(
         ExecutionHistoryEventFamily,
-        {
-            "tool_call": "tool_call",
-            "tool_result": "tool_result",
-            "output_delta": "output_delta",
-            "run_notice": "run_notice",
-            "turn_started": "run_notice",
-            "approval_requested": "run_notice",
-            "token_usage": "token_usage",
-            "turn_completed": "terminal",
-            "turn_failed": "terminal",
-        }.get(str(event_type or "").strip(), "run_notice"),
+        timeline_hot_family_for_event_type(event_type) or "run_notice",
     )
 
 

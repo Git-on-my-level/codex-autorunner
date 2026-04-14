@@ -14,7 +14,6 @@ from .flows.store import FlowStore
 from .freshness import build_freshness_payload
 from .text_utils import _iso_now
 
-_START_NEW_FLOW_TOKEN = " flow ticket_flow start "
 _COMPLETED_FLOW_STATUSES = {"completed", "done"}
 _ATTENTION_STATES = {"blocked", "dead", "paused"}
 _PR_URL_RE = re.compile(r"https://github\.com/[^/\s]+/[^/\s]+/pull/\d+", re.IGNORECASE)
@@ -98,7 +97,11 @@ def select_authoritative_run_record(
 
 def _is_start_new_flow_action(action: str) -> bool:
     normalized = f" {action.strip().lower()} "
-    return _START_NEW_FLOW_TOKEN in normalized and " --run-id " not in normalized
+    if " --run-id " in normalized:
+        return False
+    return (
+        " flow ticket_flow start " in normalized or " ticket-flow start " in normalized
+    )
 
 
 def _extract_pr_url(data: dict[str, Any], body: Optional[str]) -> Optional[str]:

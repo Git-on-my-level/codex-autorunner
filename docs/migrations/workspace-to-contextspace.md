@@ -85,10 +85,11 @@ docs:
 
 ## Rollback
 
-If you need to rollback (e.g., to test the old workspace behavior):
+If you need to rollback (e.g., to test the old workspace directory name):
+
+Run these from the **repository root**. `.codex-autorunner/contextspace` must exist. `.codex-autorunner/workspace` must not already exist (remove or rename it first), or `mv` will fail or nest directories incorrectly. This only restores the **on-disk folder name**; current CAR releases read context from `contextspace/`, so rollback is for manual experiments, not supported runtime behavior.
 
 ```bash
-# Ensure contextspace exists
 mv .codex-autorunner/contextspace .codex-autorunner/workspace
 ```
 

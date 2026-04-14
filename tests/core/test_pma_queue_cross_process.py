@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
 
 import pytest
 
-from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.pma_lane_worker import PmaLaneWorker
 from codex_autorunner.core.pma_queue import PmaQueue, QueueItemState
 
@@ -140,7 +138,7 @@ async def test_compact_lane_keeps_non_terminal_and_last_terminal_items(
         {"message": "running"},
     )
     running_item.state = QueueItemState.RUNNING
-    await queue._update_canonical_row(running_item)
+    await queue._update_in_file(running_item)
 
     lane_path = queue._lane_queue_path(lane_id)
     before_lines = len(
@@ -171,87 +169,76 @@ async def test_compact_lane_keeps_non_terminal_and_last_terminal_items(
 
 
 @pytest.mark.anyio
-async def test_canonical_store_is_sqlite_not_mirror(tmp_path: Path) -> None:
-    lane_id = "pma:canonical-test"
+async def test_async_queue_operations_offload_blocking_store_calls(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lane_id = "pma:default"
     queue = PmaQueue(tmp_path)
+    calls: list[str] = []
+    original_to_thread = asyncio.to_thread
 
-    item, reason = queue.enqueue_sync(
-        lane_id,
-        "canonical-key",
-        {"message": "verify-sqlite"},
-    )
-    assert reason is None
+    async def _record_to_thread(func, /, *args, **kwargs):
+        calls.append(getattr(func, "__name__", repr(func)))
+        return await original_to_thread(func, *args, **kwargs)
 
-    with open_orchestration_sqlite(tmp_path, durable=False) as conn:
-        row = conn.execute(
-            "SELECT state, payload_json FROM orch_queue_items WHERE queue_item_id = ?",
-            (item.item_id,),
-        ).fetchone()
-    assert row is not None
-    assert row["state"] == "pending"
-    assert json.loads(str(row["payload_json"])) == {"message": "verify-sqlite"}
+    monkeypatch.setattr(asyncio, "to_thread", _record_to_thread)
 
-
-@pytest.mark.anyio
-async def test_mirror_deletion_does_not_affect_queue_behaviour(tmp_path: Path) -> None:
-    lane_id = "pma:mirror-del"
-    queue = PmaQueue(tmp_path)
-
-    item, _ = queue.enqueue_sync(
-        lane_id,
-        "mirror-key",
-        {"message": "mirror-test"},
-    )
-
-    mirror_path = queue._lane_queue_path(lane_id)
-    assert mirror_path.exists()
-    mirror_path.unlink()
-    assert not mirror_path.exists()
-
+    item, _ = await queue.enqueue(lane_id, "offload-key", {"message": "hello"})
     items = await queue.list_items(lane_id)
-    assert len(items) == 1
-    assert items[0].item_id == item.item_id
-    assert items[0].state == QueueItemState.PENDING
-
-    replayed = await queue.replay_pending(lane_id)
-    assert replayed == 1
+    assert items and items[0].item_id == item.item_id
 
     dequeued = await queue.dequeue(lane_id)
     assert dequeued is not None
-    assert dequeued.item_id == item.item_id
     await queue.complete_item(dequeued, {"status": "ok"})
 
-    items = await queue.list_items(lane_id)
-    assert items[0].state == QueueItemState.COMPLETED
-
-    assert mirror_path.exists(), "mirror should be regenerated after mutation"
+    lanes = await queue.get_all_lanes()
+    assert lane_id in lanes
+    assert "_append_to_file_sync" in calls
+    assert "_update_in_file_sync" in calls
+    assert "_get_all_lanes_sync" in calls
 
 
 @pytest.mark.anyio
-async def test_mirror_reflects_canonical_state(tmp_path: Path) -> None:
-    lane_id = "pma:mirror-reflect"
+async def test_lane_write_cancellation_waits_for_offloaded_store_call(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lane_id = "pma:default"
     queue = PmaQueue(tmp_path)
+    item, _ = await queue.enqueue(lane_id, "cancel-key", {"message": "hello"})
+    item.state = QueueItemState.RUNNING
 
-    item, _ = await queue.enqueue(
-        lane_id,
-        "reflect-key",
-        {"message": "reflect-test"},
-    )
-    await queue.complete_item(item, {"status": "done"})
+    started = asyncio.Event()
+    release = asyncio.Event()
+    original_to_thread = asyncio.to_thread
 
-    mirror_path = queue._lane_queue_path(lane_id)
-    assert mirror_path.exists()
+    async def _blocked_to_thread(func, /, *args, **kwargs):
+        if getattr(func, "__name__", "") == "_update_in_file_sync":
+            started.set()
+            await release.wait()
+        return await original_to_thread(func, *args, **kwargs)
 
-    mirror_lines = [
-        json.loads(line)
-        for line in mirror_path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
-    assert len(mirror_lines) == 1
-    assert mirror_lines[0]["item_id"] == item.item_id
-    assert mirror_lines[0]["state"] == "completed"
+    monkeypatch.setattr(asyncio, "to_thread", _blocked_to_thread)
 
-    sqlite_items = await queue.list_items(lane_id)
-    assert len(sqlite_items) == 1
-    assert sqlite_items[0].item_id == item.item_id
-    assert sqlite_items[0].state == QueueItemState.COMPLETED
+    update_task = asyncio.create_task(queue._update_in_file(item))
+    await asyncio.wait_for(started.wait(), timeout=1.0)
+
+    update_task.cancel()
+
+    lock_reacquired = asyncio.Event()
+
+    async def _wait_for_lane_lock() -> None:
+        async with queue._ensure_lane_lock(lane_id):
+            lock_reacquired.set()
+
+    waiter = asyncio.create_task(_wait_for_lane_lock())
+    await asyncio.sleep(0)
+    assert lock_reacquired.is_set() is False
+
+    release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await update_task
+    await asyncio.wait_for(waiter, timeout=1.0)
+    assert lock_reacquired.is_set() is True

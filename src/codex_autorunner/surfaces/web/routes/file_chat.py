@@ -35,6 +35,9 @@ from .file_chat_routes.drafts import (
     pending_file_patch as extracted_pending_file_patch,
 )
 from .file_chat_routes.execution import execute_file_chat as extracted_execute_file_chat
+from .file_chat_routes.execution import (
+    resolve_file_chat_agent_selection as extracted_resolve_file_chat_agent_selection,
+)
 from .file_chat_routes.runtime import active_for_client as _active_for_client
 from .file_chat_routes.runtime import begin_turn_state as _begin_turn_state
 from .file_chat_routes.runtime import clear_interrupt_event as _clear_interrupt_event
@@ -103,6 +106,7 @@ def build_file_chat_routes() -> APIRouter:
         message = (body.get("message") or "").strip()
         stream = bool(body.get("stream", False))
         agent = body.get("agent", "codex")
+        profile = body.get("profile")
         model = body.get("model")
         reasoning = body.get("reasoning")
         client_turn_id = (body.get("client_turn_id") or "").strip() or None
@@ -116,6 +120,13 @@ def build_file_chat_routes() -> APIRouter:
         # Ensure target directory exists for contextspace docs (write on demand)
         if target.kind == "contextspace":
             target.path.parent.mkdir(parents=True, exist_ok=True)
+
+        selection = extracted_resolve_file_chat_agent_selection(
+            request,
+            target,
+            agent=agent,
+            profile=profile,
+        )
 
         # Concurrency guard per target
         s = _get_state(request)
@@ -134,7 +145,8 @@ def build_file_chat_routes() -> APIRouter:
                     repo_root,
                     target,
                     message,
-                    agent=agent,
+                    agent=selection.agent_id,
+                    profile=selection.profile,
                     model=model,
                     reasoning=reasoning,
                     client_turn_id=client_turn_id,
@@ -161,7 +173,8 @@ def build_file_chat_routes() -> APIRouter:
                     repo_root,
                     target,
                     message,
-                    agent=agent,
+                    agent=selection.agent_id,
+                    profile=selection.profile,
                     model=model,
                     reasoning=reasoning,
                     on_meta=_on_meta,
@@ -196,6 +209,7 @@ def build_file_chat_routes() -> APIRouter:
         message: str,
         *,
         agent: str = "codex",
+        profile: Optional[str] = None,
         model: Optional[str] = None,
         reasoning: Optional[str] = None,
         client_turn_id: Optional[str] = None,
@@ -219,6 +233,7 @@ def build_file_chat_routes() -> APIRouter:
                     target,
                     message,
                     agent=agent,
+                    profile=profile,
                     model=model,
                     reasoning=reasoning,
                     on_meta=_on_meta,
@@ -279,6 +294,7 @@ def build_file_chat_routes() -> APIRouter:
         message: str,
         *,
         agent: str = "codex",
+        profile: Optional[str] = None,
         model: Optional[str] = None,
         reasoning: Optional[str] = None,
         on_meta: Optional[Callable[[str, str, str], Any]] = None,
@@ -290,6 +306,7 @@ def build_file_chat_routes() -> APIRouter:
             target,
             message,
             agent=agent,
+            profile=profile,
             model=model,
             reasoning=reasoning,
             on_meta=on_meta,
@@ -649,6 +666,7 @@ def build_file_chat_routes() -> APIRouter:
         message = (body.get("message") or "").strip()
         stream = bool(body.get("stream", False))
         agent = body.get("agent", "codex")
+        profile = body.get("profile")
         model = body.get("model")
         reasoning = body.get("reasoning")
         client_turn_id = (body.get("client_turn_id") or "").strip() or None
@@ -658,6 +676,12 @@ def build_file_chat_routes() -> APIRouter:
 
         repo_root = _resolve_repo_root(request)
         target = _parse_target(repo_root, f"ticket:{int(index)}")
+        selection = extracted_resolve_file_chat_agent_selection(
+            request,
+            target,
+            agent=agent,
+            profile=profile,
+        )
 
         s = _get_state(request)
         async with s.chat_lock:
@@ -676,7 +700,8 @@ def build_file_chat_routes() -> APIRouter:
                     repo_root,
                     target,
                     message,
-                    agent=agent,
+                    agent=selection.agent_id,
+                    profile=selection.profile,
                     model=model,
                     reasoning=reasoning,
                     client_turn_id=client_turn_id,
@@ -691,7 +716,8 @@ def build_file_chat_routes() -> APIRouter:
                 repo_root,
                 target,
                 message,
-                agent=agent,
+                agent=selection.agent_id,
+                profile=selection.profile,
                 model=model,
                 reasoning=reasoning,
             )
@@ -749,7 +775,18 @@ def build_file_chat_routes() -> APIRouter:
     async def reset_ticket_chat_thread(index: int, request: Request):
         repo_root = _resolve_repo_root(request)
         target = _parse_target(repo_root, f"ticket:{int(index)}")
-        thread_key = f"file_chat.{target.state_key}"
+        try:
+            body = await request.json()
+        except ValueError:
+            body = {}
+        payload = dict(body) if isinstance(body, dict) else {}
+        selection = extracted_resolve_file_chat_agent_selection(
+            request,
+            target,
+            agent=payload.get("agent", "codex"),
+            profile=payload.get("profile"),
+        )
+        thread_key = selection.thread_key
         registry = getattr(request.app.state, "app_server_threads", None)
         cleared = False
         if registry is not None:

@@ -40,9 +40,16 @@ from .events import (
     normalize_notification,
 )
 from .protocol import (
+    ACPAdvertisedCommand,
     ACPInitializeResult,
+    ACPSessionCapabilities,
     ACPSessionDescriptor,
+    ACPSessionForkResult,
+    ACPSetModelResult,
+    ACPSetModeResult,
     coerce_session_list,
+    extract_advertised_commands,
+    extract_session_capabilities,
 )
 
 NotificationHandler = Callable[[ACPEvent], Awaitable[None]]
@@ -303,6 +310,18 @@ class ACPClient:
     def initialize_result(self) -> Optional[ACPInitializeResult]:
         return self._initialize_result
 
+    @property
+    def advertised_commands(self) -> list[ACPAdvertisedCommand]:
+        if self._initialize_result is None:
+            return []
+        return extract_advertised_commands(self._initialize_result.capabilities)
+
+    @property
+    def session_capabilities(self) -> ACPSessionCapabilities:
+        if self._initialize_result is None:
+            return ACPSessionCapabilities()
+        return extract_session_capabilities(self._initialize_result.capabilities)
+
     async def start(self) -> ACPInitializeResult:
         async with self._start_lock:
             if self._closed:
@@ -505,6 +524,62 @@ class ACPClient:
             {"cwd": self._cwd or str(Path.cwd())},
         )
         return coerce_session_list(result)
+
+    async def fork_session(
+        self,
+        session_id: str,
+        *,
+        title: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> ACPSessionForkResult:
+        await self.start()
+        params: dict[str, Any] = {"sessionId": session_id}
+        if title:
+            params["title"] = title
+        if metadata:
+            params["metadata"] = dict(metadata)
+        result = await self.call_optional("session/fork", params)
+        fork_result = ACPSessionForkResult.from_optional_response(result)
+        self._log_trace_event(
+            "acp.session.fork",
+            source_session_id=session_id,
+            forked_session_id=fork_result.session_id,
+            supported=fork_result.supported,
+            title=title,
+        )
+        return fork_result
+
+    async def set_session_model(
+        self, session_id: str, model_id: str
+    ) -> ACPSetModelResult:
+        await self.start()
+        result = await self.call_optional(
+            "session/set_model",
+            {"sessionId": session_id, "modelId": model_id},
+        )
+        set_result = ACPSetModelResult.from_optional_response(result)
+        self._log_trace_event(
+            "acp.session.set_model",
+            session_id=session_id,
+            model_id=model_id,
+            supported=set_result.supported,
+        )
+        return set_result
+
+    async def set_session_mode(self, session_id: str, mode: str) -> ACPSetModeResult:
+        await self.start()
+        result = await self.call_optional(
+            "session/set_mode",
+            {"sessionId": session_id, "mode": mode},
+        )
+        set_result = ACPSetModeResult.from_optional_response(result)
+        self._log_trace_event(
+            "acp.session.set_mode",
+            session_id=session_id,
+            mode=mode,
+            supported=set_result.supported,
+        )
+        return set_result
 
     async def start_prompt(
         self,
@@ -1019,10 +1094,7 @@ class ACPClient:
         state.request_started_at = time.monotonic()
         try:
             if model:
-                await self.call_optional(
-                    "session/set_model",
-                    {"sessionId": state.session_id, "modelId": model},
-                )
+                await self.set_session_model(state.session_id, model)
             params: dict[str, Any] = {
                 "sessionId": state.session_id,
                 "messageId": state.turn_id,

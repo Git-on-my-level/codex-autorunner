@@ -140,20 +140,23 @@ complete.
 Hermes currently supports:
 
 - Durable thread/session create and resume
+- Active thread discovery via Hermes session listing
 - Message turns
 - Interrupt
 - Event streaming
 - Approval requests
 - Manual model override strings
+- File-chat execution (via generic harness path)
+- Optional ACP session controls when the server supports them: fork session,
+  set session model, set session mode
+- Advertised slash command discovery from ACP initialization
 
 Hermes currently does not support:
 
-- Active thread discovery on the current stable ACP surface
 - Review mode
 - Model catalog listing
 - Transcript history as a public CAR contract
 - CAR-managed Hermes-home isolation
-- File-chat execution
 
 On unsupported actions, CAR should return a capability-driven error rather than
 silently falling back.
@@ -183,8 +186,19 @@ Notes:
 
 - `car pma models hermes` is expected to fail because Hermes does not advertise
   `model_listing`.
+- Hermes advertises `active_thread_discovery` through the harness, so CAR can
+  list and resume managed Hermes sessions in PMA/CLI flows that consume managed
+  thread metadata. CAR does not yet ship a dedicated selector-driven Hermes
+  session picker UI.
 - Use `--model <value>` only when you want to pass a free-form Hermes model
   override on the next turn.
+- CAR exposes typed wrappers for optional Hermes ACP session methods when the
+  server supports them: `fork_session`, `set_session_model`, `set_session_mode`.
+  These degrade gracefully on servers that do not advertise the methods.
+- If Hermes advertises available slash commands in its ACP initialization
+  response, CAR surfaces them through PMA agent metadata and help-oriented
+  surfaces for the current runtime session. CAR does not yet persist a command
+  catalog beyond the active ACP session.
 
 ## Ticket-Flow Usage
 
@@ -200,8 +214,26 @@ done: false
 ---
 ```
 
+With a named profile:
+
+```yaml
+---
+ticket_id: tkt.example.hermes.profiled
+title: "Example Hermes ticket with profile"
+agent: "hermes"
+profile: "m4-pma"
+done: false
+---
+```
+
 Then run ticket flow normally. CAR routes the turn through the Hermes harness
-instead of the Codex or OpenCode backends.
+instead of the Codex or OpenCode backends. Incoming agent selections and ticket
+frontmatter are normalized so Hermes profile aliases resolve consistently before
+binding threads.
+
+Durable thread binding persists per ticket and is reused across turns. The
+binding resets when the agent or profile changes, or when the managed thread is
+stale or missing. Completed ticket bindings are cleared before the next ticket.
 
 Approval behavior follows ticket-flow policy:
 
@@ -209,6 +241,31 @@ Approval behavior follows ticket-flow policy:
   `sandbox_policy=workspaceWrite`
 - `ticket_flow.approval_mode: yolo` maps to `approval_mode=never` and
   `sandbox_policy=dangerFullAccess`
+
+## File-Chat Usage
+
+Hermes is supported in CAR file-chat. Select Hermes and an optional profile in
+the web file-chat UI and CAR routes the turn through the generic harness path
+instead of the Codex or OpenCode backends.
+
+Hermes file-chat requires the `durable_threads` and `message_turns`
+capabilities, both of which Hermes advertises. The execution path checks these
+capabilities before routing, so agents that lack either capability receive a
+clear capability-driven error instead of an opaque crash.
+
+Hermes file-chat preserves the same draft-safety contract as Codex and OpenCode
+file-chat: edits go to a working-copy draft first and must be explicitly applied
+or discarded by the user.
+
+Thread keys for Hermes file-chat include agent and profile so that switching
+profiles does not resume the wrong backend thread. For example:
+
+```text
+file_chat.hermes.profile.m4-pma.contextspace_spec.md
+```
+
+If a managed Hermes session becomes stale during file-chat, CAR falls back to a
+fresh conversation automatically.
 
 ## Approval Behavior
 

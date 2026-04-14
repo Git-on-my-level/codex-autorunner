@@ -43,6 +43,7 @@ from ....chat.session_messages import (
 )
 from ....chat.status_diagnostics import (
     StatusBlockContext,
+    build_process_monitor_lines_for_root,
     build_status_block_lines,
 )
 from ....chat.thread_summaries import _format_resume_timestamp
@@ -171,6 +172,24 @@ def _telegram_status_base_lines(
 
 
 class WorkspaceCommands(TelegramCommandSupportMixin):
+    def _process_monitor_root(
+        self,
+        record: Optional["TelegramTopicRecord"],
+        *,
+        allow_fallback: bool = False,
+    ) -> Optional[Path]:
+        if record is not None and getattr(record, "pma_enabled", False):
+            hub_root = getattr(self, "_hub_root", None)
+            if hub_root is not None:
+                return Path(hub_root)
+        if record is not None and record.workspace_path:
+            return Path(record.workspace_path)
+        if allow_fallback:
+            config_root = getattr(getattr(self, "_config", None), "root", None)
+            if config_root is not None:
+                return Path(config_root)
+        return None
+
     def _resolve_workspace_path(
         self,
         record: Optional["TelegramTopicRecord"],
@@ -866,25 +885,38 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
         arg = (arg or "").strip()
         if not arg:
             return None
-        hub_supervisor = getattr(self, "_hub_supervisor", None)
-        if hub_supervisor is not None:
+        hub_client = getattr(self, "_hub_client", None)
+        if hub_client is not None:
             try:
-                for snapshot in hub_supervisor.list_agent_workspaces():
-                    workspace_id = str(getattr(snapshot, "id", "") or "").strip()
-                    workspace_path = getattr(snapshot, "path", None)
-                    if isinstance(workspace_path, str):
-                        workspace_path = Path(workspace_path)
-                    if workspace_id != arg or not isinstance(workspace_path, Path):
+                import asyncio
+                from concurrent.futures import ThreadPoolExecutor
+
+                from .....core.hub_control_plane import AgentWorkspaceListRequest
+
+                request = AgentWorkspaceListRequest()
+
+                def _fetch() -> Any:
+                    return asyncio.run(hub_client.list_agent_workspaces(request))
+
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    future = pool.submit(_fetch)
+                    response = future.result(timeout=10)
+                for descriptor in response.workspaces:
+                    workspace_id = descriptor.workspace_id
+                    workspace_path = descriptor.workspace_root
+                    if not workspace_id or not workspace_path:
+                        continue
+                    if workspace_id != arg:
                         continue
                     return (
-                        str(canonicalize_path(workspace_path)),
+                        str(canonicalize_path(Path(workspace_path))),
                         None,
                         "agent_workspace",
                         workspace_id,
                     )
-            except (OSError, ValueError, RuntimeError):
+            except (OSError, ValueError, RuntimeError, Exception):
                 self._logger.debug(
-                    "resolve_workspace: hub_supervisor lookup failed", exc_info=True
+                    "resolve_workspace: hub_client lookup failed", exc_info=True
                 )
         if self._manifest_path and self._hub_root:
             try:
@@ -1801,19 +1833,23 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
             return
 
         setup_command_count = 0
-        hub_supervisor = getattr(self, "_hub_supervisor", None)
-        if hub_supervisor is not None:
+        hub_client = getattr(self, "_hub_client", None)
+        if hub_client is not None:
             repo_id_hint = (
                 record.repo_id.strip()
                 if isinstance(record.repo_id, str) and record.repo_id.strip()
                 else None
             )
             try:
-                setup_command_count = await asyncio.to_thread(
-                    hub_supervisor.run_setup_commands_for_workspace,
-                    workspace_root,
-                    repo_id_hint=repo_id_hint,
+                from .....core.hub_control_plane import WorkspaceSetupCommandRequest
+
+                cp_result = await hub_client.run_workspace_setup_commands(
+                    WorkspaceSetupCommandRequest(
+                        workspace_root=str(workspace_root),
+                        repo_id_hint=repo_id_hint,
+                    )
                 )
+                setup_command_count = cp_result.setup_command_count
             except (OSError, RuntimeError, ValueError) as exc:
                 log_event(
                     self._logger,
@@ -3598,6 +3634,12 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                 self._logger.debug(
                     "status: hub repo status aggregation failed", exc_info=True
                 )
+        lines.extend(
+            build_process_monitor_lines_for_root(
+                self._process_monitor_root(record),
+                include_history=False,
+            )
+        )
 
         if not record.workspace_path and not is_pma:
             lines.append("Use /bind <repo_id> or /bind <path>.")
@@ -3625,6 +3667,32 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                 finally:
                     store.close()
 
+        await self._send_message(
+            message.chat_id,
+            "\n".join(lines),
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+
+    async def _handle_processes(
+        self, message: TelegramMessage, _args: str = "", _runtime: Optional[Any] = None
+    ) -> None:
+        key = await self._resolve_topic_key(message.chat_id, message.thread_id)
+        record = await self._router.get_topic(key)
+        root = self._process_monitor_root(record, allow_fallback=True)
+        if root is None:
+            await self._send_message(
+                message.chat_id,
+                "Process monitor unavailable; no workspace or hub root is bound.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        lines = [f"Process monitor root: {root}"]
+        lines.extend(
+            build_process_monitor_lines_for_root(root, include_history=True)
+            or ["Process monitor unavailable."]
+        )
         await self._send_message(
             message.chat_id,
             "\n".join(lines),

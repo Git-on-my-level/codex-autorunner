@@ -273,6 +273,29 @@ def file_chat_discord_key(agent: str, channel_id: str, workspace_path: str) -> s
     return f"{prefix}discord.{channel_id.strip()}.{digest}"
 
 
+def file_chat_target_key(
+    agent: str,
+    target_state_key: str,
+    profile: Optional[str] = None,
+) -> str:
+    """Build a file-chat registry key scoped by logical agent/profile/target."""
+
+    normalized_agent = (agent or "").strip().lower()
+    normalized_target_state_key = str(target_state_key or "").strip().lower()
+    if not normalized_target_state_key:
+        raise ValueError("target_state_key is required")
+    if normalized_agent in ("codex", ""):
+        base_key = FILE_CHAT_KEY
+    elif normalized_agent == "opencode":
+        base_key = FILE_CHAT_OPENCODE_KEY
+    elif normalized_agent == "hermes":
+        base_key = FILE_CHAT_HERMES_KEY
+    else:
+        base_key = f"{FILE_CHAT_KEY}.{normalized_agent}"
+    scoped_base_key = _append_profile_suffix(base_key, profile)
+    return f"{scoped_base_key}.{normalized_target_state_key}"
+
+
 def default_app_server_threads_path(repo_root: Path) -> Path:
     return repo_root / APP_SERVER_THREADS_FILENAME
 

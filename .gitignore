@@ -3,6 +3,7 @@ build/
 .env
 .venv/
 .desloppify/
+.superset/
 src/codex_autorunner.egg-info/
 codex-autorunner.override.yml
 .codex-autorunner/*

@@ -5,10 +5,18 @@ import sqlite3
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Mapping, Optional
+
+if TYPE_CHECKING:
+    from .hub_control_plane.models import NotificationRecord
 
 from .orchestration.sqlite import open_orchestration_sqlite
-from .text_utils import _json_dumps, _json_loads_object, _normalize_text
+from .text_utils import (
+    _json_dumps,
+    _json_loads_object,
+    _normalize_optional_text,
+    _normalize_text,
+)
 from .time_utils import now_iso
 
 
@@ -71,7 +79,9 @@ def notification_surface_key(notification_id: str) -> str:
     return f"notification:{normalized}"
 
 
-def build_notification_context_block(conversation: NotificationConversation) -> str:
+def build_notification_context_block(
+    conversation: "NotificationConversation | NotificationRecord",
+) -> str:
     payload = {
         "notification_id": conversation.notification_id,
         "correlation_id": conversation.correlation_id,
@@ -218,7 +228,7 @@ class PmaNotificationStore:
         self, *, delivery_record_id: str, delivered_message_id: Any
     ) -> Optional[NotificationConversation]:
         normalized_record_id = _normalize_text(delivery_record_id)
-        normalized_message_id = _normalize_text(delivered_message_id)
+        normalized_message_id = _normalize_optional_text(delivered_message_id)
         if normalized_record_id is None or normalized_message_id is None:
             return None
         timestamp = now_iso()
@@ -281,7 +291,7 @@ class PmaNotificationStore:
     ) -> Optional[NotificationConversation]:
         normalized_surface_kind = _normalize_text(surface_kind)
         normalized_surface_key = _normalize_text(surface_key)
-        normalized_message_id = _normalize_text(delivered_message_id)
+        normalized_message_id = _normalize_optional_text(delivered_message_id)
         if (
             normalized_surface_kind is None
             or normalized_surface_key is None

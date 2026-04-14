@@ -4,12 +4,10 @@ import copy
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
-from .....core.hub_projection_store import (
-    REPO_RUNTIME_PROJECTION_NAMESPACE,
-    path_stat_fingerprint,
-)
+from .....core.hub_projection_store import path_stat_fingerprint
 
 if TYPE_CHECKING:
     from ...app_state import HubAppContext
@@ -17,6 +15,7 @@ if TYPE_CHECKING:
 
 
 _REPO_ENRICH_CACHE_TTL_SECONDS = 45.0
+_REPO_RUNTIME_PROJECTION_NAMESPACE = "repo_runtime_v1"
 _REPO_RUNTIME_PROJECTION_MAX_AGE_SECONDS = 300.0
 
 
@@ -57,7 +56,7 @@ class HubRepoEnricher:
         projection_store = getattr(self._context, "projection_store", None)
         if projection_store is not None:
             try:
-                projection_store.delete(namespace=REPO_RUNTIME_PROJECTION_NAMESPACE)
+                projection_store.delete(namespace=_REPO_RUNTIME_PROJECTION_NAMESPACE)
             except Exception:
                 pass
 
@@ -76,6 +75,14 @@ class HubRepoEnricher:
             self._unbound_thread_counts_cache = dict(counts)
             self._unbound_thread_counts_cached_at = now
             return dict(counts)
+
+    def unbound_repo_thread_counts_snapshot(self) -> dict[str, int]:
+        return self._unbound_repo_thread_counts()
+
+    def _path_stat_fingerprint(
+        self, path: Path
+    ) -> tuple[bool, Optional[int], Optional[int]]:
+        return path_stat_fingerprint(path)
 
     def _repo_state_projection_key(self, snapshot) -> str:
         return f"{snapshot.id}:{snapshot.path}"
@@ -97,9 +104,9 @@ class HubRepoEnricher:
             snapshot.last_run_started_at,
             snapshot.last_run_finished_at,
             int(stale_threshold_seconds or 0),
-            path_stat_fingerprint(car_root),
-            path_stat_fingerprint(car_root / "tickets"),
-            path_stat_fingerprint(car_root / "runs"),
+            self._path_stat_fingerprint(car_root),
+            self._path_stat_fingerprint(car_root / "tickets"),
+            self._path_stat_fingerprint(car_root / "runs"),
         )
 
     def _compute_repo_state_payload(
@@ -114,10 +121,7 @@ class HubRepoEnricher:
         from .....core.pma_context import (
             get_latest_ticket_flow_run_state_with_record,
         )
-        from .....core.ticket_flow_projection import (
-            build_canonical_state_v1,
-            collect_ticket_flow_census,
-        )
+        from .....core.ticket_flow_projection import build_canonical_state_v1
         from .....core.ticket_flow_summary import (
             build_ticket_flow_display,
             build_ticket_flow_summary,
@@ -147,18 +151,10 @@ class HubRepoEnricher:
                 store = None
 
         try:
-            census = collect_ticket_flow_census(snapshot.path)
-            run_state, run_record = get_latest_ticket_flow_run_state_with_record(
-                snapshot.path,
-                snapshot.id,
-                store=store,
-            )
             ticket_flow = build_ticket_flow_summary(
                 snapshot.path,
                 include_failure=True,
                 store=store,
-                census=census,
-                record=run_record,
             )
             payload["ticket_flow"] = ticket_flow
             if isinstance(ticket_flow, dict):
@@ -183,6 +179,11 @@ class HubRepoEnricher:
                     total_count=0,
                     run_id=None,
                 )
+            run_state, run_record = get_latest_ticket_flow_run_state_with_record(
+                snapshot.path,
+                snapshot.id,
+                store=store,
+            )
             payload["run_state"] = run_state
             if run_record is not None:
                 if str(snapshot.last_run_id) != str(run_record.id):
@@ -205,7 +206,6 @@ class HubRepoEnricher:
                     else None
                 ),
                 stale_threshold_seconds=stale_threshold_seconds,
-                census=census,
             )
         finally:
             if store is not None:
@@ -242,7 +242,7 @@ class HubRepoEnricher:
                     cache_key,
                     fingerprint,
                     max_age_seconds=_REPO_RUNTIME_PROJECTION_MAX_AGE_SECONDS,
-                    namespace=REPO_RUNTIME_PROJECTION_NAMESPACE,
+                    namespace=_REPO_RUNTIME_PROJECTION_NAMESPACE,
                 )
             except Exception:
                 cached_payload = None
@@ -270,7 +270,7 @@ class HubRepoEnricher:
                     cache_key,
                     fingerprint,
                     payload,
-                    namespace=REPO_RUNTIME_PROJECTION_NAMESPACE,
+                    namespace=_REPO_RUNTIME_PROJECTION_NAMESPACE,
                 )
             except Exception:
                 pass
@@ -281,6 +281,7 @@ class HubRepoEnricher:
         snapshot,
         chat_binding_counts: Optional[dict[str, int]] = None,
         chat_binding_counts_by_source: Optional[dict[str, dict[str, int]]] = None,
+        unbound_thread_counts: Optional[dict[str, int]] = None,
     ) -> dict:
         from .....core.freshness import resolve_stale_threshold_seconds
 
@@ -308,9 +309,12 @@ class HubRepoEnricher:
         repo_dict["cleanup_blocked_by_chat_binding"] = non_pma_binding_count > 0
         unbound_thread_count = 0
         if snapshot.kind == "base":
-            unbound_thread_count = int(
-                self._unbound_repo_thread_counts().get(snapshot.id, 0)
+            counts = (
+                dict(unbound_thread_counts)
+                if unbound_thread_counts is not None
+                else self._unbound_repo_thread_counts()
             )
+            unbound_thread_count = int(counts.get(snapshot.id, 0))
         repo_dict["unbound_managed_thread_count"] = max(0, unbound_thread_count)
         repo_dict.update(
             self._repo_state_payload(

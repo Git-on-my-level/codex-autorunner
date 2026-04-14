@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import logging
 import re
@@ -10,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from ....agents.opencode.supervisor import OpenCodeSupervisorError
 from ....core.coercion import coerce_int
+from ....core.config import load_hub_config
 from ....core.logging_utils import log_event
 from ....core.state import now_iso
 from ....core.update import (
@@ -37,6 +40,7 @@ from ...chat.session_messages import (
     format_update_started_message,
     format_update_status_message,
 )
+from ...chat.status_diagnostics import build_process_monitor_lines_for_root
 from ...chat.turn_metrics import compose_turn_response_with_footer
 from ...chat.update_notifier import mark_update_status_notified
 from ..adapter import (
@@ -1374,6 +1378,19 @@ class TelegramCommandHandlers(
             reply_to=message.message_id,
         )
 
+    def _load_hub_pma_config(self) -> Any:
+        hub_config = self._load_hub_config_from_file()
+        return hub_config.pma if hub_config is not None else None
+
+    def _load_hub_config_from_file(self) -> Any:
+        hub_config_path = getattr(self, "_hub_config_path", None)
+        if hub_config_path and Path(hub_config_path).exists():
+            try:
+                return load_hub_config(Path(hub_config_path).parent.parent)
+            except (OSError, ValueError):
+                pass
+        return None
+
     async def _handle_pma(
         self, message: TelegramMessage, args: str, _runtime: Any
     ) -> None:
@@ -1395,16 +1412,18 @@ class TelegramCommandHandlers(
             return
 
         supervisor = getattr(self, "_hub_supervisor", None)
-        if supervisor and hasattr(supervisor, "hub_config"):
+        if supervisor is not None and hasattr(supervisor, "hub_config"):
             pma_config = supervisor.hub_config.pma
-            if not pma_config.enabled:
-                await self._send_message(
-                    message.chat_id,
-                    "PMA is disabled in hub config. Set pma.enabled: true to enable.",
-                    thread_id=message.thread_id,
-                    reply_to=message.message_id,
-                )
-                return
+        else:
+            pma_config = self._load_hub_pma_config()
+        if pma_config is not None and not pma_config.enabled:
+            await self._send_message(
+                message.chat_id,
+                "PMA is disabled in hub config. Set pma.enabled: true to enable.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
 
         argv = self._parse_command_args(args)
         action = argv[0].lower() if argv else ""
@@ -1417,9 +1436,17 @@ class TelegramCommandHandlers(
         elif action in ("off", "disable", "false"):
             enabled = False
         elif action in ("status", "show", ""):
+            text = status_text(record)
+            if record is not None and record.pma_enabled and self._hub_root is not None:
+                process_lines = build_process_monitor_lines_for_root(
+                    self._hub_root,
+                    include_history=False,
+                )
+                if process_lines:
+                    text = "\n".join([text, *process_lines])
             await self._send_message(
                 message.chat_id,
-                status_text(record),
+                text,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -1993,7 +2020,6 @@ class TelegramCommandHandlers(
             )
             key = await self._resolve_topic_key(message.chat_id, message.thread_id)
             try:
-                from ....core.pma_thread_store import PmaThreadStore
                 from ...chat.managed_thread_lifecycle import (
                     bind_surface_thread,
                     replace_surface_thread,
@@ -2077,11 +2103,26 @@ class TelegramCommandHandlers(
                     backend_thread_id=new_thread_id,
                     thread=replacement.replacement_thread,
                 )
-                config_root = getattr(self._config, "root", None)
-                if config_root is not None:
-                    PmaThreadStore(config_root).set_thread_compact_seed(
-                        replacement_thread.thread_target_id,
-                        summary_text,
+                hub_client = getattr(self, "_hub_client", None)
+                if hub_client is not None:
+                    from ....core.hub_control_plane import (
+                        ThreadCompactSeedUpdateRequest as _CPCompactSeedRequest,
+                    )
+
+                    with contextlib.suppress(Exception):
+                        await hub_client.update_thread_compact_seed(
+                            _CPCompactSeedRequest(
+                                thread_target_id=replacement_thread.thread_target_id,
+                                compact_seed=summary_text,
+                            )
+                        )
+                else:
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "telegram.compact.seed_save.hub_client_unavailable",
+                        chat_id=message.chat_id,
+                        thread_id=message.thread_id,
                     )
             except (
                 RuntimeError,
@@ -2126,7 +2167,6 @@ class TelegramCommandHandlers(
             return True, None
         key = await self._resolve_topic_key(message.chat_id, message.thread_id)
         try:
-            from ....core.pma_thread_store import PmaThreadStore
             from ...chat.managed_thread_lifecycle import replace_surface_thread
             from .commands.execution import _get_telegram_thread_binding
 
@@ -2176,11 +2216,26 @@ class TelegramCommandHandlers(
                 thread=current_thread,
             )
             replacement_thread = replacement.replacement_thread
-            config_root = getattr(self._config, "root", None)
-            if config_root is not None:
-                PmaThreadStore(config_root).set_thread_compact_seed(
-                    replacement_thread.thread_target_id,
-                    summary_text,
+            hub_client = getattr(self, "_hub_client", None)
+            if hub_client is not None:
+                from ....core.hub_control_plane import (
+                    ThreadCompactSeedUpdateRequest as _CPCompactSeedRequest,
+                )
+
+                with contextlib.suppress(Exception):
+                    await hub_client.update_thread_compact_seed(
+                        _CPCompactSeedRequest(
+                            thread_target_id=replacement_thread.thread_target_id,
+                            compact_seed=summary_text,
+                        )
+                    )
+            else:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.compact.seed_save.hub_client_unavailable",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
                 )
         except (RuntimeError, OSError, ValueError, TypeError, ConnectionError) as exc:
             log_event(
@@ -2412,7 +2467,8 @@ Compact canceled.""",
 Applying summary...""",
             reply_markup=None,
         )
-        status = self._write_compact_status(
+        status = await asyncio.to_thread(
+            self._write_compact_status,
             "running",
             "Applying summary...",
             chat_id=callback.chat_id,
@@ -2436,7 +2492,8 @@ Applying summary...""",
             message, record, state.summary_text
         )
         if not success:
-            status = self._write_compact_status(
+            status = await asyncio.to_thread(
+                self._write_compact_status,
                 "error",
                 failure_message or "Failed to start new thread with summary.",
                 chat_id=callback.chat_id,
@@ -2462,7 +2519,8 @@ Failed to start new thread with summary.""",
                     callback.chat_id, failure_message, thread_id=callback.thread_id
                 )
             return
-        status = self._write_compact_status(
+        status = await asyncio.to_thread(
+            self._write_compact_status,
             "ok",
             "Summary applied.",
             chat_id=callback.chat_id,
@@ -2638,14 +2696,14 @@ Summary applied.""",
             chat_id=chat_id,
             thread_id=thread_id,
             reply_to=notify_reply_to,
-            include_legacy_telegram_keys=True,
         )
         callback_answered = False
         if callback is not None:
             await self._answer_callback(callback, "Starting update...")
             callback_answered = True
         try:
-            _spawn_update_process(
+            await asyncio.to_thread(
+                _spawn_update_process,
                 repo_url=repo_url,
                 repo_ref=repo_ref,
                 update_dir=update_dir,
@@ -2755,8 +2813,20 @@ Summary applied.""",
         raw_config: Optional[dict[str, Any]] = None
 
         supervisor = getattr(self, "_hub_supervisor", None)
-        if supervisor and hasattr(supervisor, "hub_config"):
+        if supervisor is not None and hasattr(supervisor, "hub_config"):
             hub_config = getattr(supervisor, "hub_config", None)
+            if hub_config is not None:
+                raw = getattr(hub_config, "raw", None)
+                if isinstance(raw, dict):
+                    raw_config = raw
+                backend = getattr(hub_config, "update_backend", None)
+                if isinstance(backend, str) and backend.strip():
+                    update_backend = backend.strip()
+                services = getattr(hub_config, "update_linux_service_names", None)
+                if isinstance(services, dict):
+                    update_services = services
+        else:
+            hub_config = self._load_hub_config_from_file()
             if hub_config is not None:
                 raw = getattr(hub_config, "raw", None)
                 if isinstance(raw, dict):
@@ -2981,7 +3051,8 @@ Summary applied.""",
         message = status.message
         if state == "running":
             message = "Compact apply interrupted by restart. Please retry."
-            status = self._write_compact_status(
+            status = await asyncio.to_thread(
+                self._write_compact_status,
                 "interrupted",
                 message,
                 chat_id=chat_id,

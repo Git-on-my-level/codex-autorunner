@@ -180,17 +180,17 @@ run_cmd "${CAR_CMD[@]}" hub destination set "$REPO_ID" docker \
 
 run_cmd "${CAR_CMD[@]}" hub destination show "$REPO_ID" --json --path "$HUB_ROOT"
 
-run_cmd "${CAR_CMD[@]}" flow ticket_flow bootstrap --repo "$REPO_PATH" --hub "$HUB_ROOT"
+run_cmd "${CAR_CMD[@]}" ticket-flow bootstrap --repo "$REPO_PATH" --hub "$HUB_ROOT"
 
 if [[ "$EXECUTE" -eq 1 ]]; then
   mkdir -p "$EVIDENCE_DIR"
   printf '+'
-  printf ' %q' "${CAR_CMD[@]}" flow ticket_flow start --repo "$REPO_PATH" --hub "$HUB_ROOT" --force-new
+  printf ' %q' "${CAR_CMD[@]}" ticket-flow start --repo "$REPO_PATH" --hub "$HUB_ROOT" --force-new
   printf '\n'
-  "${CAR_CMD[@]}" flow ticket_flow start --repo "$REPO_PATH" --hub "$HUB_ROOT" --force-new \
+  "${CAR_CMD[@]}" ticket-flow start --repo "$REPO_PATH" --hub "$HUB_ROOT" --force-new \
     | tee "$RUN_START_LOG"
 else
-  run_cmd "${CAR_CMD[@]}" flow ticket_flow start --repo "$REPO_PATH" --hub "$HUB_ROOT" --force-new
+  run_cmd "${CAR_CMD[@]}" ticket-flow start --repo "$REPO_PATH" --hub "$HUB_ROOT" --force-new
 fi
 
 RUN_ID=""
@@ -205,7 +205,7 @@ if [[ "$EXECUTE" -eq 1 ]]; then
       "$STATUS_STDOUT" \
       "$STATUS_STDERR" \
       "$STATUS_CODE" \
-      "${CAR_CMD[@]}" flow ticket_flow status \
+      "${CAR_CMD[@]}" ticket-flow status \
       --repo "$REPO_PATH" \
       --hub "$HUB_ROOT" \
       --run-id "$RUN_ID" \
@@ -215,7 +215,7 @@ if [[ "$EXECUTE" -eq 1 ]]; then
       "$STATUS_STDOUT" \
       "$STATUS_STDERR" \
       "$STATUS_CODE" \
-      "${CAR_CMD[@]}" flow ticket_flow status \
+      "${CAR_CMD[@]}" ticket-flow status \
       --repo "$REPO_PATH" \
       --hub "$HUB_ROOT" \
       --json || STATUS_RC=$?
@@ -249,7 +249,7 @@ if [[ "$EXECUTE" -eq 1 ]]; then
       "$STATUS_FINAL_STDOUT" \
       "$STATUS_FINAL_STDERR" \
       "$STATUS_FINAL_CODE" \
-      "${CAR_CMD[@]}" flow ticket_flow status \
+      "${CAR_CMD[@]}" ticket-flow status \
       --repo "$REPO_PATH" \
       --hub "$HUB_ROOT" \
       --run-id "$RUN_ID" \
@@ -259,7 +259,7 @@ if [[ "$EXECUTE" -eq 1 ]]; then
       "$STATUS_FINAL_STDOUT" \
       "$STATUS_FINAL_STDERR" \
       "$STATUS_FINAL_CODE" \
-      "${CAR_CMD[@]}" flow ticket_flow status \
+      "${CAR_CMD[@]}" ticket-flow status \
       --repo "$REPO_PATH" \
       --hub "$HUB_ROOT" \
       --json || STATUS_FINAL_RC=$?

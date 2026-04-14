@@ -13,6 +13,7 @@ from codex_autorunner.integrations.discord.commands import (
 from codex_autorunner.integrations.discord.interaction_registry import (
     autocomplete_route_for,
     component_route_for_custom_id,
+    component_scheduler_ack_strategy,
     modal_route_for_custom_id,
     normalize_discord_command_path,
     slash_command_route_for_path,
@@ -132,6 +133,22 @@ def test_registry_matches_high_risk_component_and_modal_patterns() -> None:
     assert component_route_for_custom_id("tickets_select") is not None
     assert component_route_for_custom_id("tickets_filter_select") is not None
     assert modal_route_for_custom_id("tickets_modal:abc123") is not None
+
+
+def test_interrupt_components_share_ephemeral_scheduler_ack_strategy() -> None:
+    assert component_scheduler_ack_strategy("cancel_turn") == "scheduler_ephemeral"
+    assert (
+        component_scheduler_ack_strategy("cancel_turn:thread-1:turn-1")
+        == "scheduler_ephemeral"
+    )
+    assert (
+        component_scheduler_ack_strategy("queue_interrupt_send:message-1")
+        == "scheduler_ephemeral"
+    )
+    assert (
+        component_scheduler_ack_strategy("qis:turn-1:message-1")
+        == "scheduler_ephemeral"
+    )
 
 
 def test_registry_matches_autocomplete_routes_for_registered_paths() -> None:

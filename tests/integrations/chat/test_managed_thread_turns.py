@@ -607,6 +607,175 @@ def test_resolve_managed_thread_target_resumes_matching_binding(tmp_path: Path) 
     ]
 
 
+def test_resolve_managed_thread_target_clears_stale_backend_for_fresh_pma_session(
+    tmp_path: Path,
+) -> None:
+    canonical_workspace = str(tmp_path.resolve())
+    thread = SimpleNamespace(
+        thread_target_id="thread-1",
+        agent_id="codex",
+        agent_profile=None,
+        workspace_root=canonical_workspace,
+        lifecycle_status="paused",
+        backend_thread_id="stale-session",
+        backend_runtime_instance_id="runtime-old",
+    )
+    binding = SimpleNamespace(thread_target_id="thread-1", mode="pma")
+    clear_calls: list[dict[str, Any]] = []
+    resume_calls: list[dict[str, Any]] = []
+
+    class _Service:
+        def get_binding(self, *, surface_kind: str, surface_key: str) -> Any:
+            _ = surface_kind, surface_key
+            return binding
+
+        def get_thread_target(self, thread_target_id: str) -> Any:
+            assert thread_target_id == "thread-1"
+            return thread
+
+        def set_thread_backend_id(
+            self,
+            thread_target_id: str,
+            backend_thread_id: Optional[str],
+            *,
+            backend_runtime_instance_id: Optional[str] = None,
+        ) -> None:
+            assert thread_target_id == "thread-1"
+            clear_calls.append(
+                {
+                    "backend_thread_id": backend_thread_id,
+                    "backend_runtime_instance_id": backend_runtime_instance_id,
+                }
+            )
+            thread.backend_thread_id = backend_thread_id
+            thread.backend_runtime_instance_id = backend_runtime_instance_id
+
+        def resume_thread_target(self, thread_target_id: str, **kwargs: Any) -> Any:
+            assert thread_target_id == "thread-1"
+            resume_calls.append(kwargs)
+            return SimpleNamespace(
+                thread_target_id="thread-1",
+                agent_id="codex",
+                agent_profile=None,
+                workspace_root=canonical_workspace,
+                lifecycle_status="active",
+                backend_thread_id=thread.backend_thread_id,
+                backend_runtime_instance_id=thread.backend_runtime_instance_id,
+            )
+
+        def create_thread_target(self, *args: Any, **kwargs: Any) -> Any:
+            raise AssertionError("create_thread_target should not be called")
+
+        def upsert_binding(self, **kwargs: Any) -> None:
+            pass
+
+    _, resolved_thread = managed_thread_turns_module.resolve_managed_thread_target(
+        _Service(),
+        request=managed_thread_turns_module.ManagedThreadTargetRequest(
+            surface_kind="telegram",
+            surface_key="telegram:-1001:101",
+            mode="pma",
+            agent="codex",
+            workspace_root=tmp_path,
+            display_name="telegram:surface",
+            binding_metadata={"topic_key": "telegram:-1001:101"},
+        ),
+    )
+
+    assert resolved_thread is not None
+    assert clear_calls == [
+        {
+            "backend_thread_id": None,
+            "backend_runtime_instance_id": None,
+        }
+    ]
+    assert resume_calls == [
+        {
+            "backend_runtime_instance_id": None,
+        }
+    ]
+    assert resolved_thread.backend_thread_id is None
+
+
+def test_resolve_managed_thread_target_keeps_backend_for_repo_resume_without_rebind(
+    tmp_path: Path,
+) -> None:
+    canonical_workspace = str(tmp_path.resolve())
+    thread = SimpleNamespace(
+        thread_target_id="thread-1",
+        agent_id="codex",
+        agent_profile=None,
+        workspace_root=canonical_workspace,
+        lifecycle_status="archived",
+        backend_thread_id="backend-existing",
+        backend_runtime_instance_id=None,
+    )
+    binding = SimpleNamespace(thread_target_id="thread-1", mode="repo")
+    clear_calls: list[dict[str, Any]] = []
+    resume_calls: list[dict[str, Any]] = []
+
+    class _Service:
+        def get_binding(self, *, surface_kind: str, surface_key: str) -> Any:
+            _ = surface_kind, surface_key
+            return binding
+
+        def get_thread_target(self, thread_target_id: str) -> Any:
+            assert thread_target_id == "thread-1"
+            return thread
+
+        def set_thread_backend_id(
+            self,
+            thread_target_id: str,
+            backend_thread_id: Optional[str],
+            *,
+            backend_runtime_instance_id: Optional[str] = None,
+        ) -> None:
+            assert thread_target_id == "thread-1"
+            clear_calls.append(
+                {
+                    "backend_thread_id": backend_thread_id,
+                    "backend_runtime_instance_id": backend_runtime_instance_id,
+                }
+            )
+
+        def resume_thread_target(self, thread_target_id: str, **kwargs: Any) -> Any:
+            assert thread_target_id == "thread-1"
+            resume_calls.append(kwargs)
+            return SimpleNamespace(
+                thread_target_id="thread-1",
+                agent_id="codex",
+                agent_profile=None,
+                workspace_root=canonical_workspace,
+                lifecycle_status="active",
+                backend_thread_id=thread.backend_thread_id,
+                backend_runtime_instance_id=thread.backend_runtime_instance_id,
+            )
+
+        def create_thread_target(self, *args: Any, **kwargs: Any) -> Any:
+            raise AssertionError("create_thread_target should not be called")
+
+        def upsert_binding(self, **kwargs: Any) -> None:
+            pass
+
+    _, resolved_thread = managed_thread_turns_module.resolve_managed_thread_target(
+        _Service(),
+        request=managed_thread_turns_module.ManagedThreadTargetRequest(
+            surface_kind="discord",
+            surface_key="discord:channel-1",
+            mode="repo",
+            agent="codex",
+            workspace_root=tmp_path,
+            display_name="discord:surface",
+            binding_metadata={"channel_id": "channel-1"},
+        ),
+    )
+
+    assert resolved_thread is not None
+    assert clear_calls == []
+    assert resume_calls == [{"backend_runtime_instance_id": None}]
+    assert resolved_thread.backend_thread_id == "backend-existing"
+
+
 def test_resolve_managed_thread_target_reuses_backend_matched_thread(
     tmp_path: Path,
 ) -> None:
@@ -771,6 +940,35 @@ class _FakeTranscriptStore:
         self.writes.append((turn_id, metadata, assistant_text))
 
 
+class _FakeHubPersistenceClient:
+    def __init__(self) -> None:
+        self.timeline_requests: list[Any] = []
+        self.trace_requests: list[Any] = []
+        self.transcript_requests: list[Any] = []
+        self.activity_requests: list[Any] = []
+
+    async def persist_execution_timeline(self, request: Any) -> Any:
+        self.timeline_requests.append(request)
+        return SimpleNamespace(
+            execution_id=request.execution_id,
+            persisted_event_count=len(request.events),
+        )
+
+    async def finalize_execution_cold_trace(self, request: Any) -> Any:
+        self.trace_requests.append(request)
+        return SimpleNamespace(
+            execution_id=request.execution_id,
+            trace_manifest_id="trace-1",
+        )
+
+    async def write_transcript(self, request: Any) -> Any:
+        self.transcript_requests.append(request)
+        return SimpleNamespace(turn_id=request.turn_id)
+
+    async def record_thread_activity(self, request: Any) -> None:
+        self.activity_requests.append(request)
+
+
 @pytest.mark.anyio
 async def test_finalize_managed_thread_execution_logs_timeout_source(
     tmp_path: Path,
@@ -778,21 +976,7 @@ async def test_finalize_managed_thread_execution_logs_timeout_source(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     started = _started_execution_with_backend_ids(tmp_path)
-    fake_thread_store = _FakeThreadStore(tmp_path)
-
-    monkeypatch.setattr(
-        managed_thread_turns_module, "PmaThreadStore", lambda _root: fake_thread_store
-    )
-    monkeypatch.setattr(
-        managed_thread_turns_module,
-        "PmaTranscriptStore",
-        lambda _root: _FakeTranscriptStore(tmp_path),
-    )
-    monkeypatch.setattr(
-        managed_thread_turns_module,
-        "persist_turn_timeline",
-        lambda *args, **kwargs: None,
-    )
+    fake_hub_client = _FakeHubPersistenceClient()
     monkeypatch.setattr(
         managed_thread_turns_module,
         "harness_supports_progress_event_stream",
@@ -832,6 +1016,7 @@ async def test_finalize_managed_thread_execution_logs_timeout_source(
         orchestration_service=orchestration_service,
         started=started,
         state_root=tmp_path,
+        hub_client=fake_hub_client,
         surface=managed_thread_turns_module.ManagedThreadSurfaceInfo(
             log_label="Discord",
             surface_kind="discord",
@@ -852,6 +1037,16 @@ async def test_finalize_managed_thread_execution_logs_timeout_source(
     assert '"completion_source":"timeout"' in caplog.text
     assert '"managed_thread_id":"thread-1"' in caplog.text
     assert '"backend_thread_id":"session-1"' in caplog.text
+    assert len(fake_hub_client.timeline_requests) == 1
+    assert fake_hub_client.timeline_requests[0].metadata["status"] == "error"
+    assert fake_hub_client.timeline_requests[0].metadata["backend_turn_id"] == "turn-1"
+    assert (
+        fake_hub_client.timeline_requests[0].metadata["trace_manifest_id"] == "trace-1"
+    )
+    assert len(fake_hub_client.trace_requests) == 1
+    assert fake_hub_client.trace_requests[0].backend_turn_id == "turn-1"
+    assert fake_hub_client.transcript_requests == []
+    assert fake_hub_client.activity_requests == []
 
 
 @pytest.mark.anyio
@@ -861,22 +1056,7 @@ async def test_finalize_managed_thread_execution_logs_finalization_failure_after
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     started = _started_execution_with_backend_ids(tmp_path)
-    fake_thread_store = _FakeThreadStore(tmp_path)
-    fake_transcripts = _FakeTranscriptStore(tmp_path)
-
-    monkeypatch.setattr(
-        managed_thread_turns_module, "PmaThreadStore", lambda _root: fake_thread_store
-    )
-    monkeypatch.setattr(
-        managed_thread_turns_module,
-        "PmaTranscriptStore",
-        lambda _root: fake_transcripts,
-    )
-    monkeypatch.setattr(
-        managed_thread_turns_module,
-        "persist_turn_timeline",
-        lambda *args, **kwargs: None,
-    )
+    fake_hub_client = _FakeHubPersistenceClient()
     monkeypatch.setattr(
         managed_thread_turns_module,
         "harness_supports_progress_event_stream",
@@ -917,6 +1097,7 @@ async def test_finalize_managed_thread_execution_logs_finalization_failure_after
         orchestration_service=orchestration_service,
         started=started,
         state_root=tmp_path,
+        hub_client=fake_hub_client,
         surface=managed_thread_turns_module.ManagedThreadSurfaceInfo(
             log_label="Telegram",
             surface_kind="telegram",
@@ -936,3 +1117,14 @@ async def test_finalize_managed_thread_execution_logs_finalization_failure_after
     assert "chat.managed_thread.finalization_failed_after_prompt_return" in caplog.text
     assert '"completion_source":"prompt_return"' in caplog.text
     assert '"managed_turn_id":"exec-1"' in caplog.text
+    assert len(fake_hub_client.timeline_requests) == 1
+    assert fake_hub_client.timeline_requests[0].metadata["status"] == "ok"
+    assert fake_hub_client.timeline_requests[0].metadata["backend_turn_id"] == "turn-1"
+    assert (
+        fake_hub_client.timeline_requests[0].metadata["trace_manifest_id"] == "trace-1"
+    )
+    assert len(fake_hub_client.trace_requests) == 1
+    assert fake_hub_client.trace_requests[0].backend_turn_id == "turn-1"
+    assert len(fake_hub_client.transcript_requests) == 1
+    assert fake_hub_client.transcript_requests[0].assistant_text == "fixture reply"
+    assert fake_hub_client.activity_requests == []

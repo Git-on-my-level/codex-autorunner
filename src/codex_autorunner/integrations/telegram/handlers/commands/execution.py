@@ -36,6 +36,10 @@ from .....core.context_awareness import (
     maybe_inject_filebox_hint,
     maybe_inject_prompt_writing_hint,
 )
+from .....core.hub_control_plane import (
+    RemoteSurfaceBindingStore,
+    RemoteThreadExecutionStore,
+)
 from .....core.injected_context import wrap_injected_context
 from .....core.logging_utils import log_event
 from .....core.orchestration import (
@@ -51,12 +55,11 @@ from .....core.orchestration.runtime_threads import (
     begin_runtime_thread_execution,
 )
 from .....core.pma_context import (
-    build_hub_snapshot,
+    build_hub_unavailable_snapshot,
     format_pma_discoverability_preamble,
     format_pma_prompt,
     load_pma_prompt,
 )
-from .....core.pma_thread_store import PmaThreadStore
 from .....core.state import now_iso
 from .....core.utils import canonicalize_path
 from .....integrations.app_server.threads import (
@@ -366,12 +369,26 @@ def _build_telegram_thread_orchestration_service(handlers: Any) -> Any:
             )
         )
 
-    state_root = _telegram_state_root(handlers)
-
+    hub_client = getattr(handlers, "_hub_client", None)
+    handshake_compat = getattr(handlers, "_hub_handshake_compatibility", None)
+    handshake_ok = hub_client is not None and getattr(
+        handshake_compat, "compatible", False
+    )
+    if not handshake_ok:
+        log_event(
+            handlers._logger,
+            logging.WARNING,
+            "telegram.orchestration.hub_client_unavailable",
+            message="Hub control-plane client not available; orchestration disabled",
+        )
+        return None
+    thread_store = RemoteThreadExecutionStore(hub_client)
+    binding_store = RemoteSurfaceBindingStore(hub_client)
     created = build_harness_backed_orchestration_service(
         descriptors=descriptors,
         harness_factory=_make_harness,
-        pma_thread_store=PmaThreadStore(state_root),
+        thread_store=thread_store,
+        binding_store=binding_store,
     )
     handlers._telegram_managed_thread_orchestration_service = created
     handlers._telegram_thread_orchestration_service = created
@@ -385,6 +402,10 @@ def _get_telegram_thread_binding(
     mode: Optional[str] = None,
 ) -> tuple[Any, Any, Any]:
     orchestration_service = _build_telegram_thread_orchestration_service(handlers)
+    if orchestration_service is None:
+        raise RuntimeError(
+            "Telegram orchestration service unavailable: hub control-plane client not connected"
+        )
     resolved = resolve_surface_thread_binding(
         orchestration_service,
         surface_kind="telegram",
@@ -494,6 +515,7 @@ def _build_telegram_managed_thread_coordinator(
     return ManagedThreadTurnCoordinator(
         orchestration_service=orchestration_service,
         state_root=_telegram_state_root(handlers),
+        hub_client=getattr(handlers, "_hub_client", None),
         surface=ManagedThreadSurfaceInfo(
             log_label="Telegram",
             surface_kind="telegram",
@@ -875,7 +897,7 @@ async def _run_telegram_managed_thread_turn(
             return
         await handlers._send_message(
             message.chat_id,
-            ("Turn failed: " f"{finalized.error or public_execution_error}"),
+            (f"Turn failed: {finalized.error or public_execution_error}"),
             thread_id=message.thread_id,
             reply_to=None,
         )
@@ -2902,9 +2924,36 @@ class ExecutionCommands(TelegramCommandSupportMixin):
         hub_root = getattr(self, "_hub_root", None)
         if hub_root is None:
             return None
-        supervisor = getattr(self, "_hub_supervisor", None)
         try:
-            snapshot = await build_hub_snapshot(supervisor, hub_root=Path(hub_root))
+            hub_client = getattr(self, "_hub_client", None)
+            snapshot_detail = (
+                "Hub control plane is unavailable for Telegram PMA prompt context."
+            )
+            if hub_client is not None:
+                try:
+                    cp_snapshot = await hub_client.get_pma_snapshot()
+                    snapshot = cp_snapshot.snapshot
+                except Exception as exc:
+                    snapshot = build_hub_unavailable_snapshot(detail=snapshot_detail)
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "telegram.pma.snapshot.control_plane_failed",
+                        chat_id=message.chat_id,
+                        thread_id=message.thread_id,
+                        message_id=message.message_id,
+                        exc=exc,
+                    )
+            else:
+                snapshot = build_hub_unavailable_snapshot(detail=snapshot_detail)
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.pma.snapshot.hub_client_unavailable",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    message_id=message.message_id,
+                )
             base_prompt = load_pma_prompt(hub_root)
             prompt_state_key = self._pma_registry_key(record, message)
             return format_pma_prompt(

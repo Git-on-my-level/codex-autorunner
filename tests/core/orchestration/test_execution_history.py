@@ -5,6 +5,7 @@ from codex_autorunner.core.orchestration.execution_history import (
     build_hot_projection_envelope,
     provider_raw_trace_routing,
     route_run_event,
+    timeline_hot_family_for_event_type,
     truncate_hot_event_payload,
 )
 from codex_autorunner.core.ports.run_event import (
@@ -182,6 +183,13 @@ def test_failed_routing_is_terminal_family() -> None:
     assert decision.hot_payload_contract == "terminal_summary"
     assert decision.persist_hot_projection is True
     assert decision.capture_cold_trace is True
+
+
+def test_timeline_hot_family_for_event_type_maps_turn_events() -> None:
+    assert timeline_hot_family_for_event_type("turn_started") == "run_notice"
+    assert timeline_hot_family_for_event_type("tool_call") == "tool_call"
+    assert timeline_hot_family_for_event_type("turn_completed") == "terminal"
+    assert timeline_hot_family_for_event_type("unknown") is None
 
 
 def test_truncate_hot_event_small_tool_call_keeps_full_payload() -> None:

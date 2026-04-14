@@ -686,6 +686,20 @@ _SLASH_ROUTES: tuple[SlashCommandRoute, ...] = (
         exposure="public",
     ),
     SlashCommandRoute(
+        id="car.processes",
+        canonical_path=("car", "processes"),
+        registered_path=("car", "processes"),
+        description="Show process monitor summary",
+        handler=lambda *args, **kwargs: _dispatch_service_method(
+            *args,
+            **kwargs,
+            method_name="_handle_processes",
+            include_channel_id=True,
+        ),
+        ack_policy="defer_ephemeral",
+        exposure="public",
+    ),
+    SlashCommandRoute(
         id="car.new",
         canonical_path=("car", "new"),
         registered_path=("car", "new"),
@@ -1888,6 +1902,22 @@ async def _handle_continue_turn_component(service: Any, ctx: Any) -> None:
     )
 
 
+def _interrupt_component_route(
+    *,
+    id: str,
+    handler: ComponentHandler,
+    exact_custom_id: Optional[str] = None,
+    custom_id_prefix: Optional[str] = None,
+) -> ComponentRoute:
+    return ComponentRoute(
+        id=id,
+        exact_custom_id=exact_custom_id,
+        custom_id_prefix=custom_id_prefix,
+        handler=handler,
+        scheduler_ack_strategy="scheduler_ephemeral",
+    )
+
+
 _COMPONENT_ROUTES: tuple[ComponentRoute, ...] = (
     ComponentRoute(
         id="tickets.filter",
@@ -2010,22 +2040,22 @@ _COMPONENT_ROUTES: tuple[ComponentRoute, ...] = (
         custom_id_prefix="qcancel:",
         handler=_handle_cancel_queued_turn_component,
     ),
-    ComponentRoute(
+    _interrupt_component_route(
         id="queue.interrupt_send",
         custom_id_prefix="queue_interrupt_send:",
         handler=_handle_queue_interrupt_send_component,
     ),
-    ComponentRoute(
+    _interrupt_component_route(
         id="queued_turn.interrupt_send",
         custom_id_prefix="qis:",
         handler=_handle_queued_turn_interrupt_send_component,
     ),
-    ComponentRoute(
+    _interrupt_component_route(
         id="turn.cancel",
         exact_custom_id="cancel_turn",
         handler=_handle_cancel_turn_component,
     ),
-    ComponentRoute(
+    _interrupt_component_route(
         id="turn.cancel_scoped",
         custom_id_prefix="cancel_turn:",
         handler=_handle_cancel_turn_component,

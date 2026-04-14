@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from .orchestration.legacy_backfill_gate import ensure_legacy_orchestration_backfill
 from .orchestration.transcript_mirror import (
     TranscriptMirrorStore,
     build_plain_text_transcript,
@@ -126,10 +125,6 @@ class PmaTranscriptStore:
         entries = self._mirror_store.list_recent(limit=limit)
         if entries:
             return entries
-        self._backfill_legacy_transcripts()
-        entries = self._mirror_store.list_recent(limit=limit)
-        if entries:
-            return entries
         return self._list_recent_legacy(limit=limit)
 
     def _list_recent_legacy(self, *, limit: int = 50) -> list[dict[str, Any]]:
@@ -163,10 +158,6 @@ class PmaTranscriptStore:
         transcript = self._mirror_store.read_transcript(turn_id)
         if transcript is not None:
             return transcript
-        self._backfill_legacy_transcripts()
-        transcript = self._mirror_store.read_transcript(turn_id)
-        if transcript is not None:
-            return transcript
         return self._read_transcript_legacy(turn_id)
 
     def _read_transcript_legacy(self, turn_id: str) -> Optional[dict[str, Any]]:
@@ -185,9 +176,6 @@ class PmaTranscriptStore:
             )
             content = ""
         return {"metadata": meta, "content": content}
-
-    def _backfill_legacy_transcripts(self) -> None:
-        ensure_legacy_orchestration_backfill(self._root)
 
     def _find_metadata(self, turn_id: str) -> Optional[tuple[dict[str, Any], Path]]:
         if not self._dir.exists():

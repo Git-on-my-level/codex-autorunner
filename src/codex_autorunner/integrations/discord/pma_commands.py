@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Optional
+
+from ..chat.status_diagnostics import build_process_monitor_lines_for_root
 
 
 def _previous_binding_fields(
@@ -132,6 +135,14 @@ async def handle_pma_status(
         text = "PMA mode: disabled\nCurrent workspace: unbound"
     elif binding.get("pma_enabled", False):
         text = "PMA mode: enabled"
+        root = getattr(getattr(service, "_config", None), "root", None)
+        if root is not None:
+            process_lines = build_process_monitor_lines_for_root(
+                Path(root),
+                include_history=False,
+            )
+            if process_lines:
+                text = "\n".join([text, *process_lines])
     else:
         workspace = binding.get("workspace_path", "unknown")
         text = f"PMA mode: disabled\nCurrent workspace: {workspace}"

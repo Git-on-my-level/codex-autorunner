@@ -72,10 +72,24 @@ from ...core.git_utils import (  # noqa: F401 - kept for test monkeypatching
     GitError,
     reset_branch_from_origin_main,
 )
+from ...core.hub_control_plane import (
+    HandshakeCompatibility,
+    HttpHubControlPlaneClient,
+    HubControlPlaneError,
+    evaluate_handshake_compatibility,
+)
+from ...core.hub_control_plane.models import (
+    HandshakeRequest as _HandshakeRequest,
+)
+from ...core.hub_control_plane.service import (
+    CONTROL_PLANE_API_VERSION as _CONTROL_PLANE_API_VERSION,
+)
 from ...core.logging_utils import log_event
 from ...core.managed_processes import reap_managed_processes
-from ...core.orchestration import build_ticket_flow_orchestration_service
-from ...core.pma_notification_store import PmaNotificationStore
+from ...core.orchestration import (
+    ORCHESTRATION_SCHEMA_VERSION,
+    build_ticket_flow_orchestration_service,
+)
 from ...core.state_roots import resolve_global_state_root
 from ...core.update import (  # noqa: F401 - kept for test monkeypatching
     UpdateInProgressError,
@@ -111,6 +125,7 @@ from ...integrations.app_server.threads import (
 from ...integrations.chat.agents import (
     DEFAULT_CHAT_AGENT,
     chat_agent_supports_effort,
+    chat_hermes_profile_options,
     format_chat_agent_selection,
     normalize_chat_agent,
     normalize_hermes_profile,
@@ -270,6 +285,7 @@ from .interaction_registry import (
     slash_command_route_for_path,
     slash_command_workspace_lock_policy,
 )
+from .interaction_runtime import ensure_ephemeral_response_deferred
 from .interaction_session import (
     DiscordInteractionSession,
     InteractionSessionKind,
@@ -330,6 +346,7 @@ from .workspace_commands import (
     handle_debug,
     handle_help,
     handle_ids,
+    handle_processes,
     handle_status,
 )
 
@@ -745,22 +762,22 @@ class DiscordBotService:
                 self._hub_config_path = root_hub_config
 
         self._hub_supervisor = None
+        self._hub_client: Optional[HttpHubControlPlaneClient] = None
+        self._hub_handshake_compatibility: Optional[HandshakeCompatibility] = None
         try:
-            from ...core.hub import HubSupervisor
-            from ...integrations.github.polling import build_hub_scm_poll_processor
-
-            self._hub_supervisor = HubSupervisor.from_path(
-                self._config.root,
-                scm_poll_processor=build_hub_scm_poll_processor(
-                    hub_root=self._config.root,
-                    raw_config=load_hub_config(self._config.root).raw,
-                ),
+            hub_config = load_hub_config(self._config.root)
+            base_path = hub_config.server_base_path or ""
+            if base_path.endswith("/"):
+                base_path = base_path[:-1]
+            hub_base_url = (
+                f"http://{hub_config.server_host}:{hub_config.server_port}{base_path}"
             )
+            self._hub_client = HttpHubControlPlaneClient(base_url=hub_base_url)
         except (ConfigError, OSError, ValueError, ImportError, RuntimeError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
-                "discord.pma.hub_supervisor.unavailable",
+                "discord.hub_control_plane.client_init_failed",
                 hub_root=str(self._config.root),
                 exc=exc,
             )
@@ -780,6 +797,9 @@ class DiscordBotService:
         )
         self._effect_sink = DiscordEffectSink(self)
         self._queued_notice_messages: dict[tuple[str, str], str] = {}
+        self._queued_notice_messages_by_source: dict[
+            tuple[str, str], tuple[str, str]
+        ] = {}
         self._discord_turn_progress_reuse_requests: dict[str, Any] = {}
         self._discord_reusable_progress_messages: dict[str, Any] = {}
         self._background_tasks: set[asyncio.Task[Any]] = set()
@@ -822,6 +842,9 @@ class DiscordBotService:
 
     async def run_forever(self) -> None:
         self._service_started_at_monotonic = time.monotonic()
+        handshake_ok = await self._perform_hub_handshake()
+        if not handshake_ok:
+            raise SystemExit(1)
         self._reap_managed_processes(stage="startup")
         await self._store.initialize()
         await self._reconcile_discord_progress_leases_on_startup()
@@ -902,6 +925,83 @@ class DiscordBotService:
             return None
         current = time.monotonic() if now is None else now
         return round(max(0.0, (current - started_at) * 1000), 1)
+
+    async def _perform_hub_handshake(self) -> bool:
+        expected_schema_generation = ORCHESTRATION_SCHEMA_VERSION
+        if self._hub_client is None:
+            log_event(
+                self._logger,
+                logging.ERROR,
+                "discord.hub_control_plane.client_not_configured",
+                hub_root=str(self._config.root),
+                expected_schema_generation=expected_schema_generation,
+            )
+            return False
+
+        try:
+            response = await self._hub_client.handshake(
+                _HandshakeRequest(
+                    client_name="discord",
+                    client_api_version=_CONTROL_PLANE_API_VERSION,
+                    expected_schema_generation=expected_schema_generation,
+                )
+            )
+            compatibility = evaluate_handshake_compatibility(
+                response,
+                client_api_version=_CONTROL_PLANE_API_VERSION,
+                expected_schema_generation=expected_schema_generation,
+            )
+            self._hub_handshake_compatibility = compatibility
+            if compatibility.compatible:
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "discord.hub_control_plane.handshake_ok",
+                    hub_root=str(self._config.root),
+                    api_version=response.api_version,
+                    schema_generation=response.schema_generation,
+                    expected_schema_generation=expected_schema_generation,
+                )
+                return True
+            else:
+                log_event(
+                    self._logger,
+                    logging.ERROR,
+                    "discord.hub_control_plane.handshake_incompatible",
+                    hub_root=str(self._config.root),
+                    reason=compatibility.reason,
+                    server_api_version=compatibility.server_api_version,
+                    client_api_version=compatibility.client_api_version,
+                    server_schema_generation=compatibility.server_schema_generation,
+                    expected_schema_generation=compatibility.expected_schema_generation,
+                )
+                return False
+        except HubControlPlaneError as exc:
+            log_event(
+                self._logger,
+                logging.ERROR,
+                "discord.hub_control_plane.handshake_failed",
+                hub_root=str(self._config.root),
+                error_code=exc.code,
+                retryable=exc.retryable,
+                message=str(exc),
+                expected_schema_generation=expected_schema_generation,
+            )
+            return False
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.ERROR,
+                "discord.hub_control_plane.handshake_unexpected_error",
+                hub_root=str(self._config.root),
+                exc=exc,
+                expected_schema_generation=expected_schema_generation,
+            )
+            return False
+
+    @property
+    def hub_client(self) -> Optional[HttpHubControlPlaneClient]:
+        return self._hub_client
 
     def _is_within_cold_start_window(self, *, now: Optional[float] = None) -> bool:
         started_at_raw = getattr(self, "_service_started_at_monotonic", None)
@@ -992,13 +1092,15 @@ class DiscordBotService:
         async def _handle_dispatched_event(
             queued_event: ChatEvent, context: DispatchContext
         ) -> None:
-            if isinstance(queued_event, ChatMessageEvent):
-                await self._clear_queued_notice(
-                    conversation_id=context.conversation_id,
-                    source_message_id=queued_event.message.message_id,
-                    channel_id=context.chat_id,
-                )
-            await self._handle_chat_event(queued_event, context)
+            try:
+                await self._handle_chat_event(queued_event, context)
+            finally:
+                if isinstance(queued_event, ChatMessageEvent):
+                    await self._clear_queued_notice(
+                        conversation_id=context.conversation_id,
+                        source_message_id=queued_event.message.message_id,
+                        channel_id=context.chat_id,
+                    )
 
         dispatch_result = await self._dispatcher.dispatch(
             event, _handle_dispatched_event
@@ -1502,6 +1604,32 @@ class DiscordBotService:
             )
         return acknowledged
 
+    def _dispatch_ack_failure_confirms_expiry(
+        self,
+        ctx: IngressContext,
+        envelope: RuntimeInteractionEnvelope,
+    ) -> bool:
+        ack_policy = envelope.dispatch_ack_policy
+        if ack_policy in (None, "immediate"):
+            return False
+
+        ack_finished_at = ctx.timing.ack_finished_at
+        ingress_started_at = ctx.timing.ingress_started_at
+        if ack_finished_at is not None and ingress_started_at is not None:
+            ack_deadline_at = ingress_started_at + self._initial_ack_budget_seconds()
+            if ack_finished_at >= ack_deadline_at:
+                return True
+
+        session = self._get_interaction_session(ctx.interaction_token)
+        if session is None:
+            return False
+
+        delivery_status = (session.last_delivery_status or "").strip()
+        delivery_error = (session.last_delivery_error or "").lower()
+        if delivery_status != "ack_failed":
+            return False
+        return "unknown interaction" in delivery_error or "10062" in delivery_error
+
     async def acknowledge_runtime_envelope(
         self,
         envelope: RuntimeInteractionEnvelope,
@@ -1654,6 +1782,11 @@ class DiscordBotService:
     ) -> None:
         key = (conversation_id, source_message_id)
         notice_message_id = self._queued_notice_messages.pop(key, None)
+        source_key = (channel_id, source_message_id)
+        source_entry = self._queued_notice_messages_by_source.pop(source_key, None)
+        if not notice_message_id and isinstance(source_entry, tuple):
+            _, source_notice_message_id = source_entry
+            notice_message_id = source_notice_message_id
         if not notice_message_id:
             return
         await self._delete_channel_message_safe(
@@ -1661,6 +1794,22 @@ class DiscordBotService:
             notice_message_id,
             record_id=f"queue-notice-delete:{channel_id}:{source_message_id}",
         )
+
+    def _claim_queued_notice_progress_message(
+        self,
+        *,
+        channel_id: str,
+        source_message_id: str,
+    ) -> Optional[str]:
+        source_key = (channel_id, source_message_id)
+        source_entry = self._queued_notice_messages_by_source.pop(source_key, None)
+        if not isinstance(source_entry, tuple):
+            return None
+        conversation_id, notice_message_id = source_entry
+        if conversation_id:
+            self._queued_notice_messages.pop((conversation_id, source_message_id), None)
+        normalized_notice_message_id = str(notice_message_id or "").strip()
+        return normalized_notice_message_id or None
 
     async def _queued_notice_config_for_conversation(
         self, conversation_id: str
@@ -1690,10 +1839,11 @@ class DiscordBotService:
         if not await self._can_start_message_turn_in_channel(event):
             return
         channel_id = dispatch_result.context.chat_id
-        notice_content, allow_interrupt = (
-            await self._queued_notice_config_for_conversation(
-                dispatch_result.context.conversation_id
-            )
+        (
+            notice_content,
+            allow_interrupt,
+        ) = await self._queued_notice_config_for_conversation(
+            dispatch_result.context.conversation_id
         )
         source_message_id = event.message.message_id
         queued_notice_payload = build_discord_queue_notice_message(
@@ -1708,9 +1858,13 @@ class DiscordBotService:
             )
             notice_message_id = response.get("id")
             if isinstance(notice_message_id, str) and notice_message_id:
-                self._queued_notice_messages[
-                    (dispatch_result.context.conversation_id, source_message_id)
-                ] = notice_message_id
+                conversation_id = dispatch_result.context.conversation_id
+                self._queued_notice_messages[(conversation_id, source_message_id)] = (
+                    notice_message_id
+                )
+                self._queued_notice_messages_by_source[
+                    (channel_id, source_message_id)
+                ] = (conversation_id, notice_message_id)
         except (DiscordAPIError, OSError, TypeError, ValueError):
             await self._send_channel_message_safe(
                 channel_id,
@@ -2446,6 +2600,10 @@ class DiscordBotService:
         mode: Optional[str] = None,
     ) -> tuple[Any, Any, Any]:
         orchestration_service = self._discord_thread_service()
+        if orchestration_service is None:
+            raise RuntimeError(
+                "Discord orchestration service unavailable: hub control-plane client not connected"
+            )
         resolved = resolve_surface_thread_binding(
             orchestration_service,
             surface_kind="discord",
@@ -3767,6 +3925,9 @@ class DiscordBotService:
                 await self._store.close()
         await self._close_all_app_server_supervisors()
         await self._close_all_opencode_supervisors()
+        if self._hub_client is not None:
+            with contextlib.suppress(Exception):
+                await self._hub_client.aclose()
         self._reap_managed_processes(stage="shutdown")
 
     async def _close_all_app_server_supervisors(self) -> None:
@@ -3913,10 +4074,33 @@ class DiscordBotService:
     ) -> None:
         if not isinstance(delivered_message_id, str) or not delivered_message_id:
             return
-        PmaNotificationStore(self._config.root).mark_delivered(
-            delivery_record_id=record.record_id,
-            delivered_message_id=delivered_message_id,
+        if self._hub_client is None:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.outbox.delivery_mark.hub_client_unavailable",
+                record_id=record.record_id,
+            )
+            return
+        from ...core.hub_control_plane import (
+            NotificationDeliveryMarkRequest as _CPDeliveryMarkRequest,
         )
+
+        try:
+            await self._hub_client.mark_notification_delivered(
+                _CPDeliveryMarkRequest(
+                    delivery_record_id=record.record_id,
+                    delivered_message_id=delivered_message_id,
+                )
+            )
+        except (HubControlPlaneError, OSError, ValueError) as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.outbox.delivery_mark.control_plane_failed",
+                record_id=record.record_id,
+                exc=exc,
+            )
 
     async def _delete_channel_message_safe(
         self,
@@ -4146,9 +4330,9 @@ class DiscordBotService:
                         envelope,
                         stage="dispatch",
                     )
-                    if not acked and envelope.dispatch_ack_policy not in (
-                        None,
-                        "immediate",
+                    if not acked and self._dispatch_ack_failure_confirms_expiry(
+                        ctx,
+                        envelope,
                     ):
                         log_event(
                             self._logger,
@@ -4161,6 +4345,19 @@ class DiscordBotService:
                                 envelope=envelope,
                             ),
                         )
+                        # The interaction callback window is already gone. Trying to
+                        # answer again only produces a second stale-callback failure
+                        # that can bubble back into gateway reconnect handling.
+                        ctx.timing = replace(
+                            ctx.timing,
+                            ack_finished_at=time.monotonic(),
+                            ingress_finished_at=time.monotonic(),
+                        )
+                        return
+                    if not acked and envelope.dispatch_ack_policy not in (
+                        None,
+                        "immediate",
+                    ):
                         await self._respond_ephemeral(
                             ctx.interaction_id,
                             ctx.interaction_token,
@@ -4874,15 +5071,34 @@ class DiscordBotService:
         agent: str,
         agent_profile: Optional[str] = None,
     ) -> tuple[str, ...]:
+        agent_ids: list[str] = []
+        seen: set[str] = set()
+
+        def _add_agent_id(value: object) -> None:
+            normalized = str(value or "").strip().lower()
+            if not normalized or normalized in seen:
+                return
+            seen.add(normalized)
+            agent_ids.append(normalized)
+
         runtime_agent = resolve_chat_runtime_agent(
             agent,
             agent_profile,
             default=self.DEFAULT_AGENT,
             context=self,
         )
-        if runtime_agent == agent:
-            return (agent,)
-        return (agent, runtime_agent)
+        _add_agent_id(agent)
+        _add_agent_id(runtime_agent)
+        if agent == "hermes":
+            normalized_profile = normalize_hermes_profile(
+                agent_profile,
+                context=self,
+            )
+            if normalized_profile is not None:
+                for option in chat_hermes_profile_options(self):
+                    if option.profile == normalized_profile:
+                        _add_agent_id(option.runtime_agent)
+        return tuple(agent_ids)
 
     def _discord_thread_matches_agent(
         self,
@@ -5810,6 +6026,21 @@ class DiscordBotService:
             channel_id=channel_id,
             guild_id=guild_id,
             user_id=user_id,
+        )
+
+    async def _handle_processes(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+    ) -> None:
+        await DiscordBotService._run_effectful_handler(
+            self,
+            handle_processes,
+            interaction_id,
+            interaction_token,
+            channel_id=channel_id,
         )
 
     async def _get_active_flow_info(
@@ -8580,6 +8811,24 @@ class DiscordBotService:
             source_user_id=source_user_id,
         )
 
+    async def _send_interrupt_component_response(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        text: str,
+    ) -> None:
+        deferred = await ensure_ephemeral_response_deferred(
+            self,
+            interaction_id,
+            interaction_token,
+        )
+        await self.send_or_respond_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text=text,
+        )
+
     async def _handle_cancel_turn_button(
         self,
         interaction_id: str,
@@ -8692,7 +8941,7 @@ class DiscordBotService:
             custom_id
         )
         if not execution_id or not source_message_id:
-            await self._respond_ephemeral(
+            await self._send_interrupt_component_response(
                 interaction_id,
                 interaction_token,
                 "Queued request is unavailable.",
@@ -8705,7 +8954,7 @@ class DiscordBotService:
             self._get_discord_thread_binding(channel_id=channel_id, mode=mode)
         )
         if current_thread is None:
-            await self._respond_ephemeral(
+            await self._send_interrupt_component_response(
                 interaction_id,
                 interaction_token,
                 "Queued request is unavailable.",
@@ -8716,7 +8965,7 @@ class DiscordBotService:
             execution_id,
         )
         if not promoted:
-            await self._respond_ephemeral(
+            await self._send_interrupt_component_response(
                 interaction_id,
                 interaction_token,
                 "Queued request is no longer pending.",
@@ -8730,7 +8979,7 @@ class DiscordBotService:
         if callable(get_running_execution):
             running_execution = get_running_execution(current_thread.thread_target_id)
             if running_execution is None:
-                await self._respond_ephemeral(
+                await self._send_interrupt_component_response(
                     interaction_id,
                     interaction_token,
                     "Queued request moved to the front.",
@@ -8810,7 +9059,7 @@ class DiscordBotService:
     ) -> None:
         source_message_id = custom_id.split(":", 1)[1].strip()
         if not source_message_id:
-            await self._respond_ephemeral(
+            await self._send_interrupt_component_response(
                 interaction_id,
                 interaction_token,
                 "Queued request is unavailable.",
@@ -8825,7 +9074,7 @@ class DiscordBotService:
             source_message_id,
         )
         if not promoted:
-            await self._respond_ephemeral(
+            await self._send_interrupt_component_response(
                 interaction_id,
                 interaction_token,
                 "Queued request is no longer pending.",
@@ -8838,7 +9087,7 @@ class DiscordBotService:
             self._get_discord_thread_binding(channel_id=channel_id, mode=mode)
         )
         if current_thread is None:
-            await self._respond_ephemeral(
+            await self._send_interrupt_component_response(
                 interaction_id,
                 interaction_token,
                 "Queued request moved to the front.",

@@ -1,6 +1,9 @@
 # ruff: noqa: F401
 
 import pytest
+from tests.discord_message_turns_queue_notice_support import (
+    test_orchestrated_turn_queued_reuses_claimed_queue_notice,
+)
 from tests.discord_message_turns_support import (
     test_build_attachment_filename_does_not_infer_audio_suffix_for_video,
     test_build_attachment_filename_uses_source_url_audio_suffix,

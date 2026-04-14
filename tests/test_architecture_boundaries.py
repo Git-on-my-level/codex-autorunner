@@ -366,3 +366,229 @@ def test_engine_regression_detects_top_level_control_plane_import() -> None:
 
 def test_top_level_module_is_not_unknown_layer() -> None:
     assert classify_module("codex_autorunner.manifest") == Layer.CONTROL_PLANE
+
+
+# ---------------------------------------------------------------------------
+# Side-process boundary regression tests
+# ---------------------------------------------------------------------------
+
+_SIDE_PROCESS_PREFIXES: tuple[str, ...] = (
+    "codex_autorunner.integrations.discord",
+    "codex_autorunner.integrations.telegram",
+)
+
+_FORBIDDEN_SHARED_STATE_PATTERNS: tuple[str, ...] = (
+    "HubSupervisor",
+    "open_orchestration_sqlite",
+    "PmaAutomationStore",
+    "PmaQueue",
+    "PmaThreadStore",
+    "ScmPollingWatchStore",
+)
+
+_FORBIDDEN_NOTIFICATION_STORE_PATTERN = "PmaNotificationStore"
+
+_FORBIDDEN_TRANSCRIPT_MIRROR_PATTERN = "TranscriptMirrorStore"
+
+_FORBIDDEN_POLLING_OWNER_PATTERNS: tuple[str, ...] = (
+    "HubLifecycleWorker",
+    "GitHubScmPollingService",
+    "build_hub_scm_poll_processor",
+)
+
+_SIDE_PROCESS_BOUNDARY_ALLOWLIST: dict[str, list[str]] = {
+    "integrations/discord/service.py": [
+        "build_ticket_flow_orchestration_service -- ALLOWED: ticket flow uses per-workspace orchestration SQLite",
+        "seed_repo_files -- ALLOWED: bootstrap seeding runs during startup before hub handshake completes",
+    ],
+    "integrations/telegram/service.py": [
+        "AppServerThreadRegistry -- ALLOWED: protocol-local PMA thread ID mapping for topic routing",
+    ],
+    "integrations/telegram/handlers/commands/execution.py": [
+        "AppServerThreadRegistry -- ALLOWED: protocol-local PMA thread ID mapping for topic routing",
+    ],
+    "integrations/telegram/handlers/commands/flows.py": [
+        "build_ticket_flow_orchestration_service -- ALLOWED: ticket flow uses per-workspace orchestration SQLite",
+    ],
+    "integrations/agents/agent_pool_impl.py": [
+        "PmaThreadStore -- ALLOWED: agent pool manages thread execution records in hub context",
+    ],
+    "integrations/agents/backend_orchestrator.py": [
+        "AppServerThreadRegistry -- ALLOWED: protocol-local session tracking in backend orchestrator",
+    ],
+}
+
+
+def _is_allowlisted(file_key: str, pattern: str) -> bool:
+    for entry in _SIDE_PROCESS_BOUNDARY_ALLOWLIST.get(file_key, []):
+        if pattern in entry:
+            return True
+    return False
+
+
+def _side_process_files() -> list[Path]:
+    result: list[Path] = []
+    for prefix in _SIDE_PROCESS_PREFIXES:
+        parts = prefix.split(".")
+        base = SRC_ROOT
+        for part in parts[1:]:
+            base = base / part
+        if base.is_dir():
+            for py in sorted(base.rglob("*.py")):
+                if py.name == "__init__.py":
+                    continue
+                result.append(py)
+    return result
+
+
+def test_side_processes_do_not_import_hub_supervisor() -> None:
+    violations: list[str] = []
+    for path in _side_process_files():
+        try:
+            source = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                module = node.module or ""
+                for alias in node.names:
+                    full = f"{module}.{alias.name}" if module else alias.name
+                    if "HubSupervisor" in full or alias.name == "HubSupervisor":
+                        file_key = str(path.relative_to(SRC_ROOT))
+                        violations.append(
+                            f"{file_key}: imports HubSupervisor via 'from {module} import {alias.name}'"
+                        )
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    if "HubSupervisor" in alias.name:
+                        file_key = str(path.relative_to(SRC_ROOT))
+                        violations.append(
+                            f"{file_key}: imports HubSupervisor via 'import {alias.name}'"
+                        )
+    assert (
+        not violations
+    ), "Side-process modules must not import HubSupervisor:\n" + "\n".join(violations)
+
+
+def test_side_processes_do_not_use_notification_store_directly() -> None:
+    violations: list[str] = []
+    for path in _side_process_files():
+        try:
+            source = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if _FORBIDDEN_NOTIFICATION_STORE_PATTERN not in source:
+            continue
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    if alias.name == _FORBIDDEN_NOTIFICATION_STORE_PATTERN:
+                        file_key = str(path.relative_to(SRC_ROOT))
+                        violations.append(
+                            f"{file_key}: imports PmaNotificationStore "
+                            "(use hub control-plane client instead)"
+                        )
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    if _FORBIDDEN_NOTIFICATION_STORE_PATTERN in alias.name:
+                        file_key = str(path.relative_to(SRC_ROOT))
+                        violations.append(
+                            f"{file_key}: imports PmaNotificationStore "
+                            "(use hub control-plane client instead)"
+                        )
+    assert (
+        not violations
+    ), "Side-process modules must not import PmaNotificationStore:\n" + "\n".join(
+        violations
+    )
+
+
+def test_side_processes_do_not_use_transcript_mirror_directly() -> None:
+    violations: list[str] = []
+    for path in _side_process_files():
+        try:
+            source = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if _FORBIDDEN_TRANSCRIPT_MIRROR_PATTERN not in source:
+            continue
+        file_key = str(path.relative_to(SRC_ROOT))
+        if _is_allowlisted(file_key, _FORBIDDEN_TRANSCRIPT_MIRROR_PATTERN):
+            continue
+        violations.append(
+            f"{file_key}: references TranscriptMirrorStore "
+            "(use hub control-plane get_transcript_history instead)"
+        )
+    assert (
+        not violations
+    ), "Side-process modules must not import TranscriptMirrorStore:\n" + "\n".join(
+        violations
+    )
+
+
+def test_side_process_shared_state_imports_are_allowlisted() -> None:
+    violations: list[str] = []
+    for path in _side_process_files():
+        try:
+            source = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        file_key = str(path.relative_to(SRC_ROOT))
+        for pattern in _FORBIDDEN_SHARED_STATE_PATTERNS:
+            if pattern not in source:
+                continue
+            if _is_allowlisted(file_key, pattern):
+                continue
+            tree = ast.parse(source)
+            found = False
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom):
+                    for alias in node.names:
+                        if pattern in alias.name:
+                            found = True
+                elif isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if pattern in alias.name:
+                            found = True
+            if found:
+                violations.append(
+                    f"{file_key}: imports/uses {pattern} without allowlist entry"
+                )
+    assert not violations, (
+        "Side-process shared-state imports must have an explicit allowlist entry:\n"
+        + "\n".join(violations)
+    )
+
+
+def test_side_processes_do_not_import_polling_owners() -> None:
+    violations: list[str] = []
+    for path in _side_process_files():
+        try:
+            source = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        tree = ast.parse(source)
+        file_key = str(path.relative_to(SRC_ROOT))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                module = node.module or ""
+                for alias in node.names:
+                    full = f"{module}.{alias.name}" if module else alias.name
+                    for pattern in _FORBIDDEN_POLLING_OWNER_PATTERNS:
+                        if pattern in full or alias.name == pattern:
+                            violations.append(
+                                f"{file_key}: imports {pattern} via 'from {module} import {alias.name}'"
+                            )
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    for pattern in _FORBIDDEN_POLLING_OWNER_PATTERNS:
+                        if pattern in alias.name:
+                            violations.append(
+                                f"{file_key}: imports {pattern} via 'import {alias.name}'"
+                            )
+    assert not violations, (
+        "Side-process modules must not import hub-owned polling workers/services:\n"
+        + "\n".join(violations)
+    )

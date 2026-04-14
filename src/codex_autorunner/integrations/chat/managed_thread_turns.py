@@ -12,8 +12,15 @@ from ...agents.base import (
     harness_progress_event_stream,
     harness_supports_progress_event_stream,
 )
+from ...core.hub_control_plane import (
+    ExecutionColdTraceFinalizeRequest,
+    ExecutionTimelinePersistRequest,
+    ThreadActivityRecordRequest,
+    TranscriptWriteRequest,
+    serialize_run_event,
+)
+from ...core.hub_control_plane.errors import HubControlPlaneError
 from ...core.logging_utils import log_event
-from ...core.orchestration.cold_trace_store import ColdTraceWriter
 from ...core.orchestration.models import MessageRequest
 from ...core.orchestration.runtime_thread_events import (
     RuntimeThreadRunEventState,
@@ -30,12 +37,6 @@ from ...core.orchestration.runtime_threads import (
     begin_next_queued_runtime_thread_execution,
     begin_runtime_thread_execution,
 )
-from ...core.orchestration.turn_timeline import (
-    append_turn_events_to_cold_trace,
-    persist_turn_timeline,
-)
-from ...core.pma_thread_store import PmaThreadStore
-from ...core.pma_transcripts import PmaTranscriptStore
 from ...core.ports.run_event import (
     RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
     RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
@@ -386,12 +387,28 @@ def _resume_managed_thread_target(
     orchestration_service: Any,
     thread: Any,
     *,
+    clear_backend_thread_id: bool,
     desired_backend_thread_id: Optional[str],
     current_backend_thread_id: Optional[str],
     desired_runtime_instance_id: Optional[str],
 ) -> Any:
     resume_kwargs: dict[str, Any] = {}
-    if desired_backend_thread_id is not None or current_backend_thread_id is not None:
+    if clear_backend_thread_id and current_backend_thread_id is not None:
+        clear_backend_thread_id_fn = getattr(
+            orchestration_service, "set_thread_backend_id", None
+        )
+        if not callable(clear_backend_thread_id_fn):
+            thread_store = getattr(orchestration_service, "thread_store", None)
+            clear_backend_thread_id_fn = getattr(
+                thread_store, "set_thread_backend_id", None
+            )
+        if callable(clear_backend_thread_id_fn):
+            clear_backend_thread_id_fn(
+                thread.thread_target_id,
+                None,
+                backend_runtime_instance_id=desired_runtime_instance_id,
+            )
+    elif desired_backend_thread_id is not None:
         resume_kwargs["backend_thread_id"] = desired_backend_thread_id
     resume_kwargs["backend_runtime_instance_id"] = desired_runtime_instance_id
     return orchestration_service.resume_thread_target(
@@ -601,6 +618,9 @@ def resolve_managed_thread_target(
         thread = _resume_managed_thread_target(
             orchestration_service,
             thread,
+            clear_backend_thread_id=(
+                request.mode == "pma" and desired_backend_thread_id is None
+            ),
             desired_backend_thread_id=desired_backend_thread_id,
             current_backend_thread_id=current_backend_thread_id,
             desired_runtime_instance_id=desired_runtime_instance_id,
@@ -633,6 +653,7 @@ class ManagedThreadTurnCoordinator:
     logger: logging.Logger
     turn_preview: str
     preview_builder: Optional[MessagePreviewBuilder] = None
+    hub_client: Any | None = None
 
     async def submit_execution(
         self,
@@ -681,6 +702,7 @@ class ManagedThreadTurnCoordinator:
                 orchestration_service=self.orchestration_service,
                 started=started,
                 state_root=self.state_root,
+                hub_client=self.hub_client,
                 surface=self.surface,
                 errors=self.errors,
                 logger=self.logger,
@@ -749,6 +771,107 @@ def get_thread_runtime_binding(
         return getter(thread_target_id)
     except (AttributeError, KeyError, TypeError, RuntimeError):
         return None
+
+
+def _resolve_hub_control_plane_client(
+    orchestration_service: Any,
+    explicit_hub_client: Any | None,
+) -> Any | None:
+    if explicit_hub_client is not None:
+        return explicit_hub_client
+    thread_store = getattr(orchestration_service, "thread_store", None)
+    client = getattr(thread_store, "_client", None)
+    return client if client is not None else None
+
+
+def _thread_target_metadata(thread: Any) -> dict[str, Any]:
+    return {
+        "repo_id": getattr(thread, "repo_id", None),
+        "resource_kind": getattr(thread, "resource_kind", None),
+        "resource_id": getattr(thread, "resource_id", None),
+        "agent": getattr(thread, "agent_id", None),
+        "workspace_root": getattr(thread, "workspace_root", None),
+    }
+
+
+async def _persist_execution_timeline_via_hub(
+    hub_client: Any,
+    *,
+    execution_id: str,
+    target_kind: str,
+    target_id: str,
+    repo_id: Optional[str],
+    resource_kind: Optional[str],
+    resource_id: Optional[str],
+    metadata: dict[str, Any],
+    events: list[Any],
+    start_index: int = 1,
+) -> None:
+    await hub_client.persist_execution_timeline(
+        ExecutionTimelinePersistRequest(
+            execution_id=execution_id,
+            target_kind=target_kind,
+            target_id=target_id,
+            repo_id=repo_id,
+            resource_kind=resource_kind,
+            resource_id=resource_id,
+            metadata=dict(metadata),
+            events=tuple(serialize_run_event(event) for event in events),
+            start_index=start_index,
+        )
+    )
+
+
+async def _finalize_execution_cold_trace_via_hub(
+    hub_client: Any,
+    *,
+    execution_id: str,
+    events: list[Any],
+    backend_thread_id: Optional[str],
+    backend_turn_id: Optional[str],
+) -> Optional[str]:
+    response = await hub_client.finalize_execution_cold_trace(
+        ExecutionColdTraceFinalizeRequest(
+            execution_id=execution_id,
+            events=tuple(serialize_run_event(event) for event in events),
+            backend_thread_id=backend_thread_id,
+            backend_turn_id=backend_turn_id,
+        )
+    )
+    return str(getattr(response, "trace_manifest_id", "") or "").strip() or None
+
+
+async def _write_transcript_via_hub(
+    hub_client: Any,
+    *,
+    turn_id: str,
+    metadata: dict[str, Any],
+    assistant_text: str,
+) -> Optional[str]:
+    response = await hub_client.write_transcript(
+        TranscriptWriteRequest(
+            turn_id=turn_id,
+            metadata=dict(metadata),
+            assistant_text=assistant_text,
+        )
+    )
+    return str(getattr(response, "turn_id", "") or "").strip() or None
+
+
+async def _record_thread_activity_via_hub(
+    hub_client: Any,
+    *,
+    thread_target_id: str,
+    execution_id: str,
+    message_preview: str,
+) -> None:
+    await hub_client.record_thread_activity(
+        ThreadActivityRecordRequest(
+            thread_target_id=thread_target_id,
+            execution_id=execution_id,
+            message_preview=message_preview,
+        )
+    )
 
 
 async def submit_managed_thread_execution(
@@ -969,11 +1092,13 @@ def ensure_managed_thread_queue_worker(
                         transcript_turn_id=None,
                     )
             except (
+                HubControlPlaneError,
                 RuntimeError,
                 OSError,
                 ValueError,
                 TypeError,
                 AttributeError,
+                KeyError,
             ):
                 logger.exception(
                     "Managed-thread queue worker cleanup failed (thread=%s)",
@@ -1106,6 +1231,7 @@ async def finalize_managed_thread_execution(
     orchestration_service: Any,
     started: RuntimeThreadExecution,
     state_root: Path,
+    hub_client: Any | None,
     surface: ManagedThreadSurfaceInfo,
     errors: ManagedThreadErrorMessages,
     logger: logging.Logger,
@@ -1113,11 +1239,20 @@ async def finalize_managed_thread_execution(
     runtime_event_state: Optional[RuntimeThreadRunEventState] = None,
     on_progress_event: Optional[ProgressEventHandler] = None,
 ) -> ManagedThreadFinalizationResult:
-    thread_store = PmaThreadStore(state_root)
-    transcripts = PmaTranscriptStore(state_root)
+    _ = state_root
     managed_thread_id = started.thread.thread_target_id
     managed_turn_id = started.execution.execution_id
-    current_thread_row = thread_store.get_thread(managed_thread_id) or {}
+    resolved_hub_client = _resolve_hub_control_plane_client(
+        orchestration_service,
+        hub_client,
+    )
+    try:
+        current_thread = orchestration_service.get_thread_target(managed_thread_id)
+    except (AttributeError, KeyError, TypeError, RuntimeError):
+        current_thread = None
+    if current_thread is None:
+        current_thread = started.thread
+    current_thread_metadata = _thread_target_metadata(current_thread)
     runtime_binding = get_thread_runtime_binding(
         orchestration_service, managed_thread_id
     )
@@ -1137,23 +1272,6 @@ async def finalize_managed_thread_execution(
     live_timeline_error_logged = False
     final_trace_manifest_id: Optional[str] = None
 
-    cold_trace_writer: Optional[ColdTraceWriter] = None
-    try:
-        cold_trace_writer = ColdTraceWriter(
-            hub_root=state_root,
-            execution_id=managed_turn_id,
-            backend_thread_id=current_backend_thread_id or None,
-            backend_turn_id=started.execution.backend_id,
-        ).open()
-    except Exception:
-        logger.warning(
-            "%s Failed to open cold trace writer (thread=%s turn=%s)",
-            surface.log_label,
-            managed_thread_id,
-            managed_turn_id,
-            exc_info=True,
-        )
-
     log_event(
         logger,
         logging.INFO,
@@ -1170,33 +1288,37 @@ async def finalize_managed_thread_execution(
         agent_id=getattr(started.thread, "agent_id", None),
     )
 
-    def _persist_live_timeline_events(events: list[Any]) -> None:
+    async def _persist_live_timeline_events(events: list[Any]) -> None:
         nonlocal live_timeline_count
         nonlocal live_timeline_error_logged
         if not events:
             return
-        if cold_trace_writer is None:
+        if resolved_hub_client is None:
             if not live_timeline_error_logged:
                 live_timeline_error_logged = True
                 logger.error(
-                    "%s Skipping live timeline persistence without a cold trace writer (thread=%s turn=%s)",
+                    "%s Skipping live timeline persistence without a hub control-plane client (thread=%s turn=%s)",
                     surface.log_label,
                     managed_thread_id,
                     managed_turn_id,
                 )
             return
         try:
-            persist_turn_timeline(
-                state_root,
+            await _persist_execution_timeline_via_hub(
+                resolved_hub_client,
                 execution_id=managed_turn_id,
                 target_kind="thread_target",
                 target_id=managed_thread_id,
-                repo_id=str(current_thread_row.get("repo_id") or "").strip() or None,
+                repo_id=(
+                    str(current_thread_metadata.get("repo_id") or "").strip() or None
+                ),
                 resource_kind=(
-                    str(current_thread_row.get("resource_kind") or "").strip() or None
+                    str(current_thread_metadata.get("resource_kind") or "").strip()
+                    or None
                 ),
                 resource_id=(
-                    str(current_thread_row.get("resource_id") or "").strip() or None
+                    str(current_thread_metadata.get("resource_id") or "").strip()
+                    or None
                 ),
                 metadata=_surface_metadata(
                     started,
@@ -1207,13 +1329,12 @@ async def finalize_managed_thread_execution(
                 ),
                 events=events,
                 start_index=live_timeline_count + 1,
-                cold_trace_writer=cold_trace_writer,
             )
         except Exception:
             if not live_timeline_error_logged:
                 live_timeline_error_logged = True
                 logger.exception(
-                    "Failed to persist live %s thread timeline (thread=%s turn=%s)",
+                    "Failed to persist live %s thread timeline via hub control plane (thread=%s turn=%s)",
                     surface.log_label,
                     managed_thread_id,
                     managed_turn_id,
@@ -1221,68 +1342,65 @@ async def finalize_managed_thread_execution(
         else:
             live_timeline_count += len(events)
 
-    def _persist_final_timeline_with_cold_trace(
+    async def _persist_final_timeline_with_cold_trace(
         *,
         metadata: dict[str, Any],
         events: list[Any],
     ) -> Optional[str]:
+        if resolved_hub_client is None:
+            logger.error(
+                "%s Skipping final timeline persistence without a hub control-plane client (thread=%s turn=%s)",
+                surface.log_label,
+                managed_thread_id,
+                managed_turn_id,
+            )
+            return None
         manifest_id = str(metadata.get("trace_manifest_id") or "").strip() or None
         if manifest_id is None:
-            final_writer: Optional[ColdTraceWriter] = cold_trace_writer
-            if final_writer is None:
-                try:
-                    final_writer = ColdTraceWriter(
-                        hub_root=state_root,
-                        execution_id=managed_turn_id,
-                        backend_thread_id=current_backend_thread_id or None,
-                        backend_turn_id=(
-                            outcome.backend_turn_id or started.execution.backend_id
-                        ),
-                    ).open()
-                except Exception:
-                    logger.warning(
-                        "%s Failed to open final cold trace writer (thread=%s turn=%s)",
-                        surface.log_label,
-                        managed_thread_id,
-                        managed_turn_id,
-                        exc_info=True,
-                    )
-                    final_writer = None
-            if final_writer is not None:
-                try:
-                    append_turn_events_to_cold_trace(final_writer, events=events)
-                    manifest_id = final_writer.finalize().trace_id
-                except Exception:
-                    logger.warning(
-                        "%s Failed to persist final cold trace (thread=%s turn=%s)",
-                        surface.log_label,
-                        managed_thread_id,
-                        managed_turn_id,
-                        exc_info=True,
-                    )
-                finally:
-                    final_writer.close()
+            try:
+                manifest_id = await _finalize_execution_cold_trace_via_hub(
+                    resolved_hub_client,
+                    execution_id=managed_turn_id,
+                    events=timeline_events,
+                    backend_thread_id=current_backend_thread_id or None,
+                    backend_turn_id=(
+                        outcome.backend_turn_id or started.execution.backend_id
+                    ),
+                )
+            except Exception:
+                logger.warning(
+                    "%s Failed to persist final cold trace via hub control plane (thread=%s turn=%s)",
+                    surface.log_label,
+                    managed_thread_id,
+                    managed_turn_id,
+                    exc_info=True,
+                )
 
         try:
-            persist_turn_timeline(
-                state_root,
+            await _persist_execution_timeline_via_hub(
+                resolved_hub_client,
                 execution_id=managed_turn_id,
                 target_kind="thread_target",
                 target_id=managed_thread_id,
-                repo_id=str(current_thread_row.get("repo_id") or "").strip() or None,
+                repo_id=(
+                    str(current_thread_metadata.get("repo_id") or "").strip() or None
+                ),
                 resource_kind=(
-                    str(current_thread_row.get("resource_kind") or "").strip() or None
+                    str(current_thread_metadata.get("resource_kind") or "").strip()
+                    or None
                 ),
                 resource_id=(
-                    str(current_thread_row.get("resource_id") or "").strip() or None
+                    str(current_thread_metadata.get("resource_id") or "").strip()
+                    or None
                 ),
-                metadata=metadata
+                metadata=dict(metadata)
                 | ({"trace_manifest_id": manifest_id} if manifest_id else {}),
                 events=events,
+                start_index=live_timeline_count + 1,
             )
         except Exception:
             logger.exception(
-                "Failed to persist %s thread timeline (thread=%s turn=%s)",
+                "Failed to persist %s thread timeline via hub control plane (thread=%s turn=%s)",
                 surface.log_label,
                 managed_thread_id,
                 managed_turn_id,
@@ -1378,7 +1496,7 @@ async def finalize_managed_thread_execution(
                                 content_summary=content_summary,
                             )
                     timeline_events.extend(run_events)
-                    _persist_live_timeline_events(run_events)
+                    await _persist_live_timeline_events(run_events)
                     if on_progress_event is None:
                         continue
                     for run_event in run_events:
@@ -1537,26 +1655,7 @@ async def finalize_managed_thread_execution(
                 exc_info=True,
             )
 
-    if cold_trace_writer is not None and live_timeline_count > 0:
-        try:
-            append_turn_events_to_cold_trace(
-                cold_trace_writer,
-                events=timeline_events[live_timeline_count:],
-            )
-            final_trace_manifest_id = cold_trace_writer.finalize().trace_id
-        except Exception:
-            logger.warning(
-                "%s Failed to finalize cold trace (thread=%s turn=%s)",
-                surface.log_label,
-                managed_thread_id,
-                managed_turn_id,
-                exc_info=True,
-            )
-        finally:
-            cold_trace_writer.close()
-            cold_trace_writer = None
-
-    final_trace_manifest_id = _persist_final_timeline_with_cold_trace(
+    final_trace_manifest_id = await _persist_final_timeline_with_cold_trace(
         metadata=_surface_metadata(
             started,
             surface,
@@ -1569,13 +1668,19 @@ async def finalize_managed_thread_execution(
             if final_trace_manifest_id
             else {}
         ),
-        events=timeline_events,
+        events=timeline_events[live_timeline_count:],
     )
 
     resolved_assistant_text = (
         outcome.assistant_text or event_state.best_assistant_text()
     )
-    finalized_thread = orchestration_service.get_thread_target(managed_thread_id)
+    try:
+        finalized_thread = orchestration_service.get_thread_target(managed_thread_id)
+    except (AttributeError, KeyError, TypeError, RuntimeError):
+        finalized_thread = None
+    if finalized_thread is None:
+        finalized_thread = current_thread
+    finalized_thread_metadata = _thread_target_metadata(finalized_thread)
     finalized_runtime_binding = get_thread_runtime_binding(
         orchestration_service,
         managed_thread_id,
@@ -1599,9 +1704,12 @@ async def finalize_managed_thread_execution(
         transcript_metadata = {
             "managed_thread_id": managed_thread_id,
             "managed_turn_id": managed_turn_id,
-            "repo_id": current_thread_row.get("repo_id"),
-            "workspace_root": str(started.workspace_root),
-            "agent": current_thread_row.get("agent"),
+            "repo_id": finalized_thread_metadata.get("repo_id"),
+            "workspace_root": str(
+                finalized_thread_metadata.get("workspace_root")
+                or started.workspace_root
+            ),
+            "agent": finalized_thread_metadata.get("agent"),
             "backend_thread_id": resolved_backend_thread_id,
             "backend_turn_id": outcome.backend_turn_id,
             "model": started.request.model,
@@ -1612,13 +1720,15 @@ async def finalize_managed_thread_execution(
         }
         transcript_metadata.update(dict(surface.metadata))
         try:
-            transcripts.write_transcript(
+            if resolved_hub_client is None:
+                raise RuntimeError("Hub control-plane client unavailable")
+            transcript_turn_id = await _write_transcript_via_hub(
+                resolved_hub_client,
                 turn_id=managed_turn_id,
                 metadata=transcript_metadata,
                 assistant_text=resolved_assistant_text,
             )
-            transcript_turn_id = managed_turn_id
-        except OSError as exc:
+        except (HubControlPlaneError, RuntimeError, OSError) as exc:
             logger.warning(
                 "Failed to persist %s transcript (thread=%s turn=%s): %s",
                 surface.log_label,
@@ -1683,11 +1793,9 @@ async def finalize_managed_thread_execution(
                 backend_thread_id=resolved_backend_thread_id,
                 token_usage=event_state.token_usage,
             )
-        thread_store.update_thread_after_turn(
-            managed_thread_id,
-            last_turn_id=managed_turn_id,
-            last_message_preview=turn_preview,
-        )
+        # Log turn_finalized immediately after orchestration acknowledges ok so log-plane
+        # correlates with orch_thread_executions even if optional hub calls below fail or
+        # raise an exception type we do not catch.
         log_event(
             logger,
             logging.INFO,
@@ -1706,6 +1814,23 @@ async def finalize_managed_thread_execution(
             token_usage=event_state.token_usage,
             **_managed_thread_runtime_trace_fields(event_state),
         )
+        try:
+            if resolved_hub_client is None:
+                raise RuntimeError("Hub control-plane client unavailable")
+            await _record_thread_activity_via_hub(
+                resolved_hub_client,
+                thread_target_id=managed_thread_id,
+                execution_id=managed_turn_id,
+                message_preview=turn_preview,
+            )
+        except (HubControlPlaneError, RuntimeError, OSError):
+            logger.warning(
+                "%s Failed to persist thread activity via hub control plane (thread=%s turn=%s)",
+                surface.log_label,
+                managed_thread_id,
+                managed_turn_id,
+                exc_info=True,
+            )
         return _build_finalization_result(
             status="ok",
             assistant_text=resolved_assistant_text,
@@ -1769,7 +1894,7 @@ async def finalize_managed_thread_execution(
             backend_turn_id=outcome.backend_turn_id,
             transcript_turn_id=None,
         )
-    except KeyError:
+    except (HubControlPlaneError, KeyError):
         pass
     log_event(
         logger,

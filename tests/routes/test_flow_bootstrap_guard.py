@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from codex_autorunner.bootstrap import seed_hub_files
+from codex_autorunner.core.config_contract import ConfigError
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.core.flows.worker_process import FlowWorkerHealth
@@ -523,6 +524,22 @@ def test_bootstrap_retries_when_flow_db_recovery_succeeds(tmp_path, monkeypatch)
         flow_routes, "_recover_flow_store_if_possible", lambda *_, **__: True
     )
 
+    class _ConfigErrorService:
+        def list_active_flow_runs(self, **__):
+            return []
+
+        def list_flow_runs(self, **__):
+            return []
+
+        async def start_flow_run(self, *_, **__):
+            raise ConfigError("no hub config")
+
+    monkeypatch.setattr(
+        flow_routes,
+        "_build_flow_orchestration_service",
+        lambda *_, **__: _ConfigErrorService(),
+    )
+
     db_path = tmp_path / ".codex-autorunner" / "flows.db"
     store = FlowStore(db_path)
     store.initialize()
@@ -572,6 +589,22 @@ def test_bootstrap_returns_503_on_sqlite_error_without_recovery(tmp_path, monkey
         flow_routes, "_recover_flow_store_if_possible", lambda *_, **__: False
     )
 
+    class _ConfigErrorService:
+        def list_active_flow_runs(self, **__):
+            return []
+
+        def list_flow_runs(self, **__):
+            return []
+
+        async def start_flow_run(self, *_, **__):
+            raise ConfigError("no hub config")
+
+    monkeypatch.setattr(
+        flow_routes,
+        "_build_flow_orchestration_service",
+        lambda *_, **__: _ConfigErrorService(),
+    )
+
     class FailController:
         async def start_flow(self, *_args, **_kwargs):
             raise sqlite3.DatabaseError("database disk image is malformed")
@@ -600,6 +633,22 @@ def test_bootstrap_returns_503_when_retry_attempt_hits_sqlite_error(
     monkeypatch.setattr(flow_routes, "_start_flow_worker", lambda *_, **__: None)
     monkeypatch.setattr(
         flow_routes, "_recover_flow_store_if_possible", lambda *_, **__: True
+    )
+
+    class _ConfigErrorService:
+        def list_active_flow_runs(self, **__):
+            return []
+
+        def list_flow_runs(self, **__):
+            return []
+
+        async def start_flow_run(self, *_, **__):
+            raise ConfigError("no hub config")
+
+    monkeypatch.setattr(
+        flow_routes,
+        "_build_flow_orchestration_service",
+        lambda *_, **__: _ConfigErrorService(),
     )
 
     class FirstFailController:

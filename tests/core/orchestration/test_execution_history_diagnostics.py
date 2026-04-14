@@ -282,6 +282,32 @@ def test_collect_metrics_multiple_executions(tmp_path: Path) -> None:
     assert metrics.event_count_by_execution.get("exec-b", 0) > 0
 
 
+def test_collect_metrics_uses_event_type_when_payload_json_is_malformed(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    _seed_execution(hub_root, execution_id="exec-corrupt", output_chunks=2)
+
+    with open_orchestration_sqlite(hub_root, durable=False) as conn:
+        with conn:
+            conn.execute(
+                """
+                UPDATE orch_event_projections
+                   SET payload_json = 'not-json'
+                 WHERE execution_id = ?
+                   AND event_type IN ('tool_call', 'output_delta')
+                """,
+                ("exec-corrupt",),
+            )
+
+    metrics = collect_execution_history_metrics(hub_root)
+
+    assert metrics.event_count_by_execution.get("exec-corrupt", 0) > 0
+    assert metrics.hot_row_count_by_family.get("tool_call", 0) == 1
+    assert metrics.hot_row_count_by_family.get("output_delta", 0) == 2
+
+
 def test_collect_top_n_heavy_executions(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     hub_root.mkdir()
@@ -298,6 +324,34 @@ def test_collect_top_n_heavy_executions(tmp_path: Path) -> None:
         )
     assert any(e["execution_id"] == "exec-large" for e in top_n.top_heavy_executions)
     assert len(top_n.top_event_families) > 0
+
+
+def test_collect_top_n_uses_grouped_event_types_without_payload_json(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    _seed_execution(hub_root, execution_id="exec-topn", output_chunks=3)
+
+    with open_orchestration_sqlite(hub_root, durable=False) as conn:
+        with conn:
+            conn.execute(
+                """
+                UPDATE orch_event_projections
+                   SET payload_json = ''
+                 WHERE execution_id = ?
+                   AND event_type IN ('turn_started', 'run_notice', 'tool_call')
+                """,
+                ("exec-topn",),
+            )
+
+    top_n = collect_top_n_heavy_executions(hub_root, top_n=5)
+    family_rows = {
+        entry["event_family"]: entry["hot_rows"] for entry in top_n.top_event_families
+    }
+
+    assert family_rows.get("run_notice", 0) >= 2
+    assert family_rows.get("tool_call", 0) == 1
 
 
 def test_check_thresholds_no_breach() -> None:

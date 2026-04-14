@@ -207,6 +207,8 @@ class RunnerState:
     lint: Optional[dict[str, Any]] = None
     loop_guard: Optional[dict[str, Any]] = None
     pause_context: Optional[dict[str, Any]] = None
+    ticket_thread_bindings: Optional[dict[str, Any]] = None
+    ticket_thread_debug: Optional[dict[str, Any]] = None
 
     @staticmethod
     def from_dict(data: dict[str, Any]) -> RunnerState:
@@ -231,6 +233,8 @@ class RunnerState:
             lint=data.get("lint"),
             loop_guard=data.get("loop_guard"),
             pause_context=data.get("pause_context"),
+            ticket_thread_bindings=data.get("ticket_thread_bindings"),
+            ticket_thread_debug=data.get("ticket_thread_debug"),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -274,4 +278,8 @@ class RunnerState:
             result["loop_guard"] = self.loop_guard
         if self.pause_context is not None:
             result["pause_context"] = self.pause_context
+        if self.ticket_thread_bindings is not None:
+            result["ticket_thread_bindings"] = self.ticket_thread_bindings
+        if self.ticket_thread_debug is not None:
+            result["ticket_thread_debug"] = self.ticket_thread_debug
         return result

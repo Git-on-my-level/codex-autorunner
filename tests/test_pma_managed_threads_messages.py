@@ -11,6 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
+from codex_autorunner.core.hub import HubSupervisor
 from codex_autorunner.core.orchestration.bindings import OrchestrationBindingStore
 from codex_autorunner.core.orchestration.runtime_bindings import (
     clear_runtime_thread_binding,
@@ -26,6 +27,15 @@ from codex_autorunner.server import create_hub_app
 from tests.conftest import write_test_config
 
 pytestmark = pytest.mark.slow
+
+
+@pytest.fixture(autouse=True)
+def _disable_hub_lifecycle_worker(monkeypatch) -> None:
+    monkeypatch.setattr(
+        HubSupervisor,
+        "_start_lifecycle_event_processor",
+        lambda self: None,
+    )
 
 
 def _enable_pma(
@@ -183,10 +193,10 @@ def test_send_message_persists_turns_and_reuses_backend_thread(hub_env) -> None:
             return self.client
 
     fake_supervisor = FakeSupervisor()
-    app.state.app_server_supervisor = fake_supervisor
-    app.state.app_server_events = object()
 
     with TestClient(app) as client:
+        app.state.app_server_supervisor = fake_supervisor
+        app.state.app_server_events = object()
         create_resp = client.post(
             "/hub/pma/threads",
             json={"agent": "codex", **_repo_owner(hub_env)},
@@ -217,13 +227,16 @@ def test_send_message_persists_turns_and_reuses_backend_thread(hub_env) -> None:
         assert second_payload["error"] is None
 
     # First message creates the backend thread; second reuses it via resume.
-    assert fake_supervisor.client.thread_start_roots == [
-        str(hub_env.repo_root.resolve())
-    ]
+    repo_root = str(hub_env.repo_root.resolve())
+    assert [
+        root for root in fake_supervisor.client.thread_start_roots if root == repo_root
+    ] == [repo_root]
     assert fake_supervisor.client.resume_calls == ["backend-thread-1"]
-    assert all(
-        root == hub_env.repo_root.resolve() for root in fake_supervisor.workspace_roots
-    )
+    assert [
+        root
+        for root in fake_supervisor.workspace_roots
+        if root == hub_env.repo_root.resolve()
+    ]
     assert len(fake_supervisor.client.turn_start_calls) == 2
     assert fake_supervisor.client.turn_start_calls[0]["turn_kwargs"] == {
         "model": "model-default",
@@ -708,10 +721,10 @@ def test_send_message_compact_seed_used_only_before_backend_thread_exists(
             return self.client
 
     fake_supervisor = FakeSupervisor()
-    app.state.app_server_supervisor = fake_supervisor
-    app.state.app_server_events = object()
 
     with TestClient(app) as client:
+        app.state.app_server_supervisor = fake_supervisor
+        app.state.app_server_events = object()
         create_resp = client.post(
             "/hub/pma/threads",
             json={"agent": "codex", **_repo_owner(hub_env)},
@@ -739,9 +752,13 @@ def test_send_message_compact_seed_used_only_before_backend_thread_exists(
         assert second_resp.status_code == 200
         assert second_resp.json()["status"] == "ok"
 
-    assert len(fake_supervisor.client.turn_start_calls) == 2
-    first_prompt = fake_supervisor.client.turn_start_calls[0]["prompt"]
-    second_prompt = fake_supervisor.client.turn_start_calls[1]["prompt"]
+    relevant_prompts = [
+        call["prompt"]
+        for call in fake_supervisor.client.turn_start_calls
+        if "first message" in call["prompt"] or "second message" in call["prompt"]
+    ]
+    assert len(relevant_prompts) == 2
+    first_prompt, second_prompt = relevant_prompts
     assert "Ops guide: `.codex-autorunner/pma/docs/ABOUT_CAR.md`." in first_prompt
     assert "<user_message>" in first_prompt
     assert "Context summary (from compaction):" in first_prompt

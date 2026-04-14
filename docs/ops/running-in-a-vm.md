@@ -10,15 +10,16 @@ Notes for running codex-autorunner inside containerized or cloud-provisioned VMs
 | Web Hub (FastAPI/Uvicorn) | `make serve-dev` (port 4173) | Set `CAR_DEV_INCLUDE_ROOT_REPO=1` to include the repo itself in the hub |
 | Python tests | `make test` or `.venv/bin/python -m pytest -m "not integration"` | Uses pytest with xdist for parallel runs |
 | Linting | `make check` (full suite) or individually: `black --check`, `ruff check`, `mypy`, `pnpm lint` | See `scripts/check.sh` for the full pre-commit check sequence |
-| TS build | `pnpm run build` or `make build` | Compiles `static_src/*.ts` → `static/*.js`; always rebuild after TS changes |
+| TS build | `pnpm run build` or `make build` | Compiles `src/codex_autorunner/static_src/*.ts` → `src/codex_autorunner/static/*.js`; always rebuild after TS changes |
 
 ## Startup caveats
 
 - **`python3.12-venv` system package**: Required but not pre-installed on Ubuntu 24.04 cloud VMs. Install via `sudo apt-get install -y python3.12-venv` before `make setup`.
 - **Hub init**: Before running the dev server for the first time, run `CAR_DEV_INCLUDE_ROOT_REPO=1 .venv/bin/car init --mode hub` to bootstrap `.codex-autorunner/`.
-- **Dev server binding**: Use `--host 0.0.0.0` (not the default `127.0.0.1`) to make the UI accessible outside the VM.
+- **Dev server binding**: Use `make serve-dev HOST=0.0.0.0` (not the default `127.0.0.1`) to make the UI accessible outside the VM. Health check: `curl http://localhost:4173/health`.
 - **Process termination tests**: A few tests in `tests/test_opencode_supervisor_process_management.py` and `tests/test_process_termination.py` may fail in containerized environments due to PID namespace / signal handling constraints. These are environment-specific, not code bugs.
 - **Text delta coalescer**: `tests/unit/test_text_delta_coalescer.py::test_multibyte_unicode_newline` may occasionally error in containerized VMs. This is environment-specific.
+- **Test suite is large**: ~5500 tests run serially via `make test`. Expect 60–100 min wall time in single-core VMs. Use `-n auto` (via `scripts/check.sh`) for parallelism when available.
 - **No external services required**: SQLite is embedded (stdlib); no Postgres/Redis/Docker needed for core dev workflows.
 - **Pre-commit subset**: The pre-commit hook (`scripts/check.sh`) runs `pytest -m "not integration and not slow"`. Use the same marker set when iterating locally to match pre-commit behavior.
 - **Individual lint commands**: `black --check src tests`, `ruff check src tests`, `pnpm lint`, `make typecheck-strict`. The full suite is `make check`.

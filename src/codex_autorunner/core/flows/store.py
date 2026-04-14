@@ -30,6 +30,7 @@ UNSET = object()
 _REQUIRED_SCHEMA_TABLES = frozenset(
     {"schema_info", "flow_runs", "flow_events", "flow_artifacts"}
 )
+_DELETE_SEQ_BATCH_SIZE = 900
 _SQLITE_PRAGMAS_READONLY = (
     "PRAGMA foreign_keys=ON;",
     f"PRAGMA busy_timeout={DEFAULT_SQLITE_BUSY_TIMEOUT_MS};",
@@ -924,16 +925,28 @@ class FlowStore:
         cursor = conn.execute("DELETE FROM flow_telemetry WHERE run_id = ?", (run_id,))
         return cursor.rowcount
 
-    def delete_telemetry_by_seqs(self, seqs: List[int]) -> int:
+    def _delete_rows_by_seqs(self, table_name: str, seqs: List[int]) -> int:
         if not seqs:
             return 0
+        if table_name not in {"flow_events", "flow_telemetry"}:
+            raise ValueError(f"Unsupported flow table for seq deletion: {table_name}")
         conn = self._get_conn()
-        placeholders = ",".join("?" for _ in seqs)
-        cursor = conn.execute(
-            f"DELETE FROM flow_telemetry WHERE seq IN ({placeholders})",
-            list(seqs),
-        )
-        return cursor.rowcount
+        deleted = 0
+        for start in range(0, len(seqs), _DELETE_SEQ_BATCH_SIZE):
+            batch = seqs[start : start + _DELETE_SEQ_BATCH_SIZE]
+            placeholders = ",".join("?" for _ in batch)
+            cursor = conn.execute(
+                f"DELETE FROM {table_name} WHERE seq IN ({placeholders})",
+                list(batch),
+            )
+            deleted += cursor.rowcount
+        return deleted
+
+    def delete_events_by_seqs(self, seqs: List[int]) -> int:
+        return self._delete_rows_by_seqs("flow_events", seqs)
+
+    def delete_telemetry_by_seqs(self, seqs: List[int]) -> int:
+        return self._delete_rows_by_seqs("flow_telemetry", seqs)
 
     def _row_to_flow_run(self, row: sqlite3.Row) -> FlowRunRecord:
         return FlowRunRecord(

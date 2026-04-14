@@ -18,7 +18,6 @@ from ....core.orchestration import (
     build_surface_orchestration_ingress,
 )
 from ....core.pma_notification_store import (
-    PmaNotificationStore,
     build_notification_context_block,
     notification_surface_key,
 )
@@ -693,17 +692,45 @@ async def _bind_telegram_notification_continuation(
     notification_reply = dispatch.notification_reply
     if notification_reply is None:
         return
-    orch_binding = _build_telegram_thread_orchestration_service(
-        dispatch.handlers
-    ).get_binding(
-        surface_kind="telegram",
-        surface_key=notification_surface_key(notification_reply.notification_id),
+    orch_service = _build_telegram_thread_orchestration_service(dispatch.handlers)
+    orch_binding = (
+        orch_service.get_binding(
+            surface_kind="telegram",
+            surface_key=notification_surface_key(notification_reply.notification_id),
+        )
+        if orch_service is not None
+        else None
     )
     if orch_binding is not None:
-        PmaNotificationStore(dispatch.handlers._config.root).bind_continuation_thread(
-            notification_id=notification_reply.notification_id,
-            thread_target_id=orch_binding.thread_target_id,
-        )
+        hub_client = getattr(dispatch.handlers, "_hub_client", None)
+        if hub_client is not None:
+            from ....core.hub_control_plane import (
+                NotificationContinuationBindRequest as _CPContinuationRequest,
+            )
+
+            try:
+                await hub_client.bind_notification_continuation(
+                    _CPContinuationRequest(
+                        notification_id=notification_reply.notification_id,
+                        thread_target_id=orch_binding.thread_target_id,
+                    )
+                )
+                return
+            except Exception as exc:
+                log_event(
+                    _event_logger(dispatch.handlers),
+                    logging.WARNING,
+                    "telegram.notification.continuation_bind.control_plane_failed",
+                    notification_id=notification_reply.notification_id,
+                    exc=exc,
+                )
+        else:
+            log_event(
+                _event_logger(dispatch.handlers),
+                logging.WARNING,
+                "telegram.notification.continuation_bind.hub_client_unavailable",
+                notification_id=notification_reply.notification_id,
+            )
 
 
 async def _submit_telegram_surface_turn(
@@ -1079,17 +1106,32 @@ async def handle_message_inner(
     workspace_root: Optional[Path] = None
     pma_enabled = bool(record and getattr(record, "pma_enabled", False))
     notification_reply = None
-    notification_store_root = getattr(getattr(handlers, "_config", None), "root", None)
-    if message.reply_to_message_id is not None and isinstance(
-        notification_store_root, (str, Path)
-    ):
-        notification_reply = PmaNotificationStore(
-            Path(notification_store_root)
-        ).get_reply_target(
-            surface_kind="telegram",
-            surface_key=key,
-            delivered_message_id=message.reply_to_message_id,
-        )
+    if message.reply_to_message_id is not None:
+        hub_client = getattr(handlers, "_hub_client", None)
+        if hub_client is not None:
+            from ....core.hub_control_plane import (
+                NotificationReplyTargetLookupRequest as _CPReplyTargetRequest,
+            )
+
+            try:
+                cp_response = await hub_client.get_notification_reply_target(
+                    _CPReplyTargetRequest(
+                        surface_kind="telegram",
+                        surface_key=key,
+                        delivered_message_id=str(message.reply_to_message_id),
+                    )
+                )
+                if cp_response.record is not None:
+                    notification_reply = cp_response.record
+            except Exception as exc:
+                log_event(
+                    _event_logger(handlers),
+                    logging.WARNING,
+                    "telegram.notification.reply_target.control_plane_failed",
+                    topic_key=key,
+                    message_id=message.message_id,
+                    exc=exc,
+                )
     if not pma_enabled and record and record.workspace_path:
         workspace_root = canonicalize_path(Path(record.workspace_path))
         preferred_run_id = handlers._ticket_flow_pause_targets.get(
@@ -1583,17 +1625,32 @@ async def handle_media_message(
     pma_enabled = bool(getattr(record, "pma_enabled", False))
     workspace_root = canonicalize_path(Path(record.workspace_path))
     notification_reply = None
-    notification_store_root = getattr(getattr(handlers, "_config", None), "root", None)
-    if message.reply_to_message_id is not None and isinstance(
-        notification_store_root, (str, Path)
-    ):
-        notification_reply = PmaNotificationStore(
-            Path(notification_store_root)
-        ).get_reply_target(
-            surface_kind="telegram",
-            surface_key=key,
-            delivered_message_id=message.reply_to_message_id,
-        )
+    if message.reply_to_message_id is not None:
+        hub_client = getattr(handlers, "_hub_client", None)
+        if hub_client is not None:
+            from ....core.hub_control_plane import (
+                NotificationReplyTargetLookupRequest as _CPReplyTargetRequest,
+            )
+
+            try:
+                cp_response = await hub_client.get_notification_reply_target(
+                    _CPReplyTargetRequest(
+                        surface_kind="telegram",
+                        surface_key=key,
+                        delivered_message_id=str(message.reply_to_message_id),
+                    )
+                )
+                if cp_response.record is not None:
+                    notification_reply = cp_response.record
+            except Exception as exc:
+                log_event(
+                    _event_logger(handlers),
+                    logging.WARNING,
+                    "telegram.media.reply_target.control_plane_failed",
+                    topic_key=key,
+                    message_id=message.message_id,
+                    exc=exc,
+                )
     turn_caption_text = format_forwarded_telegram_message_text(message, caption_text)
     paused = None
     if not pma_enabled and notification_reply is None:
@@ -1668,17 +1725,46 @@ async def handle_media_message(
                 pma_enabled=True,
             )
         )
-        orch_binding = _build_telegram_thread_orchestration_service(
-            handlers
-        ).get_binding(
-            surface_kind="telegram",
-            surface_key=notification_surface_key(notification_reply.notification_id),
+        orch_service = _build_telegram_thread_orchestration_service(handlers)
+        orch_binding = (
+            orch_service.get_binding(
+                surface_kind="telegram",
+                surface_key=notification_surface_key(
+                    notification_reply.notification_id
+                ),
+            )
+            if orch_service is not None
+            else None
         )
         if orch_binding is not None:
-            PmaNotificationStore(handlers._config.root).bind_continuation_thread(
-                notification_id=notification_reply.notification_id,
-                thread_target_id=orch_binding.thread_target_id,
-            )
+            hub_client = getattr(handlers, "_hub_client", None)
+            if hub_client is not None:
+                from ....core.hub_control_plane import (
+                    NotificationContinuationBindRequest as _CPContinuationRequest,
+                )
+
+                try:
+                    await hub_client.bind_notification_continuation(
+                        _CPContinuationRequest(
+                            notification_id=notification_reply.notification_id,
+                            thread_target_id=orch_binding.thread_target_id,
+                        )
+                    )
+                except Exception as exc:
+                    log_event(
+                        _event_logger(handlers),
+                        logging.WARNING,
+                        "telegram.media.continuation_bind.control_plane_failed",
+                        notification_id=notification_reply.notification_id,
+                        exc=exc,
+                    )
+            else:
+                log_event(
+                    _event_logger(handlers),
+                    logging.WARNING,
+                    "telegram.media.continuation_bind.hub_client_unavailable",
+                    notification_id=notification_reply.notification_id,
+                )
         return
     await ingress.submit_message(
         SurfaceThreadMessageRequest(

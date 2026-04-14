@@ -28,6 +28,7 @@ from .execution_history import (
     ExecutionCheckpointSignal,
     build_hot_projection_envelope,
     route_run_event,
+    timeline_hot_family_for_event_type,
 )
 from .execution_history_diagnostics import (
     log_dedupe,
@@ -112,6 +113,89 @@ def _decode_payload_json(raw: Any) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _collect_execution_family_hot_rows(
+    hub_root: Any, execution_id: str
+) -> dict[str, int]:
+    with open_orchestration_sqlite(hub_root) as conn:
+        rows = conn.execute(
+            """
+            SELECT event_type, COUNT(*) AS cnt
+              FROM orch_event_projections
+             INDEXED BY idx_orch_event_projections_family_execution_order
+             WHERE event_family = ?
+               AND execution_id = ?
+             GROUP BY event_type
+            """,
+            (_EVENT_FAMILY, execution_id),
+        ).fetchall()
+    family_hot_rows: dict[str, int] = {}
+    for row in rows:
+        family = timeline_hot_family_for_event_type(row["event_type"])
+        if family:
+            family_hot_rows[family] = family_hot_rows.get(family, 0) + int(
+                row["cnt"] or 0
+            )
+    return family_hot_rows
+
+
+def _seed_notice_memory(hub_root: Any, execution_id: str) -> dict[str, str]:
+    with open_orchestration_sqlite(hub_root) as conn:
+        rows = conn.execute(
+            """
+            SELECT payload_json
+              FROM orch_event_projections
+             INDEXED BY idx_orch_event_projections_family_execution_order
+             WHERE event_family = ?
+               AND execution_id = ?
+               AND event_type = 'run_notice'
+             ORDER BY event_id ASC
+            """,
+            (_EVENT_FAMILY, execution_id),
+        ).fetchall()
+    last_notice_by_kind: dict[str, str] = {}
+    for row in rows:
+        payload = _decode_payload_json(row["payload_json"])
+        event_payload = payload.get("event")
+        if not isinstance(event_payload, dict):
+            continue
+        kind = str(event_payload.get("kind") or "").strip()
+        if kind:
+            last_notice_by_kind[kind] = _bounded_state_text(
+                str(event_payload.get("message") or ""),
+                _HOT_STATE_NOTICE_MAX_CHARS,
+            )
+    return last_notice_by_kind
+
+
+def _seed_output_memory(hub_root: Any, execution_id: str) -> dict[str, str]:
+    with open_orchestration_sqlite(hub_root) as conn:
+        rows = conn.execute(
+            """
+            SELECT payload_json
+              FROM orch_event_projections
+             INDEXED BY idx_orch_event_projections_family_execution_order
+             WHERE event_family = ?
+               AND execution_id = ?
+               AND event_type = 'output_delta'
+             ORDER BY event_id ASC
+            """,
+            (_EVENT_FAMILY, execution_id),
+        ).fetchall()
+    last_output_by_type: dict[str, str] = {}
+    for row in rows:
+        payload = _decode_payload_json(row["payload_json"])
+        event_payload = payload.get("event")
+        if not isinstance(event_payload, dict):
+            continue
+        delta_type = str(event_payload.get("delta_type") or "").strip()
+        if delta_type:
+            last_output_by_type[delta_type] = _bounded_state_text(
+                str(event_payload.get("content") or ""),
+                _HOT_STATE_OUTPUT_MAX_CHARS,
+            )
+    return last_output_by_type
+
+
 class _HotProjectionState:
     def __init__(self, checkpoint: Optional[ExecutionCheckpoint]) -> None:
         checkpoint_state = (
@@ -161,40 +245,11 @@ class _HotProjectionState:
             )
         ):
             return
-        with open_orchestration_sqlite(hub_root) as conn:
-            rows = conn.execute(
-                """
-                SELECT event_type, payload_json
-                  FROM orch_event_projections
-                 WHERE event_family = ?
-                   AND execution_id = ?
-                 ORDER BY event_id ASC
-                """,
-                (_EVENT_FAMILY, execution_id),
-            ).fetchall()
-        for row in rows:
-            event_type = str(row["event_type"] or "").strip()
-            family = _event_family_for_event_type(event_type)
-            if family:
-                self.family_hot_rows[family] = self.family_hot_rows.get(family, 0) + 1
-            payload = _decode_payload_json(row["payload_json"])
-            event_payload = payload.get("event")
-            if not isinstance(event_payload, dict):
-                continue
-            if event_type == "run_notice":
-                kind = str(event_payload.get("kind") or "").strip()
-                if kind:
-                    self.last_notice_by_kind[kind] = _bounded_state_text(
-                        str(event_payload.get("message") or ""),
-                        _HOT_STATE_NOTICE_MAX_CHARS,
-                    )
-            elif event_type == "output_delta":
-                delta_type = str(event_payload.get("delta_type") or "").strip()
-                if delta_type:
-                    self.last_output_by_type[delta_type] = _bounded_state_text(
-                        str(event_payload.get("content") or ""),
-                        _HOT_STATE_OUTPUT_MAX_CHARS,
-                    )
+        self.family_hot_rows = _collect_execution_family_hot_rows(
+            hub_root, execution_id
+        )
+        self.last_notice_by_kind = _seed_notice_memory(hub_root, execution_id)
+        self.last_output_by_type = _seed_output_memory(hub_root, execution_id)
 
     def note_hot_persisted(self, family: str) -> None:
         self.family_hot_rows[family] = self.family_hot_rows.get(family, 0) + 1
@@ -437,20 +492,6 @@ class _CheckpointAccumulator:
             terminal_signals=tuple(self._terminal_signals),
             trace_manifest_id=self.trace_manifest_id,
         )
-
-
-def _event_family_for_event_type(event_type: str) -> Optional[str]:
-    return {
-        "turn_started": "run_notice",
-        "output_delta": "output_delta",
-        "tool_call": "tool_call",
-        "tool_result": "tool_result",
-        "approval_requested": "run_notice",
-        "token_usage": "token_usage",
-        "run_notice": "run_notice",
-        "turn_completed": "terminal",
-        "turn_failed": "terminal",
-    }.get(str(event_type or "").strip())
 
 
 def _maybe_coalesce_hot_event(
@@ -835,6 +876,7 @@ def list_turn_timeline(hub_root, *, execution_id: str) -> list[dict[str, Any]]:
             """
             SELECT event_id, event_type, timestamp, status, payload_json
               FROM orch_event_projections
+             INDEXED BY idx_orch_event_projections_family_execution_order
              WHERE event_family = ?
                AND execution_id = ?
              ORDER BY timestamp ASC, event_id ASC

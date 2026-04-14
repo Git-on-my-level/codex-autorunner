@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 from collections import deque
 from dataclasses import dataclass
@@ -11,7 +12,7 @@ from typing import Any, Awaitable, Callable, Optional
 
 import typer
 
-from ....core.config import ConfigError, load_hub_config
+from ....core.config import ACTIVE_HUB_ROOT_ENV, ConfigError, load_hub_config
 from ....core.logging_utils import setup_rotating_logger
 from ....core.redaction import redact_text
 from ....integrations.discord.command_registry import sync_commands
@@ -369,6 +370,7 @@ def register_discord_commands(
             config = load_hub_config(path or Path.cwd())
         except ConfigError as exc:
             raise_exit(str(exc), cause=exc)
+        os.environ[ACTIVE_HUB_ROOT_ENV] = str(config.root)
         try:
             discord_raw = (
                 config.raw.get("discord_bot") if isinstance(config.raw, dict) else {}

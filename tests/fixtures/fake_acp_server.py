@@ -592,6 +592,40 @@ class FakeACPServer:
                 {"sessions": list(self._sessions.values())},
             )
             return
+        if method == "session/fork":
+            source_id = str(params.get("sessionId") or "")
+            if source_id not in self._sessions:
+                self._send_error(request_id, -32004, "session not found")
+                return
+            fork_id = f"session-{self._next_session}"
+            self._next_session += 1
+            source = dict(self._sessions[source_id])
+            fork_title = params.get("title") or f"fork of {source_id}"
+            fork_session = {
+                "sessionId": fork_id,
+                "title": fork_title,
+                "cwd": source.get("cwd"),
+            }
+            self._sessions[fork_id] = fork_session
+            self._session_cancel_events[fork_id] = threading.Event()
+            self._send_result(request_id, {"session": fork_session})
+            return
+        if method == "session/set_model":
+            session_id = str(params.get("sessionId") or "")
+            if session_id not in self._sessions:
+                self._send_error(request_id, -32004, "session not found")
+                return
+            self._sessions[session_id]["modelId"] = params.get("modelId", "")
+            self._send_result(request_id, {"modelId": params.get("modelId", "")})
+            return
+        if method == "session/set_mode":
+            session_id = str(params.get("sessionId") or "")
+            if session_id not in self._sessions:
+                self._send_error(request_id, -32004, "session not found")
+                return
+            self._sessions[session_id]["mode"] = params.get("mode", "")
+            self._send_result(request_id, {"mode": params.get("mode", "")})
+            return
         if method == "session/new":
             session_id = f"session-{self._next_session}"
             self._next_session += 1

@@ -295,6 +295,8 @@
           "discovery_workspace_limit": 1,
           "enabled": false,
           "interval_seconds": 90,
+          "post_open_boost_interval_seconds": 30,
+          "post_open_boost_minutes": 30,
           "watch_window_minutes": 30
         },
         "reactions": {
@@ -304,6 +306,8 @@
           "delivery_failure_escalation_threshold": 3,
           "duplicate_escalation_threshold": 3,
           "enabled": true,
+          "github_login_blacklist": [],
+          "github_login_whitelist": [],
           "merged": true,
           "review_comment": true
         },

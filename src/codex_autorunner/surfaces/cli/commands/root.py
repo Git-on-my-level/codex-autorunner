@@ -16,6 +16,7 @@ import yaml
 
 from ....bootstrap import seed_hub_files, seed_repo_files
 from ....core.config import (
+    ACTIVE_HUB_ROOT_ENV,
     CONFIG_FILENAME,
     ConfigError,
     HubConfig,
@@ -61,6 +62,8 @@ def _require_repo_config(repo: Optional[Path], hub: Optional[Path]) -> RuntimeCo
             )
         _raise_exit("no .git", cause=exc)
     try:
+        if hub is not None:
+            os.environ[ACTIVE_HUB_ROOT_ENV] = str(hub.expanduser().resolve())
         config = load_repo_config(repo_root, hub_path=hub)
         return RuntimeContext(
             repo_root=repo_root,
@@ -72,7 +75,9 @@ def _require_repo_config(repo: Optional[Path], hub: Optional[Path]) -> RuntimeCo
 
 def _require_hub_config(path: Optional[Path]) -> HubConfig:
     try:
-        return load_hub_config(path or Path.cwd())
+        config = load_hub_config(path or Path.cwd())
+        os.environ[ACTIVE_HUB_ROOT_ENV] = str(config.root)
+        return config
     except ConfigError as exc:
         _raise_exit(str(exc), cause=exc)
 
@@ -658,20 +663,6 @@ def register_root_commands(app: typer.Typer) -> None:
             typer.echo("no process; lock cleared")
 
     @app.command()
-    def resume(
-        repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
-        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
-    ):
-        """Resume a paused/running ticket flow (now uses ticket_flow).
-
-        This command now uses ticket_flow for execution. For full control over
-        flows, use 'car flow' commands instead.
-        """
-        typer.echo("The 'resume' command has been deprecated in favor of ticket_flow.")
-        typer.echo("Use 'car flow ticket_flow start' to resume existing flows.")
-        raise typer.Exit(code=0)
-
-    @app.command()
     def log(
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
         hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
@@ -749,6 +740,7 @@ def register_root_commands(app: typer.Typer) -> None:
             config = load_hub_config(path or Path.cwd())
         except ConfigError as exc:
             _raise_exit(str(exc), cause=exc)
+        os.environ[ACTIVE_HUB_ROOT_ENV] = str(config.root)
         bind_host = host or config.server_host
         bind_port = port or config.server_port
         normalized_base = (

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -222,15 +223,20 @@ class TranscriptMirrorStore:
             )
 
     def read_transcript(self, turn_id: str) -> dict[str, Any] | None:
-        with open_orchestration_sqlite(self._hub_root) as conn:
-            row = conn.execute(
-                """
-                SELECT transcript_mirror_id, metadata_json, text_content, text_preview
-                  FROM orch_transcript_mirrors
-                 WHERE transcript_mirror_id = ?
-                """,
-                (turn_id,),
-            ).fetchone()
+        try:
+            with open_orchestration_sqlite(self._hub_root, migrate=False) as conn:
+                row = conn.execute(
+                    """
+                    SELECT transcript_mirror_id, metadata_json, text_content, text_preview
+                      FROM orch_transcript_mirrors
+                     WHERE transcript_mirror_id = ?
+                    """,
+                    (turn_id,),
+                ).fetchone()
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc).lower():
+                raise
+            return None
         parsed = self._row_to_record(row)
         if parsed is None:
             return None
@@ -239,16 +245,21 @@ class TranscriptMirrorStore:
     def list_recent(self, *, limit: int = 50) -> list[dict[str, Any]]:
         if limit <= 0:
             return []
-        with open_orchestration_sqlite(self._hub_root) as conn:
-            rows = conn.execute(
-                """
-                SELECT transcript_mirror_id, metadata_json, text_content, text_preview
-                  FROM orch_transcript_mirrors
-                 ORDER BY rowid DESC
-                 LIMIT ?
-                """,
-                (int(limit),),
-            ).fetchall()
+        try:
+            with open_orchestration_sqlite(self._hub_root, migrate=False) as conn:
+                rows = conn.execute(
+                    """
+                    SELECT transcript_mirror_id, metadata_json, text_content, text_preview
+                      FROM orch_transcript_mirrors
+                     ORDER BY rowid DESC
+                     LIMIT ?
+                    """,
+                    (int(limit),),
+                ).fetchall()
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc).lower():
+                raise
+            return []
         entries: list[dict[str, Any]] = []
         for row in rows:
             parsed = self._row_to_record(row)
@@ -265,18 +276,23 @@ class TranscriptMirrorStore:
     ) -> list[dict[str, Any]]:
         if limit <= 0:
             return []
-        with open_orchestration_sqlite(self._hub_root) as conn:
-            rows = conn.execute(
-                """
-                SELECT transcript_mirror_id, metadata_json, text_content, text_preview
-                  FROM orch_transcript_mirrors
-                 WHERE target_kind = ?
-                   AND target_id = ?
-                 ORDER BY created_at DESC, transcript_mirror_id DESC
-                 LIMIT ?
-                """,
-                (target_kind, target_id, int(limit)),
-            ).fetchall()
+        try:
+            with open_orchestration_sqlite(self._hub_root, migrate=False) as conn:
+                rows = conn.execute(
+                    """
+                    SELECT transcript_mirror_id, metadata_json, text_content, text_preview
+                      FROM orch_transcript_mirrors
+                     WHERE target_kind = ?
+                       AND target_id = ?
+                     ORDER BY created_at DESC, transcript_mirror_id DESC
+                     LIMIT ?
+                    """,
+                    (target_kind, target_id, int(limit)),
+                ).fetchall()
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc).lower():
+                raise
+            return []
         entries: list[dict[str, Any]] = []
         for row in rows:
             parsed = self._row_to_record(row)

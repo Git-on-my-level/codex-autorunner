@@ -24,14 +24,23 @@ from .events import (
     normalize_notification,
 )
 from .protocol import (
+    ACPAdvertisedCommand,
     ACPInitializeResult,
+    ACPOptionalMethodResult,
     ACPPromptDescriptor,
+    ACPSessionCapabilities,
     ACPSessionDescriptor,
+    ACPSessionForkResult,
+    ACPSetModelResult,
+    ACPSetModeResult,
     coerce_session_list,
+    extract_advertised_commands,
+    extract_session_capabilities,
 )
 from .supervisor import ACPSubprocessSupervisor, ACPSupervisorHandleSnapshot
 
 __all__ = [
+    "ACPAdvertisedCommand",
     "ACPClient",
     "ACPError",
     "ACPEvent",
@@ -41,6 +50,7 @@ __all__ = [
     "ACPMissingSessionError",
     "ACPMessageEvent",
     "ACPMethodNotFoundError",
+    "ACPOptionalMethodResult",
     "ACPOutputDeltaEvent",
     "ACPPermissionRequestEvent",
     "ACPPromptDescriptor",
@@ -50,8 +60,12 @@ __all__ = [
     "ACPProgressEvent",
     "ACPProtocolError",
     "ACPResponseError",
+    "ACPSessionCapabilities",
     "ACPSessionDescriptor",
     "ACPSessionEvent",
+    "ACPSessionForkResult",
+    "ACPSetModeResult",
+    "ACPSetModelResult",
     "ACPSubprocessSupervisor",
     "ACPSupervisorHandleSnapshot",
     "ACPTokenUsageEvent",
@@ -60,5 +74,7 @@ __all__ = [
     "ACPTurnTerminalEvent",
     "ACPUnknownEvent",
     "coerce_session_list",
+    "extract_advertised_commands",
+    "extract_session_capabilities",
     "normalize_notification",
 ]

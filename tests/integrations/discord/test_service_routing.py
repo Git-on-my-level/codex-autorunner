@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 
 from codex_autorunner.core.filebox import (
@@ -20,6 +21,7 @@ from codex_autorunner.core.filebox import (
     outbox_sent_dir,
 )
 from codex_autorunner.core.flows import FlowRunStatus
+from codex_autorunner.core.hub_control_plane import WorkspaceSetupCommandRequest
 from codex_autorunner.core.update import UpdateInProgressError
 from codex_autorunner.integrations.app_server.client import CodexAppServerResponseError
 from codex_autorunner.integrations.chat.collaboration_policy import (
@@ -37,6 +39,9 @@ from codex_autorunner.integrations.chat.models import (
 )
 from codex_autorunner.integrations.discord import message_turns as discord_message_turns
 from codex_autorunner.integrations.discord import service as discord_service_module
+from codex_autorunner.integrations.discord import (
+    workspace_commands as discord_workspace_commands_module,
+)
 from codex_autorunner.integrations.discord.car_autocomplete import (
     repo_autocomplete_value,
     workspace_autocomplete_value,
@@ -353,12 +358,6 @@ async def test_discord_message_turns_include_reply_context_in_prompt(
         "build_surface_orchestration_ingress",
         lambda **_: _IngressStub(),
     )
-    monkeypatch.setattr(
-        discord_message_turns,
-        "PmaNotificationStore",
-        lambda _root: SimpleNamespace(get_reply_target=lambda **_kwargs: None),
-    )
-
     thread = ChatThreadRef(platform="discord", chat_id="channel-1", thread_id=None)
     reply_message = ChatMessageRef(thread=thread, message_id="msg-0")
     event = ChatMessageEvent(
@@ -815,25 +814,18 @@ async def test_discord_notification_reply_routes_to_pma_thread_with_context(
         context={"wake_up": {"kind": "dispatch_paused"}},
     )
 
-    class _NotificationStoreStub:
-        def __init__(self, _root: Path) -> None:
-            return
+    class _HubClientStub:
+        async def get_notification_reply_target(self, request: object) -> object:
+            assert isinstance(request, SimpleNamespace) or hasattr(
+                request, "surface_key"
+            )
+            return SimpleNamespace(record=notification_reply)
 
-        def get_reply_target(
-            self, *, surface_kind: str, surface_key: str, delivered_message_id: object
-        ) -> object | None:
-            assert surface_kind == "discord"
-            assert surface_key == "channel-1"
-            assert delivered_message_id == "notif-msg-1"
-            return notification_reply
-
-        def bind_continuation_thread(
-            self, *, notification_id: str, thread_target_id: str
-        ) -> None:
+        async def bind_notification_continuation(self, request: object) -> None:
             bind_calls.append(
                 {
-                    "notification_id": notification_id,
-                    "thread_target_id": thread_target_id,
+                    "notification_id": getattr(request, "notification_id", None),
+                    "thread_target_id": getattr(request, "thread_target_id", None),
                 }
             )
 
@@ -857,6 +849,7 @@ async def test_discord_notification_reply_routes_to_pma_thread_with_context(
             self._logger = logging.getLogger("test")
             self._config = SimpleNamespace(root=tmp_path)
             self._hub_supervisor = object()
+            self._hub_client = _HubClientStub()
             self._background_tasks: set[asyncio.Task[Any]] = set()
 
         def _resolve_agent_state(self, binding: dict[str, object]) -> tuple[str, None]:
@@ -934,25 +927,10 @@ async def test_discord_notification_reply_routes_to_pma_thread_with_context(
         async def submit_message(self, *_args: object, **_kwargs: object) -> object:
             raise AssertionError("notification replies should bypass ingress routing")
 
-    async def _fake_build_hub_snapshot(
-        *_args: object, **_kwargs: object
-    ) -> dict[str, object]:
-        return {}
-
-    monkeypatch.setattr(
-        discord_message_turns,
-        "PmaNotificationStore",
-        _NotificationStoreStub,
-    )
     monkeypatch.setattr(
         discord_message_turns,
         "build_surface_orchestration_ingress",
         lambda **_: _IngressStub(),
-    )
-    monkeypatch.setattr(
-        discord_message_turns,
-        "build_hub_snapshot",
-        _fake_build_hub_snapshot,
     )
     monkeypatch.setattr(discord_message_turns, "load_pma_prompt", lambda _root: "base")
     monkeypatch.setattr(
@@ -3494,7 +3472,9 @@ async def test_component_interaction_cancel_queued_turn_cancels_selected_executi
         )
 
         original_clear = discord_message_turns.clear_discord_turn_progress_leases
-        discord_message_turns.clear_discord_turn_progress_leases = _clear_progress_leases  # type: ignore[assignment]
+        discord_message_turns.clear_discord_turn_progress_leases = (
+            _clear_progress_leases  # type: ignore[assignment]
+        )
         try:
             await service._handle_component_interaction_normalized(
                 "interaction-1",
@@ -3658,8 +3638,71 @@ async def test_component_interaction_queued_turn_interrupt_send_acknowledges_whe
         )
 
         assert interrupt_called is False
+        assert rest.followup_messages[-1]["payload"]["content"] == (
+            "Queued request moved to the front."
+        )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_queued_turn_interrupt_send_uses_followup_after_predefer(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    class _FakeThreadService:
+        def promote_queued_execution(
+            self, thread_target_id: str, execution_id: str
+        ) -> bool:
+            assert thread_target_id == "thread-1"
+            assert execution_id == "turn-2"
+            return True
+
+        def get_running_execution(self, thread_target_id: str) -> Any:
+            assert thread_target_id == "thread-1"
+            return None
+
+    try:
+        await store.upsert_binding(
+            channel_id="channel-1",
+            guild_id="guild-1",
+            workspace_path=str(tmp_path),
+            repo_id="repo-1",
+        )
+
+        service._get_discord_thread_binding = lambda **_kwargs: (  # type: ignore[method-assign]
+            _FakeThreadService(),
+            None,
+            SimpleNamespace(thread_target_id="thread-1"),
+        )
+
+        await service.defer_ephemeral(
+            interaction_id="interaction-1",
+            interaction_token="token-1",
+        )
+        await service._handle_queued_turn_interrupt_send_button(
+            "interaction-1",
+            "token-1",
+            channel_id="channel-1",
+            custom_id="qis:turn-2:m-2",
+            user_id="user-1",
+            message_id="progress-2",
+        )
+
+        assert len(rest.followup_messages) == 1
         assert (
-            rest.interaction_responses[-1]["payload"]["data"]["content"]
+            rest.followup_messages[0]["payload"]["content"]
             == "Queued request moved to the front."
         )
     finally:
@@ -3931,7 +3974,7 @@ async def test_service_continues_when_sync_request_fails(tmp_path: Path) -> None
 
 
 @pytest.mark.anyio
-async def test_service_falls_back_to_followup_when_initial_response_fails(
+async def test_service_attempts_fallback_reply_when_initial_response_fails(
     tmp_path: Path,
 ) -> None:
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
@@ -3951,9 +3994,10 @@ async def test_service_falls_back_to_followup_when_initial_response_fails(
         await service.run_forever()
         assert rest.interaction_responses == []
         assert len(rest.followup_messages) == 1
-        payload = rest.followup_messages[0]["payload"]
-        assert payload["flags"] == 64
-        assert "did not acknowledge" in payload["content"].lower()
+        assert (
+            rest.followup_messages[0]["payload"]["content"]
+            == "Discord interaction did not acknowledge. Please retry."
+        )
     finally:
         await store.close()
 
@@ -5912,7 +5956,7 @@ async def test_car_update_without_target_returns_picker(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
-async def test_car_update_without_target_aborts_when_required_preflight_fails(
+async def test_car_update_without_target_replies_when_dispatch_ack_fails_without_expiry(
     tmp_path: Path,
 ) -> None:
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
@@ -5938,9 +5982,11 @@ async def test_car_update_without_target_aborts_when_required_preflight_fails(
         assert len(rest.interaction_responses) == 1
         payload = rest.interaction_responses[0]["payload"]
         assert payload["type"] == 4
-        data = payload.get("data") or {}
-        content = str(data.get("content", ""))
-        assert "did not acknowledge" in content.lower()
+        assert (
+            payload["data"]["content"]
+            == "Discord interaction did not acknowledge. Please retry."
+        )
+        assert payload["data"]["flags"] == 64
         assert rest.followup_messages == []
     finally:
         await store.close()
@@ -7420,29 +7466,170 @@ async def test_car_newt_runs_hub_setup_commands_for_bound_workspace(
         discord_service_module, "reset_branch_from_origin_main", _fake_reset_branch
     )
 
-    class _HubSupervisorStub:
+    async def _fake_reset_thread_binding(**_kwargs: Any) -> tuple[bool, str]:
+        return False, "thread-newt-1"
+
+    service._reset_discord_thread_binding = _fake_reset_thread_binding  # type: ignore[method-assign]
+
+    class _FakeHubClient:
         def __init__(self) -> None:
-            self.calls: list[dict[str, object]] = []
+            self.setup_calls: list[dict[str, object]] = []
 
-        def run_setup_commands_for_workspace(
-            self, workspace_path: Path, *, repo_id_hint: str | None = None
-        ) -> int:
-            self.calls.append(
-                {"workspace_path": workspace_path, "repo_id_hint": repo_id_hint}
+        async def run_workspace_setup_commands(self, request: Any) -> Any:
+            self.setup_calls.append(
+                {
+                    "workspace_root": request.workspace_root,
+                    "repo_id_hint": request.repo_id_hint,
+                }
             )
-            return 1
+            return SimpleNamespace(setup_command_count=1)
 
-    hub_supervisor = _HubSupervisorStub()
-    service._hub_supervisor = hub_supervisor  # type: ignore[assignment]
+    hub_client = _FakeHubClient()
+    service._hub_client = hub_client  # type: ignore[assignment]
 
     try:
         await service.run_forever()
-        assert hub_supervisor.calls == [
-            {"workspace_path": workspace.resolve(), "repo_id_hint": "repo-1"}
+        assert hub_client.setup_calls == [
+            {
+                "workspace_root": str(workspace.resolve()),
+                "repo_id_hint": "repo-1",
+            }
         ]
         assert len(rest.followup_messages) == 1
         content = rest.followup_messages[0]["payload"]["content"].lower()
         assert "ran 1 setup command" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_hub_client_setup_commands_survive_loop_switch_after_workspace_lookup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway([_interaction(name="newt", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    class _LoopStickyAsyncClient:
+        instances: list["_LoopStickyAsyncClient"] = []
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            _ = args
+            self.base_url = str(kwargs.get("base_url") or "")
+            self.bound_loop: asyncio.AbstractEventLoop | None = None
+            self.calls: list[str] = []
+            type(self).instances.append(self)
+
+        async def request(
+            self,
+            method: str,
+            path: str,
+            *,
+            json: dict[str, Any] | None = None,
+            params: dict[str, Any] | None = None,
+            timeout: float | None = None,
+        ) -> httpx.Response:
+            _ = method, params
+            current_loop = asyncio.get_running_loop()
+            if self.bound_loop is None:
+                self.bound_loop = current_loop
+            elif self.bound_loop is not current_loop:
+                raise RuntimeError("Event loop is closed")
+            self.calls.append(f"{path}|timeout={timeout}")
+            if path == "/hub/api/control-plane/agent-workspaces":
+                return httpx.Response(
+                    200,
+                    json={
+                        "workspaces": [
+                            {
+                                "workspace_id": "wksp-1",
+                                "runtime_kind": "hermes",
+                                "workspace_root": str(workspace.resolve()),
+                                "display_name": "Workspace One",
+                                "enabled": True,
+                                "exists_on_disk": True,
+                                "resource_kind": "agent_workspace",
+                            }
+                        ]
+                    },
+                )
+            if path == "/hub/api/control-plane/handshake":
+                return httpx.Response(
+                    200,
+                    json={
+                        "api_version": "1.0.0",
+                        "minimum_client_api_version": "1.0.0",
+                        "schema_generation": discord_service_module.ORCHESTRATION_SCHEMA_VERSION,
+                        "capabilities": [],
+                    },
+                )
+            if path == "/hub/api/control-plane/workspace-setup-commands":
+                return httpx.Response(
+                    200,
+                    json={
+                        "workspace_root": json["workspace_root"] if json else "",
+                        "repo_id_hint": json.get("repo_id_hint") if json else None,
+                        "setup_command_count": 1,
+                    },
+                )
+            raise AssertionError(f"Unexpected control-plane request path: {path}")
+
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.hub_control_plane.http_client.httpx.AsyncClient",
+        _LoopStickyAsyncClient,
+    )
+    service._hub_client = discord_service_module.HttpHubControlPlaneClient(
+        base_url="http://testserver"
+    )
+
+    try:
+        workspaces = discord_workspace_commands_module._list_agent_workspaces(service)
+        assert workspaces == [("wksp-1", str(workspace.resolve()), "Workspace One")]
+
+        setup_result = await service._hub_client.run_workspace_setup_commands(
+            WorkspaceSetupCommandRequest(
+                workspace_root=str(workspace.resolve()),
+                repo_id_hint="repo-1",
+            )
+        )
+
+        assert setup_result.setup_command_count == 1
+        assert any(
+            any(
+                call.startswith("/hub/api/control-plane/agent-workspaces")
+                for call in instance.calls
+            )
+            for instance in _LoopStickyAsyncClient.instances
+        )
+        assert any(
+            any(
+                call == "/hub/api/control-plane/workspace-setup-commands|timeout=None"
+                for call in instance.calls
+            )
+            for instance in _LoopStickyAsyncClient.instances
+        )
     finally:
         await store.close()
 

@@ -99,6 +99,7 @@ async def test_hermes_supervisor_session_roundtrip_and_turn_streaming(
 
         assert created.session_id == resumed.session_id
         assert [session.session_id for session in listed] == [created.session_id]
+        assert [session.title for session in listed] == ["Fixture Session"]
         assert turn_id == "turn-1"
         assert result.status == "completed"
         assert result.assistant_text == "fixture reply"
@@ -601,12 +602,61 @@ async def test_hermes_supervisor_replacing_turn_cancels_previous_pending_approva
             session.session_id,
             second_turn_id,
         )
-
-        with pytest.raises(HermesSupervisorError, match="Unknown Hermes turn"):
-            await supervisor.wait_for_turn(tmp_path, session.session_id, first_turn_id)
+        first_result = await supervisor.wait_for_turn(
+            tmp_path,
+            session.session_id,
+            first_turn_id,
+        )
+        assert first_result.status == "cancelled"
         assert second_result.status == "completed"
     finally:
         approval_gate.set()
+        await supervisor.close_all()
+
+
+@pytest.mark.slow
+@pytest.mark.asyncio
+async def test_hermes_supervisor_preserves_completed_turn_after_newer_turn_starts(
+    tmp_path: Path,
+) -> None:
+    supervisor = HermesSupervisor(fixture_command("official"))
+    try:
+        session = await supervisor.create_session(tmp_path)
+        first_turn_id = await supervisor.start_turn(
+            tmp_path,
+            session.session_id,
+            "hello from hermes",
+        )
+        await asyncio.sleep(0.2)
+
+        second_turn_id = await supervisor.start_turn(
+            tmp_path,
+            session.session_id,
+            "hello again",
+        )
+
+        first_result = await supervisor.wait_for_turn(
+            tmp_path,
+            session.session_id,
+            first_turn_id,
+        )
+        second_result = await supervisor.wait_for_turn(
+            tmp_path,
+            session.session_id,
+            second_turn_id,
+        )
+
+        assert first_result.status == "completed"
+        assert any(
+            event.get("method") == "prompt/completed"
+            for event in first_result.raw_events
+        )
+        assert second_result.status == "completed"
+        assert any(
+            event.get("method") == "prompt/completed"
+            for event in second_result.raw_events
+        )
+    finally:
         await supervisor.close_all()
 
 
@@ -728,5 +778,109 @@ async def test_hermes_supervisor_rejects_unknown_turn_lookup(tmp_path: Path) -> 
             HermesSupervisorError, match="No active Hermes turn tracked"
         ):
             await supervisor.interrupt_turn(tmp_path, session.session_id, None)
+    finally:
+        await supervisor.close_all()
+
+
+@pytest.mark.slow
+@pytest.mark.asyncio
+async def test_hermes_supervisor_fork_session_creates_handle(tmp_path: Path) -> None:
+    supervisor = HermesSupervisor(fixture_command("official"))
+    try:
+        session = await supervisor.create_session(tmp_path)
+        forked = await supervisor.fork_session(
+            tmp_path, session.session_id, title="Fork"
+        )
+
+        assert forked is not None
+        assert forked.session_id != session.session_id
+        assert forked.title == "Fork"
+    finally:
+        await supervisor.close_all()
+
+
+@pytest.mark.slow
+@pytest.mark.asyncio
+async def test_hermes_supervisor_fork_session_unsupported_returns_none(
+    tmp_path: Path,
+) -> None:
+    from codex_autorunner.agents.acp.protocol import ACPSessionForkResult
+
+    result = ACPSessionForkResult.from_optional_response(None)
+    assert result.supported is False
+    assert result.session_id is None
+
+
+@pytest.mark.slow
+@pytest.mark.asyncio
+async def test_hermes_supervisor_set_session_model_returns_true_when_supported(
+    tmp_path: Path,
+) -> None:
+    supervisor = HermesSupervisor(fixture_command("official"))
+    try:
+        session = await supervisor.create_session(tmp_path)
+        supported = await supervisor.set_session_model(
+            tmp_path,
+            session.session_id,
+            "anthropic/claude-opus",
+        )
+
+        assert supported is True
+    finally:
+        await supervisor.close_all()
+
+
+@pytest.mark.slow
+@pytest.mark.asyncio
+async def test_hermes_supervisor_set_session_model_returns_false_when_unsupported(
+    tmp_path: Path,
+) -> None:
+    from codex_autorunner.agents.acp.protocol import ACPSetModelResult
+
+    result = ACPSetModelResult.from_optional_response(None)
+    assert result.supported is False
+
+
+@pytest.mark.slow
+@pytest.mark.asyncio
+async def test_hermes_supervisor_set_session_mode_returns_true_when_supported(
+    tmp_path: Path,
+) -> None:
+    supervisor = HermesSupervisor(fixture_command("official"))
+    try:
+        session = await supervisor.create_session(tmp_path)
+        supported = await supervisor.set_session_mode(
+            tmp_path,
+            session.session_id,
+            "code",
+        )
+
+        assert supported is True
+    finally:
+        await supervisor.close_all()
+
+
+@pytest.mark.slow
+@pytest.mark.asyncio
+async def test_hermes_supervisor_set_session_mode_returns_false_when_unsupported(
+    tmp_path: Path,
+) -> None:
+    from codex_autorunner.agents.acp.protocol import ACPSetModeResult
+
+    result = ACPSetModeResult.from_optional_response(None)
+    assert result.supported is False
+
+
+@pytest.mark.slow
+@pytest.mark.asyncio
+async def test_hermes_supervisor_advertised_commands_returns_list(
+    tmp_path: Path,
+) -> None:
+    supervisor = HermesSupervisor(fixture_command("official"))
+    try:
+        await supervisor.ensure_ready(tmp_path)
+        commands = await supervisor.advertised_commands(tmp_path)
+
+        assert isinstance(commands, list)
     finally:
         await supervisor.close_all()

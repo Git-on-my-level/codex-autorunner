@@ -297,12 +297,6 @@ function summarizeFileChanges(files: string[], totalCount?: number | null): { su
   return { summary: "File changes", detail: "" };
 }
 
-function parseLegacyDiffEntryCount(value: string): number | null {
-  const match = value.match(/^(\d+)\s+diff entries?$/i);
-  if (!match) return null;
-  return Number.parseInt(match[1] || "", 10);
-}
-
 function extractErrorMessage(params: PayloadParams | null | undefined): string {
   if (!params || typeof params !== "object") return "";
   const err = params.error;
@@ -426,12 +420,21 @@ export function parseAppServerEvent(payload: unknown): ParsedAgentEvent | null {
     const diffCountLabel = diffCount === null ? "" : (diffCount === 1 ? "1 file change" : `${diffCount} file changes`);
     let summary = fileSummary;
     let detailText = detail;
-    if (!files.length && fallbackPreview) {
-      const legacyDiffCount = parseLegacyDiffEntryCount(fallbackPreview);
-      const effectiveDiffCount = diffCount ?? legacyDiffCount;
-      if (effectiveDiffCount !== null && legacyDiffCount !== null) {
-        summary = effectiveDiffCount === 1 ? "1 file change" : `${effectiveDiffCount} file changes`;
-      } else if (fallbackPreview !== "diff updated") {
+    if (!files.length && fallbackPreview && fallbackPreview !== "diff updated") {
+      const legacyDiffEntries = /^(\d+)\s+diff\s+(?:entry|entries)$/i.exec(
+        fallbackPreview.trim(),
+      );
+      if (legacyDiffEntries) {
+        const legacyN = Number(legacyDiffEntries[1]);
+        if (diffCount == null || diffCount === legacyN) {
+          summary = legacyN === 1 ? "1 file change" : `${legacyN} file changes`;
+        } else {
+          summary = fallbackPreview;
+          if (!detailText && diffCountLabel && fallbackPreview !== diffCountLabel) {
+            detailText = diffCountLabel;
+          }
+        }
+      } else {
         summary = fallbackPreview;
         if (!detailText && diffCountLabel && fallbackPreview !== diffCountLabel) {
           detailText = diffCountLabel;

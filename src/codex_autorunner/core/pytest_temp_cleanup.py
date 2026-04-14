@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import os
 import shutil
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
@@ -12,6 +14,12 @@ from typing import Callable, Iterable
 _PYTEST_RUNTIME_TEMP_SUBDIR = "t"
 _DEFAULT_LSOF_TIMEOUT_SECONDS = 10.0
 _TEMP_ENV_KEYS = ("TMPDIR", "TMP", "TEMP")
+_RMTREE_RETRY_ERRNOS = {
+    errno.ENOTEMPTY,
+    errno.EBUSY,
+}
+_RMTREE_RETRY_ATTEMPTS = 8
+_RMTREE_RETRY_SLEEP_SECONDS = 0.1
 
 
 @dataclass(frozen=True)
@@ -69,6 +77,7 @@ def cleanup_repo_pytest_temp_runs(
     keep_run_tokens: set[str] | None = None,
     dry_run: bool = False,
     temp_base: Path | None = None,
+    min_age_seconds: float = 0.0,
 ) -> TempCleanupSummary:
     temp_root = repo_pytest_temp_root(repo_root, temp_base=temp_base)
     keep = {token for token in (keep_run_tokens or set()) if token}
@@ -81,11 +90,18 @@ def cleanup_repo_pytest_temp_runs(
             bytes_before=0,
             bytes_after=0,
         )
-    paths = [
-        path
-        for path in sorted(temp_root.iterdir())
-        if path.name not in keep and path.is_dir()
-    ]
+    cutoff = time.time() - max(0.0, float(min_age_seconds))
+    paths = []
+    for path in sorted(temp_root.iterdir()):
+        if path.name in keep or not path.is_dir():
+            continue
+        if min_age_seconds > 0.0:
+            try:
+                if path.stat().st_mtime >= cutoff:
+                    continue
+            except OSError:
+                continue
+        paths.append(path)
     summary = cleanup_temp_paths(paths, dry_run=dry_run)
     if not dry_run:
         _remove_empty_parent_dirs(
@@ -132,7 +148,7 @@ def cleanup_temp_paths(
             deleted_paths.append(path)
             continue
         try:
-            shutil.rmtree(path)
+            _rmtree_with_retries(path)
         except OSError as exc:
             failed += 1
             remaining_bytes = _tree_size_bytes(path)
@@ -175,6 +191,18 @@ def scan_temp_path(
         bytes=bytes_used,
         active_processes=active_processes,
     )
+
+
+def _rmtree_with_retries(path: Path) -> None:
+    attempts = _RMTREE_RETRY_ATTEMPTS
+    for attempt in range(1, attempts + 1):
+        try:
+            shutil.rmtree(path)
+            return
+        except OSError as exc:
+            if exc.errno not in _RMTREE_RETRY_ERRNOS or attempt >= attempts:
+                raise
+            time.sleep(_RMTREE_RETRY_SLEEP_SECONDS * attempt)
 
 
 def find_processes_using_path(

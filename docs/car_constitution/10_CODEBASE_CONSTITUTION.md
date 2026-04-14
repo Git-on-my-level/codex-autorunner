@@ -3,7 +3,7 @@
 This document defines the identity and long-lived invariants of the CAR codebase. It is intentionally aspirational and time-decay resistant.
 
 ## Identity
-CAR is a local-first, filesystem-backed agent orchestration system with multiple user surfaces (e.g., Telegram, Web) and multiple execution backends (e.g., Codex, OpenCode). It optimizes for leverage, speed, and evolvability.
+CAR is a local-first, filesystem-backed agent orchestration system with multiple user surfaces (e.g., Telegram, Web) and multiple execution backends (e.g., Codex, OpenCode, Hermes and other ACP-backed runtimes). It optimizes for leverage, speed, and evolvability.
 
 ## Non-negotiable invariants
 

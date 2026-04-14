@@ -286,11 +286,6 @@ app.add_typer(
     help="Canonical ticket_flow command group.",
 )
 flow_app.add_typer(
-    ticket_flow_app,
-    name="ticket_flow",
-    help="Legacy alias of `ticket-flow` (canonical: `car ticket-flow ...`).",
-)
-flow_app.add_typer(
     telemetry_app,
     name="telemetry",
     help="Flow telemetry management.",
@@ -318,14 +313,6 @@ FLOW_COMMANDS = register_flow_commands(
     cleanup_stale_flow_runs=_cleanup_stale_flow_runs,
     archive_flow_run_artifacts=_archive_flow_run_artifacts,
 )
-
-# Legacy CLI module compatibility exports.
-PreflightCheck = FLOW_COMMANDS.PreflightCheck
-PreflightReport = FLOW_COMMANDS.PreflightReport
-
-
-def _resumable_run(records):  # pragma: no cover - compatibility path
-    return FLOW_COMMANDS.ticket_flow_resumable_run(records)
 
 
 def _ticket_flow_preflight(engine, ticket_dir):
@@ -358,7 +345,6 @@ register_hub_tickets_commands(
     require_repo_config_func=_require_repo_config,
     require_templates_enabled_func=_require_templates_enabled,
     fetch_template_with_scan_func=_fetch_template_with_scan,
-    build_hub_supervisor=_build_hub_supervisor,
     ticket_flow_preflight=_hub_ticket_flow_preflight,
     print_preflight_report=_hub_print_preflight_report,
     ticket_flow_start=_hub_ticket_flow_start,

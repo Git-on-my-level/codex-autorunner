@@ -6,13 +6,18 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 
 from codex_autorunner.core import drafts as draft_utils
+from codex_autorunner.core.orchestration import FreshConversationRequiredError
 from codex_autorunner.core.state import now_iso
 from codex_autorunner.surfaces.web.routes.file_chat_routes import (
     execution as execution_module,
 )
-from codex_autorunner.surfaces.web.routes.file_chat_routes import runtime
+from codex_autorunner.surfaces.web.routes.file_chat_routes import (
+    execution_agents,
+    runtime,
+)
 from codex_autorunner.surfaces.web.routes.file_chat_routes.drafts import (
     apply_file_patch,
     pending_file_patch,
@@ -26,33 +31,178 @@ from codex_autorunner.surfaces.web.routes.file_chat_routes.targets import (
 )
 
 
-def _make_request(repo_root: Path) -> SimpleNamespace:
-    return SimpleNamespace(
-        app=SimpleNamespace(
-            state=SimpleNamespace(
-                app_server_supervisor=object(),
-                app_server_threads=None,
-                opencode_supervisor=None,
-                engine=SimpleNamespace(repo_root=repo_root),
-                app_server_events=None,
-            )
-        )
+def _make_request_state(
+    repo_root: Path,
+    *,
+    config: object | None = None,
+    **extra_state: object,
+) -> SimpleNamespace:
+    state = dict(
+        app_server_supervisor=object(),
+        app_server_threads=None,
+        opencode_supervisor=None,
+        config=config,
+        engine=SimpleNamespace(repo_root=repo_root),
+        app_server_events=None,
+    )
+    state.update(extra_state)
+    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(**state)))
+
+
+def _make_request(repo_root: Path, *, config: object | None = None) -> SimpleNamespace:
+    return _make_request_state(repo_root, config=config)
+
+
+def _make_request_with_hermes(
+    repo_root: Path, *, config: object | None = None
+) -> SimpleNamespace:
+    return _make_request_state(
+        repo_root,
+        config=config,
+        hermes_supervisor=object(),
     )
 
 
-def _make_request_with_hermes(repo_root: Path) -> SimpleNamespace:
-    return SimpleNamespace(
-        app=SimpleNamespace(
-            state=SimpleNamespace(
-                app_server_supervisor=object(),
-                app_server_threads=None,
-                opencode_supervisor=None,
-                hermes_supervisor=object(),
-                engine=SimpleNamespace(repo_root=repo_root),
-                app_server_events=None,
-            )
-        )
+class _ThreadRegistryStub:
+    def __init__(self, thread_id: str | None = None) -> None:
+        self.thread_id = thread_id
+        self.reset_calls: list[str] = []
+        self.set_calls: list[tuple[str, str]] = []
+
+    def get_thread_id(self, thread_key: str) -> str | None:
+        return self.thread_id
+
+    def set_thread_id(self, thread_key: str, thread_id: str) -> None:
+        self.thread_id = thread_id
+        self.set_calls.append((thread_key, thread_id))
+
+    def reset_thread(self, thread_key: str) -> None:
+        self.thread_id = None
+        self.reset_calls.append(thread_key)
+
+
+class _HarnessTurnStub:
+    def __init__(self, conversation_id: str, turn_id: str = "turn-1") -> None:
+        self.conversation_id = conversation_id
+        self.turn_id = turn_id
+
+
+class _HarnessResultStub:
+    assistant_text = "Agent: updated via hermes"
+    raw_events: list[object] = []
+    errors: list[str] = []
+
+
+@pytest.mark.asyncio
+async def test_execute_harness_turn_recovers_from_stale_resume_conversation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_root = tmp_path
+    registry = _ThreadRegistryStub(thread_id="stale-conv")
+    started: list[str] = []
+
+    class Harness:
+        def supports(self, capability: str) -> bool:
+            return capability in {"durable_threads", "message_turns"}
+
+        async def ensure_ready(self, _repo_root: Path) -> None:
+            return None
+
+        async def resume_conversation(self, _repo_root: Path, conversation_id: str):
+            raise FreshConversationRequiredError("missing session")
+
+        async def new_conversation(self, _repo_root: Path, title: str = ""):
+            return SimpleNamespace(id="fresh-conv")
+
+        async def start_turn(
+            self, _repo_root: Path, conversation_id: str, *args, **kwargs
+        ):
+            started.append(conversation_id)
+            return _HarnessTurnStub(conversation_id, "turn-fresh")
+
+        async def wait_for_turn(
+            self, _repo_root: Path, conversation_id: str, turn_id: str, timeout=None
+        ):
+            return _HarnessResultStub()
+
+    monkeypatch.setattr(
+        execution_agents, "_build_runtime_harness", lambda *args, **kwargs: Harness()
     )
+
+    result = await execution_agents.execute_harness_turn(
+        _make_request(repo_root),
+        repo_root,
+        "edit file",
+        asyncio.Event(),
+        agent_id="hermes",
+        profile="m4-pma",
+        thread_registry=registry,
+        thread_key="file_chat.hermes.profile.m4-pma.demo",
+    )
+
+    assert result["status"] == "ok"
+    assert started == ["fresh-conv"]
+    assert registry.thread_id == "fresh-conv"
+    assert registry.reset_calls == []
+
+
+@pytest.mark.asyncio
+async def test_execute_harness_turn_resets_stale_thread_when_start_turn_requires_fresh_conversation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_root = tmp_path
+    registry = _ThreadRegistryStub(thread_id="stale-conv")
+    started: list[str] = []
+
+    class Harness:
+        def __init__(self) -> None:
+            self.start_calls = 0
+
+        def supports(self, capability: str) -> bool:
+            return capability in {"durable_threads", "message_turns"}
+
+        async def ensure_ready(self, _repo_root: Path) -> None:
+            return None
+
+        async def resume_conversation(self, _repo_root: Path, conversation_id: str):
+            return SimpleNamespace(id=conversation_id)
+
+        async def new_conversation(self, _repo_root: Path, title: str = ""):
+            return SimpleNamespace(id="fresh-conv")
+
+        async def start_turn(
+            self, _repo_root: Path, conversation_id: str, *args, **kwargs
+        ):
+            self.start_calls += 1
+            started.append(conversation_id)
+            if self.start_calls == 1:
+                raise FreshConversationRequiredError("stale turn target")
+            return _HarnessTurnStub(conversation_id, "turn-fresh")
+
+        async def wait_for_turn(
+            self, _repo_root: Path, conversation_id: str, turn_id: str, timeout=None
+        ):
+            return _HarnessResultStub()
+
+    monkeypatch.setattr(
+        execution_agents, "_build_runtime_harness", lambda *args, **kwargs: Harness()
+    )
+
+    result = await execution_agents.execute_harness_turn(
+        _make_request(repo_root),
+        repo_root,
+        "edit file",
+        asyncio.Event(),
+        agent_id="hermes",
+        profile="m4-pma",
+        thread_registry=registry,
+        thread_key="file_chat.hermes.profile.m4-pma.demo",
+    )
+
+    assert result["status"] == "ok"
+    assert started == ["stale-conv", "fresh-conv"]
+    assert registry.reset_calls == ["file_chat.hermes.profile.m4-pma.demo"]
+    assert registry.thread_id == "fresh-conv"
 
 
 @pytest.mark.asyncio
@@ -270,7 +420,7 @@ async def test_extracted_draft_handlers_reconstruct_content_from_artifacts(
 
 
 @pytest.mark.asyncio
-async def test_execute_file_chat_rejects_hermes_with_clear_error(
+async def test_execute_file_chat_passes_hermes_profile_to_runtime_turn(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repo_root = tmp_path
@@ -287,10 +437,53 @@ async def test_execute_file_chat_rejects_hermes_with_clear_error(
     async def fake_update_turn_state(*args, **kwargs) -> None:
         return None
 
+    observed: dict[str, object] = {}
+
+    async def fake_execute_harness_turn(
+        _request,
+        fake_repo_root: Path,
+        prompt: str,
+        _interrupt_event: asyncio.Event,
+        *,
+        agent_id: str,
+        profile: str | None,
+        thread_key: str | None,
+        **kwargs,
+    ) -> dict[str, str]:
+        observed["agent_id"] = agent_id
+        observed["profile"] = profile
+        observed["thread_key"] = thread_key
+        match = re.search(r"<path>\n(.+?)\n</path>", prompt, re.DOTALL)
+        assert match is not None
+        draft_path = fake_repo_root / match.group(1).strip()
+        draft_path.write_text("after\n", encoding="utf-8")
+        return {
+            "status": "ok",
+            "agent_message": "updated via hermes",
+            "message": "updated via hermes",
+            "thread_id": "hermes-thread-1",
+            "turn_id": "hermes-turn-1",
+        }
+
     monkeypatch.setattr(
         runtime, "get_or_create_interrupt_event", fake_get_or_create_interrupt_event
     )
     monkeypatch.setattr(runtime, "update_turn_state", fake_update_turn_state)
+
+    def _resolve_profile(_request, _agent_id, requested_profile, default_profile=None):
+        _ = default_profile
+        return requested_profile
+
+    monkeypatch.setattr(
+        execution_module,
+        "resolve_requested_agent_profile",
+        _resolve_profile,
+    )
+    monkeypatch.setattr(
+        execution_module,
+        "execute_harness_turn",
+        fake_execute_harness_turn,
+    )
 
     result = await execute_file_chat(
         _make_request_with_hermes(repo_root),
@@ -298,8 +491,377 @@ async def test_execute_file_chat_rejects_hermes_with_clear_error(
         target,
         "edit the file",
         agent="hermes",
+        profile="m4-pma",
     )
 
-    assert result["status"] == "error"
-    assert "hermes" in result["detail"].lower()
-    assert "not supported" in result["detail"].lower()
+    assert result["status"] == "ok"
+    assert result["profile"] == "m4-pma"
+    assert observed == {
+        "agent_id": "hermes",
+        "profile": "m4-pma",
+        "thread_key": "file_chat.hermes.profile.m4-pma.contextspace_spec.md",
+    }
+
+
+@pytest.mark.asyncio
+async def test_execute_file_chat_supports_hermes_without_codex_or_opencode_supervisors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_root = tmp_path
+    target_path = repo_root / ".codex-autorunner" / "contextspace" / "decisions.md"
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_text("before\n", encoding="utf-8")
+    target = parse_target(repo_root, "contextspace:decisions")
+
+    async def fake_get_or_create_interrupt_event(
+        _request, _state_key: str
+    ) -> asyncio.Event:
+        return asyncio.Event()
+
+    async def fake_update_turn_state(*args, **kwargs) -> None:
+        return None
+
+    observed: dict[str, object] = {}
+
+    async def fake_execute_harness_turn(
+        _request,
+        fake_repo_root: Path,
+        prompt: str,
+        _interrupt_event: asyncio.Event,
+        *,
+        agent_id: str,
+        profile: str | None,
+        thread_key: str | None,
+        **kwargs,
+    ) -> dict[str, str]:
+        observed["agent_id"] = agent_id
+        observed["profile"] = profile
+        observed["thread_key"] = thread_key
+        match = re.search(r"<path>\n(.+?)\n</path>", prompt, re.DOTALL)
+        assert match is not None
+        draft_path = fake_repo_root / match.group(1).strip()
+        draft_path.write_text("after\n", encoding="utf-8")
+        return {
+            "status": "ok",
+            "agent_message": "updated via hermes",
+            "message": "updated via hermes",
+            "thread_id": "hermes-thread-2",
+            "turn_id": "hermes-turn-2",
+        }
+
+    monkeypatch.setattr(
+        runtime, "get_or_create_interrupt_event", fake_get_or_create_interrupt_event
+    )
+    monkeypatch.setattr(runtime, "update_turn_state", fake_update_turn_state)
+
+    def _resolve_profile(_request, _agent_id, requested_profile, default_profile=None):
+        _ = default_profile
+        return requested_profile
+
+    monkeypatch.setattr(
+        execution_module,
+        "resolve_requested_agent_profile",
+        _resolve_profile,
+    )
+    monkeypatch.setattr(
+        execution_module,
+        "execute_harness_turn",
+        fake_execute_harness_turn,
+    )
+
+    request = _make_request_state(
+        repo_root,
+        app_server_supervisor=None,
+        opencode_supervisor=None,
+        hermes_supervisor=object(),
+    )
+    result = await execute_file_chat(
+        request,
+        repo_root,
+        target,
+        "edit the file",
+        agent="hermes",
+        profile="m4-pma",
+    )
+
+    assert result["status"] == "ok"
+    assert result["profile"] == "m4-pma"
+    assert observed == {
+        "agent_id": "hermes",
+        "profile": "m4-pma",
+        "thread_key": "file_chat.hermes.profile.m4-pma.contextspace_decisions.md",
+    }
+
+
+@pytest.mark.asyncio
+async def test_execute_file_chat_reports_capability_driven_error_for_unsupported_agent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_root = tmp_path
+    target_path = repo_root / ".codex-autorunner" / "contextspace" / "active_context.md"
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_text("before\n", encoding="utf-8")
+    target = parse_target(repo_root, "contextspace:active_context")
+
+    async def fake_get_or_create_interrupt_event(
+        _request, _state_key: str
+    ) -> asyncio.Event:
+        return asyncio.Event()
+
+    async def fake_update_turn_state(*args, **kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(
+        runtime, "get_or_create_interrupt_event", fake_get_or_create_interrupt_event
+    )
+    monkeypatch.setattr(runtime, "update_turn_state", fake_update_turn_state)
+
+    def _resolve_chat_agent(
+        agent, profile=None, default="codex", context=None
+    ) -> tuple[str, None]:
+        _ = profile, default, context
+        return str(agent).strip().lower(), None
+
+    def _resolve_profile(_request, _agent_id, requested_profile, default_profile=None):
+        _ = default_profile
+        return requested_profile
+
+    def _has_capability(agent_id, capability, _context=None) -> bool:
+        return capability == "durable_threads" and agent_id == "broken"
+
+    monkeypatch.setattr(
+        execution_module,
+        "resolve_chat_agent_and_profile",
+        _resolve_chat_agent,
+    )
+    monkeypatch.setattr(
+        execution_module,
+        "validate_agent_id",
+        lambda agent_id, _context=None: str(agent_id).strip().lower(),
+    )
+    monkeypatch.setattr(
+        execution_module,
+        "resolve_requested_agent_profile",
+        _resolve_profile,
+    )
+    monkeypatch.setattr(
+        execution_module,
+        "has_capability",
+        _has_capability,
+    )
+
+    request = _make_request_state(
+        repo_root,
+        app_server_supervisor=None,
+        opencode_supervisor=None,
+    )
+    result = await execute_file_chat(
+        request,
+        repo_root,
+        target,
+        "edit the file",
+        agent="broken",
+    )
+
+    assert result == {
+        "status": "error",
+        "detail": (
+            "Agent 'broken' does not support file-chat execution "
+            "(missing capability: message_turns)"
+        ),
+    }
+
+
+def test_resolve_file_chat_agent_selection_rejects_invalid_hermes_profile(
+    tmp_path: Path,
+) -> None:
+    target = parse_target(tmp_path, "ticket:1")
+    config = SimpleNamespace(
+        agent_profiles=lambda agent_id: (
+            {"m4-pma": object()} if agent_id == "hermes" else {}
+        ),
+        agent_default_profile=lambda _agent_id: None,
+    )
+    request = _make_request_with_hermes(tmp_path, config=config)
+
+    with pytest.raises(HTTPException) as exc_info:
+        execution_module.resolve_file_chat_agent_selection(
+            request,
+            target,
+            agent="hermes",
+            profile="bad-profile",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "profile is invalid"
+
+
+@pytest.mark.asyncio
+async def test_execute_file_chat_hermes_without_profile_uses_resolved_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_root = tmp_path
+    target_path = repo_root / ".codex-autorunner" / "contextspace" / "spec.md"
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_text("before\n", encoding="utf-8")
+    target = parse_target(repo_root, "contextspace:spec")
+
+    async def fake_get_or_create_interrupt_event(
+        _request, _state_key: str
+    ) -> asyncio.Event:
+        return asyncio.Event()
+
+    async def fake_update_turn_state(*args, **kwargs) -> None:
+        return None
+
+    observed: dict[str, object] = {}
+
+    async def fake_execute_harness_turn(
+        _request,
+        fake_repo_root: Path,
+        prompt: str,
+        _interrupt_event: asyncio.Event,
+        *,
+        agent_id: str,
+        profile: str | None,
+        thread_key: str | None,
+        **kwargs,
+    ) -> dict[str, str]:
+        observed["agent_id"] = agent_id
+        observed["profile"] = profile
+        observed["thread_key"] = thread_key
+        match = re.search(r"<path>\n(.+?)\n</path>", prompt, re.DOTALL)
+        assert match is not None
+        draft_path = fake_repo_root / match.group(1).strip()
+        draft_path.write_text("after\n", encoding="utf-8")
+        return {
+            "status": "ok",
+            "agent_message": "updated via hermes",
+            "message": "updated via hermes",
+            "thread_id": "hermes-thread-default",
+            "turn_id": "hermes-turn-default",
+        }
+
+    monkeypatch.setattr(
+        runtime, "get_or_create_interrupt_event", fake_get_or_create_interrupt_event
+    )
+    monkeypatch.setattr(runtime, "update_turn_state", fake_update_turn_state)
+
+    def _resolve_profile(_request, _agent_id, requested_profile, default_profile=None):
+        _ = default_profile
+        return requested_profile or "m4-default"
+
+    monkeypatch.setattr(
+        execution_module,
+        "resolve_requested_agent_profile",
+        _resolve_profile,
+    )
+    monkeypatch.setattr(
+        execution_module,
+        "execute_harness_turn",
+        fake_execute_harness_turn,
+    )
+
+    result = await execute_file_chat(
+        _make_request_with_hermes(repo_root),
+        repo_root,
+        target,
+        "edit the file",
+        agent="hermes",
+        profile=None,
+    )
+
+    assert result["status"] == "ok"
+    assert observed["agent_id"] == "hermes"
+    assert observed["profile"] == "m4-default"
+    assert (
+        observed["thread_key"]
+        == "file_chat.hermes.profile.m4-default.contextspace_spec.md"
+    )
+
+
+@pytest.mark.asyncio
+async def test_execute_file_chat_hermes_thread_key_differs_by_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_root = tmp_path
+    target_path = repo_root / ".codex-autorunner" / "contextspace" / "decisions.md"
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_text("before\n", encoding="utf-8")
+    target = parse_target(repo_root, "contextspace:decisions")
+
+    async def fake_get_or_create_interrupt_event(
+        _request, _state_key: str
+    ) -> asyncio.Event:
+        return asyncio.Event()
+
+    async def fake_update_turn_state(*args, **kwargs) -> None:
+        return None
+
+    thread_keys: list[str | None] = []
+
+    async def fake_execute_harness_turn(
+        _request,
+        fake_repo_root: Path,
+        prompt: str,
+        _interrupt_event: asyncio.Event,
+        *,
+        agent_id: str,
+        profile: str | None,
+        thread_key: str | None,
+        **kwargs,
+    ) -> dict[str, str]:
+        thread_keys.append(thread_key)
+        match = re.search(r"<path>\n(.+?)\n</path>", prompt, re.DOTALL)
+        assert match is not None
+        draft_path = fake_repo_root / match.group(1).strip()
+        draft_path.write_text("after\n", encoding="utf-8")
+        return {
+            "status": "ok",
+            "agent_message": "updated",
+            "message": "updated",
+            "thread_id": "hermes-thread-x",
+            "turn_id": "hermes-turn-x",
+        }
+
+    monkeypatch.setattr(
+        runtime, "get_or_create_interrupt_event", fake_get_or_create_interrupt_event
+    )
+    monkeypatch.setattr(runtime, "update_turn_state", fake_update_turn_state)
+
+    def _resolve_profile(_request, _agent_id, requested_profile, default_profile=None):
+        _ = default_profile
+        return requested_profile
+
+    monkeypatch.setattr(
+        execution_module,
+        "resolve_requested_agent_profile",
+        _resolve_profile,
+    )
+    monkeypatch.setattr(
+        execution_module,
+        "execute_harness_turn",
+        fake_execute_harness_turn,
+    )
+
+    await execute_file_chat(
+        _make_request_with_hermes(repo_root),
+        repo_root,
+        target,
+        "edit",
+        agent="hermes",
+        profile=None,
+    )
+    await execute_file_chat(
+        _make_request_with_hermes(repo_root),
+        repo_root,
+        target,
+        "edit",
+        agent="hermes",
+        profile="m4-pma",
+    )
+
+    assert len(thread_keys) == 2
+    assert thread_keys[0] != thread_keys[1]
+    assert "profile" not in (thread_keys[0] or "")
+    assert "profile" in (thread_keys[1] or "")

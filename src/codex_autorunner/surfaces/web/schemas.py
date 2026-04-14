@@ -893,6 +893,12 @@ class TicketCreateRequest(Payload):
     title: Optional[str] = None
     goal: Optional[str] = None
     body: str = ""
+    profile: Optional[str] = None
+
+    @field_validator("profile")
+    @classmethod
+    def _normalize_profile(cls, value: Optional[str]) -> Optional[str]:
+        return _normalize_text(value)
 
 
 class TicketUpdateRequest(Payload):
@@ -934,10 +940,26 @@ class TicketReorderResponse(ResponseModel):
 
 
 class TicketBulkSetAgentRequest(Payload):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     agent: str
+    profile: Optional[str] = None
     range: Optional[str] = None
+    profile_explicit: bool = Field(default=False, exclude=True)
+
+    @field_validator("profile")
+    @classmethod
+    def _normalize_profile(cls, value: Optional[str]) -> Optional[str]:
+        return _normalize_text(value)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _capture_profile_intent(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        payload = dict(value)
+        payload["profile_explicit"] = "profile" in value
+        return payload
 
 
 class TicketBulkClearModelRequest(Payload):
@@ -1017,6 +1039,12 @@ class PmaManagedThreadResumeRequest(Payload):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
 
+class PmaManagedThreadForkRequest(Payload):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    name: Optional[str] = None
+
+
 class PmaChatRequest(Payload):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
@@ -1087,6 +1115,7 @@ class PmaAutomationSubscriptionCreateRequest(Payload):
             "to_state",
             "reason",
             "timestamp",
+            "idempotency_key",
             "filter",
         }
     )
@@ -1132,6 +1161,10 @@ class PmaAutomationSubscriptionCreateRequest(Payload):
     )
     reason: Optional[str] = None
     timestamp: Optional[str] = None
+    idempotency_key: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("idempotency_key", "idempotencyKey"),
+    )
     filter: Optional[Dict[str, Any]] = None
 
     @model_validator(mode="before")

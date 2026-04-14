@@ -155,10 +155,10 @@ The harness automatically gates optional helper methods:
   workspace memory is shared across threads, one active turn is allowed per
   ZeroClaw session, and `interrupt`/`review` are not advertised.
 - **Hermes**: ACP-backed repo/worktree adapter. Supports `durable_threads`,
-  `message_turns`, `interrupt`, `event_streaming`, and `approvals`. Caveats
-  remain explicit: Hermes runs against a shared `HERMES_HOME`, active-thread
-  discovery is not available on the current stable ACP surface, model catalogs
-  are not advertised, review is unsupported, and CAR does not promise
-  transcript-history reconstruction beyond CAR-observed turns.
+  `message_turns`, `active_thread_discovery`, `interrupt`, `event_streaming`,
+  and `approvals`. Caveats remain explicit: Hermes runs against a shared
+  `HERMES_HOME`, model catalogs are not advertised, review is unsupported, and
+  CAR does not promise transcript-history reconstruction beyond CAR-observed
+  turns.
 - **Codex**: Full-featured, supports all optional capabilities
 - **OpenCode**: Full-featured except `approvals`

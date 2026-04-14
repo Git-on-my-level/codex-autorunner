@@ -454,6 +454,7 @@ function appendToLiveOutput(text) {
         liveOutputBuffer.shift();
     }
     scheduleLiveOutputTextUpdate();
+    scheduleLiveOutputRender();
 }
 function addLiveOutputEvent(parsed) {
     const { event, mergeStrategy } = parsed;
@@ -581,16 +582,50 @@ function renderLiveOutputCompact() {
     const compactEl = document.getElementById("ticket-live-output-compact");
     if (!compactEl)
         return;
-    const summary = summarizeEvents(liveOutputEvents, {
-        maxActions: 1, // Show only 1 action + thinking to fit in 3-line compact view
-        maxTextLength: COMPACT_MAX_TEXT_LENGTH,
-        startTime: flowStartedAt?.getTime(),
-    });
-    const text = liveOutputEvents.length ? renderCompactSummary(summary) : "";
+    const text = renderCompactLiveOutputText();
     const newText = text || "Waiting for agent output...";
     if (compactEl.textContent !== newText) {
         compactEl.textContent = newText;
     }
+}
+function renderCompactLiveOutputText() {
+    if (liveOutputEvents.length) {
+        const summary = summarizeEvents(liveOutputEvents, {
+            maxActions: 1, // Show only 1 action + thinking to fit in 3-line compact view
+            maxTextLength: COMPACT_MAX_TEXT_LENGTH,
+            startTime: flowStartedAt?.getTime(),
+        });
+        return renderCompactSummary(summary);
+    }
+    const fallbackText = compactLiveOutputBufferText();
+    if (!fallbackText)
+        return "";
+    const summary = summarizeEvents([
+        {
+            id: "ticket-live-output-fallback",
+            title: "Output",
+            summary: fallbackText,
+            detail: "",
+            kind: "output",
+            isSignificant: true,
+            time: flowStartedAt?.getTime() || Date.now(),
+            itemId: null,
+            method: "agent_stream_delta",
+        },
+    ], {
+        maxActions: 1,
+        maxTextLength: COMPACT_MAX_TEXT_LENGTH,
+        startTime: flowStartedAt?.getTime(),
+    });
+    return renderCompactSummary(summary);
+}
+function compactLiveOutputBufferText() {
+    const recentLines = liveOutputBuffer
+        .map((line) => line.trim())
+        .filter((line) => line && !/^--- Step: .* ---$/.test(line));
+    if (!recentLines.length)
+        return "";
+    return recentLines.slice(-3).join(" ").replace(/\s+/g, " ").trim();
 }
 function updateLiveOutputViewToggle() {
     const viewToggle = document.getElementById("ticket-live-output-view-toggle");
@@ -809,6 +844,20 @@ function initReasonModal() {
         });
     }
 }
+export const __ticketFlowTest = {
+    clearLiveOutput() {
+        clearLiveOutput();
+        liveOutputDetailExpanded = false;
+        flowStartedAt = null;
+        renderLiveOutputView();
+    },
+    handleFlowEvent,
+    initLiveOutputPanel,
+    renderLiveOutputView,
+    setFlowStartedAt(value) {
+        flowStartedAt = value == null ? null : new Date(value);
+    },
+};
 function els() {
     return {
         card: document.getElementById("ticket-card"),
@@ -1242,11 +1291,8 @@ function renderDispatchHistory(runId, data) {
         header.appendChild(headerContent);
         contentWrapper.appendChild(header);
         container.append(collapseBar, contentWrapper);
-        // Add diff stats if present (for turn summaries)
-        // New path: dispatch.diff_stats (from FlowStore DIFF_UPDATED merge)
-        // Legacy fallback: dispatch.extra.diff_stats (DISPATCH.md frontmatter)
-        const diffStats = (dispatch?.diff_stats ||
-            dispatch?.extra?.diff_stats);
+        // Diff stats from FlowStore DIFF_UPDATED merge (dispatch.diff_stats)
+        const diffStats = dispatch?.diff_stats;
         if (diffStats && (diffStats.insertions || diffStats.deletions)) {
             const statsEl = document.createElement("span");
             statsEl.className = "dispatch-diff-stats";
@@ -1424,7 +1470,15 @@ async function bulkSetAgent() {
         placeholder: "codex",
         confirmText: "Set agent",
     });
-    if (!agent)
+    const agentValue = agent?.trim() || "";
+    if (!agentValue)
+        return;
+    const profile = await inputModal("Optional profile (e.g. Hermes profile). Leave blank to clear and use the default.", {
+        placeholder: "m4-pma",
+        confirmText: "Apply",
+        allowEmpty: true,
+    });
+    if (profile === null)
         return;
     const range = await inputModal("Optional range (A:B). Leave blank for all tickets.", {
         placeholder: "1:20",
@@ -1434,12 +1488,15 @@ async function bulkSetAgent() {
     if (range === null)
         return;
     const rangeValue = range.trim() || undefined;
+    const trimmedProfile = profile.trim();
+    const profileValue = trimmedProfile || null;
     setButtonLoading(bulkSetAgentBtn, true);
     try {
         const payload = (await api("/api/flows/ticket_flow/tickets/bulk-set-agent", {
             method: "POST",
             body: {
-                agent,
+                agent: agentValue,
+                profile: profileValue,
                 range: rangeValue,
             },
         }));

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -342,6 +342,64 @@ def _build_legacy_timeline_rows(
             }
         )
     return rows
+
+
+def test_orchestration_migration_adds_execution_scoped_projection_indexes(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    _seed_thread_and_execution(hub_root, execution_id="exec-index")
+    _seed_legacy_timeline_rows(
+        hub_root,
+        execution_id="exec-index",
+        rows=_build_legacy_timeline_rows(
+            execution_id="exec-index", num_output_deltas=2
+        ),
+    )
+
+    with open_orchestration_sqlite(hub_root, durable=False) as conn:
+        index_rows = conn.execute(
+            "PRAGMA index_list('orch_event_projections')"
+        ).fetchall()
+        index_names = {str(row["name"]) for row in index_rows}
+        query_plan = conn.execute(
+            """
+            EXPLAIN QUERY PLAN
+            SELECT event_id
+              FROM orch_event_projections
+             INDEXED BY idx_orch_event_projections_family_execution_order
+             WHERE event_family = ?
+               AND execution_id = ?
+             ORDER BY timestamp ASC, event_id ASC
+            """,
+            ("turn.timeline", "exec-index"),
+        ).fetchall()
+        grouped_plan = conn.execute(
+            """
+            EXPLAIN QUERY PLAN
+            SELECT event_type, COUNT(*) AS cnt
+              FROM orch_event_projections
+             INDEXED BY idx_orch_event_projections_family_type_execution
+             WHERE event_family = ?
+               AND execution_id IS NOT NULL
+             GROUP BY event_type
+            """,
+            ("turn.timeline",),
+        ).fetchall()
+
+    assert "idx_orch_event_projections_family_execution_order" in index_names
+    assert "idx_orch_event_projections_family_type_execution" in index_names
+    assert any(
+        "idx_orch_event_projections_family_execution_order" in str(row["detail"])
+        for row in query_plan
+    )
+    assert not any("TEMP B-TREE" in str(row["detail"]).upper() for row in query_plan)
+    assert any(
+        "idx_orch_event_projections_family_type_execution" in str(row["detail"])
+        for row in grouped_plan
+    )
+    assert not any("TEMP B-TREE" in str(row["detail"]).upper() for row in grouped_plan)
 
 
 class TestHotProjectionBoundedGrowth:
@@ -834,6 +892,10 @@ class TestCompactionAndRetentionAtScale:
 
         num_old = 15
         num_new = 5
+        new_finished_at = datetime.now(timezone.utc).replace(microsecond=0)
+        new_started_at = new_finished_at - timedelta(minutes=5)
+        new_started_at_iso = new_started_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+        new_finished_at_iso = new_finished_at.strftime("%Y-%m-%dT%H:%M:%SZ")
         for i in range(num_old):
             eid = f"exec-old-{i:03d}"
             rows = _build_legacy_timeline_rows(
@@ -852,11 +914,12 @@ class TestCompactionAndRetentionAtScale:
             )
             _seed_legacy_timeline_rows(hub_root, execution_id=eid, rows=rows)
 
-        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         for i in range(num_new):
             eid = f"exec-new-{i:03d}"
             rows = _build_legacy_timeline_rows(
                 execution_id=eid,
+                started_at=new_started_at_iso,
+                finished_at=new_finished_at_iso,
                 num_output_deltas=5,
                 num_run_notices=3,
                 num_tool_calls=1,
@@ -864,8 +927,8 @@ class TestCompactionAndRetentionAtScale:
             _seed_thread_and_execution(
                 hub_root,
                 execution_id=eid,
-                started_at=now_iso,
-                finished_at=now_iso,
+                started_at=new_started_at_iso,
+                finished_at=new_finished_at_iso,
             )
             _seed_legacy_timeline_rows(hub_root, execution_id=eid, rows=rows)
 

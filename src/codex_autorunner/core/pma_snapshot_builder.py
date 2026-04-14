@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 
+from .diagnostics import build_process_monitor_summary
 from .filebox import BOXES, empty_listing, list_filebox
 from .flows.models import flow_run_duration_seconds
 from .freshness import (
@@ -17,7 +18,7 @@ from .freshness import (
 )
 from .hub import HubSupervisor
 from .pma_action_queue import build_pma_action_queue
-from .pma_automation_snapshot import empty_automation_snapshot, snapshot_pma_automation
+from .pma_automation_snapshot import snapshot_pma_automation
 from .pma_context_shared import (
     PMA_MAX_MESSAGES,
     PMA_MAX_REPOS,
@@ -34,7 +35,7 @@ from .pma_file_inbox import (
 from .pma_thread_snapshot import snapshot_pma_threads
 from .pma_ticket_flow_state import get_latest_ticket_flow_run_state_with_record
 from .state_roots import resolve_hub_templates_root
-from .ticket_flow_projection import build_canonical_state_v1, collect_ticket_flow_census
+from .ticket_flow_projection import build_canonical_state_v1
 from .ticket_flow_summary import build_ticket_flow_summary
 
 _logger = logging.getLogger(__name__)
@@ -143,30 +144,6 @@ def _snapshot_pma_files(
     except (OSError, KeyError, TypeError, RuntimeError) as exc:
         _logger.warning("Could not list filebox contents: %s", exc)
     return pma_files, pma_files_detail
-
-
-def annotate_pma_files_detail(
-    pma_files_detail: dict[str, list[dict[str, Any]]],
-    *,
-    generated_at: str,
-    stale_threshold_seconds: int,
-) -> dict[str, list[dict[str, Any]]]:
-    annotated: dict[str, list[dict[str, Any]]] = {}
-    for box in BOXES:
-        entries = pma_files_detail.get(box) or []
-        annotated_entries: list[dict[str, Any]] = []
-        for entry in entries:
-            payload = dict(entry)
-            payload["freshness"] = build_freshness_payload(
-                generated_at=generated_at,
-                stale_threshold_seconds=stale_threshold_seconds,
-                candidates=[("file_modified_at", entry.get("modified_at"))],
-            )
-            if box == "inbox":
-                payload = enrich_pma_file_inbox_entry(payload)
-            annotated_entries.append(payload)
-        annotated[box] = annotated_entries
-    return annotated
 
 
 def _build_templates_snapshot(
@@ -315,15 +292,11 @@ def _build_repo_summaries(
             "canonical_state_v1": None,
         }
         if snap.initialized and snap.exists_on_disk:
-            census = collect_ticket_flow_census(snap.path)
+            summary["ticket_flow"] = build_ticket_flow_summary(
+                snap.path, include_failure=False
+            )
             run_state, run_record = get_latest_ticket_flow_run_state_with_record(
                 snap.path, snap.id
-            )
-            summary["ticket_flow"] = build_ticket_flow_summary(
-                snap.path,
-                include_failure=False,
-                census=census,
-                record=run_record,
             )
             summary["run_state"] = run_state
             if run_record is not None:
@@ -344,7 +317,6 @@ def _build_repo_summaries(
                     str(snap.last_run_id) if snap.last_run_id is not None else None
                 ),
                 stale_threshold_seconds=stale_threshold_seconds,
-                census=census,
             )
         repos.append(summary)
     return repos
@@ -400,17 +372,26 @@ def _collect_hub_local_artifacts(
     if hub_root is None:
         return pma_files, pma_files_detail, pma_threads, automation
 
-    pma_files, raw_files_detail = _snapshot_pma_files(hub_root)
-    pma_files_detail = annotate_pma_files_detail(
-        raw_files_detail,
-        generated_at=generated_at,
-        stale_threshold_seconds=stale_threshold_seconds,
-    )
-    pma_threads = snapshot_pma_threads(
-        hub_root,
-        generated_at=generated_at,
-        stale_threshold_seconds=stale_threshold_seconds,
-    )
+    pma_files, pma_files_detail = _snapshot_pma_files(hub_root)
+    pma_threads = snapshot_pma_threads(hub_root)
+    for thread in pma_threads:
+        thread["freshness"] = build_freshness_payload(
+            generated_at=generated_at,
+            stale_threshold_seconds=stale_threshold_seconds,
+            candidates=[
+                ("thread_status_changed_at", thread.get("status_changed_at")),
+                ("thread_updated_at", thread.get("updated_at")),
+            ],
+        )
+    for box in BOXES:
+        for index, entry in enumerate(pma_files_detail.get(box) or []):
+            entry["freshness"] = build_freshness_payload(
+                generated_at=generated_at,
+                stale_threshold_seconds=stale_threshold_seconds,
+                candidates=[("file_modified_at", entry.get("modified_at"))],
+            )
+            if box == "inbox":
+                pma_files_detail[box][index] = enrich_pma_file_inbox_entry(entry)
     return pma_files, pma_files_detail, pma_threads, automation
 
 
@@ -420,6 +401,15 @@ async def build_hub_snapshot_payload(
     *,
     gather_inbox: Callable[..., list[dict[str, Any]]],
 ) -> dict[str, Any]:
+    async def _build_process_monitor_payload() -> Optional[dict[str, Any]]:
+        if hub_root is None:
+            return None
+        return await asyncio.to_thread(
+            build_process_monitor_summary,
+            hub_root,
+            capture_if_stale=False,
+        )
+
     generated_at = iso_now()
     stale_threshold_seconds = _resolve_pma_freshness_threshold_seconds(supervisor)
     if supervisor is None:
@@ -434,7 +424,16 @@ async def build_hub_snapshot_payload(
             "lifecycle_events": [],
             "pma_files_detail": empty_files,
             "pma_threads": [],
-            "automation": empty_automation_snapshot(),
+            "process_monitor": None,
+            "automation": {
+                "subscriptions": {"active_count": 0, "sample": []},
+                "timers": {"pending_count": 0, "sample": []},
+                "wakeups": {
+                    "pending_count": 0,
+                    "dispatched_recent_count": 0,
+                    "pending_sample": [],
+                },
+            },
             "freshness": _build_snapshot_freshness_summary(
                 generated_at=generated_at,
                 stale_threshold_seconds=stale_threshold_seconds,
@@ -448,26 +447,29 @@ async def build_hub_snapshot_payload(
         }
 
     limits = PmaSnapshotLimits.from_supervisor(supervisor)
-    repos, agent_workspaces, inbox, lifecycle_events = await asyncio.gather(
-        asyncio.to_thread(
-            _build_repo_summaries,
-            supervisor,
-            stale_threshold_seconds=stale_threshold_seconds,
-            limits=limits,
-        ),
-        asyncio.to_thread(
-            _build_agent_workspace_summaries,
-            supervisor,
-            hub_root=hub_root,
-            limits=limits,
-        ),
-        asyncio.to_thread(
-            gather_inbox,
-            supervisor,
-            max_text_chars=limits.max_text_chars,
-            stale_threshold_seconds=stale_threshold_seconds,
-        ),
-        asyncio.to_thread(_gather_lifecycle_events, supervisor, limit=20),
+    repos, agent_workspaces, inbox, lifecycle_events, process_monitor = (
+        await asyncio.gather(
+            asyncio.to_thread(
+                _build_repo_summaries,
+                supervisor,
+                stale_threshold_seconds=stale_threshold_seconds,
+                limits=limits,
+            ),
+            asyncio.to_thread(
+                _build_agent_workspace_summaries,
+                supervisor,
+                hub_root=hub_root,
+                limits=limits,
+            ),
+            asyncio.to_thread(
+                gather_inbox,
+                supervisor,
+                max_text_chars=limits.max_text_chars,
+                stale_threshold_seconds=stale_threshold_seconds,
+            ),
+            asyncio.to_thread(_gather_lifecycle_events, supervisor, limit=20),
+            _build_process_monitor_payload(),
+        )
     )
     inbox = inbox[: limits.max_messages]
 
@@ -508,6 +510,7 @@ async def build_hub_snapshot_payload(
         "pma_files": pma_files,
         "pma_files_detail": pma_files_detail,
         "pma_threads": pma_threads,
+        "process_monitor": process_monitor,
         "automation": automation,
         "lifecycle_events": lifecycle_events,
         "freshness": freshness,

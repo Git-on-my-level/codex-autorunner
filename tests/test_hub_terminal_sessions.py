@@ -77,12 +77,13 @@ def test_hub_terminal_sessions_stay_isolated(
     _create_repo(repo_root, "alpha")
     _create_repo(repo_root, "beta")
 
-    app = create_hub_app(hub_root)
     monkeypatch.setattr(
         "codex_autorunner.surfaces.web.routes.base.PTYSession", FakePTYSession
     )
+    app = create_hub_app(hub_root)
 
     with TestClient(app) as client:
+        assert client.get("/hub/repos").status_code == 200
         with (
             client.websocket_connect("/repos/alpha/api/terminal") as ws_alpha,
             client.websocket_connect("/repos/beta/api/terminal") as ws_beta,

@@ -14,7 +14,7 @@ Thanks for helping improve codex-autorunner.
 ## Development
 - Bootstrap dev env (venv, dev deps, npm deps, hooks): `make setup`
 - Install dev deps: `pip install -e .[dev]`
-- Run tests: `python -m pytest` (or `make test`)
+- Run tests: `.venv/bin/python -m pytest` after `make setup` (or `make test`)
 - JS lint (UI): `npm run lint:js`
 - Format: `python -m black src tests`
 - Build static assets: `pnpm run build` (source is `src/codex_autorunner/static_src/`, output is `src/codex_autorunner/static/`)

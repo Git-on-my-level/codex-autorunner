@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,10 @@ from codex_autorunner.core.orchestration.cold_trace_store import ColdTraceStore
 from codex_autorunner.core.orchestration.runtime_thread_events import (
     RuntimeThreadRunEventState,
     normalize_runtime_thread_raw_event,
+)
+from codex_autorunner.core.orchestration.sqlite import (
+    initialize_orchestration_sqlite,
+    open_orchestration_sqlite,
 )
 from codex_autorunner.core.orchestration.turn_timeline import (
     list_turn_timeline,
@@ -181,6 +186,130 @@ def test_persist_turn_timeline_bounds_hot_run_notice_growth_and_updates_checkpoi
     assert checkpoint.projection_event_cursor == 150
     assert checkpoint.hot_projection_state["family_hot_rows"]["run_notice"] == 100
     assert checkpoint.hot_projection_state["spilled_counts"]["run_notice"] == 50
+
+
+def test_persist_turn_timeline_seeds_notice_memory_by_projection_order(
+    tmp_path: Path,
+) -> None:
+    initialize_orchestration_sqlite(tmp_path, durable=False)
+    with open_orchestration_sqlite(tmp_path, durable=False) as conn:
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO orch_event_projections (
+                    event_id,
+                    event_family,
+                    event_type,
+                    target_kind,
+                    target_id,
+                    execution_id,
+                    repo_id,
+                    resource_kind,
+                    resource_id,
+                    run_id,
+                    timestamp,
+                    status,
+                    payload_json,
+                    processed
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "turn-timeline:turn-seed-order:0001",
+                    "turn.timeline",
+                    "run_notice",
+                    "thread_target",
+                    "thread-1",
+                    "turn-seed-order",
+                    None,
+                    None,
+                    None,
+                    None,
+                    "2026-03-19T00:00:10Z",
+                    "recorded",
+                    json.dumps(
+                        {
+                            "event_index": 1,
+                            "event_family": "run_notice",
+                            "event": {
+                                "timestamp": "2026-03-19T00:00:10Z",
+                                "kind": "thinking",
+                                "message": "planning",
+                            },
+                        }
+                    ),
+                    1,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO orch_event_projections (
+                    event_id,
+                    event_family,
+                    event_type,
+                    target_kind,
+                    target_id,
+                    execution_id,
+                    repo_id,
+                    resource_kind,
+                    resource_id,
+                    run_id,
+                    timestamp,
+                    status,
+                    payload_json,
+                    processed
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "turn-timeline:turn-seed-order:0002",
+                    "turn.timeline",
+                    "run_notice",
+                    "thread_target",
+                    "thread-1",
+                    "turn-seed-order",
+                    None,
+                    None,
+                    None,
+                    None,
+                    "2026-03-19T00:00:00Z",
+                    "recorded",
+                    json.dumps(
+                        {
+                            "event_index": 2,
+                            "event_family": "run_notice",
+                            "event": {
+                                "timestamp": "2026-03-19T00:00:00Z",
+                                "kind": "thinking",
+                                "message": "planning more",
+                            },
+                        }
+                    ),
+                    1,
+                ),
+            )
+
+    count = persist_turn_timeline(
+        tmp_path,
+        execution_id="turn-seed-order",
+        target_kind="thread_target",
+        target_id="thread-1",
+        start_index=3,
+        events=[
+            RunNotice(
+                timestamp="2026-03-19T00:00:20Z",
+                kind="thinking",
+                message="planning more",
+            )
+        ],
+    )
+
+    assert count == 1
+    timeline = list_turn_timeline(tmp_path, execution_id="turn-seed-order")
+    assert len(timeline) == 2
+
+    checkpoint = ColdTraceStore(tmp_path).load_checkpoint("turn-seed-order")
+    assert checkpoint is not None
+    assert checkpoint.progress_text_preview == "planning more"
+    assert checkpoint.hot_projection_state["deduped_counts"]["run_notice"] == 1
 
 
 def test_persist_turn_timeline_appends_from_start_index(tmp_path: Path) -> None:

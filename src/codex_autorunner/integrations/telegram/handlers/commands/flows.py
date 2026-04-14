@@ -4,7 +4,7 @@ import asyncio
 import logging
 import uuid
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional, TypeVar
 
 from .....core.config import ConfigError, load_repo_config
 from .....core.flows import (
@@ -65,6 +65,7 @@ from .shared import TelegramCommandSupportMixin
 
 _logger = logging.getLogger(__name__)
 _FLOW_REPO_CONTEXT_CACHE_MAX = 512
+_T = TypeVar("_T")
 
 
 def _flow_paths(repo_root: Path) -> tuple[Path, Path]:
@@ -128,6 +129,11 @@ def _worktree_suffix(repo_id: str) -> Optional[str]:
 
 
 class FlowCommands(TelegramCommandSupportMixin):
+    async def _run_blocking_flow_call(
+        self, func: Callable[..., _T], /, *args: Any, **kwargs: Any
+    ) -> _T:
+        return await asyncio.to_thread(func, *args, **kwargs)
+
     def _flow_run_mirror(self, repo_root: Path) -> ChatRunMirror:
         return ChatRunMirror(repo_root, logger_=_logger)
 
@@ -617,6 +623,21 @@ class FlowCommands(TelegramCommandSupportMixin):
         *,
         repo_id: Optional[str] = None,
     ) -> None:
+        text, keyboard = await self._run_blocking_flow_call(
+            self._build_flow_status_callback_payload,
+            repo_root,
+            run_id_raw,
+            repo_id=repo_id,
+        )
+        await self._edit_callback_message(callback, text, reply_markup=keyboard)
+
+    def _build_flow_status_callback_payload(
+        self,
+        repo_root: Path,
+        run_id_raw: Optional[str],
+        *,
+        repo_id: Optional[str] = None,
+    ) -> tuple[str, dict[str, Any]]:
         store = _load_flow_store(repo_root)
         try:
             store.initialize()
@@ -625,31 +646,21 @@ class FlowCommands(TelegramCommandSupportMixin):
                 if not run_id_raw:
                     summary_text = self._build_flow_status_summary_fallback(repo_root)
                     if summary_text:
-                        await self._edit_callback_message(
-                            callback,
-                            summary_text,
-                            reply_markup={"inline_keyboard": []},
-                        )
-                        return
-                await self._edit_callback_message(
-                    callback, error, reply_markup={"inline_keyboard": []}
-                )
-                return
+                        return summary_text, {"inline_keyboard": []}
+                return error, {"inline_keyboard": []}
             if record is not None:
                 record, _updated, locked = reconcile_flow_run(repo_root, record, store)
                 if locked:
-                    await self._edit_callback_message(
-                        callback,
+                    return (
                         f"Run {_code(record.id)} is locked for reconcile; try again.",
-                        reply_markup={"inline_keyboard": []},
+                        {"inline_keyboard": []},
                     )
-                    return
             text, keyboard = self._build_flow_status_card(
                 repo_root, record, store, repo_id=repo_id
             )
         finally:
             store.close()
-        await self._edit_callback_message(callback, text, reply_markup=keyboard)
+        return text, keyboard
 
     async def _handle_flow_callback(
         self, callback: TelegramCallbackQuery, parsed: FlowCallback
@@ -757,7 +768,10 @@ class FlowCommands(TelegramCommandSupportMixin):
                     error = "No active ticket flow run found."
                 if error is None:
                     await _answer_once("Working...")
-                    record, updated, locked = flow_service.reconcile_flow_run(record.id)
+                    record, updated, locked = await self._run_blocking_flow_call(
+                        flow_service.reconcile_flow_run,
+                        record.id,
+                    )
                     if locked:
                         error = (
                             f"Run {record.run_id} is locked for reconcile; try again."
@@ -825,7 +839,8 @@ class FlowCommands(TelegramCommandSupportMixin):
                             self._flow_archive_in_progress_text(record.id),
                             reply_markup={"inline_keyboard": []},
                         )
-                        summary = flow_service.archive_flow_run(
+                        summary = await self._run_blocking_flow_call(
+                            flow_service.archive_flow_run,
                             record.id,
                             force=ticket_flow_archive_requires_force(record),
                             delete_run=True,
@@ -1942,9 +1957,10 @@ You are the first ticket in a new ticket_flow run.
                     reply_to=message.message_id,
                 )
                 return
-            record, updated, locked = self._ticket_flow_orchestration_service(
-                repo_root
-            ).reconcile_flow_run(record.id)
+            record, updated, locked = await self._run_blocking_flow_call(
+                self._ticket_flow_orchestration_service(repo_root).reconcile_flow_run,
+                record.id,
+            )
             if locked:
                 await self._send_message(
                     message.chat_id,
@@ -2060,7 +2076,8 @@ You are the first ticket in a new ticket_flow run.
             )
             return
 
-        summary = self._ticket_flow_orchestration_service(repo_root).archive_flow_run(
+        summary = await self._run_blocking_flow_call(
+            self._ticket_flow_orchestration_service(repo_root).archive_flow_run,
             record.id,
             force=ticket_flow_archive_requires_force(record),
             delete_run=True,

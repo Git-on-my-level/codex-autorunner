@@ -9,12 +9,18 @@ from typing import Any, Optional
 
 from codex_autorunner.agents.registry import AgentDescriptor
 from codex_autorunner.agents.types import TerminalTurnResult
+from codex_autorunner.core.hub_control_plane import (
+    ExecutionResponse,
+    RemoteThreadExecutionStore,
+    ThreadTargetResponse,
+)
 from codex_autorunner.core.orchestration import (
     HarnessBackedOrchestrationService,
     MappingAgentDefinitionCatalog,
     MessageRequest,
     PmaThreadExecutionStore,
 )
+from codex_autorunner.core.orchestration.models import ExecutionRecord, ThreadTarget
 from codex_autorunner.core.orchestration.runtime_threads import (
     RUNTIME_THREAD_MISSING_BACKEND_IDS_ERROR,
     await_runtime_thread_outcome,
@@ -300,6 +306,90 @@ def _build_service(
     )
 
 
+class _SerializedHubClient:
+    def __init__(self, store: PmaThreadExecutionStore) -> None:
+        self._store = store
+
+    @staticmethod
+    def _serialize_thread(thread: ThreadTarget | None) -> ThreadTargetResponse:
+        return ThreadTargetResponse.from_mapping(
+            ThreadTargetResponse(thread=thread).to_dict()
+        )
+
+    @staticmethod
+    def _serialize_execution(execution: ExecutionRecord | None) -> ExecutionResponse:
+        payload = (
+            None
+            if execution is None
+            else ExecutionResponse(execution=execution).to_dict()["execution"]
+        )
+        return ExecutionResponse.from_mapping({"execution": payload})
+
+    async def create_thread_target(self, request: Any) -> ThreadTargetResponse:
+        return self._serialize_thread(
+            self._store.create_thread_target(
+                request.agent_id,
+                Path(request.workspace_root),
+                repo_id=request.repo_id,
+                resource_kind=request.resource_kind,
+                resource_id=request.resource_id,
+                display_name=request.display_name,
+                backend_thread_id=request.backend_thread_id,
+                context_profile=request.metadata.get("context_profile"),
+                metadata=request.metadata,
+            )
+        )
+
+    async def get_thread_target(self, request: Any) -> ThreadTargetResponse:
+        return self._serialize_thread(
+            self._store.get_thread_target(request.thread_target_id)
+        )
+
+    async def create_execution(self, request: Any) -> ExecutionResponse:
+        return self._serialize_execution(
+            self._store.create_execution(
+                request.thread_target_id,
+                prompt=request.prompt,
+                request_kind=request.request_kind,
+                busy_policy=request.busy_policy,
+                model=request.model,
+                reasoning=request.reasoning,
+                client_request_id=request.client_request_id,
+                queue_payload=request.queue_payload,
+            )
+        )
+
+    async def get_execution(self, request: Any) -> ExecutionResponse:
+        return self._serialize_execution(
+            self._store.get_execution(request.thread_target_id, request.execution_id)
+        )
+
+    async def get_running_execution(self, request: Any) -> ExecutionResponse:
+        return self._serialize_execution(
+            self._store.get_running_execution(request.thread_target_id)
+        )
+
+    async def set_thread_backend_id(self, request: Any) -> None:
+        self._store.set_thread_backend_id(
+            request.thread_target_id,
+            request.backend_thread_id,
+            backend_runtime_instance_id=request.backend_runtime_instance_id,
+        )
+
+    async def set_execution_backend_id(self, request: Any) -> None:
+        self._store.set_execution_backend_id(
+            request.execution_id,
+            request.backend_turn_id,
+        )
+
+    async def record_thread_activity(self, request: Any) -> None:
+        self._store.record_thread_activity(
+            request.thread_target_id,
+            execution_id=request.execution_id,
+            message_preview=request.message_preview,
+        )
+
+
 async def test_runtime_threads_begin_and_wait_with_agent_harness(
     tmp_path: Path,
 ) -> None:
@@ -362,6 +452,46 @@ async def test_runtime_threads_use_wait_for_turn_contract_for_session_runtimes(
     assert outcome.status == "ok"
     assert harness.wait_calls == [(workspace_root, "session-1", "stream-turn-1")]
     assert outcome.assistant_text == "hello world"
+
+
+async def test_runtime_threads_begin_and_wait_via_serialized_remote_store(
+    tmp_path: Path,
+) -> None:
+    harness = _HarnessWithWait()
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    local_store = PmaThreadExecutionStore(PmaThreadStore(tmp_path / "hub"))
+    remote_store = RemoteThreadExecutionStore(_SerializedHubClient(local_store))
+    descriptors = {"codex": _make_descriptor("codex")}
+    service = HarnessBackedOrchestrationService(
+        definition_catalog=MappingAgentDefinitionCatalog(descriptors),
+        thread_store=remote_store,
+        harness_factory=lambda resolved_agent_id: harness,
+    )
+    thread = service.create_thread_target("codex", workspace_root)
+
+    started = await begin_runtime_thread_execution(
+        service,
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="user-visible prompt",
+        ),
+    )
+    outcome = await await_runtime_thread_outcome(
+        started,
+        interrupt_event=asyncio.Event(),
+        timeout_seconds=5,
+        execution_error_message="Managed thread execution failed",
+    )
+
+    assert started.thread.agent_id == "codex"
+    assert started.thread.backend_thread_id == "backend-thread-1"
+    assert started.execution.backend_id == "backend-turn-1"
+    assert harness.wait_calls == [
+        (workspace_root, "backend-thread-1", "backend-turn-1")
+    ]
+    assert outcome.status == "ok"
 
 
 async def test_runtime_threads_allow_missing_interrupt_event(

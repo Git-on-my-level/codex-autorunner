@@ -27,6 +27,7 @@ from ...core.flows.workspace_root import (
 from ...core.runtime import RuntimeContext
 from ...integrations.agents import build_backend_orchestrator
 from ...integrations.agents.build_agent_pool import build_agent_pool
+from ...tickets import DEFAULT_MAX_TOTAL_TURNS
 from ...tickets.files import list_ticket_paths, safe_relpath
 from .definition import build_ticket_flow_definition
 
@@ -64,6 +65,11 @@ def build_ticket_flow_runtime_resources(repo_root: Path) -> TicketFlowRuntimeRes
         auto_commit_default=config.git_auto_commit,
         include_previous_ticket_context_default=(
             config.ticket_flow.include_previous_ticket_context
+        ),
+        max_total_turns_default=(
+            config.ticket_flow.max_total_turns
+            if config.ticket_flow.max_total_turns is not None
+            else DEFAULT_MAX_TOTAL_TURNS
         ),
     )
     definition.validate()

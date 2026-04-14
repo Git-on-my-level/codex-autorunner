@@ -402,7 +402,7 @@ Optional capabilities:
 
 Hermes is a useful example of a deliberately partial capability surface:
 
-- supports `interrupt`, `event_streaming`, and `approvals`
+- supports `active_thread_discovery`, `interrupt`, `event_streaming`, and `approvals`
 - does not support `review`, `model_listing`, or `transcript_history`
 
 ## Durable-Thread Contract (Must-Support)

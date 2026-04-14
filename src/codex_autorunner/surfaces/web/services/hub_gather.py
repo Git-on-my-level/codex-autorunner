@@ -11,9 +11,16 @@ from ....core.capability_hints import (
     build_hub_capability_hints,
     build_repo_capability_hints,
 )
-from ....core.filebox import empty_listing
+from ....core.config import (
+    CONFIG_FILENAME,
+    REPO_OVERRIDE_FILENAME,
+    ROOT_CONFIG_FILENAME,
+    ROOT_OVERRIDE_FILENAME,
+)
+from ....core.filebox import BOXES, empty_listing
 from ....core.flows.workspace_root import resolve_ticket_flow_workspace_root
 from ....core.freshness import (
+    build_freshness_payload,
     iso_now,
     resolve_stale_threshold_seconds,
 )
@@ -23,15 +30,14 @@ from ....core.hub_inbox_resolution import (
     message_resolution_state,
     message_resolvable_actions,
 )
-from ....core.hub_projection_store import path_stat_fingerprint
 from ....core.pma_context import (
     PMA_MAX_TEXT,
     _gather_inbox,
     _snapshot_pma_automation,
     _snapshot_pma_files,
     _snapshot_pma_threads,
-    annotate_pma_files_detail,
     build_pma_action_queue,
+    enrich_pma_file_inbox_entry,
 )
 from ....core.pma_thread_store import default_pma_threads_db_path
 from ....tickets.files import safe_relpath
@@ -46,6 +52,8 @@ from ..schemas import (
 
 _HUB_SNAPSHOT_CACHE_TTL_SECONDS = 2.0
 _hub_snapshot_cache_lock = threading.Lock()
+_REPO_CAPABILITY_HINT_CACHE_TTL_SECONDS = 30.0
+_repo_capability_hint_cache_lock = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -56,6 +64,18 @@ class _HubSnapshotCacheEntry:
 
 
 _hub_snapshot_cache: dict[tuple[int, str], _HubSnapshotCacheEntry] = {}
+
+
+@dataclass(frozen=True)
+class _RepoCapabilityHintCacheEntry:
+    fingerprint: tuple[Any, ...]
+    expires_at: float
+    items: list[dict[str, Any]]
+
+
+_repo_capability_hint_cache: dict[
+    tuple[str, str, str, str], _RepoCapabilityHintCacheEntry
+] = {}
 
 
 @dataclass(frozen=True)
@@ -117,6 +137,14 @@ def _serialize_latest_dispatch_response(
     return payload
 
 
+def _path_stat_fingerprint(path: Path) -> tuple[bool, Optional[int], Optional[int]]:
+    try:
+        stat = path.stat()
+    except OSError:
+        return (False, None, None)
+    return (True, int(stat.st_mtime_ns), int(stat.st_size))
+
+
 def _hub_snapshot_fingerprint(
     context: HubAppContext,
     *,
@@ -137,9 +165,9 @@ def _hub_snapshot_fingerprint(
         fingerprint.extend(
             [
                 str(root_path),
-                path_stat_fingerprint(root_path / ".codex-autorunner"),
-                path_stat_fingerprint(root_path / ".codex-autorunner" / "filebox"),
-                path_stat_fingerprint(default_pma_threads_db_path(root_path)),
+                _path_stat_fingerprint(root_path / ".codex-autorunner"),
+                _path_stat_fingerprint(root_path / ".codex-autorunner" / "filebox"),
+                _path_stat_fingerprint(default_pma_threads_db_path(root_path)),
             ]
         )
     return tuple(fingerprint)
@@ -287,6 +315,24 @@ def _build_snapshot_settings(
     )
 
 
+def _serialize_pma_file_entry(
+    box: str,
+    entry: dict[str, Any],
+    *,
+    generated_at: str,
+    stale_threshold_seconds: int,
+) -> dict[str, Any]:
+    payload = dict(entry)
+    payload["freshness"] = build_freshness_payload(
+        generated_at=generated_at,
+        stale_threshold_seconds=stale_threshold_seconds,
+        candidates=[("file_modified_at", entry.get("modified_at"))],
+    )
+    if box == "inbox":
+        return enrich_pma_file_inbox_entry(payload)
+    return payload
+
+
 def _collect_pma_files_detail(
     hub_root: Path,
     *,
@@ -294,11 +340,18 @@ def _collect_pma_files_detail(
     stale_threshold_seconds: int,
 ) -> dict[str, list[dict[str, Any]]]:
     _, raw_listing = _snapshot_pma_files(hub_root)
-    return annotate_pma_files_detail(
-        raw_listing,
-        generated_at=generated_at,
-        stale_threshold_seconds=stale_threshold_seconds,
-    )
+    return {
+        box: [
+            _serialize_pma_file_entry(
+                box,
+                entry,
+                generated_at=generated_at,
+                stale_threshold_seconds=stale_threshold_seconds,
+            )
+            for entry in raw_listing.get(box) or []
+        ]
+        for box in BOXES
+    }
 
 
 def _collect_pma_threads(
@@ -307,11 +360,20 @@ def _collect_pma_threads(
     generated_at: str,
     stale_threshold_seconds: int,
 ) -> list[dict[str, Any]]:
-    return _snapshot_pma_threads(
-        hub_root,
-        generated_at=generated_at,
-        stale_threshold_seconds=stale_threshold_seconds,
-    )
+    return [
+        {
+            **thread,
+            "freshness": build_freshness_payload(
+                generated_at=generated_at,
+                stale_threshold_seconds=stale_threshold_seconds,
+                candidates=[
+                    ("thread_status_changed_at", thread.get("status_changed_at")),
+                    ("thread_updated_at", thread.get("updated_at")),
+                ],
+            ),
+        }
+        for thread in _snapshot_pma_threads(hub_root)
+    ]
 
 
 def _load_repo_message_context(
@@ -362,6 +424,89 @@ def _serialize_resolvable_item(item: dict[str, Any], item_type: str) -> dict[str
         "resolution_state": message_resolution_state(item_type),
         "resolvable_actions": message_resolvable_actions(item_type),
     }
+
+
+def _repo_capability_hint_fingerprint(
+    *,
+    hub_root: Optional[Path],
+    repo_id: str,
+    repo_root: Path,
+    repo_display_name: str,
+) -> tuple[Any, ...]:
+    hub_config_root = hub_root if isinstance(hub_root, Path) else None
+    return (
+        repo_id,
+        repo_display_name,
+        str(repo_root),
+        str(hub_config_root) if hub_config_root is not None else "",
+        _path_stat_fingerprint(repo_root / REPO_OVERRIDE_FILENAME),
+        _path_stat_fingerprint(repo_root / ".env"),
+        _path_stat_fingerprint(repo_root / ".codex-autorunner" / ".env"),
+        _path_stat_fingerprint(repo_root / CONFIG_FILENAME),
+        _path_stat_fingerprint(
+            hub_config_root / ROOT_CONFIG_FILENAME
+            if hub_config_root is not None
+            else Path(ROOT_CONFIG_FILENAME)
+        ),
+        _path_stat_fingerprint(
+            hub_config_root / ROOT_OVERRIDE_FILENAME
+            if hub_config_root is not None
+            else Path(ROOT_OVERRIDE_FILENAME)
+        ),
+        _path_stat_fingerprint(
+            hub_config_root / CONFIG_FILENAME
+            if hub_config_root is not None
+            else Path(CONFIG_FILENAME)
+        ),
+    )
+
+
+def _cached_repo_capability_hints(
+    context: HubAppContext,
+    *,
+    repo_id: str,
+    repo_root: Path,
+    repo_display_name: str,
+) -> list[dict[str, Any]]:
+    hub_root = getattr(getattr(context, "config", None), "root", None)
+    cache_key = (
+        str(hub_root) if isinstance(hub_root, Path) else "",
+        str(repo_root),
+        repo_id,
+        repo_display_name,
+    )
+    fingerprint = _repo_capability_hint_fingerprint(
+        hub_root=hub_root,
+        repo_id=repo_id,
+        repo_root=repo_root,
+        repo_display_name=repo_display_name,
+    )
+    now = time.monotonic()
+    with _repo_capability_hint_cache_lock:
+        cached = _repo_capability_hint_cache.get(cache_key)
+        if (
+            cached is not None
+            and cached.expires_at > now
+            and cached.fingerprint == fingerprint
+        ):
+            return [dict(item) for item in cached.items]
+    try:
+        hint_items = build_repo_capability_hints(
+            hub_config=context.config,
+            repo_id=repo_id,
+            repo_root=repo_root,
+            repo_display_name=repo_display_name,
+        )
+    except (AttributeError, OSError, ValueError, RuntimeError):
+        hint_items = []
+    stored_items = [dict(item) for item in hint_items]
+    with _repo_capability_hint_cache_lock:
+        _repo_capability_hint_cache[cache_key] = _RepoCapabilityHintCacheEntry(
+            fingerprint=fingerprint,
+            expires_at=now + _REPO_CAPABILITY_HINT_CACHE_TTL_SECONDS,
+            items=stored_items,
+        )
+    return [dict(item) for item in stored_items]
 
 
 def _filter_action_queue_items(
@@ -475,18 +620,16 @@ def _collect_inbox_messages(
         repo_root = getattr(snap, "path", None)
         if not repo_id or not isinstance(repo_root, Path):
             continue
-        try:
-            hint_items = build_repo_capability_hints(
-                hub_config=context.config,
-                repo_id=repo_id,
-                repo_root=repo_root,
-                repo_display_name=str(
-                    getattr(snap, "display_name", None) or getattr(snap, "id", "")
-                ).strip()
-                or repo_id,
-            )
-        except (AttributeError, OSError, ValueError, RuntimeError):
-            hint_items = []
+        repo_display_name = (
+            str(getattr(snap, "display_name", None) or getattr(snap, "id", "")).strip()
+            or repo_id
+        )
+        hint_items = _cached_repo_capability_hints(
+            context,
+            repo_id=repo_id,
+            repo_root=repo_root,
+            repo_display_name=repo_display_name,
+        )
         dismissals = _repo_dismissals(repo_context, repo_id, repo_root)
         for item in hint_items:
             item_type = str(item.get("item_type") or "")

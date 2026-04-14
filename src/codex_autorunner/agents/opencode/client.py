@@ -278,6 +278,23 @@ class OpenCodeClient:
         json_body: Optional[dict[str, Any]] = None,
         expect_json: bool = True,
     ) -> Any:
+        if not expect_json:
+            request = self._client.build_request(
+                method,
+                path,
+                params=params,
+                json=json_body,
+            )
+            response = await self._client.send(request, stream=True)
+            try:
+                response.raise_for_status()
+                return {
+                    "accepted": True,
+                    "status_code": response.status_code,
+                }
+            finally:
+                await response.aclose()
+
         response = await self._client.request(
             method, path, params=params, json=json_body
         )

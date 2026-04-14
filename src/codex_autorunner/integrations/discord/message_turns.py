@@ -21,6 +21,10 @@ from ...core.context_awareness import (
     maybe_inject_prompt_writing_hint,
 )
 from ...core.filebox import inbox_dir, outbox_dir, outbox_pending_dir
+from ...core.hub_control_plane import (
+    RemoteSurfaceBindingStore,
+    RemoteThreadExecutionStore,
+)
 from ...core.injected_context import wrap_injected_context
 from ...core.logging_utils import log_event
 from ...core.orchestration import (
@@ -31,6 +35,7 @@ from ...core.orchestration import (
     build_harness_backed_orchestration_service,
     build_surface_orchestration_ingress,
 )
+from ...core.orchestration.bindings import OrchestrationBindingStore
 from ...core.orchestration.runtime_thread_events import RuntimeThreadRunEventState
 from ...core.orchestration.runtime_threads import (
     RuntimeThreadExecution,
@@ -38,17 +43,15 @@ from ...core.orchestration.runtime_threads import (
     begin_runtime_thread_execution,
 )
 from ...core.pma_context import (
-    build_hub_snapshot,
+    build_hub_unavailable_snapshot,
     format_pma_discoverability_preamble,
     format_pma_prompt,
     load_pma_prompt,
 )
 from ...core.pma_notification_store import (
-    PmaNotificationStore,
     build_notification_context_block,
     notification_surface_key,
 )
-from ...core.pma_thread_store import PmaThreadStore
 from ...core.ports.run_event import TokenUsage
 from ...core.utils import canonicalize_path
 from ...integrations.chat.agents import resolve_chat_runtime_agent
@@ -897,7 +900,9 @@ def _spawn_discord_background_task(
     *,
     await_on_shutdown: bool = False,
 ) -> asyncio.Task[Any]:
-    spawn_task = service._spawn_task
+    spawn_task = getattr(service, "_spawn_task", None)
+    if not callable(spawn_task):
+        return cast(asyncio.Task[Any], asyncio.ensure_future(coro))
     if not await_on_shutdown:
         return cast(asyncio.Task[Any], spawn_task(coro))
     try:
@@ -909,6 +914,99 @@ def _spawn_discord_background_task(
         if "await_on_shutdown" not in str(exc):
             raise
         return cast(asyncio.Task[Any], spawn_task(coro))
+
+
+def _spawn_discord_progress_background_task(
+    service: Any,
+    coro: Awaitable[None],
+    *,
+    managed_thread_id: Optional[str] = None,
+    execution_id: Optional[str] = None,
+    lease_id: Optional[str] = None,
+    channel_id: Optional[str] = None,
+    message_id: Optional[str] = None,
+    failure_note: Optional[str] = None,
+    orphaned: bool = False,
+    await_on_shutdown: bool = False,
+) -> asyncio.Task[Any]:
+    task = _spawn_discord_background_task(
+        service,
+        coro,
+        await_on_shutdown=await_on_shutdown,
+    )
+    return bind_discord_progress_task_context(
+        task,
+        managed_thread_id=managed_thread_id,
+        execution_id=execution_id,
+        lease_id=lease_id,
+        channel_id=channel_id,
+        message_id=message_id,
+        failure_note=failure_note,
+        orphaned=orphaned,
+    )
+
+
+def _discord_progress_lease_is_not_newer_than_terminal_turn(
+    lease: Any,
+    *,
+    terminal_message_id: Optional[str],
+    terminal_created_at: Optional[str],
+) -> bool:
+    lease_message_id = _execution_field(lease, "message_id")
+    if (
+        isinstance(lease_message_id, str)
+        and lease_message_id.isdigit()
+        and isinstance(terminal_message_id, str)
+        and terminal_message_id.isdigit()
+    ):
+        return int(lease_message_id) <= int(terminal_message_id)
+    return False
+
+
+async def _reconcile_other_discord_turn_progress_leases(
+    service: Any,
+    *,
+    managed_thread_id: Optional[str],
+    keep_lease_id: Optional[str] = None,
+    keep_message_id: Optional[str] = None,
+    terminal_message_id: Optional[str] = None,
+    terminal_created_at: Optional[str] = None,
+) -> int:
+    normalized_thread_id = str(managed_thread_id or "").strip()
+    if not normalized_thread_id:
+        return 0
+    retained_lease_id = str(keep_lease_id or "").strip() or None
+    retained_message_id = str(keep_message_id or "").strip() or None
+    reconciled = 0
+    for lease in await _list_discord_progress_leases(
+        service,
+        managed_thread_id=normalized_thread_id,
+    ):
+        current_lease_id = _execution_field(lease, "lease_id")
+        current_message_id = _execution_field(lease, "message_id")
+        if current_lease_id and current_lease_id == retained_lease_id:
+            continue
+        if current_message_id and current_message_id == retained_message_id:
+            continue
+        # A sibling lease on the same Discord message can only exist when a newer
+        # turn has reused that progress message and replaced the older lease row.
+        # Older-turn delivery must never retire that replacement lease.
+        if current_message_id and current_message_id == terminal_message_id:
+            continue
+        # Older-turn delivery should never retire a sibling lease that belongs to
+        # a newer turn on the same managed thread, even if that newer turn has
+        # already been assigned an execution id.
+        if not _discord_progress_lease_is_not_newer_than_terminal_turn(
+            lease,
+            terminal_message_id=terminal_message_id,
+            terminal_created_at=terminal_created_at,
+        ):
+            continue
+        reconciled += await reconcile_discord_turn_progress_leases(
+            service,
+            lease_id=current_lease_id,
+        )
+    return reconciled
 
 
 async def _acknowledge_discord_progress_reuse(
@@ -1493,9 +1591,33 @@ async def _execute_discord_thread_message(
 
     if dispatch.effective_pma_enabled:
         try:
-            snapshot = await build_hub_snapshot(
-                dispatch.service._hub_supervisor, hub_root=dispatch.service._config.root
+            hub_client = getattr(dispatch.service, "_hub_client", None)
+            snapshot_detail = (
+                "Hub control plane is unavailable for Discord PMA prompt context."
             )
+            if hub_client is not None:
+                try:
+                    cp_snapshot = await hub_client.get_pma_snapshot()
+                    snapshot = cp_snapshot.snapshot
+                except Exception as exc:
+                    snapshot = build_hub_unavailable_snapshot(detail=snapshot_detail)
+                    dispatch.log_event_fn(
+                        dispatch.service._logger,
+                        logging.WARNING,
+                        "discord.pma.snapshot.control_plane_failed",
+                        channel_id=dispatch.channel_id,
+                        message_id=dispatch.event.message.message_id,
+                        exc=exc,
+                    )
+            else:
+                snapshot = build_hub_unavailable_snapshot(detail=snapshot_detail)
+                dispatch.log_event_fn(
+                    dispatch.service._logger,
+                    logging.WARNING,
+                    "discord.pma.snapshot.hub_client_unavailable",
+                    channel_id=dispatch.channel_id,
+                    message_id=dispatch.event.message.message_id,
+                )
             prompt_base = load_pma_prompt(dispatch.service._config.root)
             if dispatch.notification_reply is not None:
                 prompt_text = (
@@ -1650,17 +1772,44 @@ async def _handle_discord_notification_turn(
         dispatch=dispatch,
     )
     surface_key = notification_surface_key(dispatch.notification_reply.notification_id)
-    orch_binding = build_discord_thread_orchestration_service(
-        dispatch.service
-    ).get_binding(
-        surface_kind="discord",
-        surface_key=surface_key,
+    orch_service = build_discord_thread_orchestration_service(dispatch.service)
+    orch_binding = (
+        orch_service.get_binding(
+            surface_kind="discord",
+            surface_key=surface_key,
+        )
+        if orch_service is not None
+        else None
     )
     if orch_binding is not None:
-        PmaNotificationStore(dispatch.service._config.root).bind_continuation_thread(
-            notification_id=dispatch.notification_reply.notification_id,
-            thread_target_id=orch_binding.thread_target_id,
-        )
+        hub_client = getattr(dispatch.service, "_hub_client", None)
+        if hub_client is not None:
+            from ...core.hub_control_plane import (
+                NotificationContinuationBindRequest as _CPContinuationRequest,
+            )
+
+            try:
+                await hub_client.bind_notification_continuation(
+                    _CPContinuationRequest(
+                        notification_id=dispatch.notification_reply.notification_id,
+                        thread_target_id=orch_binding.thread_target_id,
+                    )
+                )
+            except Exception as exc:
+                dispatch.log_event_fn(
+                    dispatch.service._logger,
+                    logging.WARNING,
+                    "discord.notification.continuation_bind.control_plane_failed",
+                    notification_id=dispatch.notification_reply.notification_id,
+                    exc=exc,
+                )
+        else:
+            dispatch.log_event_fn(
+                dispatch.service._logger,
+                logging.WARNING,
+                "discord.notification.continuation_bind.hub_client_unavailable",
+                notification_id=dispatch.notification_reply.notification_id,
+            )
     return turn_result
 
 
@@ -1699,6 +1848,27 @@ async def _deliver_discord_turn_result(
         send_final_message = True
         preserve_progress_lease = False
 
+    managed_thread_id = None
+    current_lease_id = None
+    current_message_id = None
+    current_lease_created_at = None
+    if supervision is not None:
+        managed_thread_id = _execution_field(
+            supervision.task_context,
+            "managed_thread_id",
+        )
+        current_lease_id = _execution_field(supervision.task_context, "lease_id")
+        current_message_id = _execution_field(supervision.task_context, "message_id")
+        if current_lease_id:
+            current_lease = await _get_discord_progress_lease(
+                dispatch.service,
+                lease_id=current_lease_id,
+            )
+            current_lease_created_at = _execution_field(
+                current_lease,
+                "created_at",
+            )
+
     if supervision is not None:
         supervision.set_message_id(preview_message_id)
         supervision.set_execution_id(execution_id)
@@ -1733,17 +1903,26 @@ async def _deliver_discord_turn_result(
             ),
         )
         if preview_message_deleted:
-            for lease in await _list_discord_progress_leases(
-                dispatch.service,
-                channel_id=dispatch.channel_id,
-                message_id=preview_message_id,
+            if current_lease_id:
+                await _delete_discord_progress_lease(
+                    dispatch.service,
+                    lease_id=current_lease_id,
+                )
+            elif (
+                isinstance(execution_id, str)
+                and execution_id
+                and not preserve_progress_lease
             ):
-                current_lease_id = _execution_field(lease, "lease_id")
-                if current_lease_id:
-                    await _delete_discord_progress_lease(
-                        dispatch.service,
-                        lease_id=current_lease_id,
-                    )
+                for lease in await _list_discord_progress_leases(
+                    dispatch.service,
+                    execution_id=execution_id,
+                ):
+                    orphaned_lease_id = _execution_field(lease, "lease_id")
+                    if orphaned_lease_id:
+                        await _delete_discord_progress_lease(
+                            dispatch.service,
+                            lease_id=orphaned_lease_id,
+                        )
             if supervision is not None:
                 supervision.clear_progress_tracking()
     elif isinstance(execution_id, str) and execution_id and not preserve_progress_lease:
@@ -1759,14 +1938,24 @@ async def _deliver_discord_turn_result(
                 )
         if supervision is not None:
             supervision.set_lease_id(None)
-    if send_final_message:
-        await _send_discord_turn_section(
+    try:
+        if send_final_message:
+            await _send_discord_turn_section(
+                dispatch.service,
+                channel_id=dispatch.channel_id,
+                text=response_text or "(No response text returned.)",
+                record_prefix=f"turn:final:{dispatch.session_key}",
+                attachment_filename="final-response.md",
+                attachment_caption="Final response too long; attached as final-response.md.",
+            )
+    finally:
+        await _reconcile_other_discord_turn_progress_leases(
             dispatch.service,
-            channel_id=dispatch.channel_id,
-            text=response_text or "(No response text returned.)",
-            record_prefix=f"turn:final:{dispatch.session_key}",
-            attachment_filename="final-response.md",
-            attachment_caption="Final response too long; attached as final-response.md.",
+            managed_thread_id=managed_thread_id,
+            keep_lease_id=current_lease_id if preserve_progress_lease else None,
+            keep_message_id=current_message_id if preserve_progress_lease else None,
+            terminal_message_id=current_message_id,
+            terminal_created_at=current_lease_created_at,
         )
     try:
         if dispatch.pending_compact_seed is not None:
@@ -1859,13 +2048,31 @@ async def handle_message_event(
 
     notification_reply = None
     if event.reply_to is not None:
-        notification_reply = PmaNotificationStore(
-            service._config.root
-        ).get_reply_target(
-            surface_kind="discord",
-            surface_key=channel_id,
-            delivered_message_id=event.reply_to.message_id,
-        )
+        hub_client = getattr(service, "_hub_client", None)
+        if hub_client is not None:
+            from ...core.hub_control_plane import (
+                NotificationReplyTargetLookupRequest as _CPReplyTargetRequest,
+            )
+
+            try:
+                cp_response = await hub_client.get_notification_reply_target(
+                    _CPReplyTargetRequest(
+                        surface_kind="discord",
+                        surface_key=channel_id,
+                        delivered_message_id=event.reply_to.message_id,
+                    )
+                )
+                if cp_response.record is not None:
+                    notification_reply = cp_response.record
+            except Exception as exc:
+                log_event(
+                    service._logger,
+                    logging.WARNING,
+                    "discord.notification.reply_target.control_plane_failed",
+                    channel_id=channel_id,
+                    message_id=event.reply_to.message_id,
+                    exc=exc,
+                )
     effective_pma_enabled = pma_enabled or notification_reply is not None
     agent, agent_profile = service._resolve_agent_state(binding)
     runtime_agent = service._runtime_agent_for_binding(binding)
@@ -2122,10 +2329,28 @@ def build_discord_thread_orchestration_service(service: Any) -> Any:
             )
         return harness
 
+    hub_client = getattr(service, "_hub_client", None)
+    handshake_compat = getattr(service, "_hub_handshake_compatibility", None)
+    handshake_ok = hub_client is not None and getattr(
+        handshake_compat, "compatible", False
+    )
+    if not handshake_ok:
+        log_event(
+            service._logger,
+            logging.WARNING,
+            "discord.orchestration.hub_client_unavailable",
+            message="Hub control-plane client not available; orchestration disabled",
+        )
+        return None
+    thread_store = RemoteThreadExecutionStore(cast(Any, hub_client))
+    binding_store: OrchestrationBindingStore = RemoteSurfaceBindingStore(  # type: ignore[assignment]
+        cast(Any, hub_client)
+    )
     created = build_harness_backed_orchestration_service(
         descriptors=cast(Any, descriptors),
         harness_factory=_make_harness,
-        pma_thread_store=PmaThreadStore(service._config.root),
+        thread_store=thread_store,
+        binding_store=binding_store,
     )
     service._discord_thread_orchestration_service = created
     service._discord_managed_thread_orchestration_service = created
@@ -2147,6 +2372,10 @@ def resolve_discord_thread_target(
     pma_enabled: bool,
 ) -> Any:
     orchestration_service = build_discord_thread_orchestration_service(service)
+    if orchestration_service is None:
+        raise RuntimeError(
+            "Discord orchestration service unavailable: hub control-plane client not connected"
+        )
     surface_key = managed_thread_surface_key or channel_id
     runtime_agent = resolve_chat_runtime_agent(
         agent,
@@ -2249,6 +2478,7 @@ def _build_discord_managed_thread_coordinator(
     return ManagedThreadTurnCoordinator(
         orchestration_service=orchestration_service,
         state_root=service._config.root,
+        hub_client=getattr(service, "_hub_client", None),
         surface=ManagedThreadSurfaceInfo(
             log_label="Discord",
             surface_kind="discord",
@@ -2458,6 +2688,22 @@ async def _run_discord_orchestrated_turn_for_message(
         thread_target_id=managed_thread_id,
         source_message_id=source_message_id,
     )
+    if reusable_progress_message_id is None and source_message_id:
+        claim_queued_notice_message = getattr(
+            service,
+            "_claim_queued_notice_progress_message",
+            None,
+        )
+        if callable(claim_queued_notice_message):
+            claimed_notice_message_id = claim_queued_notice_message(
+                channel_id=channel_id,
+                source_message_id=source_message_id,
+            )
+            if (
+                isinstance(claimed_notice_message_id, str)
+                and claimed_notice_message_id.strip()
+            ):
+                reusable_progress_message_id = claimed_notice_message_id.strip()
 
     async def _load_progress_lease() -> Any:
         return await _get_discord_progress_lease(service, lease_id=progress_lease_id)
@@ -2620,12 +2866,14 @@ async def _run_discord_orchestrated_turn_for_message(
                 supervision.set_message_id(progress_message_id)
             await _register_progress_lease(state="pending")
             await _edit_progress(force=True)
-            progress_heartbeat_task = bind_discord_progress_task_context(
-                asyncio.create_task(_progress_heartbeat()),
+            progress_heartbeat_task = _spawn_discord_progress_background_task(
+                service,
+                _progress_heartbeat(),
                 managed_thread_id=managed_thread_id,
                 lease_id=progress_lease_id,
                 channel_id=channel_id,
                 message_id=progress_message_id,
+                await_on_shutdown=True,
             )
         else:
             initial_rendered = render_progress_text(
@@ -2658,12 +2906,14 @@ async def _run_discord_orchestrated_turn_for_message(
                 progress_rendered = initial_content
                 progress_last_updated = time.monotonic()
                 await _register_progress_lease(state="pending")
-                progress_heartbeat_task = bind_discord_progress_task_context(
-                    asyncio.create_task(_progress_heartbeat()),
+                progress_heartbeat_task = _spawn_discord_progress_background_task(
+                    service,
+                    _progress_heartbeat(),
                     managed_thread_id=managed_thread_id,
                     lease_id=progress_lease_id,
                     channel_id=channel_id,
                     message_id=progress_message_id,
+                    await_on_shutdown=True,
                 )
     except (DiscordTransientError, RuntimeError, ConnectionError, OSError):
         service._logger.warning(
@@ -2964,16 +3214,16 @@ async def _run_discord_orchestrated_turn_for_message(
             queue=ManagedSurfaceQueueConfig(
                 task_map=_get_discord_thread_queue_task_map(service),
                 managed_thread_id=managed_thread_id,
-                spawn_task=lambda coro: bind_discord_progress_task_context(
-                    _spawn_discord_background_task(
-                        service, coro, await_on_shutdown=True
-                    ),
+                spawn_task=lambda coro: _spawn_discord_progress_background_task(
+                    service,
+                    coro,
                     managed_thread_id=managed_thread_id,
                     failure_note=(
                         "Status: this progress message lost its queue worker and is "
                         "no longer live. Please retry if needed."
                     ),
                     orphaned=True,
+                    await_on_shutdown=True,
                 ),
                 begin_next_execution=cast(
                     ManagedThreadQueuedExecutionStarter,

@@ -11,6 +11,7 @@ from codex_autorunner.core.orchestration.execution_history import ExecutionCheck
 from codex_autorunner.core.orchestration.runtime_bindings import (
     clear_runtime_thread_binding,
 )
+from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.pma_thread_store import (
     ManagedThreadAlreadyHasRunningTurnError,
     ManagedThreadNotActiveError,
@@ -63,6 +64,34 @@ def test_create_list_get_thread(tmp_path: Path) -> None:
     )
     assert len(normalized_listed) == 1
     assert normalized_listed[0]["managed_thread_id"] == created["managed_thread_id"]
+
+
+def test_create_thread_mirrors_backend_thread_id_into_orchestration_row(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+
+    store = PmaThreadStore(hub_root)
+    created = store.create_thread(
+        "codex",
+        workspace_root,
+        backend_thread_id="backend-1",
+    )
+
+    with open_orchestration_sqlite(hub_root, durable=False) as conn:
+        row = conn.execute(
+            """
+            SELECT backend_thread_id
+              FROM orch_thread_targets
+             WHERE thread_target_id = ?
+            """,
+            (created["managed_thread_id"],),
+        ).fetchone()
+
+    assert row is not None
+    assert row["backend_thread_id"] == "backend-1"
 
 
 def test_create_thread_enriches_head_branch_metadata(
@@ -162,7 +191,8 @@ def test_connect_readonly_skips_bootstrap_initialize(
     initialize_calls: list[str] = []
 
     def _record_initialize(self) -> None:  # type: ignore[no-untyped-def]
-        initialize_calls.append("called")
+        if Path(self.hub_root) == hub_root.resolve():
+            initialize_calls.append("called")
 
     monkeypatch.setattr(
         "codex_autorunner.core.pma_thread_store.PmaThreadStoreBootstrap.initialize",
@@ -176,6 +206,35 @@ def test_connect_readonly_skips_bootstrap_initialize(
     assert [thread["managed_thread_id"] for thread in listed] == [
         created["managed_thread_id"]
     ]
+
+
+def test_connect_readonly_does_not_prepare_shared_state_on_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hub_root = tmp_path / "hub"
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+
+    created = PmaThreadStore(hub_root).create_thread("codex", workspace_root)
+
+    def _fail_prepare(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("readonly access must not prepare shared state")
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.pma_thread_store_bootstrap.ensure_legacy_orchestration_backfill",
+        _fail_prepare,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.pma_thread_store_bootstrap.prepare_orchestration_sqlite",
+        _fail_prepare,
+    )
+
+    store = PmaThreadStore.connect_readonly(hub_root)
+    fetched = store.get_thread(created["managed_thread_id"])
+
+    assert fetched is not None
+    assert fetched["managed_thread_id"] == created["managed_thread_id"]
 
 
 def test_create_finish_turn_and_query(tmp_path: Path) -> None:
@@ -244,6 +303,71 @@ def test_set_thread_backend_id_preserves_runtime_tag_when_omitted(
     assert binding.backend_runtime_instance_id == "runtime-1"
     assert "backend_thread_id" not in updated
     assert "backend_runtime_instance_id" not in updated
+    with open_orchestration_sqlite(tmp_path / "hub", durable=False) as conn:
+        row = conn.execute(
+            """
+            SELECT backend_thread_id
+              FROM orch_thread_targets
+             WHERE thread_target_id = ?
+            """,
+            (thread["managed_thread_id"],),
+        ).fetchone()
+    assert row is not None
+    assert row["backend_thread_id"] == "backend-2"
+
+
+def test_set_thread_backend_id_skips_noop_write_when_binding_matches(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = PmaThreadStore(tmp_path / "hub")
+    thread = store.create_thread(
+        "codex",
+        tmp_path / "workspace",
+        backend_thread_id="backend-1",
+        metadata={"backend_runtime_instance_id": "runtime-1"},
+    )
+
+    def _fail_write_conn():  # type: ignore[no-untyped-def]
+        raise AssertionError("no-op backend binding update should not write")
+
+    monkeypatch.setattr(store, "_write_conn", _fail_write_conn)
+
+    store.set_thread_backend_id(
+        thread["managed_thread_id"],
+        "backend-1",
+        backend_runtime_instance_id="runtime-1",
+    )
+
+    binding = store.get_thread_runtime_binding(thread["managed_thread_id"])
+    assert binding is not None
+    assert binding.backend_thread_id == "backend-1"
+    assert binding.backend_runtime_instance_id == "runtime-1"
+
+
+def test_set_thread_backend_id_skips_noop_write_when_runtime_tag_is_omitted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = PmaThreadStore(tmp_path / "hub")
+    thread = store.create_thread(
+        "codex",
+        tmp_path / "workspace",
+        backend_thread_id="backend-1",
+        metadata={"backend_runtime_instance_id": "runtime-1"},
+    )
+
+    def _fail_write_conn():  # type: ignore[no-untyped-def]
+        raise AssertionError("no-op backend binding update should not write")
+
+    monkeypatch.setattr(store, "_write_conn", _fail_write_conn)
+
+    store.set_thread_backend_id(thread["managed_thread_id"], "backend-1")
+
+    binding = store.get_thread_runtime_binding(thread["managed_thread_id"])
+    assert binding is not None
+    assert binding.backend_thread_id == "backend-1"
+    assert binding.backend_runtime_instance_id == "runtime-1"
 
 
 def test_create_turn_rejects_when_running_turn_exists(tmp_path: Path) -> None:

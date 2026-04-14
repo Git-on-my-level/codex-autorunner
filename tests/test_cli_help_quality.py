@@ -100,6 +100,9 @@ def test_cli_alias_help_points_to_canonical_commands() -> None:
     assert template_help.exit_code == 0
     assert "canonical form: `car templates ...`" in template_help.stdout
 
-    ticket_flow_alias_help = runner.invoke(app, ["flow", "ticket_flow", "--help"])
-    assert ticket_flow_alias_help.exit_code == 0
-    assert "canonical: `car ticket-flow ...`" in ticket_flow_alias_help.stdout
+    ticket_flow_help = runner.invoke(app, ["ticket-flow", "--help"])
+    assert ticket_flow_help.exit_code == 0
+    assert "bootstrap" in ticket_flow_help.stdout
+
+    removed_nested = runner.invoke(app, ["flow", "ticket_flow", "--help"])
+    assert removed_nested.exit_code != 0

@@ -16,6 +16,7 @@ import {
   getSelectedProfile,
   getSelectedModel,
   getSelectedReasoning,
+  setSelectedAgentProfile,
 } from "./agentControls.js";
 
 export type TicketChatStatus = ChatStatus;
@@ -33,19 +34,114 @@ export interface TicketChatState extends ChatState {
   ticketChatKey: string | null;
   draft: TicketDraft | null;
   contextUsagePercent: number | null;
+  activeTarget: string | null;
+  activePendingKey: string | null;
+  activeAgent: string | null;
+  activeProfile: string | null;
 }
 
 // Limits for events display
 export const TICKET_CHAT_EVENT_LIMIT = 8;
 export const TICKET_CHAT_EVENT_MAX = 50;
-const pendingKeyForTicket = (index: number | null, ticketChatKey: string | null) => {
-  if (ticketChatKey) return `car.ticketChat.pending.${ticketChatKey}`;
-  if (index != null) return `car.ticketChat.pending.${index}`;
-  return "car.ticketChat.pending";
-};
+function encodeTicketChatScope(value: string): string {
+  return encodeURIComponent(value.trim().toLowerCase());
+}
 
-const chatTargetForTicket = (index: number | null, ticketChatKey: string | null) =>
-  ticketChatKey || (index != null ? `ticket:${index}` : null);
+function buildScopedTicketChatTarget(
+  index: number | null,
+  ticketChatKey: string | null,
+  agent: string,
+  profile?: string
+): string | null {
+  const baseTarget = ticketChatKey || (index != null ? `ticket:${index}` : null);
+  if (!baseTarget) return null;
+  const normalizedAgent = encodeTicketChatScope(agent || "codex");
+  const normalizedProfile = profile ? encodeTicketChatScope(profile) : "";
+  return normalizedProfile
+    ? `${baseTarget}|agent=${normalizedAgent}|profile=${normalizedProfile}`
+    : `${baseTarget}|agent=${normalizedAgent}`;
+}
+
+function parseScopedTicketChatTarget(target: string): {
+  baseTarget: string;
+  agent: string;
+  profile?: string;
+} {
+  const [baseTarget, ...parts] = target.split("|");
+  let agent = "codex";
+  let profile: string | undefined;
+  for (const part of parts) {
+    if (part.startsWith("agent=")) {
+      agent = decodeURIComponent(part.slice("agent=".length)) || "codex";
+    } else if (part.startsWith("profile=")) {
+      const decoded = decodeURIComponent(part.slice("profile=".length));
+      profile = decoded || undefined;
+    }
+  }
+  return { baseTarget, agent, profile };
+}
+
+function pendingKeyForTarget(target: string): string {
+  return `car.ticketChat.pending.${target}`;
+}
+
+function setActiveTurnScope(target: string | null, pendingKey: string | null): void {
+  ticketChatState.activeTarget = target;
+  ticketChatState.activePendingKey = pendingKey;
+  if (!target) {
+    ticketChatState.activeAgent = null;
+    ticketChatState.activeProfile = null;
+    return;
+  }
+  const parsed = parseScopedTicketChatTarget(target);
+  ticketChatState.activeAgent = parsed.agent;
+  ticketChatState.activeProfile = parsed.profile || null;
+}
+
+function clearActiveTurnScope(): void {
+  setActiveTurnScope(null, null);
+}
+
+function resolveCurrentTicketChatSelection(): {
+  agent: string;
+  profile: string | undefined;
+} {
+  const els = getTicketChatElements();
+  const agent = els.agentSelect
+    ? (els.agentSelect.value || "codex")
+    : (getSelectedAgent() || "codex");
+  const profile = els.profileSelect
+    ? (els.profileSelect.value || undefined)
+    : (getSelectedProfile(agent) || undefined);
+  return { agent, profile };
+}
+
+function chatTargetForTicket(
+  index: number | null,
+  ticketChatKey: string | null,
+  agent?: string,
+  profile?: string
+) {
+  const selection = agent
+    ? { agent, profile }
+    : resolveCurrentTicketChatSelection();
+  return buildScopedTicketChatTarget(
+    index,
+    ticketChatKey,
+    selection.agent,
+    selection.profile
+  );
+}
+
+const pendingKeyForTicket = (
+  index: number | null,
+  ticketChatKey: string | null,
+  agent?: string,
+  profile?: string
+) => {
+  const target = chatTargetForTicket(index, ticketChatKey, agent, profile);
+  return target ? `car.ticketChat.pending.${target}` : "car.ticketChat.pending";
+};
 
 export const ticketChat = createDocChat({
   idPrefix: "ticket-chat",
@@ -77,6 +173,10 @@ export const ticketChatState: TicketChatState = Object.assign(ticketChat.state, 
   ticketChatKey: null,
   draft: null,
   contextUsagePercent: null,
+  activeTarget: null,
+  activePendingKey: null,
+  activeAgent: null,
+  activeProfile: null,
 });
 let currentTurnEventsController: AbortController | null = null;
 
@@ -137,6 +237,14 @@ export function resetTicketChatState(): void {
   // Messages persist across requests within the same ticket
 }
 
+export async function restoreTicketChatSelectionToActiveTurn(): Promise<void> {
+  if (!ticketChatState.activeAgent) return;
+  await setSelectedAgentProfile(
+    ticketChatState.activeAgent,
+    ticketChatState.activeProfile || ""
+  );
+}
+
 export async function startNewTicketChatThread(): Promise<void> {
   if (ticketChatState.ticketIndex == null) return;
 
@@ -144,8 +252,16 @@ export async function startNewTicketChatThread(): Promise<void> {
   if (!confirmed) return;
 
   try {
+    const els = getTicketChatElements();
+    const agent = els.agentSelect
+      ? (els.agentSelect.value || "codex")
+      : (getSelectedAgent() || "codex");
+    const profile = els.profileSelect
+      ? (els.profileSelect.value || undefined)
+      : (getSelectedProfile(agent) || undefined);
     await api(`/api/tickets/${ticketChatState.ticketIndex}/chat/new-thread`, {
       method: "POST",
+      body: { agent, profile },
     });
 
     // Clear local message history
@@ -212,6 +328,9 @@ function handleTicketTurnMeta(update: Record<string, unknown>): void {
 
 export function applyTicketChatResult(payload: unknown): void {
   if (!payload || typeof payload !== "object") return;
+  if (ticketChatState.activeTarget && ticketChatState.target !== ticketChatState.activeTarget) {
+    ticketChat.setTarget(ticketChatState.activeTarget);
+  }
 
   const result = payload as Record<string, unknown>;
   handleTicketTurnMeta(result);
@@ -301,11 +420,11 @@ export function setTicketIndex(index: number | null, ticketChatKey: string | nul
   const nextTarget = chatTargetForTicket(index, ticketChatKey);
   const changed =
     ticketChatState.ticketIndex !== index ||
-    chatTargetForTicket(ticketChatState.ticketIndex, ticketChatState.ticketChatKey) !==
-      nextTarget;
+    ticketChatState.target !== nextTarget;
   ticketChatState.ticketIndex = index;
   ticketChatState.ticketChatKey = ticketChatKey;
   ticketChatState.draft = null;
+  clearActiveTurnScope();
   resetTicketChatState();
   clearTurnEventsStream();
   // Clear chat history when switching tickets
@@ -314,8 +433,34 @@ export function setTicketIndex(index: number | null, ticketChatKey: string | nul
   }
 }
 
+export function syncTicketChatTargetToSelection(): void {
+  if (ticketChatState.ticketIndex == null && !ticketChatState.ticketChatKey) {
+    return;
+  }
+  if (ticketChatState.status === "running") {
+    if (ticketChatState.activeTarget && ticketChatState.target !== ticketChatState.activeTarget) {
+      ticketChat.setTarget(ticketChatState.activeTarget);
+    }
+    return;
+  }
+  const nextTarget = chatTargetForTicket(
+    ticketChatState.ticketIndex,
+    ticketChatState.ticketChatKey
+  );
+  if (ticketChatState.target === nextTarget) {
+    return;
+  }
+  ticketChatState.draft = null;
+  resetTicketChatState();
+  clearTurnEventsStream();
+  ticketChat.setTarget(nextTarget);
+}
+
 export function renderTicketChat(): void {
   const els = getTicketChatElements();
+  const controlsLocked = ticketChatState.status === "running";
+  if (els.agentSelect) els.agentSelect.disabled = controlsLocked;
+  if (els.profileSelect) els.profileSelect.disabled = controlsLocked;
 
   // Shared chat render (status, events, messages)
   ticketChat.render();
@@ -374,29 +519,41 @@ export async function sendTicketChat(): Promise<void> {
   ticketChatState.statusText = "queued";
   clearTurnEventsStream();
   ticketChatState.controller = new AbortController();
-  const pendingKey = pendingKeyForTicket(
-    ticketChatState.ticketIndex,
-    ticketChatState.ticketChatKey
-  );
-  const clientTurnId = newClientTurnId("ticket");
-  savePendingTurn(pendingKey, {
-    clientTurnId,
-    message,
-    startedAtMs: Date.now(),
-    target: ticketChatState.ticketIndex != null ? `ticket:${ticketChatState.ticketIndex}` : "ticket",
-  });
-
-  renderTicketChat();
-  if (els.input) {
-    els.input.value = "";
-  }
-
   const agent = els.agentSelect
     ? (els.agentSelect.value || "codex")
     : (getSelectedAgent() || "codex");
   const profile = els.profileSelect
     ? (els.profileSelect.value || undefined)
     : (getSelectedProfile(agent) || undefined);
+  const pendingKey = pendingKeyForTicket(
+    ticketChatState.ticketIndex,
+    ticketChatState.ticketChatKey,
+    agent,
+    profile
+  );
+  const clientTurnId = newClientTurnId("ticket");
+  const targetKey = chatTargetForTicket(
+    ticketChatState.ticketIndex,
+    ticketChatState.ticketChatKey,
+    agent,
+    profile
+  );
+  savePendingTurn(pendingKey, {
+    clientTurnId,
+    message,
+    startedAtMs: Date.now(),
+    target: targetKey || "ticket",
+  });
+  setActiveTurnScope(targetKey, pendingKey);
+  if (targetKey && ticketChatState.target !== targetKey) {
+    ticketChat.setTarget(targetKey);
+  }
+
+  renderTicketChat();
+  if (els.input) {
+    els.input.value = "";
+  }
+
   const model = resolveTicketChatModel(agent, els);
   const reasoning = els.reasoningSelect
     ? (els.reasoningSelect.value || undefined)
@@ -435,11 +592,16 @@ export async function sendTicketChat(): Promise<void> {
     clearPendingTurnState(pendingKey);
   } finally {
     ticketChatState.controller = null;
+    clearActiveTurnScope();
     renderTicketChat();
   }
 }
 
 export const __ticketChatActionsTest = {
+  buildScopedTicketChatTarget,
+  findPendingTicketTurn,
+  pendingKeyForTicket,
+  parseScopedTicketChatTarget,
   resolveTicketChatModel,
 };
 
@@ -468,11 +630,42 @@ export async function cancelTicketChat(): Promise<void> {
   ticketChatState.statusText = "";
   ticketChatState.controller = null;
   renderTicketChat();
-  if (ticketChatState.ticketIndex != null) {
-    clearPendingTurnState(
-      pendingKeyForTicket(ticketChatState.ticketIndex, ticketChatState.ticketChatKey)
-    );
+  if (ticketChatState.activePendingKey) {
+    clearPendingTurnState(ticketChatState.activePendingKey);
   }
+  clearActiveTurnScope();
+}
+
+function findPendingTicketTurn(
+  index: number | null,
+  ticketChatKey: string | null,
+  agent?: string,
+  profile?: string
+): { pendingKey: string; pending: ReturnType<typeof loadPendingTurn>; target: string } | null {
+  const preferredTarget = chatTargetForTicket(index, ticketChatKey, agent, profile);
+  if (preferredTarget) {
+    const preferredKey = pendingKeyForTarget(preferredTarget);
+    const preferredPending = loadPendingTurn(preferredKey);
+    if (preferredPending?.target === preferredTarget) {
+      return { pendingKey: preferredKey, pending: preferredPending, target: preferredTarget };
+    }
+  }
+  const baseTarget = ticketChatKey || (index != null ? `ticket:${index}` : null);
+  if (!baseTarget) return null;
+  try {
+    for (let idx = 0; idx < localStorage.length; idx += 1) {
+      const key = localStorage.key(idx);
+      if (!key || !key.startsWith("car.ticketChat.pending.")) continue;
+      const pending = loadPendingTurn(key);
+      if (!pending?.target) continue;
+      const parsed = parseScopedTicketChatTarget(pending.target);
+      if (parsed.baseTarget !== baseTarget) continue;
+      return { pendingKey: key, pending, target: pending.target };
+    }
+  } catch {
+    return null;
+  }
+  return null;
 }
 
 export async function resumeTicketPendingTurn(
@@ -480,9 +673,15 @@ export async function resumeTicketPendingTurn(
   ticketChatKey: string | null = null
 ): Promise<void> {
   if (index == null) return;
-  const pendingKey = pendingKeyForTicket(index, ticketChatKey);
-  const pending = loadPendingTurn(pendingKey);
-  if (!pending || pending.target !== `ticket:${index}`) return;
+  const pendingMatch = findPendingTicketTurn(index, ticketChatKey);
+  if (!pendingMatch) return;
+  const { pendingKey, pending, target } = pendingMatch;
+  const parsedTarget = parseScopedTicketChatTarget(target);
+  await setSelectedAgentProfile(parsedTarget.agent, parsedTarget.profile || "");
+  setActiveTurnScope(target, pendingKey);
+  if (ticketChatState.target !== target) {
+    ticketChat.setTarget(target);
+  }
   const chatState = ticketChatState as ChatState;
   chatState.status = "running";
   chatState.statusText = "Recovering previous turn…";
@@ -501,6 +700,7 @@ export async function resumeTicketPendingTurn(
         const status = (result as Record<string, unknown>).status;
         if (status === "ok" || status === "error" || status === "interrupted") {
           clearPendingTurnState(pendingKey);
+          clearActiveTurnScope();
         }
       },
       onError: (msg) => {
@@ -512,6 +712,7 @@ export async function resumeTicketPendingTurn(
     if (outcome.lastResult && (outcome.lastResult as Record<string, unknown>).status) {
       applyTicketChatResult(outcome.lastResult as Record<string, unknown>);
       clearPendingTurnState(pendingKey);
+      clearActiveTurnScope();
       return;
     }
     if (!outcome.controller) {

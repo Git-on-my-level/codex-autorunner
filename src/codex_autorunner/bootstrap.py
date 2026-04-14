@@ -329,8 +329,11 @@ You are an **abstraction layer, not an executor**. Coordinate tickets and flows 
 
 ## Managed Threads vs Ticket Flows
 
-- Use managed threads for exploratory/review/quick-fix/interactive debugging work in one repo.
-- Use ticket flows for structured, multi-step deliverables with acceptance criteria or cross-repo changes.
+- Managed threads are the default for straightforward work in one repo: exploratory work, reviews, bug fixes, focused refactors, and single-feature PRs that fit in one clear prompt.
+- Reuse an existing relevant managed thread before spawning a new one.
+- Do not launch runtime CLIs directly (`codex`, `opencode`, `zeroclaw`, etc.) for PMA-managed work when a managed thread fits; use `car pma thread spawn` and `car pma thread send` so CAR can track lifecycle and progress.
+- Do not write ticket files as scaffolding for managed-thread work.
+- Use ticket flows for larger structured work: cross-repo changes, 3+ planned tickets, explicit acceptance criteria tracking, or work that benefits from pause/resume/review handoffs.
 - Managed thread state is visible in `hub_snapshot.pma_threads`.
 - For hub-scoped PMA CLI commands, include `--path <hub_root>` so they resolve the
   intended hub config instead of relying on the current working directory.
@@ -423,13 +426,13 @@ def pma_notes_content() -> str:
 ## Ticket flow (start/resume)
 
 - Bootstrap (creates TICKET-001 if missing):
-  `car flow ticket_flow bootstrap --repo <path>`
+  `car ticket-flow bootstrap --repo <path>`
 - Start/resume:
-  `car flow ticket_flow start --repo <path>`
-  `car flow ticket_flow start --repo <path>`
+  `car ticket-flow start --repo <path>`
+  `car ticket-flow start --repo <path>`
 - Status/stop:
-  `car flow ticket_flow status --repo <path> [--run-id <uuid>]`
-  `car flow ticket_flow stop --repo <path> [--run-id <uuid>]`
+  `car ticket-flow status --repo <path> [--run-id <uuid>]`
+  `car ticket-flow stop --repo <path> [--run-id <uuid>]`
 - See `<repo>/.codex-autorunner/TICKET_FLOW_QUICKSTART.md` for CLI entrypoints + gotchas.
 
 ## Ticket flow mechanics (planning constraints)
@@ -615,6 +618,7 @@ This document is jointly maintained by the user and PMA.
 
 ## Defaults (examples)
 
+- Default to managed threads for straightforward single-session work; promote to ticket flow only when the work needs ordered multi-step structure.
 - After implementation work, add a final review ticket, then a ticket to open a PR.
 """
 

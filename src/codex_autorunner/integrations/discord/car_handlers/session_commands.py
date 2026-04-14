@@ -152,8 +152,8 @@ async def _finalize_car_newt(
     from ..service import log_event
 
     setup_command_count = 0
-    hub_supervisor = getattr(service, "_hub_supervisor", None)
-    if hub_supervisor is not None:
+    hub_client = getattr(service, "_hub_client", None)
+    if hub_client is not None:
         repo_id_raw = binding.get("repo_id")
         repo_id_hint = (
             repo_id_raw.strip()
@@ -161,11 +161,17 @@ async def _finalize_car_newt(
             else None
         )
         try:
-            setup_command_count = await asyncio.to_thread(
-                hub_supervisor.run_setup_commands_for_workspace,
-                workspace_root,
-                repo_id_hint=repo_id_hint,
+            from ....core.hub_control_plane import (
+                WorkspaceSetupCommandRequest as _CPSetupCommandRequest,
             )
+
+            result = await hub_client.run_workspace_setup_commands(
+                _CPSetupCommandRequest(
+                    workspace_root=str(workspace_root),
+                    repo_id_hint=repo_id_hint,
+                )
+            )
+            setup_command_count = result.setup_command_count
         except (
             RuntimeError,
             OSError,

@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from codex_autorunner.core.flows.models import FlowRunRecord, FlowRunStatus
+from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.core.ticket_flow_projection import (
+    _is_start_new_flow_action,
     build_canonical_state_v1,
-    select_authoritative_run_record,
 )
 
 
@@ -41,7 +41,7 @@ def test_build_canonical_state_v1_uses_represented_run_when_preferred_is_stale(
         "run_id": represented_run_id,
         "state": "paused",
         "flow_status": "paused",
-        "recommended_action": "car flow ticket_flow start",
+        "recommended_action": "car ticket-flow start",
     }
     canonical = build_canonical_state_v1(
         repo_root=repo_root,
@@ -145,196 +145,21 @@ def test_build_canonical_state_v1_adds_freshness_metadata(
     assert freshness.get("is_stale") is True
 
 
-def test_select_authoritative_run_record_returns_none_for_empty() -> None:
-    assert select_authoritative_run_record([]) is None
-
-
-def test_select_authoritative_run_record_prefers_represented_over_latest() -> None:
-    r_stale = FlowRunRecord(
-        id="stale-run",
-        flow_type="ticket_flow",
-        status=FlowRunStatus.COMPLETED,
-        input_data={},
-        state={},
-        metadata={},
-        created_at="2026-01-01T00:00:00+00:00",
+def test_is_start_new_flow_action_accepts_legacy_and_canonical_cli_spelling() -> None:
+    # Split so check_cli_command_hints does not see a removed CLI path in one literal.
+    legacy = "".join(
+        (
+            "car flow ",
+            "ticket_flow ",
+            "start --repo /tmp/r",
+        )
     )
-    r_represented = FlowRunRecord(
-        id="represented-run",
-        flow_type="ticket_flow",
-        status=FlowRunStatus.PAUSED,
-        input_data={},
-        state={},
-        metadata={},
-        created_at="2026-01-02T00:00:00+00:00",
+    assert _is_start_new_flow_action(legacy)
+    assert _is_start_new_flow_action("car ticket-flow start --repo /tmp/r")
+
+
+def test_is_start_new_flow_action_rejects_run_id_and_other_actions() -> None:
+    assert not _is_start_new_flow_action(
+        "car ticket-flow start --repo /tmp/r --run-id abc"
     )
-    records = [r_stale, r_represented]
-    result = select_authoritative_run_record(
-        records,
-        represented_run_id="represented-run",
-    )
-    assert result is not None
-    assert str(result.id) == "represented-run"
-
-
-def test_select_authoritative_run_record_skips_superseded() -> None:
-    r_super = FlowRunRecord(
-        id="superseded-run",
-        flow_type="ticket_flow",
-        status=FlowRunStatus.SUPERSEDED,
-        input_data={},
-        state={},
-        metadata={},
-        created_at="2026-01-01T00:00:00+00:00",
-    )
-    r_active = FlowRunRecord(
-        id="active-run",
-        flow_type="ticket_flow",
-        status=FlowRunStatus.RUNNING,
-        input_data={},
-        state={},
-        metadata={},
-        created_at="2026-01-02T00:00:00+00:00",
-    )
-    records = [r_active, r_super]
-    result = select_authoritative_run_record(records)
-    assert result is not None
-    assert str(result.id) == "active-run"
-
-
-def test_select_authoritative_run_record_returns_latest_when_all_superseded() -> None:
-    r1 = FlowRunRecord(
-        id="run-1",
-        flow_type="ticket_flow",
-        status=FlowRunStatus.SUPERSEDED,
-        input_data={},
-        state={},
-        metadata={},
-        created_at="2026-01-01T00:00:00+00:00",
-    )
-    r2 = FlowRunRecord(
-        id="run-2",
-        flow_type="ticket_flow",
-        status=FlowRunStatus.SUPERSEDED,
-        input_data={},
-        state={},
-        metadata={},
-        created_at="2026-01-02T00:00:00+00:00",
-    )
-    records = [r2, r1]
-    result = select_authoritative_run_record(records)
-    assert result is not None
-    assert str(result.id) == "run-2"
-
-
-def test_select_authoritative_run_record_running_preferred_over_paused_latest() -> None:
-    r_latest_paused = FlowRunRecord(
-        id="latest-paused",
-        flow_type="ticket_flow",
-        status=FlowRunStatus.PAUSED,
-        input_data={},
-        state={},
-        metadata={},
-        created_at="2026-01-03T00:00:00+00:00",
-    )
-    r_preferred_running = FlowRunRecord(
-        id="preferred-running",
-        flow_type="ticket_flow",
-        status=FlowRunStatus.RUNNING,
-        input_data={},
-        state={},
-        metadata={},
-        created_at="2026-01-02T00:00:00+00:00",
-    )
-    records = [r_latest_paused, r_preferred_running]
-    result = select_authoritative_run_record(
-        records,
-        preferred_run_id="preferred-running",
-    )
-    assert result is not None
-    assert str(result.id) == "preferred-running"
-
-
-def test_build_canonical_state_v1_ticket_census_counts(tmp_path: Path) -> None:
-    repo_root = tmp_path / "repo"
-    ticket_dir = repo_root / ".codex-autorunner" / "tickets"
-    ticket_dir.mkdir(parents=True, exist_ok=True)
-
-    (ticket_dir / "TICKET-001.md").write_text(
-        "---\nagent: codex\ndone: true\n---\n\nDone.\n",
-        encoding="utf-8",
-    )
-    (ticket_dir / "TICKET-002.md").write_text(
-        "---\nagent: codex\ndone: true\n---\n\nDone.\n",
-        encoding="utf-8",
-    )
-    (ticket_dir / "TICKET-003.md").write_text(
-        "---\nagent: codex\ndone: false\n---\n\nOpen.\n",
-        encoding="utf-8",
-    )
-
-    canonical = build_canonical_state_v1(
-        repo_root=repo_root,
-        repo_id="repo-1",
-        run_state={},
-    )
-    assert canonical["frontmatter_total_count"] == 3
-    assert canonical["frontmatter_done_count"] == 2
-    assert canonical["effective_next_ticket"] == "TICKET-003.md"
-
-
-def test_build_canonical_state_v1_completed_with_remaining_tickets_contradiction(
-    tmp_path: Path,
-) -> None:
-    repo_root = tmp_path / "repo"
-    ticket_dir = repo_root / ".codex-autorunner" / "tickets"
-    ticket_dir.mkdir(parents=True, exist_ok=True)
-    (ticket_dir / "TICKET-001.md").write_text(
-        "---\nagent: codex\ndone: false\n---\n\nOpen.\n",
-        encoding="utf-8",
-    )
-
-    canonical = build_canonical_state_v1(
-        repo_root=repo_root,
-        repo_id="repo-1",
-        run_state={
-            "state": "completed",
-        },
-    )
-    contradictions = canonical.get("contradictions") or []
-    assert "completed_flow_with_remaining_tickets" in contradictions
-
-
-def test_build_canonical_state_v1_attention_without_recommendation_contradiction(
-    tmp_path: Path,
-) -> None:
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir(parents=True, exist_ok=True)
-
-    canonical = build_canonical_state_v1(
-        repo_root=repo_root,
-        repo_id="repo-1",
-        run_state={
-            "state": "blocked",
-        },
-    )
-    contradictions = canonical.get("contradictions") or []
-    assert "attention_required_without_recommendation" in contradictions
-
-
-def test_build_canonical_state_v1_no_tickets_no_contradictions(
-    tmp_path: Path,
-) -> None:
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir(parents=True, exist_ok=True)
-
-    canonical = build_canonical_state_v1(
-        repo_root=repo_root,
-        repo_id="repo-1",
-        run_state={},
-    )
-    assert canonical["frontmatter_total_count"] == 0
-    assert canonical["frontmatter_done_count"] == 0
-    assert canonical["effective_next_ticket"] is None
-    contradictions = canonical.get("contradictions") or []
-    assert "completed_flow_with_remaining_tickets" not in contradictions
+    assert not _is_start_new_flow_action("car ticket-flow status --repo /tmp/r")

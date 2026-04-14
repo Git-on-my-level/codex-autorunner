@@ -16,6 +16,7 @@ from .....agents.base import (
     harness_progress_event_stream,
     harness_supports_progress_event_stream,
 )
+from .....core.config import ConfigError, load_repo_config
 from .....core.orchestration import MessageRequest
 from .....core.orchestration.cold_trace_store import ColdTraceWriter
 from .....core.orchestration.runtime_thread_events import (
@@ -42,8 +43,10 @@ from .....core.pma_thread_store import (
 from .....core.pma_transcripts import PmaTranscriptStore
 from .....core.ports.run_event import Completed, Failed, RunEvent
 from .....core.pr_binding_runtime import claim_pr_binding_for_thread
+from .....core.pr_bindings import PrBinding
 from .....core.text_utils import _truncate_text
 from .....core.time_utils import now_iso
+from .....integrations.github.polling import GitHubScmPollingService
 from .....integrations.github.service import GitHubError, GitHubService
 from ...schemas import PmaManagedThreadMessageRequest
 from ...services.pma.managed_thread_followup import (
@@ -158,10 +161,10 @@ def _claim_existing_branch_binding_for_thread(
     thread: dict[str, Any],
     managed_thread_id: str,
     workspace_root: Path,
-) -> bool:
+) -> Optional[PrBinding]:
     repo_id = normalize_optional_text(thread.get("repo_id"))
     if repo_id is None:
-        return False
+        return None
     head_branch = thread_store.refresh_thread_head_branch(
         managed_thread_id,
         workspace_root=workspace_root,
@@ -171,12 +174,12 @@ def _claim_existing_branch_binding_for_thread(
         if isinstance(metadata, dict):
             head_branch = normalize_optional_text(metadata.get("head_branch"))
     if head_branch is None:
-        return False
+        return None
 
     from .....core.pr_bindings import PrBindingStore
 
     binding_store = PrBindingStore(hub_root)
-    claimed = False
+    claimed_binding: Optional[PrBinding] = None
     for pr_state in ("open", "draft"):
         bindings = binding_store.list_bindings(
             provider="github",
@@ -195,8 +198,8 @@ def _claim_existing_branch_binding_for_thread(
                 thread_target_id=managed_thread_id,
             )
             if updated is not None and updated.thread_target_id == managed_thread_id:
-                claimed = True
-    return claimed
+                claimed_binding = updated
+    return claimed_binding
 
 
 def _claim_discovered_pr_binding_for_thread(
@@ -205,7 +208,7 @@ def _claim_discovered_pr_binding_for_thread(
     thread: dict[str, Any],
     managed_thread_id: str,
     workspace_root: Path,
-) -> bool:
+) -> Optional[PrBinding]:
     raw_config = getattr(getattr(request.app.state, "config", None), "raw", {})
     try:
         github = GitHubService(
@@ -222,14 +225,14 @@ def _claim_discovered_pr_binding_for_thread(
             workspace_root,
             exc_info=True,
         )
-        return False
+        return None
     if not isinstance(summary, dict):
-        return False
+        return None
     repo_slug = normalize_optional_text(summary.get("repo_slug"))
     pr_number = summary.get("pr_number")
     pr_state = normalize_optional_text(summary.get("pr_state"))
     if repo_slug is None or not isinstance(pr_number, int) or pr_state is None:
-        return False
+        return None
     claimed = claim_pr_binding_for_thread(
         request.app.state.config.root,
         provider="github",
@@ -241,7 +244,60 @@ def _claim_discovered_pr_binding_for_thread(
         base_branch=normalize_optional_text(summary.get("base_branch")),
         thread_target_id=managed_thread_id,
     )
-    return claimed is not None and claimed.thread_target_id == managed_thread_id
+    if claimed is None or claimed.thread_target_id != managed_thread_id:
+        return None
+    return claimed
+
+
+def _arm_scm_polling_watch_for_binding(
+    *,
+    request: Request,
+    binding: PrBinding,
+    workspace_root: Path,
+) -> None:
+    normalized_raw_config = _resolve_repo_raw_config_for_workspace(
+        request,
+        workspace_root=workspace_root,
+    )
+    GitHubScmPollingService(
+        request.app.state.config.root,
+        raw_config=normalized_raw_config,
+    ).arm_watch(
+        binding=binding,
+        workspace_root=workspace_root,
+        reaction_config=normalized_raw_config,
+    )
+
+
+def _resolve_repo_raw_config_for_workspace(
+    request: Request,
+    *,
+    workspace_root: Path,
+) -> Optional[dict[str, Any]]:
+    app_config = getattr(request.app.state, "config", None)
+    raw_config = getattr(app_config, "raw", {})
+    normalized_raw_config = raw_config if isinstance(raw_config, dict) else None
+    config_mode = str(getattr(app_config, "mode", "") or "").strip().lower()
+    if config_mode != "hub":
+        return normalized_raw_config
+    config_root = getattr(app_config, "root", None)
+    if not isinstance(config_root, Path):
+        return normalized_raw_config
+    try:
+        repo_config = load_repo_config(workspace_root, hub_path=config_root)
+    except (ConfigError, OSError, ValueError):
+        logger.debug(
+            "Failed resolving repo config for SCM polling watch arm (workspace_root=%s)",
+            workspace_root,
+            exc_info=True,
+        )
+        return normalized_raw_config
+    resolved_raw_config = getattr(repo_config, "raw", None)
+    return (
+        resolved_raw_config
+        if isinstance(resolved_raw_config, dict)
+        else normalized_raw_config
+    )
 
 
 def _self_claim_pr_bindings_for_managed_thread(
@@ -255,20 +311,29 @@ def _self_claim_pr_bindings_for_managed_thread(
     raw_events: tuple[Any, ...],
 ) -> None:
     hub_root = request.app.state.config.root
-    if _claim_existing_branch_binding_for_thread(
+    claimed_binding = _claim_existing_branch_binding_for_thread(
         hub_root=hub_root,
         thread_store=thread_store,
         thread=thread,
         managed_thread_id=managed_thread_id,
         workspace_root=workspace_root,
+    )
+    if claimed_binding is None and not _runtime_output_suggests_pr_open(
+        assistant_text, raw_events
     ):
         return
-    if not _runtime_output_suggests_pr_open(assistant_text, raw_events):
+    if claimed_binding is None:
+        claimed_binding = _claim_discovered_pr_binding_for_thread(
+            request=request,
+            thread=thread,
+            managed_thread_id=managed_thread_id,
+            workspace_root=workspace_root,
+        )
+    if claimed_binding is None:
         return
-    _claim_discovered_pr_binding_for_thread(
+    _arm_scm_polling_watch_for_binding(
         request=request,
-        thread=thread,
-        managed_thread_id=managed_thread_id,
+        binding=claimed_binding,
         workspace_root=workspace_root,
     )
 

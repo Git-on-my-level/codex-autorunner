@@ -13,6 +13,12 @@ from starlette.middleware.gzip import GZipMiddleware
 from starlette.types import ASGIApp
 
 from ...core.config import parse_flow_retention_config
+from ...core.diagnostics import (
+    DEFAULT_PROCESS_MONITOR_CADENCE_SECONDS,
+    DEFAULT_PROCESS_MONITOR_WINDOW_SECONDS,
+    ProcessMonitorStore,
+    capture_process_monitor_sample,
+)
 from ...core.filebox_retention import (
     prune_filebox_root,
     resolve_filebox_retention_policy,
@@ -38,6 +44,7 @@ from .middleware import (
 )
 from .routes.feedback_reports import build_feedback_report_routes
 from .routes.filebox import build_hub_filebox_routes
+from .routes.hub_control_plane import build_hub_control_plane_routes
 from .routes.hub_messages import build_hub_messages_routes
 from .routes.hub_repos import HubMountManager, build_hub_repo_routes
 from .routes.pma import build_pma_routes
@@ -119,6 +126,15 @@ async def _run_prune_loop(
         return
 
 
+def _record_process_monitor_sample(root: Path) -> None:
+    store = ProcessMonitorStore(root)
+    store.record_sample(
+        capture_process_monitor_sample(root),
+        cadence_seconds=DEFAULT_PROCESS_MONITOR_CADENCE_SECONDS,
+        window_seconds=DEFAULT_PROCESS_MONITOR_WINDOW_SECONDS,
+    )
+
+
 def create_hub_app(
     hub_root: Optional[Path] = None,
     base_path: Optional[str] = None,
@@ -151,6 +167,7 @@ def create_hub_app(
     app.include_router(build_feedback_report_routes())
     app.include_router(build_scm_webhook_routes())
     app.include_router(build_hub_filebox_routes())
+    app.include_router(build_hub_control_plane_routes())
 
     app.state.hub_started = False
     repo_server_overrides: Optional[ServerOverrides] = None
@@ -208,6 +225,10 @@ def create_hub_app(
             loop=asyncio.get_running_loop(),
         )
         try:
+            hub_supervisor = getattr(app.state, "hub_supervisor", None)
+            startup_hub_supervisor = getattr(hub_supervisor, "startup", None)
+            if callable(startup_hub_supervisor):
+                startup_hub_supervisor()
 
             async def _refresh_mounts_from_manifest() -> None:
                 try:
@@ -554,6 +575,30 @@ def create_hub_app(
                             "PMA lane worker registration failed",
                             exc,
                         )
+
+            async def _process_monitor_loop() -> None:
+                while True:
+                    try:
+                        await asyncio.to_thread(
+                            _record_process_monitor_sample,
+                            app.state.config.root,
+                        )
+                    except (
+                        RuntimeError,
+                        OSError,
+                        ConnectionError,
+                        ValueError,
+                        TypeError,
+                    ) as exc:  # intentional: background loop must not crash
+                        safe_log(
+                            app.state.logger,
+                            logging.WARNING,
+                            "Hub process monitor sampling failed",
+                            exc,
+                        )
+                    await asyncio.sleep(DEFAULT_PROCESS_MONITOR_CADENCE_SECONDS)
+
+            tasks.append(asyncio.create_task(_process_monitor_loop()))
             # Default lane worker starts in _deferred_hub_startup so /health is not blocked.
             # Eager repo lifespans run there too; until then, /repos/* still activates via
             # _LazyRepoApp._ensure_ready when hub_started is True.
@@ -565,6 +610,21 @@ def create_hub_app(
                     task.cancel()
                 if tasks:
                     await asyncio.gather(*tasks, return_exceptions=True)
+                hub_supervisor = getattr(app.state, "hub_supervisor", None)
+                shutdown_hub_supervisor = getattr(hub_supervisor, "shutdown", None)
+                if callable(shutdown_hub_supervisor):
+                    try:
+                        shutdown_hub_supervisor()
+                    except (
+                        OSError,
+                        RuntimeError,
+                    ) as exc:  # intentional: cleanup must not crash
+                        safe_log(
+                            app.state.logger,
+                            logging.WARNING,
+                            "Hub supervisor shutdown failed",
+                            exc,
+                        )
                 await mount_manager.stop_repo_mounts()
                 if registered_pma_lane_starter and callable(pma_lane_starter_register):
                     try:

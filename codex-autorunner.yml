@@ -71,6 +71,7 @@ repo_defaults:
     # When enabled, previous ticket content is truncated to 16KB and clearly labeled.
     # Prefer using contextspace docs (active_context.md, decisions.md, spec.md) for cross-ticket context.
     include_previous_ticket_context: false
+    max_total_turns: 150
 
   git:
     # Auto-commit after a run.
@@ -308,7 +309,7 @@ telegram_bot:
   opencode_command: null
   state_file: .codex-autorunner/telegram_state.sqlite3
   # Optional env var that contains the full app-server command.
-  app_server_command_env: CAR_TELEGRAM_APP_SERVER_COMMAND
+  app_server_command_env: CAR_APP_SERVER_COMMAND
   app_server_command:
     - codex
     - app-server

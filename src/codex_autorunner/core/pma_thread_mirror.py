@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any, Callable
 
@@ -9,11 +8,6 @@ from .sqlite_utils import open_sqlite
 from .text_utils import _json_dumps
 
 LEGACY_MIRROR_MIGRATION_VERSION = 1
-
-
-def legacy_mirror_enabled() -> bool:
-    val = os.environ.get("CAR_LEGACY_MIRROR_ENABLED", "true").strip().lower()
-    return val in ("true", "1", "yes")
 
 
 def sync_legacy_mirror(
@@ -178,6 +172,5 @@ def sync_legacy_mirror(
 
 __all__ = [
     "LEGACY_MIRROR_MIGRATION_VERSION",
-    "legacy_mirror_enabled",
     "sync_legacy_mirror",
 ]

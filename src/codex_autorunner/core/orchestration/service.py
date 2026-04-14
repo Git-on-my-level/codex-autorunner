@@ -58,6 +58,7 @@ _MISSING_THREAD_MARKERS = (
     "unknown hermes turn",
     "no active hermes turn tracked",
 )
+_RECOVERABLE_BACKEND_MARKERS = _MISSING_THREAD_MARKERS + ("event loop is closed",)
 _REHYDRATION_TRANSCRIPT_LIMIT = 3
 _REHYDRATION_TEXT_LIMIT = 4_000
 logger = logging.getLogger(__name__)
@@ -123,6 +124,10 @@ def _normalize_request_kind(value: Any) -> MessageRequestKind:
 
 def _is_missing_thread_error(exc: Exception) -> bool:
     return any(marker in str(exc).lower() for marker in _MISSING_THREAD_MARKERS)
+
+
+def _is_recoverable_backend_error(exc: Exception) -> bool:
+    return any(marker in str(exc).lower() for marker in _RECOVERABLE_BACKEND_MARKERS)
 
 
 async def _resolve_harness_runtime_instance_id(
@@ -466,9 +471,11 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
         self, thread_target_id: str, execution_id: str
     ) -> ExecutionRecord:
         updated = self._store.mark_turn_interrupted(execution_id)
-        if not updated:
-            raise KeyError(f"Execution '{execution_id}' was not running")
         execution = self.get_execution(thread_target_id, execution_id)
+        if not updated:
+            if execution is not None and execution.status == "interrupted":
+                return execution
+            raise KeyError(f"Execution '{execution_id}' was not running")
         if execution is None:
             raise KeyError(
                 f"Execution '{execution_id}' is missing after interrupt recording"
@@ -841,12 +848,12 @@ class _ThreadExecutionLifecycle:
                             AttributeError,
                             ConnectionError,
                         ) as exc:
-                            if not _is_missing_thread_error(exc):
+                            if not _is_recoverable_backend_error(exc):
                                 raise
                             log_event(
                                 logger,
                                 logging.INFO,
-                                "orchestration.thread.resume_missing_backend",
+                                "orchestration.thread.resume_recoverable_backend_error",
                                 exc=exc,
                                 thread_target_id=thread.thread_target_id,
                                 backend_thread_id=conversation_id,
@@ -958,6 +965,41 @@ class _ThreadExecutionLifecycle:
                         backend_thread_id=conversation_id,
                         operation=exc.operation,
                         status_code=exc.status_code,
+                        reason=str(exc),
+                    )
+                    self.thread_store.set_thread_backend_id(
+                        thread.thread_target_id,
+                        None,
+                        backend_runtime_instance_id=None,
+                    )
+                    conversation_id = None
+                    continue
+                except (
+                    RuntimeError,
+                    OSError,
+                    ValueError,
+                    TypeError,
+                    AttributeError,
+                    ConnectionError,
+                ) as exc:
+                    if (
+                        not used_existing_conversation
+                        or fresh_conversation_retry_attempted
+                        or not _is_recoverable_backend_error(exc)
+                    ):
+                        raise
+                    fresh_conversation_retry_attempted = True
+                    log_event(
+                        logger,
+                        logging.INFO,
+                        "orchestration.thread.refreshing_backend_binding",
+                        thread_target_id=thread.thread_target_id,
+                        execution_id=execution.execution_id,
+                        backend_thread_id=conversation_id,
+                        operation=(
+                            "start_review" if request.kind == "review" else "start_turn"
+                        ),
+                        status_code=None,
                         reason=str(exc),
                     )
                     self.thread_store.set_thread_backend_id(
@@ -1425,23 +1467,29 @@ class _ThreadRecoveryHelper:
         try:
             interrupted = await self.interrupt_thread(thread_target_id)
         except Exception as exc:
-            if not _is_missing_thread_error(exc):
+            if not _is_recoverable_backend_error(exc):
                 raise
+            reason = (
+                "interrupt_thread_not_found"
+                if _is_missing_thread_error(exc)
+                else "interrupt_thread_runtime_unavailable"
+            )
             log_event(
                 logger,
                 logging.INFO,
-                "orchestration.thread.interrupt_missing_backend",
+                "orchestration.thread.interrupt_recoverable_backend_error",
                 thread_target_id=thread_target_id,
                 execution_id=execution.execution_id,
                 backend_thread_id=backend_thread_id,
                 backend_turn_id=execution.backend_id,
+                reason=reason,
                 exc=exc,
             )
             interrupted = self.interrupt_lost_backend_execution(
                 thread_target_id=thread_target_id,
                 execution=execution,
                 backend_thread_id=backend_thread_id,
-                reason="interrupt_thread_not_found",
+                reason=reason,
             )
             return ThreadStopOutcome(
                 thread_target_id=thread_target_id,

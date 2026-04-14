@@ -33,8 +33,8 @@ If you see `app_server.turn.completed` but no `telegram.turn.completed`, the bot
 - If a run is paused, use `/flow reply <message>` then `/flow resume` to continue (`/reply` is a legacy alias).
 - If `/flow resume` fails because another run is active, inspect that run first and only force-new when it is stale.
 - If `/flow resume` keeps failing due to stale/ambiguous run metadata, use the repo terminal fallback:
-  - `car flow ticket_flow start --repo <path> --force-new`
-  - `car flow ticket_flow status --json --repo <path> [--run-id <uuid>]`
+  - `car ticket-flow start --repo <path> --force-new`
+  - `car ticket-flow status --json --repo <path> [--run-id <uuid>]`
   - Continue only after status shows `status: running` and `worker.status: alive`.
 
 ## Outbox Checks

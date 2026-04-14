@@ -31,10 +31,20 @@ from codex_autorunner.surfaces.web.routes.pma_routes import managed_thread_runti
 pytestmark = pytest.mark.slow
 
 
-def _enable_pma(hub_root: Path) -> None:
+def _enable_pma(hub_root: Path, *, enable_github_polling: bool = False) -> None:
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
     cfg.setdefault("pma", {})
     cfg["pma"]["enabled"] = True
+    if enable_github_polling:
+        repo_defaults = cfg.setdefault("repo_defaults", {})
+        if isinstance(repo_defaults, dict):
+            github = repo_defaults.setdefault("github", {})
+            if isinstance(github, dict):
+                automation = github.setdefault("automation", {})
+                if isinstance(automation, dict):
+                    polling = automation.setdefault("polling", {})
+                    if isinstance(polling, dict):
+                        polling["enabled"] = True
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
 
@@ -520,6 +530,7 @@ def test_managed_thread_message_route_self_claims_existing_pr_binding(
         head_branch="feature/self-claim",
         base_branch="main",
     )
+    arm_watch_calls: list[dict[str, Any]] = []
 
     class FakeService:
         def get_thread_target(self, thread_target_id: str):
@@ -534,6 +545,22 @@ def test_managed_thread_message_route_self_claims_existing_pr_binding(
 
         def get_execution(self, thread_target_id: str, execution_id: str):
             _ = thread_target_id, execution_id
+            return None
+
+    class FakePollingService:
+        def __init__(self, *args, **kwargs) -> None:
+            _ = args, kwargs
+
+        def arm_watch(self, *, binding, workspace_root, reaction_config=None):
+            arm_watch_calls.append(
+                {
+                    "binding_id": binding.binding_id,
+                    "repo_slug": binding.repo_slug,
+                    "pr_number": binding.pr_number,
+                    "workspace_root": str(workspace_root),
+                    "reaction_config": reaction_config,
+                }
+            )
             return None
 
     async def _fake_begin(
@@ -575,6 +602,11 @@ def test_managed_thread_message_route_self_claims_existing_pr_binding(
         "await_runtime_thread_outcome",
         _fake_await,
     )
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "GitHubScmPollingService",
+        FakePollingService,
+    )
 
     with TestClient(app) as client:
         response = client.post(
@@ -591,13 +623,17 @@ def test_managed_thread_message_route_self_claims_existing_pr_binding(
     assert response.status_code == 200
     assert binding is not None
     assert binding.thread_target_id == managed_thread_id
+    assert len(arm_watch_calls) == 1
+    assert arm_watch_calls[0]["repo_slug"] == "acme/widgets"
+    assert arm_watch_calls[0]["pr_number"] == 17
+    assert arm_watch_calls[0]["workspace_root"] == str(hub_env.repo_root.resolve())
 
 
 def test_managed_thread_message_route_self_claims_discovered_pr_binding(
     hub_env,
     monkeypatch,
 ) -> None:
-    _enable_pma(hub_env.hub_root)
+    _enable_pma(hub_env.hub_root, enable_github_polling=True)
     app = create_hub_app(hub_env.hub_root)
     store = PmaThreadStore(hub_env.hub_root)
     created = store.create_thread(
@@ -607,6 +643,8 @@ def test_managed_thread_message_route_self_claims_discovered_pr_binding(
         metadata={"head_branch": "feature/discovered"},
     )
     managed_thread_id = str(created["managed_thread_id"])
+    arm_watch_calls: list[dict[str, Any]] = []
+    polling_raw_configs: list[Optional[dict[str, Any]]] = []
 
     class FakeService:
         def get_thread_target(self, thread_target_id: str):
@@ -636,6 +674,23 @@ def test_managed_thread_message_route_self_claims_discovered_pr_binding(
                 "head_branch": "feature/discovered",
                 "base_branch": "main",
             }
+
+    class FakePollingService:
+        def __init__(self, *args, **kwargs) -> None:
+            _ = args
+            polling_raw_configs.append(kwargs.get("raw_config"))
+
+        def arm_watch(self, *, binding, workspace_root, reaction_config=None):
+            arm_watch_calls.append(
+                {
+                    "binding_id": binding.binding_id,
+                    "repo_slug": binding.repo_slug,
+                    "pr_number": binding.pr_number,
+                    "workspace_root": str(workspace_root),
+                    "reaction_config": reaction_config,
+                }
+            )
+            return None
 
     async def _fake_begin(
         service, request, *, client_request_id=None, sandbox_policy=None
@@ -681,6 +736,11 @@ def test_managed_thread_message_route_self_claims_discovered_pr_binding(
         "GitHubService",
         FakeGitHubService,
     )
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "GitHubScmPollingService",
+        FakePollingService,
+    )
 
     with TestClient(app) as client:
         response = client.post(
@@ -697,6 +757,19 @@ def test_managed_thread_message_route_self_claims_discovered_pr_binding(
     assert response.status_code == 200
     assert binding is not None
     assert binding.thread_target_id == managed_thread_id
+    assert len(arm_watch_calls) == 1
+    assert arm_watch_calls[0]["repo_slug"] == "acme/widgets"
+    assert arm_watch_calls[0]["pr_number"] == 42
+    assert arm_watch_calls[0]["workspace_root"] == str(hub_env.repo_root.resolve())
+    assert polling_raw_configs
+    assert polling_raw_configs[0] is not None
+    assert polling_raw_configs[0]["github"]["automation"]["polling"]["enabled"] is True
+    assert (
+        arm_watch_calls[0]["reaction_config"]["github"]["automation"]["polling"][
+            "enabled"
+        ]
+        is True
+    )
 
 
 def test_managed_thread_message_route_honors_explicit_approval_override(

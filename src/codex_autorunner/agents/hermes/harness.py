@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
 from ...core.orchestration.interfaces import FreshConversationRequiredError
+from ...core.text_utils import _normalize_optional_text
 from ..acp import ACPMissingSessionError
 from ..base import AgentHarness
 from ..types import (
@@ -27,6 +28,7 @@ HERMES_CAPABILITIES = frozenset(
         RuntimeCapability("durable_threads"),
         RuntimeCapability("message_turns"),
         RuntimeCapability("interrupt"),
+        RuntimeCapability("active_thread_discovery"),
         RuntimeCapability("event_streaming"),
         RuntimeCapability("approvals"),
     ]
@@ -41,6 +43,22 @@ class HermesHarness(AgentHarness):
     def __init__(self, supervisor: HermesSupervisor) -> None:
         self._supervisor = supervisor
 
+    def _conversation_ref_from_session(self, session: Any) -> ConversationRef:
+        raw = getattr(session, "raw", None)
+        raw_mapping = raw if isinstance(raw, dict) else {}
+        summary = _normalize_optional_text(getattr(session, "summary", None))
+        if summary is None and raw_mapping:
+            for key in ("summary", "subtitle", "description"):
+                summary = _normalize_optional_text(raw_mapping.get(key))
+                if summary:
+                    break
+        return ConversationRef(
+            agent=self.agent_id,
+            id=str(getattr(session, "session_id", "") or ""),
+            title=_normalize_optional_text(getattr(session, "title", None)),
+            summary=summary,
+        )
+
     async def ensure_ready(self, workspace_root: Path) -> None:
         await self._supervisor.ensure_ready(workspace_root)
 
@@ -54,7 +72,11 @@ class HermesHarness(AgentHarness):
         self, workspace_root: Path, title: Optional[str] = None
     ) -> ConversationRef:
         session = await self._supervisor.create_session(workspace_root, title=title)
-        return ConversationRef(agent=self.agent_id, id=session.session_id)
+        return self._conversation_ref_from_session(session)
+
+    async def list_conversations(self, workspace_root: Path) -> list[ConversationRef]:
+        sessions = await self._supervisor.list_sessions(workspace_root)
+        return [self._conversation_ref_from_session(session) for session in sessions]
 
     async def resume_conversation(
         self, workspace_root: Path, conversation_id: str
@@ -73,7 +95,7 @@ class HermesHarness(AgentHarness):
                 operation="resume_conversation",
                 status_code=exc.code,
             ) from exc
-        return ConversationRef(agent=self.agent_id, id=session.session_id)
+        return self._conversation_ref_from_session(session)
 
     async def start_turn(
         self,

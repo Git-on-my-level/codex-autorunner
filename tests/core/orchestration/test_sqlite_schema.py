@@ -10,6 +10,10 @@ from codex_autorunner.core.orchestration import (
     list_orchestration_table_definitions,
     resolve_orchestration_sqlite_path,
 )
+from codex_autorunner.core.orchestration.sqlite import (
+    open_orchestration_sqlite,
+    read_orchestration_compatibility_metadata,
+)
 from codex_autorunner.core.state_roots import (
     resolve_hub_orchestration_db_path,
     resolve_hub_state_root,
@@ -150,6 +154,21 @@ def test_initialize_orchestration_sqlite_creates_canonical_tables(
             "created_at",
             "updated_at",
         }.issubset(_column_names(conn, "orch_feedback_reports"))
+
+    metadata = read_orchestration_compatibility_metadata(hub_root)
+    assert metadata is not None
+    assert metadata.schema_generation == ORCHESTRATION_SCHEMA_VERSION
+    assert metadata.db_path == str(db_path)
+
+
+def test_open_without_migrate_does_not_prepare_schema(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+
+    with open_orchestration_sqlite(hub_root, durable=False, migrate=False) as conn:
+        names = _table_names(conn)
+
+    assert "orch_schema_migrations" not in names
+    assert read_orchestration_compatibility_metadata(hub_root) is None
 
 
 def test_table_definition_roles_cover_authoritative_mirror_projection_and_ops() -> None:

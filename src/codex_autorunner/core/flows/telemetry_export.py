@@ -202,15 +202,7 @@ def _write_jsonl_gz(events: Sequence[dict], path: Path) -> int:
 
 
 def _prune_events(store: FlowStore, seqs: Sequence[int]) -> int:
-    if not seqs:
-        return 0
-    conn = store._get_conn()
-    placeholders = ",".join("?" for _ in seqs)
-    cursor = conn.execute(
-        f"DELETE FROM flow_events WHERE seq IN ({placeholders})",
-        list(seqs),
-    )
-    return cursor.rowcount
+    return store.delete_events_by_seqs(list(seqs))
 
 
 def _prune_telemetry(store: FlowStore, seqs: Sequence[int]) -> int:

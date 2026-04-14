@@ -874,15 +874,27 @@ class HubChannelService:
             (True, False),
             (False, False),
         ):
-            for thread in pma_threads:
+            candidates = [
+                thread
+                for thread in pma_threads
                 if _matches(
                     thread,
                     exact_agent=exact_agent,
                     exact_profile=exact_profile,
-                ):
-                    managed_thread_id = thread.get("managed_thread_id")
-                    if isinstance(managed_thread_id, str) and managed_thread_id.strip():
-                        return managed_thread_id.strip()
+                )
+            ]
+            if not candidates:
+                continue
+            selected = max(
+                candidates,
+                key=lambda thread: (
+                    bool(thread.get("has_running_turn")),
+                    self._timestamp_rank(thread.get("updated_at")),
+                ),
+            )
+            managed_thread_id = selected.get("managed_thread_id")
+            if isinstance(managed_thread_id, str) and managed_thread_id.strip():
+                return managed_thread_id.strip()
         return None
 
     def _channel_row_matches_query(self, row: dict[str, Any], query_text: str) -> bool:

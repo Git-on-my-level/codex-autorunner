@@ -9,6 +9,7 @@ from typing import Any, Optional
 from ..text_utils import _json_dumps
 from ..time_utils import now_iso
 from .cold_trace_store import ColdTraceStore
+from .execution_history import timeline_hot_family_for_event_type
 from .execution_history_maintenance import (
     ExecutionHistoryMaintenancePolicy,
 )
@@ -17,6 +18,26 @@ from .sqlite import open_orchestration_sqlite
 logger = logging.getLogger("codex_autorunner.execution_history_diagnostics")
 
 _TIMELINE_EVENT_FAMILY = "turn.timeline"
+
+
+def _collect_timeline_family_counts(conn: Any) -> dict[str, int]:
+    family_counts: dict[str, int] = {}
+    rows = conn.execute(
+        """
+        SELECT event_type, COUNT(*) AS cnt
+          FROM orch_event_projections
+         INDEXED BY idx_orch_event_projections_family_type_execution
+         WHERE event_family = ?
+           AND execution_id IS NOT NULL
+         GROUP BY event_type
+        """,
+        (_TIMELINE_EVENT_FAMILY,),
+    ).fetchall()
+    for row in rows:
+        family = timeline_hot_family_for_event_type(row["event_type"])
+        if family:
+            family_counts[family] = family_counts.get(family, 0) + int(row["cnt"] or 0)
+    return dict(sorted(family_counts.items()))
 
 
 @dataclasses.dataclass(frozen=True)
@@ -134,7 +155,6 @@ def collect_execution_history_metrics(
     archived_manifests = sum(1 for m in manifests if m.status == "archived")
     total_trace_bytes = sum(int(m.byte_count or 0) for m in manifests)
 
-    hot_rows_by_family: dict[str, int] = {}
     event_count_by_execution: dict[str, int] = {}
     oversized_ids: list[str] = []
 
@@ -142,30 +162,13 @@ def collect_execution_history_metrics(
         execution_rows = conn.execute(
             "SELECT execution_id, status FROM orch_thread_executions ORDER BY created_at ASC"
         ).fetchall()
-
-        for row in conn.execute(
-            """
-            SELECT payload_json
-              FROM orch_event_projections
-             WHERE event_family = ?
-               AND execution_id IS NOT NULL
-            """,
-            (_TIMELINE_EVENT_FAMILY,),
-        ).fetchall():
-            import json
-
-            try:
-                payload = json.loads(str(row["payload_json"] or "{}"))
-            except (ValueError, TypeError):
-                payload = {}
-            family = str(payload.get("event_family") or "").strip()
-            if family:
-                hot_rows_by_family[family] = hot_rows_by_family.get(family, 0) + 1
+        hot_rows_by_family = _collect_timeline_family_counts(conn)
 
         for row in conn.execute(
             """
             SELECT execution_id, COUNT(*) AS cnt
               FROM orch_event_projections
+             INDEXED BY idx_orch_event_projections_family_execution_order
              WHERE event_family = ?
                AND execution_id IS NOT NULL
              GROUP BY execution_id
@@ -203,7 +206,7 @@ def collect_execution_history_metrics(
         archived_manifests=archived_manifests,
         total_trace_bytes=total_trace_bytes,
         trace_file_count=sum(1 for m in manifests if m.status in ("finalized", "open")),
-        hot_row_count_by_family=dict(sorted(hot_rows_by_family.items())),
+        hot_row_count_by_family=hot_rows_by_family,
         cold_trace_bytes_by_execution=dict(sorted(cold_bytes_by_execution.items())),
         event_count_by_execution=dict(sorted(event_count_by_execution.items())),
         oversized_execution_ids=tuple(sorted(oversized_ids)),
@@ -234,25 +237,7 @@ def collect_top_n_heavy_executions(
             if row["execution_id"] is not None
         }
 
-        family_counts: dict[str, int] = {}
-        for row in conn.execute(
-            """
-            SELECT payload_json
-              FROM orch_event_projections
-             WHERE event_family = ?
-               AND execution_id IS NOT NULL
-            """,
-            (_TIMELINE_EVENT_FAMILY,),
-        ).fetchall():
-            import json
-
-            try:
-                payload = json.loads(str(row["payload_json"] or "{}"))
-            except (ValueError, TypeError):
-                payload = {}
-            family = str(payload.get("event_family") or "").strip()
-            if family:
-                family_counts[family] = family_counts.get(family, 0) + 1
+        family_counts = _collect_timeline_family_counts(conn)
 
     cold_bytes_by_execution: dict[str, int] = {}
     for m in manifests:
@@ -438,10 +423,14 @@ def detect_completion_gap_repeated_attempts(
                    MIN(timestamp) AS first_at,
                    MAX(timestamp) AS last_at
               FROM orch_event_projections
-             WHERE event_family = ?
-               AND event_type = 'run_notice'
-               AND execution_id IS NOT NULL
-               AND payload_json LIKE '%completion_gap%'
+             INDEXED BY idx_orch_event_projections_family_type_execution
+            WHERE event_family = ?
+              AND event_type = 'run_notice'
+              AND execution_id IS NOT NULL
+              AND (
+                    payload_json LIKE '%"kind":"completion_gap"%'
+                 OR payload_json LIKE '%"kind": "completion_gap"%'
+              )
              GROUP BY execution_id
              HAVING cnt >= ?
             """,

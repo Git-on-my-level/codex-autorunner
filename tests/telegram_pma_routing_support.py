@@ -12,11 +12,20 @@ import httpx
 import pytest
 
 from codex_autorunner.agents.registry import AgentDescriptor
+from codex_autorunner.core.hub_control_plane import HubSharedStateService
 from codex_autorunner.core.orchestration.runtime_threads import (
     RUNTIME_THREAD_INTERRUPTED_ERROR,
     RUNTIME_THREAD_TIMEOUT_ERROR,
 )
-from codex_autorunner.core.pma_context import default_pma_prompt_state_path
+from codex_autorunner.core.orchestration.sqlite import prepare_orchestration_sqlite
+from codex_autorunner.core.pma_context import (
+    build_hub_snapshot,
+    default_pma_prompt_state_path,
+)
+from codex_autorunner.core.pma_thread_store import (
+    PmaThreadStore,
+    prepare_pma_thread_store,
+)
 from codex_autorunner.core.sse import format_sse
 from codex_autorunner.integrations.app_server.client import (
     CodexAppServerDisconnected,
@@ -77,6 +86,147 @@ class _RouterStub:
 
     async def get_topic(self, _key: str) -> TelegramTopicRecord:
         return self._record
+
+
+class _NoopSupervisor:
+    def list_agent_workspaces(self, *, use_cache: bool = True) -> list[object]:
+        _ = use_cache
+        return []
+
+    def get_agent_workspace_snapshot(self, workspace_id: str) -> object:
+        raise ValueError(f"Unknown workspace id: {workspace_id}")
+
+    def run_setup_commands_for_workspace(
+        self, workspace_root: Path, *, repo_id_hint: Optional[str] = None
+    ) -> int:
+        _ = workspace_root, repo_id_hint
+        return 0
+
+    def process_pma_automation_now(
+        self, *, include_timers: bool = True, limit: int = 100
+    ) -> dict[str, int]:
+        return {
+            "timers_processed": 1 if include_timers else 0,
+            "wakeups_dispatched": limit,
+        }
+
+
+class _InProcessHubControlPlaneClient:
+    def __init__(self, hub_root: Path) -> None:
+        self._hub_root = Path(hub_root)
+        prepare_orchestration_sqlite(self._hub_root, durable=False)
+        prepare_pma_thread_store(self._hub_root, durable=False)
+        self._service = HubSharedStateService(
+            hub_root=self._hub_root,
+            supervisor=_NoopSupervisor(),
+            durable_writes=False,
+        )
+
+    async def get_surface_binding(self, request: Any) -> Any:
+        return self._service.get_surface_binding(request)
+
+    async def upsert_surface_binding(self, request: Any) -> Any:
+        return self._service.upsert_surface_binding(request)
+
+    async def list_surface_bindings(self, request: Any) -> Any:
+        return self._service.list_surface_bindings(request)
+
+    async def get_thread_target(self, request: Any) -> Any:
+        return self._service.get_thread_target(request)
+
+    async def list_thread_targets(self, request: Any) -> Any:
+        return self._service.list_thread_targets(request)
+
+    async def create_thread_target(self, request: Any) -> Any:
+        return self._service.create_thread_target(request)
+
+    async def create_execution(self, request: Any) -> Any:
+        return self._service.create_execution(request)
+
+    async def get_execution(self, request: Any) -> Any:
+        return self._service.get_execution(request)
+
+    async def get_running_execution(self, request: Any) -> Any:
+        return self._service.get_running_execution(request)
+
+    async def get_latest_execution(self, request: Any) -> Any:
+        return self._service.get_latest_execution(request)
+
+    async def list_queued_executions(self, request: Any) -> Any:
+        return self._service.list_queued_executions(request)
+
+    async def get_queue_depth(self, request: Any) -> Any:
+        return self._service.get_queue_depth(request)
+
+    async def cancel_queued_execution(self, request: Any) -> Any:
+        return self._service.cancel_queued_execution(request)
+
+    async def promote_queued_execution(self, request: Any) -> Any:
+        return self._service.promote_queued_execution(request)
+
+    async def record_execution_result(self, request: Any) -> Any:
+        return self._service.record_execution_result(request)
+
+    async def record_execution_interrupted(self, request: Any) -> Any:
+        return self._service.record_execution_interrupted(request)
+
+    async def cancel_queued_executions(self, request: Any) -> Any:
+        return self._service.cancel_queued_executions(request)
+
+    async def set_execution_backend_id(self, request: Any) -> None:
+        self._service.set_execution_backend_id(request)
+
+    async def claim_next_queued_execution(self, request: Any) -> Any:
+        return self._service.claim_next_queued_execution(request)
+
+    async def persist_execution_timeline(self, request: Any) -> Any:
+        return self._service.persist_execution_timeline(request)
+
+    async def finalize_execution_cold_trace(self, request: Any) -> Any:
+        return self._service.finalize_execution_cold_trace(request)
+
+    async def resume_thread_target(self, request: Any) -> Any:
+        return self._service.resume_thread_target(request)
+
+    async def archive_thread_target(self, request: Any) -> Any:
+        return self._service.archive_thread_target(request)
+
+    async def set_thread_backend_id(self, request: Any) -> None:
+        self._service.set_thread_backend_id(request)
+
+    async def record_thread_activity(self, request: Any) -> None:
+        self._service.record_thread_activity(request)
+
+    async def update_thread_compact_seed(self, request: Any) -> Any:
+        return self._service.update_thread_compact_seed(request)
+
+    async def get_transcript_history(self, request: Any) -> Any:
+        return self._service.get_transcript_history(request)
+
+    async def write_transcript(self, request: Any) -> Any:
+        return self._service.write_transcript(request)
+
+    async def get_pma_snapshot(self) -> Any:
+        return type(
+            "PmaSnapshotResponse",
+            (),
+            {"snapshot": await build_hub_snapshot(None, hub_root=self._hub_root)},
+        )()
+
+    async def get_agent_workspace(self, request: Any) -> Any:
+        return self._service.get_agent_workspace(request)
+
+    async def list_agent_workspaces(self, request: Any) -> Any:
+        return self._service.list_agent_workspaces(request)
+
+    async def run_workspace_setup_commands(self, request: Any) -> Any:
+        return self._service.run_workspace_setup_commands(request)
+
+    async def request_automation(self, request: Any) -> Any:
+        return self._service.request_automation(request)
+
+    async def aclose(self) -> None:
+        return None
 
 
 def test_sanitize_runtime_thread_result_error_preserves_sanitized_detail() -> None:
@@ -202,21 +352,8 @@ async def test_pma_prompt_routing_uses_hub_root(tmp_path: Path) -> None:
     (inbox_dir / "input.txt").write_text("inbox", encoding="utf-8")
     (outbox_dir / "output.txt").write_text("outbox", encoding="utf-8")
 
-    class _LifecycleStoreStub:
-        def get_unprocessed(self, limit: int = 20) -> list:
-            return []
-
-    class _HubSupervisorStub:
-        def __init__(self) -> None:
-            self.hub_config = SimpleNamespace(pma=None)
-            self.lifecycle_store = _LifecycleStoreStub()
-
-        def list_repos(self) -> list:
-            return []
-
     record = TelegramTopicRecord(pma_enabled=True, workspace_path=None)
     handler = _ExecutionStub(record, hub_root)
-    handler._hub_supervisor = _HubSupervisorStub()
     message = TelegramMessage(
         update_id=1,
         message_id=10,
@@ -244,9 +381,12 @@ async def test_pma_prompt_routing_uses_hub_root(tmp_path: Path) -> None:
     snapshot_text = prompt_text.split("<hub_snapshot>\n", 1)[1].split(
         "\n</hub_snapshot>", 1
     )[0]
-    assert "PMA File Inbox:" in snapshot_text
-    assert "- inbox: [input.txt]" in snapshot_text
-    assert "- outbox: [output.txt]" in snapshot_text
+    assert "Hub Snapshot Availability:" in snapshot_text
+    assert "status=hub_unavailable" in snapshot_text
+    assert "Do not infer hub-root queue, thread, inbox, or automation state" in (
+        snapshot_text
+    )
+    assert "PMA File Inbox:" not in snapshot_text
 
 
 @pytest.mark.anyio
@@ -316,10 +456,8 @@ async def test_pma_managed_thread_turn_forwards_yolo_defaults(
         agent_turn_timeout_seconds={"codex": None, "opencode": None},
     )
     handler._spawn_task = lambda coro: None
-    handler._effective_policies = (
-        lambda current_record: WorkspaceCommands._effective_policies(
-            handler, current_record
-        )
+    handler._effective_policies = lambda current_record: (
+        WorkspaceCommands._effective_policies(handler, current_record)
     )
     captured: dict[str, Any] = {}
 
@@ -387,10 +525,8 @@ async def test_pma_managed_thread_turn_forwards_non_yolo_override(
         agent_turn_timeout_seconds={"codex": None, "opencode": None},
     )
     handler._spawn_task = lambda coro: None
-    handler._effective_policies = (
-        lambda current_record: WorkspaceCommands._effective_policies(
-            handler, current_record
-        )
+    handler._effective_policies = lambda current_record: (
+        WorkspaceCommands._effective_policies(handler, current_record)
     )
     captured: dict[str, Any] = {}
 
@@ -582,8 +718,8 @@ async def test_telegram_opencode_turn_routes_through_managed_thread_without_root
     handler._effective_agent = lambda _record: "opencode"
     handler._effective_policies = lambda _record: (None, None)
     handler._files_inbox_dir = lambda _workspace, _topic_key: tmp_path / "inbox"
-    handler._files_outbox_pending_dir = (
-        lambda _workspace, _topic_key: tmp_path / "outbox"
+    handler._files_outbox_pending_dir = lambda _workspace, _topic_key: (
+        tmp_path / "outbox"
     )
     handler._files_topic_dir = lambda _workspace, _topic_key: tmp_path / "topic"
     handler._config.media = SimpleNamespace(max_file_bytes=1024)
@@ -1455,6 +1591,8 @@ class _ManagedThreadPMAHandler(_PMAHandler):
         ] = {}
         self._turn_progress_locks: dict[tuple[str, str], asyncio.Lock] = {}
         self._pending_context_usage: dict[tuple[str, str], int] = {}
+        self._hub_client = _InProcessHubControlPlaneClient(hub_root)
+        self._hub_handshake_compatibility = SimpleNamespace(compatible=True)
 
     async def _send_message(
         self,
@@ -1773,9 +1911,11 @@ async def test_managed_thread_queue_worker_wraps_execution_with_typing_indicator
     coordinator.ensure_queue_worker(
         task_map={},
         managed_thread_id="managed-thread-1",
-        spawn_task=lambda coro: execution_commands_module._spawn_telegram_background_task(
-            handler,
-            coro,
+        spawn_task=lambda coro: (
+            execution_commands_module._spawn_telegram_background_task(
+                handler,
+                coro,
+            )
         ),
         hooks=execution_commands_module.ManagedThreadCoordinatorHooks(
             deliver_result=_deliver_result,
@@ -2490,7 +2630,7 @@ async def test_pma_text_messages_route_repeated_messages_through_managed_thread_
         assert "first telegram orchestration reply" in handler._sent
         assert "second telegram orchestration reply" in handler._sent
 
-        thread_store = execution_commands_module.PmaThreadStore(tmp_path)
+        thread_store = PmaThreadStore(tmp_path)
         threads = thread_store.list_threads(limit=10)
         assert len(threads) == 1
         turns = thread_store.list_turns(threads[0]["managed_thread_id"], limit=10)
@@ -2729,17 +2869,18 @@ async def test_resolve_telegram_managed_thread_reuses_archived_thread(
     )
     orchestration_service.archive_thread_target(current_thread.thread_target_id)
 
-    _service, resolved = (
-        await execution_commands_module._resolve_telegram_managed_thread(
-            handler,
-            surface_key="telegram:-1001:101",
-            workspace_root=workspace.resolve(),
-            agent="codex",
-            repo_id="repo-1",
-            mode="pma",
-            pma_enabled=True,
-            allow_new_thread=False,
-        )
+    (
+        _service,
+        resolved,
+    ) = await execution_commands_module._resolve_telegram_managed_thread(
+        handler,
+        surface_key="telegram:-1001:101",
+        workspace_root=workspace.resolve(),
+        agent="codex",
+        repo_id="repo-1",
+        mode="pma",
+        pma_enabled=True,
+        allow_new_thread=False,
     )
 
     assert resolved is not None
@@ -2797,18 +2938,19 @@ async def test_resolve_telegram_managed_thread_ignores_backend_thread_id_binding
         ),
     )
 
-    _service, resolved = (
-        await execution_commands_module._resolve_telegram_managed_thread(
-            SimpleNamespace(_logger=logging.getLogger("test")),
-            surface_key="telegram:-1001:101",
-            workspace_root=workspace.resolve(),
-            agent="codex",
-            repo_id="repo-1",
-            mode="pma",
-            pma_enabled=True,
-            backend_thread_id="stale-backend",
-            allow_new_thread=False,
-        )
+    (
+        _service,
+        resolved,
+    ) = await execution_commands_module._resolve_telegram_managed_thread(
+        SimpleNamespace(_logger=logging.getLogger("test")),
+        surface_key="telegram:-1001:101",
+        workspace_root=workspace.resolve(),
+        agent="codex",
+        repo_id="repo-1",
+        mode="pma",
+        pma_enabled=True,
+        backend_thread_id="stale-backend",
+        allow_new_thread=False,
     )
 
     assert resolved is not None
@@ -2817,7 +2959,6 @@ async def test_resolve_telegram_managed_thread_ignores_backend_thread_id_binding
         (
             "thread-1",
             {
-                "backend_thread_id": None,
                 "backend_runtime_instance_id": None,
             },
         )
@@ -2973,7 +3114,7 @@ async def test_pma_native_input_items_route_through_managed_thread_execution(
     assert any(item.get("type") == "localImage" for item in items[1:])
     assert "telegram managed attachment reply" in handler._sent
 
-    thread_store = execution_commands_module.PmaThreadStore(tmp_path)
+    thread_store = PmaThreadStore(tmp_path)
     threads = thread_store.list_threads(limit=10)
     assert len(threads) == 1
     turns = thread_store.list_turns(threads[0]["managed_thread_id"], limit=10)
@@ -3150,22 +3291,21 @@ async def test_pma_interrupt_uses_managed_thread_orchestration_for_text_turns(
         )
         with anyio.fail_after(2):
             while (
-                "Interrupted active PMA turn. Cancelled 1 queued PMA turn(s)."
+                "Recovered stale PMA session after backend thread was lost. Cancelled 1 queued PMA turn(s)."
                 not in handler._sent
             ):
                 await anyio.sleep(0.05)
+        release_first.set()
         await first_task
 
-        assert harness.interrupt_calls == [
-            (tmp_path, "telegram-backend-thread-1", "telegram-backend-turn-1")
-        ]
+        assert harness.interrupt_calls == []
         assert (
-            "Interrupted active PMA turn. Cancelled 1 queued PMA turn(s)."
+            "Recovered stale PMA session after backend thread was lost. Cancelled 1 queued PMA turn(s)."
             in handler._sent
         )
         assert "unexpected queued reply" not in handler._sent
 
-        thread_store = execution_commands_module.PmaThreadStore(tmp_path)
+        thread_store = PmaThreadStore(tmp_path)
         threads = thread_store.list_threads(limit=10)
         assert len(threads) == 1
         turns = thread_store.list_turns(threads[0]["managed_thread_id"], limit=10)
@@ -3362,7 +3502,7 @@ async def test_pma_interrupt_recovers_missing_backend_thread_for_text_turns(
             "Recovered stale PMA session after backend thread was lost." in sent
             for sent in handler._sent
         )
-        thread_store = execution_commands_module.PmaThreadStore(tmp_path)
+        thread_store = PmaThreadStore(tmp_path)
         threads = thread_store.list_threads(limit=10)
         assert len(threads) == 1
         turns = thread_store.list_turns(threads[0]["managed_thread_id"], limit=10)
@@ -3869,17 +4009,19 @@ async def test_repo_interrupt_uses_orchestration_binding_for_text_turns(
         )
         with anyio.fail_after(2):
             while (
-                "Interrupted active turn. Cancelled 1 queued turn(s)."
+                "Recovered stale session after backend thread was lost. Cancelled 1 queued turn(s)."
                 not in handler._sent
             ):
                 await anyio.sleep(0.05)
+        release_first.set()
         await first_task
 
         assert handler._client.thread_start_calls == []
-        assert harness.interrupt_calls == [
-            (tmp_path, "repo-backend-thread-1", "repo-backend-turn-1")
-        ]
-        assert "Interrupted active turn. Cancelled 1 queued turn(s)." in handler._sent
+        assert harness.interrupt_calls == []
+        assert (
+            "Recovered stale session after backend thread was lost. Cancelled 1 queued turn(s)."
+            in handler._sent
+        )
         assert "unexpected queued repo reply" not in handler._sent
     finally:
         release_first.set()
@@ -4081,9 +4223,8 @@ async def test_repo_message_ingress_callback_reaches_orchestrated_thread_executi
         date=None,
         is_topic_message=True,
     )
-
     await telegram_messages_module.handle_message_inner(handler, message)
-    with anyio.fail_after(2):
+    with anyio.fail_after(5):
         while "repo ingress orchestration reply" not in handler._sent:
             await anyio.sleep(0.05)
 
@@ -4476,17 +4617,19 @@ async def test_repo_interrupt_uses_orchestration_binding_for_hermes_text_turns(
         )
         with anyio.fail_after(2):
             while (
-                "Interrupted active turn. Cancelled 1 queued turn(s)."
+                "Recovered stale session after backend thread was lost. Cancelled 1 queued turn(s)."
                 not in handler._sent
             ):
                 await anyio.sleep(0.05)
+        release_first.set()
         await first_task
 
         assert handler._client.thread_start_calls == []
-        assert harness.interrupt_calls == [
-            (tmp_path, "hermes-fresh-1", "hermes-turn-1")
-        ]
-        assert "Interrupted active turn. Cancelled 1 queued turn(s)." in handler._sent
+        assert harness.interrupt_calls == []
+        assert (
+            "Recovered stale session after backend thread was lost. Cancelled 1 queued turn(s)."
+            in handler._sent
+        )
         assert "unexpected hermes queued reply" not in handler._sent
     finally:
         release_first.set()
@@ -4664,6 +4807,8 @@ class _NewtHandler(WorkspaceCommands):
         self._sent: list[str] = []
         self.app_server_supervisor = _NewtSupervisorStub()
         self.app_server_events = _NewtEventsStub()
+        self._hub_client = _InProcessHubControlPlaneClient(hub_root)
+        self._hub_handshake_compatibility = SimpleNamespace(compatible=True)
 
     async def _resolve_topic_key(self, chat_id: int, thread_id: Optional[int]) -> str:
         return f"{chat_id}:{thread_id}"
@@ -5211,19 +5356,20 @@ async def test_sync_telegram_thread_binding_rejects_rebind_when_runtime_missing(
         ),
     )
     try:
-        _service, thread = (
-            await execution_commands_module._sync_telegram_thread_binding(
-                handlers,
-                surface_key="topic-1",
-                workspace_root=workspace,
-                agent="opencode",
-                repo_id="repo-1",
-                resource_kind="repo",
-                resource_id="repo-1",
-                backend_thread_id="backend-new",
-                mode="repo",
-                pma_enabled=False,
-            )
+        (
+            _service,
+            thread,
+        ) = await execution_commands_module._sync_telegram_thread_binding(
+            handlers,
+            surface_key="topic-1",
+            workspace_root=workspace,
+            agent="opencode",
+            repo_id="repo-1",
+            resource_kind="repo",
+            resource_id="repo-1",
+            backend_thread_id="backend-new",
+            mode="repo",
+            pma_enabled=False,
         )
     finally:
         monkeypatch.undo()
@@ -5275,20 +5421,21 @@ async def test_resolve_telegram_managed_thread_rejects_rebind_when_runtime_missi
         ),
     )
     try:
-        _service, resolved_thread = (
-            await execution_commands_module._resolve_telegram_managed_thread(
-                handlers,
-                surface_key="topic-1",
-                workspace_root=workspace,
-                agent="opencode",
-                repo_id="repo-1",
-                resource_kind="repo",
-                resource_id="repo-1",
-                mode="repo",
-                pma_enabled=False,
-                backend_thread_id="backend-new",
-                allow_new_thread=True,
-            )
+        (
+            _service,
+            resolved_thread,
+        ) = await execution_commands_module._resolve_telegram_managed_thread(
+            handlers,
+            surface_key="topic-1",
+            workspace_root=workspace,
+            agent="opencode",
+            repo_id="repo-1",
+            resource_kind="repo",
+            resource_id="repo-1",
+            mode="repo",
+            pma_enabled=False,
+            backend_thread_id="backend-new",
+            allow_new_thread=True,
         )
     finally:
         monkeypatch.undo()
@@ -5354,20 +5501,21 @@ async def test_resolve_telegram_managed_thread_keeps_requested_backend_thread_id
         ),
     )
     try:
-        _service, resolved_thread = (
-            await execution_commands_module._resolve_telegram_managed_thread(
-                handlers,
-                surface_key="topic-1",
-                workspace_root=workspace,
-                agent="opencode",
-                repo_id="repo-1",
-                resource_kind="repo",
-                resource_id="repo-1",
-                mode="repo",
-                pma_enabled=False,
-                backend_thread_id="backend-new",
-                allow_new_thread=True,
-            )
+        (
+            _service,
+            resolved_thread,
+        ) = await execution_commands_module._resolve_telegram_managed_thread(
+            handlers,
+            surface_key="topic-1",
+            workspace_root=workspace,
+            agent="opencode",
+            repo_id="repo-1",
+            resource_kind="repo",
+            resource_id="repo-1",
+            mode="repo",
+            pma_enabled=False,
+            backend_thread_id="backend-new",
+            allow_new_thread=True,
         )
     finally:
         monkeypatch.undo()
@@ -5432,18 +5580,19 @@ async def test_reset_telegram_thread_binding_archives_after_lost_backend_recover
         ),
     )
     try:
-        had_previous, new_thread_id = (
-            await execution_commands_module._reset_telegram_thread_binding(
-                handlers,
-                surface_key="topic-1",
-                workspace_root=workspace,
-                agent="codex",
-                repo_id="repo-1",
-                resource_kind="repo",
-                resource_id="repo-1",
-                mode="pma",
-                pma_enabled=True,
-            )
+        (
+            had_previous,
+            new_thread_id,
+        ) = await execution_commands_module._reset_telegram_thread_binding(
+            handlers,
+            surface_key="topic-1",
+            workspace_root=workspace,
+            agent="codex",
+            repo_id="repo-1",
+            resource_kind="repo",
+            resource_id="repo-1",
+            mode="pma",
+            pma_enabled=True,
         )
     finally:
         monkeypatch.undo()
@@ -5644,10 +5793,20 @@ async def test_apply_compact_summary_uses_shared_lifecycle_before_topic_mirror_u
                 ("bind", kwargs["thread_target_id"], kwargs.get("mode"))
             )
 
+    class _FakeHubClient:
+        async def update_thread_compact_seed(self, request: Any) -> None:
+            compact_seed_calls.append(
+                (
+                    getattr(request, "thread_target_id", ""),
+                    str(getattr(request, "compact_seed", "") or ""),
+                )
+            )
+
     class _CompactHandler(TelegramCommandHandlers):
         def __init__(self) -> None:
             self._logger = logging.getLogger("test")
             self._router = _RouterStub()
+            self._hub_client = _FakeHubClient()
             self._config = SimpleNamespace(
                 root=tmp_path,
                 defaults=SimpleNamespace(policies_for_mode=lambda _mode: (None, None)),
@@ -5666,11 +5825,6 @@ async def test_apply_compact_summary_uses_shared_lifecycle_before_topic_mirror_u
         ) -> str:
             return "123:root"
 
-    def _fake_set_thread_compact_seed(
-        self, managed_thread_id: str, compact_seed: Optional[str], **_kwargs: Any
-    ) -> None:
-        compact_seed_calls.append((managed_thread_id, str(compact_seed or "")))
-
     monkeypatch.setattr(
         execution_commands_module,
         "_get_telegram_thread_binding",
@@ -5684,10 +5838,6 @@ async def test_apply_compact_summary_uses_shared_lifecycle_before_topic_mirror_u
                 lifecycle_status="active",
             ),
         ),
-    )
-    monkeypatch.setattr(
-        "codex_autorunner.core.pma_thread_store.PmaThreadStore.set_thread_compact_seed",
-        _fake_set_thread_compact_seed,
     )
 
     handler = _CompactHandler()
@@ -5758,10 +5908,20 @@ async def test_apply_compact_summary_preserves_pma_mode_for_replacement_thread(
         async def thread_start(self, _workspace_path: str, **_kwargs: Any) -> Any:
             return {"id": "backend-pma-new"}
 
+    class _FakeHubClient:
+        async def update_thread_compact_seed(self, request: Any) -> None:
+            compact_seed_calls.append(
+                (
+                    getattr(request, "thread_target_id", ""),
+                    str(getattr(request, "compact_seed", "") or ""),
+                )
+            )
+
     class _CompactHandler(TelegramCommandHandlers):
         def __init__(self) -> None:
             self._logger = logging.getLogger("test")
             self._router = _RouterStub()
+            self._hub_client = _FakeHubClient()
             self._config = SimpleNamespace(
                 root=tmp_path,
                 defaults=SimpleNamespace(policies_for_mode=lambda _mode: (None, None)),
@@ -5835,24 +5995,21 @@ async def test_apply_compact_summary_preserves_pma_mode_for_replacement_thread(
         )
         return SimpleNamespace(thread_target_id="managed-new")
 
-    def _fake_set_thread_compact_seed(
-        self, managed_thread_id: str, compact_seed: Optional[str], **_kwargs: Any
-    ) -> None:
-        compact_seed_calls.append((managed_thread_id, str(compact_seed or "")))
-
     monkeypatch.setattr(
         execution_commands_module,
         "_get_telegram_thread_binding",
-        lambda *args, **kwargs: (binding_mode_calls.append(str(kwargs["mode"])) or True)
-        and (
-            SimpleNamespace(),
-            SimpleNamespace(thread_target_id="managed-old", mode="pma"),
-            SimpleNamespace(
-                thread_target_id="managed-old",
-                agent_id="codex",
-                workspace_root=str(workspace),
-                lifecycle_status="active",
-            ),
+        lambda *args, **kwargs: (
+            (binding_mode_calls.append(str(kwargs["mode"])) or True)
+            and (
+                SimpleNamespace(),
+                SimpleNamespace(thread_target_id="managed-old", mode="pma"),
+                SimpleNamespace(
+                    thread_target_id="managed-old",
+                    agent_id="codex",
+                    workspace_root=str(workspace),
+                    lifecycle_status="active",
+                ),
+            )
         ),
     )
     monkeypatch.setattr(
@@ -5862,10 +6019,6 @@ async def test_apply_compact_summary_preserves_pma_mode_for_replacement_thread(
     monkeypatch.setattr(
         "codex_autorunner.integrations.chat.managed_thread_lifecycle.bind_surface_thread",
         _fake_bind_surface_thread,
-    )
-    monkeypatch.setattr(
-        "codex_autorunner.core.pma_thread_store.PmaThreadStore.set_thread_compact_seed",
-        _fake_set_thread_compact_seed,
     )
 
     handler = _CompactHandler()
@@ -6072,20 +6225,21 @@ async def test_sync_telegram_thread_binding_keeps_requested_backend_thread_id_fo
         ),
     )
     try:
-        _service, current_thread = (
-            await execution_commands_module._sync_telegram_thread_binding(
-                handlers,
-                surface_key="topic-1",
-                workspace_root=workspace,
-                agent="codex",
-                repo_id="repo-1",
-                resource_kind="repo",
-                resource_id="repo-1",
-                backend_thread_id="backend-new",
-                mode="repo",
-                pma_enabled=False,
-                replace_existing=True,
-            )
+        (
+            _service,
+            current_thread,
+        ) = await execution_commands_module._sync_telegram_thread_binding(
+            handlers,
+            surface_key="topic-1",
+            workspace_root=workspace,
+            agent="codex",
+            repo_id="repo-1",
+            resource_kind="repo",
+            resource_id="repo-1",
+            backend_thread_id="backend-new",
+            mode="repo",
+            pma_enabled=False,
+            replace_existing=True,
         )
     finally:
         monkeypatch.undo()
@@ -6366,6 +6520,13 @@ async def test_newt_branch_name_includes_chat_identity(
 async def test_newt_runs_hub_setup_commands_for_workspace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from unittest.mock import AsyncMock
+
+    from codex_autorunner.core.hub_control_plane.models import (
+        WorkspaceSetupCommandRequest,
+        WorkspaceSetupCommandResult,
+    )
+
     hub_root = tmp_path / "hub"
     workspace = hub_root / "repo"
     workspace.mkdir(parents=True)
@@ -6378,20 +6539,20 @@ async def test_newt_runs_hub_setup_commands_for_workspace(
     handler = _NewtHandler(record, hub_root=hub_root)
     branch_calls = _patch_newt_branch_reset(monkeypatch)
 
-    class _HubSupervisorStub:
-        def __init__(self) -> None:
-            self.calls: list[dict[str, object]] = []
+    async def _mock_run_setup_commands(
+        request: WorkspaceSetupCommandRequest,
+    ) -> WorkspaceSetupCommandResult:
+        assert request.workspace_root == str(workspace.resolve())
+        assert request.repo_id_hint == "base-repo"
+        return WorkspaceSetupCommandResult(
+            workspace_root=request.workspace_root,
+            repo_id_hint=request.repo_id_hint,
+            setup_command_count=2,
+        )
 
-        def run_setup_commands_for_workspace(
-            self, workspace_path: Path, *, repo_id_hint: Optional[str] = None
-        ) -> int:
-            self.calls.append(
-                {"workspace_path": workspace_path, "repo_id_hint": repo_id_hint}
-            )
-            return 2
-
-    hub_supervisor = _HubSupervisorStub()
-    handler._hub_supervisor = hub_supervisor  # type: ignore[attr-defined]
+    hub_client = AsyncMock()
+    hub_client.run_workspace_setup_commands = _mock_run_setup_commands
+    handler._hub_client = hub_client  # type: ignore[attr-defined]
     message = TelegramMessage(
         update_id=100,
         message_id=200,
@@ -6406,9 +6567,6 @@ async def test_newt_runs_hub_setup_commands_for_workspace(
     await handler._handle_newt(message)
 
     assert len(branch_calls) == 1
-    assert hub_supervisor.calls == [
-        {"workspace_path": workspace.resolve(), "repo_id_hint": "base-repo"}
-    ]
     assert any("Ran 2 setup command(s)." in text for text in handler._sent)
 
 

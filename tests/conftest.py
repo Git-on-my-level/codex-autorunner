@@ -25,7 +25,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-DEFAULT_NON_INTEGRATION_TIMEOUT_SECONDS = 120
+DEFAULT_NON_INTEGRATION_TIMEOUT_SECONDS = 30
+DEFAULT_INTEGRATION_TIMEOUT_SECONDS = 30
 _OPENCODE_PROCESS_KIND = "opencode"
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _PYTEST_RUNTIME_KEY = hashlib.sha1(
@@ -102,7 +103,11 @@ def _prune_old_runtime_dirs(
 
 def _prune_inactive_pytest_temp_runs(*, keep: set[str]) -> None:
     cleanup_module = _load_pytest_temp_cleanup_module()
-    cleanup_module.cleanup_repo_pytest_temp_runs(_REPO_ROOT, keep_run_tokens=keep)
+    cleanup_module.cleanup_repo_pytest_temp_runs(
+        _REPO_ROOT,
+        keep_run_tokens=keep,
+        min_age_seconds=300,
+    )
 
 
 def _format_temp_processes(processes: tuple[object, ...]) -> str:
@@ -164,16 +169,238 @@ def pytest_collection_modifyitems(
     session: pytest.Session, config: pytest.Config, items: list[pytest.Item]
 ) -> None:
     """
-    Apply a default per-test timeout to non-integration tests.
+    Apply a default per-test timeout to all tests.
 
     This relies on `pytest-timeout` when installed; if it isn't installed, the
     marker is inert but still documents the intent.
     """
     _ = session, config
     for item in items:
-        if item.get_closest_marker("integration") is not None:
+        if item.get_closest_marker("timeout") is not None:
             continue
-        item.add_marker(pytest.mark.timeout(DEFAULT_NON_INTEGRATION_TIMEOUT_SECONDS))
+        if item.get_closest_marker("integration") is not None:
+            item.add_marker(pytest.mark.timeout(DEFAULT_INTEGRATION_TIMEOUT_SECONDS))
+        else:
+            item.add_marker(
+                pytest.mark.timeout(DEFAULT_NON_INTEGRATION_TIMEOUT_SECONDS)
+            )
+
+
+@pytest.fixture(autouse=True)
+def _stub_surface_startup_handshakes_for_non_handshake_tests(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = Path(str(request.node.fspath))
+    if path.name in {"test_discord_hub_handshake.py", "test_telegram_hub_handshake.py"}:
+        return
+
+    from codex_autorunner.core.hub_control_plane import HubSharedStateService
+    from codex_autorunner.core.hub_control_plane.http_client import (
+        HttpHubControlPlaneClient,
+    )
+    from codex_autorunner.core.hub_control_plane.models import HandshakeCompatibility
+    from codex_autorunner.core.orchestration.sqlite import prepare_orchestration_sqlite
+    from codex_autorunner.core.pma_context import build_hub_snapshot
+    from codex_autorunner.core.pma_thread_store import prepare_pma_thread_store
+    from codex_autorunner.integrations.discord.service import DiscordBotService
+    from codex_autorunner.integrations.telegram.service import TelegramBotService
+
+    def _install_inprocess_hub_client(service: object, hub_root: Path) -> None:
+        current = getattr(service, "_hub_client", None)
+        if isinstance(current, HttpHubControlPlaneClient) or current is None:
+            service._hub_client = _InProcessHubControlPlaneClient(hub_root)
+        service._hub_handshake_compatibility = HandshakeCompatibility(
+            state="compatible"
+        )
+
+    class _NoopSupervisor:
+        def list_agent_workspaces(self, *, use_cache: bool = True) -> list[object]:
+            _ = use_cache
+            return []
+
+        def get_agent_workspace_snapshot(self, workspace_id: str) -> object:
+            raise ValueError(f"Unknown workspace id: {workspace_id}")
+
+        def run_setup_commands_for_workspace(
+            self, workspace_root: Path, *, repo_id_hint: str | None = None
+        ) -> int:
+            _ = workspace_root, repo_id_hint
+            return 0
+
+        def process_pma_automation_now(
+            self, *, include_timers: bool = True, limit: int = 100
+        ) -> dict[str, int]:
+            return {
+                "timers_processed": 1 if include_timers else 0,
+                "wakeups_dispatched": limit,
+            }
+
+    class _InProcessHubControlPlaneClient:
+        def __init__(self, hub_root: Path) -> None:
+            self._hub_root = Path(hub_root)
+            prepare_orchestration_sqlite(self._hub_root, durable=False)
+            prepare_pma_thread_store(self._hub_root, durable=False)
+            self._service = HubSharedStateService(
+                hub_root=self._hub_root,
+                supervisor=_NoopSupervisor(),
+                durable_writes=False,
+            )
+
+        async def handshake(self, request):
+            return self._service.handshake(request)
+
+        async def get_notification_record(self, request):
+            return self._service.get_notification_record(request)
+
+        async def get_notification_reply_target(self, request):
+            return self._service.get_notification_reply_target(request)
+
+        async def bind_notification_continuation(self, request):
+            return self._service.bind_notification_continuation(request)
+
+        async def mark_notification_delivered(self, request):
+            return self._service.mark_notification_delivered(request)
+
+        async def get_surface_binding(self, request):
+            return self._service.get_surface_binding(request)
+
+        async def upsert_surface_binding(self, request):
+            return self._service.upsert_surface_binding(request)
+
+        async def list_surface_bindings(self, request):
+            return self._service.list_surface_bindings(request)
+
+        async def get_thread_target(self, request):
+            return self._service.get_thread_target(request)
+
+        async def list_thread_targets(self, request):
+            return self._service.list_thread_targets(request)
+
+        async def create_thread_target(self, request):
+            return self._service.create_thread_target(request)
+
+        async def create_execution(self, request):
+            return self._service.create_execution(request)
+
+        async def get_execution(self, request):
+            return self._service.get_execution(request)
+
+        async def get_running_execution(self, request):
+            return self._service.get_running_execution(request)
+
+        async def get_latest_execution(self, request):
+            return self._service.get_latest_execution(request)
+
+        async def list_queued_executions(self, request):
+            return self._service.list_queued_executions(request)
+
+        async def get_queue_depth(self, request):
+            return self._service.get_queue_depth(request)
+
+        async def cancel_queued_execution(self, request):
+            return self._service.cancel_queued_execution(request)
+
+        async def promote_queued_execution(self, request):
+            return self._service.promote_queued_execution(request)
+
+        async def record_execution_result(self, request):
+            return self._service.record_execution_result(request)
+
+        async def record_execution_interrupted(self, request):
+            return self._service.record_execution_interrupted(request)
+
+        async def cancel_queued_executions(self, request):
+            return self._service.cancel_queued_executions(request)
+
+        async def set_execution_backend_id(self, request) -> None:
+            self._service.set_execution_backend_id(request)
+
+        async def claim_next_queued_execution(self, request):
+            return self._service.claim_next_queued_execution(request)
+
+        async def persist_execution_timeline(self, request):
+            return self._service.persist_execution_timeline(request)
+
+        async def finalize_execution_cold_trace(self, request):
+            return self._service.finalize_execution_cold_trace(request)
+
+        async def resume_thread_target(self, request):
+            return self._service.resume_thread_target(request)
+
+        async def archive_thread_target(self, request):
+            return self._service.archive_thread_target(request)
+
+        async def set_thread_backend_id(self, request) -> None:
+            self._service.set_thread_backend_id(request)
+
+        async def record_thread_activity(self, request) -> None:
+            self._service.record_thread_activity(request)
+
+        async def update_thread_compact_seed(self, request):
+            return self._service.update_thread_compact_seed(request)
+
+        async def get_transcript_history(self, request):
+            return self._service.get_transcript_history(request)
+
+        async def write_transcript(self, request):
+            return self._service.write_transcript(request)
+
+        async def get_pma_snapshot(self):
+            return type(
+                "PmaSnapshotResponse",
+                (),
+                {"snapshot": await build_hub_snapshot(None, hub_root=self._hub_root)},
+            )()
+
+        async def get_agent_workspace(self, request):
+            return self._service.get_agent_workspace(request)
+
+        async def list_agent_workspaces(self, request):
+            return self._service.list_agent_workspaces(request)
+
+        async def run_workspace_setup_commands(self, request):
+            return self._service.run_workspace_setup_commands(request)
+
+        async def request_automation(self, request):
+            return self._service.request_automation(request)
+
+        async def aclose(self) -> None:
+            return None
+
+    discord_init = DiscordBotService.__init__
+    telegram_init = TelegramBotService.__init__
+
+    def _discord_init(self: DiscordBotService, *args: object, **kwargs: object) -> None:
+        discord_init(self, *args, **kwargs)
+        _install_inprocess_hub_client(self, Path(self._config.root))
+
+    def _telegram_init(
+        self: TelegramBotService, *args: object, **kwargs: object
+    ) -> None:
+        telegram_init(self, *args, **kwargs)
+        _install_inprocess_hub_client(
+            self, Path(getattr(self, "_hub_root", None) or self._config.root)
+        )
+
+    async def _discord_handshake_ok(self: DiscordBotService) -> bool:
+        _install_inprocess_hub_client(self, Path(self._config.root))
+        return True
+
+    async def _telegram_handshake_ok(self: TelegramBotService) -> bool:
+        _install_inprocess_hub_client(
+            self,
+            Path(getattr(self, "_hub_root", None) or self._config.root),
+        )
+        return True
+
+    monkeypatch.setattr(DiscordBotService, "__init__", _discord_init)
+    monkeypatch.setattr(TelegramBotService, "__init__", _telegram_init)
+    monkeypatch.setattr(
+        DiscordBotService, "_perform_hub_handshake", _discord_handshake_ok
+    )
+    monkeypatch.setattr(
+        TelegramBotService, "_perform_hub_handshake", _telegram_handshake_ok
+    )
 
 
 def _list_car_managed_docker_containers() -> dict[str, tuple[str, ...]] | None:
@@ -424,6 +651,15 @@ def _cleanup_pytest_temp_runs_session() -> None:
     cleanup_module = _load_pytest_temp_cleanup_module()
     env_root = _pytest_temp_env_root()
     summary = cleanup_module.cleanup_temp_paths((env_root,))
+    if env_root.exists() and not summary.active_paths:
+        for _attempt in range(3):
+            try:
+                shutil.rmtree(env_root)
+                break
+            except FileNotFoundError:
+                break
+            except OSError:
+                time.sleep(0.1)
     failures: list[str] = []
     if summary.active_paths:
         failures.append(
@@ -442,6 +678,29 @@ def _cleanup_pytest_temp_runs_session() -> None:
         failures.append(f"pytest temp env root still exists after cleanup: {env_root}")
     if failures:
         raise AssertionError(" ; ".join(failures))
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_codex_app_server_clients_sync_per_test(
+    request: pytest.FixtureRequest,
+) -> None:
+    """
+    Reap app-server clients after sync tests as well.
+
+    The async cleanup fixture below only runs for async tests. Several sync
+    `TestClient` flows still exercise Codex app-server client paths, and if
+    they leak a client instance the subprocess transport can outlive the test
+    and wedge later teardown.
+    """
+    if request.node.get_closest_marker("anyio") is not None:
+        yield
+        return
+    yield
+    import anyio
+
+    from codex_autorunner.integrations.app_server.client import _close_all_clients
+
+    anyio.run(_close_all_clients)
 
 
 @pytest.fixture(autouse=True)

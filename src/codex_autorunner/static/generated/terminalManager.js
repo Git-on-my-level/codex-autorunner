@@ -79,7 +79,6 @@ function looksLikeCommand(text) {
     const lowered = trimmed.toLowerCase();
     return CAR_CONTEXT_COMMAND_RE.some((pattern) => pattern.test(lowered));
 }
-const LEGACY_SESSION_STORAGE_KEY = "codex_terminal_session_id";
 const SESSION_STORAGE_PREFIX = "codex_terminal_session_id:";
 const SESSION_STORAGE_TS_PREFIX = "codex_terminal_session_ts:";
 const TOUCH_OVERRIDE = (() => {
@@ -723,16 +722,6 @@ export class TerminalManager {
                 return null;
             }
             return scoped;
-        }
-        const legacy = localStorage.getItem(LEGACY_SESSION_STORAGE_KEY);
-        if (!legacy)
-            return null;
-        const hasScoped = Object.keys(localStorage).some((key) => key.startsWith(SESSION_STORAGE_PREFIX));
-        if (!hasScoped) {
-            localStorage.setItem(scopedKey, legacy);
-            this._setSavedSessionTimestamp(Date.now());
-            localStorage.removeItem(LEGACY_SESSION_STORAGE_KEY);
-            return legacy;
         }
         return null;
     }

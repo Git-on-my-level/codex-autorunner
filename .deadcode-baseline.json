@@ -4,14 +4,6 @@
     "python:class:src/codex_autorunner/integrations/app_server/logging.py:72:AppServerEventFormatter",
     "python:function:src/codex_autorunner/core/git_utils.py:110:git_ls_files",
     "python:function:src/codex_autorunner/core/git_utils.py:138:git_diff_name_status",
-    "python:function:src/codex_autorunner/core/orchestration/execution_history_diagnostics.py:556:log_spill_to_cold",
-    "python:function:src/codex_autorunner/core/orchestration/execution_history_diagnostics.py:579:log_dedupe",
-    "python:function:src/codex_autorunner/core/orchestration/execution_history_diagnostics.py:599:log_truncation",
-    "python:function:src/codex_autorunner/core/orchestration/execution_history_diagnostics.py:621:log_compaction",
-    "python:function:src/codex_autorunner/core/orchestration/execution_history_diagnostics.py:643:log_retention_prune",
-    "python:function:src/codex_autorunner/core/orchestration/execution_history_diagnostics.py:663:log_vacuum",
-    "python:function:src/codex_autorunner/core/orchestration/execution_history_diagnostics.py:683:log_quarantine",
-    "python:function:src/codex_autorunner/core/orchestration/execution_history_diagnostics.py:701:log_startup_recovery",
     "python:function:src/codex_autorunner/core/patch_utils.py:127:ensure_patch_targets_allowed",
     "python:function:src/codex_autorunner/core/patch_utils.py:167:apply_patch_file",
     "python:function:src/codex_autorunner/core/patch_utils.py:176:preview_patch",
@@ -19,6 +11,8 @@
     "python:function:src/codex_autorunner/core/pma_ticket_flow_state.py:84:_get_ticket_flow_summary",
     "python:function:src/codex_autorunner/integrations/agents/runner.py:21:run_turn_with_backend",
     "python:function:src/codex_autorunner/integrations/chat/agents.py:168:validate_hermes_profile",
+    "python:function:src/codex_autorunner/integrations/chat/parity_checker.py:1606:_count_calls",
+    "python:function:src/codex_autorunner/integrations/chat/parity_checker.py:1848:_bool_constant_value",
     "python:function:src/codex_autorunner/integrations/telegram/handlers/utils.py:19:_flatten_opencode_tokens",
     "python:function:src/codex_autorunner/integrations/telegram/handlers/utils.py:23:_extract_opencode_usage_value"
   ]

@@ -101,8 +101,7 @@ def test_ticket_flow_archive_moves_run_artifacts_and_deletes_run(
     result = runner.invoke(
         app,
         [
-            "flow",
-            "ticket_flow",
+            "ticket-flow",
             "archive",
             "--repo",
             str(repo_root),
@@ -247,8 +246,7 @@ def test_ticket_flow_archive_also_archives_ticket_flow_pma_threads(
     result = runner.invoke(
         app,
         [
-            "flow",
-            "ticket_flow",
+            "ticket-flow",
             "archive",
             "--repo",
             str(repo_root),
@@ -332,8 +330,7 @@ def test_ticket_flow_archive_tolerates_pma_archive_failures(
     result = runner.invoke(
         app,
         [
-            "flow",
-            "ticket_flow",
+            "ticket-flow",
             "archive",
             "--repo",
             str(repo_root),
@@ -601,8 +598,7 @@ def test_ticket_flow_archive_dry_run_does_not_modify(tmp_path: Path) -> None:
     result = runner.invoke(
         app,
         [
-            "flow",
-            "ticket_flow",
+            "ticket-flow",
             "archive",
             "--repo",
             str(repo_root),
@@ -630,8 +626,7 @@ def test_ticket_flow_archive_force_requires_attestation(tmp_path: Path) -> None:
     result = runner.invoke(
         app,
         [
-            "flow",
-            "ticket_flow",
+            "ticket-flow",
             "archive",
             "--repo",
             str(repo_root),
@@ -657,8 +652,7 @@ def test_ticket_flow_archive_force_with_attestation_succeeds(tmp_path: Path) -> 
     result = runner.invoke(
         app,
         [
-            "flow",
-            "ticket_flow",
+            "ticket-flow",
             "archive",
             "--repo",
             str(repo_root),
@@ -683,8 +677,7 @@ def test_ticket_flow_archive_missing_repo_shows_repo_hint(tmp_path: Path) -> Non
         result = runner.invoke(
             app,
             [
-                "flow",
-                "ticket_flow",
+                "ticket-flow",
                 "archive",
                 "--run-id",
                 "ffffffff-ffff-ffff-ffff-ffffffffffff",
@@ -739,8 +732,7 @@ def test_ticket_flow_status_outputs_human_readable_status(tmp_path: Path) -> Non
     result = runner.invoke(
         app,
         [
-            "flow",
-            "ticket_flow",
+            "ticket-flow",
             "status",
             "--repo",
             str(repo_root),
@@ -765,8 +757,7 @@ def test_ticket_flow_status_outputs_json_payload(tmp_path: Path) -> None:
     result = runner.invoke(
         app,
         [
-            "flow",
-            "ticket_flow",
+            "ticket-flow",
             "status",
             "--repo",
             str(repo_root),
@@ -786,8 +777,6 @@ def test_ticket_flow_status_outputs_json_payload(tmp_path: Path) -> None:
     assert "ticket_progress" in payload
     assert "error_message" in payload
     assert "reason_summary" in payload
-    assert "error" in payload
-    assert "failure_reason" in payload
 
 
 def test_ticket_flow_status_outputs_failure_details_in_json(tmp_path: Path) -> None:
@@ -806,8 +795,7 @@ def test_ticket_flow_status_outputs_failure_details_in_json(tmp_path: Path) -> N
     result = runner.invoke(
         app,
         [
-            "flow",
-            "ticket_flow",
+            "ticket-flow",
             "status",
             "--repo",
             str(repo_root),
@@ -823,10 +811,5 @@ def test_ticket_flow_status_outputs_failure_details_in_json(tmp_path: Path) -> N
     assert payload["reason_summary"] == "docker preflight failed"
     assert (
         payload["error_message"]
-        == "Docker preflight failed: missing required binaries: opencode"
-    )
-    assert payload["failure_reason"] == "docker preflight failed"
-    assert (
-        payload["error"]
         == "Docker preflight failed: missing required binaries: opencode"
     )
