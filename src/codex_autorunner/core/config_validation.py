@@ -1322,8 +1322,14 @@ def _validate_pma_config(cfg: Dict[str, Any]) -> None:
     profile = pma_cfg.get("worktree_archive_profile")
     if isinstance(profile, str) and profile.strip().lower() not in {"portable", "full"}:
         raise ConfigError("pma.worktree_archive_profile must be 'portable' or 'full'")
+    if "turn_timeout_seconds" in pma_cfg:
+        tt = pma_cfg.get("turn_timeout_seconds")
+        if not _is_strict_int(tt):
+            raise ConfigError("pma.turn_timeout_seconds must be an integer if provided")
+        _validate_optional_int_ge(
+            pma_cfg, "turn_timeout_seconds", 1, path="pma"
+        )
     for key in (
-        "turn_timeout_seconds",
         "filebox_inbox_max_age_days",
         "filebox_outbox_max_age_days",
         "worktree_archive_max_snapshots_per_repo",
@@ -1341,12 +1347,7 @@ def _validate_pma_config(cfg: Dict[str, Any]) -> None:
         "inbox_auto_dismiss_grace_seconds",
     ):
         _validate_optional_type(pma_cfg, key, int, path="pma")
-        _validate_optional_int_ge(
-            pma_cfg,
-            key,
-            1 if key == "turn_timeout_seconds" else 0,
-            path="pma",
-        )
+        _validate_optional_int_ge(pma_cfg, key, 0, path="pma")
 
 
 def _validate_static_assets_config(cfg: Dict[str, Any], scope: str) -> None:
