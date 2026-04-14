@@ -151,6 +151,8 @@
         "delivery_failure_escalation_threshold": 3,
         "duplicate_escalation_threshold": 3,
         "enabled": true,
+        "github_login_blacklist": [],
+        "github_login_whitelist": [],
         "merged": true,
         "review_comment": true
       },

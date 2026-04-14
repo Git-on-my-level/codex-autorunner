@@ -21,6 +21,9 @@ _FAILED_CHECK_CONCLUSIONS = frozenset(
     {"action_required", "cancelled", "failure", "startup_failure", "stale", "timed_out"}
 )
 _REVIEW_COMMENT_ID_IN_URL = re.compile(r"(?:#discussion_r|/pulls/comments/)(\d+)")
+_GITHUB_REVIEW_REACTION_KINDS = frozenset(
+    {"changes_requested", "review_comment", "approved_and_green"}
+)
 
 
 def _normalize_lower_text(value: Any) -> Optional[str]:
@@ -181,6 +184,13 @@ def _resolve_review_comment_id(payload: Mapping[str, Any]) -> Optional[str]:
     return None
 
 
+def _github_review_author_login(event: ScmEvent) -> Optional[str]:
+    payload = _event_payload(event)
+    return _normalize_lower_text(payload.get("author_login")) or _normalize_lower_text(
+        payload.get("sender_login")
+    )
+
+
 def _match_reaction_kind(
     event: ScmEvent,
     *,
@@ -254,6 +264,12 @@ def route_scm_reactions(
     resolved_config = ScmReactionConfig.from_mapping(config)
     reaction_kind = _match_reaction_kind(event, binding=binding)
     if reaction_kind is None or not resolved_config.is_enabled(reaction_kind):
+        return []
+    if (
+        event.provider == "github"
+        and reaction_kind in _GITHUB_REVIEW_REACTION_KINDS
+        and not resolved_config.github_login_allowed(_github_review_author_login(event))
+    ):
         return []
 
     intents: list[ReactionIntent] = []
