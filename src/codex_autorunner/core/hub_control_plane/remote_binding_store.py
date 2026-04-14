@@ -82,12 +82,11 @@ class RemoteSurfaceBindingStore:
 
             return asyncio.run(_run_action())
 
-        pool = ThreadPoolExecutor(max_workers=1)
-        future = pool.submit(_invoke)
         try:
-            return future.result(timeout=self._timeout_seconds)
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(_invoke)
+                return future.result(timeout=self._timeout_seconds)
         except FuturesTimeoutError as exc:
-            future.cancel()
             raise self._hub_unavailable(
                 operation=operation,
                 message=f"request timed out after {self._timeout_seconds:g}s",
@@ -110,12 +109,15 @@ class RemoteSurfaceBindingStore:
                 message=str(exc) or exc.__class__.__name__,
                 details={"cause_type": exc.__class__.__name__},
             ) from exc
-        finally:
-            pool.shutdown(wait=False, cancel_futures=True)
 
     @staticmethod
     def _normalize_key(surface_kind: str, surface_key: str) -> tuple[str, str]:
         return (str(surface_kind or "").strip(), str(surface_key or "").strip())
+
+    def _forget_binding(self, *, surface_kind: str, surface_key: str) -> None:
+        key = self._normalize_key(surface_kind, surface_key)
+        self._bindings_by_key.pop(key, None)
+        self._binding_cached_at_by_key.pop(key, None)
 
     def _remember(self, binding: Any) -> Any:
         if binding is None:
@@ -222,6 +224,9 @@ class RemoteSurfaceBindingStore:
             if cached is None:
                 raise
             return cached
+        if response.binding is None:
+            self._forget_binding(surface_kind=surface_kind, surface_key=surface_key)
+            return None
         return self._remember(response.binding)
 
     @staticmethod

@@ -51,6 +51,29 @@ class _UnavailableLookupClient:
         raise HubControlPlaneError("hub_unavailable", "hub offline")
 
 
+class _LookupClient:
+    def __init__(self, binding: Binding | None) -> None:
+        self.binding = binding
+
+    async def get_surface_binding(self, request):
+        from codex_autorunner.core.hub_control_plane import SurfaceBindingResponse
+
+        return SurfaceBindingResponse(binding=self.binding)
+
+
+class _MissThenUnavailableLookupClient:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def get_surface_binding(self, request):
+        from codex_autorunner.core.hub_control_plane import SurfaceBindingResponse
+
+        self.calls += 1
+        if self.calls == 1:
+            return SurfaceBindingResponse(binding=None)
+        raise HubControlPlaneError("hub_unavailable", "hub offline")
+
+
 class _LoopBoundListingClient(_ListingClient):
     def __init__(self, bindings: list[Binding]) -> None:
         super().__init__(bindings)
@@ -176,6 +199,24 @@ def test_remote_surface_binding_store_get_binding_requires_fresh_cache_for_fallb
     cached = _binding_from_mapping(binding_id="binding-cache")
     store._remember(cached)
     store._binding_cached_at_by_key[("discord", "channel:1")] -= 61.0
+
+    with pytest.raises(HubControlPlaneError) as exc_info:
+        store.get_binding(surface_kind="discord", surface_key="channel:1")
+
+    assert exc_info.value.code == "hub_unavailable"
+
+
+def test_remote_surface_binding_store_get_binding_evicts_cache_on_successful_miss() -> (
+    None
+):
+    store = RemoteSurfaceBindingStore(_MissThenUnavailableLookupClient())
+    cached = _binding_from_mapping(binding_id="binding-cache")
+    store._remember(cached)
+
+    first = store.get_binding(surface_kind="discord", surface_key="channel:1")
+
+    assert first is None
+    assert ("discord", "channel:1") not in store._bindings_by_key
 
     with pytest.raises(HubControlPlaneError) as exc_info:
         store.get_binding(surface_kind="discord", surface_key="channel:1")
