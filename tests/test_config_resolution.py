@@ -322,6 +322,8 @@ def test_load_repo_config_rejects_boolean_github_webhook_size_limits(
         "interval_seconds",
         "discovery_interval_seconds",
         "discovery_workspace_limit",
+        "post_open_boost_minutes",
+        "post_open_boost_interval_seconds",
     ],
 )
 def test_load_repo_config_rejects_boolean_github_polling_size_limits(

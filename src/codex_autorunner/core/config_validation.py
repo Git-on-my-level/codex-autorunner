@@ -867,13 +867,35 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
                     "interval_seconds",
                     "discovery_interval_seconds",
                     "discovery_workspace_limit",
+                    "post_open_boost_minutes",
+                    "post_open_boost_interval_seconds",
                 ):
                     value = polling.get(field)
                     if value is not None and not _is_strict_int(value):
                         raise ConfigError(
                             f"github.automation.polling.{field} must be an integer"
                         )
-                    if isinstance(value, int) and value <= 0:
+                    if (
+                        isinstance(value, int)
+                        and field
+                        in (
+                            "post_open_boost_minutes",
+                            "post_open_boost_interval_seconds",
+                        )
+                        and value < 0
+                    ):
+                        raise ConfigError(
+                            f"github.automation.polling.{field} must be >= 0"
+                        )
+                    if (
+                        isinstance(value, int)
+                        and field
+                        not in (
+                            "post_open_boost_minutes",
+                            "post_open_boost_interval_seconds",
+                        )
+                        and value <= 0
+                    ):
                         raise ConfigError(
                             f"github.automation.polling.{field} must be > 0"
                         )

@@ -234,7 +234,7 @@ def _polling_config(
     profile: str | None = None,
     discovery_interval_seconds: int = 360,
     discovery_workspace_limit: int = 1,
-    post_open_boost_minutes: int = 20,
+    post_open_boost_minutes: int = 30,
     post_open_boost_interval_seconds: int = 30,
 ) -> dict[str, object]:
     reactions: dict[str, object] = {}
@@ -258,6 +258,14 @@ def _polling_config(
             }
         }
     }
+
+
+def test_polling_config_defaults_to_30_minute_post_open_boost() -> None:
+    config = GitHubPollingConfig.from_mapping(
+        {"github": {"automation": {"polling": {"enabled": True}}}}
+    )
+    assert config.post_open_boost_minutes == 30
+    assert config.post_open_boost_interval_seconds == 30
 
 
 def _rate_limit_payload(
