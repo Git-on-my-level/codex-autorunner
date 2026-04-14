@@ -498,6 +498,73 @@ def test_hub_repo_listing_service_enriches_repos_in_parallel(tmp_path: Path) -> 
     assert [repo["repo_id"] for repo in payload["repos"]] == ["repo-1", "repo-2"]
 
 
+def test_hub_repo_listing_service_reuses_unbound_thread_counts_per_listing(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class _AsyncMountManager:
+        async def refresh_mounts(self, _snapshots) -> None:
+            return None
+
+        def add_mount_info(self, repo_dict: dict) -> dict:
+            return repo_dict
+
+    snapshots = [
+        _repo_snapshot(tmp_path / "repo-1", repo_id="repo-1"),
+        _repo_snapshot(tmp_path / "repo-2", repo_id="repo-2"),
+    ]
+    calls = {"unbound": 0}
+
+    def fake_unbound_repo_thread_counts() -> dict[str, int]:
+        calls["unbound"] += 1
+        return {"repo-1": 1, "repo-2": 2}
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.archive.has_car_state",
+        lambda _path: True,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.ticket_flow_summary.build_ticket_flow_summary",
+        lambda _path, *, include_failure, store=None: None,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.pma_context.get_latest_ticket_flow_run_state_with_record",
+        lambda _repo_root, _repo_id, *, store=None: ({}, None),
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.ticket_flow_projection.build_canonical_state_v1",
+        lambda **_kwargs: {},
+    )
+
+    context = SimpleNamespace(
+        config=SimpleNamespace(
+            root=tmp_path,
+            raw={},
+            pma=SimpleNamespace(freshness_stale_threshold_seconds=None),
+        ),
+        supervisor=SimpleNamespace(
+            list_repos=lambda: snapshots,
+            state=SimpleNamespace(last_scan_at=None, pinned_parent_repo_ids=[]),
+            unbound_repo_thread_counts=fake_unbound_repo_thread_counts,
+        ),
+        logger=logging.getLogger(__name__),
+    )
+    enricher = HubRepoEnricher(context, _AsyncMountManager())  # type: ignore[arg-type]
+    listing_service = HubRepoListingService(
+        context,
+        _AsyncMountManager(),  # type: ignore[arg-type]
+        enricher,
+    )
+    listing_service._active_chat_binding_counts_by_source = lambda: {}
+
+    payload = asyncio.run(listing_service.list_repos(sections={"repos"}))
+
+    repos_by_id = {repo["id"]: repo for repo in payload["repos"]}
+    assert repos_by_id["repo-1"]["unbound_managed_thread_count"] == 1
+    assert repos_by_id["repo-2"]["unbound_managed_thread_count"] == 2
+    assert calls["unbound"] == 1
+
+
 def test_hub_repo_listing_service_reuses_stale_response_while_refreshing(
     tmp_path: Path,
     monkeypatch,

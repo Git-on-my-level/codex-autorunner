@@ -690,14 +690,44 @@ class PmaThreadStore:
         *,
         backend_runtime_instance_id: Optional[str] = None,
     ) -> None:
+        normalized_backend_thread_id = _coerce_text(backend_thread_id)
         current_binding = get_runtime_thread_binding(self._hub_root, managed_thread_id)
-        resolved_runtime_instance_id = backend_runtime_instance_id
-        if backend_thread_id is not None and resolved_runtime_instance_id is None:
+        resolved_runtime_instance_id = _coerce_text(backend_runtime_instance_id)
+        if (
+            normalized_backend_thread_id is not None
+            and resolved_runtime_instance_id is None
+        ):
             resolved_runtime_instance_id = (
                 current_binding.backend_runtime_instance_id
                 if current_binding is not None
                 else None
             )
+        with self._read_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT backend_thread_id
+                  FROM orch_thread_targets
+                 WHERE thread_target_id = ?
+                """,
+                (managed_thread_id,),
+            ).fetchone()
+        current_backend_thread_id = (
+            _coerce_text(row["backend_thread_id"]) if row is not None else None
+        )
+        binding_matches = (
+            normalized_backend_thread_id is None and current_binding is None
+        ) or (
+            current_binding is not None
+            and current_binding.backend_thread_id == normalized_backend_thread_id
+            and current_binding.backend_runtime_instance_id
+            == resolved_runtime_instance_id
+        )
+        if (
+            row is not None
+            and current_backend_thread_id == normalized_backend_thread_id
+            and binding_matches
+        ):
+            return
         with self._write_conn() as conn:
             thread = self._fetch_thread(conn, managed_thread_id)
             metadata = _sanitize_thread_metadata(
@@ -713,7 +743,7 @@ class PmaThreadStore:
                      WHERE thread_target_id = ?
                     """,
                     (
-                        backend_thread_id,
+                        normalized_backend_thread_id,
                         _json_dumps(metadata),
                         now_iso(),
                         managed_thread_id,
@@ -722,7 +752,7 @@ class PmaThreadStore:
         set_runtime_thread_binding(
             self._hub_root,
             managed_thread_id,
-            backend_thread_id=backend_thread_id,
+            backend_thread_id=normalized_backend_thread_id,
             backend_runtime_instance_id=resolved_runtime_instance_id,
         )
 
