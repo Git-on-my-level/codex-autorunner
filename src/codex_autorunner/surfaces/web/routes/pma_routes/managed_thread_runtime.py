@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 import logging
-import re
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Optional, cast
@@ -42,12 +40,11 @@ from .....core.pma_thread_store import (
 )
 from .....core.pma_transcripts import PmaTranscriptStore
 from .....core.ports.run_event import Completed, Failed, RunEvent
-from .....core.pr_binding_runtime import claim_pr_binding_for_thread
-from .....core.pr_bindings import PrBinding
 from .....core.text_utils import _truncate_text
 from .....core.time_utils import now_iso
-from .....integrations.github.polling import GitHubScmPollingService
-from .....integrations.github.service import GitHubError, GitHubService
+from .....integrations.github.managed_thread_pr_binding import (
+    self_claim_and_arm_pr_binding,
+)
 from ...schemas import PmaManagedThreadMessageRequest
 from ...services.pma.managed_thread_followup import (
     ManagedThreadAutomationClient,
@@ -89,10 +86,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 PMA_TIMEOUT_SECONDS = 7200
-_GITHUB_PR_URL_RE = re.compile(
-    r"https://github\.com/[^/\s]+/[^/\s]+/pull/\d+",
-    re.IGNORECASE,
-)
 
 
 def _build_managed_thread_orchestration_service(
@@ -127,146 +120,6 @@ def _track_managed_thread_task(app: Any, task: asyncio.Task[Any]) -> None:
     task_pool = _managed_thread_task_pool(app)
     task_pool.add(task)
     task.add_done_callback(lambda done: task_pool.discard(done))
-
-
-def _runtime_output_suggests_pr_open(
-    assistant_text: str,
-    raw_events: tuple[Any, ...],
-) -> bool:
-    message = str(assistant_text or "")
-    if _GITHUB_PR_URL_RE.search(message):
-        return True
-    lowered_message = message.lower()
-    if "pull request" in lowered_message or re.search(
-        r"\bpr\s*#?\d+\b", lowered_message
-    ):
-        return True
-    for raw_event in raw_events:
-        try:
-            serialized = json.dumps(raw_event, sort_keys=True)
-        except TypeError:
-            serialized = str(raw_event)
-        if _GITHUB_PR_URL_RE.search(serialized):
-            return True
-        lowered_event = serialized.lower()
-        if "gh pr create" in lowered_event or "pull request" in lowered_event:
-            return True
-    return False
-
-
-def _claim_existing_branch_binding_for_thread(
-    *,
-    hub_root: Path,
-    thread_store: PmaThreadStore,
-    thread: dict[str, Any],
-    managed_thread_id: str,
-    workspace_root: Path,
-) -> Optional[PrBinding]:
-    repo_id = normalize_optional_text(thread.get("repo_id"))
-    if repo_id is None:
-        return None
-    head_branch = thread_store.refresh_thread_head_branch(
-        managed_thread_id,
-        workspace_root=workspace_root,
-    )
-    if head_branch is None:
-        metadata = thread.get("metadata")
-        if isinstance(metadata, dict):
-            head_branch = normalize_optional_text(metadata.get("head_branch"))
-    if head_branch is None:
-        return None
-
-    from .....core.pr_bindings import PrBindingStore
-
-    binding_store = PrBindingStore(hub_root)
-    claimed_binding: Optional[PrBinding] = None
-    for pr_state in ("open", "draft"):
-        bindings = binding_store.list_bindings(
-            provider="github",
-            repo_id=repo_id,
-            pr_state=pr_state,
-            head_branch=head_branch,
-            limit=20,
-        )
-        for binding in bindings:
-            if binding.thread_target_id not in {None, managed_thread_id}:
-                continue
-            updated = binding_store.attach_thread_target(
-                provider=binding.provider,
-                repo_slug=binding.repo_slug,
-                pr_number=binding.pr_number,
-                thread_target_id=managed_thread_id,
-            )
-            if updated is not None and updated.thread_target_id == managed_thread_id:
-                claimed_binding = updated
-    return claimed_binding
-
-
-def _claim_discovered_pr_binding_for_thread(
-    *,
-    request: Request,
-    thread: dict[str, Any],
-    managed_thread_id: str,
-    workspace_root: Path,
-) -> Optional[PrBinding]:
-    raw_config = getattr(getattr(request.app.state, "config", None), "raw", {})
-    try:
-        github = GitHubService(
-            workspace_root,
-            raw_config=raw_config if isinstance(raw_config, dict) else None,
-            config_root=request.app.state.config.root,
-            traffic_class="background",
-        )
-        summary = github.discover_pr_binding_summary(cwd=workspace_root)
-    except (GitHubError, OSError, RuntimeError, ValueError):
-        logger.debug(
-            "Managed-thread PR discovery failed (managed_thread_id=%s, workspace_root=%s)",
-            managed_thread_id,
-            workspace_root,
-            exc_info=True,
-        )
-        return None
-    if not isinstance(summary, dict):
-        return None
-    repo_slug = normalize_optional_text(summary.get("repo_slug"))
-    pr_number = summary.get("pr_number")
-    pr_state = normalize_optional_text(summary.get("pr_state"))
-    if repo_slug is None or not isinstance(pr_number, int) or pr_state is None:
-        return None
-    claimed = claim_pr_binding_for_thread(
-        request.app.state.config.root,
-        provider="github",
-        repo_slug=repo_slug,
-        repo_id=normalize_optional_text(thread.get("repo_id")),
-        pr_number=pr_number,
-        pr_state=pr_state,
-        head_branch=normalize_optional_text(summary.get("head_branch")),
-        base_branch=normalize_optional_text(summary.get("base_branch")),
-        thread_target_id=managed_thread_id,
-    )
-    if claimed is None or claimed.thread_target_id != managed_thread_id:
-        return None
-    return claimed
-
-
-def _arm_scm_polling_watch_for_binding(
-    *,
-    request: Request,
-    binding: PrBinding,
-    workspace_root: Path,
-) -> None:
-    normalized_raw_config = _resolve_repo_raw_config_for_workspace(
-        request,
-        workspace_root=workspace_root,
-    )
-    GitHubScmPollingService(
-        request.app.state.config.root,
-        raw_config=normalized_raw_config,
-    ).arm_watch(
-        binding=binding,
-        workspace_root=workspace_root,
-        reaction_config=normalized_raw_config,
-    )
 
 
 def _resolve_repo_raw_config_for_workspace(
@@ -310,31 +163,28 @@ def _self_claim_pr_bindings_for_managed_thread(
     assistant_text: str,
     raw_events: tuple[Any, ...],
 ) -> None:
-    hub_root = request.app.state.config.root
-    claimed_binding = _claim_existing_branch_binding_for_thread(
-        hub_root=hub_root,
-        thread_store=thread_store,
-        thread=thread,
-        managed_thread_id=managed_thread_id,
+    head_branch_hint = thread_store.refresh_thread_head_branch(
+        managed_thread_id,
         workspace_root=workspace_root,
     )
-    if claimed_binding is None and not _runtime_output_suggests_pr_open(
-        assistant_text, raw_events
-    ):
-        return
-    if claimed_binding is None:
-        claimed_binding = _claim_discovered_pr_binding_for_thread(
-            request=request,
-            thread=thread,
-            managed_thread_id=managed_thread_id,
-            workspace_root=workspace_root,
-        )
-    if claimed_binding is None:
-        return
-    _arm_scm_polling_watch_for_binding(
-        request=request,
-        binding=claimed_binding,
+    if head_branch_hint is None:
+        metadata = thread.get("metadata")
+        if isinstance(metadata, dict):
+            head_branch_hint = normalize_optional_text(metadata.get("head_branch"))
+    normalized_raw_config = _resolve_repo_raw_config_for_workspace(
+        request,
         workspace_root=workspace_root,
+    )
+    self_claim_and_arm_pr_binding(
+        hub_root=request.app.state.config.root,
+        workspace_root=workspace_root,
+        managed_thread_id=managed_thread_id,
+        repo_id=normalize_optional_text(thread.get("repo_id")),
+        head_branch_hint=head_branch_hint,
+        assistant_text=assistant_text,
+        raw_events=raw_events,
+        raw_config=normalized_raw_config,
+        thread_payload=thread,
     )
 
 

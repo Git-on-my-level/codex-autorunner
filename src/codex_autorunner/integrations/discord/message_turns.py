@@ -2530,6 +2530,11 @@ def _build_discord_managed_thread_coordinator(
         orchestration_service=orchestration_service,
         state_root=service._config.root,
         hub_client=getattr(service, "_hub_client", None),
+        raw_config=(
+            service._config.raw
+            if isinstance(getattr(service._config, "raw", None), dict)
+            else None
+        ),
         surface=ManagedThreadSurfaceInfo(
             log_label="Discord",
             surface_kind="discord",

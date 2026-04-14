@@ -22,6 +22,9 @@ from codex_autorunner.core.orchestration.runtime_threads import (
     RuntimeThreadExecution,
     RuntimeThreadOutcome,
 )
+from codex_autorunner.core.pma_thread_store import PmaThreadStore
+from codex_autorunner.core.pr_bindings import PrBindingStore
+from codex_autorunner.core.scm_polling_watches import ScmPollingWatchStore
 
 
 def _build_started_execution(tmp_path: Path) -> RuntimeThreadExecution:
@@ -1047,6 +1050,136 @@ class _FakeHubPersistenceClient:
 
     async def record_thread_activity(self, request: Any) -> None:
         self.activity_requests.append(request)
+
+
+@pytest.mark.anyio
+async def test_finalize_managed_thread_execution_self_claims_existing_pr_binding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binding_store = PrBindingStore(tmp_path)
+    thread_store = PmaThreadStore(tmp_path)
+    created = thread_store.create_thread(
+        "hermes",
+        tmp_path.resolve(),
+        repo_id="repo-1",
+        metadata={"head_branch": "feature/self-claim"},
+    )
+    managed_thread_id = str(created["managed_thread_id"])
+    started = RuntimeThreadExecution(
+        service=SimpleNamespace(),
+        harness=SimpleNamespace(),
+        thread=SimpleNamespace(
+            thread_target_id=managed_thread_id,
+            agent_id="hermes",
+            workspace_root=str(tmp_path),
+            lifecycle_status="active",
+            backend_thread_id="session-1",
+            metadata={"head_branch": "feature/self-claim"},
+        ),
+        execution=ExecutionRecord(
+            execution_id="exec-1",
+            target_id=managed_thread_id,
+            target_kind="thread",
+            status="running",
+            backend_id="turn-1",
+        ),
+        workspace_root=tmp_path,
+        request=MessageRequest(
+            target_id=managed_thread_id,
+            target_kind="thread",
+            message_text="hello",
+        ),
+    )
+    fake_hub_client = _FakeHubPersistenceClient()
+    binding = binding_store.upsert_binding(
+        provider="github",
+        repo_slug="acme/widgets",
+        repo_id="repo-1",
+        pr_number=17,
+        pr_state="open",
+        head_branch="feature/self-claim",
+        base_branch="main",
+    )
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "harness_supports_progress_event_stream",
+        lambda _harness: False,
+    )
+
+    async def _successful_outcome(*args: Any, **kwargs: Any) -> RuntimeThreadOutcome:
+        return RuntimeThreadOutcome(
+            status="ok",
+            assistant_text="Implemented changes and opened PR #17.",
+            error=None,
+            backend_thread_id="session-1",
+            backend_turn_id="turn-1",
+        )
+
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "await_runtime_thread_outcome",
+        _successful_outcome,
+    )
+
+    orchestration_service = SimpleNamespace(
+        get_thread_target=lambda managed_thread_id: SimpleNamespace(
+            backend_thread_id="session-1",
+            repo_id="repo-1",
+            resource_kind="repo",
+            resource_id="repo-1",
+            agent_id="hermes",
+            workspace_root=str(tmp_path),
+        ),
+        get_thread_runtime_binding=lambda managed_thread_id: SimpleNamespace(
+            backend_thread_id="session-1"
+        ),
+        record_execution_result=lambda *args, **kwargs: SimpleNamespace(
+            status="ok",
+            error=None,
+        ),
+    )
+
+    result = await managed_thread_turns_module.finalize_managed_thread_execution(
+        orchestration_service=orchestration_service,
+        started=started,
+        state_root=tmp_path,
+        hub_client=fake_hub_client,
+        raw_config={
+            "github": {
+                "automation": {"polling": {"enabled": True, "interval_seconds": 90}}
+            }
+        },
+        surface=managed_thread_turns_module.ManagedThreadSurfaceInfo(
+            log_label="Discord",
+            surface_kind="discord",
+            surface_key="discord:chan-1",
+        ),
+        errors=managed_thread_turns_module.ManagedThreadErrorMessages(
+            public_execution_error="Discord PMA execution failed",
+            timeout_error="Discord PMA turn timed out",
+            interrupted_error="Discord PMA turn interrupted",
+            timeout_seconds=5,
+        ),
+        logger=logging.getLogger("test.managed_thread.self_claim"),
+        turn_preview="preview",
+    )
+
+    claimed = PrBindingStore(tmp_path).get_binding_by_pr(
+        provider="github",
+        repo_slug="acme/widgets",
+        pr_number=17,
+    )
+    watch = ScmPollingWatchStore(tmp_path).get_watch(
+        provider="github",
+        binding_id=binding.binding_id,
+    )
+
+    assert result.status == "ok"
+    assert claimed is not None
+    assert claimed.thread_target_id == managed_thread_id
+    assert watch is not None
+    assert watch.workspace_root == str(tmp_path.resolve())
 
 
 @pytest.mark.anyio

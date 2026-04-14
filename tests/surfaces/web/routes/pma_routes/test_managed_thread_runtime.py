@@ -25,6 +25,10 @@ from codex_autorunner.core.orchestration.turn_timeline import list_turn_timeline
 from codex_autorunner.core.pma_context import format_pma_discoverability_preamble
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.pr_bindings import PrBindingStore
+from codex_autorunner.core.scm_polling_watches import ScmPollingWatchStore
+from codex_autorunner.integrations.github import (
+    managed_thread_pr_binding as managed_thread_pr_binding_module,
+)
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes.pma_routes import managed_thread_runtime
 
@@ -511,7 +515,7 @@ def test_managed_thread_message_route_self_claims_existing_pr_binding(
     hub_env,
     monkeypatch,
 ) -> None:
-    _enable_pma(hub_env.hub_root)
+    _enable_pma(hub_env.hub_root, enable_github_polling=True)
     app = create_hub_app(hub_env.hub_root)
     store = PmaThreadStore(hub_env.hub_root)
     created = store.create_thread(
@@ -530,7 +534,6 @@ def test_managed_thread_message_route_self_claims_existing_pr_binding(
         head_branch="feature/self-claim",
         base_branch="main",
     )
-    arm_watch_calls: list[dict[str, Any]] = []
 
     class FakeService:
         def get_thread_target(self, thread_target_id: str):
@@ -545,22 +548,6 @@ def test_managed_thread_message_route_self_claims_existing_pr_binding(
 
         def get_execution(self, thread_target_id: str, execution_id: str):
             _ = thread_target_id, execution_id
-            return None
-
-    class FakePollingService:
-        def __init__(self, *args, **kwargs) -> None:
-            _ = args, kwargs
-
-        def arm_watch(self, *, binding, workspace_root, reaction_config=None):
-            arm_watch_calls.append(
-                {
-                    "binding_id": binding.binding_id,
-                    "repo_slug": binding.repo_slug,
-                    "pr_number": binding.pr_number,
-                    "workspace_root": str(workspace_root),
-                    "reaction_config": reaction_config,
-                }
-            )
             return None
 
     async def _fake_begin(
@@ -602,11 +589,6 @@ def test_managed_thread_message_route_self_claims_existing_pr_binding(
         "await_runtime_thread_outcome",
         _fake_await,
     )
-    monkeypatch.setattr(
-        managed_thread_runtime,
-        "GitHubScmPollingService",
-        FakePollingService,
-    )
 
     with TestClient(app) as client:
         response = client.post(
@@ -619,14 +601,18 @@ def test_managed_thread_message_route_self_claims_existing_pr_binding(
         repo_slug="acme/widgets",
         pr_number=17,
     )
+    assert binding is not None
+    watch = ScmPollingWatchStore(hub_env.hub_root).get_watch(
+        provider="github",
+        binding_id=binding.binding_id,
+    )
 
     assert response.status_code == 200
-    assert binding is not None
     assert binding.thread_target_id == managed_thread_id
-    assert len(arm_watch_calls) == 1
-    assert arm_watch_calls[0]["repo_slug"] == "acme/widgets"
-    assert arm_watch_calls[0]["pr_number"] == 17
-    assert arm_watch_calls[0]["workspace_root"] == str(hub_env.repo_root.resolve())
+    assert watch is not None
+    assert watch.repo_slug == "acme/widgets"
+    assert watch.pr_number == 17
+    assert watch.workspace_root == str(hub_env.repo_root.resolve())
 
 
 def test_managed_thread_message_route_self_claims_discovered_pr_binding(
@@ -732,12 +718,12 @@ def test_managed_thread_message_route_self_claims_discovered_pr_binding(
         _fake_await,
     )
     monkeypatch.setattr(
-        managed_thread_runtime,
+        managed_thread_pr_binding_module,
         "GitHubService",
         FakeGitHubService,
     )
     monkeypatch.setattr(
-        managed_thread_runtime,
+        managed_thread_pr_binding_module,
         "GitHubScmPollingService",
         FakePollingService,
     )

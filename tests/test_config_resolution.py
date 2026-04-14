@@ -322,6 +322,7 @@ def test_load_repo_config_rejects_boolean_github_webhook_size_limits(
         "interval_seconds",
         "discovery_interval_seconds",
         "discovery_workspace_limit",
+        "discovery_terminal_thread_lookback_minutes",
         "post_open_boost_minutes",
         "post_open_boost_interval_seconds",
     ],
@@ -353,6 +354,68 @@ def test_load_repo_config_rejects_boolean_github_polling_size_limits(
     with pytest.raises(
         ConfigError,
         match=(f"github\\.automation\\.polling\\.{field} must be an integer"),
+    ):
+        load_repo_config(repo_root, hub_path=hub_root)
+
+
+def test_load_repo_config_rejects_non_boolean_manifest_discovery_flag(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    write_test_config(
+        hub_root / CONFIG_FILENAME,
+        {
+            "mode": "hub",
+            "repo_defaults": {
+                "github": {
+                    "automation": {
+                        "polling": {
+                            "discovery_include_manifest_repos": "yes",
+                        }
+                    }
+                }
+            },
+        },
+    )
+    repo_root = hub_root / "repo"
+    repo_root.mkdir()
+
+    with pytest.raises(
+        ConfigError,
+        match=(
+            "github\\.automation\\.polling\\.discovery_include_manifest_repos must be boolean"
+        ),
+    ):
+        load_repo_config(repo_root, hub_path=hub_root)
+
+
+def test_load_repo_config_rejects_invalid_polling_no_activity_tier(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    write_test_config(
+        hub_root / CONFIG_FILENAME,
+        {
+            "mode": "hub",
+            "repo_defaults": {
+                "github": {
+                    "automation": {
+                        "polling": {
+                            "no_activity_tier": "idle",
+                        }
+                    }
+                }
+            },
+        },
+    )
+    repo_root = hub_root / "repo"
+    repo_root.mkdir()
+
+    with pytest.raises(
+        ConfigError,
+        match="github\\.automation\\.polling\\.no_activity_tier",
     ):
         load_repo_config(repo_root, hub_path=hub_root)
 

@@ -287,14 +287,17 @@
           "enqueue_managed_turn": "allow",
           "merge_pr": "deny",
           "notify_chat": "allow",
-          "react_pr_review_comment": "allow",
-          "post_pr_comment": "deny"
+          "post_pr_comment": "deny",
+          "react_pr_review_comment": "allow"
         },
         "polling": {
+          "discovery_include_manifest_repos": false,
           "discovery_interval_seconds": 360,
+          "discovery_terminal_thread_lookback_minutes": 1440,
           "discovery_workspace_limit": 1,
           "enabled": false,
           "interval_seconds": 90,
+          "no_activity_tier": "cold",
           "post_open_boost_interval_seconds": 30,
           "post_open_boost_minutes": 30,
           "watch_window_minutes": 30

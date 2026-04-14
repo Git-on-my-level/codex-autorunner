@@ -12,6 +12,7 @@ from ...agents.base import (
     harness_progress_event_stream,
     harness_supports_progress_event_stream,
 )
+from ...core.config import ConfigError, load_repo_config
 from ...core.hub_control_plane import (
     ExecutionColdTraceFinalizeRequest,
     ExecutionTimelinePersistRequest,
@@ -50,6 +51,7 @@ from ...core.ports.run_event import (
     ToolCall,
 )
 from ...core.time_utils import now_iso
+from ..github.managed_thread_pr_binding import self_claim_and_arm_pr_binding
 from .runtime_thread_errors import resolve_runtime_thread_error_detail
 
 ProgressEventHandler = Callable[[Any], Awaitable[None]]
@@ -755,6 +757,7 @@ class ManagedThreadTurnCoordinator:
     turn_preview: str
     preview_builder: Optional[MessagePreviewBuilder] = None
     hub_client: Any | None = None
+    raw_config: Optional[dict[str, Any]] = None
 
     async def submit_execution(
         self,
@@ -808,6 +811,7 @@ class ManagedThreadTurnCoordinator:
                 errors=self.errors,
                 logger=self.logger,
                 turn_preview=turn_preview,
+                raw_config=self.raw_config,
                 runtime_event_state=runtime_event_state,
                 on_progress_event=resolved_hooks.on_progress_event,
             )
@@ -893,6 +897,25 @@ def _thread_target_metadata(thread: Any) -> dict[str, Any]:
         "agent": getattr(thread, "agent_id", None),
         "workspace_root": getattr(thread, "workspace_root", None),
     }
+
+
+def _resolve_repo_raw_config_for_workspace(
+    *,
+    state_root: Path,
+    workspace_root: Path,
+    raw_config: Optional[dict[str, Any]],
+) -> Optional[dict[str, Any]]:
+    normalized_raw_config = raw_config if isinstance(raw_config, dict) else None
+    try:
+        repo_config = load_repo_config(workspace_root, hub_path=state_root)
+    except (ConfigError, OSError, ValueError):
+        return normalized_raw_config
+    resolved_raw_config = getattr(repo_config, "raw", None)
+    return (
+        resolved_raw_config
+        if isinstance(resolved_raw_config, dict)
+        else normalized_raw_config
+    )
 
 
 async def _persist_execution_timeline_via_hub(
@@ -1340,6 +1363,7 @@ async def finalize_managed_thread_execution(
     started: RuntimeThreadExecution,
     state_root: Path,
     hub_client: Any | None,
+    raw_config: Optional[dict[str, Any]] = None,
     surface: ManagedThreadSurfaceInfo,
     errors: ManagedThreadErrorMessages,
     logger: logging.Logger,
@@ -1811,8 +1835,38 @@ async def finalize_managed_thread_execution(
         outcome,
         recovered_after_completion=recovered_after_completion,
     )
+    resolved_polling_raw_config = _resolve_repo_raw_config_for_workspace(
+        state_root=state_root,
+        workspace_root=started.workspace_root,
+        raw_config=raw_config,
+    )
 
     if outcome.status == "ok":
+        thread_payload: Optional[dict[str, Any]] = None
+        raw_thread_metadata = getattr(started.thread, "metadata", None)
+        if isinstance(raw_thread_metadata, Mapping):
+            thread_payload = {"metadata": dict(raw_thread_metadata)}
+        try:
+            self_claim_and_arm_pr_binding(
+                hub_root=state_root,
+                workspace_root=started.workspace_root,
+                managed_thread_id=managed_thread_id,
+                repo_id=(
+                    str(finalized_thread_metadata.get("repo_id") or "").strip() or None
+                ),
+                head_branch_hint=None,
+                assistant_text=resolved_assistant_text,
+                raw_events=tuple(outcome.raw_events),
+                raw_config=resolved_polling_raw_config,
+                thread_payload=thread_payload,
+            )
+        except Exception:
+            logger.exception(
+                "%s PR binding self-claim failed (thread=%s turn=%s)",
+                surface.log_label,
+                managed_thread_id,
+                managed_turn_id,
+            )
         transcript_turn_id: Optional[str] = None
         transcript_metadata = {
             "managed_thread_id": managed_thread_id,

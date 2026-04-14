@@ -234,6 +234,9 @@ def _polling_config(
     profile: str | None = None,
     discovery_interval_seconds: int = 360,
     discovery_workspace_limit: int = 1,
+    discovery_include_manifest_repos: bool = True,
+    discovery_terminal_thread_lookback_minutes: int = 24 * 60,
+    no_activity_tier: str = "warm",
     post_open_boost_minutes: int = 30,
     post_open_boost_interval_seconds: int = 30,
 ) -> dict[str, object]:
@@ -247,8 +250,15 @@ def _polling_config(
                     "enabled": True,
                     "discovery_interval_seconds": discovery_interval_seconds,
                     "discovery_workspace_limit": discovery_workspace_limit,
+                    "discovery_include_manifest_repos": (
+                        discovery_include_manifest_repos
+                    ),
+                    "discovery_terminal_thread_lookback_minutes": (
+                        discovery_terminal_thread_lookback_minutes
+                    ),
                     "watch_window_minutes": 30,
                     "interval_seconds": 90,
+                    "no_activity_tier": no_activity_tier,
                     "post_open_boost_minutes": post_open_boost_minutes,
                     "post_open_boost_interval_seconds": (
                         post_open_boost_interval_seconds
@@ -266,6 +276,9 @@ def test_polling_config_defaults_to_30_minute_post_open_boost() -> None:
     )
     assert config.post_open_boost_minutes == 30
     assert config.post_open_boost_interval_seconds == 30
+    assert config.discovery_include_manifest_repos is False
+    assert config.discovery_terminal_thread_lookback_minutes == 24 * 60
+    assert config.no_activity_tier == "cold"
 
 
 def _rate_limit_payload(
@@ -2112,6 +2125,48 @@ def test_process_discovers_external_pr_binding_and_arms_watch_from_manifest_work
     assert watch.workspace_root == str(repo_root.resolve())
 
 
+def test_process_skips_manifest_workspace_discovery_by_default(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    repo_root = hub_root / "workspace" / "repo"
+    repo_root.mkdir(parents=True)
+    _write_manifest(hub_root, repo_rel="workspace/repo")
+
+    def _factory(repo_root_arg: Path, raw_config=None) -> _DiscoveringGitHubServiceStub:
+        return _DiscoveringGitHubServiceStub(
+            repo_root_arg,
+            raw_config,
+            hub_root=hub_root,
+            repo_id="repo-1",
+            repo_slug="acme/widgets",
+            pr_number=142,
+            head_branch="feature/external-pr",
+            discover=True,
+        )
+
+    watch_store = ScmPollingWatchStore(hub_root)
+    service = GitHubScmPollingService(
+        hub_root,
+        raw_config=_polling_config(discovery_include_manifest_repos=False),
+        github_service_factory=_factory,
+        watch_store=watch_store,
+        event_store=ScmEventStore(hub_root),
+    )
+
+    result = service.process(limit=10)
+
+    assert result["candidate_workspaces"] == 0
+    assert result["bindings_discovered"] == 0
+    assert result["watches_armed"] == 0
+    binding = PrBindingStore(hub_root).get_binding_by_pr(
+        provider="github",
+        repo_slug="acme/widgets",
+        pr_number=142,
+    )
+    assert binding is None
+
+
 def test_process_arms_watch_for_existing_binding_without_discovery(
     tmp_path: Path,
 ) -> None:
@@ -2160,7 +2215,7 @@ def test_process_arms_watch_for_existing_binding_without_discovery(
     assert watch.workspace_root == str(repo_root.resolve())
 
 
-def test_process_discovers_external_pr_binding_from_discord_bound_unregistered_workspace(
+def test_process_skips_discovery_for_discord_bound_unregistered_workspace(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
@@ -2199,20 +2254,15 @@ def test_process_discovers_external_pr_binding_from_discord_bound_unregistered_w
 
     result = service.process(limit=10)
 
-    assert result["candidate_workspaces"] == 1
-    assert result["bindings_discovered"] == 1
-    assert result["watches_armed"] == 1
+    assert result["candidate_workspaces"] == 0
+    assert result["bindings_discovered"] == 0
+    assert result["watches_armed"] == 0
     binding = PrBindingStore(hub_root).get_binding_by_pr(
         provider="github",
         repo_slug="acme/widgets",
         pr_number=43,
     )
-    assert binding is not None
-    assert binding.repo_id is None
-    watch = watch_store.get_watch(provider="github", binding_id=binding.binding_id)
-    assert watch is not None
-    assert watch.state == "active"
-    assert watch.workspace_root == str(repo_root.resolve())
+    assert binding is None
 
 
 def test_process_uses_managed_thread_head_branch_hint_for_external_pr_discovery(

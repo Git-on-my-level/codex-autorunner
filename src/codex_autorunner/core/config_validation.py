@@ -862,11 +862,25 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
                     raise ConfigError(
                         "github.automation.polling.enabled must be boolean"
                     )
+                if "discovery_include_manifest_repos" in polling and not isinstance(
+                    polling.get("discovery_include_manifest_repos"), bool
+                ):
+                    raise ConfigError(
+                        "github.automation.polling.discovery_include_manifest_repos must be boolean"
+                    )
+                if "no_activity_tier" in polling:
+                    _validate_str_choice(
+                        polling,
+                        "no_activity_tier",
+                        {"hot", "warm", "cold"},
+                        path="github.automation.polling.no_activity_tier",
+                    )
                 for field in (
                     "watch_window_minutes",
                     "interval_seconds",
                     "discovery_interval_seconds",
                     "discovery_workspace_limit",
+                    "discovery_terminal_thread_lookback_minutes",
                     "post_open_boost_minutes",
                     "post_open_boost_interval_seconds",
                 ):

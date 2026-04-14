@@ -231,6 +231,8 @@ def backfill_pr_binding_thread_target_ids(
     hub_root: Path,
     *,
     limit: int = 200,
+    include_recent_terminal_threads: bool = True,
+    terminal_thread_lookback: timedelta = _RECENT_TERMINAL_THREAD_LOOKBACK,
 ) -> dict[str, int]:
     store = PmaThreadStore(hub_root)
     binding_store = PrBindingStore(hub_root)
@@ -239,7 +241,31 @@ def backfill_pr_binding_thread_target_ids(
         "bindings_matched": 0,
         "bindings_updated": 0,
     }
-    for thread in store.list_threads(status="active", limit=limit):
+    candidate_threads: list[Mapping[str, Any]] = []
+    seen_thread_ids: set[str] = set()
+    for active_thread in store.list_threads(status="active", limit=limit):
+        managed_thread_id = _normalize_text(active_thread.get("managed_thread_id"))
+        if managed_thread_id is None or managed_thread_id in seen_thread_ids:
+            continue
+        seen_thread_ids.add(managed_thread_id)
+        candidate_threads.append(active_thread)
+    if include_recent_terminal_threads:
+        cutoff = datetime.now(timezone.utc) - terminal_thread_lookback
+        for terminal_thread in store.list_threads(limit=max(limit * 5, limit)):
+            managed_thread_id = _normalize_text(
+                terminal_thread.get("managed_thread_id")
+            )
+            if managed_thread_id is None or managed_thread_id in seen_thread_ids:
+                continue
+            if not bool(terminal_thread.get("status_terminal")):
+                continue
+            changed_at = _thread_changed_at(terminal_thread)
+            if changed_at is None or changed_at < cutoff:
+                continue
+            seen_thread_ids.add(managed_thread_id)
+            candidate_threads.append(terminal_thread)
+
+    for thread in candidate_threads:
         managed_thread_id = _normalize_text(thread.get("managed_thread_id"))
         repo_id = _normalize_text(thread.get("repo_id"))
         if managed_thread_id is None or repo_id is None:
