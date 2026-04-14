@@ -795,6 +795,9 @@ class DiscordBotService:
         )
         self._effect_sink = DiscordEffectSink(self)
         self._queued_notice_messages: dict[tuple[str, str], str] = {}
+        self._queued_notice_messages_by_source: dict[
+            tuple[str, str], tuple[str, str]
+        ] = {}
         self._discord_turn_progress_reuse_requests: dict[str, Any] = {}
         self._discord_reusable_progress_messages: dict[str, Any] = {}
         self._background_tasks: set[asyncio.Task[Any]] = set()
@@ -1087,13 +1090,15 @@ class DiscordBotService:
         async def _handle_dispatched_event(
             queued_event: ChatEvent, context: DispatchContext
         ) -> None:
-            if isinstance(queued_event, ChatMessageEvent):
-                await self._clear_queued_notice(
-                    conversation_id=context.conversation_id,
-                    source_message_id=queued_event.message.message_id,
-                    channel_id=context.chat_id,
-                )
-            await self._handle_chat_event(queued_event, context)
+            try:
+                await self._handle_chat_event(queued_event, context)
+            finally:
+                if isinstance(queued_event, ChatMessageEvent):
+                    await self._clear_queued_notice(
+                        conversation_id=context.conversation_id,
+                        source_message_id=queued_event.message.message_id,
+                        channel_id=context.chat_id,
+                    )
 
         dispatch_result = await self._dispatcher.dispatch(
             event, _handle_dispatched_event
@@ -1775,6 +1780,11 @@ class DiscordBotService:
     ) -> None:
         key = (conversation_id, source_message_id)
         notice_message_id = self._queued_notice_messages.pop(key, None)
+        source_key = (channel_id, source_message_id)
+        source_entry = self._queued_notice_messages_by_source.pop(source_key, None)
+        if not notice_message_id and isinstance(source_entry, tuple):
+            _, source_notice_message_id = source_entry
+            notice_message_id = source_notice_message_id
         if not notice_message_id:
             return
         await self._delete_channel_message_safe(
@@ -1782,6 +1792,22 @@ class DiscordBotService:
             notice_message_id,
             record_id=f"queue-notice-delete:{channel_id}:{source_message_id}",
         )
+
+    def _claim_queued_notice_progress_message(
+        self,
+        *,
+        channel_id: str,
+        source_message_id: str,
+    ) -> Optional[str]:
+        source_key = (channel_id, source_message_id)
+        source_entry = self._queued_notice_messages_by_source.pop(source_key, None)
+        if not isinstance(source_entry, tuple):
+            return None
+        conversation_id, notice_message_id = source_entry
+        if conversation_id:
+            self._queued_notice_messages.pop((conversation_id, source_message_id), None)
+        normalized_notice_message_id = str(notice_message_id or "").strip()
+        return normalized_notice_message_id or None
 
     async def _queued_notice_config_for_conversation(
         self, conversation_id: str
@@ -1830,9 +1856,13 @@ class DiscordBotService:
             )
             notice_message_id = response.get("id")
             if isinstance(notice_message_id, str) and notice_message_id:
-                self._queued_notice_messages[
-                    (dispatch_result.context.conversation_id, source_message_id)
-                ] = notice_message_id
+                conversation_id = dispatch_result.context.conversation_id
+                self._queued_notice_messages[(conversation_id, source_message_id)] = (
+                    notice_message_id
+                )
+                self._queued_notice_messages_by_source[
+                    (channel_id, source_message_id)
+                ] = (conversation_id, notice_message_id)
         except (DiscordAPIError, OSError, TypeError, ValueError):
             await self._send_channel_message_safe(
                 channel_id,
