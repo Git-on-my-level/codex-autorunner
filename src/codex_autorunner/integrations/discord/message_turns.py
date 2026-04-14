@@ -2688,6 +2688,22 @@ async def _run_discord_orchestrated_turn_for_message(
         thread_target_id=managed_thread_id,
         source_message_id=source_message_id,
     )
+    if reusable_progress_message_id is None and source_message_id:
+        claim_queued_notice_message = getattr(
+            service,
+            "_claim_queued_notice_progress_message",
+            None,
+        )
+        if callable(claim_queued_notice_message):
+            claimed_notice_message_id = claim_queued_notice_message(
+                channel_id=channel_id,
+                source_message_id=source_message_id,
+            )
+            if (
+                isinstance(claimed_notice_message_id, str)
+                and claimed_notice_message_id.strip()
+            ):
+                reusable_progress_message_id = claimed_notice_message_id.strip()
 
     async def _load_progress_lease() -> Any:
         return await _get_discord_progress_lease(service, lease_id=progress_lease_id)
