@@ -1698,7 +1698,7 @@ async def handle_flow_resume(
     flow_service = service._ticket_flow_orchestration_service(workspace_root)
     try:
         updated = await flow_service.resume_flow_run(target.id)
-    except ValueError as exc:
+    except (KeyError, ValueError) as exc:
         await _send_flow_ephemeral_response(
             service,
             interaction_id,
@@ -1845,7 +1845,7 @@ async def handle_flow_stop(
     flow_service = service._ticket_flow_orchestration_service(workspace_root)
     try:
         updated = await flow_service.stop_flow_run(target.id)
-    except ValueError as exc:
+    except (KeyError, ValueError) as exc:
         await _send_flow_ephemeral_response(
             service,
             interaction_id,
