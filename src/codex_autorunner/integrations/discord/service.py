@@ -1646,10 +1646,9 @@ class DiscordBotService:
             return False
 
         delivery_status = (session.last_delivery_status or "").strip()
-        delivery_error = (session.last_delivery_error or "").lower()
         if delivery_status != "ack_failed":
             return False
-        return "unknown interaction" in delivery_error or "10062" in delivery_error
+        return is_unknown_interaction_error(session.last_delivery_error)
 
     @staticmethod
     def _mark_interaction_session_expired(session: Any, *, error: str) -> None:
