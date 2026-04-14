@@ -8,7 +8,7 @@ from typing import Callable
 from ..time_utils import now_iso
 from .models import OrchestrationTableDefinition
 
-ORCHESTRATION_SCHEMA_VERSION = 18
+ORCHESTRATION_SCHEMA_VERSION = 20
 
 
 @dataclass(frozen=True)
@@ -1136,6 +1136,49 @@ def _apply_v18(conn: sqlite3.Connection) -> None:
     )
 
 
+def _apply_v19(conn: sqlite3.Connection) -> None:
+    if _table_exists(conn, "orch_event_projections"):
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_orch_event_projections_family_execution
+                ON orch_event_projections(event_family, execution_id, timestamp)
+             WHERE execution_id IS NOT NULL
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_orch_event_projections_family_type_execution
+                ON orch_event_projections(event_family, event_type, execution_id, timestamp)
+             WHERE execution_id IS NOT NULL
+            """
+        )
+
+
+def _apply_v20(conn: sqlite3.Connection) -> None:
+    if _table_exists(conn, "orch_event_projections"):
+        conn.execute("DROP INDEX IF EXISTS idx_orch_event_projections_family_execution")
+        conn.execute(
+            "DROP INDEX IF EXISTS idx_orch_event_projections_family_type_execution"
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_orch_event_projections_family_execution_order
+                ON orch_event_projections(
+                    event_family,
+                    execution_id,
+                    timestamp,
+                    event_id
+                )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_orch_event_projections_family_type_execution
+                ON orch_event_projections(event_family, event_type, execution_id)
+            """
+        )
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
@@ -1159,6 +1202,16 @@ _MIGRATIONS = (
     _MigrationStep(16, "add_notification_conversation_store", _apply_v16),
     _MigrationStep(17, "add_legacy_backfill_completion_flags", _apply_v17),
     _MigrationStep(18, "add_cold_trace_manifest_and_checkpoint_tables", _apply_v18),
+    _MigrationStep(
+        19,
+        "add_event_projection_execution_indexes",
+        _apply_v19,
+    ),
+    _MigrationStep(
+        20,
+        "refine_event_projection_execution_indexes",
+        _apply_v20,
+    ),
 )
 
 

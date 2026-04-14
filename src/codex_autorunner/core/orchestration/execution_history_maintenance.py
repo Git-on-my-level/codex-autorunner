@@ -377,12 +377,16 @@ def compact_completed_execution_history(
         if not execution_id or not _is_terminal_execution_row(execution_row):
             continue
         with open_orchestration_sqlite(hub_root) as conn:
+            timeline_row_count = _count_timeline_rows(conn, execution_id)
+            if (
+                timeline_row_count
+                <= resolved_policy.max_hot_rows_per_completed_execution
+            ):
+                continue
             timeline_rows = _load_timeline_rows(conn, execution_id)
         baseline_rows = [
             row for row in timeline_rows if not _is_compaction_summary_row(row)
         ]
-        if len(baseline_rows) <= resolved_policy.max_hot_rows_per_completed_execution:
-            continue
 
         compacted_ids.append(execution_id)
         rows_before += len(baseline_rows)
@@ -892,6 +896,7 @@ def _load_timeline_rows(conn: Any, execution_id: str) -> list[dict[str, Any]]:
                status,
                payload_json
           FROM orch_event_projections
+         INDEXED BY idx_orch_event_projections_family_execution_order
          WHERE event_family = ?
            AND execution_id = ?
          ORDER BY timestamp ASC, event_id ASC
@@ -917,6 +922,22 @@ def _load_timeline_rows(conn: Any, execution_id: str) -> list[dict[str, Any]]:
             }
         )
     return parsed_rows
+
+
+def _count_timeline_rows(conn: Any, execution_id: str) -> int:
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS cnt
+          FROM orch_event_projections
+         INDEXED BY idx_orch_event_projections_family_execution_order
+         WHERE event_family = ?
+           AND execution_id = ?
+        """,
+        (_TIMELINE_EVENT_FAMILY, execution_id),
+    ).fetchone()
+    if row is None:
+        return 0
+    return int(row["cnt"] or 0)
 
 
 def _decode_payload(raw: Any) -> dict[str, Any]:

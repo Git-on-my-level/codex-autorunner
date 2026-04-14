@@ -5,6 +5,9 @@ from pathlib import Path
 
 import pytest
 
+from codex_autorunner.core.orchestration import (
+    execution_history_maintenance as maintenance_module,
+)
 from codex_autorunner.core.orchestration.cold_trace_store import ColdTraceStore
 from codex_autorunner.core.orchestration.execution_history import ExecutionCheckpoint
 from codex_autorunner.core.orchestration.execution_history_maintenance import (
@@ -352,6 +355,29 @@ def test_compact_completed_execution_history_reduces_hot_rows_and_keeps_cold_tra
     payload = json.loads(str(summary_row["payload_json"]))
     assert payload["event"]["kind"] == "compaction_summary"
     assert payload["event"]["data"]["removed_hot_rows"] > 0
+
+
+def test_compaction_skips_small_executions_without_loading_timeline_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    _seed_execution(hub_root, execution_id="exec-small", output_chunks=1)
+
+    def fail_load(*_args, **_kwargs):
+        raise AssertionError("small executions should be skipped by count precheck")
+
+    monkeypatch.setattr(maintenance_module, "_load_timeline_rows", fail_load)
+
+    summary = compact_completed_execution_history(
+        hub_root,
+        policy=ExecutionHistoryMaintenancePolicy(
+            max_hot_rows_per_completed_execution=16
+        ),
+    )
+
+    assert summary.compacted_executions == 0
+    assert summary.rows_deleted == 0
 
 
 def test_prune_execution_history_retention_removes_old_hot_rows_and_traces(
