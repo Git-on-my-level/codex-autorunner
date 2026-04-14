@@ -130,7 +130,7 @@ def _collect_execution_family_hot_rows(
         ).fetchall()
     family_hot_rows: dict[str, int] = {}
     for row in rows:
-        family = timeline_hot_family_for_event_type(str(row["event_type"] or ""))
+        family = timeline_hot_family_for_event_type(row["event_type"])
         if family:
             family_hot_rows[family] = family_hot_rows.get(family, 0) + int(
                 row["cnt"] or 0
@@ -148,7 +148,7 @@ def _seed_notice_memory(hub_root: Any, execution_id: str) -> dict[str, str]:
              WHERE event_family = ?
                AND execution_id = ?
                AND event_type = 'run_notice'
-             ORDER BY timestamp ASC, event_id ASC
+             ORDER BY event_id ASC
             """,
             (_EVENT_FAMILY, execution_id),
         ).fetchall()
@@ -177,7 +177,7 @@ def _seed_output_memory(hub_root: Any, execution_id: str) -> dict[str, str]:
              WHERE event_family = ?
                AND execution_id = ?
                AND event_type = 'output_delta'
-             ORDER BY timestamp ASC, event_id ASC
+             ORDER BY event_id ASC
             """,
             (_EVENT_FAMILY, execution_id),
         ).fetchall()

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from typing import Any, Literal, Mapping, Optional
+from typing import Any, Literal, Mapping, Optional, cast
 
 from ..ports.run_event import (
     ApprovalRequested,
@@ -355,6 +355,24 @@ def provider_raw_trace_routing(
     return ExecutionHistoryRoutingDecision.from_rule(
         policy.rule_for_family("provider_raw")
     )
+
+
+def timeline_hot_family_for_event_type(
+    event_type: Any,
+) -> Optional[ExecutionHistoryEventFamily]:
+    normalized = str(event_type or "").strip()
+    family = {
+        "turn_started": "run_notice",
+        "output_delta": "output_delta",
+        "tool_call": "tool_call",
+        "tool_result": "tool_result",
+        "approval_requested": "run_notice",
+        "token_usage": "token_usage",
+        "run_notice": "run_notice",
+        "turn_completed": "terminal",
+        "turn_failed": "terminal",
+    }.get(normalized)
+    return cast(Optional[ExecutionHistoryEventFamily], family)
 
 
 def truncate_hot_event_payload(

@@ -380,6 +380,101 @@ def test_compaction_skips_small_executions_without_loading_timeline_rows(
     assert summary.rows_deleted == 0
 
 
+def test_compaction_precheck_ignores_summary_rows_for_threshold(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    execution_id = "exec-summary-threshold"
+    policy = ExecutionHistoryMaintenancePolicy(max_hot_rows_per_completed_execution=8)
+    _seed_execution(hub_root, execution_id=execution_id, output_chunks=20)
+
+    first_summary = compact_completed_execution_history(hub_root, policy=policy)
+    assert first_summary.compacted_executions == 1
+
+    with open_orchestration_sqlite(hub_root, durable=False) as conn:
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO orch_event_projections (
+                    event_id,
+                    event_family,
+                    event_type,
+                    target_kind,
+                    target_id,
+                    execution_id,
+                    repo_id,
+                    resource_kind,
+                    resource_id,
+                    run_id,
+                    timestamp,
+                    status,
+                    payload_json,
+                    processed
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    f"turn-timeline:{execution_id}:9999",
+                    "turn.timeline",
+                    "run_notice",
+                    "thread_target",
+                    "thread-1",
+                    execution_id,
+                    "repo-1",
+                    "repo",
+                    "repo-1",
+                    None,
+                    "2026-04-12T00:05:30Z",
+                    "recorded",
+                    json.dumps(
+                        {
+                            "event_index": 9999,
+                            "event_family": "run_notice",
+                            "event": {
+                                "timestamp": "2026-04-12T00:05:30Z",
+                                "kind": "progress",
+                                "message": "post-compaction follow-up",
+                            },
+                        }
+                    ),
+                    1,
+                ),
+            )
+
+        total_rows = conn.execute(
+            """
+            SELECT COUNT(*) AS cnt
+              FROM orch_event_projections
+             WHERE event_family = 'turn.timeline'
+               AND execution_id = ?
+            """,
+            (execution_id,),
+        ).fetchone()
+        baseline_rows = conn.execute(
+            """
+            SELECT COUNT(*) AS cnt
+              FROM orch_event_projections
+             WHERE event_family = 'turn.timeline'
+               AND execution_id = ?
+               AND event_id NOT LIKE '%:compaction-summary'
+            """,
+            (execution_id,),
+        ).fetchone()
+
+    assert int(total_rows["cnt"] or 0) == 9
+    assert int(baseline_rows["cnt"] or 0) == 8
+
+    def fail_load(*_args, **_kwargs):
+        raise AssertionError("summary rows should not force a second compaction pass")
+
+    monkeypatch.setattr(maintenance_module, "_load_timeline_rows", fail_load)
+
+    second_summary = compact_completed_execution_history(hub_root, policy=policy)
+
+    assert second_summary.compacted_executions == 0
+    assert second_summary.rows_deleted == 0
+
+
 def test_prune_execution_history_retention_removes_old_hot_rows_and_traces(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

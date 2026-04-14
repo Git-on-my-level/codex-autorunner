@@ -34,7 +34,7 @@ def _collect_timeline_family_counts(conn: Any) -> dict[str, int]:
         (_TIMELINE_EVENT_FAMILY,),
     ).fetchall()
     for row in rows:
-        family = timeline_hot_family_for_event_type(str(row["event_type"] or ""))
+        family = timeline_hot_family_for_event_type(row["event_type"])
         if family:
             family_counts[family] = family_counts.get(family, 0) + int(row["cnt"] or 0)
     return dict(sorted(family_counts.items()))
