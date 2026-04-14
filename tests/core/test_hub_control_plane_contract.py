@@ -244,6 +244,32 @@ def test_thread_target_response_uses_existing_generic_thread_model() -> None:
     assert response.to_dict()["thread"]["thread_target_id"] == "thread-1"
 
 
+def test_thread_target_response_round_trips_agent_and_backend_ids() -> None:
+    response = ThreadTargetResponse.from_mapping(
+        {
+            "thread": {
+                "thread_target_id": "thread-1",
+                "agent": "codex",
+                "workspace_root": "/tmp/repo",
+                "backend_thread_id": "backend-thread-1",
+                "backend_runtime_instance_id": "runtime-1",
+                "name": "Main thread",
+            }
+        }
+    )
+
+    payload = response.to_dict()
+    round_tripped = ThreadTargetResponse.from_mapping(payload)
+
+    assert payload["thread"]["agent"] == "codex"
+    assert payload["thread"]["backend_thread_id"] == "backend-thread-1"
+    assert payload["thread"]["backend_runtime_instance_id"] == "runtime-1"
+    assert round_tripped.thread is not None
+    assert round_tripped.thread.agent_id == "codex"
+    assert round_tripped.thread.backend_thread_id == "backend-thread-1"
+    assert round_tripped.thread.backend_runtime_instance_id == "runtime-1"
+
+
 def test_execution_models_round_trip_with_existing_execution_record() -> None:
     create_request = ExecutionCreateRequest.from_mapping(
         {

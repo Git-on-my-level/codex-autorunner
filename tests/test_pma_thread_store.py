@@ -11,6 +11,7 @@ from codex_autorunner.core.orchestration.execution_history import ExecutionCheck
 from codex_autorunner.core.orchestration.runtime_bindings import (
     clear_runtime_thread_binding,
 )
+from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.pma_thread_store import (
     ManagedThreadAlreadyHasRunningTurnError,
     ManagedThreadNotActiveError,
@@ -63,6 +64,34 @@ def test_create_list_get_thread(tmp_path: Path) -> None:
     )
     assert len(normalized_listed) == 1
     assert normalized_listed[0]["managed_thread_id"] == created["managed_thread_id"]
+
+
+def test_create_thread_mirrors_backend_thread_id_into_orchestration_row(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+
+    store = PmaThreadStore(hub_root)
+    created = store.create_thread(
+        "codex",
+        workspace_root,
+        backend_thread_id="backend-1",
+    )
+
+    with open_orchestration_sqlite(hub_root, durable=False) as conn:
+        row = conn.execute(
+            """
+            SELECT backend_thread_id
+              FROM orch_thread_targets
+             WHERE thread_target_id = ?
+            """,
+            (created["managed_thread_id"],),
+        ).fetchone()
+
+    assert row is not None
+    assert row["backend_thread_id"] == "backend-1"
 
 
 def test_create_thread_enriches_head_branch_metadata(
@@ -273,6 +302,17 @@ def test_set_thread_backend_id_preserves_runtime_tag_when_omitted(
     assert binding.backend_runtime_instance_id == "runtime-1"
     assert "backend_thread_id" not in updated
     assert "backend_runtime_instance_id" not in updated
+    with open_orchestration_sqlite(tmp_path / "hub", durable=False) as conn:
+        row = conn.execute(
+            """
+            SELECT backend_thread_id
+              FROM orch_thread_targets
+             WHERE thread_target_id = ?
+            """,
+            (thread["managed_thread_id"],),
+        ).fetchone()
+    assert row is not None
+    assert row["backend_thread_id"] == "backend-2"
 
 
 def test_create_turn_rejects_when_running_turn_exists(tmp_path: Path) -> None:

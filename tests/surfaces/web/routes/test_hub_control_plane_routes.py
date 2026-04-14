@@ -25,6 +25,7 @@ from codex_autorunner.core.hub_control_plane import (
     QueuedExecutionListRequest,
     SurfaceBindingListRequest,
     SurfaceBindingUpsertRequest,
+    ThreadBackendIdUpdateRequest,
     ThreadTargetListRequest,
     ThreadTargetLookupRequest,
     TranscriptWriteRequest,
@@ -436,6 +437,39 @@ async def test_hub_control_plane_http_client_round_trip(tmp_path: Path) -> None:
     assert claimed.execution.execution_id == queued_execution.execution.execution_id
     assert claimed.queue_payload == {"source": "test"}
     assert setup_result.setup_command_count == 3
+
+
+@pytest.mark.anyio
+async def test_hub_control_plane_http_client_preserves_thread_backend_ids(
+    tmp_path: Path,
+) -> None:
+    app, thread_target_id = _build_test_app(tmp_path)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+    ) as http_client:
+        client = HttpHubControlPlaneClient(
+            base_url="http://testserver",
+            http_client=http_client,
+        )
+        await client.set_thread_backend_id(
+            ThreadBackendIdUpdateRequest.from_mapping(
+                {
+                    "thread_target_id": thread_target_id,
+                    "backend_thread_id": "conversation-1",
+                    "backend_runtime_instance_id": "runtime-1",
+                }
+            )
+        )
+        fetched = await client.get_thread_target(
+            ThreadTargetLookupRequest(thread_target_id=thread_target_id)
+        )
+
+    assert fetched.thread is not None
+    assert fetched.thread.agent_id == "codex"
+    assert fetched.thread.backend_thread_id == "conversation-1"
+    assert fetched.thread.backend_runtime_instance_id == "runtime-1"
 
 
 @pytest.mark.anyio

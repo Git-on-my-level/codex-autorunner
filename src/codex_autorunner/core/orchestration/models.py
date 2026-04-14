@@ -191,7 +191,9 @@ class ThreadTarget:
             resource_kind=resource_kind,
             resource_id=resource_id,
             workspace_root=_normalize_optional_text(data.get("workspace_root")),
-            display_name=_normalize_optional_text(data.get("name")),
+            display_name=_normalize_optional_text(
+                data.get("name") or data.get("display_name")
+            ),
             status=_normalize_optional_text(
                 data.get("normalized_status") or data.get("status")
             ),
@@ -227,10 +229,37 @@ class ThreadTarget:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        payload = asdict(self)
-        payload.pop("backend_thread_id", None)
-        payload.pop("backend_runtime_instance_id", None)
-        return payload
+        return {
+            "thread_target_id": self.thread_target_id,
+            "agent": self.agent_id,
+            "agent_id": self.agent_id,
+            "agent_profile": self.agent_profile,
+            "backend_thread_id": self.backend_thread_id,
+            "backend_runtime_instance_id": self.backend_runtime_instance_id,
+            "repo_id": self.repo_id,
+            "resource_kind": self.resource_kind,
+            "resource_id": self.resource_id,
+            "workspace_root": self.workspace_root,
+            "name": self.display_name,
+            "display_name": self.display_name,
+            "status": self.status,
+            "lifecycle_status": self.lifecycle_status,
+            "status_reason": self.status_reason,
+            "status_reason_code": self.status_reason,
+            "status_changed_at": self.status_changed_at,
+            "status_updated_at": self.status_changed_at,
+            "status_terminal": self.status_terminal,
+            "status_turn_id": self.status_turn_id,
+            "last_execution_id": self.last_execution_id,
+            "last_turn_id": self.last_execution_id,
+            "last_message_preview": self.last_message_preview,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "compact_seed": self.compact_seed,
+            "thread_kind": self.thread_kind,
+            "context_profile": self.context_profile,
+            "approval_mode": self.approval_mode,
+        }
 
 
 @dataclass(frozen=True)

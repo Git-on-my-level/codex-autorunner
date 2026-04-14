@@ -565,7 +565,7 @@ class PmaThreadStore:
                     (
                         managed_thread_id,
                         agent,
-                        None,
+                        normalized_backend_thread_id,
                         normalized_repo_id,
                         normalized_resource_kind,
                         normalized_resource_id,
@@ -707,12 +707,13 @@ class PmaThreadStore:
                 conn.execute(
                     """
                     UPDATE orch_thread_targets
-                       SET backend_thread_id = NULL,
+                       SET backend_thread_id = ?,
                            metadata_json = ?,
                            updated_at = ?
                      WHERE thread_target_id = ?
                     """,
                     (
+                        backend_thread_id,
                         _json_dumps(metadata),
                         now_iso(),
                         managed_thread_id,

@@ -54,7 +54,8 @@ def test_thread_target_normalizes_managed_thread_mapping() -> None:
     assert target.resource_id == "repo-1"
     assert target.status == "running"
     assert target.thread_kind == "ticket_flow"
-    assert "backend_thread_id" not in target.to_dict()
+    assert target.to_dict()["backend_thread_id"] is None
+    assert target.to_dict()["agent"] == "codex"
 
 
 def test_thread_target_normalizes_agent_id_round_trip_field() -> None:
