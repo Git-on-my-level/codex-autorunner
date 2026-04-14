@@ -85,7 +85,7 @@ The shim will try `PYTHONPATH=src` first and, if dependencies are missing, will 
 ## Supported agents
 CAR currently supports:
 - Codex
-- Opencode
+- OpenCode
 - Hermes (ACP-backed runtime with durable threads)
 
 CAR is built to easily integrate any reasonable agent built for Agent Client Protocol (ACP). If you would like to see your agent supported, please reach out or open a PR.
@@ -101,15 +101,15 @@ Tickets are just markdown files that both you and the agent can edit.
 You don't have to babysit the agents, they inbox you or ping you on Telegram.
 ![CAR Inbox Screenshot](docs/screenshots/inbox.png)
 
-You can collaborate with the agents in a shared workspace, independent of the codebase. Drop context there, extract artifacts, it's like a shared scratchpad.
-![CAR Workspace Screenshot](docs/screenshots/workspace.png)
+You can collaborate with the agents in the shared **contextspace** (context documents under `.codex-autorunner/contextspace/`), independent of the codebase. Drop context there, extract artifacts, it's like a shared scratchpad.
+![CAR contextspace screenshot](docs/screenshots/workspace.png)
 
-All core workspace documents are also just markdown files, so you and the agent can easily edit them.
-![CAR Workspace New MD Screenshot](docs/screenshots/workspace-new-md.png)
+All core contextspace documents are also just markdown files, so you and the agent can easily edit them.
+![CAR contextspace new markdown screenshot](docs/screenshots/workspace-new-md.png)
 
 If you need to do something more custom or granular, you can use your favorite agent TUIs in the built-in terminal.
 ![CAR Terminal Codex Screenshot](docs/screenshots/terminal-codex.png)
-![CAR Terminal Opencode Screenshot](docs/screenshots/terminal-opencode.png)
+![CAR Terminal OpenCode screenshot](docs/screenshots/terminal-opencode.png)
 
 On the go or want to use your favorite chat apps? CAR supports Telegram and Discord.
 ![CAR Discord Media Image Screenshot](docs/screenshots/discord-media-image.png)

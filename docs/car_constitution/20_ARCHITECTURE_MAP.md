@@ -51,7 +51,7 @@ Non-responsibilities:
 Mapping the conceptual layers to the codebase:
 
 - **Engine**: `src/codex_autorunner/core/`. Handles the core loop, state, and locking.
-- **Control Plane**: `.codex-autorunner/` (files), `tickets/` (python).
+- **Control Plane**: `.codex-autorunner/` (files, including the ticket queue under `tickets/`). Ticket queue behavior is implemented under `src/codex_autorunner/tickets/`.
 - **Adapters**: `src/codex_autorunner/integrations/` (GitHub, Telegram, App Server).
   - **Discord interaction runtime**: ingress (`ingress.py`) -> command runner (`command_runner.py`) -> interaction dispatch (`interaction_dispatch.py`).  Two-phase lifecycle: ingress acknowledges on the gateway hot path, then the runner executes the handler in the background with timeout enforcement.
 - **Surfaces**:
@@ -84,7 +84,7 @@ Mapping the conceptual layers to the codebase:
 ## Execution Loop
 1. **Select Ticket**: Active ticket target under `.codex-autorunner/tickets/`.
 2. **Build Prompt**: From ticket content, contextspace docs, and bounded prior run output.
-3. **Run**: Execute Codex app-server with streaming logs via OpenCode runtime.
+3. **Run**: Execute the configured backend (for example Codex app-server with OpenCode runtime, or Hermes and other ACP-backed runtimes; see `docs/ops/hermes-acp.md`).
 4. **Update State**: Handle stop rules (exit code, stop_after_runs, limits).
 
 ## Dispatch Model (Agent-Human Communication)

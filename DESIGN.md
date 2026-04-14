@@ -26,7 +26,7 @@ Hub root:
 Per-repo (under hub or standalone for development):
   .codex-autorunner/
     tickets/ (TICKET-###.md files)
-    workspace/ (active_context.md, decisions.md, spec.md)
+    contextspace/ (active_context.md, decisions.md, spec.md)
     config.yml (generated)
     state.sqlite3, codex-autorunner.log, codex-server.log, lock
     prompt.txt (optional template)
@@ -37,8 +37,10 @@ Precedence: built-ins < codex-autorunner.yml < override < .codex-autorunner/conf
 ## Core loop
 - Parse TODO checkboxes and preserve ordering.
 - Build prompt from docs plus bounded prior run output.
-- Run Codex app-server with streaming logs via OpenCode runtime.
+- Run the configured execution backend (for example Codex app-server with OpenCode runtime, or an ACP-backed runtime such as Hermes).
 - Update state and stop on empty TODOs, non-zero exit, stop_after_runs, wallclock limit, or external stop flag.
+
+If `.codex-autorunner/workspace/` still exists with content from older installs, migrate to `contextspace/` using `docs/migrations/workspace-to-contextspace.md`.
 
 ## API surface (repo)
 - Docs: /api/docs, /api/docs/{kind}, doc chat endpoints, /api/ingest-spec, /api/docs/clear.

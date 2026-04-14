@@ -10,7 +10,7 @@ Notes for running codex-autorunner inside containerized or cloud-provisioned VMs
 | Web Hub (FastAPI/Uvicorn) | `make serve-dev` (port 4173) | Set `CAR_DEV_INCLUDE_ROOT_REPO=1` to include the repo itself in the hub |
 | Python tests | `make test` or `.venv/bin/python -m pytest -m "not integration"` | Uses pytest with xdist for parallel runs |
 | Linting | `make check` (full suite) or individually: `black --check`, `ruff check`, `mypy`, `pnpm lint` | See `scripts/check.sh` for the full pre-commit check sequence |
-| TS build | `pnpm run build` or `make build` | Compiles `static_src/*.ts` → `static/*.js`; always rebuild after TS changes |
+| TS build | `pnpm run build` or `make build` | Compiles `src/codex_autorunner/static_src/*.ts` → `src/codex_autorunner/static/*.js`; always rebuild after TS changes |
 
 ## Startup caveats
 
