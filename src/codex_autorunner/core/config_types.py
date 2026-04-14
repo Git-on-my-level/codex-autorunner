@@ -171,6 +171,7 @@ class TicketFlowConfig:
     default_approval_decision: str
     include_previous_ticket_context: bool
     auto_resume: bool = False
+    max_total_turns: Optional[int] = None
 
 
 class SecurityConfigSection(TypedDict, total=False):
