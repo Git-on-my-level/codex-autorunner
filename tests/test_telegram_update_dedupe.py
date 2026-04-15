@@ -2,10 +2,16 @@ from pathlib import Path
 
 import pytest
 
+from codex_autorunner.core.orchestration import ChatOperationState
+from codex_autorunner.integrations.telegram.adapter import (
+    TelegramMessage,
+    TelegramUpdate,
+)
 from codex_autorunner.integrations.telegram.config import TelegramBotConfig
 from codex_autorunner.integrations.telegram.constants import (
     UPDATE_ID_PERSIST_INTERVAL_SECONDS,
 )
+from codex_autorunner.integrations.telegram.dispatch import dispatch_update
 from codex_autorunner.integrations.telegram.service import TelegramBotService
 
 
@@ -80,4 +86,55 @@ async def test_update_dedupe_persists_after_interval(
         await service._should_process_update(key, 11)
         assert len(calls) == 1
     finally:
+        await service._bot.close()
+
+
+@pytest.mark.anyio
+async def test_dispatch_update_registers_shared_chat_operation(tmp_path: Path) -> None:
+    config = TelegramBotConfig.from_raw(
+        {
+            "enabled": True,
+            "allowed_chat_ids": [123],
+            "allowed_user_ids": [456],
+        },
+        root=tmp_path,
+        env={"CAR_TELEGRAM_BOT_TOKEN": "test-token"},
+    )
+    service = TelegramBotService(config)
+    try:
+        message = TelegramMessage(
+            update_id=21,
+            message_id=7,
+            chat_id=123,
+            thread_id=None,
+            from_user_id=456,
+            text="hello from telegram",
+            caption=None,
+            date=1_700_000_000,
+            is_topic_message=False,
+            is_edited=False,
+            reply_to_message_id=None,
+        )
+
+        async def _handle_message(_message):  # type: ignore[no-untyped-def]
+            return None
+
+        service._handle_message = _handle_message  # type: ignore[assignment]
+        service._should_bypass_topic_queue = lambda _message: True  # type: ignore[assignment]
+
+        await dispatch_update(
+            service,
+            TelegramUpdate(update_id=21, message=message, callback=None),
+        )
+
+        snapshot = service._chat_operation_store.get_operation("telegram:update:21")
+        assert snapshot is not None
+        assert snapshot.surface_kind == "telegram"
+        assert snapshot.state is ChatOperationState.COMPLETED
+        assert snapshot.metadata["kind"] == "message"
+        assert snapshot.metadata["chat_id"] == 123
+        assert snapshot.metadata["message_id"] == 7
+    finally:
+        await service._runtime_services.close()
+        await service._store.close()
         await service._bot.close()

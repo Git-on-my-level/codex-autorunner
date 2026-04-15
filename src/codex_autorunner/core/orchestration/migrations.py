@@ -8,7 +8,7 @@ from typing import Callable
 from ..time_utils import now_iso
 from .models import OrchestrationTableDefinition
 
-ORCHESTRATION_SCHEMA_VERSION = 20
+ORCHESTRATION_SCHEMA_VERSION = 21
 
 
 @dataclass(frozen=True)
@@ -1179,6 +1179,64 @@ def _apply_v20(conn: sqlite3.Connection) -> None:
         )
 
 
+def _apply_v21(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS orch_chat_operations (
+            operation_id TEXT PRIMARY KEY,
+            surface_kind TEXT NOT NULL,
+            surface_operation_key TEXT NOT NULL,
+            conversation_id TEXT,
+            thread_target_id TEXT,
+            state TEXT NOT NULL,
+            execution_id TEXT,
+            backend_turn_id TEXT,
+            status_message TEXT,
+            blocking_reason TEXT,
+            ack_requested_at TEXT,
+            ack_completed_at TEXT,
+            first_visible_feedback_at TEXT,
+            anchor_ref TEXT,
+            interrupt_ref TEXT,
+            delivery_state TEXT,
+            delivery_cursor_json TEXT,
+            delivery_attempt_count INTEGER NOT NULL DEFAULT 0,
+            delivery_claimed_at TEXT,
+            terminal_outcome TEXT,
+            terminal_detail TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            UNIQUE(surface_kind, surface_operation_key)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_chat_operations_thread_updated
+            ON orch_chat_operations(thread_target_id, updated_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_chat_operations_surface_state_updated
+            ON orch_chat_operations(surface_kind, state, updated_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_chat_operations_conversation_updated
+            ON orch_chat_operations(conversation_id, updated_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_chat_operations_recovery
+            ON orch_chat_operations(state, terminal_outcome, updated_at)
+        """
+    )
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
@@ -1212,6 +1270,7 @@ _MIGRATIONS = (
         "refine_event_projection_execution_indexes",
         _apply_v20,
     ),
+    _MigrationStep(21, "add_chat_operation_ledger", _apply_v21),
 )
 
 
@@ -1300,6 +1359,11 @@ _TABLE_DEFINITIONS = (
         name="orch_notification_conversations",
         role="authoritative",
         description="Replyable PMA notification continuations keyed by delivered chat message ids.",
+    ),
+    OrchestrationTableDefinition(
+        name="orch_chat_operations",
+        role="authoritative",
+        description="Shared durable chat operation ledger keyed by surface-visible operation identity rather than transport-local delivery mirrors.",
     ),
     OrchestrationTableDefinition(
         name="orch_transcript_mirrors",

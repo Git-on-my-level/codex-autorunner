@@ -13,6 +13,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from codex_autorunner.core.orchestration import (
+    SQLiteChatOperationLedger,
+    initialize_orchestration_sqlite,
+)
 from codex_autorunner.integrations.chat.collaboration_policy import (
     CollaborationEvaluationResult,
 )
@@ -194,9 +198,15 @@ class _ChaosRest:
 
 class _ChaosHarness:
     def __init__(self, tmp_path: Path) -> None:
+        initialize_orchestration_sqlite(tmp_path, durable=False)
         self.store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+        self.operation_store = SQLiteChatOperationLedger(tmp_path, durable=False)
         self.rest = _ChaosRest()
-        self.config = SimpleNamespace(application_id="app-1", max_message_length=2000)
+        self.config = SimpleNamespace(
+            application_id="app-1",
+            max_message_length=2000,
+            root=tmp_path,
+        )
         self.logger = logging.getLogger("test.discord.chaos")
 
     async def initialize(self) -> None:
@@ -439,11 +449,17 @@ def _build_recovery_service(
     *,
     store: DiscordStateStore,
     rest: _ChaosRest,
+    operation_store: SQLiteChatOperationLedger,
 ) -> DiscordBotService:
     service = DiscordBotService.__new__(DiscordBotService)
     service._store = store
+    service._chat_operation_store = operation_store
     service._rest = rest
-    service._config = SimpleNamespace(application_id="app-1", max_message_length=2000)
+    service._config = SimpleNamespace(
+        application_id="app-1",
+        max_message_length=2000,
+        root=Path("."),
+    )
     service._logger = logging.getLogger("test.discord.chaos.recovery")
     service._handle_car_command = AsyncMock()
     service._handle_pma_command = AsyncMock()
@@ -757,7 +773,11 @@ async def test_recovery_resumes_acked_not_executed_without_second_ack(
     harness = _ChaosHarness(tmp_path)
     await harness.initialize()
     try:
-        service = _build_recovery_service(store=harness.store, rest=harness.rest)
+        service = _build_recovery_service(
+            store=harness.store,
+            rest=harness.rest,
+            operation_store=harness.operation_store,
+        )
         ctx = _make_ctx(
             interaction_id="recover-ack-1",
             interaction_token="token-recover-ack-1",
@@ -821,7 +841,11 @@ async def test_recovery_replays_delivery_without_rerunning_business_logic(
     harness = _ChaosHarness(tmp_path)
     await harness.initialize()
     try:
-        service = _build_recovery_service(store=harness.store, rest=harness.rest)
+        service = _build_recovery_service(
+            store=harness.store,
+            rest=harness.rest,
+            operation_store=harness.operation_store,
+        )
         ctx = _make_ctx(
             interaction_id="recover-delivery-1",
             interaction_token="token-recover-delivery-1",
@@ -898,7 +922,11 @@ async def test_recovery_skips_execution_replay_during_backoff_window(
     harness = _ChaosHarness(tmp_path)
     await harness.initialize()
     try:
-        service = _build_recovery_service(store=harness.store, rest=harness.rest)
+        service = _build_recovery_service(
+            store=harness.store,
+            rest=harness.rest,
+            operation_store=harness.operation_store,
+        )
         ctx = _make_ctx(
             interaction_id="recover-backoff-1",
             interaction_token="token-recover-backoff-1",
@@ -956,7 +984,11 @@ async def test_recovery_abandons_unchanged_delivery_cursor_after_budget(
     harness = _ChaosHarness(tmp_path)
     await harness.initialize()
     try:
-        service = _build_recovery_service(store=harness.store, rest=harness.rest)
+        service = _build_recovery_service(
+            store=harness.store,
+            rest=harness.rest,
+            operation_store=harness.operation_store,
+        )
         ctx = _make_ctx(
             interaction_id="recover-unchanged-cursor-1",
             interaction_token="token-recover-unchanged-cursor-1",
@@ -1037,7 +1069,11 @@ async def test_duplicate_completed_interaction_is_rejected_without_rerun(
     harness = _ChaosHarness(tmp_path)
     await harness.initialize()
     try:
-        service = _build_recovery_service(store=harness.store, rest=harness.rest)
+        service = _build_recovery_service(
+            store=harness.store,
+            rest=harness.rest,
+            operation_store=harness.operation_store,
+        )
         ctx = _make_ctx(
             interaction_id="recover-dup-done-1",
             interaction_token="token-recover-dup-done-1",
@@ -1101,7 +1137,11 @@ async def test_recovery_replays_execution_when_defer_ack_hint_is_pending(
     harness = _ChaosHarness(tmp_path)
     await harness.initialize()
     try:
-        service = _build_recovery_service(store=harness.store, rest=harness.rest)
+        service = _build_recovery_service(
+            store=harness.store,
+            rest=harness.rest,
+            operation_store=harness.operation_store,
+        )
 
         async def _recovered_handler(
             interaction_id: str,
@@ -1179,7 +1219,11 @@ async def test_successful_immediate_response_clears_delivery_cursor_and_recovery
     harness = _ChaosHarness(tmp_path)
     await harness.initialize()
     try:
-        service = _build_recovery_service(store=harness.store, rest=harness.rest)
+        service = _build_recovery_service(
+            store=harness.store,
+            rest=harness.rest,
+            operation_store=harness.operation_store,
+        )
 
         async def _immediate_handler(
             interaction_id: str,

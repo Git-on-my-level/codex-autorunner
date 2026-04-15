@@ -14,6 +14,13 @@ from .catalog import (
     map_agent_capabilities,
     merge_agent_capabilities,
 )
+from .chat_operation_ledger import (
+    ChatOperationRecoveryAction,
+    ChatOperationRecoveryDecision,
+    ChatOperationRegistration,
+    SQLiteChatOperationLedger,
+    plan_chat_operation_recovery,
+)
 from .chat_operation_state import (
     CHAT_OPERATION_ALLOWED_TRANSITIONS,
     CHAT_OPERATION_TERMINAL_STATES,
@@ -147,6 +154,9 @@ __all__ = [
     "Binding",
     "CHAT_OPERATION_ALLOWED_TRANSITIONS",
     "CHAT_OPERATION_TERMINAL_STATES",
+    "ChatOperationRecoveryAction",
+    "ChatOperationRecoveryDecision",
+    "ChatOperationRegistration",
     "ChatOperationSnapshot",
     "ChatOperationState",
     "ChatOperationStore",
@@ -205,6 +215,7 @@ __all__ = [
     "SurfaceIngressResult",
     "SurfaceOrchestrationIngress",
     "SurfaceThreadMessageRequest",
+    "SQLiteChatOperationLedger",
     "TargetCapability",
     "TargetKind",
     "ThreadControlRequest",
@@ -243,6 +254,7 @@ __all__ = [
     "list_orchestration_table_definitions",
     "map_agent_capabilities",
     "merge_agent_capabilities",
+    "plan_chat_operation_recovery",
     "audit_execution_history",
     "export_execution_history_bundle",
     "provider_raw_trace_routing",

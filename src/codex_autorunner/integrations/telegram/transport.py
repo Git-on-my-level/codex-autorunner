@@ -5,6 +5,7 @@ import secrets
 from typing import Any, Optional
 
 from ...core.logging_utils import log_event
+from ...core.orchestration import ChatOperationState
 from ...core.state import now_iso
 from .adapter import TelegramAPIError, TelegramCallbackQuery
 from .constants import PLACEHOLDER_TEXT, TELEGRAM_MAX_MESSAGE_LENGTH
@@ -90,11 +91,18 @@ class TelegramMessageTransport:
         overflow_mode_override: Optional[str] = None,
     ) -> bool:
         operation: Optional[str] = None
+        operation_id = self._current_chat_operation_id()
         if placeholder_id is not None:
             if delete_placeholder_on_delivery:
                 operation = OUTBOX_OPERATION_SEND_DELETE_PLACEHOLDER
             else:
                 operation = OUTBOX_OPERATION_SEND_KEEP_PLACEHOLDER
+        if operation_id is not None:
+            await self._mark_chat_operation_state(
+                operation_id,
+                state=ChatOperationState.DELIVERING,
+                delivery_state="pending",
+            )
         record = OutboxRecord(
             record_id=secrets.token_hex(8),
             chat_id=chat_id,
@@ -104,6 +112,7 @@ class TelegramMessageTransport:
             text=text,
             created_at=now_iso(),
             operation=operation,
+            operation_id=operation_id,
             overflow_mode_override=overflow_mode_override,
         )
         return await self._outbox_manager.send_message_with_outbox(record)
@@ -564,6 +573,17 @@ class TelegramMessageTransport:
                 message_id=callback.message_id,
                 text=text,
             )
+            operation_id = self._current_chat_operation_id()
+            if operation_id is not None:
+                await self._mark_chat_operation_state(
+                    operation_id,
+                    state=ChatOperationState.ACKNOWLEDGED,
+                    ack_completed_at=now_iso(),
+                    first_visible_feedback_at=now_iso(),
+                    anchor_ref=(
+                        str(callback.message_id) if callback.message_id else None
+                    ),
+                )
         except TelegramAPIError as exc:
             log_event(
                 self._logger,

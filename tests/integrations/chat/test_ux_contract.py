@@ -19,6 +19,10 @@ def test_chat_operation_state_machine_foundation_contract() -> None:
     assert CHAT_UX_CONTRACT_VERSION == "chat-ux-foundation-v1"
     assert is_valid_chat_operation_transition(
         ChatOperationState.RECEIVED,
+        ChatOperationState.ACKNOWLEDGED,
+    )
+    assert is_valid_chat_operation_transition(
+        ChatOperationState.RECEIVED,
         ChatOperationState.ROUTING,
     )
     assert is_valid_chat_operation_transition(
@@ -48,6 +52,8 @@ def test_chat_ux_descriptors_cover_every_shared_state() -> None:
 def test_chat_operation_snapshot_and_store_protocol_surface_smoke() -> None:
     snapshot = ChatOperationSnapshot(
         operation_id="op-1",
+        surface_kind="telegram",
+        surface_operation_key="telegram:update:1",
         thread_target_id="thread-1",
         state=ChatOperationState.QUEUED,
         execution_id="exec-1",
@@ -59,6 +65,8 @@ def test_chat_operation_snapshot_and_store_protocol_surface_smoke() -> None:
     assert snapshot.execution_id == "exec-1"
     assert snapshot.metadata["surface"] == "telegram"
     assert hasattr(ChatOperationStore, "get_operation")
+    assert hasattr(ChatOperationStore, "get_operation_by_surface")
     assert hasattr(ChatOperationStore, "upsert_operation")
     assert hasattr(ChatOperationStore, "list_operations_for_thread")
+    assert hasattr(ChatOperationStore, "list_recoverable_operations")
     assert hasattr(ChatOperationStore, "delete_operation")

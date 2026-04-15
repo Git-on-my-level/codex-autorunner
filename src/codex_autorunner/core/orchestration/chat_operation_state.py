@@ -17,10 +17,13 @@ class ChatOperationState(str, Enum):
     """Authoritative lifecycle states for one surface-visible chat operation."""
 
     RECEIVED = "received"
+    ACKNOWLEDGED = "acknowledged"
+    VISIBLE = "visible"
     ROUTING = "routing"
     BLOCKED = "blocked"
     QUEUED = "queued"
     RUNNING = "running"
+    INTERRUPTING = "interrupting"
     DELIVERING = "delivering"
     COMPLETED = "completed"
     INTERRUPTED = "interrupted"
@@ -45,16 +48,49 @@ CHAT_OPERATION_ALLOWED_TRANSITIONS: dict[
 ] = {
     ChatOperationState.RECEIVED: frozenset(
         {
+            ChatOperationState.ACKNOWLEDGED,
+            ChatOperationState.VISIBLE,
             ChatOperationState.ROUTING,
+            ChatOperationState.QUEUED,
+            ChatOperationState.RUNNING,
+            ChatOperationState.INTERRUPTING,
             ChatOperationState.CANCELLED,
             ChatOperationState.FAILED,
         }
     ),
+    ChatOperationState.ACKNOWLEDGED: frozenset(
+        {
+            ChatOperationState.VISIBLE,
+            ChatOperationState.QUEUED,
+            ChatOperationState.RUNNING,
+            ChatOperationState.INTERRUPTING,
+            ChatOperationState.DELIVERING,
+            ChatOperationState.COMPLETED,
+            ChatOperationState.INTERRUPTED,
+            ChatOperationState.FAILED,
+            ChatOperationState.CANCELLED,
+        }
+    ),
+    ChatOperationState.VISIBLE: frozenset(
+        {
+            ChatOperationState.QUEUED,
+            ChatOperationState.RUNNING,
+            ChatOperationState.INTERRUPTING,
+            ChatOperationState.DELIVERING,
+            ChatOperationState.COMPLETED,
+            ChatOperationState.INTERRUPTED,
+            ChatOperationState.FAILED,
+            ChatOperationState.CANCELLED,
+        }
+    ),
     ChatOperationState.ROUTING: frozenset(
         {
+            ChatOperationState.ACKNOWLEDGED,
+            ChatOperationState.VISIBLE,
             ChatOperationState.BLOCKED,
             ChatOperationState.QUEUED,
             ChatOperationState.RUNNING,
+            ChatOperationState.INTERRUPTING,
             ChatOperationState.FAILED,
             ChatOperationState.CANCELLED,
         }
@@ -69,7 +105,9 @@ CHAT_OPERATION_ALLOWED_TRANSITIONS: dict[
     ),
     ChatOperationState.QUEUED: frozenset(
         {
+            ChatOperationState.VISIBLE,
             ChatOperationState.RUNNING,
+            ChatOperationState.INTERRUPTING,
             ChatOperationState.INTERRUPTED,
             ChatOperationState.FAILED,
             ChatOperationState.CANCELLED,
@@ -78,16 +116,29 @@ CHAT_OPERATION_ALLOWED_TRANSITIONS: dict[
     ChatOperationState.RUNNING: frozenset(
         {
             ChatOperationState.BLOCKED,
+            ChatOperationState.VISIBLE,
             ChatOperationState.DELIVERING,
+            ChatOperationState.INTERRUPTING,
+            ChatOperationState.COMPLETED,
             ChatOperationState.INTERRUPTED,
             ChatOperationState.FAILED,
         }
     ),
+    ChatOperationState.INTERRUPTING: frozenset(
+        {
+            ChatOperationState.DELIVERING,
+            ChatOperationState.INTERRUPTED,
+            ChatOperationState.FAILED,
+            ChatOperationState.CANCELLED,
+        }
+    ),
     ChatOperationState.DELIVERING: frozenset(
         {
+            ChatOperationState.VISIBLE,
             ChatOperationState.COMPLETED,
             ChatOperationState.INTERRUPTED,
             ChatOperationState.FAILED,
+            ChatOperationState.CANCELLED,
         }
     ),
     ChatOperationState.COMPLETED: frozenset(),
@@ -116,12 +167,27 @@ class ChatOperationSnapshot:
     """
 
     operation_id: str
-    thread_target_id: str
+    surface_kind: str
+    surface_operation_key: str
     state: ChatOperationState
+    thread_target_id: Optional[str] = None
+    conversation_id: Optional[str] = None
     execution_id: Optional[str] = None
     backend_turn_id: Optional[str] = None
     status_message: Optional[str] = None
     blocking_reason: Optional[str] = None
+    ack_requested_at: Optional[str] = None
+    ack_completed_at: Optional[str] = None
+    first_visible_feedback_at: Optional[str] = None
+    anchor_ref: Optional[str] = None
+    interrupt_ref: Optional[str] = None
+    delivery_state: Optional[str] = None
+    delivery_cursor: Optional[Mapping[str, Any]] = None
+    delivery_attempt_count: int = 0
+    delivery_claimed_at: Optional[str] = None
+    terminal_outcome: Optional[str] = None
+    terminal_detail: Optional[str] = None
+    created_at: Optional[str] = None
     updated_at: Optional[str] = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
@@ -142,12 +208,23 @@ class ChatOperationStore(Protocol):
         self, snapshot: ChatOperationSnapshot
     ) -> ChatOperationSnapshot: ...
 
+    def get_operation_by_surface(
+        self, surface_kind: str, surface_operation_key: str
+    ) -> Optional[ChatOperationSnapshot]: ...
+
     def list_operations_for_thread(
         self,
         thread_target_id: str,
         *,
         include_terminal: bool = False,
         limit: int = 20,
+    ) -> list[ChatOperationSnapshot]: ...
+
+    def list_recoverable_operations(
+        self,
+        *,
+        surface_kind: Optional[str] = None,
+        limit: int = 200,
     ) -> list[ChatOperationSnapshot]: ...
 
     def delete_operation(self, operation_id: str) -> None: ...

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import contextvars
 import json
 import logging
 import os
@@ -39,7 +40,11 @@ from ...core.hub_control_plane.service import (
 )
 from ...core.locks import FileLock, FileLockBusy
 from ...core.logging_utils import log_event
-from ...core.orchestration import ORCHESTRATION_SCHEMA_VERSION
+from ...core.orchestration import (
+    ORCHESTRATION_SCHEMA_VERSION,
+    ChatOperationState,
+    SQLiteChatOperationLedger,
+)
 from ...core.request_context import reset_conversation_id, set_conversation_id
 from ...core.runtime_services import RuntimeServices
 from ...core.state import now_iso
@@ -141,6 +146,9 @@ from .voice import TelegramVoiceManager
 
 TICKET_FLOW_WATCH_INTERVAL_SECONDS = 20
 TYPING_HEARTBEAT_INTERVAL_SECONDS = 4.0
+_CURRENT_TELEGRAM_OPERATION_ID: contextvars.ContextVar[Optional[str]] = (
+    contextvars.ContextVar("telegram_chat_operation_id", default=None)
+)
 
 
 def _build_opencode_supervisor(
@@ -288,6 +296,9 @@ class TelegramBotService(
         self._allowlist = config.allowlist()
         self._store = TelegramStateStore(
             config.state_file, default_approval_mode=config.defaults.approval_mode
+        )
+        self._chat_operation_store = SQLiteChatOperationLedger(
+            self._hub_root or self._config.root
         )
         self._router = TopicRouter(self._store)
         self._app_server_state_root = resolve_global_state_root() / "workspaces"
@@ -467,6 +478,18 @@ class TelegramBotService(
     async def _handle_telegram_outbox_delivery(
         self, record: OutboxRecord, delivered_message_id: Optional[int]
     ) -> None:
+        if record.operation_id:
+            await self._mark_chat_operation_state(
+                record.operation_id,
+                state=ChatOperationState.COMPLETED,
+                delivery_state="delivered",
+                first_visible_feedback_at=now_iso(),
+                anchor_ref=(
+                    str(delivered_message_id)
+                    if isinstance(delivered_message_id, int)
+                    else None
+                ),
+            )
         if not isinstance(delivered_message_id, int):
             return
         delivered_id_str = str(delivered_message_id)
@@ -1654,6 +1677,88 @@ class TelegramBotService(
         self, message: str, *, chat_id: int, thread_id: Optional[int]
     ) -> str:
         return _with_conversation_id(message, chat_id=chat_id, thread_id=thread_id)
+
+    def _current_chat_operation_id(self) -> Optional[str]:
+        operation_id = _CURRENT_TELEGRAM_OPERATION_ID.get()
+        return str(operation_id).strip() or None if operation_id is not None else None
+
+    def _with_chat_operation(self, operation_id: Optional[str], work: Any) -> Any:
+        normalized_operation_id = (
+            str(operation_id or "").strip() or None
+            if operation_id is not None
+            else None
+        )
+        if normalized_operation_id is None:
+            return work
+
+        async def wrapped() -> Any:
+            token = _CURRENT_TELEGRAM_OPERATION_ID.set(normalized_operation_id)
+            try:
+                return await work()
+            finally:
+                _CURRENT_TELEGRAM_OPERATION_ID.reset(token)
+
+        return wrapped
+
+    async def _register_accepted_chat_operation(
+        self,
+        *,
+        operation_id: str,
+        surface_operation_key: str,
+        conversation_id: Optional[str],
+        chat_id: Optional[int],
+        thread_id: Optional[int],
+        user_id: Optional[int],
+        message_id: Optional[int],
+        kind: str,
+    ) -> None:
+        self._chat_operation_store.register_operation(
+            operation_id=operation_id,
+            surface_kind="telegram",
+            surface_operation_key=surface_operation_key,
+            state=ChatOperationState.RECEIVED,
+            conversation_id=conversation_id,
+            metadata={
+                "kind": kind,
+                "chat_id": chat_id,
+                "thread_id": thread_id,
+                "user_id": user_id,
+                "message_id": message_id,
+            },
+        )
+
+    async def _mark_chat_operation_state(
+        self,
+        operation_id: Optional[str],
+        *,
+        state: ChatOperationState,
+        validate_transition: bool = False,
+        **changes: Any,
+    ) -> None:
+        normalized_operation_id = str(operation_id or "").strip()
+        if not normalized_operation_id:
+            return
+        try:
+            self._chat_operation_store.patch_operation(
+                normalized_operation_id,
+                state=state,
+                validate_transition=validate_transition,
+                **changes,
+            )
+        except ValueError:
+            snapshot = self._chat_operation_store.get_operation(normalized_operation_id)
+            if snapshot is None:
+                return
+            self._chat_operation_store.upsert_operation(
+                snapshot.__class__(
+                    **{
+                        **snapshot.__dict__,
+                        "state": state,
+                        "updated_at": now_iso(),
+                        **changes,
+                    }
+                )
+            )
 
     async def _should_process_update(self, key: str, update_id: int) -> bool:
         if not isinstance(update_id, int):

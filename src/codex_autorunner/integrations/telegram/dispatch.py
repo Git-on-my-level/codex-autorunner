@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Awaitable, Callable, Optional
 
 from ...core.logging_utils import log_event
+from ...core.orchestration import ChatOperationState
 from ...core.request_context import reset_conversation_id, set_conversation_id
+from ...core.state import now_iso
 from .adapter import (
     ApprovalCallback,
     CancelCallback,
@@ -29,9 +31,34 @@ class DispatchContext:
     is_topic: Optional[bool]
     is_edited: Optional[bool]
     topic_key: Optional[str]
+    operation_id: Optional[str] = None
 
 
 DispatchRoute = Callable[[Any, TelegramUpdate, DispatchContext], Awaitable[None]]
+
+
+async def _mark_chat_operation_state(
+    handlers: Any,
+    operation_id: Optional[str],
+    *,
+    state: ChatOperationState,
+    **changes: Any,
+) -> None:
+    marker = getattr(handlers, "_mark_chat_operation_state", None)
+    if not callable(marker):
+        return
+    await marker(operation_id, state=state, **changes)
+
+
+def _with_chat_operation(
+    handlers: Any,
+    operation_id: Optional[str],
+    work: Callable[[], Awaitable[None]],
+) -> Callable[[], Awaitable[None]]:
+    wrapper = getattr(handlers, "_with_chat_operation", None)
+    if not callable(wrapper):
+        return work
+    return wrapper(operation_id, work)
 
 
 async def _run_with_typing_indicator(
@@ -158,9 +185,39 @@ async def _dispatch_callback(
     callback = update.callback
     if callback is None:
         return
+    operation_id = getattr(context, "operation_id", None)
 
     async def _handle() -> None:
-        await handlers._handle_callback(callback)
+        parsed = parse_callback_data(callback.data)
+        target_state = (
+            ChatOperationState.INTERRUPTING
+            if isinstance(parsed, CancelCallback)
+            and (
+                parsed.kind == "interrupt"
+                or parsed.kind.startswith("queue_interrupt_send:")
+            )
+            else ChatOperationState.RUNNING
+        )
+        await _mark_chat_operation_state(
+            handlers,
+            operation_id,
+            state=target_state,
+        )
+        try:
+            await handlers._handle_callback(callback)
+        except Exception:
+            await _mark_chat_operation_state(
+                handlers,
+                operation_id,
+                state=ChatOperationState.FAILED,
+                terminal_outcome="failed",
+            )
+            raise
+        await _mark_chat_operation_state(
+            handlers,
+            operation_id,
+            state=ChatOperationState.COMPLETED,
+        )
 
     parsed = parse_callback_data(callback.data)
     should_bypass_queue = isinstance(
@@ -184,21 +241,29 @@ async def _dispatch_callback(
         if not should_bypass_queue:
             handlers._enqueue_topic_work(
                 context.topic_key,
-                lambda: _run_with_typing_indicator(
+                lambda: _with_chat_operation(
                     handlers,
-                    chat_id=callback.chat_id,
-                    thread_id=callback.thread_id,
-                    work=_handle,
-                ),
+                    operation_id,
+                    lambda: _run_with_typing_indicator(
+                        handlers,
+                        chat_id=callback.chat_id,
+                        thread_id=callback.thread_id,
+                        work=_handle,
+                    ),
+                )(),
                 force_queue=True,
             )
             return
-    await _run_with_typing_indicator(
+    await _with_chat_operation(
         handlers,
-        chat_id=callback.chat_id,
-        thread_id=callback.thread_id,
-        work=_handle,
-    )
+        operation_id,
+        lambda: _run_with_typing_indicator(
+            handlers,
+            chat_id=callback.chat_id,
+            thread_id=callback.thread_id,
+            work=_handle,
+        ),
+    )()
 
 
 async def _dispatch_message(
@@ -207,40 +272,85 @@ async def _dispatch_message(
     message = update.message
     if message is None:
         return
+    operation_id = getattr(context, "operation_id", None)
 
     async def _handle() -> None:
-        await handlers._handle_message(message)
+        await _mark_chat_operation_state(
+            handlers,
+            operation_id,
+            state=ChatOperationState.RUNNING,
+        )
+        try:
+            await handlers._handle_message(message)
+        except Exception:
+            await _mark_chat_operation_state(
+                handlers,
+                operation_id,
+                state=ChatOperationState.FAILED,
+                terminal_outcome="failed",
+            )
+            raise
+        await _mark_chat_operation_state(
+            handlers,
+            operation_id,
+            state=ChatOperationState.COMPLETED,
+        )
 
     if context.topic_key:
         if handlers._should_bypass_topic_queue(message):
-            await _run_with_typing_indicator(
+            await _with_chat_operation(
                 handlers,
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-                work=_handle,
-            )
+                operation_id,
+                lambda: _run_with_typing_indicator(
+                    handlers,
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    work=_handle,
+                ),
+            )()
             return
-        await handlers._maybe_send_queued_placeholder(
+        placeholder_id = await handlers._maybe_send_queued_placeholder(
             message, topic_key=context.topic_key
+        )
+        if placeholder_id is not None:
+            await _mark_chat_operation_state(
+                handlers,
+                operation_id,
+                state=ChatOperationState.VISIBLE,
+                first_visible_feedback_at=now_iso(),
+                anchor_ref=str(placeholder_id),
+            )
+        await _mark_chat_operation_state(
+            handlers,
+            operation_id,
+            state=ChatOperationState.QUEUED,
         )
         handlers._enqueue_topic_work(
             context.topic_key,
-            lambda: _run_with_typing_indicator(
+            lambda: _with_chat_operation(
                 handlers,
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-                work=_handle,
-            ),
+                operation_id,
+                lambda: _run_with_typing_indicator(
+                    handlers,
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    work=_handle,
+                ),
+            )(),
             force_queue=True,
             item_id=str(message.message_id),
         )
         return
-    await _run_with_typing_indicator(
+    await _with_chat_operation(
         handlers,
-        chat_id=message.chat_id,
-        thread_id=message.thread_id,
-        work=_handle,
-    )
+        operation_id,
+        lambda: _run_with_typing_indicator(
+            handlers,
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            work=_handle,
+        ),
+    )()
 
 
 _ROUTES: tuple[tuple[str, DispatchRoute], ...] = (
@@ -249,9 +359,32 @@ _ROUTES: tuple[tuple[str, DispatchRoute], ...] = (
 )
 
 
-async def dispatch_update(handlers: Any, update: TelegramUpdate) -> None:
-    from ...core.state import now_iso
+def _operation_identity(
+    update: TelegramUpdate,
+) -> tuple[Optional[str], Optional[str], str]:
+    if update.callback is not None:
+        update_id = update.callback.update_id
+        if update_id is not None:
+            value = f"telegram:update:{update_id}"
+            return value, value, "callback"
+        callback_id = str(update.callback.callback_id or "").strip()
+        if callback_id:
+            value = f"telegram:callback:{callback_id}"
+            return value, value, "callback"
+        return None, None, "callback"
+    if update.message is not None:
+        update_id = update.message.update_id
+        if update_id is not None:
+            value = f"telegram:update:{update_id}"
+            return value, value, "message"
+        message_id = update.message.message_id
+        if message_id is not None:
+            value = f"telegram:message:{message_id}"
+            return value, value, "message"
+    return None, None, "message"
 
+
+async def dispatch_update(handlers: Any, update: TelegramUpdate) -> None:
     context = await _build_context(handlers, update)
     conversation_id = None
     if context.chat_id is not None:
@@ -298,6 +431,19 @@ async def dispatch_update(handlers: Any, update: TelegramUpdate) -> None:
         if not allowlist_allows(update, handlers._allowlist):
             _log_denied(handlers, update)
             return
+        operation_id, surface_operation_key, kind = _operation_identity(update)
+        if operation_id and surface_operation_key:
+            await handlers._register_accepted_chat_operation(
+                operation_id=operation_id,
+                surface_operation_key=surface_operation_key,
+                conversation_id=conversation_id,
+                chat_id=context.chat_id,
+                thread_id=context.thread_id,
+                user_id=context.user_id,
+                message_id=context.message_id,
+                kind=kind,
+            )
+            context = replace(context, operation_id=operation_id)
         for name, route in _ROUTES:
             if name == "callback" and update.callback:
                 await route(handlers, update, context)
