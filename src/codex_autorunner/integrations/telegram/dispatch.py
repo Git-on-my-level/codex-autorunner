@@ -8,17 +8,15 @@ from ...core.logging_utils import log_event
 from ...core.orchestration import ChatOperationState
 from ...core.request_context import reset_conversation_id, set_conversation_id
 from ...core.state import now_iso
+from ..chat.action_ux_contract import (
+    callback_entry_bypasses_queue,
+    telegram_callback_ux_contract_for_callback,
+)
 from .adapter import (
-    ApprovalCallback,
-    CancelCallback,
-    QuestionCancelCallback,
-    QuestionCustomCallback,
-    QuestionDoneCallback,
-    QuestionOptionCallback,
     TelegramUpdate,
     allowlist_allows,
 )
-from .chat_callbacks import parse_callback_data
+from .chat_callbacks import TelegramCallbackCodec
 from .immediate_feedback_bridge import (
     telegram_immediate_callback_ack,
     telegram_publish_queued_notice,
@@ -191,17 +189,25 @@ async def _dispatch_callback(
         return
     operation_id = getattr(context, "operation_id", None)
 
-    async def _handle() -> None:
-        parsed = parse_callback_data(callback.data)
-        target_state = (
-            ChatOperationState.INTERRUPTING
-            if isinstance(parsed, CancelCallback)
-            and (
-                parsed.kind == "interrupt"
-                or parsed.kind.startswith("queue_interrupt_send:")
-            )
-            else ChatOperationState.RUNNING
+    decoded = TelegramCallbackCodec().decode(callback.data)
+    callback_ux = (
+        telegram_callback_ux_contract_for_callback(
+            decoded.callback_id,
+            decoded.payload,
         )
+        if decoded is not None
+        else None
+    )
+
+    should_bypass_queue = callback_entry_bypasses_queue(callback_ux)
+
+    target_state = (
+        ChatOperationState.INTERRUPTING
+        if callback_ux is not None and callback_ux.control_priority == "interrupt"
+        else ChatOperationState.RUNNING
+    )
+
+    async def _handle() -> None:
         await _mark_chat_operation_state(
             handlers,
             operation_id,
@@ -222,25 +228,6 @@ async def _dispatch_callback(
             operation_id,
             state=ChatOperationState.COMPLETED,
         )
-
-    parsed = parse_callback_data(callback.data)
-    should_bypass_queue = isinstance(
-        parsed,
-        (
-            ApprovalCallback,
-            QuestionOptionCallback,
-            QuestionDoneCallback,
-            QuestionCustomCallback,
-            QuestionCancelCallback,
-        ),
-    ) or (
-        isinstance(parsed, CancelCallback)
-        and (
-            parsed.kind == "interrupt"
-            or parsed.kind.startswith("queue_cancel:")
-            or parsed.kind.startswith("queue_interrupt_send:")
-        )
-    )
 
     await telegram_immediate_callback_ack(
         handlers,

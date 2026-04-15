@@ -3,6 +3,7 @@ from __future__ import annotations
 from codex_autorunner.integrations.chat.action_ux_contract import (
     CHAT_ACTION_UX_CONTRACT,
     CHAT_ACTION_UX_CONTRACT_VERSION,
+    callback_entry_bypasses_queue,
     discord_component_ux_contract_for_route,
     discord_slash_command_ux_contract_for_id,
     plain_text_turn_ux_contract_for_mode,
@@ -66,3 +67,86 @@ def test_action_ux_contract_bridges_command_and_plain_text_policies() -> None:
     assert discord_flow_status.ack_class == "defer_public"
     assert plain_text_mentions is not None
     assert plain_text_mentions.anchor_message_reuse == "prefer"
+
+
+def test_callback_entry_bypasses_queue_returns_false_for_none() -> None:
+    assert callback_entry_bypasses_queue(None) is False
+
+
+def test_callback_entry_bypasses_queue_returns_false_for_serialize() -> None:
+    entry = telegram_callback_ux_contract_for_callback("resume")
+    assert entry is not None
+    assert entry.queue_policy == "serialize"
+    assert callback_entry_bypasses_queue(entry) is False
+
+
+def test_control_callbacks_bypass_queue() -> None:
+    control_cases = [
+        ("cancel", {"kind": "interrupt"}, "control.interrupt"),
+        ("cancel", {"kind": "queue_cancel:123"}, "control.queue_cancel"),
+        (
+            "cancel",
+            {"kind": "queue_interrupt_send:123"},
+            "control.queue_interrupt_send",
+        ),
+        ("page", {"picker_name": "bind", "page": "1"}, "control.pagination"),
+        ("flow", {"action": "refresh"}, "control.refresh"),
+    ]
+    for callback_id, payload, expected_id in control_cases:
+        entry = telegram_callback_ux_contract_for_callback(callback_id, payload)
+        assert entry is not None, f"missing UX contract for {callback_id}/{payload}"
+        assert entry.id == expected_id
+        assert (
+            callback_entry_bypasses_queue(entry) is True
+        ), f"{expected_id} should bypass queue but queue_policy={entry.queue_policy}"
+
+
+def test_approval_and_question_callbacks_bypass_queue() -> None:
+    bypass_cases = [
+        "approval",
+        "question_option",
+        "question_done",
+        "question_custom",
+        "question_cancel",
+    ]
+    for callback_id in bypass_cases:
+        entry = telegram_callback_ux_contract_for_callback(callback_id)
+        assert entry is not None, f"missing UX contract for {callback_id}"
+        assert (
+            callback_entry_bypasses_queue(entry) is True
+        ), f"{callback_id} should bypass queue but queue_policy={entry.queue_policy}"
+
+
+def test_cancel_selection_bypasses_queue() -> None:
+    entry = telegram_callback_ux_contract_for_callback("cancel", {"kind": "agent"})
+    assert entry is not None
+    assert entry.id == "telegram_callback.cancel.selection"
+    assert (
+        callback_entry_bypasses_queue(entry) is True
+    ), f"cancel.selection should bypass queue but queue_policy={entry.queue_policy}"
+
+
+def test_long_running_callbacks_do_not_bypass_queue() -> None:
+    serialize_cases = [
+        "resume",
+        "bind",
+        "agent",
+        "agent_profile",
+        "model",
+        "effort",
+        "update",
+        "update_confirm",
+        "review_commit",
+        "compact",
+        "flow",
+        "flow_run",
+    ]
+    for callback_id in serialize_cases:
+        payload = None
+        if callback_id == "flow":
+            payload = {"action": "status"}
+        entry = telegram_callback_ux_contract_for_callback(callback_id, payload)
+        assert entry is not None, f"missing UX contract for {callback_id}"
+        assert (
+            callback_entry_bypasses_queue(entry) is False
+        ), f"{callback_id} should serialize but queue_policy={entry.queue_policy}"

@@ -515,6 +515,7 @@ CHAT_ACTION_UX_CONTRACT: tuple[ChatActionUxContractEntry, ...] = (
     _telegram_callback_entry("flow_run"),
     _telegram_callback_entry(
         "cancel.selection",
+        queue_policy="bypass_active_turn",
         control_priority="control",
         anchor_message_reuse="prefer",
     ),
@@ -859,6 +860,14 @@ def telegram_allow_during_turn_for_entry(
     return entry.queue_policy in {"allow_during_turn", "control_priority"}
 
 
+def callback_entry_bypasses_queue(
+    entry: Optional[ChatActionUxContractEntry],
+) -> bool:
+    if entry is None:
+        return False
+    return entry.queue_policy in {"bypass_active_turn", "control_priority"}
+
+
 __all__ = [
     "CHAT_ACTION_UX_CONTRACT",
     "CHAT_ACTION_UX_CONTRACT_VERSION",
@@ -876,6 +885,7 @@ __all__ = [
     "SchedulerAckStrategy",
     "TelegramExposure",
     "TelegramResponsePolicy",
+    "callback_entry_bypasses_queue",
     "discord_ack_policy_for_entry",
     "discord_autocomplete_ux_contract_for_route",
     "discord_component_ux_contract_for_route",
