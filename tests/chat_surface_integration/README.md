@@ -51,6 +51,9 @@ regressed in production:
 - Related parity/doctor checks keep the shared UX regression matrix explicit so
   required scenarios cannot quietly disappear from coverage.
 
+Managed-thread restart recovery is currently covered separately at the
+orchestration/runtime layer rather than by a Telegram/Discord surface harness.
+
 Legacy ACP prompt-notification fixtures still exist in `fake_acp_server.py` for
 generic ACP compatibility work, but they are not the current Hermes contract.
 

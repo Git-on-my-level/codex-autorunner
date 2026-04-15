@@ -61,6 +61,7 @@ class QueuedNoticeResult:
 class InterruptNoticeResult:
     published: bool
     anchor_ref: Optional[str] = None
+    message_ref: Optional[ChatMessageRef] = None
 
 
 @dataclass(frozen=True)
@@ -273,22 +274,41 @@ async def publish_interrupt_notice(
     transport: ChatTransport,
     thread: ChatThreadRef,
     *,
+    reply_to: Optional[ChatMessageRef] = None,
     anchor_ref: Optional[str] = None,
     text: str = INTERRUPT_REQUESTED_TEXT,
     operation_id: Optional[str] = None,
     state_writer: Optional[ChatOperationStateWriter] = None,
     logger: Optional[logging.Logger] = None,
 ) -> InterruptNoticeResult:
+    message_ref: Optional[ChatMessageRef] = None
+    try:
+        message_ref = await transport.send_text(
+            thread,
+            text,
+            reply_to=reply_to,
+        )
+    except Exception as exc:
+        _log_transport_failure(logger, "publish_interrupt_notice", exc, thread)
+        return InterruptNoticeResult(
+            published=False,
+            anchor_ref=anchor_ref,
+        )
+
+    resolved_anchor_ref = (
+        message_ref.message_id if message_ref is not None else anchor_ref
+    )
     if state_writer is not None and operation_id is not None:
         await state_writer(
             operation_id,
             state=ChatOperationState.INTERRUPTING,
-            interrupt_ref=anchor_ref,
+            interrupt_ref=resolved_anchor_ref,
         )
 
     return InterruptNoticeResult(
         published=True,
-        anchor_ref=anchor_ref,
+        anchor_ref=resolved_anchor_ref,
+        message_ref=message_ref,
     )
 
 
@@ -333,6 +353,7 @@ async def ack_and_enqueue(
     *,
     interaction: Optional[ChatInteractionRef] = None,
     reply_to: Optional[ChatMessageRef] = None,
+    queued_actions: Sequence[ChatAction] = (),
     ux_entry: Optional[ChatActionUxContractEntry] = None,
     operation_id: Optional[str] = None,
     state_writer: Optional[ChatOperationStateWriter] = None,
@@ -360,6 +381,7 @@ async def ack_and_enqueue(
         transport,
         thread,
         reply_to=reply_to,
+        actions=queued_actions,
         operation_id=operation_id,
         state_writer=state_writer,
         cancel_action_id=cancel_action_id,

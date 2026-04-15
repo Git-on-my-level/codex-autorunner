@@ -11,8 +11,9 @@ It is intentionally aligned with `docs/ARCHITECTURE_BOUNDARIES.md`:
 - transport-specific modules continue to own protocol parsing, delivery, and
   platform limitations only
 
-This ticket does not change runtime behavior. It defines the contract and
-scaffolding future tickets must implement against.
+This document started as the foundation contract for the shared chat UX
+initiative. Later tickets did change runtime behavior, but they are expected to
+stay within the ownership boundaries and state-machine contract documented here.
 
 ## Scope
 

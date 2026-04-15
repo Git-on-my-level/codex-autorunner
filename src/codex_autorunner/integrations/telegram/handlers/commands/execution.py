@@ -142,6 +142,7 @@ from ...helpers import (
     format_public_error,
     is_interrupt_status,
 )
+from ...immediate_feedback_bridge import telegram_create_or_reuse_working_anchor
 from ...state import topic_key as build_topic_key
 from ..utils import (
     _build_opencode_token_usage,
@@ -3137,12 +3138,28 @@ class ExecutionCommands(TelegramCommandSupportMixin):
         if queued:
             placeholder_text = QUEUED_PLACEHOLDER_TEXT
         if placeholder_id is None and send_placeholder:
-            placeholder_id = await self._send_placeholder(
-                message.chat_id,
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-                text=placeholder_text,
-            )
+            if getattr(self, "_bot", None) is not None:
+                placeholder_result = await telegram_create_or_reuse_working_anchor(
+                    self,
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    reply_to_message_id=message.message_id,
+                    text=placeholder_text,
+                    operation_id=None,
+                    logger=self._logger,
+                )
+                if placeholder_result.anchor_ref is not None:
+                    try:
+                        placeholder_id = int(placeholder_result.anchor_ref)
+                    except (TypeError, ValueError):
+                        placeholder_id = None
+            else:
+                placeholder_id = await self._send_placeholder(
+                    message.chat_id,
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                    text=placeholder_text,
+                )
             key = await self._resolve_topic_key(message.chat_id, message.thread_id)
             log_event(
                 self._logger,

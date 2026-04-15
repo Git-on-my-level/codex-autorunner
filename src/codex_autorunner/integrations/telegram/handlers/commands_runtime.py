@@ -112,6 +112,7 @@ from ..helpers import (
     format_codex_features,
     parse_codex_features_list,
 )
+from ..immediate_feedback_bridge import telegram_publish_interrupt_notice
 from ..state import (
     parse_topic_key,
     topic_key,
@@ -789,22 +790,40 @@ class TelegramCommandHandlers(
         )
         _interrupt_snapshot = _Snap(platform="telegram", channel_id=str(chat_id))
         _interrupt_snapshot.record(ChatUxMilestone.RAW_EVENT_RECEIVED)
-        payload_text, parse_mode = self._prepare_outgoing_text(
-            "Stopping current turn...",
+        operation_id_getter = getattr(self, "_current_chat_operation_id", None)
+        operation_id = operation_id_getter() if callable(operation_id_getter) else None
+        interrupt_notice = await telegram_publish_interrupt_notice(
+            self,
             chat_id=chat_id,
             thread_id=thread_id,
-            reply_to=reply_to,
-        )
-        response = await self._bot.send_message(
-            chat_id,
-            payload_text,
-            message_thread_id=thread_id,
             reply_to_message_id=reply_to,
-            parse_mode=parse_mode,
+            text="Stopping current turn...",
+            operation_id=operation_id,
+            logger=self._logger,
         )
-        response_message_id = (
-            response.get("message_id") if isinstance(response, dict) else None
-        )
+        response_message_id = None
+        if interrupt_notice.anchor_ref is not None:
+            try:
+                response_message_id = int(interrupt_notice.anchor_ref)
+            except (TypeError, ValueError):
+                response_message_id = None
+        if response_message_id is None:
+            payload_text, parse_mode = self._prepare_outgoing_text(
+                "Stopping current turn...",
+                chat_id=chat_id,
+                thread_id=thread_id,
+                reply_to=reply_to,
+            )
+            response = await self._bot.send_message(
+                chat_id,
+                payload_text,
+                message_thread_id=thread_id,
+                reply_to_message_id=reply_to,
+                parse_mode=parse_mode,
+            )
+            response_message_id = (
+                response.get("message_id") if isinstance(response, dict) else None
+            )
         _interrupt_snapshot.record(ChatUxMilestone.INTERRUPT_REQUESTED_VISIBLE)
         log_event(
             self._logger,
@@ -816,8 +835,6 @@ class TelegramCommandHandlers(
             turn_id=turn_id,
             **_interrupt_snapshot.to_log_fields(),
         )
-        operation_id_getter = getattr(self, "_current_chat_operation_id", None)
-        operation_id = operation_id_getter() if callable(operation_id_getter) else None
         if operation_id is not None and isinstance(response_message_id, int):
             await self._mark_chat_operation_state(
                 operation_id,

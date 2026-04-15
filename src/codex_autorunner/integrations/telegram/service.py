@@ -1963,14 +1963,21 @@ class TelegramBotService(
         is_busy = runtime.current_turn_id is not None or runtime.queue.pending() > 0
         if not is_busy:
             return None
-        placeholder_id = await self._send_placeholder(
-            message.chat_id,
+        from .immediate_feedback_bridge import telegram_publish_queued_notice
+
+        result = await telegram_publish_queued_notice(
+            self,
+            chat_id=message.chat_id,
             thread_id=message.thread_id,
-            reply_to=message.message_id,
+            reply_to_message_id=message.message_id,
             text=QUEUED_PLACEHOLDER_TEXT,
-            reply_markup=self._queued_placeholder_keyboard(message.message_id),
+            logger=self._logger,
         )
-        if placeholder_id is None:
+        if result.anchor_ref is None:
+            return None
+        try:
+            placeholder_id = int(result.anchor_ref)
+        except (TypeError, ValueError):
             return None
         self._set_queued_placeholder(
             message.chat_id, message.message_id, placeholder_id

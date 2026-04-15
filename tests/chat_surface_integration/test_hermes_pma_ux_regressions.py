@@ -126,10 +126,10 @@ async def test_surfaces_make_busy_thread_queue_visible_before_recovery(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    runtime = HermesFixtureRuntime("official")
+    runtime = HermesFixtureRuntime("official_prompt_hang")
     patch_hermes_runtime(monkeypatch, runtime)
 
-    discord = DiscordSurfaceHarness(tmp_path / "discord-queued", timeout_seconds=8.0)
+    discord = DiscordSurfaceHarness(tmp_path / "discord-queued", timeout_seconds=15.0)
     await discord.setup(agent="hermes", approval_mode="yolo")
     try:
         discord_first = discord.start_message("cancel me")

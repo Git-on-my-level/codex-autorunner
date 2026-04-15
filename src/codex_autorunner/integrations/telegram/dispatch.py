@@ -18,8 +18,8 @@ from .adapter import (
 )
 from .chat_callbacks import TelegramCallbackCodec
 from .immediate_feedback_bridge import (
+    telegram_ack_and_enqueue,
     telegram_immediate_callback_ack,
-    telegram_publish_queued_notice,
 )
 from .state import topic_key
 
@@ -319,11 +319,14 @@ async def _dispatch_message(
         )
 
         if is_busy:
-            queued_result = await telegram_publish_queued_notice(
+            _ack_result, queued_result = await telegram_ack_and_enqueue(
                 handlers,
+                callback_id=None,
                 chat_id=message.chat_id,
                 thread_id=message.thread_id,
+                message_id=message.message_id,
                 reply_to_message_id=message.message_id,
+                is_busy=True,
                 operation_id=operation_id,
                 logger=handlers._logger if hasattr(handlers, "_logger") else None,
             )

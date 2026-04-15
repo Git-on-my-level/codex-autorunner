@@ -123,7 +123,7 @@ CHAT_UX_REGRESSION_CONTRACT = (
     ),
     ChatUxRegressionScenarioEntry(
         id="restart_recovery",
-        description="Managed-thread recovery after restart preserves queued work instead of silently dropping it.",
+        description="Managed-thread recovery after restart preserves queued work at the orchestration/runtime layer.",
         test_paths=(
             "tests/surfaces/web/routes/pma_routes/test_managed_thread_runtime.py",
         ),

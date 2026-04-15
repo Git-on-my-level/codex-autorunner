@@ -6,12 +6,15 @@ from typing import Optional
 import pytest
 
 from codex_autorunner.integrations.chat.immediate_feedback import (
+    INTERRUPT_REQUESTED_TEXT,
     QUEUED_NOTICE_TEXT,
     ImmediateAckResult,
+    InterruptNoticeResult,
     QueuedNoticeResult,
     WorkingAnchorResult,
     create_or_reuse_working_anchor,
     immediate_ack,
+    publish_interrupt_notice,
     publish_queued_notice,
 )
 from codex_autorunner.integrations.chat.models import (
@@ -39,6 +42,7 @@ class _BotStub:
     def __init__(self) -> None:
         self.sent_messages: list[dict] = []
         self.answered_callbacks: list[dict] = []
+        self.edited_messages: list[dict] = []
 
     async def send_message(
         self,
@@ -84,6 +88,23 @@ class _BotStub:
             }
         )
 
+    async def edit_message_text(
+        self,
+        *,
+        chat_id: int,
+        message_id: int,
+        text: str,
+        reply_markup: Optional[dict] = None,
+    ) -> None:
+        self.edited_messages.append(
+            {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "text": text,
+                "reply_markup": reply_markup,
+            }
+        )
+
 
 class _ServiceStub:
     def __init__(self, router: TopicRouter) -> None:
@@ -106,6 +127,7 @@ class _ServiceStub:
         self._pending_review_custom: dict = {}
         self._pending_approvals: dict = {}
         self._turn_contexts: dict = {}
+        self.state_changes: list[dict] = []
         self.timeline: list[str] = []
 
     def _resolve_topic_key(self, chat_id: int, thread_id: Optional[int]) -> str:
@@ -123,6 +145,17 @@ class _ServiceStub:
                 "callback_query_id": getattr(callback, "callback_id", None),
                 "text": text,
             }
+        )
+
+    async def _mark_chat_operation_state(
+        self,
+        operation_id,
+        *,
+        state,
+        **changes,
+    ) -> None:
+        self.state_changes.append(
+            {"operation_id": operation_id, "state": state, **changes}
         )
 
     def _get_queued_placeholder(self, chat_id: int, message_id: int) -> Optional[int]:
@@ -291,6 +324,38 @@ async def test_fast_ack_not_sent_when_topic_is_idle() -> None:
 
     assert len(handler._bot.sent_messages) == 0
     assert (10, 1) not in handler._queued_placeholder_map
+
+
+@pytest.mark.anyio
+async def test_fast_ack_marks_operation_queued_after_visible_notice() -> None:
+    topics = {}
+    store = SimpleNamespace(_topics=topics)
+
+    router = TopicRouter(store)
+    handler = _ServiceStub(router)
+
+    runtime = router.runtime_for("10:11")
+    runtime.current_turn_id = "active-turn"
+
+    message = _message(message_id=1, thread_id=11)
+    update = SimpleNamespace(update_id=1, message=message, callback=None)
+    context = SimpleNamespace(
+        chat_id=10,
+        user_id=2,
+        thread_id=11,
+        message_id=1,
+        is_topic=True,
+        is_edited=False,
+        topic_key="10:11",
+        operation_id="op-1",
+    )
+
+    await _dispatch_message(handler, update, context)
+
+    assert [change["state"].value for change in handler.state_changes] == [
+        "visible",
+        "queued",
+    ]
 
 
 @pytest.mark.anyio
@@ -602,6 +667,38 @@ async def test_publish_queued_notice_includes_cancel_button() -> None:
     result = await publish_queued_notice(transport, thread)
     assert result.published is True
     assert result.message_ref is not None
+
+
+@pytest.mark.anyio
+async def test_publish_interrupt_notice_sends_visible_message() -> None:
+    transport = _FakeTransport()
+    thread = ChatThreadRef(platform="test", chat_id="10")
+    reply_to = ChatMessageRef(thread=thread, message_id="5")
+    state_calls: list[dict] = []
+
+    async def state_writer(operation_id, *, state, **changes):
+        state_calls.append({"id": operation_id, "state": state, **changes})
+
+    result = await publish_interrupt_notice(
+        transport,
+        thread,
+        reply_to=reply_to,
+        operation_id="op-1",
+        state_writer=state_writer,
+    )
+    assert isinstance(result, InterruptNoticeResult)
+    assert result.published is True
+    assert result.anchor_ref is not None
+    assert result.message_ref is not None
+    assert transport.sent == [(INTERRUPT_REQUESTED_TEXT, thread, reply_to)]
+    assert state_calls == [
+        {
+            "id": "op-1",
+            "state": state_calls[0]["state"],
+            "interrupt_ref": result.anchor_ref,
+        }
+    ]
+    assert state_calls[0]["state"].value == "interrupting"
 
 
 @pytest.mark.anyio
