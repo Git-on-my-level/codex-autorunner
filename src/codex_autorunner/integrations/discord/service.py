@@ -3524,6 +3524,7 @@ class DiscordBotService:
         orchestrator_channel_key: str,
         managed_thread_surface_key: Optional[str] = None,
         supervision: Optional[Any] = None,
+        chat_ux_snapshot: Optional[Any] = None,
     ) -> DiscordMessageTurnResult:
         async def _run_turn() -> DiscordMessageTurnResult:
             if orchestrator_channel_key.startswith("pma:"):
@@ -3540,7 +3541,25 @@ class DiscordBotService:
                     orchestrator_channel_key=orchestrator_channel_key,
                     managed_thread_surface_key=managed_thread_surface_key,
                     supervision=supervision,
+                    chat_ux_snapshot=chat_ux_snapshot,
                 )
+            return await run_agent_turn_for_message(
+                self,
+                workspace_root=workspace_root,
+                prompt_text=prompt_text,
+                input_items=input_items,
+                source_message_id=source_message_id,
+                agent=agent,
+                model_override=model_override,
+                reasoning_effort=reasoning_effort,
+                session_key=session_key,
+                orchestrator_channel_key=orchestrator_channel_key,
+                max_actions=DISCORD_TURN_PROGRESS_MAX_ACTIONS,
+                min_edit_interval_seconds=DISCORD_TURN_PROGRESS_MIN_EDIT_INTERVAL_SECONDS,
+                heartbeat_interval_seconds=DISCORD_TURN_PROGRESS_HEARTBEAT_INTERVAL_SECONDS,
+                log_event_fn=log_event,
+                chat_ux_snapshot=chat_ux_snapshot,
+            )
             return await run_agent_turn_for_message(
                 self,
                 workspace_root=workspace_root,
@@ -8885,6 +8904,22 @@ class DiscordBotService:
             interaction_token,
             "Stopping current turn...",
             components=[],
+        )
+        from ..chat.chat_ux_telemetry import ChatUxMilestone, ChatUxTimingSnapshot
+
+        cancel_snapshot = ChatUxTimingSnapshot(
+            platform="discord", channel_id=channel_id
+        )
+        cancel_snapshot.record(ChatUxMilestone.RAW_EVENT_RECEIVED)
+        cancel_snapshot.record(ChatUxMilestone.INTERRUPT_REQUESTED_VISIBLE)
+        log_event(
+            self._logger,
+            logging.INFO,
+            "discord.turn.cancel_acknowledged",
+            channel_id=channel_id,
+            thread_target_id=thread_target_id,
+            execution_id=execution_id,
+            **cancel_snapshot.to_log_fields(),
         )
         await self._handle_car_interrupt(
             interaction_id,

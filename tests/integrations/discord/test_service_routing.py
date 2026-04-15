@@ -7295,6 +7295,7 @@ async def test_message_turn_waits_for_ingressed_slash_command_to_finish(
         session_key: str,
         orchestrator_channel_key: str,
         managed_thread_surface_key: str | None = None,
+        chat_ux_snapshot: Any = None,
     ) -> DiscordMessageTurnResult:
         _ = (
             workspace_root,
@@ -7306,6 +7307,7 @@ async def test_message_turn_waits_for_ingressed_slash_command_to_finish(
             session_key,
             orchestrator_channel_key,
             managed_thread_surface_key,
+            chat_ux_snapshot,
         )
         observed.append(f"message:{prompt_text}")
         message_turn_started.set()
@@ -7452,6 +7454,7 @@ async def test_run_forever_drains_message_queued_behind_ingressed_slash_command(
         session_key: str,
         orchestrator_channel_key: str,
         managed_thread_surface_key: str | None = None,
+        chat_ux_snapshot: Any = None,
     ) -> DiscordMessageTurnResult:
         _ = (
             workspace_root,
@@ -7463,6 +7466,7 @@ async def test_run_forever_drains_message_queued_behind_ingressed_slash_command(
             session_key,
             orchestrator_channel_key,
             managed_thread_surface_key,
+            chat_ux_snapshot,
         )
         observed.append(f"message:{prompt_text}")
         return DiscordMessageTurnResult(final_message="message reply")
@@ -10496,6 +10500,7 @@ async def test_run_agent_turn_for_message_wraps_typing_indicator(
         min_edit_interval_seconds: float,
         heartbeat_interval_seconds: float,
         log_event_fn: Any,
+        chat_ux_snapshot: Any = None,
     ) -> DiscordMessageTurnResult:
         _ = (
             workspace_root,
@@ -10511,6 +10516,7 @@ async def test_run_agent_turn_for_message_wraps_typing_indicator(
             min_edit_interval_seconds,
             heartbeat_interval_seconds,
             log_event_fn,
+            chat_ux_snapshot,
         )
         started.set()
         await release.wait()

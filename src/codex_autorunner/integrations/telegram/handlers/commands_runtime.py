@@ -25,6 +25,12 @@ from ....core.update import (
 from ....core.update_paths import resolve_update_paths
 from ....core.update_targets import get_update_target_label
 from ...app_server.client import CodexAppServerError
+from ...chat.chat_ux_telemetry import (
+    ChatUxMilestone,
+)
+from ...chat.chat_ux_telemetry import (
+    ChatUxTimingSnapshot as _Snap,
+)
 from ...chat.constants import (
     APP_SERVER_UNAVAILABLE_MESSAGE,
     TOPIC_NOT_BOUND_MESSAGE,
@@ -768,6 +774,20 @@ class TelegramCommandHandlers(
             thread_id=thread_id,
             message_id=message_id,
             turn_id=turn_id,
+        )
+        _interrupt_snapshot = _Snap(platform="telegram", channel_id=str(chat_id))
+        _interrupt_snapshot.record(ChatUxMilestone.RAW_EVENT_RECEIVED)
+        _interrupt_snapshot.record(ChatUxMilestone.INTERRUPT_REQUESTED_VISIBLE)
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.interrupt.acknowledged",
+            chat_ux_platform="telegram",
+            chat_id=chat_id,
+            thread_id=thread_id,
+            message_id=message_id,
+            turn_id=turn_id,
+            **_interrupt_snapshot.to_log_fields(),
         )
         payload_text, parse_mode = self._prepare_outgoing_text(
             "Stopping current turn...",

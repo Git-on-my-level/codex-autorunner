@@ -58,6 +58,12 @@ from ...core.ports.run_event import TokenUsage
 from ...core.utils import canonicalize_path
 from ...integrations.chat.agents import resolve_chat_runtime_agent
 from ...integrations.chat.approval_modes import resolve_approval_mode_policies
+from ...integrations.chat.chat_ux_telemetry import (
+    ChatUxFailureReason,
+    ChatUxMilestone,
+    ChatUxTimingSnapshot,
+    emit_chat_ux_timing,
+)
 from ...integrations.chat.collaboration_policy import CollaborationEvaluationResult
 from ...integrations.chat.compaction import match_pending_compact_seed
 from ...integrations.chat.dispatcher import DispatchContext
@@ -264,6 +270,9 @@ class _DiscordMessageTurnDispatch:
     pending_compact_seed: Optional[str]
     turn_text: str
     flow_reply_text: str
+    chat_ux_snapshot: ChatUxTimingSnapshot = field(
+        default_factory=lambda: ChatUxTimingSnapshot(platform="discord")
+    )
     paused_records: dict[str, Any] = field(default_factory=dict)
 
     def build_request(
@@ -1395,6 +1404,9 @@ async def _submit_discord_thread_message(
             )
             return None
         message_id = response.get("id")
+        _snap = getattr(dispatch, "chat_ux_snapshot", None)
+        if isinstance(_snap, ChatUxTimingSnapshot):
+            _snap.record(ChatUxMilestone.FIRST_VISIBLE_FEEDBACK)
         return message_id if isinstance(message_id, str) and message_id else None
 
     async def _resolve_managed_thread_id() -> Optional[str]:
@@ -1696,6 +1708,7 @@ async def _execute_discord_thread_message(
         run_turn_kwargs["supervision"] = supervision
     if turn_input_items:
         run_turn_kwargs["input_items"] = turn_input_items
+    run_turn_kwargs["chat_ux_snapshot"] = dispatch.chat_ux_snapshot
     try:
         try:
             return cast(
@@ -2001,6 +2014,17 @@ async def _deliver_discord_turn_result(
         flushed_outbox_files=send_final_message,
         agent=dispatch.agent,
     )
+    _dispatch_snapshot = getattr(dispatch, "chat_ux_snapshot", None)
+    if isinstance(_dispatch_snapshot, ChatUxTimingSnapshot):
+        _dispatch_snapshot.record(ChatUxMilestone.TERMINAL_DELIVERY)
+        emit_chat_ux_timing(
+            dispatch.service._logger,
+            logging.INFO,
+            _dispatch_snapshot,
+            event_suffix="turn_delivery",
+            session_key=dispatch.session_key,
+            execution_id=execution_id,
+        )
 
 
 async def handle_message_event(
@@ -2098,6 +2122,13 @@ async def handle_message_event(
         pending_target_id=binding.get("pending_compact_session_key"),
         active_target_id=session_key,
     )
+    chat_ux_snapshot = ChatUxTimingSnapshot(
+        platform="discord",
+        channel_id=channel_id,
+        agent=agent,
+        conversation_id=context.conversation_id,
+    )
+    chat_ux_snapshot.record(ChatUxMilestone.RAW_EVENT_RECEIVED)
     dispatch = _DiscordMessageTurnDispatch(
         service=service,
         event=event,
@@ -2122,6 +2153,7 @@ async def handle_message_event(
         pending_compact_seed=pending_compact_seed,
         turn_text=turn_text,
         flow_reply_text=flow_reply_text,
+        chat_ux_snapshot=chat_ux_snapshot,
     )
     ingress = _build_discord_surface_ingress(dispatch)
 
@@ -2166,6 +2198,7 @@ async def run_agent_turn_for_message(
     min_edit_interval_seconds: float,
     heartbeat_interval_seconds: float,
     log_event_fn: Any,
+    chat_ux_snapshot: Optional[ChatUxTimingSnapshot] = None,
 ) -> DiscordMessageTurnResult:
     _ = (
         max_actions,
@@ -2202,6 +2235,7 @@ async def run_agent_turn_for_message(
         max_actions=max_actions,
         min_edit_interval_seconds=min_edit_interval_seconds,
         heartbeat_interval_seconds=heartbeat_interval_seconds,
+        chat_ux_snapshot=chat_ux_snapshot,
     )
 
 
@@ -2702,6 +2736,7 @@ async def _run_discord_orchestrated_turn_for_message(
     min_edit_interval_seconds: float,
     heartbeat_interval_seconds: float,
     supervision: Optional[_DiscordTurnExecutionSupervision] = None,
+    chat_ux_snapshot: Optional[ChatUxTimingSnapshot] = None,
 ) -> DiscordMessageTurnResult:
     _ = session_key
     channel_id = (
@@ -3022,15 +3057,24 @@ async def _run_discord_orchestrated_turn_for_message(
         managed_thread_id=managed_thread_id,
         public_execution_error=public_execution_error,
     )
-    runner_hooks = ManagedThreadCoordinatorHooks(
-        on_execution_started=runner_hooks.on_execution_started,
-        on_execution_finished=runner_hooks.on_execution_finished,
-        on_progress_event=lambda run_event: _apply_discord_progress_run_event(
+    _first_progress_recorded = False
+
+    async def _handle_progress_event(run_event: Any) -> None:
+        nonlocal _first_progress_recorded
+        await _apply_discord_progress_run_event(
             tracker,
             run_event,
             runtime_state=runtime_state,
             edit_progress=_edit_progress,
-        ),
+        )
+        if not _first_progress_recorded and chat_ux_snapshot is not None:
+            _first_progress_recorded = True
+            chat_ux_snapshot.record(ChatUxMilestone.FIRST_SEMANTIC_PROGRESS)
+
+    runner_hooks = ManagedThreadCoordinatorHooks(
+        on_execution_started=runner_hooks.on_execution_started,
+        on_execution_finished=runner_hooks.on_execution_finished,
+        on_progress_event=_handle_progress_event,
         deliver_result=queue_worker_hooks.deliver_result,
         run_with_indicator=queue_worker_hooks.run_with_indicator,
     )
@@ -3066,6 +3110,8 @@ async def _run_discord_orchestrated_turn_for_message(
 
     async def _on_submission_error(exc: BaseException) -> DiscordMessageTurnResult:
         if isinstance(exc, asyncio.TimeoutError):
+            if chat_ux_snapshot is not None:
+                chat_ux_snapshot.failure_reason = ChatUxFailureReason.SUBMISSION_TIMEOUT
             evicted_supervisors = await _evict_cached_runtime_supervisors(
                 service,
                 agent_id=logical_agent,
@@ -3144,6 +3190,8 @@ async def _run_discord_orchestrated_turn_for_message(
         )
 
     async def _on_queued(_flow: Any) -> DiscordMessageTurnResult:
+        if chat_ux_snapshot is not None:
+            chat_ux_snapshot.record(ChatUxMilestone.QUEUE_VISIBLE)
         log_event(
             service._logger,
             logging.INFO,
@@ -3386,6 +3434,7 @@ async def run_managed_thread_turn_for_message(
     orchestrator_channel_key: str,
     managed_thread_surface_key: Optional[str] = None,
     supervision: Optional[_DiscordTurnExecutionSupervision] = None,
+    chat_ux_snapshot: Optional[ChatUxTimingSnapshot] = None,
 ) -> DiscordMessageTurnResult:
     execution_prompt = (
         f"{format_pma_discoverability_preamble(hub_root=service._config.root)}"
@@ -3423,4 +3472,5 @@ async def run_managed_thread_turn_for_message(
         min_edit_interval_seconds=DISCORD_PMA_PROGRESS_MIN_EDIT_INTERVAL_SECONDS,
         heartbeat_interval_seconds=DISCORD_PMA_PROGRESS_HEARTBEAT_INTERVAL_SECONDS,
         supervision=supervision,
+        chat_ux_snapshot=chat_ux_snapshot,
     )

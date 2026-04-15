@@ -21,6 +21,10 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from ...core.logging_utils import log_event
+from ...integrations.chat.chat_ux_telemetry import (
+    ChatUxMilestone,
+    ChatUxTimingSnapshot,
+)
 from ...integrations.chat.command_ingress import canonicalize_command_ingress
 from .interaction_registry import (
     DiscordAckPolicy,
@@ -91,6 +95,9 @@ class IngressContext:
     focused_value: Optional[str] = None
     message_id: Optional[str] = None
     timing: IngressTiming = field(default_factory=IngressTiming)
+    chat_ux_snapshot: ChatUxTimingSnapshot = field(
+        default_factory=lambda: ChatUxTimingSnapshot(platform="discord")
+    )
 
 
 @dataclass(frozen=True)
@@ -125,6 +132,8 @@ class InteractionIngress:
                 accepted=False,
                 rejection_reason="normalization_failed",
             )
+        ctx.chat_ux_snapshot.channel_id = ctx.channel_id
+        ctx.chat_ux_snapshot.record(ChatUxMilestone.RAW_EVENT_RECEIVED, now=now)
         self._service._ensure_interaction_session(
             ctx.interaction_id,
             ctx.interaction_token,
@@ -332,6 +341,10 @@ class InteractionIngress:
             execution_started_at=ctx.timing.execution_started_at,
             execution_finished_at=ctx.timing.execution_finished_at,
         )
+        if ctx.timing.ack_finished_at is not None:
+            ctx.chat_ux_snapshot.record(
+                ChatUxMilestone.ACK_FINISHED, now=ctx.timing.ack_finished_at
+            )
         self._record_telemetry(ctx)
 
     def _record_telemetry(self, ctx: IngressContext) -> None:

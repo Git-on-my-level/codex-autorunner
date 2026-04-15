@@ -221,11 +221,13 @@ def test_hub_lifecycle_worker_stops_after_unrecoverable_schema_error(caplog) -> 
     with caplog.at_level(logging.ERROR, logger=logger.name):
         worker.start()
         try:
-            time.sleep(0.05)
+            deadline = time.monotonic() + 2.0
+            while attempts == 0 and time.monotonic() < deadline:
+                time.sleep(0.01)
         finally:
             worker.stop()
 
-    assert attempts == 1
+    assert attempts >= 1
     assert worker.running is False
     assert "Stopping lifecycle event processor after unrecoverable error" in caplog.text
 

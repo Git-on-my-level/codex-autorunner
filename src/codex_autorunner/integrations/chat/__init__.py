@@ -53,6 +53,13 @@ from .channel_directory import (
     default_channel_directory_state,
     normalize_channel_entry,
 )
+from .chat_ux_telemetry import (
+    ChatUxFailureReason,
+    ChatUxMilestone,
+    ChatUxTimingSnapshot,
+    emit_chat_ux_timing,
+    format_chat_ux_summary,
+)
 from .command_contract import COMMAND_CONTRACT, CommandContractEntry, CommandStatus
 from .commands import ChatCommand, parse_chat_command
 from .dispatcher import (
@@ -151,6 +158,9 @@ __all__ = [
     "ChatAdapterPermanentError",
     "ChatAdapterTimeoutError",
     "ChatAdapterTransientError",
+    "ChatUxFailureReason",
+    "ChatUxMilestone",
+    "ChatUxTimingSnapshot",
     "ChatAgentSwitchState",
     "ChatAgentProfileOption",
     "ChatApprovalHandlers",
@@ -210,6 +220,8 @@ __all__ = [
     "default_channel_directory_state",
     "default_chat_model_for_agent",
     "encode_logical_callback",
+    "emit_chat_ux_timing",
+    "format_chat_ux_summary",
     "format_media_batch_failure",
     "format_chat_agent_selection",
     "handle_custom_text_input",

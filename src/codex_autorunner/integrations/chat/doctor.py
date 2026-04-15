@@ -6,6 +6,12 @@ from pathlib import Path
 from typing import Any
 
 from ...core.runtime import DoctorCheck
+from .chat_ux_telemetry import (
+    ChatUxFailureReason,
+    ChatUxMilestone,
+    ChatUxTimingSnapshot,
+    format_chat_ux_summary,
+)
 from .parity_checker import ParityCheckResult, run_parity_checks
 
 _CHECK_GROUP = "chat.parity_contract"
@@ -121,3 +127,61 @@ def _metadata_list(metadata: dict[str, Any], key: str) -> list[str]:
     if not isinstance(raw, list):
         return []
     return [str(item) for item in raw]
+
+
+def chat_ux_telemetry_doctor_checks() -> list[DoctorCheck]:
+    """Verify chat UX telemetry primitives are structurally sound."""
+    checks: list[DoctorCheck] = []
+
+    expected_milestones = {m.value for m in ChatUxMilestone}
+    expected_failures = {r.value for r in ChatUxFailureReason}
+
+    snapshot = ChatUxTimingSnapshot(platform="test")
+    snapshot.record(ChatUxMilestone.RAW_EVENT_RECEIVED, now=100.0)
+    snapshot.record(ChatUxMilestone.ACK_FINISHED, now=101.0)
+    snapshot.record(ChatUxMilestone.FIRST_VISIBLE_FEEDBACK, now=102.0)
+    snapshot.record(ChatUxMilestone.TERMINAL_DELIVERY, now=105.0)
+    fields = snapshot.to_log_fields()
+
+    checks.append(
+        DoctorCheck(
+            name="Chat UX telemetry milestones are defined",
+            passed=len(expected_milestones) >= 7,
+            message=f"{len(expected_milestones)} milestones defined",
+            severity="info",
+            check_id="chat_ux_telemetry.milestones",
+        )
+    )
+    checks.append(
+        DoctorCheck(
+            name="Chat UX telemetry failure reasons are defined",
+            passed=len(expected_failures) >= 5,
+            message=f"{len(expected_failures)} failure reasons defined",
+            severity="info",
+            check_id="chat_ux_telemetry.failure_reasons",
+        )
+    )
+    checks.append(
+        DoctorCheck(
+            name="Chat UX telemetry snapshot produces log fields",
+            passed="chat_ux_platform" in fields
+            and "chat_ux_delta_ack_ms" in fields
+            and "chat_ux_delta_terminal_ms" in fields,
+            message=f"snapshot produced {len(fields)} log fields",
+            severity="info",
+            check_id="chat_ux_telemetry.snapshot_fields",
+        )
+    )
+
+    summary = format_chat_ux_summary(snapshot)
+    checks.append(
+        DoctorCheck(
+            name="Chat UX telemetry summary is operator-readable",
+            passed="[test]" in summary and "ack=" in summary and "terminal=" in summary,
+            message=summary,
+            severity="info",
+            check_id="chat_ux_telemetry.summary_format",
+        )
+    )
+
+    return checks
