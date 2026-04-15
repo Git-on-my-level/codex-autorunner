@@ -89,6 +89,38 @@ def test_guard_rejects_direct_tmp_write(tmp_path: Path) -> None:
     assert "tmp-direct-open-write (open)" in result.stdout
 
 
+def test_guard_rejects_direct_tmp_write_with_file_keyword(tmp_path: Path) -> None:
+    test_file = tmp_path / "tests" / "test_guard_target.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    test_file.write_text(
+        "def test_case():\n" "    open(file='/tmp/out.txt', mode='w')\n",
+        encoding="utf-8",
+    )
+    _write_allowlist(tmp_path, violations=[])
+
+    result = _run_guard(tmp_path)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "tmp-direct-open-write (open)" in result.stdout
+
+
+def test_guard_rejects_path_open_with_positional_mode(tmp_path: Path) -> None:
+    test_file = tmp_path / "tests" / "test_guard_target.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    test_file.write_text(
+        "from pathlib import Path\n\n"
+        "def test_case():\n"
+        "    Path('/tmp/out.txt').open('w')\n",
+        encoding="utf-8",
+    )
+    _write_allowlist(tmp_path, violations=[])
+
+    result = _run_guard(tmp_path)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "tmp-path-open-write (Path.open)" in result.stdout
+
+
 def test_guard_rejects_tmp_copytree_destination(tmp_path: Path) -> None:
     test_file = tmp_path / "tests" / "test_guard_target.py"
     test_file.parent.mkdir(parents=True, exist_ok=True)

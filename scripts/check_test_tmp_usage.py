@@ -167,14 +167,14 @@ def _tmp_path_argument(
     return _path_literal(node.args[positional_index])
 
 
-def _open_mode(call: ast.Call) -> str:
+def _open_mode(call: ast.Call, *, positional_index: int) -> str:
     for keyword in call.keywords:
         if keyword.arg == "mode":
             mode = _literal_string(keyword.value)
             if mode is not None:
                 return mode
-    if len(call.args) >= 2:
-        mode = _literal_string(call.args[1])
+    if len(call.args) > positional_index:
+        mode = _literal_string(call.args[positional_index])
         if mode is not None:
             return mode
     return "r"
@@ -237,9 +237,13 @@ def _check_file(path: Path, *, repo_root: Path) -> list[Violation]:
                     )
                 )
 
-        if call_name == "open" and node.args:
-            target = _path_literal(node.args[0])
-            if target and _is_writable_mode(_open_mode(node)):
+        if call_name == "open":
+            target = _tmp_path_argument(
+                node,
+                positional_index=0,
+                keyword_names=("file",),
+            )
+            if target and _is_writable_mode(_open_mode(node, positional_index=1)):
                 violations.append(
                     Violation(
                         file_path=rel_path,
@@ -288,7 +292,11 @@ def _check_file(path: Path, *, repo_root: Path) -> list[Violation]:
                         snippet=target,
                     )
                 )
-            if target and method == "open" and _is_writable_mode(_open_mode(node)):
+            if (
+                target
+                and method == "open"
+                and _is_writable_mode(_open_mode(node, positional_index=0))
+            ):
                 violations.append(
                     Violation(
                         file_path=rel_path,
