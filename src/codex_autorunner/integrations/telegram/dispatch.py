@@ -477,7 +477,7 @@ async def dispatch_update(handlers: Any, update: TelegramUpdate) -> None:
             return
         operation_id, surface_operation_key, kind = _operation_identity(update)
         if operation_id and surface_operation_key:
-            await handlers._register_accepted_chat_operation(
+            inserted = await handlers._register_accepted_chat_operation(
                 operation_id=operation_id,
                 surface_operation_key=surface_operation_key,
                 conversation_id=conversation_id,
@@ -487,6 +487,20 @@ async def dispatch_update(handlers: Any, update: TelegramUpdate) -> None:
                 message_id=context.message_id,
                 kind=kind,
             )
+            if not inserted:
+                log_event(
+                    handlers._logger,
+                    logging.INFO,
+                    "telegram.update.duplicate",
+                    update_id=update.update_id,
+                    chat_id=context.chat_id,
+                    thread_id=context.thread_id,
+                    message_id=context.message_id,
+                    conversation_id=conversation_id,
+                    operation_id=operation_id,
+                    duplicate_source="shared_operation_ledger",
+                )
+                return
             context = replace(context, operation_id=operation_id)
         for name, route in _ROUTES:
             if name == "callback" and update.callback:

@@ -4,6 +4,7 @@ import pytest
 
 from codex_autorunner.core.orchestration import ChatOperationState
 from codex_autorunner.integrations.telegram.adapter import (
+    TelegramCallbackQuery,
     TelegramMessage,
     TelegramUpdate,
 )
@@ -138,3 +139,124 @@ async def test_dispatch_update_registers_shared_chat_operation(tmp_path: Path) -
         await service._runtime_services.close()
         await service._store.close()
         await service._bot.close()
+
+
+@pytest.mark.anyio
+async def test_dispatch_update_uses_shared_ledger_to_reject_restart_duplicate_message(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = TelegramBotConfig.from_raw(
+        {
+            "enabled": True,
+            "allowed_chat_ids": [123],
+            "allowed_user_ids": [456],
+        },
+        root=tmp_path,
+        env={"CAR_TELEGRAM_BOT_TOKEN": "test-token"},
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.telegram.service.time.monotonic",
+        lambda: 0.0,
+    )
+    message = TelegramMessage(
+        update_id=33,
+        message_id=9,
+        chat_id=123,
+        thread_id=None,
+        from_user_id=456,
+        text="restart duplicate",
+        caption=None,
+        date=1_700_000_000,
+        is_topic_message=False,
+        is_edited=False,
+        reply_to_message_id=None,
+    )
+    executions: list[str] = []
+
+    service = TelegramBotService(config)
+    restarted = TelegramBotService(config)
+    try:
+
+        async def _handle_message(_message):  # type: ignore[no-untyped-def]
+            executions.append("handled")
+            return None
+
+        service._handle_message = _handle_message  # type: ignore[assignment]
+        restarted._handle_message = _handle_message  # type: ignore[assignment]
+        service._should_bypass_topic_queue = lambda _message: True  # type: ignore[assignment]
+        restarted._should_bypass_topic_queue = lambda _message: True  # type: ignore[assignment]
+
+        update = TelegramUpdate(update_id=33, message=message, callback=None)
+        await dispatch_update(service, update)
+        await dispatch_update(restarted, update)
+
+        assert executions == ["handled"]
+        snapshot = restarted._chat_operation_store.get_operation("telegram:update:33")
+        assert snapshot is not None
+        assert snapshot.state is ChatOperationState.COMPLETED
+    finally:
+        await service._runtime_services.close()
+        await service._store.close()
+        await service._bot.close()
+        await restarted._runtime_services.close()
+        await restarted._store.close()
+        await restarted._bot.close()
+
+
+@pytest.mark.anyio
+async def test_dispatch_update_uses_shared_ledger_to_reject_restart_duplicate_callback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = TelegramBotConfig.from_raw(
+        {
+            "enabled": True,
+            "allowed_chat_ids": [123],
+            "allowed_user_ids": [456],
+        },
+        root=tmp_path,
+        env={"CAR_TELEGRAM_BOT_TOKEN": "test-token"},
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.telegram.service.time.monotonic",
+        lambda: 0.0,
+    )
+    callback = TelegramCallbackQuery(
+        update_id=41,
+        callback_id="cb-41",
+        from_user_id=456,
+        data="resume:thread-1",
+        message_id=17,
+        chat_id=123,
+        thread_id=None,
+    )
+    executions: list[str] = []
+
+    service = TelegramBotService(config)
+    restarted = TelegramBotService(config)
+    try:
+
+        async def _handle_callback(_callback):  # type: ignore[no-untyped-def]
+            executions.append("handled")
+            return None
+
+        service._handle_callback = _handle_callback  # type: ignore[assignment]
+        restarted._handle_callback = _handle_callback  # type: ignore[assignment]
+
+        update = TelegramUpdate(update_id=41, message=None, callback=callback)
+        await dispatch_update(service, update)
+        await dispatch_update(restarted, update)
+
+        assert executions == ["handled"]
+        snapshot = restarted._chat_operation_store.get_operation("telegram:update:41")
+        assert snapshot is not None
+        assert snapshot.state is ChatOperationState.COMPLETED
+        assert snapshot.metadata["kind"] == "callback"
+    finally:
+        await service._runtime_services.close()
+        await service._store.close()
+        await service._bot.close()
+        await restarted._runtime_services.close()
+        await restarted._store.close()
+        await restarted._bot.close()

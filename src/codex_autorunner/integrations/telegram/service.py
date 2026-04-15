@@ -1710,7 +1710,7 @@ class TelegramBotService(
         user_id: Optional[int],
         message_id: Optional[int],
         kind: str,
-    ) -> None:
+    ) -> bool:
         registration = self._chat_operation_store.register_operation(
             operation_id=operation_id,
             surface_kind="telegram",
@@ -1729,6 +1729,7 @@ class TelegramBotService(
             registration.snapshot.operation_id,
             ack_requested_at=now_iso(),
         )
+        return registration.inserted
 
     async def _mark_chat_operation_state(
         self,
