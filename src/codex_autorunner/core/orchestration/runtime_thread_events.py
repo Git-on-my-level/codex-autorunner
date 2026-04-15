@@ -39,6 +39,24 @@ from ..ports.run_event import (
 )
 from ..sse import SSEEvent, parse_sse_lines
 from ..time_utils import now_iso
+from .codex_item_normalizers import (
+    extract_agent_message_text as _extract_agent_message_text,
+)
+from .codex_item_normalizers import (
+    is_commentary_agent_message as _is_commentary_agent_message,
+)
+from .codex_item_normalizers import (
+    merge_runtime_raw_events,
+)
+from .codex_item_normalizers import (
+    normalize_tool_name as _normalize_tool_name,
+)
+from .codex_item_normalizers import (
+    output_delta_type_for_method as _output_delta_type_for_method,
+)
+from .codex_item_normalizers import (
+    reasoning_buffer_key as _reasoning_buffer_key,
+)
 from .opencode_event_fields import (
     coerce_dict as _event_coerce_dict,
 )
@@ -72,34 +90,11 @@ _APPROVAL_METHODS = {
 }
 
 
-def _runtime_raw_event_key(raw_event: Any) -> str:
-    if isinstance(raw_event, (dict, list)):
-        return json.dumps(
-            raw_event,
-            sort_keys=True,
-            separators=(",", ":"),
-            default=str,
-        )
-    return str(raw_event)
-
-
 def merge_runtime_thread_raw_events(
     streamed_raw_events: list[Any] | tuple[Any, ...],
     result_raw_events: list[Any] | tuple[Any, ...],
 ) -> list[Any]:
-    streamed = list(streamed_raw_events or [])
-    result = list(result_raw_events or [])
-    if not streamed:
-        return result
-    if not result:
-        return streamed
-    streamed_keys = [_runtime_raw_event_key(item) for item in streamed]
-    result_keys = [_runtime_raw_event_key(item) for item in result]
-    max_overlap = min(len(streamed_keys), len(result_keys))
-    for overlap in range(max_overlap, 0, -1):
-        if streamed_keys[-overlap:] == result_keys[:overlap]:
-            return streamed + result[overlap:]
-    return streamed + result
+    return merge_runtime_raw_events(streamed_raw_events, result_raw_events)
 
 
 @dataclass
@@ -983,16 +978,6 @@ def _extract_opencode_reasoning_text(
     return delta_text
 
 
-def _output_delta_type_for_method(method: str) -> str:
-    normalized = method.strip().lower()
-    if normalized in {
-        "item/commandexecution/outputdelta",
-        "item/filechange/outputdelta",
-    }:
-        return RUN_EVENT_DELTA_TYPE_LOG_LINE
-    return RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM
-
-
 def _normalize_opencode_tool_part(
     part: dict[str, Any],
     state: RuntimeThreadRunEventState,
@@ -1149,93 +1134,6 @@ def _extract_opencode_usage_part(part: dict[str, Any]) -> Optional[dict[str, Any
     return None
 
 
-def _normalize_tool_name(
-    params: dict[str, Any],
-    *,
-    item: Optional[dict[str, Any]] = None,
-) -> tuple[str, dict[str, Any]]:
-    item_dict = item if isinstance(item, dict) else _coerce_dict(params.get("item"))
-    item_type = item_dict.get("type")
-
-    if item_type == "commandExecution":
-        command = item_dict.get("command")
-        if not command:
-            command = params.get("command")
-        if isinstance(command, list):
-            command = " ".join(str(part) for part in command).strip()
-        if isinstance(command, str) and command:
-            return command, {"command": command}
-        return "commandExecution", {}
-
-    if item_type == "fileChange":
-        files = item_dict.get("files")
-        if isinstance(files, list):
-            paths = [str(entry) for entry in files if isinstance(entry, str)]
-            if paths:
-                return "fileChange", {"files": paths}
-        return "fileChange", {}
-
-    if item_type == "tool":
-        name = item_dict.get("name") or item_dict.get("tool") or item_dict.get("id")
-        if isinstance(name, str) and name:
-            return name, {}
-        return "tool", {}
-
-    tool_call = _coerce_dict(item_dict.get("toolCall") or item_dict.get("tool_call"))
-    name = tool_call.get("name") or params.get("toolName") or params.get("tool_name")
-    if isinstance(name, str) and name:
-        input_payload = tool_call.get("input")
-        if isinstance(input_payload, dict):
-            return name, input_payload
-        input_payload = params.get("toolInput") or params.get("input")
-        if isinstance(input_payload, dict):
-            return name, input_payload
-        return name, {}
-    return "", {}
-
-
-def _reasoning_buffer_key(
-    params: dict[str, Any],
-    *,
-    item: Optional[dict[str, Any]] = None,
-) -> Optional[str]:
-    for key in ("itemId", "item_id", "turnId", "turn_id"):
-        value = params.get(key)
-        if isinstance(value, str) and value:
-            return value
-    if isinstance(item, dict):
-        for key in ("id", "itemId", "turnId", "turn_id"):
-            value = item.get(key)
-            if isinstance(value, str) and value:
-                return value
-    return None
-
-
-def _extract_agent_message_text(item: dict[str, Any]) -> str:
-    text = item.get("text")
-    if isinstance(text, str) and text.strip():
-        return text
-    content = item.get("content")
-    if isinstance(content, list):
-        parts: list[str] = []
-        for entry in content:
-            if not isinstance(entry, dict):
-                continue
-            entry_type = entry.get("type")
-            if entry_type not in (None, "output_text", "text", "message"):
-                continue
-            candidate = entry.get("text")
-            if isinstance(candidate, str) and candidate.strip():
-                parts.append(candidate)
-        if parts:
-            return "".join(parts)
-    return ""
-
-
-def _is_commentary_agent_message(item: dict[str, Any]) -> bool:
-    return str(item.get("phase") or "").strip().lower() == "commentary"
-
-
 def _extract_message_phase(params: dict[str, Any]) -> Optional[str]:
     phase = params.get("phase")
     if isinstance(phase, str) and phase.strip():
@@ -1369,4 +1267,6 @@ __all__ = [
     "_extract_agent_message_text",
     "_extract_usage",
     "_coerce_dict",
+    "_reasoning_buffer_key",
+    "_is_commentary_agent_message",
 ]
