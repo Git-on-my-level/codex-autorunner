@@ -81,6 +81,10 @@ from .opencode_event_fields import (
 from .opencode_event_fields import (
     extract_part_type as _event_extract_part_type,
 )
+from .runtime_payload_shapes import (
+    OpenCodeToolPartShape,
+    TokenUsageShape,
+)
 from .runtime_threads import RuntimeThreadOutcome
 from .stream_text_merge import merge_assistant_stream_text
 
@@ -984,57 +988,35 @@ def _normalize_opencode_tool_part(
     *,
     timestamp: Optional[str] = None,
 ) -> list[RunEvent]:
-    event_timestamp = timestamp or now_iso()
-    tool_name = part.get("tool") or part.get("name") or ""
-    if not isinstance(tool_name, str) or not tool_name.strip():
+    shape = OpenCodeToolPartShape.from_raw_part(part)
+    if shape is None:
         return []
 
-    tool_id = part.get("callID") or part.get("id") or tool_name
-    tool_id_text = str(tool_id).strip() if tool_id is not None else tool_name.strip()
-    state_payload = _coerce_dict(part.get("state"))
-    status = state_payload.get("status")
-    status_text = str(status).strip().lower() if isinstance(status, str) else ""
-    last_status = state.opencode_tool_status.get(tool_id_text)
-
-    input_payload: dict[str, Any] = {}
-    for key in ("input", "command", "cmd", "script"):
-        value = part.get(key)
-        if isinstance(value, str) and value.strip():
-            input_payload[key] = value.strip()
-            break
-    if not input_payload:
-        args = part.get("args") or part.get("arguments") or part.get("params")
-        if isinstance(args, dict):
-            for key in ("command", "cmd", "script", "input"):
-                value = args.get(key)
-                if isinstance(value, str) and value.strip():
-                    input_payload[key] = value.strip()
-                    break
-        elif isinstance(args, str) and args.strip():
-            input_payload["input"] = args.strip()
+    event_timestamp = timestamp or now_iso()
+    last_status = state.opencode_tool_status.get(shape.tool_id)
 
     events: list[RunEvent] = []
-    if last_status is None or status_text in {"running", "pending"}:
-        if last_status != status_text:
+    if last_status is None or shape.status in {"running", "pending"}:
+        if last_status != shape.status:
             events.append(
                 ToolCall(
                     timestamp=event_timestamp,
-                    tool_name=tool_name.strip(),
-                    tool_input=input_payload,
+                    tool_name=shape.tool_name,
+                    tool_input=shape.input_payload,
                 )
             )
 
-    if status_text == "completed" and last_status != status_text:
+    if shape.status == "completed" and last_status != shape.status:
         events.append(
             ToolResult(
                 timestamp=event_timestamp,
-                tool_name=tool_name.strip(),
-                status=status_text,
-                result=dict(state_payload),
+                tool_name=shape.tool_name,
+                status=shape.status,
+                result=dict(shape.state_payload),
                 error=None,
             )
         )
-        exit_code = state_payload.get("exitCode")
+        exit_code = shape.state_payload.get("exitCode")
         if exit_code is not None:
             events.append(
                 OutputDelta(
@@ -1043,17 +1025,17 @@ def _normalize_opencode_tool_part(
                     delta_type=RUN_EVENT_DELTA_TYPE_LOG_LINE,
                 )
             )
-    elif status_text in {"error", "failed"} and last_status != status_text:
+    elif shape.status in {"error", "failed"} and last_status != shape.status:
         events.append(
             ToolResult(
                 timestamp=event_timestamp,
-                tool_name=tool_name.strip(),
-                status=status_text,
-                result=dict(state_payload),
-                error=state_payload.get("error"),
+                tool_name=shape.tool_name,
+                status=shape.status,
+                result=dict(shape.state_payload),
+                error=shape.error,
             )
         )
-        error = state_payload.get("error")
+        error = shape.error
         if isinstance(error, dict):
             error = error.get("message") or error.get("error")
         if isinstance(error, str) and error.strip():
@@ -1065,8 +1047,8 @@ def _normalize_opencode_tool_part(
                 )
             )
 
-    if status_text:
-        state.opencode_tool_status[tool_id_text] = status_text
+    if shape.status:
+        state.opencode_tool_status[shape.tool_id] = shape.status
     return events
 
 
@@ -1108,30 +1090,10 @@ def _normalize_opencode_patch_part(
 
 
 def _extract_opencode_usage_part(part: dict[str, Any]) -> Optional[dict[str, Any]]:
-    usage: dict[str, Any] = {}
-
-    total_tokens = part.get("totalTokens")
-    if isinstance(total_tokens, int):
-        usage["totalTokens"] = total_tokens
-    input_tokens = part.get("inputTokens")
-    if isinstance(input_tokens, int):
-        usage["inputTokens"] = input_tokens
-    cached_tokens = part.get("cachedInputTokens")
-    if isinstance(cached_tokens, int):
-        usage["cachedInputTokens"] = cached_tokens
-    output_tokens = part.get("outputTokens")
-    if isinstance(output_tokens, int):
-        usage["outputTokens"] = output_tokens
-    reasoning_tokens = part.get("reasoningTokens")
-    if isinstance(reasoning_tokens, int):
-        usage["reasoningTokens"] = reasoning_tokens
-    context_window = part.get("modelContextWindow")
-    if isinstance(context_window, int):
-        usage["modelContextWindow"] = context_window
-
-    if usage:
-        return usage
-    return None
+    shape = TokenUsageShape.from_raw(part)
+    if shape.is_empty():
+        return None
+    return shape.to_dict()
 
 
 def _extract_message_phase(params: dict[str, Any]) -> Optional[str]:

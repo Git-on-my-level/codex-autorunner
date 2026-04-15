@@ -1489,3 +1489,774 @@ async def test_message_delta_uses_cached_part_type_for_reasoning() -> None:
 
     assert events == []
     assert state.assistant_stream_text == ""
+
+
+class TestCrossBackendUsageParity:
+    """Usage extraction should produce identical TokenUsage events across backends."""
+
+    async def test_codex_token_usage_produces_token_usage_event(self) -> None:
+        state = RuntimeThreadRunEventState()
+
+        events = await normalize_runtime_thread_raw_event(
+            {"method": "token/usage", "params": {"usage": {"totalTokens": 100}}},
+            state,
+        )
+
+        assert len(events) == 1
+        assert isinstance(events[0], TokenUsage)
+        assert events[0].usage == {"totalTokens": 100}
+        assert state.token_usage == {"totalTokens": 100}
+
+    async def test_opencode_turn_token_usage_produces_token_usage_event(self) -> None:
+        state = RuntimeThreadRunEventState()
+
+        events = await normalize_runtime_thread_raw_event(
+            {"method": "turn/tokenUsage", "params": {"usage": {"totalTokens": 100}}},
+            state,
+        )
+
+        assert len(events) == 1
+        assert isinstance(events[0], TokenUsage)
+        assert events[0].usage == {"totalTokens": 100}
+        assert state.token_usage == {"totalTokens": 100}
+
+    async def test_session_update_usage_update_produces_token_usage_event(
+        self,
+    ) -> None:
+        state = RuntimeThreadRunEventState()
+
+        events = await normalize_runtime_thread_raw_event(
+            {
+                "message": {
+                    "method": "session/update",
+                    "params": {
+                        "update": {
+                            "sessionUpdate": "usage_update",
+                            "usage": {"totalTokens": 100},
+                        }
+                    },
+                }
+            },
+            state,
+        )
+
+        assert len(events) == 1
+        assert isinstance(events[0], TokenUsage)
+        assert events[0].usage == {"totalTokens": 100}
+        assert state.token_usage == {"totalTokens": 100}
+
+    async def test_thread_token_usage_updated_produces_token_usage_event(self) -> None:
+        state = RuntimeThreadRunEventState()
+
+        events = await normalize_runtime_thread_raw_event(
+            {
+                "method": "thread/tokenUsage/updated",
+                "params": {"tokenUsage": {"totalTokens": 100}},
+            },
+            state,
+        )
+
+        assert len(events) == 1
+        assert isinstance(events[0], TokenUsage)
+        assert events[0].usage == {"totalTokens": 100}
+        assert state.token_usage == {"totalTokens": 100}
+
+    async def test_opencode_usage_part_produces_token_usage_event(self) -> None:
+        state = RuntimeThreadRunEventState()
+
+        events = await normalize_runtime_thread_raw_event(
+            format_sse(
+                "app-server",
+                {
+                    "message": {
+                        "method": "message.part.updated",
+                        "params": {
+                            "properties": {
+                                "part": {
+                                    "id": "usage-1",
+                                    "type": "usage",
+                                    "totalTokens": 100,
+                                    "inputTokens": 60,
+                                    "outputTokens": 40,
+                                }
+                            }
+                        },
+                    }
+                },
+            ),
+            state,
+        )
+
+        assert len(events) == 1
+        assert isinstance(events[0], TokenUsage)
+        assert events[0].usage == {
+            "totalTokens": 100,
+            "inputTokens": 60,
+            "outputTokens": 40,
+        }
+        assert state.token_usage == {
+            "totalTokens": 100,
+            "inputTokens": 60,
+            "outputTokens": 40,
+        }
+
+    async def test_usage_alias_keys_produce_identical_events(self) -> None:
+        canonical_state = RuntimeThreadRunEventState()
+        await normalize_runtime_thread_raw_event(
+            {"method": "token/usage", "params": {"usage": {"totalTokens": 42}}},
+            canonical_state,
+        )
+
+        snake_state = RuntimeThreadRunEventState()
+        await normalize_runtime_thread_raw_event(
+            {"method": "token/usage", "params": {"usage": {"total_tokens": 42}}},
+            snake_state,
+        )
+
+        assert canonical_state.token_usage == {"totalTokens": 42}
+        assert snake_state.token_usage == {"total_tokens": 42}
+
+
+class TestCrossBackendToolParity:
+    """Tool call/result should produce equivalent events across Codex and OpenCode."""
+
+    async def test_codex_item_tool_call_start_and_end(self) -> None:
+        state = RuntimeThreadRunEventState()
+
+        start = await normalize_runtime_thread_raw_event(
+            {
+                "method": "item/toolCall/start",
+                "params": {
+                    "item": {"toolCall": {"name": "shell", "input": {"cmd": "pwd"}}}
+                },
+            },
+            state,
+        )
+        end = await normalize_runtime_thread_raw_event(
+            {
+                "method": "item/toolCall/end",
+                "params": {"name": "shell", "result": {"stdout": "/tmp"}},
+            },
+            state,
+        )
+
+        assert isinstance(start[0], ToolCall)
+        assert start[0].tool_name == "shell"
+        assert isinstance(end[0], ToolResult)
+        assert end[0].tool_name == "shell"
+        assert end[0].status == "completed"
+        assert end[0].result == {"stdout": "/tmp"}
+
+    async def test_opencode_tool_part_running_then_completed(self) -> None:
+        state = RuntimeThreadRunEventState()
+
+        start = await normalize_runtime_thread_raw_event(
+            format_sse(
+                "app-server",
+                {
+                    "message": {
+                        "method": "message.part.updated",
+                        "params": {
+                            "properties": {
+                                "part": {
+                                    "id": "tool-1",
+                                    "type": "tool",
+                                    "tool": "bash",
+                                    "input": "pwd",
+                                    "state": {"status": "running"},
+                                }
+                            }
+                        },
+                    }
+                },
+            ),
+            state,
+        )
+        end = await normalize_runtime_thread_raw_event(
+            format_sse(
+                "app-server",
+                {
+                    "message": {
+                        "method": "message.part.updated",
+                        "params": {
+                            "properties": {
+                                "part": {
+                                    "id": "tool-1",
+                                    "type": "tool",
+                                    "tool": "bash",
+                                    "state": {"status": "completed", "exitCode": 0},
+                                }
+                            }
+                        },
+                    }
+                },
+            ),
+            state,
+        )
+
+        assert isinstance(start[0], ToolCall)
+        assert start[0].tool_name == "bash"
+        assert isinstance(end[0], ToolResult)
+        assert end[0].tool_name == "bash"
+        assert end[0].status == "completed"
+
+    async def test_opencode_tool_part_error_status(self) -> None:
+        state = RuntimeThreadRunEventState(opencode_tool_status={"tool-err": "running"})
+
+        events = await normalize_runtime_thread_raw_event(
+            format_sse(
+                "app-server",
+                {
+                    "message": {
+                        "method": "message.part.updated",
+                        "params": {
+                            "properties": {
+                                "part": {
+                                    "id": "tool-err",
+                                    "type": "tool",
+                                    "tool": "bash",
+                                    "state": {
+                                        "status": "failed",
+                                        "error": "non-zero exit",
+                                    },
+                                }
+                            }
+                        },
+                    }
+                },
+            ),
+            state,
+        )
+
+        assert isinstance(events[0], ToolResult)
+        assert events[0].tool_name == "bash"
+        assert events[0].status == "failed"
+        assert isinstance(events[1], OutputDelta)
+        assert "non-zero exit" in events[1].content
+
+
+class TestCrossBackendCommentaryFiltering:
+    """Commentary/reasoning must not leak into final assistant answer."""
+
+    async def test_codex_commentary_agent_message_filtered(self) -> None:
+        state = RuntimeThreadRunEventState()
+
+        events = await normalize_runtime_thread_raw_event(
+            {
+                "method": "item/completed",
+                "params": {
+                    "item": {
+                        "type": "agentMessage",
+                        "phase": "commentary",
+                        "text": "thinking about approach",
+                    }
+                },
+            },
+            state,
+        )
+
+        assert events == []
+        assert state.best_assistant_text() == ""
+
+    async def test_codex_non_commentary_agent_message_kept(self) -> None:
+        state = RuntimeThreadRunEventState()
+
+        events = await normalize_runtime_thread_raw_event(
+            {
+                "method": "item/completed",
+                "params": {"item": {"type": "agentMessage", "text": "final answer"}},
+            },
+            state,
+        )
+
+        assert len(events) == 1
+        assert isinstance(events[0], OutputDelta)
+        assert events[0].content == "final answer"
+        assert state.best_assistant_text() == "final answer"
+
+    async def test_opencode_commentary_message_completed_filtered(self) -> None:
+        state = RuntimeThreadRunEventState()
+
+        events = await normalize_runtime_thread_raw_event(
+            {
+                "method": "message.completed",
+                "params": {
+                    "phase": "commentary",
+                    "properties": {
+                        "info": {"id": "msg-1", "role": "assistant"},
+                    },
+                    "text": "internal commentary",
+                },
+            },
+            state,
+        )
+
+        assert events == []
+        assert state.best_assistant_text() == ""
+
+    async def test_opencode_reasoning_part_never_leaks_to_stream(self) -> None:
+        state = RuntimeThreadRunEventState()
+
+        await normalize_runtime_thread_raw_event(
+            format_sse(
+                "app-server",
+                {
+                    "message": {
+                        "method": "message.part.updated",
+                        "params": {
+                            "properties": {
+                                "part": {
+                                    "id": "r1",
+                                    "type": "reasoning",
+                                    "text": "let me think deeply",
+                                },
+                            }
+                        },
+                    }
+                },
+            ),
+            state,
+        )
+        await normalize_runtime_thread_raw_event(
+            format_sse(
+                "app-server",
+                {
+                    "message": {
+                        "method": "message.part.updated",
+                        "params": {
+                            "properties": {
+                                "part": {
+                                    "type": "text",
+                                    "text": "the actual answer",
+                                },
+                            }
+                        },
+                    }
+                },
+            ),
+            state,
+        )
+
+        assert state.best_assistant_text() == "the actual answer"
+        assert state.assistant_stream_text == "the actual answer"
+
+    async def test_opencode_assistant_stream_phase_commentary_filtered(self) -> None:
+        state = RuntimeThreadRunEventState()
+
+        events = await normalize_runtime_thread_raw_event(
+            {
+                "method": "prompt/output",
+                "params": {"delta": "commentary text", "phase": "commentary"},
+            },
+            state,
+        )
+
+        assert events == []
+        assert state.assistant_stream_text == ""
+
+    async def test_prompt_message_commentary_ignored(self) -> None:
+        state = RuntimeThreadRunEventState()
+
+        events = await normalize_runtime_thread_raw_event(
+            {
+                "method": "prompt/message",
+                "params": {
+                    "text": "reasoning about the problem",
+                    "phase": "commentary",
+                },
+            },
+            state,
+        )
+
+        assert len(events) == 1
+        assert isinstance(events[0], OutputDelta)
+        assert events[0].content == "reasoning about the problem"
+
+
+class TestCrossBackendApprovalParity:
+    """Approval routing should produce equivalent events across methods."""
+
+    async def test_permission_requested_produces_approval(self) -> None:
+        state = RuntimeThreadRunEventState()
+
+        events = await normalize_runtime_thread_raw_event(
+            {
+                "method": "permission/requested",
+                "params": {
+                    "requestId": "perm-1",
+                    "description": "Need approval",
+                    "context": {"tool": "shell"},
+                },
+            },
+            state,
+        )
+
+        assert isinstance(events[0], ApprovalRequested)
+        assert events[0].request_id == "perm-1"
+        assert events[0].description == "Need approval"
+
+    async def test_session_request_permission_produces_approval(self) -> None:
+        state = RuntimeThreadRunEventState()
+
+        events = await normalize_runtime_thread_raw_event(
+            {
+                "method": "session/request_permission",
+                "params": {
+                    "requestId": "perm-2",
+                    "description": "Need approval",
+                    "context": {"tool": "shell"},
+                },
+            },
+            state,
+        )
+
+        assert isinstance(events[0], ApprovalRequested)
+        assert events[0].request_id == "perm-2"
+        assert events[0].description == "Need approval"
+
+    async def test_command_execution_request_approval_produces_approval(self) -> None:
+        state = RuntimeThreadRunEventState()
+
+        events = await normalize_runtime_thread_raw_event(
+            {
+                "method": "item/commandExecution/requestApproval",
+                "params": {"command": ["rm", "-rf", "/tmp/example"]},
+            },
+            state,
+        )
+
+        assert isinstance(events[0], ApprovalRequested)
+        assert "rm -rf /tmp/example" in events[0].description
+
+    async def test_file_change_request_approval_produces_approval(self) -> None:
+        state = RuntimeThreadRunEventState()
+
+        events = await normalize_runtime_thread_raw_event(
+            {
+                "method": "item/fileChange/requestApproval",
+                "params": {"files": ["src/main.py", "README.md"]},
+            },
+            state,
+        )
+
+        assert isinstance(events[0], ApprovalRequested)
+        assert "src/main.py" in events[0].description
+        assert "README.md" in events[0].description
+
+
+class TestCrossBackendCompletionParity:
+    """Completion/failure events should have consistent semantics."""
+
+    async def test_prompt_completed_marks_completed_seen(self) -> None:
+        state = RuntimeThreadRunEventState()
+        await normalize_runtime_thread_raw_event(
+            {
+                "method": "prompt/completed",
+                "params": {"status": "completed", "finalOutput": "done"},
+            },
+            state,
+        )
+        assert state.completed_seen is True
+
+    async def test_turn_completed_marks_completed_seen(self) -> None:
+        state = RuntimeThreadRunEventState()
+        await normalize_runtime_thread_raw_event(
+            {"method": "turn/completed", "params": {"status": "completed"}},
+            state,
+        )
+        assert state.completed_seen is True
+
+    async def test_session_idle_marks_completed_seen(self) -> None:
+        state = RuntimeThreadRunEventState()
+        await normalize_runtime_thread_raw_event(
+            {"method": "session.idle", "params": {}},
+            state,
+        )
+        assert state.completed_seen is True
+
+    async def test_prompt_failed_produces_failed_event(self) -> None:
+        state = RuntimeThreadRunEventState()
+        events = await normalize_runtime_thread_raw_event(
+            {"method": "prompt/failed", "params": {"message": "boom"}},
+            state,
+        )
+        assert isinstance(events[0], Failed)
+        assert events[0].error_message == "boom"
+        assert state.completed_seen is False
+
+    async def test_turn_failed_produces_failed_event(self) -> None:
+        state = RuntimeThreadRunEventState()
+        events = await normalize_runtime_thread_raw_event(
+            {"method": "turn/failed", "params": {"message": "crash"}},
+            state,
+        )
+        assert isinstance(events[0], Failed)
+        assert events[0].error_message == "crash"
+        assert state.completed_seen is False
+
+    async def test_prompt_cancelled_does_not_mark_completed(self) -> None:
+        state = RuntimeThreadRunEventState()
+        await normalize_runtime_thread_raw_event(
+            {"method": "prompt/cancelled", "params": {"status": "cancelled"}},
+            state,
+        )
+        assert state.completed_seen is False
+
+    async def test_turn_cancelled_does_not_mark_completed(self) -> None:
+        state = RuntimeThreadRunEventState()
+        await normalize_runtime_thread_raw_event(
+            {"method": "turn/cancelled", "params": {"status": "cancelled"}},
+            state,
+        )
+        assert state.completed_seen is False
+
+
+class TestProtocolDriftAliases:
+    """Different key aliases for the same semantic data should produce identical results."""
+
+    async def test_tool_name_from_tool_vs_name_key(self) -> None:
+        tool_state = RuntimeThreadRunEventState()
+        events_a = await normalize_runtime_thread_raw_event(
+            format_sse(
+                "app-server",
+                {
+                    "message": {
+                        "method": "message.part.updated",
+                        "params": {
+                            "properties": {
+                                "part": {
+                                    "id": "t1",
+                                    "type": "tool",
+                                    "tool": "bash",
+                                    "state": {"status": "running"},
+                                }
+                            }
+                        },
+                    }
+                },
+            ),
+            tool_state,
+        )
+
+        name_state = RuntimeThreadRunEventState()
+        events_b = await normalize_runtime_thread_raw_event(
+            format_sse(
+                "app-server",
+                {
+                    "message": {
+                        "method": "message.part.updated",
+                        "params": {
+                            "properties": {
+                                "part": {
+                                    "id": "t1",
+                                    "type": "tool",
+                                    "name": "bash",
+                                    "state": {"status": "running"},
+                                }
+                            }
+                        },
+                    }
+                },
+            ),
+            name_state,
+        )
+
+        assert len(events_a) == 1
+        assert len(events_b) == 1
+        assert events_a[0].tool_name == events_b[0].tool_name == "bash"
+
+    async def test_tool_id_from_callID_vs_id(self) -> None:
+        callid_state = RuntimeThreadRunEventState()
+        events_a = await normalize_runtime_thread_raw_event(
+            format_sse(
+                "app-server",
+                {
+                    "message": {
+                        "method": "message.part.updated",
+                        "params": {
+                            "properties": {
+                                "part": {
+                                    "callID": "c1",
+                                    "type": "tool",
+                                    "tool": "bash",
+                                    "state": {"status": "running"},
+                                }
+                            }
+                        },
+                    }
+                },
+            ),
+            callid_state,
+        )
+
+        id_state = RuntimeThreadRunEventState()
+        events_b = await normalize_runtime_thread_raw_event(
+            format_sse(
+                "app-server",
+                {
+                    "message": {
+                        "method": "message.part.updated",
+                        "params": {
+                            "properties": {
+                                "part": {
+                                    "id": "c1",
+                                    "type": "tool",
+                                    "tool": "bash",
+                                    "state": {"status": "running"},
+                                }
+                            }
+                        },
+                    }
+                },
+            ),
+            id_state,
+        )
+
+        assert len(events_a) == 1
+        assert len(events_b) == 1
+        assert (
+            callid_state.opencode_tool_status.keys()
+            == id_state.opencode_tool_status.keys()
+        )
+
+    async def test_tool_input_from_cmd_vs_command_vs_input(self) -> None:
+        for key in ("input", "command", "cmd"):
+            state = RuntimeThreadRunEventState()
+            events = await normalize_runtime_thread_raw_event(
+                format_sse(
+                    "app-server",
+                    {
+                        "message": {
+                            "method": "message.part.updated",
+                            "params": {
+                                "properties": {
+                                    "part": {
+                                        "id": f"tool-{key}",
+                                        "type": "tool",
+                                        "tool": "bash",
+                                        key: "pwd",
+                                        "state": {"status": "running"},
+                                    }
+                                }
+                            },
+                        }
+                    },
+                ),
+                state,
+            )
+            assert len(events) == 1
+            assert isinstance(events[0], ToolCall)
+            assert key in events[0].tool_input
+            assert events[0].tool_input[key] == "pwd"
+
+    async def test_usage_from_usage_vs_tokenUsage_key(self) -> None:
+        usage_state = RuntimeThreadRunEventState()
+        events_a = await normalize_runtime_thread_raw_event(
+            {"method": "token/usage", "params": {"usage": {"totalTokens": 42}}},
+            usage_state,
+        )
+
+        token_usage_state = RuntimeThreadRunEventState()
+        events_b = await normalize_runtime_thread_raw_event(
+            {"method": "token/usage", "params": {"tokenUsage": {"totalTokens": 42}}},
+            token_usage_state,
+        )
+
+        assert len(events_a) == 1
+        assert len(events_b) == 1
+        assert events_a[0].usage == events_b[0].usage == {"totalTokens": 42}
+
+    async def test_tool_args_vs_arguments_vs_params_key(self) -> None:
+        for key in ("args", "arguments", "params"):
+            state = RuntimeThreadRunEventState()
+            events = await normalize_runtime_thread_raw_event(
+                format_sse(
+                    "app-server",
+                    {
+                        "message": {
+                            "method": "message.part.updated",
+                            "params": {
+                                "properties": {
+                                    "part": {
+                                        "id": f"tool-{key}",
+                                        "type": "tool",
+                                        "tool": "bash",
+                                        key: {"command": "ls"},
+                                        "state": {"status": "running"},
+                                    }
+                                }
+                            },
+                        }
+                    },
+                ),
+                state,
+            )
+            assert len(events) == 1
+            assert isinstance(events[0], ToolCall)
+            assert events[0].tool_input == {"command": "ls"}
+
+
+class TestRecoveryBehavior:
+    """Recovery semantics should be bounded and evidence-based."""
+
+    async def test_recover_post_completion_requires_all_three_conditions(self) -> None:
+        from codex_autorunner.core.orchestration.runtime_threads import (
+            RuntimeThreadOutcome,
+        )
+
+        outcome_error = RuntimeThreadOutcome(
+            status="error",
+            assistant_text="",
+            error="disconnected",
+            backend_thread_id="t1",
+            backend_turn_id="turn-1",
+        )
+
+        no_completion = recover_post_completion_outcome(
+            outcome_error,
+            RuntimeThreadRunEventState(
+                assistant_stream_text="partial", completed_seen=False
+            ),
+        )
+        assert no_completion.status == "error"
+
+        no_text = recover_post_completion_outcome(
+            outcome_error,
+            RuntimeThreadRunEventState(completed_seen=True),
+        )
+        assert no_text.status == "error"
+
+        already_ok = RuntimeThreadOutcome(
+            status="ok",
+            assistant_text="done",
+            error=None,
+            backend_thread_id="t1",
+            backend_turn_id="turn-1",
+        )
+        already_ok_result = recover_post_completion_outcome(
+            already_ok,
+            RuntimeThreadRunEventState(completed_seen=True),
+        )
+        assert already_ok_result.status == "ok"
+        assert already_ok_result.assistant_text == "done"
+
+    async def test_completed_seen_set_only_on_successful_completion(self) -> None:
+        for method, status, expected in [
+            ("prompt/completed", "completed", True),
+            ("turn/completed", "completed", True),
+            ("prompt/completed", "failed", False),
+            ("turn/completed", "failed", False),
+            ("prompt/cancelled", "cancelled", False),
+            ("turn/cancelled", "cancelled", False),
+            ("session.idle", "", True),
+            ("session.status", "", False),
+        ]:
+            state = RuntimeThreadRunEventState()
+            params = {"status": status} if status else {}
+            await normalize_runtime_thread_raw_event(
+                {"method": method, "params": params},
+                state,
+            )
+            assert (
+                state.completed_seen is expected
+            ), f"method={method} status={status} expected completed_seen={expected}"
