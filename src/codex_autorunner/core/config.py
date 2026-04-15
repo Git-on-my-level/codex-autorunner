@@ -1,7 +1,6 @@
 import dataclasses
 import logging
 import os
-import shlex
 from os import PathLike
 from pathlib import Path
 from typing import (
@@ -29,6 +28,8 @@ from .agent_config import (  # noqa: F401 — backward-compat re-exports
     AgentConfig,
     AgentProfileConfig,
     ResolvedAgentTarget,
+    parse_agents_config,
+    resolve_agent_target_from_agents,
 )
 from .app_server_command import (
     GLOBAL_APP_SERVER_COMMAND_ENV,
@@ -405,77 +406,10 @@ def _parse_optional_int(value: Any) -> Optional[int]:
 class AgentConfigMixin:
     agents: Dict[str, AgentConfig]
 
-    @staticmethod
-    def _normalize_agent_token(value: object) -> str:
-        return str(value or "").strip().lower()
-
-    @classmethod
-    def _strip_agent_prefix(cls, agent_id: str, runtime_kind: str) -> Optional[str]:
-        normalized_agent_id = cls._normalize_agent_token(agent_id)
-        normalized_runtime_kind = cls._normalize_agent_token(runtime_kind)
-        if not normalized_agent_id or not normalized_runtime_kind:
-            return None
-        for prefix in (
-            f"{normalized_runtime_kind}-",
-            f"{normalized_runtime_kind}_",
-        ):
-            if normalized_agent_id.startswith(prefix):
-                suffix = normalized_agent_id[len(prefix) :].strip()
-                return suffix or None
-        return None
-
     def resolve_runtime_agent_target(
         self, agent_id: str, *, profile: Optional[str] = None
     ) -> ResolvedAgentTarget:
-        logical_agent_id = self._normalize_agent_token(agent_id)
-        logical_profile = self._normalize_agent_token(profile) or None
-        if not logical_agent_id:
-            raise ConfigError("agent_id is required")
-
-        if logical_profile is not None:
-            agent = self.agents.get(logical_agent_id)
-            configured_profiles = agent.profiles if agent is not None else None
-            if (
-                isinstance(configured_profiles, dict)
-                and logical_profile in configured_profiles
-            ):
-                return ResolvedAgentTarget(
-                    logical_agent_id=logical_agent_id,
-                    logical_profile=logical_profile,
-                    runtime_agent_id=logical_agent_id,
-                    runtime_profile=logical_profile,
-                    resolution_kind="canonical_profile",
-                )
-
-            for raw_runtime_agent_id, runtime_agent in self.agents.items():
-                runtime_agent_id = self._normalize_agent_token(raw_runtime_agent_id)
-                if runtime_agent_id == logical_agent_id:
-                    continue
-                runtime_kind = self._normalize_agent_token(
-                    runtime_agent.backend or runtime_agent_id
-                )
-                if runtime_kind != logical_agent_id:
-                    continue
-                derived_profile = self._strip_agent_prefix(
-                    runtime_agent_id, logical_agent_id
-                )
-                if derived_profile != logical_profile:
-                    continue
-                return ResolvedAgentTarget(
-                    logical_agent_id=logical_agent_id,
-                    logical_profile=logical_profile,
-                    runtime_agent_id=runtime_agent_id,
-                    runtime_profile=None,
-                    resolution_kind="alias_profile",
-                )
-
-        return ResolvedAgentTarget(
-            logical_agent_id=logical_agent_id,
-            logical_profile=logical_profile,
-            runtime_agent_id=logical_agent_id,
-            runtime_profile=logical_profile,
-            resolution_kind="passthrough",
-        )
+        return resolve_agent_target_from_agents(self.agents, agent_id, profile=profile)
 
     def resolved_agent_config(
         self, agent_id: str, *, profile: Optional[str] = None
@@ -870,14 +804,6 @@ def _normalize_base_path(path: Optional[str]) -> str:
         normalized = "/" + normalized
     normalized = normalized.rstrip("/")
     return normalized or ""
-
-
-def _parse_command(raw: Any) -> List[str]:
-    if isinstance(raw, list):
-        return [str(item) for item in raw if item]
-    if isinstance(raw, str):
-        return [part for part in shlex.split(raw) if part]
-    return []
 
 
 def _parse_prompt_int(cfg: Dict[str, Any], defaults: Dict[str, Any], key: str) -> int:
@@ -1418,76 +1344,7 @@ def _parse_usage_config(
 def _parse_agents_config(
     cfg: Optional[Dict[str, Any]], defaults: Dict[str, Any]
 ) -> Dict[str, AgentConfig]:
-    raw_agents = cfg.get("agents") if cfg else None
-    if not isinstance(raw_agents, dict):
-        raw_agents = defaults.get("agents", {})
-    agents: Dict[str, AgentConfig] = {}
-    for agent_id, agent_cfg in raw_agents.items():
-        if not isinstance(agent_cfg, dict):
-            continue
-        backend = agent_cfg.get("backend")
-        if not isinstance(backend, str) or not backend.strip():
-            backend = None
-        binary = agent_cfg.get("binary")
-        if not isinstance(binary, str) or not binary.strip():
-            continue
-        serve_command = None
-        if "serve_command" in agent_cfg:
-            serve_command = _parse_command(agent_cfg.get("serve_command"))
-        base_url = agent_cfg.get("base_url")
-        subagent_models = agent_cfg.get("subagent_models")
-        if not isinstance(subagent_models, dict):
-            subagent_models = None
-        default_profile = agent_cfg.get("default_profile")
-        if not isinstance(default_profile, str) or not default_profile.strip():
-            default_profile = None
-        else:
-            default_profile = default_profile.strip().lower()
-        profiles_raw = agent_cfg.get("profiles")
-        profiles: Optional[Dict[str, AgentProfileConfig]] = None
-        if isinstance(profiles_raw, dict):
-            parsed_profiles: Dict[str, AgentProfileConfig] = {}
-            for profile_id, profile_cfg in profiles_raw.items():
-                normalized_profile_id = str(profile_id or "").strip().lower()
-                if not normalized_profile_id or not isinstance(profile_cfg, dict):
-                    continue
-                profile_backend = profile_cfg.get("backend")
-                if not isinstance(profile_backend, str) or not profile_backend.strip():
-                    profile_backend = None
-                profile_serve_command = None
-                if "serve_command" in profile_cfg:
-                    profile_serve_command = _parse_command(
-                        profile_cfg.get("serve_command")
-                    )
-                profile_base_url = profile_cfg.get("base_url")
-                profile_subagent_models = profile_cfg.get("subagent_models")
-                if not isinstance(profile_subagent_models, dict):
-                    profile_subagent_models = None
-                display_name = profile_cfg.get("display_name")
-                if not isinstance(display_name, str) or not display_name.strip():
-                    display_name = None
-                binary_override = profile_cfg.get("binary")
-                if not isinstance(binary_override, str) or not binary_override.strip():
-                    binary_override = None
-                parsed_profiles[normalized_profile_id] = AgentProfileConfig(
-                    display_name=display_name.strip() if display_name else None,
-                    backend=profile_backend,
-                    binary=binary_override,
-                    serve_command=profile_serve_command,
-                    base_url=profile_base_url,
-                    subagent_models=profile_subagent_models,
-                )
-            profiles = parsed_profiles or None
-        agents[str(agent_id)] = AgentConfig(
-            backend=backend,
-            binary=binary,
-            serve_command=serve_command,
-            base_url=base_url,
-            subagent_models=subagent_models,
-            default_profile=default_profile,
-            profiles=profiles,
-        )
-    return agents
+    return parse_agents_config(cfg, defaults)
 
 
 def _parse_templates_config(
