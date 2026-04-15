@@ -258,3 +258,123 @@ class TestDefaultConfigConstants:
     def test_generated_config_header_is_comment(self):
         assert GENERATED_CONFIG_HEADER.startswith("#")
         assert GENERATED_CONFIG_HEADER.endswith("\n")
+
+
+class TestHubPrecedenceChain:
+    """Characterize: built-in defaults < root config < root override < explicit overrides."""
+
+    def test_built_in_defaults_used_when_no_root_config(self, tmp_path):
+        result = resolve_hub_config_data(tmp_path)
+        assert result["mode"] == "hub"
+        assert result["version"] == 2
+        assert result["pma"]["max_text_chars"] == 10_000
+        assert result["server"]["host"] == "127.0.0.1"
+        assert result["server"]["port"] == 4173
+
+    def test_root_config_overrides_built_in_defaults(self, tmp_path):
+        root_cfg = tmp_path / ROOT_CONFIG_FILENAME
+        root_cfg.write_text("pma:\n  max_repos: 99\nserver:\n  port: 5000\n")
+        result = resolve_hub_config_data(tmp_path)
+        assert result["pma"]["max_repos"] == 99
+        assert result["server"]["port"] == 5000
+        assert result["pma"]["max_text_chars"] == 10_000
+
+    def test_root_override_overrides_root_config(self, tmp_path):
+        root_cfg = tmp_path / ROOT_CONFIG_FILENAME
+        root_cfg.write_text("pma:\n  max_repos: 50\nserver:\n  port: 5000\n")
+        override = tmp_path / ROOT_OVERRIDE_FILENAME
+        override.write_text("pma:\n  max_repos: 99\n")
+        result = resolve_hub_config_data(tmp_path)
+        assert result["pma"]["max_repos"] == 99
+        assert result["server"]["port"] == 5000
+
+    def test_explicit_overrides_highest_precedence(self, tmp_path):
+        root_cfg = tmp_path / ROOT_CONFIG_FILENAME
+        root_cfg.write_text("pma:\n  max_repos: 50\n")
+        override = tmp_path / ROOT_OVERRIDE_FILENAME
+        override.write_text("pma:\n  max_repos: 70\n")
+        result = resolve_hub_config_data(tmp_path, overrides={"pma": {"max_repos": 99}})
+        assert result["pma"]["max_repos"] == 99
+
+    def test_nested_merge_across_precedence_layers(self, tmp_path):
+        root_cfg = tmp_path / ROOT_CONFIG_FILENAME
+        root_cfg.write_text("pma:\n  max_repos: 99\n")
+        override = tmp_path / ROOT_OVERRIDE_FILENAME
+        override.write_text("pma:\n  max_text_chars: 5000\n")
+        result = resolve_hub_config_data(tmp_path)
+        assert result["pma"]["max_repos"] == 99
+        assert result["pma"]["max_text_chars"] == 5000
+        assert result["pma"]["enabled"] is True
+
+    def test_root_config_cannot_set_mode(self, tmp_path):
+        root_cfg = tmp_path / ROOT_CONFIG_FILENAME
+        root_cfg.write_text("mode: repo\n")
+        result = resolve_hub_config_data(tmp_path)
+        assert result["mode"] == "repo"
+
+
+class TestRepoDerivationPrecedenceChain:
+    """Characterize: built-in repo defaults < hub shared keys < hub.repo_defaults < repo override."""
+
+    def test_repo_derivation_uses_built_in_repo_defaults(self, tmp_path):
+        hub_data = {"repo_defaults": {}}
+        result = derive_repo_config_data(hub_data, tmp_path)
+        assert result["mode"] == "repo"
+        assert result["version"] == 2
+        assert result["runner"]["sleep_seconds"] == 5
+
+    def test_hub_shared_keys_propagate_over_repo_defaults(self, tmp_path):
+        hub_data = {
+            "repo_defaults": {},
+            "agents": {"codex": {"binary": "/custom/codex"}},
+            "server": {"port": 9999},
+        }
+        result = derive_repo_config_data(hub_data, tmp_path)
+        assert result["agents"]["codex"]["binary"] == "/custom/codex"
+        assert result["server"]["port"] == 9999
+
+    def test_repo_defaults_override_shared_keys(self, tmp_path):
+        hub_data = {
+            "repo_defaults": {"runner": {"sleep_seconds": 99}},
+            "server": {"port": 9999},
+        }
+        result = derive_repo_config_data(hub_data, tmp_path)
+        assert result["runner"]["sleep_seconds"] == 99
+        assert result["server"]["port"] == 9999
+
+    def test_repo_override_has_highest_precedence(self, tmp_path):
+        hub_data = {"repo_defaults": {"runner": {"sleep_seconds": 99}}}
+        override = tmp_path / ".codex-autorunner" / "repo.override.yml"
+        override.parent.mkdir(parents=True, exist_ok=True)
+        override.write_text("runner:\n  sleep_seconds: 42\n")
+        result = derive_repo_config_data(hub_data, tmp_path)
+        assert result["runner"]["sleep_seconds"] == 42
+
+    def test_shared_keys_and_repo_defaults_merge_not_replace(self, tmp_path):
+        hub_data = {
+            "repo_defaults": {"runner": {"sleep_seconds": 99}},
+            "agents": {"codex": {"binary": "/custom/codex"}},
+        }
+        result = derive_repo_config_data(hub_data, tmp_path)
+        assert result["runner"]["sleep_seconds"] == 99
+        assert result["agents"]["codex"]["binary"] == "/custom/codex"
+
+    def test_repo_override_rejects_mode(self, tmp_path):
+        from codex_autorunner.core.config_contract import ConfigError
+
+        hub_data = {"repo_defaults": {}}
+        override = tmp_path / ".codex-autorunner" / "repo.override.yml"
+        override.parent.mkdir(parents=True, exist_ok=True)
+        override.write_text("mode: hub\n")
+        with pytest.raises(ConfigError, match="must not set mode or version"):
+            derive_repo_config_data(hub_data, tmp_path)
+
+    def test_repo_override_rejects_version(self, tmp_path):
+        from codex_autorunner.core.config_contract import ConfigError
+
+        hub_data = {"repo_defaults": {}}
+        override = tmp_path / ".codex-autorunner" / "repo.override.yml"
+        override.parent.mkdir(parents=True, exist_ok=True)
+        override.write_text("version: 99\n")
+        with pytest.raises(ConfigError, match="must not set mode or version"):
+            derive_repo_config_data(hub_data, tmp_path)
