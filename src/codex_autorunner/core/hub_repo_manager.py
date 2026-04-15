@@ -18,6 +18,7 @@ from .force_attestation import enforce_force_attestation
 from .git_utils import (
     GitError,
     git_available,
+    git_failure_detail,
     git_is_clean,
     git_upstream_status,
     run_git,
@@ -29,10 +30,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger("codex_autorunner.hub_repo_manager")
 
 _GIT_CLONE_TIMEOUT_SECONDS = 300
-
-
-def _git_failure_detail(proc: Any) -> str:
-    return (proc.stderr or proc.stdout or "").strip() or f"exit {proc.returncode}"
 
 
 def _repo_id_from_url(url: str) -> str:
@@ -311,7 +308,7 @@ class RepoManager:
         except GitError as exc:
             raise ValueError(f"git init failed: {exc}") from exc
         if proc.returncode != 0:
-            raise ValueError(f"git init failed: {_git_failure_detail(proc)}")
+            raise ValueError(f"git init failed: {git_failure_detail(proc)}")
 
     def _git_clone(self, git_url: str, target: Path) -> None:
         try:
@@ -324,4 +321,4 @@ class RepoManager:
         except GitError as exc:
             raise ValueError(f"git clone failed: {exc}") from exc
         if proc.returncode != 0:
-            raise ValueError(f"git clone failed: {_git_failure_detail(proc)}")
+            raise ValueError(f"git clone failed: {git_failure_detail(proc)}")

@@ -294,6 +294,14 @@ def terminal_status_for_method(method: str, params: Mapping[str, Any]) -> Option
         return _normalize_optional_text(params.get("status")) or "cancelled"
     if method in {"prompt/completed", "turn/completed"}:
         normalized = _normalize_optional_text(params.get("status"))
+        if not normalized:
+            for nested_key in ("turn", "prompt"):
+                nested = params.get(nested_key)
+                if not isinstance(nested, Mapping):
+                    continue
+                normalized = _extract_status_value(nested.get("status"))
+                if normalized:
+                    break
         if normalized:
             return normalized
         return "completed"

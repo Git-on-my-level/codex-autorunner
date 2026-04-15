@@ -8,6 +8,18 @@ from .hub import HubSupervisor
 _logger = logging.getLogger(__name__)
 
 
+def empty_automation_snapshot() -> dict[str, Any]:
+    return {
+        "subscriptions": {"active_count": 0, "sample": []},
+        "timers": {"pending_count": 0, "sample": []},
+        "wakeups": {
+            "pending_count": 0,
+            "dispatched_recent_count": 0,
+            "pending_sample": [],
+        },
+    }
+
+
 def _coerce_automation_items(payload: Any, *, key: str) -> list[dict[str, Any]]:
     if isinstance(payload, list):
         return [entry for entry in payload if isinstance(entry, dict)]
@@ -35,18 +47,17 @@ def _call_automation_list(
     return _coerce_automation_items(result, key=key)
 
 
+def _wakeup_sort_key(entry: dict[str, Any]) -> tuple[str, str, str]:
+    timestamp = str(entry.get("timestamp") or "").strip()
+    updated_at = str(entry.get("updated_at") or "").strip()
+    wakeup_id = str(entry.get("wakeup_id") or "").strip()
+    return (timestamp, updated_at, wakeup_id)
+
+
 def snapshot_pma_automation(
     supervisor: HubSupervisor, *, max_items: int = 10
 ) -> dict[str, Any]:
-    out = {
-        "subscriptions": {"active_count": 0, "sample": []},
-        "timers": {"pending_count": 0, "sample": []},
-        "wakeups": {
-            "pending_count": 0,
-            "dispatched_recent_count": 0,
-            "pending_sample": [],
-        },
-    }
+    out = empty_automation_snapshot()
     try:
         store = supervisor.pma_automation_store
     except (AttributeError, RuntimeError, TypeError):
@@ -69,22 +80,15 @@ def snapshot_pma_automation(
     pending_wakeups = _call_automation_list(
         getattr(store, "list_wakeups", None), key="wakeups", state_filter="pending"
     )
-    pending_wakeups_sample = _call_automation_list(
-        getattr(store, "list_pending_wakeups", None),
-        key="wakeups",
-        limit=max_items,
-    )
     if not pending_wakeups:
         pending_wakeups = _call_automation_list(
             getattr(store, "list_pending_wakeups", None), key="wakeups"
         )
-    if not pending_wakeups_sample:
-        pending_wakeups_sample = _call_automation_list(
-            getattr(store, "list_wakeups", None),
-            key="wakeups",
-            state_filter="pending",
-            limit=max_items,
-        )
+    pending_wakeups_sample = sorted(
+        pending_wakeups,
+        key=_wakeup_sort_key,
+        reverse=True,
+    )[:max_items]
     dispatched_wakeups = _call_automation_list(
         getattr(store, "list_wakeups", None),
         key="wakeups",

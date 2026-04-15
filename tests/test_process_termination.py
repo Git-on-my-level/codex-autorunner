@@ -19,6 +19,16 @@ def _assert_process_gone(pid: int) -> None:
             return
         except PermissionError:
             return
+        # Reaped children can remain as zombies until the parent waits; treat Z
+        # as non-running for termination assertions.
+        try:
+            stat_path = f"/proc/{pid}/stat"
+            with open(stat_path, encoding="utf-8") as handle:
+                state = handle.read().split()[2]
+            if state == "Z":
+                return
+        except (OSError, IndexError, ValueError):
+            pass
         time.sleep(0.05)
     pytest.fail(f"process {pid} still running after termination")
 

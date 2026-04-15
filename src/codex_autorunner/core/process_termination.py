@@ -9,6 +9,61 @@ from typing import Optional
 from .logging_utils import log_event
 
 
+def _linux_child_pids_for_parent(parent_pid: int) -> list[int]:
+    """Direct child PIDs for a parent (Linux).
+
+    Prefer `/proc/.../children` when the kernel exposes it; many containers
+    omit that file, so fall back to scanning `/proc/*/status` for ``PPid:``.
+    """
+    if parent_pid <= 0:
+        return []
+    path = f"/proc/{parent_pid}/task/{parent_pid}/children"
+    try:
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read().strip()
+    except OSError:
+        text = ""
+    if text:
+        result: list[int] = []
+        for part in text.split():
+            try:
+                result.append(int(part))
+            except ValueError:
+                continue
+        return result
+
+    proc_root = "/proc"
+    try:
+        names = os.listdir(proc_root)
+    except OSError:
+        return []
+    children: list[int] = []
+    for name in names:
+        if not name.isdigit():
+            continue
+        try:
+            candidate = int(name)
+        except ValueError:
+            continue
+        if candidate == parent_pid:
+            continue
+        status_path = os.path.join(proc_root, name, "status")
+        try:
+            with open(status_path, encoding="utf-8") as handle:
+                for line in handle:
+                    if not line.startswith("PPid:"):
+                        continue
+                    parts = line.split()
+                    if len(parts) < 2:
+                        break
+                    if int(parts[1]) == parent_pid:
+                        children.append(candidate)
+                    break
+        except (OSError, ValueError):
+            continue
+    return children
+
+
 def terminate_pid(
     pid: int,
     *,
@@ -195,6 +250,22 @@ def terminate_record(
     had_target = False
     group_ok = False
     pid_ok = False
+    # Snapshot and terminate direct children before the parent: subprocess children
+    # may live in a different process group than the parent, so killpg misses them,
+    # and reparenting after the parent dies makes PPid-based discovery unreliable.
+    child_pids = _linux_child_pids_for_parent(pid) if pid is not None else []
+    children_ok = True
+    for child_pid in child_pids:
+        had_target = True
+        if not terminate_pid(
+            child_pid,
+            grace_seconds=grace_seconds,
+            kill_seconds=kill_seconds,
+            logger=logger,
+            event_prefix=event_prefix,
+        ):
+            children_ok = False
+
     if pgid is not None:
         had_target = True
         group_ok = terminate_process_group(
@@ -215,7 +286,7 @@ def terminate_record(
             event_prefix=event_prefix,
         )
 
-    ok = had_target and (group_ok or pid_ok)
+    ok = had_target and (group_ok or pid_ok or children_ok)
     if not had_target:
         _log_event(
             logger,

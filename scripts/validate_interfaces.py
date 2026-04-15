@@ -24,7 +24,12 @@ SCHEMA_BINDINGS = {
     "RepoSnapshot": {
         "typescript": "HubRepo",
         "python": "RepoSnapshot",
-        "python_extra": {"mounted", "mount_error", "ticket_flow", "ticket_flow_display"},
+        "python_extra": {
+            "mounted",
+            "mount_error",
+            "ticket_flow",
+            "ticket_flow_display",
+        },
     },
     "AgentWorkspaceSnapshot": {
         "typescript": "HubAgentWorkspace",
@@ -88,7 +93,9 @@ def _is_dataclass(node: ast.ClassDef) -> bool:
     return False
 
 
-def _extract_python_classes(py_path: Path) -> Tuple[Dict[str, Set[str]], Dict[str, Set[str]]]:
+def _extract_python_classes(
+    py_path: Path,
+) -> Tuple[Dict[str, Set[str]], Dict[str, Set[str]]]:
     content = load_text_document(py_path, label="Python interface file")
     tree = ast.parse(content)
     classes: Dict[str, Set[str]] = {}
@@ -106,7 +113,9 @@ def _extract_python_classes(py_path: Path) -> Tuple[Dict[str, Set[str]], Dict[st
                 for child in ast.walk(stmt):
                     if isinstance(child, ast.Dict):
                         for key in child.keys:
-                            if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                            if isinstance(key, ast.Constant) and isinstance(
+                                key.value, str
+                            ):
                                 dict_keys.add(key.value)
         classes[node.name] = fields
         if dict_keys:
@@ -159,7 +168,13 @@ def validate_interfaces(
             errors.append(f"{schema_name}: missing TypeScript interface '{ts_name}'")
         else:
             errors.extend(
-                _diff_props(schema_name, f"TypeScript {ts_name}", ts_props, required, schema_props)
+                _diff_props(
+                    schema_name,
+                    f"TypeScript {ts_name}",
+                    ts_props,
+                    required,
+                    schema_props,
+                )
             )
 
         py_props = py_to_dict.get(py_name) or py_classes.get(py_name)
@@ -168,7 +183,9 @@ def validate_interfaces(
         else:
             merged = set(py_props) | py_extra
             errors.extend(
-                _diff_props(schema_name, f"Python {py_name}", merged, required, schema_props)
+                _diff_props(
+                    schema_name, f"Python {py_name}", merged, required, schema_props
+                )
             )
 
     return not errors, errors
@@ -193,7 +210,7 @@ def main() -> int:
     parser.add_argument(
         "--python",
         type=Path,
-        default=Path("src/codex_autorunner/core/hub.py"),
+        default=Path("src/codex_autorunner/core/hub_topology.py"),
         help="Path to Python hub module.",
     )
     args = parser.parse_args()

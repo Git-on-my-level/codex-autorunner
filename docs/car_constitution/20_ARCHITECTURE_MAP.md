@@ -87,6 +87,19 @@ Mapping the conceptual layers to the codebase:
 3. **Run**: Execute the configured backend (for example Codex app-server with OpenCode runtime, or Hermes and other ACP-backed runtimes; see `docs/ops/hermes-acp.md`).
 4. **Update State**: Handle stop rules (exit code, stop_after_runs, limits).
 
+### Ticket-flow runner seam structure
+The ticket-flow orchestration hot path is split across focused submodules:
+- **`runner.py`** (`TicketRunner.step`): Step controller that sequences pre-turn planning, execution, and post-turn processing without reimplementing helper contracts inline.
+- **`runner_selection.py`**: Ticket selection (`select_ticket`), validation (`validate_ticket_for_execution`), pre-turn planning (`plan_pre_turn`), reply-context loading (`build_reply_context`), and requested-context resolution (`load_ticket_context_block`).
+- **`runner_prompt.py`**: Prompt assembly (`build_prompt`), budgeting (`_shrink_prompt`), and ticket-frontmatter preservation (`_preserve_ticket_structure`).
+- **`runner_execution.py`**: Agent turn execution (`execute_turn`), git-state capture, loop-guard computation, and network-error classification.
+- **`runner_post_turn.py`**: Dispatch archival (`archive_dispatch_and_create_summary`), turn-summary creation, frontmatter recheck, checkpoint/commit gating, pause-result construction, and completion-state cleanup.
+- **`runner_commit.py`**: Commit-gating logic for done-but-dirty working trees.
+
+Projections and summaries (read-only, consumed by hub/PMA/CLI surfaces):
+- **`core/ticket_flow_projection.py`**: Canonical state projection merging ticket frontmatter, run-state, flow-store, freshness, and contradiction detection.
+- **`core/ticket_flow_summary.py`**: Display-oriented summary (status icons, labels, PR URL) built from projection facts.
+
 ## Dispatch Model (Agent-Human Communication)
 - **Dispatch**: Agent → Human (`tickets/models.py`).
   - `mode: "notify"`: Informational, agent continues.

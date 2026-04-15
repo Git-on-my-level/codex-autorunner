@@ -37,7 +37,16 @@ from .pma_thread_store_rows import (
     coerce_text as _coerce_text,
 )
 from .pma_thread_store_rows import (
+    complete_thread_execution_queue_item as _complete_thread_execution_queue_item,
+)
+from .pma_thread_store_rows import (
     enrich_thread_metadata_for_workspace as _enrich_thread_metadata_for_workspace,
+)
+from .pma_thread_store_rows import (
+    fail_thread_execution_running_items as _fail_thread_execution_running_items,
+)
+from .pma_thread_store_rows import (
+    insert_thread_execution_queue_item as _insert_thread_execution_queue_item,
 )
 from .pma_thread_store_rows import (
     normalize_request_kind as _normalize_request_kind,
@@ -1004,45 +1013,17 @@ class PmaThreadStore:
                     ),
                 )
                 if execution_status == "queued":
-                    conn.execute(
-                        """
-                        INSERT INTO orch_queue_items (
-                            queue_item_id,
-                            lane_id,
-                            source_kind,
-                            source_key,
-                            dedupe_key,
-                            state,
-                            visible_at,
-                            claimed_at,
-                            completed_at,
-                            payload_json,
-                            created_at,
-                            updated_at,
-                            idempotency_key,
-                            error_text,
-                            dedupe_reason,
-                            result_json
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            queue_item_id,
-                            thread_queue_lane_id(managed_thread_id),
-                            "thread_execution",
-                            managed_turn_id,
-                            client_turn_id or managed_turn_id,
-                            "queued",
-                            started_at,
-                            None,
-                            None,
-                            _json_dumps(queue_payload or {}),
-                            started_at,
-                            started_at,
-                            client_turn_id or managed_turn_id,
-                            None,
-                            None,
-                            _json_dumps({}),
-                        ),
+                    _insert_thread_execution_queue_item(
+                        conn,
+                        queue_item_id=queue_item_id,
+                        lane_id=thread_queue_lane_id(managed_thread_id),
+                        source_key=managed_turn_id,
+                        dedupe_key=client_turn_id or managed_turn_id,
+                        state="queued",
+                        visible_at=started_at,
+                        payload_json=_json_dumps(queue_payload or {}),
+                        created_at=started_at,
+                        idempotency_key=client_turn_id or managed_turn_id,
                     )
             if execution_status == "running":
                 with conn:
@@ -1129,33 +1110,20 @@ class PmaThreadStore:
             if cursor.rowcount == 0:
                 return False
             queue_state = "completed" if status == "ok" else "failed"
-            conn.execute(
-                """
-                UPDATE orch_queue_items
-                   SET state = ?,
-                       completed_at = ?,
-                       updated_at = ?,
-                       error_text = ?,
-                       result_json = ?
-                 WHERE source_kind = 'thread_execution'
-                   AND source_key = ?
-                   AND state = 'running'
-                """,
-                (
-                    queue_state,
-                    finished_at,
-                    finished_at,
-                    error,
-                    _json_dumps(
-                        {
-                            "status": status,
-                            "assistant_text": assistant_text or "",
-                            "backend_turn_id": backend_turn_id or "",
-                            "transcript_turn_id": transcript_turn_id or "",
-                            "error": error or "",
-                        }
-                    ),
-                    managed_turn_id,
+            _complete_thread_execution_queue_item(
+                conn,
+                source_key=managed_turn_id,
+                target_state=queue_state,
+                completed_at=finished_at,
+                error_text=error,
+                result_json=_json_dumps(
+                    {
+                        "status": status,
+                        "assistant_text": assistant_text or "",
+                        "backend_turn_id": backend_turn_id or "",
+                        "transcript_turn_id": transcript_turn_id or "",
+                        "error": error or "",
+                    }
                 ),
             )
             self._transition_thread_status(
@@ -1208,24 +1176,11 @@ class PmaThreadStore:
                 )
             if cursor.rowcount == 0:
                 return False
-            conn.execute(
-                """
-                UPDATE orch_queue_items
-                   SET state = 'failed',
-                       completed_at = ?,
-                       updated_at = ?,
-                       error_text = COALESCE(error_text, 'interrupted'),
-                       result_json = ?
-                 WHERE source_kind = 'thread_execution'
-                   AND source_key = ?
-                   AND state = 'running'
-                """,
-                (
-                    finished_at,
-                    finished_at,
-                    _json_dumps({"status": "interrupted"}),
-                    managed_turn_id,
-                ),
+            _fail_thread_execution_running_items(
+                conn,
+                source_keys=[managed_turn_id],
+                completed_at=finished_at,
+                error_text="interrupted",
             )
             self._transition_thread_status(
                 conn,
