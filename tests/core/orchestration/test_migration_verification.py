@@ -144,20 +144,24 @@ def test_verify_migration_summary(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir(parents=True)
-    store = PmaThreadStore(hub_root)
-    store.create_thread("codex", workspace_root, repo_id="repo-1", name="Test")
-    persistence = PmaAutomationPersistence(hub_root)
-    persistence.save(default_pma_automation_state())
-    with open_orchestration_sqlite(hub_root, durable=False) as conn:
-        backfill_legacy_thread_state(hub_root, conn)
-        backfill_legacy_automation_state(hub_root, conn)
-        summary = verify_migration(hub_root, conn)
-    assert summary.run_id
-    assert summary.started_at
-    assert summary.finished_at
-    assert summary.status in ("passed", "failed")
-    assert "recommendations" in summary.to_dict()
-    assert summary.rollback_available
+    os.environ["CAR_LEGACY_MIRROR_ENABLED"] = "true"
+    try:
+        store = PmaThreadStore(hub_root)
+        store.create_thread("codex", workspace_root, repo_id="repo-1", name="Test")
+        persistence = PmaAutomationPersistence(hub_root)
+        persistence.save(default_pma_automation_state())
+        with open_orchestration_sqlite(hub_root, durable=False) as conn:
+            backfill_legacy_thread_state(hub_root, conn)
+            backfill_legacy_automation_state(hub_root, conn)
+            summary = verify_migration(hub_root, conn)
+        assert summary.run_id
+        assert summary.started_at
+        assert summary.finished_at
+        assert summary.status in ("passed", "failed")
+        assert "recommendations" in summary.to_dict()
+        assert summary.rollback_available
+    finally:
+        os.environ.pop("CAR_LEGACY_MIRROR_ENABLED", None)
 
 
 def test_verify_migration_with_all_data(tmp_path: Path) -> None:

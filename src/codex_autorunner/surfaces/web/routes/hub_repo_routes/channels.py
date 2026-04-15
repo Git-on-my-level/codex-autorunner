@@ -24,7 +24,7 @@ from .....core.orchestration.sqlite import resolve_orchestration_sqlite_path
 from .....core.pma_context import (
     get_latest_ticket_flow_run_state_with_record,
 )
-from .....core.pma_thread_store import PmaThreadStore, default_pma_threads_db_path
+from .....core.pma_thread_store import PmaThreadStore
 from .....core.text_utils import _coerce_int as _standalone_coerce_int
 from .....integrations.app_server.threads import (
     AppServerThreadRegistry,
@@ -620,7 +620,7 @@ class HubChannelService:
     def _read_active_pma_threads(
         self, hub_root: Path, repo_id_by_workspace: dict[str, str]
     ) -> list[dict[str, Any]]:
-        db_path = default_pma_threads_db_path(hub_root)
+        db_path = resolve_orchestration_sqlite_path(hub_root)
         if not db_path.exists():
             return []
         try:

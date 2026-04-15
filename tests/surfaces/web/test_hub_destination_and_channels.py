@@ -20,10 +20,7 @@ from codex_autorunner.core.orchestration.bindings import OrchestrationBindingSto
 from codex_autorunner.core.orchestration.sqlite import (
     resolve_orchestration_sqlite_path,
 )
-from codex_autorunner.core.pma_thread_store import (
-    PmaThreadStore,
-    default_pma_threads_db_path,
-)
+from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.state import RunnerState, save_state
 from codex_autorunner.integrations.agents.backend_orchestrator import (
     build_backend_orchestrator,
@@ -1172,14 +1169,15 @@ def test_hub_channel_directory_route_uses_managed_thread_id_for_pma_usage(
     managed_thread_id = str(created["managed_thread_id"])
     legacy_backend_thread_id = "legacy-backend-thread"
 
-    conn = sqlite3.connect(default_pma_threads_db_path(hub_root))
+    orch_db_path = resolve_orchestration_sqlite_path(hub_root)
+    conn = sqlite3.connect(orch_db_path)
     try:
         with conn:
             conn.execute(
                 """
-                UPDATE pma_managed_threads
+                UPDATE orch_thread_targets
                    SET backend_thread_id = ?
-                 WHERE managed_thread_id = ?
+                 WHERE thread_target_id = ?
                 """,
                 (legacy_backend_thread_id, managed_thread_id),
             )
