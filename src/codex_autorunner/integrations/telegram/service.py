@@ -521,19 +521,12 @@ class TelegramBotService(
             )
 
     async def _housekeeping_roots(self) -> list[Path]:
-        roots: set[Path] = set()
-        try:
-            state = await self._store.load()
-            for record in state.topics.values():
-                if isinstance(record.workspace_path, str) and record.workspace_path:
-                    roots.add(Path(record.workspace_path).expanduser().resolve())
-        except (OSError, ValueError) as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "telegram.housekeeping.state_failed",
-                exc=exc,
+        roots = set(
+            await self._workspace_roots_from_state(
+                state_failed_event="telegram.housekeeping.state_failed",
+                prune_reason="housekeeping",
             )
+        )
         if self._hub_root and self._manifest_path and self._manifest_path.exists():
             try:
                 manifest = load_manifest(self._manifest_path, self._hub_root)
@@ -551,20 +544,83 @@ class TelegramBotService(
         return sorted(roots)
 
     async def _gather_workspace_roots(self) -> list[Path]:
+        return await self._workspace_roots_from_state(
+            state_failed_event="telegram.prewarm.state_failed",
+            prune_reason="prewarm",
+        )
+
+    async def _workspace_roots_from_state(
+        self,
+        *,
+        state_failed_event: str,
+        prune_reason: str,
+    ) -> list[Path]:
         roots: set[Path] = set()
+        stale_topics: list[tuple[str, Path]] = []
         try:
             state = await self._store.load()
-            for record in state.topics.values():
-                if isinstance(record.workspace_path, str) and record.workspace_path:
-                    roots.add(Path(record.workspace_path).expanduser().resolve())
+            for key, record in state.topics.items():
+                workspace_root = self._canonical_workspace_root(record.workspace_path)
+                if workspace_root is None:
+                    continue
+                if workspace_root.is_dir():
+                    roots.add(workspace_root)
+                    continue
+                stale_topics.append((key, workspace_root))
         except (OSError, ValueError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
-                "telegram.prewarm.state_failed",
+                state_failed_event,
                 exc=exc,
             )
+            return []
+        if stale_topics:
+            await self._clear_stale_workspace_topics(
+                stale_topics,
+                reason=prune_reason,
+            )
         return sorted(roots)
+
+    async def _clear_stale_workspace_topics(
+        self,
+        topics: Sequence[tuple[str, Path]],
+        *,
+        reason: str,
+    ) -> None:
+        pruned_keys: list[str] = []
+        pruned_workspaces: list[str] = []
+        for key, workspace_root in topics:
+
+            def clear_stale_workspace(record: TelegramTopicRecord) -> None:
+                record.workspace_path = None
+                record.workspace_id = None
+
+            try:
+                await self._store.update_topic(key, clear_stale_workspace)
+            except (OSError, ValueError) as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.workspace_binding.prune_failed",
+                    reason=reason,
+                    topic_key=key,
+                    workspace_root=str(workspace_root),
+                    exc=exc,
+                )
+                continue
+            pruned_keys.append(key)
+            pruned_workspaces.append(str(workspace_root))
+        if pruned_keys:
+            log_event(
+                self._logger,
+                logging.INFO,
+                "telegram.workspace_binding.pruned",
+                reason=reason,
+                pruned_count=len(pruned_keys),
+                topic_keys=pruned_keys,
+                workspaces=pruned_workspaces,
+            )
 
     async def _prewarm_workspace_clients(self) -> None:
         workspace_roots = await self._gather_workspace_roots()
@@ -588,10 +644,21 @@ class TelegramBotService(
         sem = asyncio.Semaphore(3)
         prewarmed_count = 0
         failed_count = 0
+        skipped_missing_count = 0
 
         async def prewarm_one(workspace_root: Path) -> None:
-            nonlocal prewarmed_count, failed_count
+            nonlocal prewarmed_count, failed_count, skipped_missing_count
             async with sem:
+                if not workspace_root.is_dir():
+                    skipped_missing_count += 1
+                    log_event(
+                        self._logger,
+                        logging.INFO,
+                        "telegram.prewarm.client_skipped",
+                        workspace_root=str(workspace_root),
+                        reason="missing_workspace",
+                    )
+                    return
                 try:
                     await self._app_server_supervisor.get_client(workspace_root)
                     prewarmed_count += 1
@@ -623,6 +690,7 @@ class TelegramBotService(
             workspace_count=len(workspace_roots),
             prewarmed_count=prewarmed_count,
             failed_count=failed_count,
+            skipped_missing_count=skipped_missing_count,
         )
 
     async def _housekeeping_loop(self) -> None:

@@ -8,6 +8,7 @@ import pytest
 from codex_autorunner.integrations.telegram import service as telegram_service_module
 from codex_autorunner.integrations.telegram.config import TelegramBotConfig
 from codex_autorunner.integrations.telegram.service import TelegramBotService
+from codex_autorunner.integrations.telegram.state import topic_key
 
 
 def _config(root: Path) -> TelegramBotConfig:
@@ -112,3 +113,88 @@ async def test_housekeeping_cycle_prunes_fileboxes_using_per_root_repo_config(
     assert housekeeping_calls == [[repo_root, workspace_root]]
     assert app_server_pruned == 1
     assert opencode_pruned == 1
+
+
+@pytest.mark.anyio
+async def test_gather_workspace_roots_prunes_missing_workspace_bindings(
+    tmp_path: Path,
+) -> None:
+    service = TelegramBotService(_config(tmp_path), hub_root=tmp_path)
+    live_workspace = tmp_path / "live-workspace"
+    live_workspace.mkdir()
+    missing_workspace = tmp_path / "missing-workspace"
+    live_key = topic_key(123, 10)
+    missing_key = topic_key(123, 11)
+
+    try:
+        await service._store.bind_topic(live_key, str(live_workspace))
+        await service._store.bind_topic(missing_key, str(missing_workspace))
+
+        roots = await service._gather_workspace_roots()
+        stale_record = await service._store.get_topic(missing_key)
+        live_record = await service._store.get_topic(live_key)
+    finally:
+        await service._bot.close()
+        await service._store.close()
+
+    assert roots == [live_workspace.resolve()]
+    assert live_record is not None
+    assert live_record.workspace_path == str(live_workspace)
+    assert stale_record is not None
+    assert stale_record.workspace_path is None
+    assert stale_record.workspace_id is None
+
+
+@pytest.mark.anyio
+async def test_housekeeping_roots_prune_missing_workspace_bindings(
+    tmp_path: Path,
+) -> None:
+    service = TelegramBotService(_config(tmp_path), hub_root=tmp_path)
+    live_workspace = tmp_path / "housekeeping-live"
+    live_workspace.mkdir()
+    missing_workspace = tmp_path / "housekeeping-missing"
+    missing_key = topic_key(123, 12)
+
+    try:
+        await service._store.bind_topic(topic_key(123, 13), str(live_workspace))
+        await service._store.bind_topic(missing_key, str(missing_workspace))
+
+        roots = await service._housekeeping_roots()
+        stale_record = await service._store.get_topic(missing_key)
+    finally:
+        await service._bot.close()
+        await service._store.close()
+
+    assert roots == sorted([tmp_path.resolve(), live_workspace.resolve()])
+    assert stale_record is not None
+    assert stale_record.workspace_path is None
+    assert stale_record.workspace_id is None
+
+
+@pytest.mark.anyio
+async def test_prewarm_skips_missing_workspaces_without_spawning(
+    tmp_path: Path,
+) -> None:
+    service = TelegramBotService(_config(tmp_path), hub_root=tmp_path)
+    live_workspace = tmp_path / "prewarm-live"
+    live_workspace.mkdir()
+    missing_workspace = tmp_path / "prewarm-missing"
+
+    await service._store.bind_topic(topic_key(123, 20), str(live_workspace))
+    await service._store.bind_topic(topic_key(123, 21), str(missing_workspace))
+
+    started_roots: list[Path] = []
+
+    async def _fake_get_client(workspace_root: Path) -> object:
+        started_roots.append(workspace_root)
+        return object()
+
+    service._app_server_supervisor = SimpleNamespace(get_client=_fake_get_client)
+
+    try:
+        await service._prewarm_workspace_clients()
+    finally:
+        await service._bot.close()
+        await service._store.close()
+
+    assert started_roots == [live_workspace.resolve()]
