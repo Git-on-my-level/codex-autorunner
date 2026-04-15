@@ -112,9 +112,7 @@ def test_discord_harness_factory_logs_alias_hermes_runtime_resolution(
 
     def _fake_make_harness(_ctx: Any) -> SimpleNamespace:
         return SimpleNamespace(
-            _supervisor=SimpleNamespace(
-                launch_command=("hermes", "-p", "hermes-m4-pma", "acp")
-            )
+            _supervisor=SimpleNamespace(launch_command=("hermes-m4-pma", "acp"))
         )
 
     descriptor = AgentDescriptor(
@@ -169,6 +167,6 @@ def test_discord_harness_factory_logs_alias_hermes_runtime_resolution(
             "resolution_kind": "alias_profile",
             "runtime_agent_id": "hermes-m4-pma",
             "runtime_profile": None,
-            "launch_command": ["hermes", "-p", "hermes-m4-pma", "acp"],
+            "launch_command": ["hermes-m4-pma", "acp"],
         }
     ]

@@ -89,6 +89,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 PMA_TIMEOUT_SECONDS = 7200
+_DEFAULT_PMA_TIMEOUT_SECONDS = 7200
 _GITHUB_PR_URL_RE = re.compile(
     r"https://github\.com/[^/\s]+/[^/\s]+/pull/\d+",
     re.IGNORECASE,
@@ -113,6 +114,23 @@ def _build_managed_thread_orchestration_service_for_app(
         _managed_thread_request_for_app(app),
         thread_store=thread_store,
     )
+
+
+def _pma_turn_timeout_seconds(request: Request) -> float:
+    overridden_timeout = globals().get(
+        "PMA_TIMEOUT_SECONDS",
+        _DEFAULT_PMA_TIMEOUT_SECONDS,
+    )
+    if overridden_timeout != _DEFAULT_PMA_TIMEOUT_SECONDS:
+        return float(overridden_timeout)
+    configured_timeout = getattr(
+        getattr(request.app.state.config, "pma", None),
+        "turn_timeout_seconds",
+        None,
+    )
+    if configured_timeout is None:
+        return float(_DEFAULT_PMA_TIMEOUT_SECONDS)
+    return float(configured_timeout)
 
 
 def _managed_thread_task_pool(app: Any) -> set[asyncio.Task[Any]]:
@@ -658,7 +676,7 @@ async def _run_managed_thread_execution(
         outcome = await await_runtime_thread_outcome(
             started,
             interrupt_event=None,
-            timeout_seconds=PMA_TIMEOUT_SECONDS,
+            timeout_seconds=_pma_turn_timeout_seconds(request),
             execution_error_message=MANAGED_THREAD_PUBLIC_EXECUTION_ERROR,
         )
     except Exception:  # intentional: top-level error handler for execution outcome

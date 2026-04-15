@@ -15,6 +15,8 @@ from ...agents.registry import (
     resolve_agent_runtime,
     wrap_requested_agent_context,
 )
+from ...core.config import load_hub_config
+from ...core.config_contract import ConfigError
 from ...core.context_awareness import (
     maybe_inject_car_awareness,
     maybe_inject_filebox_hint,
@@ -117,6 +119,7 @@ _logger = logging.getLogger(__name__)
 DISCORD_PMA_PUBLIC_EXECUTION_ERROR = "Discord PMA turn failed"
 DISCORD_REPO_PUBLIC_EXECUTION_ERROR = "Discord turn failed"
 DISCORD_PMA_TIMEOUT_SECONDS = 7200
+_DEFAULT_DISCORD_PMA_TIMEOUT_SECONDS = 7200
 DISCORD_MANAGED_THREAD_SUBMISSION_TIMEOUT_SECONDS = 45.0
 DISCORD_PMA_PROGRESS_MAX_ACTIONS = 12
 DISCORD_PMA_PROGRESS_MIN_EDIT_INTERVAL_SECONDS = 1.0
@@ -2525,7 +2528,13 @@ def _build_discord_managed_thread_coordinator(
     public_execution_error: str,
     timeout_error: str,
     interrupted_error: str,
+    pma_enabled: bool,
 ) -> ManagedThreadTurnCoordinator:
+    timeout_seconds = (
+        _load_discord_pma_turn_timeout_seconds(service)
+        if pma_enabled
+        else float(_DEFAULT_DISCORD_PMA_TIMEOUT_SECONDS)
+    )
     return ManagedThreadTurnCoordinator(
         orchestration_service=orchestration_service,
         state_root=service._config.root,
@@ -2539,7 +2548,7 @@ def _build_discord_managed_thread_coordinator(
             public_execution_error=public_execution_error,
             timeout_error=timeout_error,
             interrupted_error=interrupted_error,
-            timeout_seconds=DISCORD_PMA_TIMEOUT_SECONDS,
+            timeout_seconds=timeout_seconds,
         ),
         logger=getattr(service, "_logger", _logger),
         turn_preview="",
@@ -2548,6 +2557,27 @@ def _build_discord_managed_thread_coordinator(
             max_len=120,
         ),
     )
+
+
+def _load_discord_pma_turn_timeout_seconds(service: Any) -> float:
+    overridden_timeout = globals().get(
+        "DISCORD_PMA_TIMEOUT_SECONDS",
+        _DEFAULT_DISCORD_PMA_TIMEOUT_SECONDS,
+    )
+    if overridden_timeout != _DEFAULT_DISCORD_PMA_TIMEOUT_SECONDS:
+        return float(overridden_timeout)
+    try:
+        hub_config = load_hub_config(service._config.root)
+    except (ConfigError, OSError, RuntimeError, TypeError, ValueError):
+        return float(_DEFAULT_DISCORD_PMA_TIMEOUT_SECONDS)
+    configured_timeout = getattr(
+        getattr(hub_config, "pma", None),
+        "turn_timeout_seconds",
+        None,
+    )
+    if configured_timeout is None:
+        return float(_DEFAULT_DISCORD_PMA_TIMEOUT_SECONDS)
+    return float(configured_timeout)
 
 
 def _get_discord_thread_queue_task_map(service: Any) -> dict[str, asyncio.Task[Any]]:
@@ -2717,6 +2747,7 @@ async def _run_discord_orchestrated_turn_for_message(
         public_execution_error=public_execution_error,
         timeout_error=timeout_error,
         interrupted_error=interrupted_error,
+        pma_enabled=pma_enabled,
     )
     tracker = TurnProgressTracker(
         started_at=time.monotonic(),
