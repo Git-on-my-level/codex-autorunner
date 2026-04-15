@@ -6,12 +6,6 @@ from pathlib import Path
 from typing import Any
 
 from ...core.runtime import DoctorCheck
-from .chat_ux_telemetry import (
-    ChatUxFailureReason,
-    ChatUxMilestone,
-    ChatUxTimingSnapshot,
-    format_chat_ux_summary,
-)
 from .parity_checker import ParityCheckResult, run_parity_checks
 
 _CHECK_GROUP = "chat.parity_contract"
@@ -116,6 +110,57 @@ def _failure_details(result: ParityCheckResult) -> tuple[str, str]:
             f"`{_TELEGRAM_TRIGGER_MODE}`, `{_TELEGRAM_MESSAGES}`, and `{_DISCORD_SERVICE}`.",
         )
 
+    if result.id == "chat.ux_latency_budget_contract_complete":
+        missing = _metadata_list(result.metadata, "missing_required_budget_ids")
+        invalid = _metadata_list(result.metadata, "invalid_budget_ids")
+        duplicates = _metadata_list(result.metadata, "duplicate_budget_ids")
+        problems = []
+        if missing:
+            problems.append(f"missing={', '.join(missing)}")
+        if invalid:
+            problems.append(f"invalid={', '.join(invalid)}")
+        if duplicates:
+            problems.append(f"duplicate={', '.join(duplicates)}")
+        detail = "; ".join(problems) if problems else "<unknown>"
+        return (
+            "Chat parity contract failed: UX latency budgets are incomplete "
+            f"({detail}).",
+            "Restore the required entries in "
+            "`src/codex_autorunner/integrations/chat/ux_regression_contract.py` "
+            "so first-visible, queue-visible, first-progress, and interrupt-visible "
+            "gates remain declared.",
+        )
+
+    if result.id == "chat.ux_regression_contract_complete":
+        missing = _metadata_list(result.metadata, "missing_required_scenario_ids")
+        paths = _metadata_list(result.metadata, "missing_test_paths")
+        surface = _metadata_list(result.metadata, "scenarios_missing_surface_coverage")
+        budgets = _metadata_list(result.metadata, "scenarios_with_missing_budget_refs")
+        empty = _metadata_list(result.metadata, "scenarios_with_empty_tests")
+        duplicates = _metadata_list(result.metadata, "duplicate_scenario_ids")
+        problems = []
+        if missing:
+            problems.append(f"missing={', '.join(missing)}")
+        if paths:
+            problems.append(f"missing_paths={', '.join(paths)}")
+        if surface:
+            problems.append(f"surface={', '.join(surface)}")
+        if budgets:
+            problems.append(f"budget_refs={', '.join(budgets)}")
+        if empty:
+            problems.append(f"empty={', '.join(empty)}")
+        if duplicates:
+            problems.append(f"duplicate={', '.join(duplicates)}")
+        detail = "; ".join(problems) if problems else "<unknown>"
+        return (
+            "Chat parity contract failed: UX regression coverage declarations are "
+            f"incomplete ({detail}).",
+            "Update "
+            "`src/codex_autorunner/integrations/chat/ux_regression_contract.py` "
+            "so each required UX scenario points at concrete regression tests and "
+            "shared Discord/Telegram scenarios declare both surfaces.",
+        )
+
     return (
         f"Chat parity contract failed: {result.message}",
         "Run parity checks and align command routing/guard helpers across chat surfaces.",
@@ -127,61 +172,3 @@ def _metadata_list(metadata: dict[str, Any], key: str) -> list[str]:
     if not isinstance(raw, list):
         return []
     return [str(item) for item in raw]
-
-
-def chat_ux_telemetry_doctor_checks() -> list[DoctorCheck]:
-    """Verify chat UX telemetry primitives are structurally sound."""
-    checks: list[DoctorCheck] = []
-
-    expected_milestones = {m.value for m in ChatUxMilestone}
-    expected_failures = {r.value for r in ChatUxFailureReason}
-
-    snapshot = ChatUxTimingSnapshot(platform="test")
-    snapshot.record(ChatUxMilestone.RAW_EVENT_RECEIVED, now=100.0)
-    snapshot.record(ChatUxMilestone.ACK_FINISHED, now=101.0)
-    snapshot.record(ChatUxMilestone.FIRST_VISIBLE_FEEDBACK, now=102.0)
-    snapshot.record(ChatUxMilestone.TERMINAL_DELIVERY, now=105.0)
-    fields = snapshot.to_log_fields()
-
-    checks.append(
-        DoctorCheck(
-            name="Chat UX telemetry milestones are defined",
-            passed=len(expected_milestones) >= 7,
-            message=f"{len(expected_milestones)} milestones defined",
-            severity="info",
-            check_id="chat_ux_telemetry.milestones",
-        )
-    )
-    checks.append(
-        DoctorCheck(
-            name="Chat UX telemetry failure reasons are defined",
-            passed=len(expected_failures) >= 5,
-            message=f"{len(expected_failures)} failure reasons defined",
-            severity="info",
-            check_id="chat_ux_telemetry.failure_reasons",
-        )
-    )
-    checks.append(
-        DoctorCheck(
-            name="Chat UX telemetry snapshot produces log fields",
-            passed="chat_ux_platform" in fields
-            and "chat_ux_delta_ack_ms" in fields
-            and "chat_ux_delta_terminal_ms" in fields,
-            message=f"snapshot produced {len(fields)} log fields",
-            severity="info",
-            check_id="chat_ux_telemetry.snapshot_fields",
-        )
-    )
-
-    summary = format_chat_ux_summary(snapshot)
-    checks.append(
-        DoctorCheck(
-            name="Chat UX telemetry summary is operator-readable",
-            passed="[test]" in summary and "ack=" in summary and "terminal=" in summary,
-            message=summary,
-            severity="info",
-            check_id="chat_ux_telemetry.summary_format",
-        )
-    )
-
-    return checks

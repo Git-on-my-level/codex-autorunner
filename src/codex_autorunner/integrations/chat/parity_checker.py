@@ -43,6 +43,14 @@ from .command_contract import (
     telegram_command_metadata_for_name,
     telegram_runtime_command_names_from_contract,
 )
+from .ux_regression_contract import (
+    CHAT_UX_LATENCY_BUDGETS,
+    CHAT_UX_REGRESSION_CONTRACT,
+    REQUIRED_CHAT_UX_LATENCY_BUDGET_IDS,
+    REQUIRED_CHAT_UX_REGRESSION_SCENARIO_IDS,
+    ChatUxLatencyBudgetEntry,
+    ChatUxRegressionScenarioEntry,
+)
 
 _DISCORD_SERVICE_PATH = Path("src/codex_autorunner/integrations/discord/service.py")
 _DISCORD_CAR_DISPATCH_PATH = Path(
@@ -82,6 +90,10 @@ def run_parity_checks(
     repo_root: Path | None = None,
     contract: Sequence[CommandContractEntry] = COMMAND_CONTRACT,
     action_ux_contract: Sequence[ChatActionUxContractEntry] = CHAT_ACTION_UX_CONTRACT,
+    ux_regression_contract: Sequence[
+        ChatUxRegressionScenarioEntry
+    ] = CHAT_UX_REGRESSION_CONTRACT,
+    ux_latency_budgets: Sequence[ChatUxLatencyBudgetEntry] = CHAT_UX_LATENCY_BUDGETS,
 ) -> tuple[ParityCheckResult, ...]:
     source_paths = {
         "discord_service": _resolve_source_path(
@@ -191,6 +203,14 @@ def run_parity_checks(
             telegram_trigger_mode_ast=telegram_trigger_mode_ast,
             telegram_messages_ast=telegram_messages_ast,
         ),
+        _check_chat_ux_latency_budget_contract_complete(
+            ux_latency_budgets=ux_latency_budgets
+        ),
+        _check_chat_ux_regression_contract_complete(
+            repo_root=repo_root,
+            ux_regression_contract=ux_regression_contract,
+            ux_latency_budgets=ux_latency_budgets,
+        ),
     )
 
 
@@ -234,6 +254,27 @@ def _package_relative_path(path: Path) -> Path:
     if path.parts and path.parts[0] == "src":
         return Path(*path.parts[1:])
     return path
+
+
+def _resolve_repo_file_path(
+    *,
+    repo_root: Path | None,
+    repo_relative_path: Path,
+) -> Path | None:
+    candidates: list[Path] = []
+    if repo_root is not None:
+        candidates.append(repo_root / repo_relative_path)
+    else:
+        module_path = Path(__file__).resolve()
+        for parent in module_path.parents:
+            if not (parent / ".git").exists():
+                continue
+            candidates.append(parent / repo_relative_path)
+            break
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_file():
+            return candidate
+    return None
 
 
 def _source_unavailable_results(
@@ -298,6 +339,18 @@ def _source_unavailable_results(
         ),
         ParityCheckResult(
             id="chat.shared_plain_text_turn_policy_usage",
+            passed=True,
+            message=message,
+            metadata=metadata,
+        ),
+        ParityCheckResult(
+            id="chat.ux_latency_budget_contract_complete",
+            passed=True,
+            message=message,
+            metadata=metadata,
+        ),
+        ParityCheckResult(
+            id="chat.ux_regression_contract_complete",
             passed=True,
             message=message,
             metadata=metadata,
@@ -1050,6 +1103,125 @@ def _check_shared_plain_text_turn_policy_usage(
         metadata={
             "failed_predicates": failed_predicates,
             "predicates": checks,
+        },
+    )
+
+
+def _check_chat_ux_latency_budget_contract_complete(
+    *,
+    ux_latency_budgets: Sequence[ChatUxLatencyBudgetEntry],
+) -> ParityCheckResult:
+    budget_ids = [entry.id for entry in ux_latency_budgets]
+    duplicate_budget_ids = sorted(
+        budget_id for budget_id in set(budget_ids) if budget_ids.count(budget_id) > 1
+    )
+    missing_required_budget_ids = sorted(
+        required_id
+        for required_id in REQUIRED_CHAT_UX_LATENCY_BUDGET_IDS
+        if required_id not in budget_ids
+    )
+    invalid_budget_ids = sorted(
+        entry.id
+        for entry in ux_latency_budgets
+        if entry.max_ms <= 0
+        or not entry.description.strip()
+        or entry.id not in REQUIRED_CHAT_UX_LATENCY_BUDGET_IDS
+    )
+    passed = not any(
+        (duplicate_budget_ids, missing_required_budget_ids, invalid_budget_ids)
+    )
+    message = (
+        "Shared chat UX latency budgets are declared for the required responsiveness gates."
+        if passed
+        else "Chat UX latency budget declarations are incomplete or invalid."
+    )
+    return ParityCheckResult(
+        id="chat.ux_latency_budget_contract_complete",
+        passed=passed,
+        message=message,
+        metadata={
+            "budget_ids": sorted(budget_ids),
+            "duplicate_budget_ids": duplicate_budget_ids,
+            "missing_required_budget_ids": missing_required_budget_ids,
+            "invalid_budget_ids": invalid_budget_ids,
+        },
+    )
+
+
+def _check_chat_ux_regression_contract_complete(
+    *,
+    repo_root: Path | None,
+    ux_regression_contract: Sequence[ChatUxRegressionScenarioEntry],
+    ux_latency_budgets: Sequence[ChatUxLatencyBudgetEntry],
+) -> ParityCheckResult:
+    scenario_ids = [entry.id for entry in ux_regression_contract]
+    duplicate_scenario_ids = sorted(
+        scenario_id
+        for scenario_id in set(scenario_ids)
+        if scenario_ids.count(scenario_id) > 1
+    )
+    missing_required_scenario_ids = sorted(
+        required_id
+        for required_id in REQUIRED_CHAT_UX_REGRESSION_SCENARIO_IDS
+        if required_id not in scenario_ids
+    )
+    known_budget_ids = {entry.id for entry in ux_latency_budgets}
+    missing_test_paths: list[str] = []
+    scenarios_missing_surface_coverage: list[str] = []
+    scenarios_with_missing_budget_refs: list[str] = []
+    scenarios_with_empty_tests: list[str] = []
+
+    for entry in ux_regression_contract:
+        if not entry.test_paths:
+            scenarios_with_empty_tests.append(entry.id)
+        if entry.required_surfaces and not {
+            "discord",
+            "telegram",
+        }.issubset(set(entry.required_surfaces)):
+            scenarios_missing_surface_coverage.append(entry.id)
+        if any(
+            budget_id not in known_budget_ids for budget_id in entry.latency_budget_ids
+        ):
+            scenarios_with_missing_budget_refs.append(entry.id)
+        for test_path in entry.test_paths:
+            resolved = _resolve_repo_file_path(
+                repo_root=repo_root,
+                repo_relative_path=Path(test_path),
+            )
+            if resolved is None:
+                missing_test_paths.append(test_path)
+
+    passed = not any(
+        (
+            duplicate_scenario_ids,
+            missing_required_scenario_ids,
+            missing_test_paths,
+            scenarios_missing_surface_coverage,
+            scenarios_with_missing_budget_refs,
+            scenarios_with_empty_tests,
+        )
+    )
+    message = (
+        "Shared chat UX regression scenarios are declared with concrete test coverage."
+        if passed
+        else "Chat UX regression coverage contract is incomplete."
+    )
+    return ParityCheckResult(
+        id="chat.ux_regression_contract_complete",
+        passed=passed,
+        message=message,
+        metadata={
+            "scenario_ids": sorted(scenario_ids),
+            "duplicate_scenario_ids": duplicate_scenario_ids,
+            "missing_required_scenario_ids": missing_required_scenario_ids,
+            "missing_test_paths": sorted(set(missing_test_paths)),
+            "scenarios_missing_surface_coverage": sorted(
+                set(scenarios_missing_surface_coverage)
+            ),
+            "scenarios_with_missing_budget_refs": sorted(
+                set(scenarios_with_missing_budget_refs)
+            ),
+            "scenarios_with_empty_tests": sorted(set(scenarios_with_empty_tests)),
         },
     )
 

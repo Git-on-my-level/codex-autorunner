@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -207,22 +208,39 @@ class TestDuplicateDetection:
         config.enable_rate_limit = False
         config.enable_circuit_breaker = False
         config.max_duplicate_actions = 2
-        checker = PmaSafetyChecker(hub_root, config=config)
+        checker = PmaSafetyChecker(hub_root / "fresh", config=config)
+        fresh_timestamp = datetime.now(timezone.utc).isoformat()
 
         for _i in range(config.max_duplicate_actions):
-            checker.record_action(
-                PmaActionType.CHAT_STARTED,
-                agent="agent1",
-                details={"message_truncated": "test"[:200]},
+            checker._audit_log.append(
+                PmaAuditEntry(
+                    action_type=PmaActionType.CHAT_STARTED,
+                    timestamp=fresh_timestamp,
+                    agent="agent1",
+                    details={"message_truncated": "test"[:200]},
+                )
             )
 
         result = checker.check_chat_start("agent1", "test")
         assert result.allowed is False
         assert result.reason == "duplicate_action"
 
-        time.sleep(0.6)
+        expired_checker = PmaSafetyChecker(hub_root / "expired", config=config)
+        expired_timestamp = (
+            datetime.now(timezone.utc) - timedelta(seconds=1)
+        ).isoformat()
 
-        result = checker.check_chat_start("agent1", "test")
+        for _i in range(config.max_duplicate_actions):
+            expired_checker._audit_log.append(
+                PmaAuditEntry(
+                    action_type=PmaActionType.CHAT_STARTED,
+                    timestamp=expired_timestamp,
+                    agent="agent1",
+                    details={"message_truncated": "test"[:200]},
+                )
+            )
+
+        result = expired_checker.check_chat_start("agent1", "test")
         assert result.allowed is True
 
     def test_duplicate_detection_disabled(

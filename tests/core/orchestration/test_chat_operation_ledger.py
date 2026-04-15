@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 from codex_autorunner.core.orchestration import (
     ChatOperationRecoveryAction,
     ChatOperationSnapshot,
@@ -19,31 +21,43 @@ def _ledger(tmp_path: Path) -> SQLiteChatOperationLedger:
     return SQLiteChatOperationLedger(hub_root, durable=False)
 
 
-def test_chat_operation_ledger_round_trip_and_surface_dedupe(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("surface_kind", "surface_operation_key", "conversation_id"),
+    (
+        ("discord", "interaction-1", "conversation:discord:chan-1"),
+        ("telegram", "telegram:update:1", "conversation:telegram:123:456"),
+    ),
+)
+def test_chat_operation_ledger_round_trip_and_surface_dedupe(
+    tmp_path: Path,
+    surface_kind: str,
+    surface_operation_key: str,
+    conversation_id: str,
+) -> None:
     ledger = _ledger(tmp_path)
 
     registration = ledger.register_operation(
-        operation_id="discord-op-1",
-        surface_kind="discord",
-        surface_operation_key="interaction-1",
+        operation_id=f"{surface_kind}-op-1",
+        surface_kind=surface_kind,
+        surface_operation_key=surface_operation_key,
         state=ChatOperationState.RECEIVED,
-        conversation_id="conversation:discord:chan-1",
-        metadata={"channel_id": "chan-1"},
+        conversation_id=conversation_id,
+        metadata={"surface": surface_kind},
     )
     assert registration.inserted is True
     assert registration.snapshot.state is ChatOperationState.RECEIVED
 
     duplicate = ledger.register_operation(
-        operation_id="discord-op-2",
-        surface_kind="discord",
-        surface_operation_key="interaction-1",
+        operation_id=f"{surface_kind}-op-2",
+        surface_kind=surface_kind,
+        surface_operation_key=surface_operation_key,
         state=ChatOperationState.RECEIVED,
     )
     assert duplicate.inserted is False
-    assert duplicate.snapshot.operation_id == "discord-op-1"
+    assert duplicate.snapshot.operation_id == f"{surface_kind}-op-1"
 
     updated = ledger.patch_operation(
-        "discord-op-1",
+        f"{surface_kind}-op-1",
         state=ChatOperationState.ACKNOWLEDGED,
         ack_completed_at="2026-04-15T01:02:03Z",
         delivery_state="pending",
@@ -57,9 +71,9 @@ def test_chat_operation_ledger_round_trip_and_surface_dedupe(tmp_path: Path) -> 
         "state": "pending",
     }
 
-    by_surface = ledger.get_operation_by_surface("discord", "interaction-1")
+    by_surface = ledger.get_operation_by_surface(surface_kind, surface_operation_key)
     assert by_surface is not None
-    assert by_surface.operation_id == "discord-op-1"
+    assert by_surface.operation_id == f"{surface_kind}-op-1"
 
 
 def test_chat_operation_ledger_lists_recoverable_for_thread(tmp_path: Path) -> None:

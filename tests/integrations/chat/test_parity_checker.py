@@ -13,6 +13,12 @@ from codex_autorunner.integrations.chat.command_contract import (
     CommandContractEntry,
 )
 from codex_autorunner.integrations.chat.parity_checker import run_parity_checks
+from codex_autorunner.integrations.chat.ux_regression_contract import (
+    CHAT_UX_LATENCY_BUDGETS,
+    CHAT_UX_REGRESSION_CONTRACT,
+    ChatUxLatencyBudgetEntry,
+    ChatUxRegressionScenarioEntry,
+)
 
 
 @pytest.mark.slow
@@ -255,6 +261,66 @@ def test_parity_checker_fails_when_shared_helper_usage_is_missing(
 
     assert not ingress_check.passed
     assert not turn_policy_check.passed
+
+
+def test_parity_checker_validates_chat_ux_latency_budget_contract() -> None:
+    budgets = tuple(
+        entry for entry in CHAT_UX_LATENCY_BUDGETS if entry.id != "queue_visible"
+    ) + (
+        ChatUxLatencyBudgetEntry(
+            id="duplicate_delivery",
+            description="invalid budget id",
+            max_ms=100.0,
+        ),
+    )
+
+    results_by_id = {
+        result.id: result for result in run_parity_checks(ux_latency_budgets=budgets)
+    }
+
+    budget_check = results_by_id["chat.ux_latency_budget_contract_complete"]
+    assert not budget_check.passed
+    assert "queue_visible" in budget_check.metadata["missing_required_budget_ids"]
+    assert "duplicate_delivery" in budget_check.metadata["invalid_budget_ids"]
+
+
+def test_parity_checker_validates_chat_ux_regression_contract() -> None:
+    contract = tuple(
+        entry
+        for entry in CHAT_UX_REGRESSION_CONTRACT
+        if entry.id != "queued_visibility"
+    ) + (
+        ChatUxRegressionScenarioEntry(
+            id="duplicate_delivery",
+            description="duplicate regression id",
+            test_paths=(),
+            required_surfaces=("discord",),
+            latency_budget_ids=("unknown_budget",),
+        ),
+    )
+
+    results_by_id = {
+        result.id: result
+        for result in run_parity_checks(
+            ux_regression_contract=contract,
+        )
+    }
+
+    coverage_check = results_by_id["chat.ux_regression_contract_complete"]
+    assert not coverage_check.passed
+    assert (
+        "queued_visibility" in coverage_check.metadata["missing_required_scenario_ids"]
+    )
+    assert "duplicate_delivery" in coverage_check.metadata["duplicate_scenario_ids"]
+    assert (
+        "duplicate_delivery"
+        in coverage_check.metadata["scenarios_missing_surface_coverage"]
+    )
+    assert (
+        "duplicate_delivery"
+        in coverage_check.metadata["scenarios_with_missing_budget_refs"]
+    )
+    assert "duplicate_delivery" in coverage_check.metadata["scenarios_with_empty_tests"]
 
 
 def test_parity_checker_fails_when_telegram_trigger_bridge_is_missing(
