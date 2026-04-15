@@ -728,6 +728,8 @@ def _parse_pma_config(
 
     def _parse_nonnegative_int(name: str, fallback: int) -> int:
         raw = cfg.get(name, defaults.get(name, fallback))
+        if isinstance(raw, bool):
+            return fallback
         try:
             value = int(raw)
         except (TypeError, ValueError):
