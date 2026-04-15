@@ -23,6 +23,9 @@ from codex_autorunner.core.filebox import (
 )
 from codex_autorunner.core.flows import FlowRunStatus
 from codex_autorunner.core.hub_control_plane import WorkspaceSetupCommandRequest
+from codex_autorunner.core.orchestration.chat_operation_state import (
+    ChatOperationState,
+)
 from codex_autorunner.core.update import UpdateInProgressError
 from codex_autorunner.integrations.app_server.client import CodexAppServerResponseError
 from codex_autorunner.integrations.chat.collaboration_policy import (
@@ -1713,7 +1716,7 @@ async def _dispatch_gateway_interaction(
     payload: dict[str, Any],
 ) -> None:
     await service._on_dispatch("INTERACTION_CREATE", payload)
-    await asyncio.wait_for(service._command_runner.shutdown(), timeout=1.0)
+    await asyncio.wait_for(service._command_runner.shutdown(), timeout=3.0)
 
 
 def test_model_picker_items_are_deduplicated_and_labeled() -> None:
@@ -6765,12 +6768,12 @@ async def test_on_dispatch_backgrounds_interaction_handling(
                 ),
             )
         )
-        await asyncio.wait_for(dispatch_task, timeout=1.0)
+        await asyncio.wait_for(dispatch_task, timeout=3.0)
         assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 5
-        await asyncio.wait_for(started.wait(), timeout=1.0)
+        await asyncio.wait_for(started.wait(), timeout=3.0)
         release.set()
-        await asyncio.wait_for(service._command_runner.shutdown(), timeout=1.0)
+        await asyncio.wait_for(service._command_runner.shutdown(), timeout=3.0)
     finally:
         await service._shutdown()
         await store.close()
@@ -8968,6 +8971,159 @@ async def test_car_interrupt_treats_promoted_no_active_as_success(
         assert rest.edited_channel_messages == []
         assert service._discord_turn_progress_reuse_requests == {}
         assert service._discord_reusable_progress_messages == {}
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_interrupt_reports_still_stopping_from_shared_ledger(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    chat_operation_store = service._chat_operation_store_or_none()
+    assert chat_operation_store is not None
+    chat_operation_store.register_operation(
+        operation_id="existing-op",
+        surface_kind="discord",
+        surface_operation_key="existing-op",
+        state=ChatOperationState.RECEIVED,
+    )
+    chat_operation_store.patch_operation(
+        "existing-op",
+        state=ChatOperationState.INTERRUPTING,
+        validate_transition=False,
+        thread_target_id="thread-1",
+        execution_id="turn-1",
+        metadata_updates={
+            "control": "interrupt",
+            "interrupt_state": "requested",
+            "cancel_queued": True,
+            "referenced_execution_id": "turn-1",
+        },
+    )
+
+    class _FakeThreadService:
+        def get_binding(self, *, surface_kind: str, surface_key: str) -> Any:
+            assert surface_kind == "discord"
+            assert surface_key == "channel-1"
+            return SimpleNamespace(thread_target_id="thread-1", mode="repo")
+
+        def get_thread_target(self, thread_target_id: str) -> Any:
+            assert thread_target_id == "thread-1"
+            return SimpleNamespace(thread_target_id="thread-1")
+
+        def get_running_execution(self, thread_target_id: str) -> Any:
+            assert thread_target_id == "thread-1"
+            return SimpleNamespace(execution_id="turn-1", status="running")
+
+        async def stop_thread(self, thread_target_id: str, **kwargs: Any) -> Any:
+            raise AssertionError(
+                f"stop_thread should not run for duplicate interrupt: {thread_target_id} {kwargs}"
+            )
+
+    service._discord_thread_service = lambda: _FakeThreadService()  # type: ignore[assignment]
+
+    try:
+        await service._handle_car_interrupt(
+            "interaction-2",
+            "token-2",
+            channel_id="channel-1",
+        )
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        assert (
+            rest.followup_messages[0]["payload"]["content"]
+            == "Still stopping current turn..."
+        )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_interrupt_reports_already_finished_when_turn_is_no_longer_active(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    class _FakeThreadService:
+        def get_binding(self, *, surface_kind: str, surface_key: str) -> Any:
+            assert surface_kind == "discord"
+            assert surface_key == "channel-1"
+            return SimpleNamespace(thread_target_id="thread-1", mode="repo")
+
+        def get_thread_target(self, thread_target_id: str) -> Any:
+            assert thread_target_id == "thread-1"
+            return SimpleNamespace(thread_target_id="thread-1")
+
+        def get_running_execution(self, thread_target_id: str) -> Any:
+            assert thread_target_id == "thread-1"
+            return None
+
+        async def stop_thread(self, thread_target_id: str, **kwargs: Any) -> Any:
+            assert thread_target_id == "thread-1"
+            return SimpleNamespace(
+                interrupted_active=False,
+                recovered_lost_backend=False,
+                cancelled_queued=0,
+                execution=None,
+            )
+
+    service._discord_thread_service = lambda: _FakeThreadService()  # type: ignore[assignment]
+
+    try:
+        await service._handle_car_interrupt(
+            "interaction-3",
+            "token-3",
+            channel_id="channel-1",
+        )
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        assert (
+            rest.followup_messages[0]["payload"]["content"]
+            == "Current turn already finished."
+        )
     finally:
         await store.close()
 

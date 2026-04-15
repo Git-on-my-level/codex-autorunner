@@ -35,6 +35,11 @@ from ...chat.constants import (
     APP_SERVER_UNAVAILABLE_MESSAGE,
     TOPIC_NOT_BOUND_MESSAGE,
 )
+from ...chat.interrupt_controller import (
+    SharedInterruptState,
+    render_managed_thread_interrupt_message,
+    request_managed_thread_interrupt,
+)
 from ...chat.media import (
     format_media_batch_failure as _format_media_batch_failure,  # noqa: F401
 )
@@ -613,17 +618,18 @@ class TelegramCommandHandlers(
             )
             if current_thread is not None:
                 pma_mode = bool(getattr(record, "pma_enabled", False))
-                try:
-                    stop_outcome = await orchestration_service.stop_thread(
-                        current_thread.thread_target_id
-                    )
-                except (
-                    RuntimeError,
-                    OSError,
-                    ValueError,
-                    TypeError,
-                    ConnectionError,
-                ) as exc:
+                operation_id_getter = getattr(self, "_current_chat_operation_id", None)
+                operation_id = (
+                    operation_id_getter() if callable(operation_id_getter) else None
+                )
+                interrupt_outcome = await request_managed_thread_interrupt(
+                    orchestration_service=orchestration_service,
+                    thread_target_id=current_thread.thread_target_id,
+                    cancel_queued=True,
+                    operation_store=getattr(self, "_chat_operation_store", None),
+                    operation_id=operation_id,
+                )
+                if interrupt_outcome.state == SharedInterruptState.FAILED_TO_DISPATCH:
                     log_event(
                         self._logger,
                         logging.WARNING,
@@ -633,7 +639,8 @@ class TelegramCommandHandlers(
                         message_id=message_id,
                         managed_thread_id=current_thread.thread_target_id,
                         mode=mode,
-                        exc=exc,
+                        interrupt_state=interrupt_outcome.state.value,
+                        error=interrupt_outcome.error,
                     )
                     await self._send_message(
                         chat_id,
@@ -646,37 +653,41 @@ class TelegramCommandHandlers(
                         reply_to=reply_to,
                     )
                     return
-                if (
-                    stop_outcome.interrupted_active
-                    or stop_outcome.recovered_lost_backend
-                    or stop_outcome.cancelled_queued
-                ):
-                    parts = []
-                    if stop_outcome.recovered_lost_backend:
-                        parts.append(
-                            (
+                if interrupt_outcome.state in {
+                    SharedInterruptState.CONFIRMED,
+                    SharedInterruptState.STILL_STOPPING,
+                    SharedInterruptState.ALREADY_FINISHED,
+                }:
+                    await self._send_message(
+                        chat_id,
+                        render_managed_thread_interrupt_message(
+                            interrupt_outcome,
+                            active_turn_text=(
+                                "Interrupted active PMA turn."
+                                if pma_mode
+                                else "Interrupted active turn."
+                            ),
+                            still_stopping_text=(
+                                "Still stopping active PMA turn..."
+                                if pma_mode
+                                else "Still stopping active turn..."
+                            ),
+                            already_finished_text=(
+                                "Active PMA turn already finished."
+                                if pma_mode
+                                else "Active turn already finished."
+                            ),
+                            recovered_lost_backend_text=(
                                 "Recovered stale PMA session after backend thread was lost."
                                 if pma_mode
                                 else "Recovered stale session after backend thread was lost."
-                            )
-                        )
-                    elif stop_outcome.interrupted_active:
-                        parts.append(
-                            "Interrupted active PMA turn."
-                            if pma_mode
-                            else "Interrupted active turn."
-                        )
-                    if stop_outcome.cancelled_queued:
-                        parts.append(
-                            (
-                                f"Cancelled {stop_outcome.cancelled_queued} queued PMA turn(s)."
+                            ),
+                            queued_text_template=(
+                                "Cancelled {count} queued PMA turn(s)."
                                 if pma_mode
-                                else f"Cancelled {stop_outcome.cancelled_queued} queued turn(s)."
-                            )
-                        )
-                    await self._send_message(
-                        chat_id,
-                        " ".join(parts),
+                                else "Cancelled {count} queued turn(s)."
+                            ),
+                        ),
                         thread_id=thread_id,
                         reply_to=reply_to,
                     )
