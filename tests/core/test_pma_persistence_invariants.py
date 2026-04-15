@@ -827,6 +827,411 @@ class TestMirrorFileSyncInvariants:
         assert "key-2" not in raw["last_enqueued"]
 
 
+class TestAutomationLoadFallbackBehavior:
+    def test_load_reads_from_sqlite_first(self, tmp_path: Path) -> None:
+        hub_root = tmp_path / "hub"
+        store = PmaAutomationStore(hub_root)
+        thread_id = _create_thread(hub_root)
+        store.create_subscription(
+            thread_id=thread_id,
+            event_types=["lifecycle"],
+            from_state="running",
+            to_state="completed",
+            lane_id="pma:default",
+        )
+
+        with open_orchestration_sqlite(hub_root, durable=False) as conn:
+            sub_rows = conn.execute(
+                "SELECT subscription_id FROM orch_automation_subscriptions"
+            ).fetchall()
+        assert len(sub_rows) == 1
+
+        reloaded = PmaAutomationStore(hub_root)
+        state = reloaded.load()
+        assert len(state["subscriptions"]) == 1
+
+    def test_load_produces_default_state_when_both_sqlite_and_mirror_empty(
+        self, tmp_path: Path
+    ) -> None:
+        hub_root = tmp_path / "hub"
+        store = PmaAutomationStore(hub_root)
+        state = store.load()
+        assert state["version"] == 1
+        assert isinstance(state["subscriptions"], list)
+        assert isinstance(state["timers"], list)
+        assert isinstance(state["wakeups"], list)
+
+    def test_load_falls_back_to_json_mirror_when_sqlite_tables_absent(
+        self, tmp_path: Path
+    ) -> None:
+        hub_root = tmp_path / "hub"
+        store = PmaAutomationStore(hub_root)
+        thread_id = _create_thread(hub_root)
+        store.create_subscription(
+            thread_id=thread_id,
+            event_types=["lifecycle"],
+            from_state="running",
+            to_state="completed",
+            lane_id="pma:default",
+        )
+
+        mirror_path = _automation_json_mirror_path(hub_root)
+        assert mirror_path.exists()
+
+        with open_orchestration_sqlite(hub_root, durable=False) as conn:
+            conn.execute("DROP TABLE IF EXISTS orch_automation_subscriptions")
+            conn.execute("DROP TABLE IF EXISTS orch_automation_timers")
+            conn.execute("DROP TABLE IF EXISTS orch_automation_wakeups")
+            conn.commit()
+
+        reloaded = PmaAutomationStore(hub_root)
+        state = reloaded.load()
+        assert len(state["subscriptions"]) == 1
+
+
+class TestAutomationSaveFullTableRewriteCharacterization:
+    def test_save_deletes_and_reinserts_all_rows(self, tmp_path: Path) -> None:
+        hub_root = tmp_path / "hub"
+        store = PmaAutomationStore(hub_root)
+        thread_a = _create_thread(hub_root)
+        store.create_subscription(
+            thread_id=thread_a,
+            event_types=["lifecycle"],
+            from_state="running",
+            to_state="completed",
+            lane_id="pma:default",
+        )
+
+        with open_orchestration_sqlite(hub_root, durable=False) as conn:
+            sub_ids_before = {
+                r["subscription_id"]
+                for r in conn.execute(
+                    "SELECT subscription_id FROM orch_automation_subscriptions"
+                ).fetchall()
+            }
+
+        store.create_subscription(
+            thread_id=thread_a,
+            event_types=["lifecycle"],
+            from_state="running",
+            to_state="failed",
+            lane_id="pma:default",
+        )
+
+        with open_orchestration_sqlite(hub_root, durable=False) as conn:
+            sub_ids_after = {
+                r["subscription_id"]
+                for r in conn.execute(
+                    "SELECT subscription_id FROM orch_automation_subscriptions"
+                ).fetchall()
+            }
+
+        assert len(sub_ids_before) == 1
+        assert len(sub_ids_after) == 2
+
+    def test_save_drops_orphaned_wakeups_during_rewrite(self, tmp_path: Path) -> None:
+        hub_root = tmp_path / "hub"
+        store = PmaAutomationStore(hub_root)
+        thread_id = _create_thread(hub_root)
+        store.create_subscription(
+            thread_id=thread_id,
+            event_types=["lifecycle"],
+            from_state="running",
+            to_state="completed",
+            lane_id="pma:default",
+        )
+        sub_id = store.list_subscriptions(state="active")[0]["subscription_id"]
+        store.enqueue_wakeup(
+            subscription_id=sub_id,
+            lane_id="pma:default",
+            source="timer",
+        )
+
+        store.cancel_subscription(sub_id)
+        store.purge_subscription(sub_id)
+
+        with open_orchestration_sqlite(hub_root, durable=False) as conn:
+            rows = conn.execute(
+                "SELECT wakeup_id FROM orch_automation_wakeups"
+            ).fetchall()
+        assert len(rows) == 0
+
+
+class TestThreadStoreCanonicalVsRuntimeBinding:
+    def test_backend_thread_id_stored_in_orchestration_row(
+        self, tmp_path: Path
+    ) -> None:
+        hub_root = tmp_path / "hub"
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        store = PmaThreadStore(hub_root)
+        store.create_thread("codex", workspace, backend_thread_id="backend-1")
+
+        with open_orchestration_sqlite(hub_root, durable=False) as conn:
+            row = conn.execute(
+                "SELECT backend_thread_id FROM orch_thread_targets"
+            ).fetchone()
+        assert row is not None
+        assert row["backend_thread_id"] == "backend-1"
+
+    def test_runtime_binding_is_separate_from_orchestration_row(
+        self, tmp_path: Path
+    ) -> None:
+        hub_root = tmp_path / "hub"
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        store = PmaThreadStore(hub_root)
+        created = store.create_thread(
+            "codex",
+            workspace,
+            backend_thread_id="backend-1",
+            metadata={"backend_runtime_instance_id": "runtime-1"},
+        )
+
+        fetched = store.get_thread(created["managed_thread_id"])
+        assert fetched is not None
+        assert "backend_thread_id" not in fetched
+        assert "backend_runtime_instance_id" not in fetched
+
+        binding = store.get_thread_runtime_binding(created["managed_thread_id"])
+        assert binding is not None
+        assert binding.backend_thread_id == "backend-1"
+        assert binding.backend_runtime_instance_id == "runtime-1"
+
+    def test_canonical_state_survives_legacy_mirror_deletion(
+        self, tmp_path: Path
+    ) -> None:
+        hub_root = tmp_path / "hub"
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        store = PmaThreadStore(hub_root)
+        created = store.create_thread("codex", workspace)
+        thread_id = str(created["managed_thread_id"])
+        store.create_turn(thread_id, prompt="hello")
+        turn_id = str(store.list_turns(thread_id)[0]["managed_turn_id"])
+
+        legacy_path = _legacy_thread_db_path(hub_root)
+        if legacy_path.exists():
+            legacy_path.unlink()
+
+        restarted = PmaThreadStore(hub_root)
+        fetched = restarted.get_thread(thread_id)
+        assert fetched is not None
+        assert fetched["managed_thread_id"] == thread_id
+
+        turns = restarted.list_turns(thread_id)
+        assert len(turns) == 1
+        assert turns[0]["managed_turn_id"] == turn_id
+
+    def test_set_thread_backend_id_updates_orchestration_row(
+        self, tmp_path: Path
+    ) -> None:
+        hub_root = tmp_path / "hub"
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        store = PmaThreadStore(hub_root)
+        created = store.create_thread("codex", workspace)
+        thread_id = created["managed_thread_id"]
+
+        store.set_thread_backend_id(thread_id, "backend-new")
+
+        with open_orchestration_sqlite(hub_root, durable=False) as conn:
+            row = conn.execute(
+                "SELECT backend_thread_id FROM orch_thread_targets WHERE thread_target_id = ?",
+                (thread_id,),
+            ).fetchone()
+        assert row is not None
+        assert row["backend_thread_id"] == "backend-new"
+
+        binding = store.get_thread_runtime_binding(thread_id)
+        assert binding is not None
+        assert binding.backend_thread_id == "backend-new"
+
+
+class TestQueueMirrorRewriteCharacterization:
+    @pytest.mark.anyio
+    async def test_mirror_contains_all_states_after_mixed_operations(
+        self, tmp_path: Path
+    ) -> None:
+        hub_root = tmp_path / "hub"
+        queue = PmaQueue(hub_root)
+        item1, _ = queue.enqueue_sync("pma:default", "k1", {"v": 1})
+        item2, _ = queue.enqueue_sync("pma:default", "k2", {"v": 2})
+        await queue.replay_pending("pma:default")
+
+        dequeued1 = await queue.dequeue("pma:default")
+        assert dequeued1 is not None
+        await queue.complete_item(dequeued1, {"status": "ok"})
+
+        dequeued2 = await queue.dequeue("pma:default")
+        assert dequeued2 is not None
+        await queue.fail_item(dequeued2, "broke")
+
+        mirror_path = _queue_jsonl_mirror_path(hub_root, "pma:default")
+        assert mirror_path.exists()
+        lines = mirror_path.read_text().strip().splitlines()
+        assert len(lines) == 2
+        parsed = [json.loads(line) for line in lines]
+        states = {p["item_id"]: p["state"] for p in parsed}
+        assert states[item1.item_id] == "completed"
+        assert states[item2.item_id] == "failed"
+
+    @pytest.mark.anyio
+    async def test_compaction_removes_old_terminal_items_but_keeps_recent(
+        self, tmp_path: Path
+    ) -> None:
+        hub_root = tmp_path / "hub"
+        queue = PmaQueue(hub_root)
+        items = []
+        for i in range(5):
+            item, _ = queue.enqueue_sync("pma:compact", f"k{i}", {"v": i})
+            items.append(item)
+        await queue.replay_pending("pma:compact")
+
+        for _item in items:
+            dequeued = await queue.dequeue("pma:compact")
+            assert dequeued is not None
+            await queue.complete_item(dequeued, {"status": "ok"})
+
+        result = await queue.compact_lane("pma:compact", keep_last=2)
+        assert result is True
+
+        all_items = await queue.list_items("pma:compact")
+        assert len(all_items) == 2
+        remaining_ids = {i.item_id for i in all_items}
+        assert items[-1].item_id in remaining_ids
+        assert items[-2].item_id in remaining_ids
+
+
+class TestThreadStoreTurnLifecycleCanonicalInvariants:
+    def test_mark_turn_finished_returns_false_for_already_interrupted(
+        self, tmp_path: Path
+    ) -> None:
+        hub_root = tmp_path / "hub"
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        store = PmaThreadStore(hub_root)
+        created = store.create_thread("codex", workspace)
+        thread_id = created["managed_thread_id"]
+        turn = store.create_turn(thread_id, prompt="hello")
+        turn_id = turn["managed_turn_id"]
+
+        assert store.mark_turn_interrupted(turn_id) is True
+        assert store.mark_turn_finished(turn_id, status="ok") is False
+
+        fetched = store.get_turn(thread_id, turn_id)
+        assert fetched is not None
+        assert fetched["status"] == "interrupted"
+        assert fetched["assistant_text"] is None
+
+    def test_duplicate_mark_turn_finished_is_idempotent(self, tmp_path: Path) -> None:
+        hub_root = tmp_path / "hub"
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        store = PmaThreadStore(hub_root)
+        created = store.create_thread("codex", workspace)
+        thread_id = created["managed_thread_id"]
+        turn = store.create_turn(thread_id, prompt="hello")
+        turn_id = turn["managed_turn_id"]
+
+        assert store.mark_turn_finished(turn_id, status="ok") is True
+        assert store.mark_turn_finished(turn_id, status="ok") is False
+
+    def test_mark_turn_interrupted_on_running_turn_is_idempotent(
+        self, tmp_path: Path
+    ) -> None:
+        hub_root = tmp_path / "hub"
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        store = PmaThreadStore(hub_root)
+        created = store.create_thread("codex", workspace)
+        thread_id = created["managed_thread_id"]
+        turn = store.create_turn(thread_id, prompt="hello")
+        turn_id = turn["managed_turn_id"]
+
+        assert store.mark_turn_interrupted(turn_id) is True
+        assert store.mark_turn_interrupted(turn_id) is False
+
+    def test_finished_turn_does_not_create_queue_row(self, tmp_path: Path) -> None:
+        hub_root = tmp_path / "hub"
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        store = PmaThreadStore(hub_root)
+        created = store.create_thread("codex", workspace)
+        thread_id = created["managed_thread_id"]
+        turn = store.create_turn(thread_id, prompt="hello")
+        turn_id = turn["managed_turn_id"]
+
+        store.mark_turn_finished(turn_id, status="ok")
+
+        with open_orchestration_sqlite(hub_root, durable=False) as conn:
+            rows = conn.execute(
+                "SELECT * FROM orch_queue_items WHERE source_kind = 'thread_execution' AND source_key = ?",
+                (turn_id,),
+            ).fetchall()
+        assert len(rows) == 0
+
+
+class TestAutomationNotifyTransitionCharacterization:
+    def test_notify_transition_matches_subscription_and_creates_wakeup(
+        self, tmp_path: Path
+    ) -> None:
+        hub_root = tmp_path / "hub"
+        store = PmaAutomationStore(hub_root)
+        thread_id = _create_thread(hub_root)
+        store.create_subscription(
+            {
+                "event_type": "flow_completed",
+                "thread_id": thread_id,
+                "from_state": "running",
+                "to_state": "completed",
+                "lane_id": "pma:default",
+            }
+        )
+
+        result = store.notify_transition(
+            {
+                "event_type": "flow_completed",
+                "thread_id": thread_id,
+                "from_state": "running",
+                "to_state": "completed",
+                "transition_id": "trans-1",
+            }
+        )
+        assert result["matched"] == 1
+        assert result["created"] == 1
+
+        with open_orchestration_sqlite(hub_root, durable=False) as conn:
+            wakeups = conn.execute(
+                "SELECT wakeup_id, state FROM orch_automation_wakeups"
+            ).fetchall()
+        assert len(wakeups) == 1
+        assert wakeups[0]["state"] == "pending"
+
+    def test_notify_transition_with_no_matching_subscription_creates_no_wakeup(
+        self, tmp_path: Path
+    ) -> None:
+        hub_root = tmp_path / "hub"
+        store = PmaAutomationStore(hub_root)
+
+        result = store.notify_transition(
+            {
+                "event_type": "flow_completed",
+                "from_state": "running",
+                "to_state": "completed",
+                "transition_id": "trans-1",
+            }
+        )
+        assert result["matched"] == 0
+        assert result["created"] == 0
+
+        with open_orchestration_sqlite(hub_root, durable=False) as conn:
+            wakeups = conn.execute(
+                "SELECT wakeup_id FROM orch_automation_wakeups"
+            ).fetchall()
+        assert len(wakeups) == 0
+
+
 class TestPmaStateStoreIsRuntimeOnly:
     def test_pma_state_store_does_not_touch_orchestration_tables(
         self, tmp_path: Path

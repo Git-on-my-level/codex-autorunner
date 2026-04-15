@@ -750,3 +750,98 @@ def test_scm_webhook_preserves_explicit_correlation_id_header(tmp_path: Path) ->
     events = list_events(hub_root, provider="github", limit=10)
     assert len(events) == 1
     assert events[0].correlation_id == "corr-explicit-123"
+
+
+def test_scm_webhook_duplicate_delivery_without_inline_drain_does_not_invoke_callback(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir(parents=True, exist_ok=True)
+    cfg = _enable_github_webhooks(_hub_config(), drain_inline=False)
+    payload = {
+        "action": "opened",
+        "repository": {"full_name": "acme/widgets", "id": 99},
+        "sender": {"login": "octocat", "id": 7, "type": "User"},
+        "pull_request": {
+            "number": 42,
+            "title": "Dedup without drain",
+            "state": "open",
+            "merged": False,
+            "draft": False,
+            "html_url": "https://github.com/acme/widgets/pull/42",
+            "created_at": "2026-03-24T10:00:00+00:00",
+            "updated_at": "2026-03-24T10:01:02+00:00",
+            "base": {"ref": "main"},
+            "head": {"ref": "feature/webhooks"},
+            "user": {"login": "octocat"},
+        },
+    }
+    body = json.dumps(payload).encode("utf-8")
+    app = _build_route_app(hub_root, cfg=cfg)
+
+    with TestClient(app) as client:
+        first = client.post(
+            "/hub/scm/webhooks/github",
+            content=body,
+            headers=_headers(body, event="pull_request"),
+        )
+        second = client.post(
+            "/hub/scm/webhooks/github",
+            content=body,
+            headers=_headers(body, event="pull_request"),
+        )
+
+    assert first.status_code == 200
+    assert "deduped" not in first.json()
+    assert second.status_code == 200
+    assert second.json()["deduped"] is True
+    events = list_events(hub_root, provider="github", limit=10)
+    assert len(events) == 1
+
+
+def test_scm_webhook_inline_drain_failure_does_not_affect_event_payload(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir(parents=True, exist_ok=True)
+    cfg = _enable_github_webhooks(_hub_config(), drain_inline=True)
+
+    def _failing_drain(_request, event) -> None:
+        raise RuntimeError("drain crashed")
+
+    payload = {
+        "action": "opened",
+        "repository": {"full_name": "acme/widgets", "id": 99},
+        "sender": {"login": "octocat", "id": 7, "type": "User"},
+        "pull_request": {
+            "number": 42,
+            "title": "Drain failure preserves event",
+            "state": "open",
+            "merged": False,
+            "draft": False,
+            "html_url": "https://github.com/acme/widgets/pull/42",
+            "created_at": "2026-03-24T10:00:00+00:00",
+            "updated_at": "2026-03-24T10:01:02+00:00",
+            "base": {"ref": "main"},
+            "head": {"ref": "feature/webhooks"},
+            "user": {"login": "octocat"},
+        },
+    }
+    body = json.dumps(payload).encode("utf-8")
+    app = _build_route_app(hub_root, cfg=cfg, drain_callback=_failing_drain)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/hub/scm/webhooks/github",
+            content=body,
+            headers=_headers(body, event="pull_request"),
+        )
+
+    assert response.status_code == 200
+    assert response.json()["drained_inline"] is False
+    assert response.json()["drain_error"] == "inline_drain_failed"
+    events = list_events(hub_root, provider="github", limit=10)
+    assert len(events) == 1
+    assert events[0].repo_slug == "acme/widgets"
+    assert events[0].pr_number == 42
+    assert events[0].payload["action"] == "opened"
