@@ -1213,6 +1213,85 @@ async def test_recovery_replays_execution_when_defer_ack_hint_is_pending(
 
 
 @pytest.mark.anyio
+async def test_recovery_replays_public_anchor_delivery_after_completed_execution(
+    tmp_path: Path,
+) -> None:
+    harness = _ChaosHarness(tmp_path)
+    await harness.initialize()
+    try:
+        service = _build_recovery_service(
+            store=harness.store,
+            rest=harness.rest,
+            operation_store=harness.operation_store,
+        )
+        ctx = _make_ctx(
+            interaction_id="recover-public-anchor-1",
+            interaction_token="token-recover-public-anchor-1",
+        )
+        payload = _slash_payload(
+            interaction_id="recover-public-anchor-1",
+            interaction_token="token-recover-public-anchor-1",
+            subcommand_name="new",
+        )
+        await harness.store.register_interaction(
+            interaction_id=ctx.interaction_id,
+            interaction_token=ctx.interaction_token,
+            interaction_kind=ctx.kind.value,
+            channel_id=ctx.channel_id,
+            guild_id=ctx.guild_id,
+            user_id=ctx.user_id,
+            metadata_json=service._interaction_ledger_metadata(ctx),
+        )
+        envelope = RuntimeInteractionEnvelope(
+            context=ctx,
+            conversation_id="conversation:discord:chan-1:guild-1",
+            resource_keys=("conversation:discord:chan-1:guild-1",),
+            dispatch_ack_policy="defer_public",
+        )
+        await service._persist_runtime_interaction(
+            envelope,
+            payload,
+            scheduler_state="delivery_pending",
+        )
+        await harness.store.mark_interaction_acknowledged(
+            ctx.interaction_id,
+            ack_mode="defer_public",
+        )
+        await harness.store.mark_interaction_execution(
+            ctx.interaction_id,
+            execution_status="completed",
+        )
+        await harness.store.update_interaction_delivery_cursor(
+            ctx.interaction_id,
+            delivery_cursor_json={
+                "state": "pending",
+                "operation": "edit_original_component_message",
+                "payload": {"text": "Recovered final public message."},
+            },
+            scheduler_state="delivery_pending",
+        )
+
+        await service._resume_interaction_recovery()
+        await service._command_runner.shutdown(grace_seconds=2.0)
+
+        service._handle_car_command.assert_not_awaited()
+        assert harness.rest.followup_messages == []
+        assert len(harness.rest.edited_original_responses) == 1
+        assert (
+            harness.rest.edited_original_responses[0]["payload"]["content"]
+            == "Recovered final public message."
+        )
+
+        record = await harness.store.get_interaction(ctx.interaction_id)
+        assert record is not None
+        assert record.execution_status == "completed"
+        assert record.final_delivery_status == "original_response_edited"
+        assert record.scheduler_state == "completed"
+    finally:
+        await harness.close()
+
+
+@pytest.mark.anyio
 async def test_successful_immediate_response_clears_delivery_cursor_and_recovery_set(
     tmp_path: Path,
 ) -> None:

@@ -232,6 +232,14 @@ class _FakeOutboxManager:
         await asyncio.Event().wait()
 
 
+def _latest_public_response_payload(rest: _FakeRest) -> dict[str, Any]:
+    if rest.edited_original_interaction_responses:
+        return rest.edited_original_interaction_responses[-1]["payload"]
+    if rest.followup_messages:
+        return rest.followup_messages[-1]["payload"]
+    raise AssertionError("expected a Discord public response payload")
+
+
 class _DeleteFailingRest(_FakeRest):
     async def delete_channel_message(self, *, channel_id: str, message_id: str) -> None:
         _ = channel_id, message_id
@@ -2773,9 +2781,23 @@ async def test_service_routes_bind_picker_component_interaction_for_path_candida
 
         assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 6
-        assert len(rest.followup_messages) == 1
-        content = rest.followup_messages[0]["payload"]["content"].lower()
+        assert rest.followup_messages == []
+        assert len(rest.edited_original_interaction_responses) == 2
+        progress_content = rest.edited_original_interaction_responses[0]["payload"][
+            "content"
+        ].lower()
+        assert "binding workspace" in progress_content
+        assert (
+            rest.edited_original_interaction_responses[0]["payload"]["components"] == []
+        )
+        content = rest.edited_original_interaction_responses[-1]["payload"][
+            "content"
+        ].lower()
         assert "bound this channel to workspace" in content
+        assert (
+            rest.edited_original_interaction_responses[-1]["payload"]["components"]
+            == []
+        )
     finally:
         await store.close()
 
@@ -2816,6 +2838,20 @@ async def test_service_routes_bind_picker_component_interaction_for_tokenized_pa
         assert binding is not None
         assert binding["repo_id"] is None
         assert binding["workspace_path"] == str(workspace.resolve())
+        assert rest.followup_messages == []
+        assert len(rest.edited_original_interaction_responses) == 2
+        assert (
+            "binding workspace"
+            in rest.edited_original_interaction_responses[0]["payload"][
+                "content"
+            ].lower()
+        )
+        assert (
+            "bound this channel to workspace"
+            in rest.edited_original_interaction_responses[-1]["payload"][
+                "content"
+            ].lower()
+        )
     finally:
         await store.close()
 
@@ -3246,8 +3282,15 @@ async def test_service_routes_bind_picker_component_interaction(tmp_path: Path) 
 
         assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 6
-        assert len(rest.followup_messages) == 1
-        content = rest.followup_messages[0]["payload"]["content"].lower()
+        assert rest.followup_messages == []
+        assert len(rest.edited_original_interaction_responses) == 2
+        progress_content = rest.edited_original_interaction_responses[0]["payload"][
+            "content"
+        ].lower()
+        assert "binding workspace" in progress_content
+        content = rest.edited_original_interaction_responses[-1]["payload"][
+            "content"
+        ].lower()
         assert "bound this channel to: repo-1" in content
     finally:
         await store.close()
@@ -4970,8 +5013,8 @@ async def test_service_routes_car_new_without_generic_fallback(
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 5
-        assert len(rest.followup_messages) == 1
-        content = rest.followup_messages[0]["payload"]["content"].lower()
+        assert rest.followup_messages == []
+        content = _latest_public_response_payload(rest)["content"].lower()
         assert "not bound" in content
         assert "not implemented yet for discord" not in content
     finally:
@@ -7071,8 +7114,8 @@ async def test_car_new_resets_repo_session_key(tmp_path: Path) -> None:
         assert thread.lifecycle_status == "active"
         assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 5
-        assert len(rest.followup_messages) == 1
-        content = rest.followup_messages[0]["payload"]["content"]
+        assert rest.followup_messages == []
+        content = _latest_public_response_payload(rest)["content"]
         normalized = content.lower()
         assert "fresh repo session" in normalized
         assert "Thread: `" in content
@@ -7144,8 +7187,8 @@ async def test_car_newt_resets_current_workspace_branch_and_session(
         assert thread.lifecycle_status == "active"
         assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 5
-        assert len(rest.followup_messages) == 1
-        content = rest.followup_messages[0]["payload"]["content"]
+        assert rest.followup_messages == []
+        content = _latest_public_response_payload(rest)["content"]
         normalized = content.lower()
         assert "reset branch" in normalized
         assert "origin/master" in normalized
@@ -7576,8 +7619,8 @@ async def test_car_newt_runs_hub_setup_commands_for_bound_workspace(
                 "repo_id_hint": "repo-1",
             }
         ]
-        assert len(rest.followup_messages) == 1
-        content = rest.followup_messages[0]["payload"]["content"].lower()
+        assert rest.followup_messages == []
+        content = _latest_public_response_payload(rest)["content"].lower()
         assert "ran 1 setup command" in content
     finally:
         await store.close()
@@ -7810,8 +7853,8 @@ async def test_car_newt_reports_branch_reset_errors(
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 5
-        assert len(rest.followup_messages) == 1
-        content = rest.followup_messages[0]["payload"]["content"].lower()
+        assert rest.followup_messages == []
+        content = _latest_public_response_payload(rest)["content"].lower()
         assert "failed to reset branch" in content
     finally:
         await store.close()
@@ -7865,8 +7908,8 @@ async def test_car_newt_dirty_worktree_shows_hard_reset_prompt(
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 5
-        assert len(rest.followup_messages) == 1
-        payload = rest.followup_messages[0]["payload"]
+        assert rest.followup_messages == []
+        payload = _latest_public_response_payload(rest)
         content = payload["content"].lower()
         assert "can't start a fresh" in content
         assert "changed.txt" in payload["content"]
@@ -7970,9 +8013,9 @@ async def test_car_newt_hard_reset_button_discards_changes_and_retries(
             5,
             6,
         ]
-        assert len(rest.followup_messages) == 1
-        assert len(rest.edited_original_interaction_responses) == 2
-        progress_payload = rest.edited_original_interaction_responses[0]["payload"]
+        assert rest.followup_messages == []
+        assert len(rest.edited_original_interaction_responses) == 3
+        progress_payload = rest.edited_original_interaction_responses[1]["payload"]
         assert "discarding local changes" in progress_payload["content"].lower()
         assert progress_payload["components"] == []
         edited_payload = rest.edited_original_interaction_responses[-1]["payload"]
@@ -8044,9 +8087,9 @@ async def test_car_newt_cancel_button_keeps_local_changes(
             5,
             6,
         ]
-        assert len(rest.followup_messages) == 1
-        assert len(rest.edited_original_interaction_responses) == 1
-        edited_payload = rest.edited_original_interaction_responses[0]["payload"]
+        assert rest.followup_messages == []
+        assert len(rest.edited_original_interaction_responses) == 2
+        edited_payload = rest.edited_original_interaction_responses[-1]["payload"]
         assert "cancelled `/car newt`" in edited_payload["content"].lower()
         assert "kept local changes" in edited_payload["content"].lower()
         assert edited_payload["components"] == []
@@ -8126,8 +8169,9 @@ async def test_car_newt_hard_reset_reports_discard_when_retry_reset_fails(
         assert len(rest.interaction_responses) == 2
         assert rest.interaction_responses[1]["payload"]["type"] == 6
         assert hard_reset_calls == [workspace.resolve()]
-        assert len(rest.edited_original_interaction_responses) == 2
-        progress_payload = rest.edited_original_interaction_responses[0]["payload"]
+        assert rest.followup_messages == []
+        assert len(rest.edited_original_interaction_responses) == 3
+        progress_payload = rest.edited_original_interaction_responses[1]["payload"]
         assert "discarding local changes" in progress_payload["content"].lower()
         assert progress_payload["components"] == []
         edited_payload = rest.edited_original_interaction_responses[-1]["payload"]
@@ -8203,8 +8247,9 @@ async def test_car_newt_hard_reset_reports_when_tracked_discard_step_fails(
         await service.run_forever()
         assert len(rest.interaction_responses) == 2
         assert rest.interaction_responses[1]["payload"]["type"] == 6
-        assert len(rest.edited_original_interaction_responses) == 2
-        progress_payload = rest.edited_original_interaction_responses[0]["payload"]
+        assert rest.followup_messages == []
+        assert len(rest.edited_original_interaction_responses) == 3
+        progress_payload = rest.edited_original_interaction_responses[1]["payload"]
         assert "discarding local changes" in progress_payload["content"].lower()
         assert progress_payload["components"] == []
         edited_payload = rest.edited_original_interaction_responses[-1]["payload"]
@@ -8285,8 +8330,9 @@ async def test_car_newt_hard_reset_reports_when_untracked_cleanup_fails(
         await service.run_forever()
         assert len(rest.interaction_responses) == 2
         assert rest.interaction_responses[1]["payload"]["type"] == 6
-        assert len(rest.edited_original_interaction_responses) == 2
-        progress_payload = rest.edited_original_interaction_responses[0]["payload"]
+        assert rest.followup_messages == []
+        assert len(rest.edited_original_interaction_responses) == 3
+        progress_payload = rest.edited_original_interaction_responses[1]["payload"]
         assert "discarding local changes" in progress_payload["content"].lower()
         assert progress_payload["components"] == []
         edited_payload = rest.edited_original_interaction_responses[-1]["payload"]
@@ -8426,8 +8472,8 @@ async def test_car_new_resets_pma_session_key_for_current_agent(tmp_path: Path) 
         assert thread.lifecycle_status == "active"
         assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 5
-        assert len(rest.followup_messages) == 1
-        content = rest.followup_messages[0]["payload"]["content"].lower()
+        assert rest.followup_messages == []
+        content = _latest_public_response_payload(rest)["content"].lower()
         assert "fresh pma session" in content
     finally:
         await store.close()
@@ -9255,7 +9301,7 @@ async def test_car_update_status_defers_before_reading_status(
     try:
         await service.run_forever()
         assert observed["deferred_type"] == 5
-        assert len(rest.followup_messages) == 1
+        assert _latest_public_response_payload(rest)["content"]
     finally:
         await store.close()
 

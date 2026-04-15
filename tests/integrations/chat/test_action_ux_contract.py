@@ -59,12 +59,16 @@ def test_action_ux_contract_reuses_shared_control_entries_across_surfaces() -> N
 def test_action_ux_contract_bridges_command_and_plain_text_policies() -> None:
     telegram_status = telegram_command_ux_contract_for_name("status")
     discord_flow_status = discord_slash_command_ux_contract_for_id("car.flow.status")
+    discord_new = discord_slash_command_ux_contract_for_id("car.new")
     plain_text_mentions = plain_text_turn_ux_contract_for_mode("mentions")
 
     assert telegram_status is not None
     assert telegram_status.queue_policy == "allow_during_turn"
     assert discord_flow_status is not None
     assert discord_flow_status.ack_class == "defer_public"
+    assert discord_flow_status.anchor_message_reuse == "prefer"
+    assert discord_new is not None
+    assert discord_new.anchor_message_reuse == "prefer"
     assert plain_text_mentions is not None
     assert plain_text_mentions.anchor_message_reuse == "prefer"
 

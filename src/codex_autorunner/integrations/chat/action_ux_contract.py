@@ -141,8 +141,11 @@ def _discord_slash_entry(
     visibility: DiscordExposure,
     ack_timing: DiscordAckTiming = "dispatch",
     control_priority: ChatActionPriority = "normal",
-    anchor_message_reuse: AnchorMessageReuse = "never",
+    anchor_message_reuse: Optional[AnchorMessageReuse] = None,
 ) -> ChatActionUxContractEntry:
+    resolved_anchor_reuse = anchor_message_reuse or (
+        "prefer" if ack_class == "defer_public" else "never"
+    )
     return ChatActionUxContractEntry(
         id=f"discord_slash_command.{command_id}",
         surface="discord_slash_command",
@@ -156,7 +159,7 @@ def _discord_slash_entry(
         first_visible_feedback=_first_visible_feedback_for_ack(ack_class),
         optimistic_ui_allowed=False,
         control_priority=control_priority,
-        anchor_message_reuse=anchor_message_reuse,
+        anchor_message_reuse=resolved_anchor_reuse,
         visibility=visibility,
         ack_timing=ack_timing,
     )

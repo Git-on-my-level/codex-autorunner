@@ -32,7 +32,10 @@ from codex_autorunner.integrations.discord.effects import (
     DiscordEffectDeliveryError,
     DiscordResponseEffect,
 )
-from codex_autorunner.integrations.discord.errors import DiscordPermanentError
+from codex_autorunner.integrations.discord.errors import (
+    DiscordAPIError,
+    DiscordPermanentError,
+)
 from codex_autorunner.integrations.discord.gateway import DiscordGatewayClient
 from codex_autorunner.integrations.discord.ingress import (
     CommandSpec,
@@ -1166,6 +1169,63 @@ async def test_ack_budget_expiry_stops_execution_and_logs_expired_before_ack(
 
 
 @pytest.mark.anyio
+async def test_ack_succeeds_within_budget_and_records_latency() -> None:
+    import time as _time
+
+    service = DiscordBotService.__new__(DiscordBotService)
+    service._logger = logging.getLogger("test.reliability.ack_budget_success")
+    service._config = SimpleNamespace(dispatch=SimpleNamespace(ack_budget_ms=250))
+    service._store = SimpleNamespace(
+        get_interaction=AsyncMock(return_value=None),
+        mark_interaction_scheduler_state=AsyncMock(),
+    )
+
+    class _Session:
+        last_delivery_status = "ack_deferred_ephemeral"
+        last_delivery_error = None
+
+        def has_initial_response(self) -> bool:
+            return False
+
+        def is_deferred(self) -> bool:
+            return False
+
+        def restore_initial_response(self, _ack_mode: str) -> None:
+            return None
+
+    service._ensure_interaction_session = lambda *_args, **_kwargs: _Session()  # type: ignore[assignment]
+    service._load_interaction_ack_mode = AsyncMock(return_value=None)
+
+    async def _fast_defer(**_kwargs: Any) -> bool:
+        await asyncio.sleep(0.01)
+        return True
+
+    service._defer_ephemeral = _fast_defer  # type: ignore[assignment]
+    service._defer_public = _fast_defer  # type: ignore[assignment]
+    service._defer_component_update = _fast_defer  # type: ignore[assignment]
+    service._interaction_telemetry_fields = lambda *args, **kwargs: {}  # type: ignore[assignment]
+
+    ctx = _make_ctx(interaction_id="ack-ok-1", interaction_token="token-ack-ok-1")
+    ingress_started_at = _time.monotonic()
+    ctx.timing = IngressTiming(ingress_started_at=ingress_started_at)
+    envelope = RuntimeInteractionEnvelope(
+        context=ctx,
+        conversation_id="conversation:discord:chan-1",
+        resource_keys=("conversation:discord:chan-1",),
+        dispatch_ack_policy="defer_ephemeral",
+    )
+
+    acked = await service._acknowledge_runtime_envelope(envelope, stage="dispatch")
+
+    assert acked is True
+    assert ctx.deferred is True
+    assert ctx.timing.ack_finished_at is not None
+    assert (
+        ctx.timing.ack_finished_at - ingress_started_at
+    ) * 1000 < service._config.dispatch.ack_budget_ms
+
+
+@pytest.mark.anyio
 async def test_on_dispatch_does_not_attempt_fallback_response_after_confirmed_ack_expiry() -> (
     None
 ):
@@ -1854,6 +1914,194 @@ async def test_send_or_respond_persists_initial_response_state(
         assert record.ack_mode == "immediate_message"
         assert record.final_delivery_status == "initial_response_sent"
         assert record.original_response_message_id is None
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_send_or_respond_public_reuses_deferred_original_response(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    rest = _FakeRest()
+    logger = logging.getLogger("test.reliability.public_anchor")
+    config = SimpleNamespace(application_id="app-1", max_message_length=2000)
+    try:
+        await store.initialize()
+        await store.register_interaction(
+            interaction_id="public-1",
+            interaction_token="token-public-1",
+            interaction_kind="slash_command",
+            channel_id="chan-1",
+            guild_id="guild-1",
+            user_id="user-1",
+            metadata_json={"command_path": ["car", "new"]},
+        )
+
+        async def load_ack_mode(interaction_id: str) -> Optional[str]:
+            record = await store.get_interaction(interaction_id)
+            return record.ack_mode if record is not None else None
+
+        async def record_ack(
+            interaction_id: str,
+            interaction_token: str,
+            ack_mode: str,
+            original_response_message_id: Optional[str],
+        ) -> None:
+            await store.mark_interaction_acknowledged(
+                interaction_id,
+                ack_mode=ack_mode,
+                original_response_message_id=original_response_message_id,
+            )
+
+        async def record_delivery(
+            interaction_id: str,
+            delivery_status: str,
+            delivery_error: Optional[str],
+            original_response_message_id: Optional[str],
+        ) -> None:
+            await store.record_interaction_delivery(
+                interaction_id,
+                delivery_status=delivery_status,
+                delivery_error=delivery_error,
+                original_response_message_id=original_response_message_id,
+            )
+
+        responder = DiscordResponder(
+            rest=rest,
+            config=config,
+            logger=logger,
+            hydrate_ack_mode=load_ack_mode,
+            record_ack=record_ack,
+            record_delivery=record_delivery,
+        )
+
+        deferred = await responder.defer(
+            interaction_id="public-1",
+            interaction_token="token-public-1",
+            ephemeral=False,
+        )
+        await responder.send_or_respond(
+            interaction_id="public-1",
+            interaction_token="token-public-1",
+            deferred=True,
+            text="Fresh session is ready.",
+            ephemeral=False,
+        )
+
+        assert deferred is True
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"] == {"type": 5}
+        assert rest.followup_messages == []
+        assert rest.edited_original_interaction_responses == [
+            {
+                "application_id": "app-1",
+                "interaction_token": "token-public-1",
+                "payload": {"content": "Fresh session is ready."},
+            }
+        ]
+
+        record = await store.get_interaction("public-1")
+        assert record is not None
+        assert record.ack_mode == "defer_public"
+        assert record.final_delivery_status == "original_response_edited"
+        assert record.original_response_message_id == "@original"
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_send_or_respond_public_falls_back_to_followup_when_original_edit_fails(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    rest = _FakeRest()
+    logger = logging.getLogger("test.reliability.public_anchor_fallback")
+    config = SimpleNamespace(application_id="app-1", max_message_length=2000)
+    try:
+        await store.initialize()
+        await store.register_interaction(
+            interaction_id="public-fallback-1",
+            interaction_token="token-public-fallback-1",
+            interaction_kind="slash_command",
+            channel_id="chan-1",
+            guild_id="guild-1",
+            user_id="user-1",
+            metadata_json={"command_path": ["car", "new"]},
+        )
+
+        async def load_ack_mode(interaction_id: str) -> Optional[str]:
+            record = await store.get_interaction(interaction_id)
+            return record.ack_mode if record is not None else None
+
+        async def record_ack(
+            interaction_id: str,
+            interaction_token: str,
+            ack_mode: str,
+            original_response_message_id: Optional[str],
+        ) -> None:
+            await store.mark_interaction_acknowledged(
+                interaction_id,
+                ack_mode=ack_mode,
+                original_response_message_id=original_response_message_id,
+            )
+
+        async def record_delivery(
+            interaction_id: str,
+            delivery_status: str,
+            delivery_error: Optional[str],
+            original_response_message_id: Optional[str],
+        ) -> None:
+            await store.record_interaction_delivery(
+                interaction_id,
+                delivery_status=delivery_status,
+                delivery_error=delivery_error,
+                original_response_message_id=original_response_message_id,
+            )
+
+        async def _fail_edit_original_interaction_response(
+            **_kwargs: Any,
+        ) -> dict[str, Any]:
+            raise DiscordAPIError("cannot edit original response")
+
+        rest.edit_original_interaction_response = (  # type: ignore[method-assign]
+            _fail_edit_original_interaction_response
+        )
+
+        responder = DiscordResponder(
+            rest=rest,
+            config=config,
+            logger=logger,
+            hydrate_ack_mode=load_ack_mode,
+            record_ack=record_ack,
+            record_delivery=record_delivery,
+        )
+
+        deferred = await responder.defer(
+            interaction_id="public-fallback-1",
+            interaction_token="token-public-fallback-1",
+            ephemeral=False,
+        )
+        await responder.send_or_respond(
+            interaction_id="public-fallback-1",
+            interaction_token="token-public-fallback-1",
+            deferred=True,
+            text="Recovered through followup.",
+            ephemeral=False,
+        )
+
+        assert deferred is True
+        assert len(rest.interaction_responses) == 1
+        assert len(rest.followup_messages) == 1
+        assert rest.followup_messages[0]["payload"]["content"] == (
+            "Recovered through followup."
+        )
+
+        record = await store.get_interaction("public-fallback-1")
+        assert record is not None
+        assert record.ack_mode == "defer_public"
+        assert record.final_delivery_status == "followup_sent"
+        assert record.original_response_message_id == "followup-1"
     finally:
         await store.close()
 
