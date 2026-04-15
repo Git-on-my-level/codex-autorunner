@@ -463,6 +463,80 @@ async def test_flow_archive_button_real_archive_renders_archived_state(
 
 
 @pytest.mark.anyio
+async def test_flow_archive_button_falls_back_when_status_refresh_is_transient(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = _workspace(tmp_path)
+    run_id = str(uuid.uuid4())
+    _create_run(workspace, run_id, FlowRunStatus.COMPLETED)
+
+    tickets_dir = workspace / ".codex-autorunner" / "tickets"
+    tickets_dir.mkdir(parents=True, exist_ok=True)
+    (tickets_dir / "TICKET-001.md").write_text("ticket", encoding="utf-8")
+
+    context_dir = workspace / ".codex-autorunner" / "contextspace"
+    context_dir.mkdir(parents=True, exist_ok=True)
+    (context_dir / "active_context.md").write_text("Active context\n", encoding="utf-8")
+
+    run_dir = workspace / ".codex-autorunner" / "runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "DISPATCH.md").write_text("dispatch", encoding="utf-8")
+    live_flow_dir = workspace / ".codex-autorunner" / "flows" / run_id / "chat"
+    live_flow_dir.mkdir(parents=True, exist_ok=True)
+    (live_flow_dir / "outbound.jsonl").write_text("{}", encoding="utf-8")
+
+    rest = _FakeRest()
+    service = _service(tmp_path, rest)
+    real_open_flow_store = service._open_flow_store
+    open_calls = 0
+    logged_events: list[str] = []
+
+    def _fake_log_event(_logger: Any, _level: int, event: str, **kwargs: Any) -> None:
+        _ = kwargs
+        logged_events.append(event)
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.discord.flow_commands.log_event",
+        _fake_log_event,
+    )
+
+    def _flaky_open_flow_store(workspace_root: Path) -> FlowStore:
+        nonlocal open_calls
+        open_calls += 1
+        if open_calls == 1:
+            return real_open_flow_store(workspace_root)
+        raise sqlite3.OperationalError("database is locked")
+
+    service._open_flow_store = _flaky_open_flow_store  # type: ignore[assignment]
+
+    try:
+        await service._handle_flow_button(
+            "interaction-2-transient",
+            "token-2-transient",
+            workspace_root=workspace,
+            custom_id=f"flow:{run_id}:archive",
+            channel_id="channel-1",
+            guild_id="guild-1",
+        )
+    finally:
+        await service._store.close()
+
+    assert rest.interaction_responses[0]["payload"]["type"] == 6
+    assert len(rest.followup_messages) == 1
+    assert "Archiving run" in rest.followup_messages[0]["payload"]["content"]
+    edited = rest.edited_original_interaction_responses[0]["payload"]
+    assert "Archived run" in edited["content"]
+    assert "Status: archived" in edited["content"]
+    assert f"Archive path: .codex-autorunner/archive/runs/{run_id}" in edited["content"]
+    assert "Flow state archived: yes" in edited["content"]
+    assert edited["components"] == []
+    assert logged_events == [
+        "discord.flow.store_open_failed",
+        "discord.flow.archive.status_refresh_failed",
+    ]
+
+
+@pytest.mark.anyio
 async def test_flow_archive_button_classifies_open_sqlite_errors_as_store_open_failed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
