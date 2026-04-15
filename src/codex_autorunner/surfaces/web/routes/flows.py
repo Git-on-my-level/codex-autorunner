@@ -5,7 +5,7 @@ import sqlite3
 import subprocess
 import uuid
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, Union, cast
 
@@ -56,7 +56,11 @@ from ....core.orchestration import build_ticket_flow_orchestration_service
 from ....core.runtime import RuntimeContext
 from ....core.utils import atomic_write, find_repo_root
 from ....flows.ticket_flow import build_ticket_flow_definition
-from ....flows.ticket_flow.runtime_helpers import normalize_ticket_flow_input_data
+from ....flows.ticket_flow.runtime_helpers import (
+    normalize_ticket_flow_input_data,
+    render_bootstrap_ticket_template,
+    select_active_or_paused_run,
+)
 from ....integrations.agents.build_agent_pool import build_agent_pool
 from ....integrations.github.service import GitHubError, GitHubService
 from ....tickets import DEFAULT_MAX_TOTAL_TURNS
@@ -92,126 +96,16 @@ from ..services import flow_store as flow_store_service
 from .flow_routes import FlowRoutesState
 from .flow_routes.dependencies import build_default_flow_route_dependencies
 from .flow_routes.runtime_service import (
+    evict_cached_controller,
     list_orchestration_flow_run_records,
+    recover_flow_store_if_possible,
     resolve_flow_run_record,
 )
 
 _logger = logging.getLogger(__name__)
 
 _supported_flow_types = ("ticket_flow",)
-_FLOW_DB_CORRUPT_SUFFIX = ".corrupt"
-_FLOW_DB_NOTICE_SUFFIX = ".corrupt.json"
 _WorkerHandle = tuple[Optional[subprocess.Popen[Any]], Any, Any]
-
-
-def _utc_stamp() -> str:
-    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-
-
-def _is_probably_corrupt_flow_db_error(exc: Exception, db_path: Path) -> bool:
-    if not isinstance(exc, sqlite3.Error):
-        return False
-    msg = str(exc).lower()
-    if "file is not a database" in msg or "database disk image is malformed" in msg:
-        return True
-    if "disk i/o error" in msg:
-        try:
-            header = db_path.read_bytes()[:16]
-        except OSError:
-            return False
-        return header not in (b"", b"SQLite format 3\x00")
-    return False
-
-
-def _rotate_corrupt_flow_db(db_path: Path, detail: str) -> Optional[Path]:
-    stamp = _utc_stamp()
-    backup_path = db_path.with_name(f"{db_path.name}{_FLOW_DB_CORRUPT_SUFFIX}.{stamp}")
-    notice_path = db_path.with_name(f"{db_path.name}{_FLOW_DB_NOTICE_SUFFIX}")
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    backup_value: str = ""
-    if db_path.exists():
-        try:
-            db_path.replace(backup_path)
-            backup_value = str(backup_path)
-        except OSError:
-            backup_value = ""
-
-    for suffix in ("-wal", "-shm"):
-        sidecar = db_path.with_name(f"{db_path.name}{suffix}")
-        try:
-            sidecar.unlink(missing_ok=True)
-        except OSError:
-            pass
-
-    notice = {
-        "status": "corrupt",
-        "message": "Flow store reset due to corrupted flows.db.",
-        "detail": detail,
-        "detected_at": stamp,
-        "backup_path": backup_value,
-    }
-    try:
-        atomic_write(notice_path, json.dumps(notice, indent=2) + "\n")
-    except OSError:
-        _logger.warning("Failed to write flow DB corruption notice at %s", notice_path)
-    return backup_path if backup_value else None
-
-
-def _evict_cached_controller(
-    repo_root: Path, flow_type: str, state: FlowRoutesState
-) -> None:
-    key = (repo_root.resolve(), flow_type)
-    with state.lock:
-        controller = cast(
-            Optional[FlowController], state.controller_cache.pop(key, None)
-        )
-    if not controller:
-        return
-    try:
-        controller.shutdown()
-    except (OSError, sqlite3.Error, RuntimeError):  # intentional: defensive cleanup
-        _logger.debug("Failed to shutdown cached flow controller", exc_info=True)
-
-
-def _recover_flow_store_if_possible(
-    repo_root: Path,
-    flow_type: str,
-    state: FlowRoutesState,
-    exc: Exception,
-) -> bool:
-    db_path, _ = _flow_paths(repo_root)
-    if not _is_probably_corrupt_flow_db_error(exc, db_path):
-        return False
-
-    backup_path = _rotate_corrupt_flow_db(db_path, str(exc))
-    _evict_cached_controller(repo_root, flow_type, state)
-    store = FlowStore(db_path)
-    try:
-        store.initialize()
-        _logger.warning(
-            "Recovered corrupted flow DB at %s (backup=%s, reason=%s)",
-            db_path,
-            str(backup_path) if backup_path else "unavailable",
-            exc,
-        )
-        return True
-    except (
-        sqlite3.Error,
-        OSError,
-        RuntimeError,
-    ) as recover_exc:  # intentional: recovery attempt
-        _logger.warning(
-            "Flow DB recovery failed at %s after error %s: %s",
-            db_path,
-            exc,
-            recover_exc,
-        )
-        return False
-    finally:
-        try:
-            store.close()
-        except (sqlite3.Error, OSError):  # intentional: defensive cleanup
-            _logger.debug("Failed to close flow store during recovery", exc_info=True)
 
 
 def _flow_paths(repo_root: Path) -> tuple[Path, Path]:
@@ -362,8 +256,8 @@ def _get_flow_controller(
             OSError,
             RuntimeError,
         ) as exc:  # intentional: init with recovery fallback
-            if not _recover_flow_store_if_possible(repo_root, flow_type, state, exc):
-                _evict_cached_controller(repo_root, flow_type, state)
+            if not recover_flow_store_if_possible(repo_root, flow_type, state, exc):
+                evict_cached_controller(repo_root, flow_type, state)
                 _logger.warning("Failed to initialize cached flow controller: %s", exc)
                 raise HTTPException(
                     status_code=503,
@@ -388,7 +282,7 @@ def _get_flow_controller(
         OSError,
         RuntimeError,
     ) as exc:  # intentional: init with recovery fallback
-        if _recover_flow_store_if_possible(repo_root, flow_type, state, exc):
+        if recover_flow_store_if_possible(repo_root, flow_type, state, exc):
             controller = _new_controller()
             try:
                 controller.initialize()
@@ -420,11 +314,7 @@ def _get_flow_record(repo_root: Path, run_id: str) -> FlowRunRecord:
     )
 
 
-def _active_or_paused_run(records: list[FlowRunRecord]) -> Optional[FlowRunRecord]:
-    for record in records:
-        if record.status in (FlowRunStatus.RUNNING, FlowRunStatus.PAUSED):
-            return record
-    return None
+_active_or_paused_run = select_active_or_paused_run
 
 
 def _coerce_ticket_diff_ref(value: object) -> Optional[str]:
@@ -708,7 +598,7 @@ async def _start_flow_via_controller(
         ValueError,
         RuntimeError,
     ) as exc:  # intentional: flow start with recovery fallback
-        if _recover_flow_store_if_possible(repo_root, flow_type, state, exc):
+        if recover_flow_store_if_possible(repo_root, flow_type, state, exc):
             controller = _get_flow_controller(repo_root, flow_type, state)
             retry_run_id = _normalize_run_id(uuid.uuid4())
             try:
@@ -811,7 +701,7 @@ def build_flow_routes() -> APIRouter:
     deps.get_flow_record = _get_flow_record
     deps.get_flow_controller = _get_flow_controller
     deps.start_flow_worker = _start_flow_worker
-    deps.recover_flow_store_if_possible = _recover_flow_store_if_possible
+    deps.recover_flow_store_if_possible = recover_flow_store_if_possible
     deps.bootstrap_check = ux_bootstrap_check
 
     from .flow_routes.status_history_routes import (
@@ -936,7 +826,7 @@ def build_flow_routes() -> APIRouter:
             RuntimeError,
             KeyError,
         ) as exc:  # intentional: flow start with recovery fallback
-            if _recover_flow_store_if_possible(repo_root, flow_type, state, exc):
+            if recover_flow_store_if_possible(repo_root, flow_type, state, exc):
                 run_id = _normalize_run_id(uuid.uuid4())
                 try:
                     service = _build_flow_orchestration_service(repo_root, flow_type)
@@ -1092,29 +982,7 @@ def build_flow_routes() -> APIRouter:
         seeded = False
         if not tickets_exist and not ticket_path.exists():
             bootstrap_ticket_id = generate_ticket_id()
-            template = f"""---
-agent: codex
-done: false
-ticket_id: "{bootstrap_ticket_id}"
-title: Bootstrap ticket plan
-goal: Capture scope and seed follow-up tickets
----
-
-You are the first ticket in a new ticket_flow run.
-
-- Read `.codex-autorunner/ISSUE.md`. If it is missing:
-  - If GitHub is available, ask the user for the issue/PR URL or number and create `.codex-autorunner/ISSUE.md` from it.
-  - If GitHub is not available, write `DISPATCH.md` with `mode: pause` asking the user to describe the work (or share a doc). After the reply, create `.codex-autorunner/ISSUE.md` with their input.
-- If helpful, create or update contextspace docs under `.codex-autorunner/contextspace/`:
-  - `active_context.md` for current context and links
-  - `decisions.md` for decisions/rationale
-  - `spec.md` for requirements and constraints
-- Break the work into additional `TICKET-00X.md` files with clear owners/goals; keep this ticket open until they exist.
-- Place any supporting artifacts in `.codex-autorunner/runs/<run_id>/dispatch/` if needed.
-- Write `DISPATCH.md` to dispatch a message to the user:
-  - Use `mode: pause` (handoff) to wait for user response. This pauses execution.
-  - Use `mode: notify` (informational) to message the user but keep running.
-"""
+            template = render_bootstrap_ticket_template(bootstrap_ticket_id)
             ticket_path.write_text(template, encoding="utf-8")
             seeded = True
 

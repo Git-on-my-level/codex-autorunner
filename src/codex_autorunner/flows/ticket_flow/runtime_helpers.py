@@ -24,6 +24,7 @@ from ...core.flows.worker_process import (
 from ...core.flows.workspace_root import (
     normalize_ticket_flow_input_data as _normalize_ticket_flow_input_data,
 )
+from ...core.orchestration.models import FlowRunTarget
 from ...core.runtime import RuntimeContext
 from ...integrations.agents import build_backend_orchestrator
 from ...integrations.agents.build_agent_pool import build_agent_pool
@@ -352,3 +353,69 @@ def archive_ticket_flow_run(
         force=force,
         delete_run=delete_run,
     )
+
+
+def flow_run_record_from_target(target: FlowRunTarget) -> FlowRunRecord:
+    return FlowRunRecord(
+        id=target.run_id,
+        flow_type=target.flow_type,
+        status=FlowRunStatus(target.status),
+        input_data={},
+        state=dict(target.state or {}),
+        current_step=target.current_step,
+        stop_requested=False,
+        created_at=target.created_at or "",
+        started_at=target.started_at,
+        finished_at=target.finished_at,
+        error_message=target.error_message,
+        metadata=dict(target.metadata or {}),
+    )
+
+
+def select_active_or_paused_run(
+    records: list[FlowRunRecord],
+) -> Optional[FlowRunRecord]:
+    for record in records:
+        if record.status in (FlowRunStatus.RUNNING, FlowRunStatus.PAUSED):
+            return record
+    return None
+
+
+def select_resumable_run(
+    records: list[FlowRunRecord],
+) -> tuple[Optional[FlowRunRecord], str]:
+    if not records:
+        return None, "new_run"
+    active = select_active_or_paused_run(records)
+    if active:
+        return active, "active"
+    latest = records[0]
+    if latest.status == FlowRunStatus.COMPLETED:
+        return latest, "completed_pending"
+    return None, "new_run"
+
+
+def render_bootstrap_ticket_template(ticket_id: str) -> str:
+    return f"""---
+agent: codex
+done: false
+ticket_id: "{ticket_id}"
+title: Bootstrap ticket plan
+goal: Capture scope and seed follow-up tickets
+---
+
+You are the first ticket in a new ticket_flow run.
+
+- Read `.codex-autorunner/ISSUE.md`. If it is missing:
+  - If GitHub is available, ask the user for the issue/PR URL or number and create `.codex-autorunner/ISSUE.md` from it.
+  - If GitHub is not available, write `DISPATCH.md` with `mode: pause` asking the user to describe the work (or share a doc). After the reply, create `.codex-autorunner/ISSUE.md` with their input.
+- If helpful, create or update contextspace docs under `.codex-autorunner/contextspace/`:
+  - `active_context.md` for current context and links
+  - `decisions.md` for decisions/rationale
+  - `spec.md` for requirements and constraints
+- Break the work into additional `TICKET-00X.md` files with clear owners/goals; keep this ticket open until they exist.
+- Place any supporting artifacts in `.codex-autorunner/runs/<run_id>/dispatch/` if needed.
+- Write `DISPATCH.md` to dispatch a message to the user:
+  - Use `mode: pause` (handoff) to wait for user response. This pauses execution.
+  - Use `mode: notify` (informational) to message the user but keep running.
+"""
