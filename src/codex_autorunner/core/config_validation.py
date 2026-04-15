@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 from pathlib import Path
-from typing import Any, Dict, Tuple, Type, Union
+from typing import Any, Dict, Tuple, Type, Union, cast
 
 from .config_contract import (
     _TICKET_FLOW_APPROVAL_MODE_ALIASES,
@@ -1255,6 +1255,8 @@ def _validate_optional_type(
         value = mapping.get(key)
         if value is None and allow_none:
             return
+        if expected is int and isinstance(value, bool):
+            raise ConfigError(f"{path}.{key} must be int if provided")
         if isinstance(value, expected):
             return
         type_name = (
@@ -1270,7 +1272,7 @@ def _validate_optional_int_ge(
 ) -> None:
     if key in mapping:
         value = mapping.get(key)
-        if isinstance(value, int) and value < min_value:
+        if _is_strict_int(value) and cast(int, value) < min_value:
             if min_value == 0:
                 raise ConfigError(f"{path}.{key} must be >= 0")
             elif min_value == 1:
@@ -1392,6 +1394,7 @@ def _validate_pma_config(cfg: Dict[str, Any]) -> None:
     if isinstance(profile, str) and profile.strip().lower() not in {"portable", "full"}:
         raise ConfigError("pma.worktree_archive_profile must be 'portable' or 'full'")
     for key in (
+        "turn_timeout_seconds",
         "filebox_inbox_max_age_days",
         "filebox_outbox_max_age_days",
         "worktree_archive_max_snapshots_per_repo",
@@ -1409,7 +1412,12 @@ def _validate_pma_config(cfg: Dict[str, Any]) -> None:
         "inbox_auto_dismiss_grace_seconds",
     ):
         _validate_optional_type(pma_cfg, key, int, path="pma")
-        _validate_optional_int_ge(pma_cfg, key, 0, path="pma")
+        _validate_optional_int_ge(
+            pma_cfg,
+            key,
+            1 if key == "turn_timeout_seconds" else 0,
+            path="pma",
+        )
 
 
 def _validate_static_assets_config(cfg: Dict[str, Any], scope: str) -> None:

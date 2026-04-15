@@ -1462,6 +1462,16 @@ async def finalize_managed_thread_execution(
                 events=events,
                 start_index=live_timeline_count + 1,
             )
+        except asyncio.CancelledError:
+            if not live_timeline_error_logged:
+                live_timeline_error_logged = True
+                logger.warning(
+                    "Live %s thread timeline persistence cancelled; continuing without live persistence (thread=%s turn=%s)",
+                    surface.log_label,
+                    managed_thread_id,
+                    managed_turn_id,
+                    exc_info=True,
+                )
         except Exception:
             if not live_timeline_error_logged:
                 live_timeline_error_logged = True
@@ -1499,6 +1509,14 @@ async def finalize_managed_thread_execution(
                         outcome.backend_turn_id or started.execution.backend_id
                     ),
                 )
+            except asyncio.CancelledError:
+                logger.warning(
+                    "%s Final cold trace persistence cancelled; continuing without a cold trace manifest (thread=%s turn=%s)",
+                    surface.log_label,
+                    managed_thread_id,
+                    managed_turn_id,
+                    exc_info=True,
+                )
             except Exception:
                 logger.warning(
                     "%s Failed to persist final cold trace via hub control plane (thread=%s turn=%s)",
@@ -1529,6 +1547,14 @@ async def finalize_managed_thread_execution(
                 | ({"trace_manifest_id": manifest_id} if manifest_id else {}),
                 events=events,
                 start_index=live_timeline_count + 1,
+            )
+        except asyncio.CancelledError:
+            logger.warning(
+                "Final %s thread timeline persistence cancelled; continuing finalization (thread=%s turn=%s)",
+                surface.log_label,
+                managed_thread_id,
+                managed_turn_id,
+                exc_info=True,
             )
         except Exception:
             logger.exception(
@@ -1727,7 +1753,6 @@ async def finalize_managed_thread_execution(
         )
     finally:
         if stream_task is not None:
-            drain_cancel: Optional[BaseException] = None
             try:
                 await asyncio.wait_for(stream_task, timeout=0.5)
             except asyncio.TimeoutError:
@@ -1735,12 +1760,31 @@ async def finalize_managed_thread_execution(
                 with contextlib.suppress(asyncio.CancelledError):
                     await stream_task
             except asyncio.CancelledError as exc:
-                drain_cancel = exc
+                # Decide before any await: Task.cancelling() resets after yield on 3.11+,
+                # and is absent on 3.9–3.10. Completion of stream_task with CancelledError
+                # means wait_for propagated the pump's cancellation, not this task's.
+                pump_completed_cancelled = False
+                if stream_task.done():
+                    try:
+                        pump_exc = stream_task.exception()
+                        pump_completed_cancelled = isinstance(
+                            pump_exc, asyncio.CancelledError
+                        )
+                    except asyncio.CancelledError:
+                        pump_completed_cancelled = True
                 stream_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await stream_task
-            if drain_cancel is not None:
-                raise drain_cancel
+                if pump_completed_cancelled:
+                    logger.warning(
+                        "%s progress event pump cancelled during finalization; continuing with terminal-state recovery (thread=%s turn=%s)",
+                        surface.log_label,
+                        managed_thread_id,
+                        managed_turn_id,
+                        exc_info=True,
+                    )
+                else:
+                    raise exc
 
     recovered_outcome = recover_post_completion_outcome(outcome, event_state)
     recovered_after_completion = recovered_outcome is not outcome

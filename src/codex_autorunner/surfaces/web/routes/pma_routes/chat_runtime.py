@@ -85,6 +85,7 @@ from .tail_stream import resolve_resume_after
 logger = logging.getLogger(__name__)
 
 PMA_TIMEOUT_SECONDS = 7200
+_DEFAULT_PMA_TIMEOUT_SECONDS = 7200
 _SUCCESSFUL_COMPLETION_STATUSES = frozenset(
     {"ok", "completed", "complete", "done", "success"}
 )
@@ -99,6 +100,23 @@ def _requires_fresh_pma_conversation(exc: Exception) -> bool:
 def _get_pma_config(request: Request) -> dict[str, Any]:
     raw = getattr(request.app.state.config, "raw", {})
     return pma_config_from_raw(raw)
+
+
+def _pma_turn_timeout_seconds(request: Request) -> float:
+    overridden_timeout = globals().get(
+        "PMA_TIMEOUT_SECONDS",
+        _DEFAULT_PMA_TIMEOUT_SECONDS,
+    )
+    if overridden_timeout != _DEFAULT_PMA_TIMEOUT_SECONDS:
+        return float(overridden_timeout)
+    configured_timeout = getattr(
+        getattr(request.app.state.config, "pma", None),
+        "turn_timeout_seconds",
+        None,
+    )
+    if configured_timeout is None:
+        return float(_DEFAULT_PMA_TIMEOUT_SECONDS)
+    return float(configured_timeout)
 
 
 def _resolve_hermes_supervisor(
@@ -825,8 +843,14 @@ async def _execute_harness_turn(
     thread_registry: Optional[Any] = None,
     thread_key: Optional[str] = None,
     on_meta: Optional[Any] = None,
+    timeout_seconds: Optional[float] = None,
 ) -> dict[str, Any]:
     await harness.ensure_ready(hub_root)
+    resolved_timeout_seconds = float(
+        timeout_seconds
+        if timeout_seconds is not None
+        else globals().get("PMA_TIMEOUT_SECONDS", _DEFAULT_PMA_TIMEOUT_SECONDS)
+    )
 
     conversation_id = backend_thread_id
     if conversation_id is None and thread_registry is not None and thread_key:
@@ -976,7 +1000,7 @@ async def _execute_harness_turn(
             timeout=None,
         )
     )
-    timeout_task = asyncio.create_task(asyncio.sleep(PMA_TIMEOUT_SECONDS))
+    timeout_task = asyncio.create_task(asyncio.sleep(resolved_timeout_seconds))
     interrupt_task = asyncio.create_task(interrupt_event.wait())
     try:
         done, _ = await asyncio.wait(
@@ -1095,7 +1119,13 @@ async def _execute_app_server(
     thread_registry: Optional[Any] = None,
     thread_key: Optional[str] = None,
     on_meta: Optional[Any] = None,
+    timeout_seconds: Optional[float] = None,
 ) -> dict[str, Any]:
+    resolved_timeout_seconds = float(
+        timeout_seconds
+        if timeout_seconds is not None
+        else globals().get("PMA_TIMEOUT_SECONDS", _DEFAULT_PMA_TIMEOUT_SECONDS)
+    )
     client = await supervisor.get_client(hub_root)
 
     if backend_thread_id:
@@ -1176,7 +1206,7 @@ async def _execute_app_server(
         return {"status": "interrupted", "detail": "PMA chat interrupted"}
 
     turn_task = asyncio.create_task(handle.wait(timeout=None))
-    timeout_task = asyncio.create_task(asyncio.sleep(PMA_TIMEOUT_SECONDS))
+    timeout_task = asyncio.create_task(asyncio.sleep(resolved_timeout_seconds))
     interrupt_task = asyncio.create_task(interrupt_event.wait())
     try:
         done, _ = await asyncio.wait(
@@ -1281,7 +1311,13 @@ async def _execute_opencode(
     stall_timeout_seconds: Optional[float] = None,
     on_meta: Optional[Any] = None,
     part_handler: Optional[Any] = None,
+    timeout_seconds: Optional[float] = None,
 ) -> dict[str, Any]:
+    resolved_timeout_seconds = float(
+        timeout_seconds
+        if timeout_seconds is not None
+        else globals().get("PMA_TIMEOUT_SECONDS", _DEFAULT_PMA_TIMEOUT_SECONDS)
+    )
     from .....agents.opencode.runtime import (
         PERMISSION_ALLOW,
         build_turn_id,
@@ -1384,7 +1420,7 @@ async def _execute_opencode(
             variant=reasoning,
         )
     )
-    timeout_task = asyncio.create_task(asyncio.sleep(PMA_TIMEOUT_SECONDS))
+    timeout_task = asyncio.create_task(asyncio.sleep(resolved_timeout_seconds))
     interrupt_task = asyncio.create_task(interrupt_event.wait())
     try:
         prompt_response = None
@@ -1742,6 +1778,7 @@ async def _execute_queue_item(
             thread_registry=registry,
             thread_key=pma_base_key(agent_id, profile),
             on_meta=_meta,
+            timeout_seconds=_pma_turn_timeout_seconds(request),
         )
 
     try:
@@ -1933,7 +1970,10 @@ def build_chat_runtime_router(
         )
 
         try:
-            result = await asyncio.wait_for(result_future, timeout=PMA_TIMEOUT_SECONDS)
+            result = await asyncio.wait_for(
+                result_future,
+                timeout=_pma_turn_timeout_seconds(request),
+            )
         except asyncio.TimeoutError:
             return {"status": "error", "detail": "PMA chat timed out"}
         except Exception:  # intentional: top-level error handler

@@ -302,6 +302,22 @@ def test_thread_has_pr_open_hint_github_url_detection(
     assert github_polling._thread_has_pr_open_hint(thread) is expected
 
 
+def test_thread_has_pr_open_hint_accepts_numeric_pr_number_in_metadata() -> None:
+    thread = {
+        "metadata": {"pr_number": 42},
+        "status_reason": "",
+    }
+    assert github_polling._thread_has_pr_open_hint(thread) is True
+
+
+def test_thread_has_pr_open_hint_ignores_false_pr_number() -> None:
+    thread = {
+        "metadata": {"pr_number": False},
+        "status_reason": "",
+    }
+    assert github_polling._thread_has_pr_open_hint(thread) is False
+
+
 def _rate_limit_payload(
     *,
     graphql_remaining: int,

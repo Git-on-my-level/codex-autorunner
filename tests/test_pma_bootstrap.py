@@ -1,9 +1,11 @@
 from pathlib import Path
 
+import pytest
 import yaml
 
 from codex_autorunner.bootstrap import GENERATED_CONFIG_HEADER, seed_hub_files
 from codex_autorunner.core.config import CONFIG_VERSION, load_hub_config
+from codex_autorunner.core.config_contract import ConfigError
 
 
 def test_pma_files_created_on_hub_init(tmp_path: Path) -> None:
@@ -92,8 +94,10 @@ def test_pma_config_defaults(tmp_path: Path) -> None:
     assert pma_config.get("max_repos") == 25
     assert pma_config.get("max_messages") == 10
     assert pma_config.get("max_text_chars") == 10_000
+    assert pma_config.get("turn_timeout_seconds") == 7200
     assert pma_config.get("inbox_auto_dismiss_grace_seconds") == 3600
     assert config.pma.managed_thread_terminal_followup_default is True
+    assert config.pma.turn_timeout_seconds == 7200
 
 
 def test_pma_generated_files_refreshed_without_force(tmp_path: Path) -> None:
@@ -130,6 +134,36 @@ def test_pma_inbox_auto_dismiss_grace_configurable(tmp_path: Path) -> None:
 
     config = load_hub_config(tmp_path)
     assert config.pma.inbox_auto_dismiss_grace_seconds == 15
+
+
+def test_pma_turn_timeout_seconds_configurable(tmp_path: Path) -> None:
+    seed_hub_files(tmp_path, force=True)
+
+    config_path = tmp_path / ".codex-autorunner" / "config.yml"
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    payload.setdefault("pma", {})["turn_timeout_seconds"] = 45
+    config_path.write_text(
+        GENERATED_CONFIG_HEADER + yaml.safe_dump(payload, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    config = load_hub_config(tmp_path)
+    assert config.pma.turn_timeout_seconds == 45
+
+
+def test_pma_turn_timeout_seconds_rejects_boolean_yaml(tmp_path: Path) -> None:
+    seed_hub_files(tmp_path, force=True)
+
+    config_path = tmp_path / ".codex-autorunner" / "config.yml"
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    payload.setdefault("pma", {})["turn_timeout_seconds"] = True
+    config_path.write_text(
+        GENERATED_CONFIG_HEADER + yaml.safe_dump(payload, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="pma.turn_timeout_seconds must be int"):
+        load_hub_config(tmp_path)
 
 
 def test_pma_generated_config_upgrades_stale_default_without_force(

@@ -115,6 +115,22 @@ def _normalize_non_negative_int(value: Any) -> Optional[int]:
     return normalized if normalized >= 0 else None
 
 
+def _pr_hint_present_in_context(context: Mapping[str, Any]) -> bool:
+    for key in _PR_HINT_METADATA_KEYS:
+        raw = context.get(key)
+        if key == "pr_number":
+            if isinstance(raw, bool):
+                continue
+            if isinstance(raw, int) and raw > 0:
+                return True
+            if _normalize_text(raw) is not None:
+                return True
+            continue
+        if _normalize_text(raw) is not None:
+            return True
+    return False
+
+
 def _thread_branch_hint(thread: Mapping[str, Any]) -> Optional[str]:
     metadata = _mapping(thread.get("metadata"))
     contexts: list[Mapping[str, Any]] = [metadata]
@@ -138,9 +154,8 @@ def _thread_has_pr_open_hint(thread: Mapping[str, Any]) -> bool:
         if nested:
             contexts.append(nested)
     for context in contexts:
-        for key in _PR_HINT_METADATA_KEYS:
-            if _normalize_text(context.get(key)) is not None:
-                return True
+        if _pr_hint_present_in_context(context):
+            return True
     for key in ("status_reason", "last_message_preview"):
         value = _normalize_lower_text(thread.get(key))
         if value is None:
@@ -1696,12 +1711,15 @@ class GitHubScmPollingService:
             minutes=max(1, polling_config.discovery_terminal_thread_lookback_minutes)
         )
         try:
-            threads = thread_store.list_threads(
-                limit=500,
-            )
+            active_threads = thread_store.list_threads(status="active", limit=500)
         except Exception:
-            threads = []
-        for thread in threads:
+            active_threads = []
+        try:
+            terminal_thread_candidates = thread_store.list_threads(limit=500)
+        except Exception:
+            terminal_thread_candidates = []
+
+        for thread in active_threads:
             workspace_root = _normalize_text(thread.get("workspace_root"))
             if workspace_root is None:
                 continue
@@ -1709,11 +1727,26 @@ class GitHubScmPollingService:
             include_active_thread = lifecycle_status == "active" and not bool(
                 thread.get("status_terminal")
             )
-            include_recent_terminal = _is_recent_terminal_thread_candidate(
+            if not include_active_thread:
+                continue
+            add_root(
+                Path(workspace_root),
+                repo_id=_normalize_text(thread.get("repo_id")),
+                thread_target_id=_normalize_text(thread.get("managed_thread_id")),
+                branch_hint=_thread_branch_hint(thread),
+            )
+
+        for thread in terminal_thread_candidates:
+            workspace_root = _normalize_text(thread.get("workspace_root"))
+            if workspace_root is None:
+                continue
+            lifecycle_status = _normalize_lower_text(thread.get("lifecycle_status"))
+            if lifecycle_status == "active" and not bool(thread.get("status_terminal")):
+                continue
+            if not _is_recent_terminal_thread_candidate(
                 thread,
                 cutoff=lookback_cutoff,
-            )
-            if not include_active_thread and not include_recent_terminal:
+            ):
                 continue
             add_root(
                 Path(workspace_root),

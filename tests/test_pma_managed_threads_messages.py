@@ -410,7 +410,7 @@ def test_send_message_resolves_alias_backed_hermes_profile_runtime(
     assert payload["status"] == "ok"
     assert payload["assistant_text"] == "hermes-output"
     assert payload["backend_thread_id"] == "hermes-session-1"
-    assert observed_supervisor_args == [("hermes-m4-pma", None)]
+    assert observed_supervisor_args == [("hermes", "m4-pma")]
 
 
 @pytest.mark.anyio

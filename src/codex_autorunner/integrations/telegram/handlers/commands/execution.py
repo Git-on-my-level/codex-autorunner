@@ -29,6 +29,7 @@ from .....agents.registry import (
     resolve_agent_runtime,
     wrap_requested_agent_context,
 )
+from .....core.config import load_hub_config
 from .....core.config_contract import ConfigError
 from .....core.context_awareness import (
     has_file_context_signal,
@@ -162,6 +163,7 @@ TELEGRAM_REPO_TIMEOUT_ERROR = "Telegram turn timed out"
 TELEGRAM_PMA_INTERRUPTED_ERROR = "Telegram PMA turn interrupted"
 TELEGRAM_REPO_INTERRUPTED_ERROR = "Telegram turn interrupted"
 TELEGRAM_PMA_TIMEOUT_SECONDS = 7200
+_DEFAULT_TELEGRAM_PMA_TIMEOUT_SECONDS = 7200
 
 
 @dataclass
@@ -512,7 +514,13 @@ def _build_telegram_managed_thread_coordinator(
     public_execution_error: str,
     timeout_error: str,
     interrupted_error: str,
+    pma_enabled: bool,
 ) -> ManagedThreadTurnCoordinator:
+    timeout_seconds = (
+        _load_telegram_pma_turn_timeout_seconds(handlers)
+        if pma_enabled
+        else float(_DEFAULT_TELEGRAM_PMA_TIMEOUT_SECONDS)
+    )
     return ManagedThreadTurnCoordinator(
         orchestration_service=orchestration_service,
         state_root=_telegram_state_root(handlers),
@@ -537,7 +545,7 @@ def _build_telegram_managed_thread_coordinator(
             public_execution_error=public_execution_error,
             timeout_error=timeout_error,
             interrupted_error=interrupted_error,
-            timeout_seconds=TELEGRAM_PMA_TIMEOUT_SECONDS,
+            timeout_seconds=timeout_seconds,
         ),
         logger=getattr(handlers, "_logger", logging.getLogger(__name__)),
         turn_preview="",
@@ -546,6 +554,42 @@ def _build_telegram_managed_thread_coordinator(
             RESUME_PREVIEW_USER_LIMIT,
         ),
     )
+
+
+def _load_telegram_pma_turn_timeout_seconds(handlers: Any) -> float:
+    overridden_timeout = globals().get(
+        "TELEGRAM_PMA_TIMEOUT_SECONDS",
+        _DEFAULT_TELEGRAM_PMA_TIMEOUT_SECONDS,
+    )
+    if overridden_timeout != _DEFAULT_TELEGRAM_PMA_TIMEOUT_SECONDS:
+        return float(overridden_timeout)
+
+    supervisor = getattr(handlers, "_hub_supervisor", None)
+    configured_timeout = getattr(
+        getattr(getattr(supervisor, "hub_config", None), "pma", None),
+        "turn_timeout_seconds",
+        None,
+    )
+    if configured_timeout is not None:
+        return float(configured_timeout)
+
+    hub_root = getattr(handlers, "_hub_root", None)
+    if hub_root is None:
+        hub_root = getattr(getattr(handlers, "_config", None), "root", None)
+    if hub_root is None:
+        return float(_DEFAULT_TELEGRAM_PMA_TIMEOUT_SECONDS)
+    try:
+        hub_config = load_hub_config(Path(hub_root))
+    except (ConfigError, OSError, RuntimeError, TypeError, ValueError):
+        return float(_DEFAULT_TELEGRAM_PMA_TIMEOUT_SECONDS)
+    configured_timeout = getattr(
+        getattr(hub_config, "pma", None),
+        "turn_timeout_seconds",
+        None,
+    )
+    if configured_timeout is None:
+        return float(_DEFAULT_TELEGRAM_PMA_TIMEOUT_SECONDS)
+    return float(configured_timeout)
 
 
 async def _reset_telegram_thread_binding(
@@ -834,6 +878,7 @@ async def _run_telegram_managed_thread_turn(
         public_execution_error=public_execution_error,
         timeout_error=timeout_error,
         interrupted_error=interrupted_error,
+        pma_enabled=pma_enabled,
     )
 
     async def _begin_execution(
