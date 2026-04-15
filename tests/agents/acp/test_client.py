@@ -25,6 +25,14 @@ from codex_autorunner.agents.acp.protocol import (
     extract_advertised_commands,
     extract_session_capabilities,
 )
+from codex_autorunner.core.acp_lifecycle import (
+    _IDLE_TERMINAL_METHODS,
+    _SESSION_TURN_ID_FALLBACK_METHODS,
+    _TERMINAL_METHODS,
+)
+from codex_autorunner.core.acp_lifecycle import (
+    should_map_missing_turn_id as _shared_should_map_missing_turn_id,
+)
 
 FIXTURE_PATH = Path(__file__).resolve().parents[2] / "fixtures" / "fake_acp_server.py"
 pytestmark = pytest.mark.slow
@@ -786,3 +794,63 @@ def test_extract_session_capabilities_from_various_payloads() -> None:
     assert caps.fork is True
     assert caps.set_model is True
     assert caps.set_mode is True
+
+
+class TestClientLifecycleDelegation:
+    def test_client_imports_shared_turn_id_fallback(self) -> None:
+        from codex_autorunner.agents.acp.client import (
+            _should_map_missing_turn_id,
+        )
+
+        for method in _SESSION_TURN_ID_FALLBACK_METHODS:
+            assert _should_map_missing_turn_id(method, {})
+
+    def test_client_fallback_matches_shared_lifecycle(self) -> None:
+        from codex_autorunner.agents.acp.client import (
+            _should_map_missing_turn_id,
+        )
+
+        for method in _TERMINAL_METHODS:
+            assert _should_map_missing_turn_id(
+                method, {}
+            ) == _shared_should_map_missing_turn_id(method, {})
+
+        for method in (
+            "prompt/started",
+            "turn/started",
+            "permission/requested",
+            "token/usage",
+        ):
+            assert _should_map_missing_turn_id(
+                method, {}
+            ) == _shared_should_map_missing_turn_id(method, {})
+
+    def test_client_idle_terminal_not_mapped_without_active_turn(self) -> None:
+        client = ACPClient(fixture_command("official"))
+        for method in _IDLE_TERMINAL_METHODS:
+            mapped = client._message_with_mapped_turn_id(
+                {"method": method, "params": {"sessionId": "session-1"}}
+            )
+            assert mapped.get("params", {}).get("turnId") is None
+
+    @pytest.mark.parametrize(
+        ("case"),
+        load_acp_lifecycle_corpus(),
+        ids=[case["name"] for case in load_acp_lifecycle_corpus()],
+    )
+    def test_client_turn_id_mapping_consistent_with_shared_lifecycle(
+        self,
+        case: dict[str, object],
+    ) -> None:
+        client = ACPClient(fixture_command("official"))
+        client._session_active_turns["session-1"] = "turn-active"
+        raw = dict(case["raw"])
+        expected = dict(case["expected"])
+
+        mapped = client._message_with_mapped_turn_id(raw)
+
+        params = mapped.get("params", {})
+        if expected["uses_turn_id_fallback"]:
+            assert params.get("turnId") == "turn-active"
+        else:
+            assert params.get("turnId") is None

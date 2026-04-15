@@ -762,7 +762,7 @@ def normalize_runtime_thread_message(
             state.completed_seen = True
         return []
 
-    if method == "session.status":
+    if method in {"session.status", "session/status"}:
         if acp_lifecycle.runtime_terminal_status == "ok":
             state.completed_seen = True
             return []

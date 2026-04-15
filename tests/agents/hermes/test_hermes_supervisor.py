@@ -20,6 +20,13 @@ from codex_autorunner.agents.hermes.supervisor import (
     build_hermes_supervisor_from_config,
     hermes_runtime_preflight,
 )
+from codex_autorunner.core.acp_lifecycle import (
+    _IDLE_TERMINAL_METHODS,
+    _TERMINAL_METHODS,
+)
+from codex_autorunner.core.acp_lifecycle import (
+    should_close_turn_buffer as _shared_should_close_turn_buffer,
+)
 
 FIXTURE_PATH = Path(__file__).resolve().parents[2] / "fixtures" / "fake_acp_server.py"
 
@@ -884,3 +891,56 @@ async def test_hermes_supervisor_advertised_commands_returns_list(
         assert isinstance(commands, list)
     finally:
         await supervisor.close_all()
+
+
+class TestHermesLifecycleDelegation:
+    def test_should_close_turn_buffer_delegates_to_shared(self) -> None:
+        for method in _TERMINAL_METHODS:
+            payload: dict[str, object] = {}
+            if method in {"session.status", "session/status"}:
+                payload = {"status": {"type": "idle"}}
+            event = normalize_notification(
+                {"method": method, "params": {"sessionId": "s1", **payload}}
+            )
+            expected = _shared_should_close_turn_buffer(method, payload)
+            assert _should_close_turn_buffer(event) == expected
+
+    def test_idle_terminals_never_close_buffer_via_supervisor(self) -> None:
+        for method in _IDLE_TERMINAL_METHODS:
+            payload: dict[str, object] = {}
+            if method in {"session.status", "session/status"}:
+                payload = {"status": {"type": "idle"}}
+            event = normalize_notification(
+                {"method": method, "params": {"sessionId": "s1", **payload}}
+            )
+            assert not _should_close_turn_buffer(event)
+
+    def test_non_terminal_events_never_close_buffer(self) -> None:
+        for method in (
+            "session/update",
+            "session/created",
+            "session/loaded",
+            "prompt/started",
+            "turn/started",
+            "permission/requested",
+            "session/request_permission",
+        ):
+            event = normalize_notification(
+                {"method": method, "params": {"sessionId": "s1"}}
+            )
+            assert not _should_close_turn_buffer(event)
+
+    @pytest.mark.parametrize(
+        ("case"),
+        load_acp_lifecycle_corpus(),
+        ids=[case["name"] for case in load_acp_lifecycle_corpus()],
+    )
+    def test_supervisor_buffer_closing_consistent_with_corpus(
+        self,
+        case: dict[str, object],
+    ) -> None:
+        raw = dict(case["raw"])
+        expected = dict(case["expected"])
+        event = normalize_notification(raw)
+
+        assert _should_close_turn_buffer(event) is expected["closes_turn_buffer"]

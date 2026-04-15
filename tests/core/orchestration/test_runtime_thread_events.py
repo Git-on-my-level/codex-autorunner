@@ -48,7 +48,7 @@ async def test_normalize_runtime_thread_raw_event_shared_lifecycle_corpus() -> N
             assert state.best_assistant_text() == expected["output_delta"]
         elif expected["normalized_kind"] == "progress":
             if (
-                raw["method"] == "session.status"
+                raw["method"] in {"session.status", "session/status"}
                 and expected["session_status"] == "idle"
             ):
                 assert events == []
@@ -57,7 +57,7 @@ async def test_normalize_runtime_thread_raw_event_shared_lifecycle_corpus() -> N
                 assert isinstance(events[0], RunNotice)
                 expected_message = (
                     f"agent {expected['progress_message']}"
-                    if raw["method"] == "session.status"
+                    if raw["method"] in {"session.status", "session/status"}
                     else expected["progress_message"]
                 )
                 assert events[0].message == expected_message

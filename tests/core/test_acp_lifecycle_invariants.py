@@ -1,6 +1,14 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
+import pytest
+
 from codex_autorunner.core.acp_lifecycle import (
+    _IDLE_TERMINAL_METHODS,
+    _SESSION_TURN_ID_FALLBACK_METHODS,
+    _TERMINAL_METHODS,
     analyze_acp_lifecycle_message,
     extract_identifier,
     extract_message_text,
@@ -8,6 +16,7 @@ from codex_autorunner.core.acp_lifecycle import (
     extract_permission_description,
     extract_usage,
     is_idle_terminal,
+    runtime_terminal_status_for_lifecycle,
     session_status_type,
     session_update_content_summary,
     should_close_turn_buffer,
@@ -15,6 +24,10 @@ from codex_autorunner.core.acp_lifecycle import (
     status_indicates_interrupted,
     status_indicates_successful_completion,
     terminal_status_for_method,
+)
+
+_CORPUS_PATH = (
+    Path(__file__).resolve().parent.parent / "fixtures" / "acp_lifecycle_corpus.json"
 )
 
 
@@ -578,3 +591,350 @@ def test_analyze_acp_lifecycle_session_update_snake_case_update_kind() -> None:
     )
     assert snap.normalized_kind == "token_usage"
     assert snap.usage == {"input": 3}
+
+
+class TestFrozenMethodSets:
+    def test_idle_terminal_methods_are_subset_of_terminal_methods(self) -> None:
+        assert _IDLE_TERMINAL_METHODS.issubset(_TERMINAL_METHODS)
+
+    def test_session_fallback_methods_are_not_terminal(self) -> None:
+        assert _SESSION_TURN_ID_FALLBACK_METHODS.isdisjoint(_TERMINAL_METHODS)
+
+    def test_idle_methods_do_not_close_buffers(self) -> None:
+        for method in _IDLE_TERMINAL_METHODS:
+            assert not should_close_turn_buffer(method, {})
+
+    def test_explicit_terminal_methods_close_buffers(self) -> None:
+        explicit = _TERMINAL_METHODS - _IDLE_TERMINAL_METHODS
+        for method in explicit:
+            assert should_close_turn_buffer(method, {}), f"{method} should close buffer"
+
+    def test_idle_terminal_methods_set_is_frozen(self) -> None:
+        with pytest.raises(AttributeError):
+            _IDLE_TERMINAL_METHODS.add("fake/method")  # type: ignore[misc]
+
+    def test_terminal_methods_set_is_frozen(self) -> None:
+        with pytest.raises(AttributeError):
+            _TERMINAL_METHODS.add("fake/method")  # type: ignore[misc]
+
+    def test_session_fallback_methods_set_is_frozen(self) -> None:
+        with pytest.raises(AttributeError):
+            _SESSION_TURN_ID_FALLBACK_METHODS.add("fake/method")  # type: ignore[misc]
+
+    def test_idle_methods_known_set(self) -> None:
+        assert _IDLE_TERMINAL_METHODS == frozenset(
+            {"session.idle", "session.status", "session/status"}
+        )
+
+    def test_terminal_methods_known_set(self) -> None:
+        assert _TERMINAL_METHODS == frozenset(
+            {
+                "prompt/completed",
+                "prompt/cancelled",
+                "prompt/failed",
+                "turn/completed",
+                "turn/cancelled",
+                "turn/failed",
+                "session.idle",
+                "session.status",
+                "session/status",
+            }
+        )
+
+    def test_session_fallback_methods_known_set(self) -> None:
+        assert _SESSION_TURN_ID_FALLBACK_METHODS == frozenset(
+            {"session/update", "session/request_permission"}
+        )
+
+
+class TestIdleTerminalParity:
+    def test_session_status_dot_idle_is_idle_terminal(self) -> None:
+        assert is_idle_terminal("session.status", {"status": {"type": "idle"}})
+
+    def test_session_status_slash_idle_is_idle_terminal(self) -> None:
+        assert is_idle_terminal("session/status", {"status": {"type": "idle"}})
+
+    def test_session_status_dot_string_idle_is_idle_terminal(self) -> None:
+        assert is_idle_terminal("session.status", {"status": "idle"})
+
+    def test_session_status_slash_string_idle_is_idle_terminal(self) -> None:
+        assert is_idle_terminal("session/status", {"status": "idle"})
+
+    def test_session_status_dot_busy_not_idle_terminal(self) -> None:
+        assert not is_idle_terminal("session.status", {"status": {"type": "busy"}})
+
+    def test_session_status_slash_busy_not_idle_terminal(self) -> None:
+        assert not is_idle_terminal("session/status", {"status": {"type": "busy"}})
+
+    def test_session_idle_always_idle_terminal(self) -> None:
+        assert is_idle_terminal("session.idle", {})
+
+    def test_idle_terminal_does_not_close_buffer(self) -> None:
+        assert not should_close_turn_buffer("session.idle", {})
+
+    def test_idle_session_status_dot_does_not_close_buffer(self) -> None:
+        assert not should_close_turn_buffer(
+            "session.status", {"status": {"type": "idle"}}
+        )
+
+    def test_idle_session_status_slash_does_not_close_buffer(self) -> None:
+        assert not should_close_turn_buffer(
+            "session/status", {"status": {"type": "idle"}}
+        )
+
+
+class TestTurnPromptParity:
+    @pytest.mark.parametrize(
+        ("prefix"),
+        ("prompt", "turn"),
+    )
+    def test_completed_parity(self, prefix: str) -> None:
+        method = f"{prefix}/completed"
+        assert terminal_status_for_method(method, {}) == "completed"
+        assert runtime_terminal_status_for_lifecycle(method, {}) == "ok"
+        assert should_map_missing_turn_id(method, {})
+        assert should_close_turn_buffer(method, {})
+
+    @pytest.mark.parametrize(
+        ("prefix"),
+        ("prompt", "turn"),
+    )
+    def test_cancelled_parity(self, prefix: str) -> None:
+        method = f"{prefix}/cancelled"
+        assert terminal_status_for_method(method, {}) == "cancelled"
+        assert runtime_terminal_status_for_lifecycle(method, {}) == "interrupted"
+        assert should_map_missing_turn_id(method, {})
+        assert should_close_turn_buffer(method, {})
+
+    @pytest.mark.parametrize(
+        ("prefix"),
+        ("prompt", "turn"),
+    )
+    def test_failed_parity(self, prefix: str) -> None:
+        method = f"{prefix}/failed"
+        assert terminal_status_for_method(method, {}) == "failed"
+        assert runtime_terminal_status_for_lifecycle(method, {}) == "error"
+        assert should_map_missing_turn_id(method, {})
+        assert should_close_turn_buffer(method, {})
+
+    @pytest.mark.parametrize(
+        ("prefix"),
+        ("prompt", "turn"),
+    )
+    def test_started_parity(self, prefix: str) -> None:
+        method = f"{prefix}/started"
+        assert terminal_status_for_method(method, {}) is None
+        assert not should_map_missing_turn_id(method, {})
+        assert not should_close_turn_buffer(method, {})
+
+    @pytest.mark.parametrize(
+        ("prefix"),
+        ("prompt", "turn"),
+    )
+    def test_message_parity(self, prefix: str) -> None:
+        method = f"{prefix}/message"
+        snap = analyze_acp_lifecycle_message(
+            {"method": method, "params": {"text": "hello"}}
+        )
+        assert snap.normalized_kind == "message"
+        assert snap.assistant_text == "hello"
+        assert not snap.is_terminal
+
+    @pytest.mark.parametrize(
+        ("prefix"),
+        ("prompt", "turn"),
+    )
+    def test_progress_parity(self, prefix: str) -> None:
+        method = f"{prefix}/progress"
+        snap = analyze_acp_lifecycle_message(
+            {"method": method, "params": {"delta": "chunk"}}
+        )
+        assert snap.normalized_kind == "output_delta"
+        assert snap.output_delta == "chunk"
+
+
+class TestCorpusSnapshotFields:
+    @pytest.fixture(scope="class")
+    def corpus(self) -> list[dict[str, object]]:
+        raw = json.loads(_CORPUS_PATH.read_text(encoding="utf-8"))
+        assert isinstance(raw, list)
+        return [dict(item) for item in raw]
+
+    def test_corpus_is_not_empty(self, corpus: list[dict[str, object]]) -> None:
+        assert len(corpus) >= 10
+
+    @pytest.mark.parametrize(
+        ("idx", "case"),
+        [
+            pytest.param(i, dict(c), id=str(c.get("name", f"case-{i}")))
+            for i, c in enumerate(json.loads(_CORPUS_PATH.read_text(encoding="utf-8")))
+        ],
+    )
+    def test_corpus_snapshot_matches_expected(
+        self, idx: int, case: dict[str, object]
+    ) -> None:
+        raw = dict(case["raw"])  # type: ignore[index]
+        expected = dict(case["expected"])  # type: ignore[index]
+        snap = analyze_acp_lifecycle_message(raw)
+
+        assert snap.normalized_kind == expected["normalized_kind"]
+        assert snap.terminal_status == expected["terminal_status"]
+        assert snap.runtime_terminal_status == expected["runtime_terminal_status"]
+        assert snap.uses_turn_id_fallback == expected["uses_turn_id_fallback"]
+        assert snap.closes_turn_buffer == expected["closes_turn_buffer"]
+        assert snap.assistant_text == expected["assistant_text"]
+        assert snap.output_delta == expected["output_delta"]
+        assert snap.progress_message == expected["progress_message"]
+        assert snap.error_message == expected["error_message"]
+        assert snap.session_status == expected["session_status"]
+        assert snap.session_update_kind == expected["session_update_kind"]
+
+        for opt_key in ("usage", "permission_request_id", "permission_description"):
+            if opt_key in expected:
+                actual = getattr(snap, opt_key)
+                assert actual == expected[opt_key]
+
+    def test_corpus_has_turn_completed_variants(
+        self, corpus: list[dict[str, object]]
+    ) -> None:
+        methods = {c["raw"]["method"] for c in corpus}  # type: ignore[index]
+        for method in ("turn/completed", "turn/cancelled", "turn/failed"):
+            assert method in methods, f"corpus missing {method}"
+
+    def test_corpus_has_session_status_slash_variant(
+        self, corpus: list[dict[str, object]]
+    ) -> None:
+        methods = {c["raw"]["method"] for c in corpus}  # type: ignore[index]
+        assert "session/status" in methods
+
+    def test_corpus_has_idle_non_closing_cases(
+        self, corpus: list[dict[str, object]]
+    ) -> None:
+        idle_cases = [
+            c
+            for c in corpus
+            if c.get("expected", {}).get("closes_turn_buffer") is False  # type: ignore[index]
+            and c.get("expected", {}).get("terminal_status") is not None  # type: ignore[index]
+        ]
+        assert len(idle_cases) >= 3
+
+    def test_corpus_has_explicit_terminal_closing_cases(
+        self, corpus: list[dict[str, object]]
+    ) -> None:
+        explicit_cases = [
+            c
+            for c in corpus
+            if c.get("expected", {}).get("closes_turn_buffer") is True  # type: ignore[index]
+        ]
+        assert len(explicit_cases) >= 5
+
+    def test_corpus_has_session_update_variants(
+        self, corpus: list[dict[str, object]]
+    ) -> None:
+        update_kinds = {
+            c.get("expected", {}).get("session_update_kind")  # type: ignore[index]
+            for c in corpus
+            if c.get("raw", {}).get("method") == "session/update"  # type: ignore[index]
+        }
+        assert "agent_message_chunk" in update_kinds
+        assert "agent_thought_chunk" in update_kinds
+        assert "usage_update" in update_kinds
+        assert "session_info_update" in update_kinds
+
+
+class TestTurnIdFallbackBoundary:
+    def test_session_update_uses_fallback(self) -> None:
+        assert should_map_missing_turn_id("session/update", {})
+
+    def test_session_request_permission_uses_fallback(self) -> None:
+        assert should_map_missing_turn_id("session/request_permission", {})
+
+    def test_permission_requested_does_not_use_fallback(self) -> None:
+        assert not should_map_missing_turn_id("permission/requested", {})
+
+    def test_prompt_started_does_not_use_fallback(self) -> None:
+        assert not should_map_missing_turn_id("prompt/started", {})
+
+    def test_turn_started_does_not_use_fallback(self) -> None:
+        assert not should_map_missing_turn_id("turn/started", {})
+
+    def test_token_usage_does_not_use_fallback(self) -> None:
+        assert not should_map_missing_turn_id("token/usage", {})
+
+    def test_non_terminal_session_status_does_not_use_fallback(self) -> None:
+        assert not should_map_missing_turn_id(
+            "session.status", {"status": {"type": "running"}}
+        )
+
+    def test_terminal_session_idle_uses_fallback(self) -> None:
+        assert should_map_missing_turn_id("session.idle", {})
+
+    def test_terminal_session_status_idle_uses_fallback(self) -> None:
+        assert should_map_missing_turn_id(
+            "session.status", {"status": {"type": "idle"}}
+        )
+
+
+class TestRuntimeTerminalStatusMapping:
+    def test_ok_for_completed(self) -> None:
+        assert runtime_terminal_status_for_lifecycle("turn/completed", {}) == "ok"
+
+    def test_ok_for_idle(self) -> None:
+        assert runtime_terminal_status_for_lifecycle("session.idle", {}) == "ok"
+
+    def test_ok_for_succeeded(self) -> None:
+        assert (
+            runtime_terminal_status_for_lifecycle(
+                "turn/completed", {"status": "succeeded"}
+            )
+            == "ok"
+        )
+
+    def test_ok_for_done(self) -> None:
+        assert (
+            runtime_terminal_status_for_lifecycle("turn/completed", {"status": "done"})
+            == "ok"
+        )
+
+    def test_ok_for_success(self) -> None:
+        assert (
+            runtime_terminal_status_for_lifecycle(
+                "turn/completed", {"status": "success"}
+            )
+            == "ok"
+        )
+
+    def test_interrupted_for_cancelled(self) -> None:
+        assert (
+            runtime_terminal_status_for_lifecycle("turn/cancelled", {}) == "interrupted"
+        )
+
+    def test_interrupted_for_aborted(self) -> None:
+        assert (
+            runtime_terminal_status_for_lifecycle(
+                "turn/completed", {"status": "aborted"}
+            )
+            == "interrupted"
+        )
+
+    def test_interrupted_for_canceled(self) -> None:
+        assert (
+            runtime_terminal_status_for_lifecycle(
+                "turn/completed", {"status": "canceled"}
+            )
+            == "interrupted"
+        )
+
+    def test_error_for_failed(self) -> None:
+        assert runtime_terminal_status_for_lifecycle("turn/failed", {}) == "error"
+
+    def test_none_for_non_terminal(self) -> None:
+        assert runtime_terminal_status_for_lifecycle("session/update", {}) is None
+
+    def test_none_for_running_session_status(self) -> None:
+        assert (
+            runtime_terminal_status_for_lifecycle(
+                "session.status", {"status": {"type": "running"}}
+            )
+            is None
+        )
