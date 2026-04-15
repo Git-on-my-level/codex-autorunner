@@ -281,6 +281,27 @@ def test_polling_config_defaults_to_30_minute_post_open_boost() -> None:
     assert config.no_activity_tier == "cold"
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("see https://github.com/acme/widgets/pull/17", True),
+        ("http://github.com/acme/widgets/pull/17", True),
+        ("github.com/acme/widgets/pull/17 for review", True),
+        ("prefix https://evil.github.com/acme/widgets/pull/17", False),
+        ("not a url evil.github.com/acme/widgets/pull/17", False),
+        ("no pr path github.com/acme/widgets/issues/17", False),
+    ],
+)
+def test_thread_has_pr_open_hint_github_url_detection(
+    text: str, expected: bool
+) -> None:
+    thread = {
+        "metadata": {},
+        "status_reason": text,
+    }
+    assert github_polling._thread_has_pr_open_hint(thread) is expected
+
+
 def _rate_limit_payload(
     *,
     graphql_remaining: int,

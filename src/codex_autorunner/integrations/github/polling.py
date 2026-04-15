@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 import uuid
 from dataclasses import dataclass
@@ -48,6 +49,12 @@ _RATE_LIMIT_RESOURCES = ("graphql", "core")
 _THREAD_BRANCH_KEYS = ("head_branch", "branch", "git_branch")
 _THREAD_CONTEXT_KEYS = ("manual_context", "scm", "scm_context", "context")
 _PR_HINT_METADATA_KEYS = ("pr_number", "pr_url", "pull_request_url", "pr_ref")
+# Bounded match for GitHub browser PR URLs (avoids loose substring checks on user text).
+_GITHUB_PR_URL_HINT_RE = re.compile(
+    r"(?:https?://github\.com/|(?<![\w.-])github\.com/)"
+    r"[^/\s]{1,200}/[^/\s]{1,200}/pull/\d+",
+    re.IGNORECASE,
+)
 _LOGGER = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
@@ -60,6 +67,10 @@ GitHubServiceFactory = Callable[[Path, Optional[dict[str, Any]]], "GitHubService
 def _normalize_lower_text(value: Any) -> Optional[str]:
     text = _normalize_text(value)
     return text.lower() if text is not None else None
+
+
+def _text_has_github_pull_request_url(value: str) -> bool:
+    return _GITHUB_PR_URL_HINT_RE.search(value) is not None
 
 
 def _utc_now() -> datetime:
@@ -136,7 +147,7 @@ def _thread_has_pr_open_hint(thread: Mapping[str, Any]) -> bool:
             continue
         if "pull request" in value or "gh pr create" in value:
             return True
-        if "github.com/" in value and "/pull/" in value:
+        if _text_has_github_pull_request_url(value):
             return True
     return False
 
