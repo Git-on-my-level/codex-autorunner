@@ -162,7 +162,9 @@ def test_pma_turn_timeout_seconds_rejects_boolean_yaml(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    with pytest.raises(ConfigError, match="pma.turn_timeout_seconds must be int"):
+    with pytest.raises(
+        ConfigError, match=r"pma\.turn_timeout_seconds must be an integer"
+    ):
         load_hub_config(tmp_path)
 
 

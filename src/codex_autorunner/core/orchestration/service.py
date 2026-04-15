@@ -739,8 +739,9 @@ class _ThreadExecutionLifecycle:
       queued executions.  It handles harness preparation, conversation
       creation/resumption, rehydration prefix assembly, and fresh-conversation
       retries.
-    - It must **not** own recovery or completion-gap logic.  Stale-backend
-      binding validation is delegated to ``_ThreadRecoveryHelper``.
+    - It must **not** own recovery or completion-gap logic. Stale-runtime
+      mismatch hints for resume are delegated to ``_ThreadRecoveryHelper``
+      (logging only; binding clearing stays in proven-failure paths here).
     - It never records terminal execution results directly; that responsibility
       belongs to the thread store and recovery helper.
     """
@@ -850,14 +851,11 @@ class _ThreadExecutionLifecycle:
                 else None
             )
             if self._stale_binding_checker is not None:
-                if self._stale_binding_checker(
+                self._stale_binding_checker(
                     thread_target_id=thread.thread_target_id,
                     backend_thread_id=conversation_id,
                     runtime_instance_id=runtime_instance_id,
-                ):
-                    fresh_backend_session_reason = "stale_runtime_instance"
-                    previous_backend_thread_id = conversation_id
-                    conversation_id = None
+                )
             while True:
                 used_existing_conversation = conversation_id is not None
                 try:
@@ -1278,9 +1276,11 @@ class _ThreadRecoveryHelper:
     - This helper is the sole authority for managed-thread recovery decisions.
     - It never synthesizes a successful completion outcome. All recovery paths
       record either ``error`` or ``interrupted`` status.
-    - Stale backend bindings (where the stored runtime instance id differs from
-      the current one) are detected and cleared here, not in the execution
-      lifecycle layer.
+    - Stale backend binding **hints** (stored runtime instance id differs from
+      the live harness id) are logged from execution start via this helper.
+      Bindings are not cleared merely for that mismatch; ``start_execution``
+      attempts ``resume_conversation`` first and only clears after proven
+      backend failure paths.
     - Callers must not substitute their own stale-binding detection logic.
     """
 
@@ -1289,13 +1289,14 @@ class _ThreadRecoveryHelper:
     get_running_execution: Callable[[str], Optional[ExecutionRecord]]
     harness_for_thread: Callable[[ThreadTarget], RuntimeThreadHarness]
 
-    def clear_stale_backend_binding(
+    def hint_stale_backend_binding_for_resume(
         self,
         *,
         thread_target_id: str,
         backend_thread_id: Optional[str],
         runtime_instance_id: Optional[str],
     ) -> bool:
+        """Log a stale-runtime hint; never clears ``backend_thread_id`` here."""
         if not backend_thread_id or not runtime_instance_id:
             return False
         runtime_binding = _resolve_thread_runtime_binding(
@@ -1316,14 +1317,9 @@ class _ThreadRecoveryHelper:
             backend_thread_id=backend_thread_id,
             stored_runtime_instance_id=runtime_binding.backend_runtime_instance_id,
             current_runtime_instance_id=runtime_instance_id,
-            action="clear_stale_binding",
+            action="attempt_resume",
         )
-        self.thread_store.set_thread_backend_id(
-            thread_target_id,
-            None,
-            backend_runtime_instance_id=None,
-        )
-        return True
+        return False
 
     async def interrupt_thread(self, thread_target_id: str) -> ExecutionRecord:
         thread = self.get_thread_target(thread_target_id)
@@ -1653,7 +1649,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             thread_store=self.thread_store,
             get_execution=self.get_execution,
             harness_for_thread=self._runtime_adapter.harness_for_thread,
-            _stale_binding_checker=self._recovery_helper.clear_stale_backend_binding,
+            _stale_binding_checker=self._recovery_helper.hint_stale_backend_binding_for_resume,
         )
 
     def _harness_for_agent(

@@ -562,7 +562,7 @@ async def test_send_message_starts_fresh_when_resume_conversation_is_missing(
     assert binding.backend_thread_id == "backend-conversation-1"
 
 
-async def test_send_message_starts_fresh_when_backend_runtime_instance_is_stale(
+async def test_send_message_reuses_conversation_when_backend_runtime_instance_changes(
     tmp_path: Path,
 ) -> None:
     harness = _FakeHarness(
@@ -590,13 +590,13 @@ async def test_send_message_starts_fresh_when_backend_runtime_instance_is_stale(
     refreshed_thread = service.get_thread_target(thread.thread_target_id)
 
     assert execution.status == "running"
-    assert harness.resume_conversation_calls == []
-    assert harness.new_conversation_calls == [(workspace_root, None)]
-    assert harness.start_turn_calls[0]["conversation_id"] == "backend-fresh-2"
+    assert harness.resume_conversation_calls == [(workspace_root, "backend-existing-1")]
+    assert harness.new_conversation_calls == []
+    assert harness.start_turn_calls[0]["conversation_id"] == "backend-existing-1"
     assert refreshed_thread is not None
     binding = _thread_runtime_binding(service, thread.thread_target_id)
     assert binding is not None
-    assert binding.backend_thread_id == "backend-fresh-2"
+    assert binding.backend_thread_id == "backend-existing-1"
     assert binding.backend_runtime_instance_id == "runtime-new"
 
 

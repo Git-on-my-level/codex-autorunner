@@ -651,6 +651,11 @@ class DiscordGatewayClient:
             if self._is_ignored_expired_interaction_failure(result):
                 continue
             raise result
+        # Task done callbacks (e.g. `_dispatch_callback_done` logging) are
+        # scheduled when the task finishes; they may not run until after
+        # `gather` returns. Yield once so structured logs flush before callers
+        # continue (tests and metrics rely on this ordering).
+        await asyncio.sleep(0)
 
     async def _cancel_dispatch_worker(self) -> None:
         queue = self._dispatch_queue

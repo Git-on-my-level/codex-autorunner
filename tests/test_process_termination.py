@@ -30,8 +30,10 @@ def _assert_process_gone(pid: int) -> None:
             except (FileNotFoundError, OSError):
                 return
             rparen = data.rfind(")")
-            if rparen != -1 and len(data) > rparen + 2 and data[rparen + 2] == "Z":
-                return
+            if rparen != -1:
+                after_comm = data[rparen + 1 :].split()
+                if after_comm and after_comm[0] == "Z":
+                    return
         time.sleep(0.05)
     pytest.fail(f"process {pid} still running after termination")
 
