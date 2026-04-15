@@ -6,9 +6,11 @@ from pathlib import Path
 from typing import Any
 
 from ...core.runtime import DoctorCheck
+from .chat_ux_telemetry import get_global_accumulator
 from .parity_checker import ParityCheckResult, run_parity_checks
 
 _CHECK_GROUP = "chat.parity_contract"
+_DIAGNOSTICS_GROUP = "chat.ux_timing_diagnostics"
 _DISCORD_SERVICE = "src/codex_autorunner/integrations/discord/service.py"
 _TELEGRAM_TRIGGER_MODE = "src/codex_autorunner/integrations/telegram/trigger_mode.py"
 _TELEGRAM_MESSAGES = "src/codex_autorunner/integrations/telegram/handlers/messages.py"
@@ -42,6 +44,57 @@ def chat_doctor_checks(repo_root: Path | None = None) -> list[DoctorCheck]:
                 fix=fix,
             )
         )
+
+    return checks
+
+
+def chat_ux_timing_diagnostic_checks() -> list[DoctorCheck]:
+    acc = get_global_accumulator()
+    lines = acc.format_diagnostic_lines()
+    summaries = acc.platform_summaries()
+    message = "\n".join(lines)
+
+    if acc.snapshot_count == 0:
+        return [
+            DoctorCheck(
+                name="Chat UX timing accumulator",
+                passed=True,
+                message=message,
+                severity="info",
+                check_id=_DIAGNOSTICS_GROUP,
+            )
+        ]
+
+    checks: list[DoctorCheck] = []
+    checks.append(
+        DoctorCheck(
+            name="Chat UX timing accumulator",
+            passed=True,
+            message=message,
+            severity="info",
+            check_id=_DIAGNOSTICS_GROUP,
+        )
+    )
+
+    for ps in summaries:
+        slow_deltas = [
+            ds for ds in ps.deltas if ds.p95_ms is not None and ds.p95_ms > 3000
+        ]
+        if slow_deltas:
+            slow_labels = ", ".join(
+                f"{ds.label}(p95={ds.p95_ms:.0f}ms)" for ds in slow_deltas
+            )
+            checks.append(
+                DoctorCheck(
+                    name=f"Chat UX slow path [{ps.platform}]",
+                    passed=False,
+                    message=f"High-p95 deltas detected: {slow_labels}",
+                    check_id=f"{_DIAGNOSTICS_GROUP}.{ps.platform}.slow_path",
+                    fix="Investigate slow ack/feedback/interrupt paths via log search for "
+                    "`chat_ux_timing` events and compare against latency budgets in "
+                    "`ux_regression_contract.py`.",
+                )
+            )
 
     return checks
 
@@ -108,6 +161,57 @@ def _failure_details(result: ParityCheckResult) -> tuple[str, str]:
             "Route Telegram and Discord trigger paths through "
             "`should_trigger_plain_text_turn(...)` with `PlainTextTurnContext` in "
             f"`{_TELEGRAM_TRIGGER_MODE}`, `{_TELEGRAM_MESSAGES}`, and `{_DISCORD_SERVICE}`.",
+        )
+
+    if result.id == "chat.ux_latency_budget_contract_complete":
+        missing = _metadata_list(result.metadata, "missing_required_budget_ids")
+        invalid = _metadata_list(result.metadata, "invalid_budget_ids")
+        duplicates = _metadata_list(result.metadata, "duplicate_budget_ids")
+        problems = []
+        if missing:
+            problems.append(f"missing={', '.join(missing)}")
+        if invalid:
+            problems.append(f"invalid={', '.join(invalid)}")
+        if duplicates:
+            problems.append(f"duplicate={', '.join(duplicates)}")
+        detail = "; ".join(problems) if problems else "<unknown>"
+        return (
+            "Chat parity contract failed: UX latency budgets are incomplete "
+            f"({detail}).",
+            "Restore the required entries in "
+            "`src/codex_autorunner/integrations/chat/ux_regression_contract.py` "
+            "so first-visible, queue-visible, first-progress, and interrupt-visible "
+            "gates remain declared.",
+        )
+
+    if result.id == "chat.ux_regression_contract_complete":
+        missing = _metadata_list(result.metadata, "missing_required_scenario_ids")
+        paths = _metadata_list(result.metadata, "missing_test_paths")
+        surface = _metadata_list(result.metadata, "scenarios_missing_surface_coverage")
+        budgets = _metadata_list(result.metadata, "scenarios_with_missing_budget_refs")
+        empty = _metadata_list(result.metadata, "scenarios_with_empty_tests")
+        duplicates = _metadata_list(result.metadata, "duplicate_scenario_ids")
+        problems = []
+        if missing:
+            problems.append(f"missing={', '.join(missing)}")
+        if paths:
+            problems.append(f"missing_paths={', '.join(paths)}")
+        if surface:
+            problems.append(f"surface={', '.join(surface)}")
+        if budgets:
+            problems.append(f"budget_refs={', '.join(budgets)}")
+        if empty:
+            problems.append(f"empty={', '.join(empty)}")
+        if duplicates:
+            problems.append(f"duplicate={', '.join(duplicates)}")
+        detail = "; ".join(problems) if problems else "<unknown>"
+        return (
+            "Chat parity contract failed: UX regression coverage declarations are "
+            f"incomplete ({detail}).",
+            "Update "
+            "`src/codex_autorunner/integrations/chat/ux_regression_contract.py` "
+            "so each required UX scenario points at concrete regression tests and "
+            "shared Discord/Telegram scenarios declare both surfaces.",
         )
 
     return (

@@ -245,6 +245,55 @@ def test_apply_orchestration_migrations_adds_scm_event_table_from_v8(
     assert scm_event_table is not None
 
 
+def test_apply_orchestration_migrations_adds_chat_operation_ledger_from_v20(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "orchestration.sqlite3"
+
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE orch_schema_migrations (
+                version INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                applied_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE orch_migration_runs (
+                run_id TEXT PRIMARY KEY,
+                from_version INTEGER NOT NULL,
+                target_version INTEGER NOT NULL,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                status TEXT NOT NULL,
+                error_text TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO orch_schema_migrations (version, name, applied_at)
+            VALUES (20, 'refine_event_projection_execution_indexes', '2026-04-15T00:00:00Z')
+            """
+        )
+
+        version_after = apply_orchestration_migrations(conn)
+        table = conn.execute(
+            """
+            SELECT name
+              FROM sqlite_master
+             WHERE type = 'table'
+               AND name = 'orch_chat_operations'
+            """
+        ).fetchone()
+
+    assert version_after == ORCHESTRATION_SCHEMA_VERSION
+    assert table is not None
+
+
 def test_apply_orchestration_migrations_adds_pr_binding_table_from_v9(
     tmp_path: Path,
 ) -> None:

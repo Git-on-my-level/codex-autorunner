@@ -512,6 +512,7 @@ class OutboxRecord:
     last_attempt_at: Optional[str] = None
     next_attempt_at: Optional[str] = None
     operation: Optional[str] = None
+    operation_id: Optional[str] = None
     message_id: Optional[int] = None
     outbox_key: Optional[str] = None
     overflow_mode_override: Optional[str] = None
@@ -532,6 +533,7 @@ class OutboxRecord:
         last_attempt_at = payload.get("last_attempt_at")
         next_attempt_at = payload.get("next_attempt_at")
         operation = payload.get("operation")
+        operation_id = payload.get("operation_id")
         message_id = payload.get("message_id")
         outbox_key = payload.get("outbox_key")
         overflow_mode_override = payload.get("overflow_mode_override")
@@ -561,6 +563,8 @@ class OutboxRecord:
             next_attempt_at = None
         if not isinstance(operation, str):
             operation = None
+        if not isinstance(operation_id, str):
+            operation_id = None
         if message_id is not None and not isinstance(message_id, int):
             message_id = None
         if not isinstance(outbox_key, str):
@@ -580,6 +584,7 @@ class OutboxRecord:
             last_attempt_at=last_attempt_at,
             next_attempt_at=next_attempt_at,
             operation=operation,
+            operation_id=operation_id,
             message_id=message_id,
             outbox_key=outbox_key,
             overflow_mode_override=overflow_mode_override,
@@ -599,6 +604,7 @@ class OutboxRecord:
             "last_attempt_at": self.last_attempt_at,
             "next_attempt_at": self.next_attempt_at,
             "operation": self.operation,
+            "operation_id": self.operation_id,
             "message_id": self.message_id,
             "outbox_key": self.outbox_key,
             "overflow_mode_override": self.overflow_mode_override,

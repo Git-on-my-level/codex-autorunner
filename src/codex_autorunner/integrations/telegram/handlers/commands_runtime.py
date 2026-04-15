@@ -14,6 +14,7 @@ from ....agents.opencode.supervisor import OpenCodeSupervisorError
 from ....core.coercion import coerce_int
 from ....core.config import load_hub_config
 from ....core.logging_utils import log_event
+from ....core.orchestration.chat_operation_state import ChatOperationState
 from ....core.state import now_iso
 from ....core.update import (
     _available_update_target_options,
@@ -25,9 +26,20 @@ from ....core.update import (
 from ....core.update_paths import resolve_update_paths
 from ....core.update_targets import get_update_target_label
 from ...app_server.client import CodexAppServerError
+from ...chat.chat_ux_telemetry import (
+    ChatUxMilestone,
+)
+from ...chat.chat_ux_telemetry import (
+    ChatUxTimingSnapshot as _Snap,
+)
 from ...chat.constants import (
     APP_SERVER_UNAVAILABLE_MESSAGE,
     TOPIC_NOT_BOUND_MESSAGE,
+)
+from ...chat.interrupt_controller import (
+    SharedInterruptState,
+    render_managed_thread_interrupt_message,
+    request_managed_thread_interrupt,
 )
 from ...chat.media import (
     format_media_batch_failure as _format_media_batch_failure,  # noqa: F401
@@ -100,6 +112,7 @@ from ..helpers import (
     format_codex_features,
     parse_codex_features_list,
 )
+from ..immediate_feedback_bridge import telegram_publish_interrupt_notice
 from ..state import (
     parse_topic_key,
     topic_key,
@@ -607,17 +620,18 @@ class TelegramCommandHandlers(
             )
             if current_thread is not None:
                 pma_mode = bool(getattr(record, "pma_enabled", False))
-                try:
-                    stop_outcome = await orchestration_service.stop_thread(
-                        current_thread.thread_target_id
-                    )
-                except (
-                    RuntimeError,
-                    OSError,
-                    ValueError,
-                    TypeError,
-                    ConnectionError,
-                ) as exc:
+                operation_id_getter = getattr(self, "_current_chat_operation_id", None)
+                operation_id = (
+                    operation_id_getter() if callable(operation_id_getter) else None
+                )
+                interrupt_outcome = await request_managed_thread_interrupt(
+                    orchestration_service=orchestration_service,
+                    thread_target_id=current_thread.thread_target_id,
+                    cancel_queued=True,
+                    operation_store=getattr(self, "_chat_operation_store", None),
+                    operation_id=operation_id,
+                )
+                if interrupt_outcome.state == SharedInterruptState.FAILED_TO_DISPATCH:
                     log_event(
                         self._logger,
                         logging.WARNING,
@@ -627,7 +641,8 @@ class TelegramCommandHandlers(
                         message_id=message_id,
                         managed_thread_id=current_thread.thread_target_id,
                         mode=mode,
-                        exc=exc,
+                        interrupt_state=interrupt_outcome.state.value,
+                        error=interrupt_outcome.error,
                     )
                     await self._send_message(
                         chat_id,
@@ -640,37 +655,41 @@ class TelegramCommandHandlers(
                         reply_to=reply_to,
                     )
                     return
-                if (
-                    stop_outcome.interrupted_active
-                    or stop_outcome.recovered_lost_backend
-                    or stop_outcome.cancelled_queued
-                ):
-                    parts = []
-                    if stop_outcome.recovered_lost_backend:
-                        parts.append(
-                            (
+                if interrupt_outcome.state in {
+                    SharedInterruptState.CONFIRMED,
+                    SharedInterruptState.STILL_STOPPING,
+                    SharedInterruptState.ALREADY_FINISHED,
+                }:
+                    await self._send_message(
+                        chat_id,
+                        render_managed_thread_interrupt_message(
+                            interrupt_outcome,
+                            active_turn_text=(
+                                "Interrupted active PMA turn."
+                                if pma_mode
+                                else "Interrupted active turn."
+                            ),
+                            still_stopping_text=(
+                                "Still stopping active PMA turn..."
+                                if pma_mode
+                                else "Still stopping active turn..."
+                            ),
+                            already_finished_text=(
+                                "Active PMA turn already finished."
+                                if pma_mode
+                                else "Active turn already finished."
+                            ),
+                            recovered_lost_backend_text=(
                                 "Recovered stale PMA session after backend thread was lost."
                                 if pma_mode
                                 else "Recovered stale session after backend thread was lost."
-                            )
-                        )
-                    elif stop_outcome.interrupted_active:
-                        parts.append(
-                            "Interrupted active PMA turn."
-                            if pma_mode
-                            else "Interrupted active turn."
-                        )
-                    if stop_outcome.cancelled_queued:
-                        parts.append(
-                            (
-                                f"Cancelled {stop_outcome.cancelled_queued} queued PMA turn(s)."
+                            ),
+                            queued_text_template=(
+                                "Cancelled {count} queued PMA turn(s)."
                                 if pma_mode
-                                else f"Cancelled {stop_outcome.cancelled_queued} queued turn(s)."
-                            )
-                        )
-                    await self._send_message(
-                        chat_id,
-                        " ".join(parts),
+                                else "Cancelled {count} queued turn(s)."
+                            ),
+                        ),
                         thread_id=thread_id,
                         reply_to=reply_to,
                     )
@@ -769,22 +788,59 @@ class TelegramCommandHandlers(
             message_id=message_id,
             turn_id=turn_id,
         )
-        payload_text, parse_mode = self._prepare_outgoing_text(
-            "Stopping current turn...",
+        _interrupt_snapshot = _Snap(platform="telegram", channel_id=str(chat_id))
+        _interrupt_snapshot.record(ChatUxMilestone.RAW_EVENT_RECEIVED)
+        operation_id_getter = getattr(self, "_current_chat_operation_id", None)
+        operation_id = operation_id_getter() if callable(operation_id_getter) else None
+        interrupt_notice = await telegram_publish_interrupt_notice(
+            self,
             chat_id=chat_id,
             thread_id=thread_id,
-            reply_to=reply_to,
-        )
-        response = await self._bot.send_message(
-            chat_id,
-            payload_text,
-            message_thread_id=thread_id,
             reply_to_message_id=reply_to,
-            parse_mode=parse_mode,
+            text="Stopping current turn...",
+            operation_id=operation_id,
+            logger=self._logger,
         )
-        response_message_id = (
-            response.get("message_id") if isinstance(response, dict) else None
+        response_message_id = None
+        if interrupt_notice.anchor_ref is not None:
+            try:
+                response_message_id = int(interrupt_notice.anchor_ref)
+            except (TypeError, ValueError):
+                response_message_id = None
+        if response_message_id is None:
+            payload_text, parse_mode = self._prepare_outgoing_text(
+                "Stopping current turn...",
+                chat_id=chat_id,
+                thread_id=thread_id,
+                reply_to=reply_to,
+            )
+            response = await self._bot.send_message(
+                chat_id,
+                payload_text,
+                message_thread_id=thread_id,
+                reply_to_message_id=reply_to,
+                parse_mode=parse_mode,
+            )
+            response_message_id = (
+                response.get("message_id") if isinstance(response, dict) else None
+            )
+        _interrupt_snapshot.record(ChatUxMilestone.INTERRUPT_REQUESTED_VISIBLE)
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.interrupt.acknowledged",
+            chat_id=chat_id,
+            thread_id=thread_id,
+            message_id=message_id,
+            turn_id=turn_id,
+            **_interrupt_snapshot.to_log_fields(),
         )
+        if operation_id is not None and isinstance(response_message_id, int):
+            await self._mark_chat_operation_state(
+                operation_id,
+                state=ChatOperationState.INTERRUPTING,
+                interrupt_ref=str(response_message_id),
+            )
         codex_thread_id = None
         if runtime.current_turn_key and runtime.current_turn_key[1] == turn_id:
             codex_thread_id = runtime.current_turn_key[0]

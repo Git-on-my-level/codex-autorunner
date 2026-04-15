@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Sequence
 
+from ...chat.action_ux_contract import telegram_callback_ux_contract_for_callback
 from ..adapter import (
     AgentCallback,
     AgentProfileCallback,
@@ -24,7 +25,7 @@ from ..adapter import (
     UpdateCallback,
     UpdateConfirmCallback,
 )
-from ..chat_callbacks import parse_callback_data
+from ..chat_callbacks import TelegramCallbackCodec, parse_callback_data
 
 
 def _selection_contains(items: Sequence[tuple[str, str]], value: str) -> bool:
@@ -41,6 +42,17 @@ def _selection_belongs_to_user(state: Any, user_id: int | None) -> bool:
 
 
 async def handle_callback(handlers: Any, callback: TelegramCallbackQuery) -> None:
+    decoded = TelegramCallbackCodec().decode(callback.data)
+    if decoded is None:
+        return
+    callback_ux = telegram_callback_ux_contract_for_callback(
+        decoded.callback_id,
+        decoded.payload,
+    )
+    if callback_ux is None:
+        raise ValueError(
+            f"missing shared Telegram callback UX contract for {decoded.callback_id}"
+        )
     parsed = parse_callback_data(callback.data)
     if parsed is None:
         return
@@ -104,11 +116,11 @@ async def handle_callback(handlers: Any, callback: TelegramCallbackQuery) -> Non
             await handlers._handle_review_commit_callback(key, callback, parsed)
     elif isinstance(parsed, CancelCallback):
         if key:
-            if parsed.kind == "interrupt":
+            if callback_ux.id == "control.interrupt":
                 await handlers._handle_interrupt_callback(callback)
-            elif parsed.kind.startswith("queue_cancel:"):
+            elif callback_ux.id == "control.queue_cancel":
                 await handlers._handle_queue_cancel_callback(callback, parsed.kind)
-            elif parsed.kind.startswith("queue_interrupt_send:"):
+            elif callback_ux.id == "control.queue_interrupt_send":
                 await handlers._handle_queue_interrupt_send_callback(
                     callback, parsed.kind
                 )

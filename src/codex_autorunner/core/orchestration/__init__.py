@@ -14,6 +14,21 @@ from .catalog import (
     map_agent_capabilities,
     merge_agent_capabilities,
 )
+from .chat_operation_ledger import (
+    ChatOperationRecoveryAction,
+    ChatOperationRecoveryDecision,
+    ChatOperationRegistration,
+    SQLiteChatOperationLedger,
+    plan_chat_operation_recovery,
+)
+from .chat_operation_state import (
+    CHAT_OPERATION_ALLOWED_TRANSITIONS,
+    CHAT_OPERATION_TERMINAL_STATES,
+    ChatOperationSnapshot,
+    ChatOperationState,
+    ChatOperationStore,
+    is_valid_chat_operation_transition,
+)
 from .cold_trace_store import ColdTraceReader, ColdTraceStore, ColdTraceWriter
 from .events import OrchestrationEvent, OrchestrationEventType
 from .execution_history import (
@@ -137,6 +152,14 @@ __all__ = [
     "AgentDefinition",
     "AgentDefinitionCatalog",
     "Binding",
+    "CHAT_OPERATION_ALLOWED_TRANSITIONS",
+    "CHAT_OPERATION_TERMINAL_STATES",
+    "ChatOperationRecoveryAction",
+    "ChatOperationRecoveryDecision",
+    "ChatOperationRegistration",
+    "ChatOperationSnapshot",
+    "ChatOperationState",
+    "ChatOperationStore",
     "ColdTraceReader",
     "ColdTraceStore",
     "ColdTraceWriter",
@@ -192,6 +215,7 @@ __all__ = [
     "SurfaceIngressResult",
     "SurfaceOrchestrationIngress",
     "SurfaceThreadMessageRequest",
+    "SQLiteChatOperationLedger",
     "TargetCapability",
     "TargetKind",
     "ThreadControlRequest",
@@ -222,6 +246,7 @@ __all__ = [
     "get_native_target_definition",
     "get_surface_orchestration_ingress",
     "initialize_orchestration_sqlite",
+    "is_valid_chat_operation_transition",
     "is_helper_subsystem",
     "is_native_target",
     "list_agent_definitions",
@@ -229,6 +254,7 @@ __all__ = [
     "list_orchestration_table_definitions",
     "map_agent_capabilities",
     "merge_agent_capabilities",
+    "plan_chat_operation_recovery",
     "audit_execution_history",
     "export_execution_history_bundle",
     "provider_raw_trace_routing",

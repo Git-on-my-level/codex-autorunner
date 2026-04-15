@@ -51,6 +51,7 @@ class TurnContext:
     codex_thread_id: Optional[str]
     reply_to_message_id: Optional[int]
     placeholder_message_id: Optional[int] = None
+    placeholder_reused: bool = False
 
 
 @dataclass

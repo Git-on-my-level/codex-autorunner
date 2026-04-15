@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -299,5 +300,353 @@ async def test_outbox_per_chat_scheduling(
 
         assert len(chat1_times) >= 1
         assert len(chat2_times) >= 1
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_outbox_coalescing_by_operation_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(outbox_module, "OUTBOX_IMMEDIATE_RETRY_DELAYS", [])
+    store = TelegramStateStore(tmp_path / "telegram_state.sqlite3")
+    try:
+        sent: list[str] = []
+
+        async def send_message(
+            _chat_id: int,
+            text: str,
+            *,
+            thread_id: Optional[int] = None,
+            reply_to: Optional[int] = None,
+        ) -> int:
+            sent.append(text)
+            return len(sent)
+
+        async def edit_message_text(*_args, **_kwargs) -> bool:
+            return False
+
+        async def delete_message(*_args, **_kwargs) -> bool:
+            return False
+
+        manager = TelegramOutboxManager(
+            store,
+            send_message=send_message,
+            edit_message_text=edit_message_text,
+            delete_message=delete_message,
+            logger=logging.getLogger("test"),
+        )
+        manager.start()
+
+        ts = now_iso()
+        record1 = OutboxRecord(
+            record_id="r1",
+            chat_id=123,
+            thread_id=None,
+            reply_to_message_id=None,
+            placeholder_message_id=None,
+            text="stale",
+            created_at=ts,
+            operation_id="op-100",
+        )
+        record2 = OutboxRecord(
+            record_id="r2",
+            chat_id=123,
+            thread_id=None,
+            reply_to_message_id=None,
+            placeholder_message_id=None,
+            text="fresh",
+            created_at=ts,
+            operation_id="op-100",
+        )
+        record3 = OutboxRecord(
+            record_id="r3",
+            chat_id=123,
+            thread_id=None,
+            reply_to_message_id=None,
+            placeholder_message_id=None,
+            text="other",
+            created_at=ts,
+            operation_id="op-200",
+        )
+        await store.enqueue_outbox(record1)
+        await store.enqueue_outbox(record2)
+        await store.enqueue_outbox(record3)
+
+        records = await store.list_outbox()
+        assert len(records) == 3
+
+        await manager._flush(records)
+        assert len(sent) == 2
+        assert "fresh" in sent
+        assert "other" in sent
+        assert "stale" not in sent
+
+        records = await store.list_outbox()
+        assert len(records) == 0
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_outbox_operation_id_delivery_cleans_all_same_op(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(outbox_module, "OUTBOX_IMMEDIATE_RETRY_DELAYS", [])
+    store = TelegramStateStore(tmp_path / "telegram_state.sqlite3")
+    try:
+        sent: list[str] = []
+
+        async def send_message(
+            _chat_id: int,
+            text: str,
+            *,
+            thread_id: Optional[int] = None,
+            reply_to: Optional[int] = None,
+        ) -> int:
+            sent.append(text)
+            return len(sent)
+
+        async def edit_message_text(*_args, **_kwargs) -> bool:
+            return False
+
+        async def delete_message(*_args, **_kwargs) -> bool:
+            return False
+
+        manager = TelegramOutboxManager(
+            store,
+            send_message=send_message,
+            edit_message_text=edit_message_text,
+            delete_message=delete_message,
+            logger=logging.getLogger("test"),
+        )
+        manager.start()
+
+        ts_early = "2026-01-01T00:00:00Z"
+        ts_late = "2026-01-01T00:01:00Z"
+        await store.enqueue_outbox(
+            OutboxRecord(
+                record_id="r1",
+                chat_id=123,
+                thread_id=None,
+                reply_to_message_id=None,
+                placeholder_message_id=None,
+                text="old",
+                created_at=ts_early,
+                operation_id="op-clean",
+            )
+        )
+        await store.enqueue_outbox(
+            OutboxRecord(
+                record_id="r2",
+                chat_id=123,
+                thread_id=None,
+                reply_to_message_id=None,
+                placeholder_message_id=None,
+                text="new",
+                created_at=ts_late,
+                operation_id="op-clean",
+            )
+        )
+
+        records = await store.list_outbox()
+        await manager._flush(records)
+
+        assert sent == ["new"]
+        records = await store.list_outbox()
+        assert len(records) == 0
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_outbox_skips_ready_older_record_when_newer_same_op_is_backed_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(outbox_module, "OUTBOX_IMMEDIATE_RETRY_DELAYS", [])
+    store = TelegramStateStore(tmp_path / "telegram_state.sqlite3")
+    try:
+        sent: list[str] = []
+
+        async def send_message(
+            _chat_id: int,
+            text: str,
+            *,
+            thread_id: Optional[int] = None,
+            reply_to: Optional[int] = None,
+        ) -> int:
+            sent.append(text)
+            return len(sent)
+
+        async def edit_message_text(*_args, **_kwargs) -> bool:
+            return False
+
+        async def delete_message(*_args, **_kwargs) -> bool:
+            return False
+
+        manager = TelegramOutboxManager(
+            store,
+            send_message=send_message,
+            edit_message_text=edit_message_text,
+            delete_message=delete_message,
+            logger=logging.getLogger("test"),
+        )
+        manager.start()
+
+        await store.enqueue_outbox(
+            OutboxRecord(
+                record_id="old-ready",
+                chat_id=123,
+                thread_id=None,
+                reply_to_message_id=None,
+                placeholder_message_id=None,
+                text="old",
+                created_at="2026-01-01T00:00:00Z",
+                operation_id="op-backoff",
+            )
+        )
+        await store.enqueue_outbox(
+            OutboxRecord(
+                record_id="new-backoff",
+                chat_id=123,
+                thread_id=None,
+                reply_to_message_id=None,
+                placeholder_message_id=None,
+                text="new",
+                created_at="2026-01-01T00:01:00Z",
+                next_attempt_at=(
+                    datetime.now(timezone.utc) + timedelta(hours=1)
+                ).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                operation_id="op-backoff",
+            )
+        )
+
+        await manager._flush(await store.list_outbox())
+        assert sent == []
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_outbox_inflight_dedup_by_operation_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(outbox_module, "OUTBOX_MAX_ATTEMPTS", 2)
+    monkeypatch.setattr(outbox_module, "OUTBOX_IMMEDIATE_RETRY_DELAYS", [0])
+    store = TelegramStateStore(tmp_path / "telegram_state.sqlite3")
+    try:
+        send_count = {"n": 0}
+
+        async def send_message(
+            _chat_id: int,
+            _text: str,
+            *,
+            thread_id: Optional[int] = None,
+            reply_to: Optional[int] = None,
+        ) -> int:
+            send_count["n"] += 1
+            return send_count["n"]
+
+        async def edit_message_text(*_args, **_kwargs) -> bool:
+            return False
+
+        async def delete_message(*_args, **_kwargs) -> bool:
+            return False
+
+        manager = TelegramOutboxManager(
+            store,
+            send_message=send_message,
+            edit_message_text=edit_message_text,
+            delete_message=delete_message,
+            logger=logging.getLogger("test"),
+        )
+        manager.start()
+
+        record = OutboxRecord(
+            record_id="r-dedup",
+            chat_id=123,
+            thread_id=None,
+            reply_to_message_id=None,
+            placeholder_message_id=None,
+            text="hello",
+            created_at=now_iso(),
+            operation_id="op-dedup-test",
+        )
+        delivered = await manager.send_message_with_outbox(record)
+        assert delivered is True
+        assert send_count["n"] == 1
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_outbox_replay_after_send_failure_with_operation_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(outbox_module, "OUTBOX_MAX_ATTEMPTS", 5)
+    monkeypatch.setattr(outbox_module, "OUTBOX_IMMEDIATE_RETRY_DELAYS", [0])
+    store = TelegramStateStore(tmp_path / "telegram_state.sqlite3")
+    try:
+        attempts = {"n": 0}
+
+        async def send_message(
+            _chat_id: int,
+            _text: str,
+            *,
+            thread_id: Optional[int] = None,
+            reply_to: Optional[int] = None,
+        ) -> int:
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                raise RuntimeError("transient failure")
+            return 999
+
+        async def edit_message_text(*_args, **_kwargs) -> bool:
+            return False
+
+        async def delete_message(*_args, **_kwargs) -> bool:
+            return False
+
+        manager = TelegramOutboxManager(
+            store,
+            send_message=send_message,
+            edit_message_text=edit_message_text,
+            delete_message=delete_message,
+            logger=logging.getLogger("test"),
+        )
+        manager.start()
+
+        ts = now_iso()
+        await store.enqueue_outbox(
+            OutboxRecord(
+                record_id="r-replay",
+                chat_id=123,
+                thread_id=None,
+                reply_to_message_id=None,
+                placeholder_message_id=None,
+                text="replay-me",
+                created_at=ts,
+                operation_id="op-replay-test",
+            )
+        )
+
+        records = await store.list_outbox()
+        assert len(records) == 1
+        assert records[0].operation_id == "op-replay-test"
+
+        await manager._flush(records)
+        assert attempts["n"] == 1
+
+        failed = await store.get_outbox("r-replay")
+        assert failed is not None
+        assert failed.operation_id == "op-replay-test"
+        assert failed.attempts == 1
+
+        records2 = await store.list_outbox()
+        await manager._flush(records2)
+        assert attempts["n"] == 2
+
+        remaining = await store.list_outbox()
+        assert len(remaining) == 0
     finally:
         await store.close()

@@ -1214,28 +1214,35 @@ class PmaThreadStore:
         return self.get_running_turn(managed_thread_id) is not None
 
     def get_running_turn(self, managed_thread_id: str) -> Optional[dict[str, Any]]:
-        with self._write_conn() as conn:
-            # Status checks can be polled frequently; avoid age-based interruption of
-            # the currently-tracked status turn during passive reads.
-            self._recover_stale_running_turns(
-                conn,
-                managed_thread_id,
-                include_status_turn_age_recovery=False,
+        # Passive status checks must stay read-only so hub control-plane probes do
+        # not contend on the PMA write lock or trigger the legacy mirror path.
+        # Still filter out rows that are already logically stale because thread
+        # state no longer points at them; mutation paths perform the actual
+        # recovery when they acquire the write lock.
+        with self._read_conn() as conn:
+            stale_execution_ids = set(
+                self._lifecycle.find_stale_running_turn_ids(
+                    conn,
+                    managed_thread_id,
+                    include_status_turn_age_recovery=False,
+                )
             )
-            row = conn.execute(
+            rows = conn.execute(
                 """
                 SELECT *
                   FROM orch_thread_executions
                  WHERE thread_target_id = ?
                    AND status = 'running'
                  ORDER BY started_at DESC, execution_id DESC
-                 LIMIT 1
                 """,
                 (managed_thread_id,),
-            ).fetchone()
-        if row is None:
-            return None
-        return _execution_row_to_record(row)
+            ).fetchall()
+        for row in rows:
+            execution_id = str(row["execution_id"] or "").strip()
+            if execution_id and execution_id in stale_execution_ids:
+                continue
+            return _execution_row_to_record(row)
+        return None
 
     def get_turn(
         self, managed_thread_id: str, managed_turn_id: str

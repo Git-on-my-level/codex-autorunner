@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 from ..chat.callbacks import (
@@ -51,6 +52,143 @@ _KIND_TO_ID = {
     "flow": CALLBACK_FLOW,
     "flow_run": CALLBACK_FLOW_RUN,
 }
+
+
+@dataclass(frozen=True)
+class TelegramCallbackContractScenario:
+    label: str
+    callback_id: str
+    payload: dict[str, Any]
+    catalog_in_contract: bool = True
+
+
+def cataloged_telegram_callback_contract_scenarios(
+    *,
+    include_control_variants: bool = True,
+) -> tuple[TelegramCallbackContractScenario, ...]:
+    scenarios: list[TelegramCallbackContractScenario] = [
+        TelegramCallbackContractScenario(
+            label="approval",
+            callback_id=CALLBACK_APPROVAL,
+            payload={"decision": "approve", "request_id": "req-1"},
+        ),
+        TelegramCallbackContractScenario(
+            label="question_option",
+            callback_id=CALLBACK_QUESTION_OPTION,
+            payload={"request_id": "req-1", "question_index": 0, "option_index": 0},
+        ),
+        TelegramCallbackContractScenario(
+            label="question_done",
+            callback_id=CALLBACK_QUESTION_DONE,
+            payload={"request_id": "req-1"},
+        ),
+        TelegramCallbackContractScenario(
+            label="question_custom",
+            callback_id=CALLBACK_QUESTION_CUSTOM,
+            payload={"request_id": "req-1"},
+        ),
+        TelegramCallbackContractScenario(
+            label="question_cancel",
+            callback_id=CALLBACK_QUESTION_CANCEL,
+            payload={"request_id": "req-1"},
+        ),
+        TelegramCallbackContractScenario(
+            label="resume",
+            callback_id=CALLBACK_RESUME,
+            payload={"thread_id": "thread-1"},
+        ),
+        TelegramCallbackContractScenario(
+            label="bind",
+            callback_id=CALLBACK_BIND,
+            payload={"repo_id": "repo-1"},
+        ),
+        TelegramCallbackContractScenario(
+            label="agent",
+            callback_id=CALLBACK_AGENT,
+            payload={"agent": "codex"},
+        ),
+        TelegramCallbackContractScenario(
+            label="agent_profile",
+            callback_id=CALLBACK_AGENT_PROFILE,
+            payload={"profile": "default"},
+        ),
+        TelegramCallbackContractScenario(
+            label="model",
+            callback_id=CALLBACK_MODEL,
+            payload={"model_id": "gpt-5.4"},
+        ),
+        TelegramCallbackContractScenario(
+            label="effort",
+            callback_id=CALLBACK_EFFORT,
+            payload={"effort": "high"},
+        ),
+        TelegramCallbackContractScenario(
+            label="update",
+            callback_id=CALLBACK_UPDATE,
+            payload={"target": "discord"},
+        ),
+        TelegramCallbackContractScenario(
+            label="update_confirm",
+            callback_id=CALLBACK_UPDATE_CONFIRM,
+            payload={"decision": "confirm"},
+        ),
+        TelegramCallbackContractScenario(
+            label="review_commit",
+            callback_id=CALLBACK_REVIEW_COMMIT,
+            payload={"sha": "abc123"},
+        ),
+        TelegramCallbackContractScenario(
+            label="compact",
+            callback_id=CALLBACK_COMPACT,
+            payload={"action": "start"},
+        ),
+        TelegramCallbackContractScenario(
+            label="flow",
+            callback_id=CALLBACK_FLOW,
+            payload={"action": "resume", "run_id": "run-1", "repo_id": None},
+        ),
+        TelegramCallbackContractScenario(
+            label="flow_run",
+            callback_id=CALLBACK_FLOW_RUN,
+            payload={"run_id": "run-1"},
+        ),
+    ]
+    if include_control_variants:
+        scenarios.extend(
+            (
+                TelegramCallbackContractScenario(
+                    label="flow_refresh",
+                    callback_id=CALLBACK_FLOW,
+                    payload={"action": "refresh", "run_id": "run-1", "repo_id": None},
+                ),
+                TelegramCallbackContractScenario(
+                    label="selection_cancel",
+                    callback_id=CALLBACK_CANCEL,
+                    payload={"kind": "selection"},
+                ),
+                TelegramCallbackContractScenario(
+                    label="interrupt",
+                    callback_id=CALLBACK_CANCEL,
+                    payload={"kind": "interrupt"},
+                ),
+                TelegramCallbackContractScenario(
+                    label="queue_cancel",
+                    callback_id=CALLBACK_CANCEL,
+                    payload={"kind": "queue_cancel:exec-1"},
+                ),
+                TelegramCallbackContractScenario(
+                    label="queue_interrupt_send",
+                    callback_id=CALLBACK_CANCEL,
+                    payload={"kind": "queue_interrupt_send:exec-1"},
+                ),
+                TelegramCallbackContractScenario(
+                    label="pagination",
+                    callback_id=CALLBACK_PAGE,
+                    payload={"kind": "resume", "page": 1},
+                ),
+            )
+        )
+    return tuple(scenario for scenario in scenarios if scenario.catalog_in_contract)
 
 
 class TelegramCallbackCodec(CallbackCodec):

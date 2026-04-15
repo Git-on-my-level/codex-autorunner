@@ -7,11 +7,30 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
 
+from .action_ux_contract import (
+    CHAT_ACTION_UX_CONTRACT,
+    ChatActionUxContractEntry,
+    discord_autocomplete_ux_contract_for_route,
+    discord_component_ux_contract_for_route,
+    discord_modal_ux_contract_for_route,
+    discord_slash_command_ux_contract_for_id,
+    plain_text_turn_ux_contract_for_mode,
+    telegram_callback_ux_contract_for_callback,
+    telegram_command_ux_contract_for_name,
+)
 from .command_contract import (
     COMMAND_CONTRACT,
     CommandContractEntry,
     telegram_command_metadata_for_name,
     telegram_runtime_command_names_from_contract,
+)
+from .ux_regression_contract import (
+    CHAT_UX_LATENCY_BUDGETS,
+    CHAT_UX_REGRESSION_CONTRACT,
+    REQUIRED_CHAT_UX_LATENCY_BUDGET_IDS,
+    REQUIRED_CHAT_UX_REGRESSION_SCENARIO_IDS,
+    ChatUxLatencyBudgetEntry,
+    ChatUxRegressionScenarioEntry,
 )
 
 _DISCORD_SERVICE_PATH = Path("src/codex_autorunner/integrations/discord/service.py")
@@ -51,6 +70,11 @@ def run_parity_checks(
     *,
     repo_root: Path | None = None,
     contract: Sequence[CommandContractEntry] = COMMAND_CONTRACT,
+    action_ux_contract: Sequence[ChatActionUxContractEntry] = CHAT_ACTION_UX_CONTRACT,
+    ux_regression_contract: Sequence[
+        ChatUxRegressionScenarioEntry
+    ] = CHAT_UX_REGRESSION_CONTRACT,
+    ux_latency_budgets: Sequence[ChatUxLatencyBudgetEntry] = CHAT_UX_LATENCY_BUDGETS,
 ) -> tuple[ParityCheckResult, ...]:
     source_paths = {
         "discord_service": _resolve_source_path(
@@ -123,6 +147,10 @@ def run_parity_checks(
     return (
         _check_contract_discord_metadata_complete(contract=contract),
         _check_contract_telegram_metadata_complete(contract=contract),
+        _check_shared_action_ux_contract_complete(
+            contract=contract,
+            action_ux_contract=action_ux_contract,
+        ),
         _check_contract_registry_entries_cataloged(
             contract=contract,
             discord_commands_ast=discord_commands_ast,
@@ -155,6 +183,14 @@ def run_parity_checks(
             discord_service_ast=discord_service_ast,
             telegram_trigger_mode_ast=telegram_trigger_mode_ast,
             telegram_messages_ast=telegram_messages_ast,
+        ),
+        _check_chat_ux_latency_budget_contract_complete(
+            ux_latency_budgets=ux_latency_budgets
+        ),
+        _check_chat_ux_regression_contract_complete(
+            repo_root=repo_root,
+            ux_regression_contract=ux_regression_contract,
+            ux_latency_budgets=ux_latency_budgets,
         ),
     )
 
@@ -201,6 +237,27 @@ def _package_relative_path(path: Path) -> Path:
     return path
 
 
+def _resolve_repo_file_path(
+    *,
+    repo_root: Path | None,
+    repo_relative_path: Path,
+) -> Path | None:
+    candidates: list[Path] = []
+    if repo_root is not None:
+        candidates.append(repo_root / repo_relative_path)
+    else:
+        module_path = Path(__file__).resolve()
+        for parent in module_path.parents:
+            if not (parent / ".git").exists():
+                continue
+            candidates.append(parent / repo_relative_path)
+            break
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_file():
+            return candidate
+    return None
+
+
 def _source_unavailable_results(
     *, missing: Sequence[str]
 ) -> tuple[ParityCheckResult, ...]:
@@ -221,6 +278,12 @@ def _source_unavailable_results(
         ),
         ParityCheckResult(
             id="contract.telegram_metadata_complete",
+            passed=True,
+            message=message,
+            metadata=metadata,
+        ),
+        ParityCheckResult(
+            id="contract.shared_action_ux_complete",
             passed=True,
             message=message,
             metadata=metadata,
@@ -257,6 +320,18 @@ def _source_unavailable_results(
         ),
         ParityCheckResult(
             id="chat.shared_plain_text_turn_policy_usage",
+            passed=True,
+            message=message,
+            metadata=metadata,
+        ),
+        ParityCheckResult(
+            id="chat.ux_latency_budget_contract_complete",
+            passed=True,
+            message=message,
+            metadata=metadata,
+        ),
+        ParityCheckResult(
+            id="chat.ux_regression_contract_complete",
             passed=True,
             message=message,
             metadata=metadata,
@@ -335,6 +410,134 @@ def _check_contract_telegram_metadata_complete(
             "missing_exposure": missing_exposure,
             "missing_response_policy": missing_response_policy,
             "missing_allow_during_turn": missing_allow_during_turn,
+        },
+    )
+
+
+def _check_shared_action_ux_contract_complete(
+    *,
+    contract: Sequence[CommandContractEntry],
+    action_ux_contract: Sequence[ChatActionUxContractEntry],
+) -> ParityCheckResult:
+    from ..discord.interaction_registry import (
+        cataloged_autocomplete_contract_scenarios,
+        cataloged_component_contract_scenarios,
+        cataloged_modal_contract_scenarios,
+    )
+    from ..telegram.chat_callbacks import (
+        cataloged_telegram_callback_contract_scenarios,
+    )
+
+    missing_telegram_commands = sorted(
+        name
+        for name in telegram_runtime_command_names_from_contract(tuple(contract))
+        if telegram_command_ux_contract_for_name(name, ux_contract=action_ux_contract)
+        is None
+    )
+    missing_discord_commands = sorted(
+        entry.id
+        for entry in contract
+        if entry.discord_paths
+        and discord_slash_command_ux_contract_for_id(
+            entry.id,
+            ux_contract=action_ux_contract,
+        )
+        is None
+    )
+
+    missing_telegram_callbacks = sorted(
+        {
+            scenario.label
+            for scenario in cataloged_telegram_callback_contract_scenarios()
+            if telegram_callback_ux_contract_for_callback(
+                scenario.callback_id,
+                scenario.payload,
+                ux_contract=action_ux_contract,
+            )
+            is None
+        }
+    )
+
+    missing_discord_components = sorted(
+        {
+            route_id
+            for route_id, custom_id in cataloged_component_contract_scenarios()
+            if discord_component_ux_contract_for_route(
+                route_id,
+                custom_id=custom_id,
+                ux_contract=action_ux_contract,
+            )
+            is None
+        }
+    )
+
+    missing_discord_modals = sorted(
+        {
+            route_id
+            for route_id, _custom_id in cataloged_modal_contract_scenarios()
+            if discord_modal_ux_contract_for_route(
+                route_id,
+                ux_contract=action_ux_contract,
+            )
+            is None
+        }
+    )
+
+    missing_discord_autocomplete = sorted(
+        {
+            route_id or f"{'.'.join(command_path)}.{focused_name}"
+            for route_id, command_path, focused_name in (
+                cataloged_autocomplete_contract_scenarios()
+            )
+            if discord_autocomplete_ux_contract_for_route(
+                route_id,
+                command_path=command_path,
+                focused_name=focused_name,
+                ux_contract=action_ux_contract,
+            )
+            is None
+        }
+    )
+
+    plain_text_modes = ("always", "mentions")
+    missing_plain_text_turns = sorted(
+        mode
+        for mode in plain_text_modes
+        if plain_text_turn_ux_contract_for_mode(
+            mode,
+            ux_contract=action_ux_contract,
+        )
+        is None
+    )
+
+    passed = not any(
+        (
+            missing_telegram_commands,
+            missing_discord_commands,
+            missing_telegram_callbacks,
+            missing_discord_components,
+            missing_discord_modals,
+            missing_discord_autocomplete,
+            missing_plain_text_turns,
+        )
+    )
+    message = (
+        "Shared action UX contract covers public commands, callbacks, controls, and interactive routes."
+        if passed
+        else "One or more public chat actions are missing shared action UX coverage."
+    )
+    return ParityCheckResult(
+        id="contract.shared_action_ux_complete",
+        passed=passed,
+        message=message,
+        metadata={
+            "missing_telegram_commands": missing_telegram_commands,
+            "missing_discord_commands": missing_discord_commands,
+            "missing_telegram_callbacks": missing_telegram_callbacks,
+            "missing_discord_components": missing_discord_components,
+            "missing_discord_modals": missing_discord_modals,
+            "missing_discord_autocomplete": missing_discord_autocomplete,
+            "missing_plain_text_turns": missing_plain_text_turns,
         },
     )
 
@@ -820,6 +1023,125 @@ def _check_shared_plain_text_turn_policy_usage(
         metadata={
             "failed_predicates": failed_predicates,
             "predicates": checks,
+        },
+    )
+
+
+def _check_chat_ux_latency_budget_contract_complete(
+    *,
+    ux_latency_budgets: Sequence[ChatUxLatencyBudgetEntry],
+) -> ParityCheckResult:
+    budget_ids = [entry.id for entry in ux_latency_budgets]
+    duplicate_budget_ids = sorted(
+        budget_id for budget_id in set(budget_ids) if budget_ids.count(budget_id) > 1
+    )
+    missing_required_budget_ids = sorted(
+        required_id
+        for required_id in REQUIRED_CHAT_UX_LATENCY_BUDGET_IDS
+        if required_id not in budget_ids
+    )
+    invalid_budget_ids = sorted(
+        entry.id
+        for entry in ux_latency_budgets
+        if entry.max_ms <= 0
+        or not entry.description.strip()
+        or entry.id not in REQUIRED_CHAT_UX_LATENCY_BUDGET_IDS
+    )
+    passed = not any(
+        (duplicate_budget_ids, missing_required_budget_ids, invalid_budget_ids)
+    )
+    message = (
+        "Shared chat UX latency budgets are declared for the required responsiveness gates."
+        if passed
+        else "Chat UX latency budget declarations are incomplete or invalid."
+    )
+    return ParityCheckResult(
+        id="chat.ux_latency_budget_contract_complete",
+        passed=passed,
+        message=message,
+        metadata={
+            "budget_ids": sorted(budget_ids),
+            "duplicate_budget_ids": duplicate_budget_ids,
+            "missing_required_budget_ids": missing_required_budget_ids,
+            "invalid_budget_ids": invalid_budget_ids,
+        },
+    )
+
+
+def _check_chat_ux_regression_contract_complete(
+    *,
+    repo_root: Path | None,
+    ux_regression_contract: Sequence[ChatUxRegressionScenarioEntry],
+    ux_latency_budgets: Sequence[ChatUxLatencyBudgetEntry],
+) -> ParityCheckResult:
+    scenario_ids = [entry.id for entry in ux_regression_contract]
+    duplicate_scenario_ids = sorted(
+        scenario_id
+        for scenario_id in set(scenario_ids)
+        if scenario_ids.count(scenario_id) > 1
+    )
+    missing_required_scenario_ids = sorted(
+        required_id
+        for required_id in REQUIRED_CHAT_UX_REGRESSION_SCENARIO_IDS
+        if required_id not in scenario_ids
+    )
+    known_budget_ids = {entry.id for entry in ux_latency_budgets}
+    missing_test_paths: list[str] = []
+    scenarios_missing_surface_coverage: list[str] = []
+    scenarios_with_missing_budget_refs: list[str] = []
+    scenarios_with_empty_tests: list[str] = []
+
+    for entry in ux_regression_contract:
+        if not entry.test_paths:
+            scenarios_with_empty_tests.append(entry.id)
+        if entry.required_surfaces and not {
+            "discord",
+            "telegram",
+        }.issubset(set(entry.required_surfaces)):
+            scenarios_missing_surface_coverage.append(entry.id)
+        if any(
+            budget_id not in known_budget_ids for budget_id in entry.latency_budget_ids
+        ):
+            scenarios_with_missing_budget_refs.append(entry.id)
+        for test_path in entry.test_paths:
+            resolved = _resolve_repo_file_path(
+                repo_root=repo_root,
+                repo_relative_path=Path(test_path),
+            )
+            if resolved is None:
+                missing_test_paths.append(test_path)
+
+    passed = not any(
+        (
+            duplicate_scenario_ids,
+            missing_required_scenario_ids,
+            missing_test_paths,
+            scenarios_missing_surface_coverage,
+            scenarios_with_missing_budget_refs,
+            scenarios_with_empty_tests,
+        )
+    )
+    message = (
+        "Shared chat UX regression scenarios are declared with concrete test coverage."
+        if passed
+        else "Chat UX regression coverage contract is incomplete."
+    )
+    return ParityCheckResult(
+        id="chat.ux_regression_contract_complete",
+        passed=passed,
+        message=message,
+        metadata={
+            "scenario_ids": sorted(scenario_ids),
+            "duplicate_scenario_ids": duplicate_scenario_ids,
+            "missing_required_scenario_ids": missing_required_scenario_ids,
+            "missing_test_paths": sorted(set(missing_test_paths)),
+            "scenarios_missing_surface_coverage": sorted(
+                set(scenarios_missing_surface_coverage)
+            ),
+            "scenarios_with_missing_budget_refs": sorted(
+                set(scenarios_with_missing_budget_refs)
+            ),
+            "scenarios_with_empty_tests": sorted(set(scenarios_with_empty_tests)),
         },
     )
 
@@ -1603,12 +1925,6 @@ def _module_has_call(tree: ast.Module | None, *, callee_name: str) -> bool:
     return False
 
 
-def _count_calls(tree: ast.Module | None, *, callee_name: str) -> int:
-    if tree is None:
-        return 0
-    return sum(1 for call in _iter_calls(tree) if _call_name(call.func) == callee_name)
-
-
 def _has_call_with_string_argument(
     functions: Sequence[ast.FunctionDef | ast.AsyncFunctionDef],
     *,
@@ -1841,12 +2157,6 @@ def _string_tuple(expr: ast.expr) -> tuple[str, ...] | None:
 
 def _string_constant_value(expr: ast.expr) -> str | None:
     if isinstance(expr, ast.Constant) and isinstance(expr.value, str):
-        return expr.value
-    return None
-
-
-def _bool_constant_value(expr: ast.expr) -> bool | None:
-    if isinstance(expr, ast.Constant) and isinstance(expr.value, bool):
         return expr.value
     return None
 

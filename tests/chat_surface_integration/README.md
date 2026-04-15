@@ -12,7 +12,16 @@ need to exercise real surface ingress plus a subprocess-backed runtime.
 
 ## Fastest way to use it
 
-Run the Hermes PMA surface parity tests:
+Run the full UX regression suite before merging chat UX/runtime changes:
+
+```bash
+.venv/bin/pytest tests/chat_surface_integration/test_hermes_pma_ux_regressions.py -m integration
+.venv/bin/pytest tests/chat_surface_integration/test_hermes_pma_surface_parity.py -m integration
+.venv/bin/python -m pytest tests/test_cross_surface_parity.py -q
+.venv/bin/python -m pytest tests/test_doctor_checks.py -q -k chat_doctor_checks
+```
+
+Run the Hermes PMA surface parity tests only:
 
 ```bash
 .venv/bin/pytest tests/chat_surface_integration/test_hermes_pma_surfaces.py -m integration
@@ -26,12 +35,24 @@ Run the official-path timeout characterization:
 
 ## Current regression coverage
 
-The Hermes surface tests cover the current official session lifecycle only:
+The Hermes surface tests now cover the UX-contract scenarios that previously
+regressed in production:
 
 - Discord sends an initial preparation message.
 - Progress updates edit that same placeholder into `working`.
 - Completion edits the placeholder to `done`, deletes it, then sends the final reply.
 - Telegram sends a lightweight `Working...` placeholder and then a separate final reply.
+- Both surfaces emit first-visible and first-progress timing logs that are
+  checked against non-flaky latency budgets.
+- Busy-thread queueing becomes visibly queued before recovery resumes the
+  waiting turn.
+- Interrupt controls must acknowledge quickly and still reconcile to a final
+  interrupted state.
+- Related parity/doctor checks keep the shared UX regression matrix explicit so
+  required scenarios cannot quietly disappear from coverage.
+
+Managed-thread restart recovery is currently covered separately at the
+orchestration/runtime layer rather than by a Telegram/Discord surface harness.
 
 Legacy ACP prompt-notification fixtures still exist in `fake_acp_server.py` for
 generic ACP compatibility work, but they are not the current Hermes contract.

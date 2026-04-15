@@ -14,6 +14,11 @@ from ....core.git_utils import (
     reset_worktree_to_head,
 )
 from ....core.utils import canonicalize_path
+from ...chat.interrupt_controller import (
+    SharedInterruptState,
+    render_managed_thread_interrupt_message,
+    request_managed_thread_interrupt,
+)
 from ...chat.session_messages import (
     build_fresh_session_started_lines,
     build_thread_detail_lines,
@@ -1504,21 +1509,21 @@ async def handle_car_interrupt(
         )
         return
     try:
-        if cancel_queued:
-            stop_outcome = await orchestration_service.stop_thread(
-                current_thread.thread_target_id
-            )
-        else:
-            stop_outcome = await orchestration_service.stop_thread(
-                current_thread.thread_target_id,
-                cancel_queued=False,
-            )
-        interrupted_active = bool(getattr(stop_outcome, "interrupted_active", False))
-        recovered_lost_backend = bool(
-            getattr(stop_outcome, "recovered_lost_backend", False)
+        operation_store = None
+        operation_store_getter = getattr(service, "_chat_operation_store_or_none", None)
+        if callable(operation_store_getter):
+            operation_store = operation_store_getter()
+        interrupt_outcome = await request_managed_thread_interrupt(
+            orchestration_service=orchestration_service,
+            thread_target_id=current_thread.thread_target_id,
+            cancel_queued=cancel_queued,
+            referenced_execution_id=normalized_execution_id,
+            operation_store=operation_store,
+            operation_id=interaction_id,
         )
-        cancelled_queued = int(getattr(stop_outcome, "cancelled_queued", 0) or 0)
-        execution_record = getattr(stop_outcome, "execution", None)
+        interrupted_active = interrupt_outcome.interrupted_active
+        recovered_lost_backend = interrupt_outcome.recovered_lost_backend
+        cancelled_queued = interrupt_outcome.cancelled_queued
         log_event(
             service._logger,
             logging.INFO,
@@ -1531,19 +1536,35 @@ async def handle_car_interrupt(
             source_custom_id=source_custom_id,
             source_message_id=source_message_id,
             thread_target_id=current_thread.thread_target_id,
+            interrupt_state=interrupt_outcome.state.value,
             interrupted_active=interrupted_active,
             recovered_lost_backend=recovered_lost_backend,
             cancelled_queued=cancelled_queued,
-            execution_id=(
-                execution_record.execution_id if execution_record is not None else None
-            ),
-            execution_status=(
-                execution_record.status if execution_record is not None else None
-            ),
-            execution_backend_turn_id=(
-                execution_record.backend_id if execution_record is not None else None
-            ),
+            execution_id=interrupt_outcome.execution_id,
         )
+        if interrupt_outcome.state == SharedInterruptState.FAILED_TO_DISPATCH:
+            if progress_reuse_source_message_id or progress_reuse_acknowledgement:
+                clear_discord_turn_progress_reuse(
+                    service,
+                    thread_target_id=current_thread.thread_target_id,
+                )
+            text = format_discord_message("Interrupt failed. Please try again.")
+            await service.send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=text,
+            )
+            return
+        if interrupt_outcome.state == SharedInterruptState.STILL_STOPPING:
+            text = format_discord_message("Still stopping current turn...")
+            await service.send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=text,
+            )
+            return
         if (
             not interrupted_active
             and not recovered_lost_backend
@@ -1599,7 +1620,11 @@ async def handle_car_interrupt(
                 interaction_id=interaction_id,
                 interaction_token=interaction_token,
                 deferred=deferred,
-                text=text,
+                text=(
+                    format_discord_message("Current turn already finished.")
+                    if interrupt_outcome.state == SharedInterruptState.ALREADY_FINISHED
+                    else text
+                ),
             )
             return
         if interrupted_active:
@@ -1615,12 +1640,6 @@ async def handle_car_interrupt(
                 thread_target_id=current_thread.thread_target_id,
             )
         elif source_message_id:
-            note = _interrupt_resolution_note(
-                referenced_execution_id=normalized_execution_id,
-                running_execution=running_execution,
-                resolved_execution=execution_record,
-                thread_missing=False,
-            )
             await clear_discord_turn_progress_leases(
                 service,
                 managed_thread_id=current_thread.thread_target_id,
@@ -1633,20 +1652,18 @@ async def handle_car_interrupt(
                 message_id=source_message_id,
                 note="Status: this turn is no longer live in the backend and was recovered locally.",
             )
-        parts = []
-        if interrupted_active:
-            parts.append(active_turn_text)
-        elif recovered_lost_backend:
-            parts.append("Recovered stale session after backend thread was lost.")
-        if cancelled_queued:
-            parts.append(f"Cancelled {cancelled_queued} queued turn(s).")
         text = format_discord_message(
-            "Recovered stale session after backend thread was lost."
-            if recovered_lost_backend
-            else active_turn_text
+            render_managed_thread_interrupt_message(
+                interrupt_outcome,
+                active_turn_text=active_turn_text,
+                still_stopping_text="Still stopping current turn...",
+                already_finished_text="Current turn already finished.",
+                recovered_lost_backend_text=(
+                    "Recovered stale session after backend thread was lost."
+                ),
+                queued_text_template="Cancelled {count} queued turn(s).",
+            )
         )
-        if parts:
-            text = format_discord_message(" ".join(parts))
         await service.send_or_respond_ephemeral(
             interaction_id=interaction_id,
             interaction_token=interaction_token,

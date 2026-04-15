@@ -2,6 +2,7 @@ from codex_autorunner.core.ports.run_event import (
     RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
     RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
     RUN_EVENT_DELTA_TYPE_LOG_LINE,
+    ApprovalRequested,
     Completed,
     OutputDelta,
     RunNotice,
@@ -10,6 +11,9 @@ from codex_autorunner.core.ports.run_event import (
 from codex_autorunner.integrations.chat.managed_thread_progress import (
     ProgressRuntimeState,
     apply_run_event_to_progress_tracker,
+)
+from codex_autorunner.integrations.chat.managed_thread_progress_projector import (
+    ManagedThreadProgressProjector,
 )
 from codex_autorunner.integrations.chat.progress_primitives import (
     TurnProgressTracker,
@@ -25,6 +29,14 @@ def _tracker() -> TurnProgressTracker:
         label="working",
         max_actions=12,
         max_output_chars=400,
+    )
+
+
+def _projector() -> ManagedThreadProgressProjector:
+    return ManagedThreadProgressProjector(
+        _tracker(),
+        min_render_interval_seconds=1.0,
+        heartbeat_interval_seconds=5.0,
     )
 
 
@@ -426,3 +438,74 @@ def test_assistant_message_does_not_duplicate_when_stream_output_is_truncated() 
 
     rendered = render_progress_text(tracker, max_length=4000, now=1.0)
     assert rendered.count("investigating") <= 1
+
+
+def test_managed_thread_progress_projector_records_semantic_phase_sequence() -> None:
+    projector = _projector()
+    projector.mark_queued()
+    projector.mark_working()
+
+    events = [
+        ApprovalRequested(
+            timestamp="2026-03-15T00:00:00Z",
+            request_id="req-1",
+            description="Need approval to run tests",
+            context={},
+        ),
+        ToolCall(
+            timestamp="2026-03-15T00:00:01Z",
+            tool_name="exec",
+            tool_input={"cmd": "pytest -q"},
+        ),
+        Completed(
+            timestamp="2026-03-15T00:00:02Z",
+            final_message="tests passed",
+        ),
+    ]
+
+    for event in events:
+        projector.apply_run_event(event)
+
+    assert projector.phase_sequence() == (
+        "queued",
+        "working",
+        "approval",
+        "progress",
+        "terminal",
+    )
+    assert projector.semantic_phase == "terminal"
+    assert projector.tracker.label == "done"
+
+
+def test_managed_thread_progress_projector_reuses_then_supersedes_anchor() -> None:
+    projector = _projector()
+    projector.mark_queued()
+
+    first = projector.bind_anchor("msg-1", owned=True, reused=False)
+    reused = projector.bind_anchor("msg-1", owned=True, reused=True)
+    projector.mark_working()
+    superseded = projector.bind_anchor("msg-2", owned=True, reused=False)
+
+    assert first.anchor_ref == "msg-1"
+    assert first.stage == "queued"
+    assert reused.anchor_ref == "msg-1"
+    assert reused.reused is True
+    assert superseded.anchor_ref == "msg-2"
+    assert superseded.superseded_anchor_ref == "msg-1"
+    assert superseded.cleanup_required is True
+
+
+def test_managed_thread_progress_projector_controls_duplicate_and_heartbeat_policy() -> (
+    None
+):
+    projector = _projector()
+    projector.mark_working()
+    rendered = "working · agent codex · default · 0s"
+
+    assert projector.should_emit_render(rendered, now=1.0, force=False) is True
+    projector.note_rendered(rendered, now=1.0)
+
+    assert projector.should_emit_render(rendered, now=1.5, force=False) is False
+    assert projector.should_emit_render(rendered, now=2.5, force=False) is False
+    assert projector.should_emit_heartbeat(now=5.9) is False
+    assert projector.should_emit_heartbeat(now=6.0) is True

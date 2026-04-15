@@ -1356,6 +1356,57 @@ def test_chat_doctor_checks_failures_are_actionable(
     assert fix_snippet in check.fix
 
 
+def test_chat_doctor_checks_report_ux_regression_contract_failures(monkeypatch):
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.chat.doctor.run_parity_checks",
+        lambda repo_root=None: (
+            ParityCheckResult(
+                id="chat.ux_latency_budget_contract_complete",
+                passed=False,
+                message="missing budgets",
+                metadata={
+                    "missing_required_budget_ids": ["queue_visible"],
+                    "invalid_budget_ids": [],
+                    "duplicate_budget_ids": [],
+                },
+            ),
+            ParityCheckResult(
+                id="chat.ux_regression_contract_complete",
+                passed=False,
+                message="missing scenarios",
+                metadata={
+                    "missing_required_scenario_ids": ["queued_visibility"],
+                    "missing_test_paths": [],
+                    "scenarios_missing_surface_coverage": ["duplicate_delivery"],
+                    "scenarios_with_missing_budget_refs": [],
+                    "scenarios_with_empty_tests": [],
+                    "duplicate_scenario_ids": [],
+                },
+            ),
+        ),
+    )
+
+    checks = chat_doctor_checks()
+    by_name = {check.name: check for check in checks}
+
+    budget_check = by_name[
+        "Chat parity contract (chat.ux_latency_budget_contract_complete)"
+    ]
+    coverage_check = by_name[
+        "Chat parity contract (chat.ux_regression_contract_complete)"
+    ]
+
+    assert budget_check.passed is False
+    assert "queue_visible" in budget_check.message
+    assert budget_check.fix is not None
+    assert "ux_regression_contract.py" in budget_check.fix
+
+    assert coverage_check.passed is False
+    assert "queued_visibility" in coverage_check.message
+    assert coverage_check.fix is not None
+    assert "concrete regression tests" in coverage_check.fix
+
+
 @pytest.fixture
 def tmp_path(tmpdir):
     """Provide a temporary path for testing."""

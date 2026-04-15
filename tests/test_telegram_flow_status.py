@@ -19,6 +19,11 @@ from codex_autorunner.core.flows.models import (
     FlowRunStatus,
 )
 from codex_autorunner.core.flows.worker_process import FlowWorkerHealth
+from codex_autorunner.core.ports.run_event import (
+    ApprovalRequested,
+    Completed,
+    ToolCall,
+)
 from codex_autorunner.integrations.telegram.adapter import (
     FlowCallback,
     TelegramCallbackQuery,
@@ -334,10 +339,21 @@ class _TurnCompletionProgressHarness(TelegramNotificationHandlers):
                 max_output_chars=400,
             )
         }
+        self._turn_progress_rendered: dict[tuple[str, str], str] = {}
+        self._turn_progress_updated_at: dict[tuple[str, str], float] = {}
         self._turn_progress_backoff_until: dict[tuple[str, str], float] = {}
         self._turn_progress_failure_streaks: dict[tuple[str, str], int] = {}
         self._turn_progress_suppressed_counts: dict[tuple[str, str], int] = {}
-        self._turn_contexts: dict[tuple[str, str], Any] = {self._turn_key: object()}
+        self._turn_progress_tasks: dict[tuple[str, str], Any] = {}
+        self._turn_progress_locks: dict[tuple[str, str], Any] = {}
+        self._turn_contexts: dict[tuple[str, str], Any] = {
+            self._turn_key: SimpleNamespace(
+                chat_id=1,
+                thread_id=2,
+                topic_key="topic-1",
+                placeholder_message_id=100,
+            )
+        }
         self.edits: list[tuple[tuple[str, str], bool, str]] = []
         self.cleared: list[tuple[str, str]] = []
 
@@ -584,6 +600,49 @@ async def test_turn_completed_prunes_duplicate_terminal_output_from_progress() -
     assert tracker.finalized is True
     assert harness.edits == [(key, True, "final")]
     assert harness.cleared == [key]
+
+
+@pytest.mark.anyio
+async def test_apply_run_event_to_progress_tracks_shared_semantic_phase_order() -> None:
+    harness = _TurnCompletionProgressHarness()
+    key = harness._turn_key
+    projector = harness._get_turn_progress_projector(key, create=True)
+    assert projector is not None
+    projector.mark_queued()
+    projector.mark_working()
+
+    await harness._apply_run_event_to_progress(
+        key,
+        ApprovalRequested(
+            timestamp="2026-03-15T00:00:00Z",
+            request_id="req-1",
+            description="Need approval to run tests",
+            context={},
+        ),
+    )
+    await harness._apply_run_event_to_progress(
+        key,
+        ToolCall(
+            timestamp="2026-03-15T00:00:01Z",
+            tool_name="exec",
+            tool_input={"cmd": "pytest -q"},
+        ),
+    )
+    await harness._apply_run_event_to_progress(
+        key,
+        Completed(
+            timestamp="2026-03-15T00:00:02Z",
+            final_message="tests passed",
+        ),
+    )
+
+    assert projector.phase_sequence() == (
+        "queued",
+        "working",
+        "approval",
+        "progress",
+        "terminal",
+    )
 
 
 @pytest.mark.anyio

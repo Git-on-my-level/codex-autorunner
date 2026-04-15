@@ -446,6 +446,14 @@ class DiscordResponder:
             interaction_id=interaction_id,
         )
         if deferred and session.has_initial_response():
+            if not ephemeral:
+                updated = await self.edit_original_component_message(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    text=text,
+                )
+                if updated:
+                    return
             sent = await self.send_followup(
                 interaction_id=interaction_id,
                 interaction_token=interaction_token,
@@ -495,6 +503,15 @@ class DiscordResponder:
             interaction_id=interaction_id,
         )
         if deferred and session.has_initial_response():
+            if not ephemeral:
+                updated = await self.edit_original_component_message(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    text=text,
+                    components=components,
+                )
+                if updated:
+                    return
             sent = await self.send_followup(
                 interaction_id=interaction_id,
                 interaction_token=interaction_token,

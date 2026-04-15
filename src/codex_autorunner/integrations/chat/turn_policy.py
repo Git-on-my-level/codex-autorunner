@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, Optional
 
+from .action_ux_contract import plain_text_turn_ux_contract_for_mode
+
 TurnTriggerMode = Literal["always", "mentions"]
 
 
@@ -26,6 +28,8 @@ def should_trigger_plain_text_turn(
 ) -> bool:
     """Return True when a plain-text message should trigger an agent turn."""
 
+    if plain_text_turn_ux_contract_for_mode(mode) is None:
+        return False
     if mode == "always":
         return True
     if mode != "mentions":
