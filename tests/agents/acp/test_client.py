@@ -31,6 +31,15 @@ from codex_autorunner.core.acp_lifecycle import (
     _TERMINAL_METHODS,
 )
 from codex_autorunner.core.acp_lifecycle import (
+    classify_prompt_response_status as _classify_prompt_response_status,
+)
+from codex_autorunner.core.acp_lifecycle import (
+    extract_prompt_response_error as _extract_prompt_response_error,
+)
+from codex_autorunner.core.acp_lifecycle import (
+    prompt_terminal_method_for_status as _prompt_terminal_method_for_status,
+)
+from codex_autorunner.core.acp_lifecycle import (
     should_map_missing_turn_id as _shared_should_map_missing_turn_id,
 )
 
@@ -854,3 +863,83 @@ class TestClientLifecycleDelegation:
             assert params.get("turnId") == "turn-active"
         else:
             assert params.get("turnId") is None
+
+
+class TestPromptResponseLifecycleDelegation:
+    def test_classify_prompt_response_status_completed(self) -> None:
+        assert _classify_prompt_response_status({}) == "completed"
+        assert (
+            _classify_prompt_response_status({"stopReason": "end_turn"}) == "completed"
+        )
+        assert (
+            _classify_prompt_response_status({"stop_reason": "end_turn"}) == "completed"
+        )
+        assert _classify_prompt_response_status({"stopReason": ""}) == "completed"
+
+    def test_classify_prompt_response_status_cancelled(self) -> None:
+        assert (
+            _classify_prompt_response_status({"stopReason": "cancelled"}) == "cancelled"
+        )
+        assert (
+            _classify_prompt_response_status({"stop_reason": "cancelled"})
+            == "cancelled"
+        )
+
+    def test_classify_prompt_response_status_failed(self) -> None:
+        assert _classify_prompt_response_status({"stopReason": "refusal"}) == "failed"
+        assert _classify_prompt_response_status({"stop_reason": "refusal"}) == "failed"
+
+    def test_prompt_terminal_method_for_status(self) -> None:
+        assert _prompt_terminal_method_for_status("completed") == "prompt/completed"
+        assert _prompt_terminal_method_for_status("cancelled") == "prompt/cancelled"
+        assert _prompt_terminal_method_for_status("failed") == "prompt/failed"
+
+    def test_extract_prompt_response_error_returns_none_when_not_failed(self) -> None:
+        assert _extract_prompt_response_error({}) is None
+        assert _extract_prompt_response_error({"stopReason": "cancelled"}) is None
+        assert _extract_prompt_response_error({"stopReason": "end_turn"}) is None
+
+    def test_extract_prompt_response_error_extracts_message(self) -> None:
+        assert (
+            _extract_prompt_response_error(
+                {"stopReason": "refusal", "message": "model refused"}
+            )
+            == "model refused"
+        )
+        assert (
+            _extract_prompt_response_error(
+                {"stopReason": "refusal", "error": "error text"}
+            )
+            == "error text"
+        )
+        assert _extract_prompt_response_error({"stopReason": "refusal"}) == "refusal"
+
+    def test_client_prompt_response_uses_shared_classification(
+        self,
+    ) -> None:
+        payloads: list[dict[str, object]] = [
+            {},
+            {"stopReason": "cancelled"},
+            {"stopReason": "refusal"},
+            {"stopReason": "end_turn"},
+            {"stop_reason": "cancelled"},
+            {"stop_reason": "refusal"},
+        ]
+        expected: list[str] = [
+            "completed",
+            "cancelled",
+            "failed",
+            "completed",
+            "cancelled",
+            "failed",
+        ]
+        for payload, expect in zip(payloads, expected):
+            status = _classify_prompt_response_status(payload)
+            method = _prompt_terminal_method_for_status(status)
+            assert status == expect, f"payload={payload}"
+            if expect == "completed":
+                assert method == "prompt/completed"
+            elif expect == "cancelled":
+                assert method == "prompt/cancelled"
+            elif expect == "failed":
+                assert method == "prompt/failed"

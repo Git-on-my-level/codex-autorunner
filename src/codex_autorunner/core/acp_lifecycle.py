@@ -513,10 +513,42 @@ def session_update_content_summary(update: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def classify_prompt_response_status(payload: Mapping[str, Any]) -> str:
+    result = coerce_mapping(payload)
+    raw_reason = result.get("stopReason") or result.get("stop_reason")
+    stop_reason = _normalize_optional_text(raw_reason) or ""
+    if stop_reason == "cancelled":
+        return "cancelled"
+    if stop_reason == "refusal":
+        return "failed"
+    return "completed"
+
+
+def prompt_terminal_method_for_status(status: str) -> str:
+    if status == "cancelled":
+        return "prompt/cancelled"
+    if status == "failed":
+        return "prompt/failed"
+    return "prompt/completed"
+
+
+def extract_prompt_response_error(payload: Mapping[str, Any]) -> Optional[str]:
+    if classify_prompt_response_status(payload) != "failed":
+        return None
+    result = coerce_mapping(payload)
+    return _normalize_optional_text(
+        result.get("message")
+        or result.get("error")
+        or result.get("stopReason")
+        or result.get("stop_reason")
+    )
+
+
 __all__ = [
     "ACPLifecycleSnapshot",
-    "analyze_acp_lifecycle_message",
     "ACPRuntimeTerminalStatus",
+    "analyze_acp_lifecycle_message",
+    "classify_prompt_response_status",
     "coerce_mapping",
     "extract_error_message",
     "extract_identifier",
@@ -524,12 +556,14 @@ __all__ = [
     "extract_output_delta",
     "extract_permission_description",
     "extract_progress_message",
+    "extract_prompt_response_error",
     "extract_session_update",
     "extract_session_update_kind",
     "extract_text",
     "extract_text_content",
     "extract_usage",
     "is_idle_terminal",
+    "prompt_terminal_method_for_status",
     "runtime_terminal_status_for_lifecycle",
     "session_status_type",
     "session_update_content_summary",

@@ -930,6 +930,34 @@ class TestHermesLifecycleDelegation:
             )
             assert not _should_close_turn_buffer(event)
 
+    def test_should_close_turn_buffer_handles_all_event_types(self) -> None:
+        event_types = [
+            normalize_notification(
+                {"method": "session/update", "params": {"sessionId": "s1"}}
+            ),
+            normalize_notification(
+                {"method": "prompt/started", "params": {"sessionId": "s1"}}
+            ),
+            normalize_notification(
+                {
+                    "method": "prompt/completed",
+                    "params": {"sessionId": "s1", "status": "completed"},
+                }
+            ),
+            normalize_notification(
+                {
+                    "method": "prompt/failed",
+                    "params": {"sessionId": "s1", "message": "err"},
+                }
+            ),
+        ]
+        for event in event_types:
+            result = _should_close_turn_buffer(event)
+            assert isinstance(result, bool)
+            assert result == _shared_should_close_turn_buffer(
+                event.method, event.payload
+            )
+
     @pytest.mark.parametrize(
         ("case"),
         load_acp_lifecycle_corpus(),
