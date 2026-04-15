@@ -64,6 +64,7 @@ from .hub_topology import (
     normalize_pinned_parent_repo_ids,
     prune_pinned_parent_repo_ids,
     read_lock_status,  # noqa: F401  re-exported for consumers
+    refresh_pma_threads_artifact,
     save_hub_state,
 )
 from .hub_worktree_manager import WorktreeManager
@@ -358,6 +359,7 @@ class HubSupervisor:
         self._pma_automation_store: Optional[PmaAutomationStore] = None
         self._pma_lane_worker_starter: Optional[Callable[[str], None]] = None
         self._scm_poll_processor = scm_poll_processor
+        self._invalidation_callbacks: List[Callable[[], None]] = []
         self._repo_manager = RepoManager(
             hub_config,
             on_invalidate_cache=self._invalidate_list_cache,
@@ -414,6 +416,7 @@ class HubSupervisor:
             pinned_parent_repo_ids=pinned_parent_repo_ids,
         )
         save_hub_state(self.state_path, self.state, self.hub_config.root)
+        refresh_pma_threads_artifact(self.hub_config.root)
         return snapshots
 
     def list_repos(self, *, use_cache: bool = True) -> List[RepoSnapshot]:
@@ -444,7 +447,6 @@ class HubSupervisor:
                 self.state_path,
                 self.state,
                 self.hub_config.root,
-                refresh_pma_threads_artifact=False,
             )
             self._list_cache = snapshots
             self._list_cache_at = time.monotonic()
@@ -481,7 +483,6 @@ class HubSupervisor:
                 self.state_path,
                 self.state,
                 self.hub_config.root,
-                refresh_pma_threads_artifact=False,
             )
             return list(self.state.pinned_parent_repo_ids)
 
@@ -1315,11 +1316,19 @@ class HubSupervisor:
             raise ValueError(f"Agent workspace {workspace_id} not found in manifest")
         return build_agent_workspace_snapshot(workspace, self.hub_config.root)
 
+    def register_invalidation_callback(self, callback: Callable[[], None]) -> None:
+        self._invalidation_callbacks.append(callback)
+
     def _invalidate_list_cache(self) -> None:
         with self._list_lock:
             self._list_cache = None
             self._list_cache_at = None
             self._startup_repo_state_pending = False
+        for cb in self._invalidation_callbacks:
+            try:
+                cb()
+            except (OSError, ValueError, TypeError, RuntimeError):
+                logger.exception("Invalidation callback failed")
 
     @property
     def lifecycle_emitter(self) -> LifecycleEventEmitter:

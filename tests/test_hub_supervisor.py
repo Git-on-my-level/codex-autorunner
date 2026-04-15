@@ -326,7 +326,9 @@ def test_list_repos_does_not_refresh_pma_threads_artifact(
         calls.append(path)
 
     monkeypatch.setattr(
-        hub_topology_module, "_save_pma_threads_artifact", _record_artifact_call
+        hub_topology_module,
+        "refresh_pma_threads_artifact",
+        _record_artifact_call,
     )
     try:
         supervisor.list_repos(use_cache=False)
@@ -1329,19 +1331,21 @@ def test_archive_repo_state_waits_for_runner_exit_before_archiving(
     monkeypatch.setattr(
         hub_module,
         "archive_workspace_for_fresh_start",
-        lambda **_kwargs: archived.append(dict(_kwargs))
-        or types.SimpleNamespace(
-            snapshot_id="snap",
-            snapshot_path=base.path / ".codex-autorunner" / "archive",
-            meta_path=base.path / ".codex-autorunner" / "archive" / "META.json",
-            status="complete",
-            file_count=0,
-            total_bytes=0,
-            flow_run_count=0,
-            latest_flow_run_id=None,
-            archived_paths=(),
-            reset_paths=(),
-            archived_thread_ids=(),
+        lambda **_kwargs: (
+            archived.append(dict(_kwargs))
+            or types.SimpleNamespace(
+                snapshot_id="snap",
+                snapshot_path=base.path / ".codex-autorunner" / "archive",
+                meta_path=base.path / ".codex-autorunner" / "archive" / "META.json",
+                status="complete",
+                file_count=0,
+                total_bytes=0,
+                flow_run_count=0,
+                latest_flow_run_id=None,
+                archived_paths=(),
+                reset_paths=(),
+                archived_thread_ids=(),
+            )
         ),
     )
 

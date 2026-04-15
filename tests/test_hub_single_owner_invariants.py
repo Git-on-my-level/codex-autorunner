@@ -432,19 +432,19 @@ def test_save_hub_state_writes_atomic_json(tmp_path: Path) -> None:
         runner_pid=None,
     )
     state = HubState(last_scan_at="2026-01-01T00:00:00Z", repos=[repo])
-    save_hub_state(state_path, state, hub_root, refresh_pma_threads_artifact=False)
+    save_hub_state(state_path, state, hub_root)
 
     loaded = json.loads(state_path.read_text(encoding="utf-8"))
     assert loaded["last_scan_at"] == "2026-01-01T00:00:00Z"
     assert loaded["repos"][0]["id"] == "demo"
 
 
-def test_save_hub_state_pma_artifact_failure_is_non_fatal(
+def test_refresh_pma_threads_artifact_failure_is_non_fatal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import codex_autorunner.core.hub_topology as topo_mod
     from codex_autorunner.core.hub_topology import (
         HubState,
+        refresh_pma_threads_artifact,
         save_hub_state,
     )
 
@@ -454,17 +454,20 @@ def test_save_hub_state_pma_artifact_failure_is_non_fatal(
     state_path.parent.mkdir(parents=True, exist_ok=True)
     state = HubState(last_scan_at="2026-01-01T00:00:00Z", repos=[])
 
-    call_count = {"pma_save": 0}
-
-    def _failing_pma_save(_hub_root: Path) -> None:
-        call_count["pma_save"] += 1
-        raise OSError("pma artifact write failed")
-
-    monkeypatch.setattr(topo_mod, "_save_pma_threads_artifact", _failing_pma_save)
-    save_hub_state(state_path, state, hub_root, refresh_pma_threads_artifact=True)
-
-    assert call_count["pma_save"] == 1
+    save_hub_state(state_path, state, hub_root)
     assert state_path.exists(), "main state file must still be written"
+
+    import codex_autorunner.core.pma_context as pma_ctx
+
+    monkeypatch.setattr(
+        pma_ctx,
+        "_snapshot_pma_threads",
+        lambda _root: (_ for _ in ()).throw(OSError("pma artifact write failed")),
+    )
+    refresh_pma_threads_artifact(hub_root)
+
+    artifact_path = hub_root / ".codex-autorunner" / "pma_threads.json"
+    assert not artifact_path.exists(), "artifact should not be written on failure"
 
 
 # ---------------------------------------------------------------------------
