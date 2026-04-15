@@ -2722,7 +2722,8 @@ def _resolve_hub_config_path(start: Path) -> Path:
     config_path = find_nearest_hub_config_path(start)
     if not config_path:
         raise ConfigError(
-            f"Missing hub config file; expected to find {CONFIG_FILENAME} in {start} or parents (use --path to specify, or run 'car init' to initialize)"
+            f"Missing hub config file; expected to find {CONFIG_FILENAME} in {start} or parents "
+            "(pass --path on most commands, --hub-root on car render, or run 'car init' to initialize)"
         )
     return config_path
 

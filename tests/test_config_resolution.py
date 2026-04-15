@@ -987,7 +987,10 @@ def test_load_hub_config_raises_when_no_config_in_git_repo(tmp_path: Path) -> No
     config_path = git_repo / ".codex-autorunner" / "config.yml"
     assert not config_path.exists(), "Precondition: no config should exist"
 
-    with pytest.raises(ConfigError, match="Missing hub config file"):
+    with pytest.raises(
+        ConfigError,
+        match=r"Missing hub config file.*--path.*--hub-root.*car render",
+    ):
         load_hub_config(git_repo)
 
     assert not config_path.exists(), "load_hub_config should not create config file"
@@ -1001,7 +1004,10 @@ def test_load_hub_config_raises_without_seeding_in_empty_dir(tmp_path: Path) -> 
     config_path = empty_dir / ".codex-autorunner" / "config.yml"
     assert not config_path.exists(), "Precondition: no config should exist"
 
-    with pytest.raises(ConfigError, match="Missing hub config file"):
+    with pytest.raises(
+        ConfigError,
+        match=r"Missing hub config file.*--path.*--hub-root.*car render",
+    ):
         load_hub_config(empty_dir)
 
     assert not config_path.exists(), "load_hub_config should not create config file"
