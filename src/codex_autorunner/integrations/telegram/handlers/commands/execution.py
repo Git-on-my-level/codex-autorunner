@@ -794,6 +794,7 @@ async def _run_telegram_managed_thread_turn(
     chat_ux_snapshot: Optional[ChatUxTimingSnapshot] = None,
 ) -> _TurnRunResult | _TurnRunFailure:
     if chat_ux_snapshot is not None:
+        chat_ux_snapshot.record(ChatUxMilestone.ACK_FINISHED)
         chat_ux_snapshot.record(ChatUxMilestone.FIRST_VISIBLE_FEEDBACK)
     prepared_placeholder_id = await handlers._prepare_turn_placeholder(
         message,

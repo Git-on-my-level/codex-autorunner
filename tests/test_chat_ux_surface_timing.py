@@ -10,7 +10,15 @@ from codex_autorunner.integrations.chat.chat_ux_telemetry import (
     ChatUxMilestone,
     ChatUxTimingSnapshot,
     emit_chat_ux_timing,
+    reset_global_accumulator,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_accumulator():
+    reset_global_accumulator()
+    yield
+    reset_global_accumulator()
 
 
 @pytest.fixture
@@ -112,6 +120,7 @@ class TestTelegramTimingEmission:
             agent="opencode",
         )
         snap.record(ChatUxMilestone.RAW_EVENT_RECEIVED, now=200.0)
+        snap.record(ChatUxMilestone.ACK_FINISHED, now=200.5)
         snap.record(ChatUxMilestone.FIRST_VISIBLE_FEEDBACK, now=201.0)
         snap.record(ChatUxMilestone.FIRST_SEMANTIC_PROGRESS, now=203.0)
         snap.record(ChatUxMilestone.TERMINAL_DELIVERY, now=210.0)
@@ -131,6 +140,7 @@ class TestTelegramTimingEmission:
         event = events[0]
         assert event["event"] == "chat_ux_timing.telegram.managed_thread_turn"
         assert event["chat_ux_platform"] == "telegram"
+        assert event["chat_ux_delta_ack_ms"] == 500.0
         assert event["chat_ux_delta_first_visible_ms"] == 1000.0
         assert event["chat_ux_delta_first_progress_ms"] == 3000.0
         assert event["chat_ux_delta_terminal_ms"] == 10000.0

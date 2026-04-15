@@ -31,7 +31,10 @@ from ....core.utils import (
     is_within,
     resolve_executable,
 )
-from ....integrations.chat.doctor import chat_doctor_checks
+from ....integrations.chat.doctor import (
+    chat_doctor_checks,
+    chat_ux_timing_diagnostic_checks,
+)
 from ....integrations.discord.doctor import discord_doctor_checks
 from ....integrations.telegram.doctor import telegram_doctor_checks
 from .utils import get_car_version, raise_exit
@@ -312,6 +315,7 @@ def register_doctor_commands(
             hub_worktree_checks = hub_worktree_doctor_checks(hub_config)
             hub_destination_checks = hub_destination_doctor_checks(hub_config)
             chat_checks = chat_doctor_checks(repo_root=repo_root) if dev else []
+            timing_checks = chat_ux_timing_diagnostic_checks() if dev else []
 
             report = DoctorReport(
                 checks=report.checks
@@ -323,6 +327,7 @@ def register_doctor_commands(
                 + zeroclaw_doctor_checks(hub_config)
                 + hermes_doctor_checks(hub_config)
                 + chat_checks
+                + timing_checks
             )
         except ConfigError as exc:
             raise_exit(str(exc), cause=exc)
