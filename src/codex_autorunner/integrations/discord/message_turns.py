@@ -75,9 +75,8 @@ from ...integrations.chat.models import ChatMessageEvent
 from ...integrations.chat.runtime_thread_errors import (
     sanitize_runtime_thread_error,
 )
-from ..chat.managed_thread_progress import (
-    ProgressRuntimeState,
-    apply_run_event_to_progress_tracker,
+from ..chat.managed_thread_progress_projector import (
+    ManagedThreadProgressProjector,
 )
 from ..chat.managed_thread_turns import (
     ManagedThreadCoordinatorHooks,
@@ -101,7 +100,7 @@ from ..chat.managed_turn_runner import (
     ManagedSurfaceRunnerConfig,
     run_managed_surface_turn,
 )
-from ..chat.progress_primitives import TurnProgressTracker, render_progress_text
+from ..chat.progress_primitives import TurnProgressTracker
 from ..chat.turn_metrics import (
     _extract_context_usage_percent,
     compose_turn_response_with_footer,
@@ -1076,24 +1075,17 @@ def _resolve_discord_turn_policies(
 
 
 async def _apply_discord_progress_run_event(
-    tracker: TurnProgressTracker,
+    projector: ManagedThreadProgressProjector,
     run_event: Any,
     *,
-    runtime_state: ProgressRuntimeState,
     edit_progress: Any,
 ) -> None:
     if isinstance(run_event, TokenUsage):
         usage_payload = run_event.usage
         if isinstance(usage_payload, dict):
-            tracker.context_usage_percent = _extract_context_usage_percent(
-                usage_payload
-            )
+            projector.note_context_usage(_extract_context_usage_percent(usage_payload))
         return
-    outcome = apply_run_event_to_progress_tracker(
-        tracker,
-        run_event,
-        runtime_state=runtime_state,
-    )
+    outcome = projector.apply_run_event(run_event)
     if not outcome.changed:
         return
     await edit_progress(
@@ -2797,13 +2789,15 @@ async def _run_discord_orchestrated_turn_for_message(
         max_actions=max_actions,
         max_output_chars=max_progress_len,
     )
+    projector = ManagedThreadProgressProjector(
+        tracker,
+        min_render_interval_seconds=min_edit_interval_seconds,
+        heartbeat_interval_seconds=heartbeat_interval_seconds,
+    )
     progress_message_id: Optional[str] = None
-    progress_rendered: Optional[str] = None
-    progress_last_updated = 0.0
     progress_heartbeat_task: Optional[asyncio.Task[None]] = None
     progress_execution_id: Optional[str] = None
     progress_lease_id = uuid.uuid4().hex
-    runtime_state = ProgressRuntimeState()
     active_progress_labels = {"working", "queued", "running", "review"}
     reusable_progress_message_id = _claim_discord_reusable_progress_message(
         service,
@@ -2882,21 +2876,21 @@ async def _run_discord_orchestrated_turn_for_message(
         remove_components: bool = False,
         render_mode: str = "live",
     ) -> None:
-        nonlocal progress_rendered
-        nonlocal progress_last_updated
         if not progress_message_id:
             return
         now = time.monotonic()
-        if not force and (now - progress_last_updated) < min_edit_interval_seconds:
-            return
-        rendered = render_progress_text(
-            tracker,
+        rendered = projector.render(
             max_length=max_progress_len,
             now=now,
             render_mode=render_mode,
         )
         content = truncate_for_discord(rendered, max_len=max_progress_len)
-        if not force and content == progress_rendered:
+        if not projector.should_emit_render(
+            content,
+            now=now,
+            force=force,
+            min_interval_seconds=min_edit_interval_seconds,
+        ):
             return
         payload: dict[str, Any] = {"content": content}
         if remove_components:
@@ -2931,10 +2925,9 @@ async def _run_discord_orchestrated_turn_for_message(
                 progress_message_id,
                 exc_info=True,
             )
-            progress_last_updated = now
+            projector.note_render_attempt(now=now)
             return
-        progress_rendered = content
-        progress_last_updated = now
+        projector.note_rendered(content, now=now)
         await _update_discord_progress_lease(
             service,
             lease_id=progress_lease_id,
@@ -2948,6 +2941,8 @@ async def _run_discord_orchestrated_turn_for_message(
             await asyncio.sleep(heartbeat_interval_seconds)
             if not await _progress_lease_allows_heartbeat():
                 return
+            if not projector.should_emit_heartbeat(now=time.monotonic()):
+                continue
             await _edit_progress()
 
     async def _stop_progress_heartbeat() -> None:
@@ -2984,6 +2979,7 @@ async def _run_discord_orchestrated_turn_for_message(
     try:
         if reusable_progress_message_id:
             progress_message_id = reusable_progress_message_id
+            projector.bind_anchor(progress_message_id, owned=True, reused=True)
             if supervision is not None:
                 supervision.set_message_id(progress_message_id)
             await _register_progress_lease(state="pending")
@@ -2998,8 +2994,7 @@ async def _run_discord_orchestrated_turn_for_message(
                 await_on_shutdown=True,
             )
         else:
-            initial_rendered = render_progress_text(
-                tracker,
+            initial_rendered = projector.render(
                 max_length=max_progress_len,
                 now=time.monotonic(),
             )
@@ -3023,10 +3018,10 @@ async def _run_discord_orchestrated_turn_for_message(
             message_id = response.get("id")
             if isinstance(message_id, str) and message_id:
                 progress_message_id = message_id
+                projector.bind_anchor(progress_message_id, owned=True, reused=False)
                 if supervision is not None:
                     supervision.set_message_id(progress_message_id)
-                progress_rendered = initial_content
-                progress_last_updated = time.monotonic()
+                projector.note_rendered(initial_content, now=time.monotonic())
                 await _register_progress_lease(state="pending")
                 progress_heartbeat_task = _spawn_discord_progress_background_task(
                     service,
@@ -3062,9 +3057,8 @@ async def _run_discord_orchestrated_turn_for_message(
     async def _handle_progress_event(run_event: Any) -> None:
         nonlocal _first_progress_recorded
         await _apply_discord_progress_run_event(
-            tracker,
+            projector,
             run_event,
-            runtime_state=runtime_state,
             edit_progress=_edit_progress,
         )
         if not _first_progress_recorded and chat_ux_snapshot is not None:
@@ -3098,6 +3092,7 @@ async def _run_discord_orchestrated_turn_for_message(
             execution_id=progress_execution_id,
             state="active",
         )
+        projector.mark_working(force=True)
         if progress_message_id:
             try:
                 await _edit_progress(force=True)
@@ -3204,7 +3199,7 @@ async def _run_discord_orchestrated_turn_for_message(
             progress_message_id=progress_message_id,
             agent=logical_agent,
         )
-        tracker.set_label("queued")
+        projector.mark_queued(force=True)
         try:
             if progress_message_id:
                 await _edit_progress(force=True)
@@ -3296,8 +3291,7 @@ async def _run_discord_orchestrated_turn_for_message(
             isinstance(finalized.assistant_text, str)
             and finalized.assistant_text.strip()
         ):
-            summary_snapshot = render_progress_text(
-                tracker,
+            summary_snapshot = projector.render(
                 max_length=max_progress_len,
                 now=time.monotonic(),
                 render_mode="live",
@@ -3308,8 +3302,7 @@ async def _run_discord_orchestrated_turn_for_message(
         if not intermediate_message:
             intermediate_message = tracker.latest_output_text().strip()
         if not intermediate_message:
-            intermediate_message = render_progress_text(
-                tracker,
+            intermediate_message = projector.render(
                 max_length=max_progress_len,
                 now=time.monotonic(),
                 render_mode="final",

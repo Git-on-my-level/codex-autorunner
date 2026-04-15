@@ -12,10 +12,9 @@ from ...core.ports.run_event import (
 )
 from ...core.state import now_iso
 from ...core.text_delta_coalescer import TextDeltaCoalescer
-from ..chat.managed_thread_progress import (
-    ProgressRuntimeState,
-    apply_run_event_to_progress_tracker,
-    progress_item_id_for_log_line,
+from ..chat.managed_thread_progress import progress_item_id_for_log_line
+from ..chat.managed_thread_progress_projector import (
+    ManagedThreadProgressProjector,
 )
 from .constants import (
     PROGRESS_HEARTBEAT_INTERVAL_SECONDS,
@@ -50,6 +49,72 @@ _PROGRESS_EDIT_FAILURE_MAX_BACKOFF_SECONDS = 120.0
 
 
 class TelegramNotificationHandlers:
+    def _ensure_turn_progress_projectors(
+        self,
+    ) -> dict[tuple[str, str], ManagedThreadProgressProjector]:
+        projectors = getattr(self, "_turn_progress_projectors", None)
+        if isinstance(projectors, dict):
+            return projectors
+        projectors = {}
+        self._turn_progress_projectors = projectors
+        return projectors
+
+    def _get_turn_progress_projector(
+        self,
+        turn_key: tuple[str, str],
+        *,
+        create: bool = False,
+    ) -> Optional[ManagedThreadProgressProjector]:
+        projectors = TelegramNotificationHandlers._ensure_turn_progress_projectors(self)
+        projector = projectors.get(turn_key)
+        if projector is not None or not create:
+            return projector
+        tracker = self._turn_progress_trackers.get(turn_key)
+        if tracker is None:
+            return None
+        progress_config = getattr(self._config, "progress_stream", None)
+        min_interval = (
+            getattr(progress_config, "min_edit_interval_seconds", 0.0)
+            if progress_config is not None
+            else 0.0
+        )
+        projector = ManagedThreadProgressProjector(
+            tracker,
+            min_render_interval_seconds=min_interval,
+            heartbeat_interval_seconds=PROGRESS_HEARTBEAT_INTERVAL_SECONDS,
+            initial_phase="queued" if tracker.label == "queued" else "working",
+        )
+        projectors[turn_key] = projector
+        return projector
+
+    def _render_turn_progress_text(
+        self,
+        turn_key: tuple[str, str],
+        *,
+        render_mode: str,
+        now: Optional[float] = None,
+    ) -> str:
+        projector = TelegramNotificationHandlers._get_turn_progress_projector(
+            self,
+            turn_key,
+            create=False,
+        )
+        tracker = self._turn_progress_trackers.get(turn_key)
+        if tracker is None:
+            return ""
+        if projector is not None:
+            return projector.render(
+                max_length=TELEGRAM_MAX_MESSAGE_LENGTH,
+                now=now,
+                render_mode=render_mode,
+            )
+        return render_progress_text(
+            tracker,
+            max_length=TELEGRAM_MAX_MESSAGE_LENGTH,
+            now=time.monotonic() if now is None else now,
+            render_mode=render_mode,
+        )
+
     def _progress_tracker_is_degraded(
         self,
         turn_key: tuple[str, str],
@@ -190,11 +255,11 @@ class TelegramNotificationHandlers:
                 return ""
             cached = cached_map.pop(turn_key, "")
             return cached if isinstance(cached, str) else ""
-        rendered = render_progress_text(
-            tracker,
-            max_length=TELEGRAM_MAX_MESSAGE_LENGTH,
-            now=time.monotonic(),
+        rendered = TelegramNotificationHandlers._render_turn_progress_text(
+            self,
+            turn_key,
             render_mode="live",
+            now=time.monotonic(),
         )
         line = rendered.splitlines()[0].strip() if rendered else ""
         return line
@@ -207,11 +272,11 @@ class TelegramNotificationHandlers:
                 return ""
             cached = cached_map.pop(turn_key, "")
             return cached if isinstance(cached, str) else ""
-        return render_progress_text(
-            tracker,
-            max_length=TELEGRAM_MAX_MESSAGE_LENGTH,
-            now=time.monotonic(),
+        return TelegramNotificationHandlers._render_turn_progress_text(
+            self,
+            turn_key,
             render_mode="final",
+            now=time.monotonic(),
         )
 
     def _cache_final_turn_progress(self, turn_key: tuple[str, str]) -> None:
@@ -222,11 +287,11 @@ class TelegramNotificationHandlers:
         if not isinstance(cached_map, dict):
             cached_map = {}
             self._turn_progress_final_rendered = cached_map
-        rendered = render_progress_text(
-            tracker,
-            max_length=TELEGRAM_MAX_MESSAGE_LENGTH,
-            now=time.monotonic(),
+        rendered = TelegramNotificationHandlers._render_turn_progress_text(
+            self,
+            turn_key,
             render_mode="final",
+            now=time.monotonic(),
         )
         if rendered.strip():
             cached_map[turn_key] = rendered
@@ -452,7 +517,16 @@ class TelegramNotificationHandlers:
             max_actions=self._config.progress_stream.max_actions,
             max_output_chars=self._config.progress_stream.max_output_chars,
         )
+        projector = ManagedThreadProgressProjector(
+            tracker,
+            min_render_interval_seconds=self._config.progress_stream.min_edit_interval_seconds,
+            heartbeat_interval_seconds=PROGRESS_HEARTBEAT_INTERVAL_SECONDS,
+            initial_phase="queued" if label == "queued" else "working",
+        )
         self._turn_progress_trackers[turn_key] = tracker
+        TelegramNotificationHandlers._ensure_turn_progress_projectors(self)[
+            turn_key
+        ] = projector
         self._turn_progress_rendered.pop(turn_key, None)
         self._turn_progress_updated_at.pop(turn_key, None)
         self._touch_cache_timestamp("progress_trackers", turn_key)
@@ -466,9 +540,19 @@ class TelegramNotificationHandlers:
         if ctx:
             chat_id = ctx.chat_id
             thread_id = ctx.thread_id
+            if getattr(ctx, "placeholder_message_id", None) is not None:
+                projector.bind_anchor(
+                    str(ctx.placeholder_message_id),
+                    owned=True,
+                    reused=True,
+                )
         else:
             chat_id = None
             thread_id = None
+        if label == "queued":
+            projector.mark_queued(force=True)
+        else:
+            projector.mark_working(force=True)
         log_event(
             self._logger,
             logging.INFO,
@@ -488,6 +572,9 @@ class TelegramNotificationHandlers:
 
     def _clear_turn_progress(self, turn_key: tuple[str, str]) -> None:
         self._turn_progress_trackers.pop(turn_key, None)
+        TelegramNotificationHandlers._ensure_turn_progress_projectors(self).pop(
+            turn_key, None
+        )
         self._turn_progress_rendered.pop(turn_key, None)
         self._turn_progress_updated_at.pop(turn_key, None)
         self._turn_progress_locks.pop(turn_key, None)
@@ -704,23 +791,24 @@ class TelegramNotificationHandlers:
         run_event: Any,
     ) -> None:
         tracker = self._turn_progress_trackers.get(turn_key)
-        if tracker is None:
+        projector = TelegramNotificationHandlers._get_turn_progress_projector(
+            self,
+            turn_key,
+            create=True,
+        )
+        if tracker is None or projector is None:
             return
 
         if isinstance(run_event, TokenUsage):
             usage_payload = run_event.usage
             if isinstance(usage_payload, dict):
-                tracker.set_context_usage_percent(
+                projector.note_context_usage(
                     _extract_context_usage_percent(usage_payload)
                 )
                 await self._schedule_progress_edit(turn_key)
             return
 
-        outcome = apply_run_event_to_progress_tracker(
-            tracker,
-            run_event,
-            runtime_state=ProgressRuntimeState(),
-        )
+        outcome = projector.apply_run_event(run_event)
         if not outcome.changed:
             return
         if outcome.terminal:
@@ -807,8 +895,15 @@ class TelegramNotificationHandlers:
             while True:
                 await asyncio.sleep(PROGRESS_HEARTBEAT_INTERVAL_SECONDS)
                 tracker = self._turn_progress_trackers.get(turn_key)
-                if tracker is None or tracker.finalized:
+                projector = TelegramNotificationHandlers._get_turn_progress_projector(
+                    self,
+                    turn_key,
+                    create=True,
+                )
+                if tracker is None or projector is None or tracker.finalized:
                     return
+                if not projector.should_emit_heartbeat(now=time.monotonic()):
+                    continue
                 ctx = self._turn_contexts.get(turn_key)
                 if ctx is None or ctx.placeholder_message_id is None:
                     continue
@@ -826,7 +921,12 @@ class TelegramNotificationHandlers:
         render_mode: str = "live",
     ) -> None:
         tracker = self._turn_progress_trackers.get(turn_key)
-        if tracker is None:
+        projector = TelegramNotificationHandlers._get_turn_progress_projector(
+            self,
+            turn_key,
+            create=True,
+        )
+        if tracker is None or projector is None:
             return
         if ctx is None:
             ctx = self._turn_contexts.get(turn_key)
@@ -848,13 +948,25 @@ class TelegramNotificationHandlers:
             turn_key,
             tracker,
         )
-        rendered = render_progress_text(
-            tracker,
+        rendered = projector.render(
             max_length=TELEGRAM_MAX_MESSAGE_LENGTH,
             now=now,
             render_mode=render_mode,
         )
-        if not force and rendered == self._turn_progress_rendered.get(turn_key):
+        if not projector.should_emit_render(
+            rendered,
+            now=now,
+            force=force,
+            min_interval_seconds=(
+                None
+                if force
+                else TelegramNotificationHandlers._progress_edit_min_interval(
+                    self,
+                    turn_key,
+                    tracker,
+                )
+            ),
+        ):
             return
         reply_markup: Optional[dict[str, Any]] = {"inline_keyboard": []}
         if tracker.label in _ACTIVE_PROGRESS_LABELS:
@@ -879,6 +991,7 @@ class TelegramNotificationHandlers:
                 self,
                 turn_key,
             )
+            projector.note_rendered(rendered, now=now)
             self._turn_progress_rendered[turn_key] = rendered
             self._turn_progress_updated_at[turn_key] = now
             self._touch_cache_timestamp("progress_trackers", turn_key)
