@@ -19,6 +19,19 @@ def _assert_process_gone(pid: int) -> None:
             return
         except PermissionError:
             return
+        # After SIGKILL of the parent, a child may be reaped as a zombie while
+        # still answering `kill(pid, 0)` until init reaps it.
+        try:
+            with open(f"/proc/{pid}/stat", encoding="utf-8") as handle:
+                stat = handle.read()
+            rparen = stat.rfind(")")
+            if rparen != -1:
+                # Fields after comm: state ppid pgrp ...
+                after_comm = stat[rparen + 1 :].split()
+                if after_comm and after_comm[0] == "Z":
+                    return
+        except OSError:
+            pass
         time.sleep(0.05)
     pytest.fail(f"process {pid} still running after termination")
 
