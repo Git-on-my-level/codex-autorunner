@@ -888,9 +888,8 @@ def _parse_app_server_output_config(
     policy_raw = cfg.get("policy", defaults.get("policy"))
     policy = str(policy_raw).strip().lower() if policy_raw is not None else ""
     if policy not in _APP_SERVER_OUTPUT_POLICIES:
-        policy = str(defaults.get("policy") or "final_only").strip().lower()
-    if policy not in _APP_SERVER_OUTPUT_POLICIES:
-        policy = "final_only"
+        allowed = ", ".join(sorted(_APP_SERVER_OUTPUT_POLICIES))
+        raise ConfigError(f"app_server.output.policy must be one of: {allowed}")
     return AppServerOutputConfig(policy=policy)
 
 
@@ -1059,7 +1058,7 @@ def _parse_opencode_config(
     )
     server_scope = str(server_scope_raw).strip().lower() or "workspace"
     if server_scope not in {"workspace", "global"}:
-        server_scope = "workspace"
+        raise ConfigError("opencode.server_scope must be 'workspace' or 'global'")
     stall_timeout_raw = cfg.get(
         "session_stall_timeout_seconds",
         defaults.get("session_stall_timeout_seconds"),

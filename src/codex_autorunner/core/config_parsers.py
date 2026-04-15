@@ -1,3 +1,17 @@
+"""Typed section parsers for configuration construction.
+
+Ownership contract (TICKET-1040):
+- ``config_validation.py`` owns rejection of invalid authored config values.
+  Canonical load paths (``load_hub_config``, ``derive_repo_config``) validate
+  before calling these parsers, so the parsers should never see truly invalid
+  authored data in the canonical path.
+- Parser-side coercion or default repair below is kept **only** for fields
+  where direct callers historically passed unvalidated data.  These are
+  documented inline as "compatibility repair" and should not expand.
+- Parsers that have been tightened (e.g. output policy, server_scope) now
+  raise ``ConfigError`` on invalid values rather than silently falling back.
+"""
+
 import dataclasses
 import os
 from pathlib import Path
@@ -281,6 +295,9 @@ def _parse_ticket_flow_config(
     )
 
 
+# Compatibility repair: _parse_update_backend returns "auto" for missing,
+# empty, or unrecognised backend values.  The validator rejects invalid
+# authored values in the canonical path; this fallback covers direct callers.
 def _parse_update_backend(update_cfg: Dict[str, Any]) -> str:
     raw = update_cfg.get("backend")
     if raw is None:
@@ -512,6 +529,8 @@ def _parse_opencode_config(
         "server_scope", defaults.get("server_scope", "workspace")
     )
     server_scope = str(server_scope_raw).strip().lower() or "workspace"
+    if server_scope not in {"workspace", "global"}:
+        raise ConfigError("opencode.server_scope must be 'workspace' or 'global'")
     stall_timeout_raw = cfg.get(
         "session_stall_timeout_seconds",
         defaults.get("session_stall_timeout_seconds"),
@@ -560,6 +579,9 @@ def _parse_pma_config(
     max_upload_bytes_raw = cfg.get(
         "max_upload_bytes", defaults.get("max_upload_bytes", 10_000_000)
     )
+    # Compatibility repair: max_upload_bytes is coerced to the default on
+    # non-int or non-positive input.  The validator rejects bad authored
+    # values in the canonical path; this fallback covers direct callers.
     try:
         max_upload_bytes = int(max_upload_bytes_raw)
     except (ValueError, TypeError):
@@ -567,6 +589,9 @@ def _parse_pma_config(
     if max_upload_bytes <= 0:
         max_upload_bytes = 10_000_000
 
+    # Compatibility repair: _parse_positive_int and _parse_nonnegative_int
+    # silently fall back to defaults on non-int or out-of-range input.
+    # The validator rejects bad authored values in the canonical path.
     def _parse_positive_int(key: str, fallback: int) -> int:
         raw = cfg.get(key, defaults.get(key, fallback))
         try:

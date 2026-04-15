@@ -1047,3 +1047,21 @@ class TestValidateRepoConfig:
         cfg["static_assets"] = {"max_cache_entries": -1}
         with pytest.raises(ConfigError, match="must be >= 0"):
             _validate_repo_config(cfg, root=tmp_path)
+
+
+class TestValidatorOwnsRejectionNotParser:
+    """
+    These tests verify that config_validation.py is the authority for
+    rejecting invalid authored config values.  The parser layer should
+    never see these values in the canonical load path.
+    """
+
+    def test_app_server_output_policy_rejected_by_validator(self) -> None:
+        with pytest.raises(ConfigError, match="must be one of"):
+            _validate_app_server_config(
+                {"app_server": {"output": {"policy": "garbage"}}}
+            )
+
+    def test_opencode_server_scope_rejected_by_validator(self) -> None:
+        with pytest.raises(ConfigError, match="must be 'workspace' or 'global'"):
+            _validate_opencode_config({"opencode": {"server_scope": "everywhere"}})

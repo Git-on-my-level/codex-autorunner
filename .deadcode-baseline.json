@@ -2,8 +2,7 @@
   "findings": [
     "python:class:src/codex_autorunner/core/supervisor_protocol.py:7:AppServerSupervisorProtocol",
     "python:class:src/codex_autorunner/integrations/app_server/logging.py:72:AppServerEventFormatter",
-    "python:function:src/codex_autorunner/core/agent_config.py:205:parse_agents_config",
-    "python:function:src/codex_autorunner/core/config_parsers.py:867:_parse_log_config",
+    "python:function:src/codex_autorunner/core/config_parsers.py:892:_parse_log_config",
     "python:function:src/codex_autorunner/core/git_utils.py:127:git_ls_files",
     "python:function:src/codex_autorunner/core/git_utils.py:155:git_diff_name_status",
     "python:function:src/codex_autorunner/core/patch_utils.py:127:ensure_patch_targets_allowed",
