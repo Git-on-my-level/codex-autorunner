@@ -9,6 +9,8 @@ from codex_autorunner.integrations.app_server import client as app_server_client
 from codex_autorunner.integrations.app_server.client import (
     CodexAppServerClient,
     CodexAppServerDisconnected,
+)
+from codex_autorunner.integrations.app_server.protocol_helpers import (
     _extract_agent_message_text,
 )
 
