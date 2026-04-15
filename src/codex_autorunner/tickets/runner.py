@@ -5,16 +5,13 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from ..agents.hermes_identity import canonicalize_hermes_identity
-from ..core.file_chat_keys import ticket_instance_token
+from ..contextspace.paths import contextspace_doc_path
 from ..core.flows.models import FlowEventType
-from ..core.git_utils import git_diff_stats
 from . import runner_commit, runner_post_turn, runner_prompt, runner_selection
 from .agent_pool import AgentPool
 from .files import list_ticket_paths, safe_relpath
 from .models import TicketResult, TicketRunConfig
 from .outbox import (
-    archive_dispatch,
-    create_turn_summary,
     ensure_outbox_dirs,
     resolve_outbox_paths,
 )
@@ -26,19 +23,21 @@ from .replies import (
 )
 from .runner_execution import (
     capture_git_state_after,
-    compute_loop_guard,
     is_network_error,
-    should_pause_for_loop,
 )
 from .runner_prompt import (
     CAR_HUD_MAX_CHARS,  # noqa: F401  # re-exported for backwards compatibility
     CAR_HUD_MAX_LINES,  # noqa: F401  # re-exported for backwards compatibility
+    _build_car_hud,  # noqa: F401  # used by _build_prompt
     _preserve_ticket_structure,  # noqa: F401  # re-exported for backwards compatibility
     _shrink_prompt,
-    _truncate_text_by_bytes,
 )
 from .runner_prompt_support import (
     TRUNCATION_MARKER,  # noqa: F401  # re-exported for backwards compatibility
+    WORKSPACE_DOC_MAX_CHARS,  # noqa: F401  # used by _build_prompt
+)
+from .runner_selection import (  # noqa: F401  # re-exported for backwards compatibility
+    TICKET_CONTEXT_TOTAL_MAX_BYTES,
 )
 from .runner_step_support import (
     build_reply_context,
@@ -458,330 +457,32 @@ class TicketRunner:
             workspace_root=self._workspace_root,
             head_before_turn=head_before_turn,
         )
-        repo_fingerprint_after_turn = git_state_after["repo_fingerprint_after"]
-        head_after_agent = git_state_after["head_after_turn"]
-        clean_after_agent = git_state_after["clean_after_turn"]
-        status_after_agent = git_state_after["status_after_turn"]
-        agent_committed_this_turn = git_state_after["agent_committed_this_turn"]
 
-        # Post-turn: archive outbox if DISPATCH.md exists.
-        dispatch_seq = int(state.get("dispatch_seq") or 0)
-        current_ticket_key = ticket_instance_token(current_path)
-        dispatch_ticket_id = current_ticket_path or current_ticket_id
-        dispatch, dispatch_errors = archive_dispatch(
-            outbox_paths,
-            next_seq=dispatch_seq + 1,
-            ticket_id=dispatch_ticket_id,
-            repo_id=self._repo_id,
-            run_id=self._run_id,
-            origin="runner",
-        )
-        if dispatch_errors:
-            # Treat as pause: user should fix DISPATCH.md frontmatter. Keep outbox
-            # lint separate from ticket frontmatter lint to avoid mixing behaviors.
-            state["outbox_lint"] = dispatch_errors
-            return self._pause(
-                state,
-                reason="Invalid DISPATCH.md frontmatter.",
-                reason_details="Errors:\n- " + "\n- ".join(dispatch_errors),
-                current_ticket=current_ticket_path,
-                reason_code="needs_user_fix",
-            )
-
-        if dispatch is not None:
-            state["dispatch_seq"] = dispatch.seq
-            state.pop("outbox_lint", None)
-
-        turn_summary_seq = int(state.get("dispatch_seq") or 0) + 1
-        self._record_turn_summary(
+        return runner_post_turn.reconcile_post_turn(
             state=state,
-            outbox_paths=outbox_paths,
-            turn_summary_seq=turn_summary_seq,
-            result=result,
-            dispatch_ticket_id=dispatch_ticket_id,
-            total_turns=total_turns,
-            head_before_turn=head_before_turn,
-            current_ticket_id=current_ticket_id,
-            current_ticket_key=current_ticket_key,
-            current_ticket_path=current_ticket_path,
-            emit_event=emit_event,
-        )
-
-        # Loop guard: if the same ticket runs with no repository state change for
-        # LOOP_NO_CHANGE_THRESHOLD consecutive successful turns, pause and ask for
-        # user intervention instead of spinning.
-        lint_retry_mode = bool(lint_errors)
-        loop_guard_result = compute_loop_guard(
-            state=state,
-            current_ticket_id=current_ticket_id,
-            repo_fingerprint_before=repo_fingerprint_before_turn,
-            repo_fingerprint_after=repo_fingerprint_after_turn,
-            lint_retry_mode=lint_retry_mode,
-        )
-        loop_guard_updates = loop_guard_result.get("loop_guard_updates", {})
-        if "loop_guard" in loop_guard_result:
-            state["loop_guard"] = loop_guard_result["loop_guard"]
-
-        if should_pause_for_loop(loop_guard_updates=loop_guard_updates):
-            no_change_count = loop_guard_updates.get("no_change_count", 0)
-            reason = "Ticket appears stuck: same ticket ran twice with no repository diff changes."
-            details = (
-                "Runner paused to avoid repeated no-op work.\n\n"
-                f"Ticket: {current_ticket_path}\n"
-                f"Consecutive no-change turns: {no_change_count}\n\n"
-                "Please provide unblock guidance via reply, or change repository state, then resume. "
-                "Use force resume only if you intentionally want to retry unchanged."
-            )
-            dispatch_record = self._create_runner_pause_dispatch(
-                outbox_paths=outbox_paths,
-                state=state,
-                title="Ticket loop detected (no repo diff change)",
-                body=details,
-                ticket_id=current_ticket_id,
-                ticket_path=current_ticket_path,
-            )
-            pause_context: dict[str, Any] = {
-                "paused_reply_seq": int(state.get("reply_seq") or 0),
-            }
-            fingerprint = self._repo_fingerprint()
-            if isinstance(fingerprint, str):
-                pause_context["repo_fingerprint"] = fingerprint
-            state["pause_context"] = pause_context
-            state["status"] = "paused"
-            state["reason"] = reason
-            state["reason_code"] = "loop_no_diff"
-            state["reason_details"] = details
-            return TicketResult(
-                status="paused",
-                state=state,
-                reason=reason,
-                reason_details=details,
-                dispatch=dispatch_record,
-                current_ticket=current_ticket_path,
-                agent_output=result.text,
-                agent_id=result.agent_id,
-                agent_conversation_id=result.conversation_id,
-                agent_turn_id=result.turn_id,
-            )
-
-        # Post-turn: ticket frontmatter must remain valid.
-        updated_fm, fm_errors = self._recheck_ticket_frontmatter(current_path)
-        if fm_errors:
-            lint_retries += 1
-            if lint_retries > self._config.max_lint_retries:
-                return self._pause(
-                    state,
-                    reason="Ticket frontmatter invalid. Manual fix required.",
-                    reason_details=(
-                        "Exceeded lint retry limit. Fix the ticket frontmatter manually and resume.\n\n"
-                        "Errors:\n- " + "\n- ".join(fm_errors)
-                    ),
-                    current_ticket=current_ticket_path,
-                    reason_code="needs_user_fix",
-                )
-
-            state["lint"] = {
-                "errors": fm_errors,
-                "retries": lint_retries,
-                "conversation_id": result.conversation_id,
-                "ticket_id": current_ticket_id,
-                "ticket_path": current_ticket_path,
-                "agent_id": canonical_agent_id,
-                "profile": current_ticket_profile,
-            }
-            return TicketResult(
-                status="continue",
-                state=state,
-                reason="Ticket frontmatter invalid; requesting agent fix.",
-                current_ticket=current_ticket_path,
-                agent_output=result.text,
-                agent_id=result.agent_id,
-                agent_conversation_id=result.conversation_id,
-                agent_turn_id=result.turn_id,
-            )
-
-        # Clear lint state if previously set.
-        if state.get("lint"):
-            state.pop("lint", None)
-
-        # Optional: auto-commit checkpoint (best-effort).
-        checkpoint_error = None
-        commit_required_now = bool(
-            updated_fm and updated_fm.done and clean_after_agent is False
-        )
-        if self._config.auto_commit and not commit_pending and not commit_required_now:
-            checkpoint_error = self._checkpoint_git(
-                turn=total_turns, agent=result.agent_id or "unknown"
-            )
-
-        # If we dispatched a pause message, pause regardless of ticket completion.
-        if dispatch is not None and dispatch.dispatch.mode == "pause":
-            reason = dispatch.dispatch.title or "Paused for user input."
-            if checkpoint_error:
-                reason += f"\n\nNote: checkpoint commit failed: {checkpoint_error}"
-            state["status"] = "paused"
-            state["reason"] = reason
-            state["reason_code"] = "user_pause"
-            return TicketResult(
-                status="paused",
-                state=state,
-                reason=reason,
-                dispatch=dispatch,
-                current_ticket=safe_relpath(current_path, self._workspace_root),
-                agent_output=result.text,
-                agent_id=result.agent_id,
-                agent_conversation_id=result.conversation_id,
-                agent_turn_id=result.turn_id,
-            )
-
-        # If ticket is marked done, require a clean working tree (i.e., changes
-        # committed) before advancing. This is bounded by max_commit_retries.
-        if updated_fm and updated_fm.done:
-            if clean_after_agent is False:
-                (
-                    commit_state_update,
-                    commit_status,
-                    commit_reason,
-                    commit_reason_code,
-                    commit_reason_details,
-                ) = runner_commit.process_commit_required(
-                    clean_after_agent=clean_after_agent,
-                    commit_pending=commit_pending,
-                    commit_retries=commit_retries,
-                    head_before_turn=head_before_turn,
-                    head_after_agent=head_after_agent,
-                    agent_committed_this_turn=agent_committed_this_turn,
-                    status_after_agent=status_after_agent,
-                    max_commit_retries=self._config.max_commit_retries,
-                )
-                if commit_state_update:
-                    state["commit"] = commit_state_update
-                if commit_reason is not None:
-                    return self._pause(
-                        state,
-                        reason=commit_reason,
-                        reason_details=commit_reason_details,
-                        current_ticket=current_ticket_path,
-                        reason_code=commit_reason_code,
-                    )
-
-                return TicketResult(
-                    status=commit_status or "continue",
-                    state=state,
-                    reason="Ticket done but commit required; requesting agent commit.",
-                    current_ticket=current_ticket_path,
-                    agent_output=result.text,
-                    agent_id=result.agent_id,
-                    agent_conversation_id=result.conversation_id,
-                    agent_turn_id=result.turn_id,
-                )
-
-            # Clean (or unknown) → commit satisfied (or no changes / cannot check).
-            state.pop("commit", None)
-            clear_ticket_thread_binding(
-                state,
-                ticket_id=current_ticket_id,
-                reason="ticket_completed",
-            )
-            state.pop("current_ticket", None)
-            state.pop("current_ticket_id", None)
-            state.pop("ticket_turns", None)
-            state.pop("last_agent_output", None)
-            state.pop("lint", None)
-        else:
-            # If the ticket is no longer done, clear any pending commit gating.
-            state.pop("commit", None)
-
-        if checkpoint_error:
-            # Non-fatal, but surface in state for UI.
-            state["last_checkpoint_error"] = checkpoint_error
-        else:
-            state.pop("last_checkpoint_error", None)
-
-        return TicketResult(
-            status="continue",
-            state=state,
-            reason="Turn complete.",
-            dispatch=dispatch,
-            current_ticket=current_ticket_path,
-            agent_output=result.text,
-            agent_id=result.agent_id,
-            agent_conversation_id=result.conversation_id,
-            agent_turn_id=result.turn_id,
-        )
-
-    def _recheck_ticket_frontmatter(self, ticket_path: Path):
-        return runner_post_turn.check_ticket_frontmatter(ticket_path=ticket_path)
-
-    def _record_turn_summary(
-        self,
-        *,
-        state: dict[str, Any],
-        outbox_paths: Any,
-        turn_summary_seq: int,
-        result: Any,
-        dispatch_ticket_id: str,
-        total_turns: int,
-        head_before_turn: Optional[str],
-        current_ticket_id: str,
-        current_ticket_key: str,
-        current_ticket_path: str,
-        emit_event: Optional[Callable[..., None]],
-    ) -> None:
-        turn_diff_stats: Optional[dict[str, Any]] = None
-        try:
-            if head_before_turn:
-                turn_diff_stats = git_diff_stats(
-                    self._workspace_root, from_ref=head_before_turn
-                )
-            else:
-                turn_diff_stats = git_diff_stats(
-                    self._workspace_root, from_ref=None, include_staged=True
-                )
-        except (OSError, ValueError, RuntimeError):
-            turn_diff_stats = None
-
-        turn_summary, _turn_summary_errors = create_turn_summary(
-            outbox_paths,
-            next_seq=turn_summary_seq,
-            agent_output=result.text or "",
-            ticket_id=dispatch_ticket_id,
-            agent_id=result.agent_id,
-            turn_number=total_turns,
-            diff_stats=turn_diff_stats,
-        )
-        if turn_summary is not None:
-            state["dispatch_seq"] = turn_summary.seq
-            if emit_event is not None and isinstance(turn_diff_stats, dict):
-                try:
-                    emit_event(
-                        FlowEventType.DIFF_UPDATED,
-                        {
-                            "ticket_id": current_ticket_id,
-                            "ticket_key": current_ticket_key,
-                            "ticket_path": current_ticket_path,
-                            "dispatch_seq": turn_summary.seq,
-                            "insertions": int(turn_diff_stats.get("insertions") or 0),
-                            "deletions": int(turn_diff_stats.get("deletions") or 0),
-                            "files_changed": int(
-                                turn_diff_stats.get("files_changed") or 0
-                            ),
-                        },
-                    )
-                except Exception:
-                    pass
-
-    def _checkpoint_git(self, *, turn: int, agent: str) -> Optional[str]:
-        """Create a best-effort git commit checkpoint.
-
-        Returns an error string if the checkpoint failed, else None.
-        """
-        return runner_post_turn.checkpoint_git(
             workspace_root=self._workspace_root,
             run_id=self._run_id,
-            turn=turn,
-            agent=agent,
+            repo_id=self._repo_id,
+            outbox_paths=outbox_paths,
+            current_ticket_id=current_ticket_id,
+            current_ticket_path=current_ticket_path,
+            current_ticket_path_obj=current_path,
+            canonical_agent_id=canonical_agent_id,
+            current_ticket_profile=current_ticket_profile,
+            result=result,
+            total_turns=total_turns,
+            head_before_turn=head_before_turn,
+            repo_fingerprint_before_turn=repo_fingerprint_before_turn,
+            git_state_after=git_state_after,
+            lint_errors=lint_errors,
+            lint_retries=lint_retries,
+            commit_pending=commit_pending,
+            commit_retries=commit_retries,
+            max_lint_retries=self._config.max_lint_retries,
+            max_commit_retries=self._config.max_commit_retries,
+            auto_commit=self._config.auto_commit,
             checkpoint_message_template=self._config.checkpoint_message_template,
+            emit_event=emit_event,
         )
 
     def _pause(
@@ -824,28 +525,6 @@ class TicketRunner:
     def _repo_fingerprint(self) -> Optional[str]:
         """Return a stable snapshot of HEAD + porcelain status."""
         return runner_post_turn.get_repo_fingerprint(self._workspace_root)
-
-    def _create_runner_pause_dispatch(
-        self,
-        *,
-        outbox_paths,
-        state: dict[str, Any],
-        title: str,
-        body: str,
-        ticket_id: str,
-        ticket_path: Optional[str] = None,
-    ):
-        """Create and archive a runner-generated pause dispatch."""
-        return runner_post_turn.create_runner_pause_dispatch(
-            outbox_paths=outbox_paths,
-            state=state,
-            ticket_id=ticket_id,
-            ticket_path=ticket_path,
-            repo_id=self._repo_id,
-            run_id=self._run_id,
-            title=title,
-            body=body,
-        )
 
     def _build_prompt(
         self,
@@ -1068,12 +747,3 @@ class TicketRunner:
                 "ticket_block",
             ],
         )
-
-    def _prior_no_change_turns(self, state: dict[str, Any], ticket_id: str) -> int:
-        loop_guard_raw = state.get("loop_guard")
-        loop_guard_state = (
-            dict(loop_guard_raw) if isinstance(loop_guard_raw, dict) else {}
-        )
-        if loop_guard_state.get("ticket") != ticket_id:
-            return 0
-        return int(loop_guard_state.get("no_change_count") or 0)

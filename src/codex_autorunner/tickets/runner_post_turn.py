@@ -464,3 +464,304 @@ def apply_checkpoint_error_state(
     else:
         state.pop("last_checkpoint_error", None)
     return state
+
+
+@dataclass
+class _ReconcileInputs:
+    state: dict[str, Any]
+    workspace_root: Path
+    run_id: str
+    repo_id: str
+    outbox_paths: Any
+    current_ticket_id: str
+    current_ticket_path: str
+    current_ticket_path_obj: Path
+    canonical_agent_id: str
+    current_ticket_profile: Optional[str]
+    result: Any
+    total_turns: int
+    head_before_turn: Optional[str]
+    repo_fingerprint_before_turn: Optional[str]
+    git_state_after: dict[str, Any]
+    lint_errors: list[str]
+    lint_retries: int
+    commit_pending: bool
+    commit_retries: int
+    max_lint_retries: int
+    max_commit_retries: int
+    auto_commit: bool
+    checkpoint_message_template: str
+    emit_event: Optional[Any]
+
+
+def reconcile_post_turn(
+    *,
+    state: dict[str, Any],
+    workspace_root: Path,
+    run_id: str,
+    repo_id: str,
+    outbox_paths: Any,
+    current_ticket_id: str,
+    current_ticket_path: str,
+    current_ticket_path_obj: Path,
+    canonical_agent_id: str,
+    current_ticket_profile: Optional[str],
+    result: Any,
+    total_turns: int,
+    head_before_turn: Optional[str],
+    repo_fingerprint_before_turn: Optional[str],
+    git_state_after: dict[str, Any],
+    lint_errors: list[str],
+    lint_retries: int,
+    commit_pending: bool,
+    commit_retries: int,
+    max_lint_retries: int,
+    max_commit_retries: int,
+    auto_commit: bool,
+    checkpoint_message_template: str,
+    emit_event: Optional[Any],
+) -> TicketResult:
+    from .runner_commit import process_commit_required as _process_commit_required
+    from .runner_execution import compute_loop_guard, should_pause_for_loop
+    from .runner_thread_bindings import clear_ticket_thread_binding
+
+    dispatch_seq = int(state.get("dispatch_seq") or 0)
+
+    archival = archive_dispatch_and_create_summary(
+        workspace_root=workspace_root,
+        outbox_paths=outbox_paths,
+        current_ticket_id=current_ticket_id,
+        current_ticket_path=current_ticket_path,
+        current_ticket_path_obj=current_ticket_path_obj,
+        repo_id=repo_id,
+        run_id=run_id,
+        dispatch_seq=dispatch_seq,
+        agent_output=result.text or "",
+        agent_id=result.agent_id or "",
+        turn_number=total_turns,
+        head_before_turn=head_before_turn,
+        emit_event=emit_event,
+    )
+
+    if archival.dispatch_errors:
+        state["outbox_lint"] = archival.dispatch_errors
+        paused = build_pause_result(
+            state=state,
+            reason="Invalid DISPATCH.md frontmatter.",
+            reason_details="Errors:\n- " + "\n- ".join(archival.dispatch_errors),
+            current_ticket=current_ticket_path,
+            workspace_root=workspace_root,
+        )
+        return TicketResult(
+            status="paused",
+            state=paused["state"],
+            reason=paused["reason"],
+            reason_details=paused["reason_details"],
+            current_ticket=paused["current_ticket"],
+        )
+
+    dispatch = archival.dispatch
+    if dispatch is not None:
+        state["dispatch_seq"] = dispatch.seq
+        state.pop("outbox_lint", None)
+    if archival.turn_summary is not None:
+        state["dispatch_seq"] = archival.turn_summary.seq
+
+    repo_fingerprint_after = git_state_after["repo_fingerprint_after"]
+    lint_retry_mode = bool(lint_errors)
+    loop_guard_result = compute_loop_guard(
+        state=state,
+        current_ticket_id=current_ticket_id,
+        repo_fingerprint_before=repo_fingerprint_before_turn,
+        repo_fingerprint_after=repo_fingerprint_after,
+        lint_retry_mode=lint_retry_mode,
+    )
+    state = dict(
+        apply_loop_guard_state(state=state, loop_guard_result=loop_guard_result)
+    )
+    loop_guard_updates = loop_guard_result.get("loop_guard_updates", {})
+
+    if should_pause_for_loop(loop_guard_updates=loop_guard_updates):
+        no_change_count = loop_guard_updates.get("no_change_count", 0)
+        details = (
+            "Runner paused to avoid repeated no-op work.\n\n"
+            f"Ticket: {current_ticket_path}\n"
+            f"Consecutive no-change turns: {no_change_count}\n\n"
+            "Please provide unblock guidance via reply, or change repository state, then resume. "
+            "Use force resume only if you intentionally want to retry unchanged."
+        )
+        dispatch_record = create_runner_pause_dispatch(
+            outbox_paths=outbox_paths,
+            state=state,
+            ticket_id=current_ticket_id,
+            ticket_path=current_ticket_path,
+            repo_id=repo_id,
+            run_id=run_id,
+            title="Ticket loop detected (no repo diff change)",
+            body=details,
+        )
+        return build_loop_guard_pause_result(
+            state=state,
+            current_ticket_path=current_ticket_path,
+            loop_guard_updates=loop_guard_updates,
+            dispatch_record=dispatch_record,
+            agent_text=result.text,
+            agent_id=result.agent_id,
+            agent_conversation_id=result.conversation_id,
+            agent_turn_id=result.turn_id,
+            workspace_root=workspace_root,
+        )
+
+    fm_result = handle_frontmatter_recheck(
+        ticket_path=current_ticket_path_obj,
+        lint_errors=lint_errors if lint_errors else None,
+        lint_retries=lint_retries,
+        max_lint_retries=max_lint_retries,
+        agent_conversation_id=result.conversation_id,
+    )
+
+    if fm_result.should_pause:
+        paused = build_pause_result(
+            state=state,
+            reason=fm_result.pause_reason or "Ticket frontmatter invalid.",
+            reason_details=fm_result.pause_reason_details,
+            current_ticket=current_ticket_path,
+            workspace_root=workspace_root,
+        )
+        return TicketResult(
+            status="paused",
+            state=paused["state"],
+            reason=paused["reason"],
+            reason_details=paused["reason_details"],
+            current_ticket=paused["current_ticket"],
+        )
+
+    if fm_result.should_retry:
+        full_lint_state = dict(fm_result.lint_state or {})
+        full_lint_state.update(
+            {
+                "ticket_id": current_ticket_id,
+                "ticket_path": current_ticket_path,
+                "agent_id": canonical_agent_id,
+                "profile": current_ticket_profile,
+            }
+        )
+        state["lint"] = full_lint_state
+        return TicketResult(
+            status="continue",
+            state=state,
+            reason="Ticket frontmatter invalid; requesting agent fix.",
+            current_ticket=current_ticket_path,
+            agent_output=result.text,
+            agent_id=result.agent_id,
+            agent_conversation_id=result.conversation_id,
+            agent_turn_id=result.turn_id,
+        )
+
+    if state.get("lint"):
+        state.pop("lint", None)
+
+    updated_fm = fm_result.updated_frontmatter
+    head_after_agent = git_state_after["head_after_turn"]
+    clean_after_agent = git_state_after["clean_after_turn"]
+    status_after_agent = git_state_after["status_after_turn"]
+    agent_committed_this_turn = git_state_after["agent_committed_this_turn"]
+
+    commit_required_now = bool(
+        updated_fm and updated_fm.done and clean_after_agent is False
+    )
+    checkpoint_error = None
+    if auto_commit and not commit_pending and not commit_required_now:
+        checkpoint_error = checkpoint_git(
+            workspace_root=workspace_root,
+            run_id=run_id,
+            turn=total_turns,
+            agent=result.agent_id or "unknown",
+            checkpoint_message_template=checkpoint_message_template,
+        )
+
+    if dispatch is not None and dispatch.dispatch.mode == "pause":
+        return build_dispatch_pause_result(
+            state=state,
+            dispatch=dispatch,
+            checkpoint_error=checkpoint_error,
+            current_ticket_rel_path=current_ticket_path,
+            agent_text=result.text,
+            agent_id=result.agent_id,
+            agent_conversation_id=result.conversation_id,
+            agent_turn_id=result.turn_id,
+            workspace_root=workspace_root,
+        )
+
+    if updated_fm and updated_fm.done:
+        if clean_after_agent is False:
+            (
+                commit_state_update,
+                commit_status,
+                commit_reason,
+                commit_reason_code,
+                commit_reason_details,
+            ) = _process_commit_required(
+                clean_after_agent=clean_after_agent,
+                commit_pending=commit_pending,
+                commit_retries=commit_retries,
+                head_before_turn=head_before_turn,
+                head_after_agent=head_after_agent,
+                agent_committed_this_turn=agent_committed_this_turn,
+                status_after_agent=status_after_agent,
+                max_commit_retries=max_commit_retries,
+            )
+            if commit_state_update:
+                state["commit"] = commit_state_update
+            if commit_reason is not None:
+                paused = build_pause_result(
+                    state=state,
+                    reason=commit_reason,
+                    reason_details=commit_reason_details,
+                    current_ticket=current_ticket_path,
+                    workspace_root=workspace_root,
+                )
+                return TicketResult(
+                    status="paused",
+                    state=paused["state"],
+                    reason=paused["reason"],
+                    reason_details=paused["reason_details"],
+                    current_ticket=paused["current_ticket"],
+                )
+
+            return TicketResult(
+                status=commit_status or "continue",
+                state=state,
+                reason="Ticket done but commit required; requesting agent commit.",
+                current_ticket=current_ticket_path,
+                agent_output=result.text,
+                agent_id=result.agent_id,
+                agent_conversation_id=result.conversation_id,
+                agent_turn_id=result.turn_id,
+            )
+
+        state.pop("commit", None)
+        clear_ticket_thread_binding(
+            state,
+            ticket_id=current_ticket_id,
+            reason="ticket_completed",
+        )
+        state = dict(apply_completion_cleanup(state=state, updated_fm=updated_fm))
+    else:
+        state.pop("commit", None)
+
+    state = dict(
+        apply_checkpoint_error_state(state=state, checkpoint_error=checkpoint_error)
+    )
+
+    return TicketResult(
+        status="continue",
+        state=state,
+        reason="Turn complete.",
+        dispatch=dispatch,
+        current_ticket=current_ticket_path,
+        agent_output=result.text,
+        agent_id=result.agent_id,
+        agent_conversation_id=result.conversation_id,
+        agent_turn_id=result.turn_id,
+    )

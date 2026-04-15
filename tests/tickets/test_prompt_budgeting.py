@@ -11,8 +11,8 @@ from codex_autorunner.tickets.runner import (
     TicketRunner,
     _preserve_ticket_structure,
     _shrink_prompt,
-    _truncate_text_by_bytes,
 )
+from codex_autorunner.tickets.runner_prompt import _truncate_text_by_bytes
 
 
 def _write_ticket(
