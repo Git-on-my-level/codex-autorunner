@@ -67,6 +67,35 @@ def _parse_next_attempt_at(next_at_str: Optional[str]) -> Optional[datetime]:
         return None
 
 
+def _coalesce_telegram_ready_records(
+    records: list[OutboxRecord],
+) -> dict[str, OutboxRecord]:
+    if not records:
+        return {}
+
+    coalesced: dict[str, OutboxRecord] = {}
+    unkeyed: list[OutboxRecord] = []
+
+    for record in records:
+        if record.operation_id is not None:
+            op_key = f"op:{record.operation_id}"
+            existing = coalesced.get(op_key)
+            if existing is None or record.created_at >= existing.created_at:
+                coalesced[op_key] = record
+        elif record.outbox_key is not None:
+            existing = coalesced.get(record.outbox_key)
+            if existing is None or record.created_at >= existing.created_at:
+                coalesced[record.outbox_key] = record
+        else:
+            unkeyed.append(record)
+
+    for record in unkeyed:
+        unique_key = f"_unkeyed:{record.record_id}"
+        coalesced[unique_key] = record
+
+    return coalesced
+
+
 class TelegramOutboxManager:
     def __init__(
         self,
@@ -223,15 +252,7 @@ class TelegramOutboxManager:
             if next_at is None or now >= next_at:
                 ready_records.append(record)
 
-        # Keep only the last ready record per outbox_key, but do not drop deferred
-        # future records; we leave them for later flush cycles. Latest wins to avoid
-        # delivering stale edits.
-        coalesced_ready: dict[str, OutboxRecord] = {}
-        for record in ready_records:
-            if record.outbox_key is not None:
-                coalesced_ready[record.outbox_key] = record
-            else:
-                await self._process_record(record)
+        coalesced_ready = _coalesce_telegram_ready_records(ready_records)
 
         for record in coalesced_ready.values():
             await self._process_record(record)
@@ -277,9 +298,7 @@ class TelegramOutboxManager:
         if current is None:
             return False
         record = current
-        if not await self._mark_inflight(
-            record.outbox_key if record.outbox_key else record.record_id
-        ):
+        if not await self._mark_inflight(self._inflight_key(record)):
             return False
         conversation_id = None
         try:
@@ -341,9 +360,7 @@ class TelegramOutboxManager:
                 )
                 return False
             finally:
-                await self._clear_inflight(
-                    record.outbox_key if record.outbox_key else record.record_id
-                )
+                await self._clear_inflight(self._inflight_key(record))
             if self._on_delivered is not None:
                 try:
                     await self._on_delivered(record, delivered_message_id)
@@ -358,15 +375,18 @@ class TelegramOutboxManager:
                         chat_id=record.chat_id,
                         thread_id=record.thread_id,
                     )
-            if record.outbox_key:
-                # Only delete records up to (and including) this record's created_at to
-                # avoid dropping newer queued messages for the same key.
+            if record.outbox_key or record.operation_id:
                 records = await self._store.list_outbox()
                 for r in records:
-                    if (
-                        r.outbox_key == record.outbox_key
-                        and r.created_at <= record.created_at
-                    ):
+                    same_key = (
+                        record.outbox_key is not None
+                        and r.outbox_key == record.outbox_key
+                    )
+                    same_op = (
+                        record.operation_id is not None
+                        and r.operation_id == record.operation_id
+                    )
+                    if (same_key or same_op) and r.created_at <= record.created_at:
                         await self._store.delete_outbox(r.record_id)
             else:
                 await self._store.delete_outbox(record.record_id)
@@ -405,6 +425,11 @@ class TelegramOutboxManager:
             return
         async with self._lock:
             self._inflight_outbox_keys.discard(key)
+
+    def _inflight_key(self, record: OutboxRecord) -> str:
+        if record.operation_id is not None:
+            return f"op:{record.operation_id}"
+        return record.outbox_key if record.outbox_key else record.record_id
 
     @contextmanager
     def _conversation_context(self, chat_id: int, thread_id: Optional[int]) -> Any:

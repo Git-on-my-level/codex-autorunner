@@ -54,6 +54,36 @@ def _extract_retry_after_seconds(exc: Exception) -> Optional[float]:
     return None
 
 
+def _coalesce_ready_records(records: list[OutboxRecord]) -> list[OutboxRecord]:
+    if not records:
+        return []
+
+    operation_id_groups: dict[str, OutboxRecord] = {}
+    ungrouped: list[OutboxRecord] = []
+
+    for record in records:
+        if record.operation_id is not None:
+            key = record.operation_id
+            existing = operation_id_groups.get(key)
+            if existing is None or record.created_at >= existing.created_at:
+                operation_id_groups[key] = record
+        else:
+            ungrouped.append(record)
+
+    coalesced: list[OutboxRecord] = []
+    seen_ids: set[str] = set()
+    for record in operation_id_groups.values():
+        if record.record_id not in seen_ids:
+            coalesced.append(record)
+            seen_ids.add(record.record_id)
+    for record in ungrouped:
+        if record.record_id not in seen_ids:
+            coalesced.append(record)
+            seen_ids.add(record.record_id)
+
+    return coalesced
+
+
 def _discord_chunk_start_index(payload_json: dict[str, Any]) -> int:
     raw_progress = payload_json.get(_OUTBOX_PROGRESS_KEY)
     if not isinstance(raw_progress, dict):
@@ -192,13 +222,22 @@ class DiscordOutboxManager:
 
     async def _flush(self, records: list[OutboxRecord]) -> None:
         now = self._now()
+        ready: list[OutboxRecord] = []
+        exhausted: list[OutboxRecord] = []
         for record in records:
             if record.attempts >= self._max_attempts:
-                await self._drop_exhausted(record)
+                exhausted.append(record)
                 continue
             next_at = _parse_next_attempt_at(record.next_attempt_at)
             if next_at is not None and now < next_at:
                 continue
+            ready.append(record)
+
+        for record in exhausted:
+            await self._drop_exhausted(record)
+
+        coalesced = _coalesce_ready_records(ready)
+        for record in coalesced:
             await self._attempt_send(record)
 
     async def _attempt_send(self, record: OutboxRecord) -> bool:
@@ -215,7 +254,7 @@ class DiscordOutboxManager:
                 current.record_id,
             )
             return False
-        if not await self._mark_inflight(current.record_id):
+        if not await self._mark_inflight(self._inflight_key(current)):
             return False
         try:
             delivered_message_id: Optional[str] = None
@@ -310,7 +349,7 @@ class DiscordOutboxManager:
             )
             return False
         finally:
-            await self._clear_inflight(current.record_id)
+            await self._clear_inflight(self._inflight_key(current))
 
         if self._on_delivered is not None:
             try:
@@ -383,3 +422,8 @@ class DiscordOutboxManager:
             return
         async with self._lock:
             self._inflight.discard(key)
+
+    def _inflight_key(self, record: OutboxRecord) -> str:
+        if record.operation_id is not None:
+            return f"op:{record.operation_id}"
+        return record.record_id
