@@ -8,7 +8,7 @@ Notes for running codex-autorunner inside containerized or cloud-provisioned VMs
 | Service | How to run | Notes |
 |---------|-----------|-------|
 | Web Hub (FastAPI/Uvicorn) | `make serve-dev` (port 4173) | Set `CAR_DEV_INCLUDE_ROOT_REPO=1` to include the repo itself in the hub |
-| Python tests | `make test` or `.venv/bin/python -m pytest -m "not integration"` | Uses pytest with xdist for parallel runs |
+| Python tests | `make test` or `.venv/bin/python -m pytest -m "not integration"` | Serial by default; use `-n auto` for xdist parallelism |
 | Lane-aware checks | `./scripts/check.sh` (auto-detect) or `./scripts/check.sh --lane <lane>` | Lanes: `core`, `web-ui`, `chat-apps`, `aggregate` (full) |
 | Full validation | `./scripts/check.sh --full` or `make check-full` | Runs all lanes plus extended checks |
 | Linting | `black --check src tests`, `ruff check src tests`, `make typecheck-strict` | Individual linters for targeted runs |

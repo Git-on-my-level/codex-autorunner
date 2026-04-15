@@ -62,7 +62,13 @@ _LANE_PREFIXES: dict[ScopedValidationLane, tuple[str, ...]] = {
 
 _LANE_GLOBS: dict[ScopedValidationLane, tuple[str, ...]] = {
     "core": (),
-    "web-ui": (),
+    "web-ui": (
+        "tests/test_app_server*.py",
+        "tests/test_auth_middleware.py",
+        "tests/test_base_path*.py",
+        "tests/test_hub_ui*.py",
+        "tests/test_static*.py",
+    ),
     "chat-apps": (
         "tests/test_chat*.py",
         "tests/test_discord*.py",
@@ -193,6 +199,8 @@ def _classify_scoped_lane(path: str) -> ScopedValidationLane | None:
             matches.append(lane)
     if len(matches) == 1:
         return matches[0]
+    if not matches and fnmatch(path, "tests/test_*.py"):
+        return "core"
     return None
 
 

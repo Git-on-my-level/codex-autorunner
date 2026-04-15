@@ -41,6 +41,15 @@ TEMPFILE_DIR_CALLS = frozenset(
     }
 )
 
+TEMPFILE_DIR_POSITIONAL_INDEX = {
+    "tempfile.TemporaryDirectory": 2,
+    "TemporaryDirectory": 2,
+    "tempfile.NamedTemporaryFile": 6,
+    "NamedTemporaryFile": 6,
+    "tempfile.mkdtemp": 2,
+    "mkdtemp": 2,
+}
+
 PATH_WRITE_METHODS = frozenset(
     {
         "mkdir",
@@ -141,6 +150,23 @@ def _path_literal(node: ast.expr) -> str | None:
     return None
 
 
+def _tmp_path_argument(
+    node: ast.Call,
+    *,
+    positional_index: int | None = None,
+    keyword_names: Iterable[str] = (),
+) -> str | None:
+    for keyword in node.keywords:
+        if keyword.arg in keyword_names:
+            value = _path_literal(keyword.value)
+            if value:
+                return value
+
+    if positional_index is None or len(node.args) <= positional_index:
+        return None
+    return _path_literal(node.args[positional_index])
+
+
 def _open_mode(call: ast.Call) -> str:
     for keyword in call.keywords:
         if keyword.arg == "mode":
@@ -193,20 +219,23 @@ def _check_file(path: Path, *, repo_root: Path) -> list[Violation]:
                     )
 
         if call_name in TEMPFILE_DIR_CALLS:
-            for keyword in node.keywords:
-                if keyword.arg == "dir":
-                    value = _path_literal(keyword.value)
-                    if value:
-                        violations.append(
-                            Violation(
-                                file_path=rel_path,
-                                line=keyword.value.lineno,
-                                col=keyword.value.col_offset,
-                                rule="tmp-tempfile-dir",
-                                symbol=call_name or "call",
-                                snippet=value,
-                            )
-                        )
+            positional_index = TEMPFILE_DIR_POSITIONAL_INDEX.get(call_name or "")
+            value = _tmp_path_argument(
+                node,
+                positional_index=positional_index,
+                keyword_names=("dir",),
+            )
+            if value:
+                violations.append(
+                    Violation(
+                        file_path=rel_path,
+                        line=node.lineno,
+                        col=node.col_offset,
+                        rule="tmp-tempfile-dir",
+                        symbol=call_name or "call",
+                        snippet=value,
+                    )
+                )
 
         if call_name == "open" and node.args:
             target = _path_literal(node.args[0])
@@ -223,7 +252,16 @@ def _check_file(path: Path, *, repo_root: Path) -> list[Violation]:
                 )
 
         if call_name in MODULE_WRITE_CALLS and node.args:
-            target = _path_literal(node.args[0])
+            positional_index = 0
+            keyword_names: tuple[str, ...] = ()
+            if call_name in {"shutil.move", "shutil.copytree"}:
+                positional_index = 1
+                keyword_names = ("dst",)
+            target = _tmp_path_argument(
+                node,
+                positional_index=positional_index,
+                keyword_names=keyword_names,
+            )
             if target:
                 violations.append(
                     Violation(

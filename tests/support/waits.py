@@ -67,8 +67,22 @@ async def wait_for_async_predicate(
     deadline = time.monotonic() + max(timeout_seconds, 0.0)
     poll_interval = max(poll_interval_seconds, 0.001)
     while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise AssertionError(
+                f"Timed out after {timeout_seconds:.3f}s waiting for {description}."
+            )
+
         result = predicate()
-        condition = await result if inspect.isawaitable(result) else bool(result)
+        if inspect.isawaitable(result):
+            try:
+                condition = await asyncio.wait_for(result, timeout=remaining)
+            except asyncio.TimeoutError as exc:
+                raise AssertionError(
+                    f"Timed out after {timeout_seconds:.3f}s waiting for {description}."
+                ) from exc
+        else:
+            condition = bool(result)
         if condition:
             return
 

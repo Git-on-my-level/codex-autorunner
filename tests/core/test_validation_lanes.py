@@ -33,6 +33,22 @@ def test_classify_chat_apps_lane_for_chat_paths() -> None:
     assert selection.lanes_touched == ("chat-apps",)
 
 
+def test_classify_core_lane_for_root_level_backend_test() -> None:
+    selection = classify_changed_files(["tests/test_hub_supervisor.py"])
+
+    assert selection.lane == "core"
+    assert selection.reason == "single-lane-diff"
+    assert selection.lanes_touched == ("core",)
+
+
+def test_classify_web_ui_lane_for_root_level_web_test() -> None:
+    selection = classify_changed_files(["tests/test_app_server_events.py"])
+
+    assert selection.lane == "web-ui"
+    assert selection.reason == "single-lane-diff"
+    assert selection.lanes_touched == ("web-ui",)
+
+
 def test_shared_risk_paths_force_aggregate() -> None:
     selection = classify_changed_files(["scripts/check.sh"])
 
