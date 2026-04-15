@@ -14,6 +14,14 @@ from .catalog import (
     map_agent_capabilities,
     merge_agent_capabilities,
 )
+from .chat_operation_state import (
+    CHAT_OPERATION_ALLOWED_TRANSITIONS,
+    CHAT_OPERATION_TERMINAL_STATES,
+    ChatOperationSnapshot,
+    ChatOperationState,
+    ChatOperationStore,
+    is_valid_chat_operation_transition,
+)
 from .cold_trace_store import ColdTraceReader, ColdTraceStore, ColdTraceWriter
 from .events import OrchestrationEvent, OrchestrationEventType
 from .execution_history import (
@@ -137,6 +145,11 @@ __all__ = [
     "AgentDefinition",
     "AgentDefinitionCatalog",
     "Binding",
+    "CHAT_OPERATION_ALLOWED_TRANSITIONS",
+    "CHAT_OPERATION_TERMINAL_STATES",
+    "ChatOperationSnapshot",
+    "ChatOperationState",
+    "ChatOperationStore",
     "ColdTraceReader",
     "ColdTraceStore",
     "ColdTraceWriter",
@@ -222,6 +235,7 @@ __all__ = [
     "get_native_target_definition",
     "get_surface_orchestration_ingress",
     "initialize_orchestration_sqlite",
+    "is_valid_chat_operation_transition",
     "is_helper_subsystem",
     "is_native_target",
     "list_agent_definitions",

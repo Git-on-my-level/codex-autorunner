@@ -111,6 +111,14 @@ from .turn_policy import (
     TurnTriggerMode,
     should_trigger_plain_text_turn,
 )
+from .ux_contract import (
+    CHAT_UX_CONTRACT_VERSION,
+    CHAT_UX_STATE_DESCRIPTORS,
+    ChatUxPhase,
+    ChatUxStateDescriptor,
+    get_chat_ux_state_descriptor,
+    is_terminal_chat_ux_state,
+)
 
 __all__ = [
     "CALLBACK_AGENT",
@@ -131,6 +139,8 @@ __all__ = [
     "CALLBACK_REVIEW_COMMIT",
     "CALLBACK_UPDATE",
     "CALLBACK_UPDATE_CONFIRM",
+    "CHAT_UX_CONTRACT_VERSION",
+    "CHAT_UX_STATE_DESCRIPTORS",
     "CHANNEL_DIRECTORY_FILENAME",
     "COMMAND_CONTRACT",
     "CallbackCodec",
@@ -165,6 +175,8 @@ __all__ = [
     "ChatStateStore",
     "ChatThreadRef",
     "ChatTransport",
+    "ChatUxPhase",
+    "ChatUxStateDescriptor",
     "ChatVoiceInput",
     "CommandContractEntry",
     "CommandStatus",
@@ -215,5 +227,7 @@ __all__ = [
     "run_chat_bootstrap_steps",
     "run_parity_checks",
     "should_trigger_plain_text_turn",
+    "get_chat_ux_state_descriptor",
+    "is_terminal_chat_ux_state",
     "valid_chat_agent_values",
 ]

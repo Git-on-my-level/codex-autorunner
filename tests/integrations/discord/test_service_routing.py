@@ -4798,8 +4798,11 @@ async def test_car_model_rejects_invalid_opencode_model_name(tmp_path: Path) -> 
         assert binding.get("model_override") is None
         assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 5
-        assert len(rest.followup_messages) == 1
-        content = rest.followup_messages[0]["payload"]["content"].lower()
+        delivery_payloads = [
+            item["payload"] for item in rest.edited_original_interaction_responses
+        ] + [item["payload"] for item in rest.followup_messages]
+        assert len(delivery_payloads) == 1
+        content = str(delivery_payloads[0]["content"]).lower()
         assert "provider/model" in content
     finally:
         await store.close()
