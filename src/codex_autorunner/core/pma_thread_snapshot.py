@@ -9,7 +9,7 @@ from ..tickets.files import safe_relpath
 from .chat_bindings import active_chat_binding_metadata_by_thread
 from .freshness import build_freshness_payload
 from .pma_context_shared import _truncate
-from .pma_thread_store import PmaThreadStore, default_pma_threads_db_path
+from .pma_thread_store import PmaThreadStore
 
 _logger = logging.getLogger(__name__)
 
@@ -23,10 +23,6 @@ def snapshot_pma_threads(
     stale_threshold_seconds: Optional[int] = None,
 ) -> list[dict[str, Any]]:
     if limit <= 0:
-        return []
-
-    db_path = default_pma_threads_db_path(hub_root)
-    if not db_path.exists():
         return []
 
     try:

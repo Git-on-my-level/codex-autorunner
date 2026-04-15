@@ -627,9 +627,6 @@ def _orchestration_binding_timestamps_by_workspace(
 def _active_pma_thread_counts(
     hub_root: Path, repo_id_by_workspace: Mapping[str, str]
 ) -> dict[str, int]:
-    db_path = default_pma_threads_db_path(hub_root)
-    if not db_path.exists():
-        return {}
     store = PmaThreadStore(hub_root)
     raw_counts = store.count_threads_by_repo(status="active")
     counts: Counter[str] = Counter()
@@ -642,21 +639,17 @@ def _active_pma_thread_counts(
             continue
         counts[repo_id] += count
     try:
-        with open_sqlite(db_path) as conn:
+        with open_orchestration_sqlite(hub_root, durable=False) as conn:
             rows = conn.execute(
                 """
                 SELECT workspace_root
-                  FROM pma_managed_threads
-                 WHERE status = 'active'
+                  FROM orch_thread_targets
+                 WHERE lifecycle_status = 'active'
                    AND (repo_id IS NULL OR TRIM(repo_id) = '')
                 """
             ).fetchall()
-    except sqlite3.OperationalError as exc:
-        if "no such table" in str(exc).lower():
-            return dict(counts)
-        raise RuntimeError(
-            f"Failed reading chat bindings from {db_path}: {exc}"
-        ) from exc
+    except sqlite3.OperationalError:
+        return dict(counts)
 
     for row in rows:
         repo_id = _resolve_bound_repo_id(
