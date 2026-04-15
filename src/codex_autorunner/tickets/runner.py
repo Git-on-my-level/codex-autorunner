@@ -7,9 +7,9 @@ from typing import Any, Callable, Optional
 from ..agents.hermes_identity import canonicalize_hermes_identity
 from ..contextspace.paths import contextspace_doc_path
 from ..core.flows.models import FlowEventType
-from . import runner_commit, runner_post_turn, runner_prompt, runner_selection
+from . import runner_commit, runner_post_turn, runner_selection
 from .agent_pool import AgentPool
-from .files import list_ticket_paths, safe_relpath
+from .files import safe_relpath
 from .models import TicketResult, TicketRunConfig
 from .outbox import (
     ensure_outbox_dirs,
@@ -40,12 +40,9 @@ from .runner_selection import (  # noqa: F401  # re-exported for backwards compa
     TICKET_CONTEXT_TOTAL_MAX_BYTES,
 )
 from .runner_step_support import (
-    build_reply_context,
-    build_turn_options,
     capture_pre_turn_git_state,
     execute_turn_with_thread_binding_retry,
     increment_turn_counters,
-    load_previous_ticket_content,
     record_successful_turn_state,
     record_turn_runtime_state,
 )
@@ -217,46 +214,75 @@ class TicketRunner:
             state.pop("pause_context", None)
         _lint_raw = state.get("lint")
         lint_state: dict[str, Any] = _lint_raw if isinstance(_lint_raw, dict) else {}
-        _lint_errors_raw = lint_state.get("errors")
-        lint_errors: list[str] = (
-            _lint_errors_raw if isinstance(_lint_errors_raw, list) else []
-        )
-        lint_retries = int(lint_state.get("retries") or 0)
-        _conv_id_raw = lint_state.get("conversation_id")
-        lint_retry_conversation_id: Optional[str] = (
-            _conv_id_raw if isinstance(_conv_id_raw, str) else None
-        )
-
-        validation_result = runner_selection.validate_ticket_for_execution(
-            ticket_path=current_path,
+        pre_turn_plan = runner_selection.plan_pre_turn(
+            selection_result=selection_result,
             workspace_root=self._workspace_root,
+            ticket_dir=ticket_dir,
+            config=self._config,
             state=state,
-            lint_errors=lint_errors if lint_errors else None,
+            run_id=self._run_id,
+            outbox_paths=outbox_paths,
+            reply_paths=reply_paths,
         )
-        current_ticket_path = safe_relpath(current_path, self._workspace_root)
-        if validation_result.status == "paused":
-            reason_details = (
-                "Errors:\n- " + "\n- ".join(validation_result.errors)
-                if validation_result.errors
+        for key, value in pre_turn_plan.state_updates.items():
+            if value is None:
+                state.pop(key, None)
+            else:
+                state[key] = value
+
+        current_ticket_path = pre_turn_plan.current_ticket_path or safe_relpath(
+            current_path, self._workspace_root
+        )
+        current_ticket_id = (
+            pre_turn_plan.current_ticket_id
+            if isinstance(pre_turn_plan.current_ticket_id, str)
+            else (
+                state.get("current_ticket_id")
+                if isinstance(state.get("current_ticket_id"), str)
                 else None
             )
-            return self._pause(
+        )
+        if current_ticket_id:
+            clear_previous_ticket_binding(
                 state,
-                reason=validation_result.pause_reason or "Ticket validation failed.",
-                reason_details=reason_details,
-                current_ticket=current_ticket_path,
-                reason_code=validation_result.pause_reason_code or "needs_user_fix",
+                previous_ticket_id=previous_ticket_id,
+                current_ticket_id=current_ticket_id,
             )
-        if not validation_result.validated:
+
+        if pre_turn_plan.status == "paused":
             return self._pause(
                 state,
-                reason="Ticket validation failed unexpectedly.",
+                reason=pre_turn_plan.pause_reason or "Ticket validation failed.",
+                reason_details=pre_turn_plan.pause_reason_details,
+                current_ticket=current_ticket_path,
+                reason_code=pre_turn_plan.pause_reason_code or "needs_user_fix",
+            )
+        if pre_turn_plan.status == "failed":
+            return TicketResult(
+                status="failed",
+                state=state,
+                reason=pre_turn_plan.pause_reason or "Ticket pre-turn planning failed.",
+                reason_details=pre_turn_plan.pause_reason_details,
+                current_ticket=current_ticket_path,
+            )
+        if pre_turn_plan.status == "skip":
+            return TicketResult(status="continue", state=state)
+        if pre_turn_plan.status != "ready" or current_ticket_id is None:
+            return self._pause(
+                state,
+                reason="Ticket pre-turn planning failed unexpectedly.",
                 current_ticket=current_ticket_path,
                 reason_code="infra_error",
             )
-        ticket_doc = validation_result.validated.ticket_doc
-        current_ticket_id = ticket_doc.frontmatter.ticket_id
-        state["current_ticket_id"] = current_ticket_id
+
+        ticket_doc = pre_turn_plan.ticket_doc
+        if ticket_doc is None or pre_turn_plan.prompt is None:
+            return self._pause(
+                state,
+                reason="Ticket pre-turn plan was incomplete.",
+                current_ticket=current_ticket_path,
+                reason_code="infra_error",
+            )
         raw_profile = normalize_profile(ticket_doc.frontmatter.profile)
         canonical = canonicalize_hermes_identity(
             ticket_doc.frontmatter.agent,
@@ -267,82 +293,22 @@ class TicketRunner:
         canonical_agent_id = canonical.agent
         lint_retry_conversation_id = validate_lint_retry_conversation_id(
             lint_state=lint_state,
-            conversation_id=lint_retry_conversation_id,
+            conversation_id=pre_turn_plan.conversation_id,
             current_ticket_path=current_ticket_path,
             current_ticket_id=current_ticket_id,
             canonical_agent_id=canonical_agent_id,
             current_ticket_profile=current_ticket_profile,
         )
-        clear_previous_ticket_binding(
-            state,
-            previous_ticket_id=previous_ticket_id,
-            current_ticket_id=current_ticket_id,
-        )
-        if validation_result.validated.skip_execution:
-            return TicketResult(status="continue", state=state)
 
         ticket_turns = int(state.get("ticket_turns") or 0)
-        reply_seq = int(state.get("reply_seq") or 0)
-        reply_context, reply_max_seq = build_reply_context(
-            reply_paths=reply_paths,
-            last_seq=reply_seq,
-            workspace_root=self._workspace_root,
-        )
-        ticket_paths = list_ticket_paths(ticket_dir)
-        requested_context_block, missing_required_context = (
-            runner_selection.load_ticket_context_block(
-                workspace_root=self._workspace_root,
-                entries=ticket_doc.frontmatter.context,
-            )
-        )
-        if missing_required_context:
-            details = "Missing required ticket context files:\n- " + "\n- ".join(
-                missing_required_context
-            )
-            state["status"] = "failed"
-            state["reason_code"] = "missing_required_context"
-            state["reason"] = "Required ticket context file missing."
-            state["reason_details"] = details
-            return TicketResult(
-                status="failed",
-                state=state,
-                reason="Required ticket context file missing.",
-                reason_details=details,
-                current_ticket=safe_relpath(current_path, self._workspace_root),
-            )
-        previous_ticket_content = load_previous_ticket_content(
-            current_path=current_path,
-            ticket_paths=ticket_paths,
-            include_previous_ticket_context=self._config.include_previous_ticket_context,
-        )
-        prompt = runner_prompt.build_prompt(
-            ticket_path=current_path,
-            workspace_root=self._workspace_root,
-            ticket_doc=ticket_doc,
-            last_agent_output=(
-                state.get("last_agent_output")
-                if isinstance(state.get("last_agent_output"), str)
-                else None
-            ),
-            last_checkpoint_error=(
-                state.get("last_checkpoint_error")
-                if isinstance(state.get("last_checkpoint_error"), str)
-                else None
-            ),
-            commit_required=commit_pending,
-            commit_attempt=commit_retries + 1 if commit_pending else 0,
-            commit_max_attempts=self._config.max_commit_retries,
-            outbox_paths=outbox_paths,
-            lint_errors=lint_errors if lint_errors else None,
-            reply_context=reply_context,
-            requested_context=requested_context_block,
-            previous_ticket_content=previous_ticket_content,
-            prior_no_change_turns=runner_selection._prior_no_change_turns(
-                state, current_ticket_id
-            ),
-            prompt_max_bytes=self._config.prompt_max_bytes,
-        )
-        turn_options = build_turn_options(ticket_doc=ticket_doc)
+        reply_seq = pre_turn_plan.reply_seq
+        reply_max_seq = pre_turn_plan.reply_max_seq
+        lint_errors = list(pre_turn_plan.lint_errors or [])
+        lint_retries = pre_turn_plan.lint_retries
+        commit_pending = pre_turn_plan.commit_pending
+        commit_retries = pre_turn_plan.commit_retries
+        prompt = pre_turn_plan.prompt
+        turn_options = dict(pre_turn_plan.turn_options or {})
         turn_options["ticket_flow_run_id"] = self._run_id
         turn_options["ticket_id"] = current_ticket_id
         turn_options["ticket_path"] = current_ticket_path

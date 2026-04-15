@@ -361,7 +361,7 @@ async def test_ticket_runner_recovers_when_current_ticket_path_is_stale(
 
 
 @pytest.mark.asyncio
-async def test_ticket_runner_delegates_selection_and_validation(
+async def test_ticket_runner_delegates_selection_and_pre_turn_planning(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -373,6 +373,7 @@ async def test_ticket_runner_delegates_selection_and_validation(
 
     calls: list[tuple[str, str]] = []
     real_select = runner_selection_module.select_ticket
+    real_plan = runner_selection_module.plan_pre_turn
     real_validate = runner_selection_module.validate_ticket_for_execution
 
     def wrapped_select(**kwargs):
@@ -381,11 +382,18 @@ async def test_ticket_runner_delegates_selection_and_validation(
         calls.append(("select", selected_rel_path))
         return result
 
+    def wrapped_plan(**kwargs):
+        selection = kwargs["selection_result"]
+        selected_rel_path = selection.selected.rel_path if selection.selected else ""
+        calls.append(("plan", selected_rel_path))
+        return real_plan(**kwargs)
+
     def wrapped_validate(**kwargs):
         calls.append(("validate", kwargs["ticket_path"].name))
         return real_validate(**kwargs)
 
     monkeypatch.setattr(runner_module.runner_selection, "select_ticket", wrapped_select)
+    monkeypatch.setattr(runner_module.runner_selection, "plan_pre_turn", wrapped_plan)
     monkeypatch.setattr(
         runner_module.runner_selection,
         "validate_ticket_for_execution",
@@ -414,6 +422,7 @@ async def test_ticket_runner_delegates_selection_and_validation(
     assert result.status == "continue"
     assert calls == [
         ("select", ".codex-autorunner/tickets/TICKET-001.md"),
+        ("plan", ".codex-autorunner/tickets/TICKET-001.md"),
         ("validate", "TICKET-001.md"),
     ]
 
