@@ -400,15 +400,13 @@ class ManagedThreadSendTimeoutProbe:
         turn: dict[str, Any] = raw_turn if isinstance(raw_turn, dict) else {}
         raw_queued_turns = payload.get("queued_turns")
         queued_turns = raw_queued_turns if isinstance(raw_queued_turns, list) else []
-        queued_turn_ids = tuple(
-            str(item.get("managed_turn_id") or "").strip()
+        normalized_queued_turns = tuple(
+            (
+                str(item.get("managed_turn_id") or "").strip(),
+                str(item.get("prompt_preview") or "").strip(),
+            )
             for item in queued_turns
             if isinstance(item, dict) and str(item.get("managed_turn_id") or "").strip()
-        )
-        queued_prompt_previews = tuple(
-            str(item.get("prompt_preview") or "").strip()
-            for item in queued_turns
-            if isinstance(item, dict) and str(item.get("prompt_preview") or "").strip()
         )
         return cls(
             last_turn_id=str(
@@ -421,8 +419,12 @@ class ManagedThreadSendTimeoutProbe:
             active_managed_turn_id=str(turn.get("managed_turn_id") or "").strip(),
             active_turn_status=str(turn.get("status") or "").strip(),
             queue_depth=coerce_optional_int(payload.get("queue_depth")) or 0,
-            queued_turn_ids=queued_turn_ids,
-            queued_prompt_previews=queued_prompt_previews,
+            queued_turn_ids=tuple(
+                managed_turn_id for managed_turn_id, _ in normalized_queued_turns
+            ),
+            queued_prompt_previews=tuple(
+                prompt_preview for _, prompt_preview in normalized_queued_turns
+            ),
         )
 
 
