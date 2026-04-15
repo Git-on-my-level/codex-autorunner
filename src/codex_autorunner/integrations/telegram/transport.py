@@ -575,14 +575,17 @@ class TelegramMessageTransport:
             )
             operation_id = self._current_chat_operation_id()
             if operation_id is not None:
+                anchor_ref = (
+                    str(callback.message_id)
+                    if callback.message_id is not None
+                    else None
+                )
                 await self._mark_chat_operation_state(
                     operation_id,
                     state=ChatOperationState.ACKNOWLEDGED,
                     ack_completed_at=now_iso(),
                     first_visible_feedback_at=now_iso(),
-                    anchor_ref=(
-                        str(callback.message_id) if callback.message_id else None
-                    ),
+                    anchor_ref=anchor_ref,
                 )
         except TelegramAPIError as exc:
             log_event(

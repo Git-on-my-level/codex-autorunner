@@ -23,6 +23,7 @@ from codex_autorunner.integrations.chat.models import (
 from codex_autorunner.integrations.telegram.adapter import (
     TelegramCallbackQuery,
     TelegramMessage,
+    encode_cancel_callback,
 )
 from codex_autorunner.integrations.telegram.dispatch import (
     _dispatch_callback,
@@ -601,6 +602,40 @@ async def test_publish_queued_notice_includes_cancel_button() -> None:
     result = await publish_queued_notice(transport, thread)
     assert result.published is True
     assert result.message_ref is not None
+
+
+@pytest.mark.anyio
+async def test_fast_ack_queued_notice_uses_source_specific_queue_actions() -> None:
+    topics = {}
+    store = SimpleNamespace(_topics=topics)
+    router = TopicRouter(store)
+    handler = _ServiceStub(router)
+
+    runtime = router.runtime_for("10:11")
+    runtime.current_turn_id = "active-turn"
+
+    message = _message(message_id=17, thread_id=11)
+    update = SimpleNamespace(update_id=1, message=message, callback=None)
+    context = SimpleNamespace(
+        chat_id=10,
+        user_id=2,
+        thread_id=11,
+        message_id=17,
+        is_topic=True,
+        is_edited=False,
+        topic_key="10:11",
+    )
+
+    await _dispatch_message(handler, update, context)
+
+    assert len(handler._bot.sent_messages) == 1
+    keyboard = handler._bot.sent_messages[0]["reply_markup"]
+    assert keyboard is not None
+    rows = keyboard["inline_keyboard"]
+    assert rows[0][0]["callback_data"] == encode_cancel_callback("queue_cancel:17")
+    assert rows[1][0]["callback_data"] == encode_cancel_callback(
+        "queue_interrupt_send:17"
+    )
 
 
 @pytest.mark.anyio

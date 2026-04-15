@@ -269,6 +269,8 @@ class ManagedThreadProgressProjector:
             return False
         if self.heartbeat_interval_seconds <= 0:
             return False
+        if self.last_rendered is None:
+            return False
         return (now - self.last_render_at) >= self.heartbeat_interval_seconds
 
     def _projection(

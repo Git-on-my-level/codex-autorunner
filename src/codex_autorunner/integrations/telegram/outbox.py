@@ -67,7 +67,7 @@ def _parse_next_attempt_at(next_at_str: Optional[str]) -> Optional[datetime]:
         return None
 
 
-def _coalesce_telegram_ready_records(
+def _coalesce_telegram_latest_records(
     records: list[OutboxRecord],
 ) -> dict[str, OutboxRecord]:
     if not records:
@@ -246,15 +246,12 @@ class TelegramOutboxManager:
 
     async def _flush(self, records: list[OutboxRecord]) -> None:
         now = datetime.now(timezone.utc)
-        ready_records: list[OutboxRecord] = []
-        for record in records:
-            next_at = _parse_next_attempt_at(record.next_attempt_at)
-            if next_at is None or now >= next_at:
-                ready_records.append(record)
-
-        coalesced_ready = _coalesce_telegram_ready_records(ready_records)
+        coalesced_ready = _coalesce_telegram_latest_records(records)
 
         for record in coalesced_ready.values():
+            next_at = _parse_next_attempt_at(record.next_attempt_at)
+            if next_at is not None and now < next_at:
+                continue
             await self._process_record(record)
 
     async def _process_record(self, record: OutboxRecord) -> None:

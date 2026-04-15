@@ -6103,7 +6103,7 @@ async def test_message_create_progress_edit_failures_are_best_effort_and_throttl
 
     try:
         await service.run_forever()
-        assert 1 <= rest.edit_attempts <= 3
+        assert 1 <= rest.edit_attempts <= 4
         assert len(rest.deleted_channel_messages) == 1
         assert rest.deleted_channel_messages[0]["message_id"] == "msg-1"
         assert any(

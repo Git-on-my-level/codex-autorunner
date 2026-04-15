@@ -175,3 +175,29 @@ def test_recovery_plan_expires_unacknowledged_operations(tmp_path: Path) -> None
     )
 
     assert decision.action == ChatOperationRecoveryAction.MARK_EXPIRED
+
+
+def test_patch_operation_preserves_first_visible_feedback_timestamp(
+    tmp_path: Path,
+) -> None:
+    ledger = _ledger(tmp_path)
+    ledger.upsert_operation(
+        ChatOperationSnapshot(
+            operation_id="visible-op",
+            surface_kind="telegram",
+            surface_operation_key="telegram:update:visible",
+            state=ChatOperationState.VISIBLE,
+            first_visible_feedback_at="2026-04-15T01:00:00Z",
+            created_at="2026-04-15T01:00:00Z",
+            updated_at="2026-04-15T01:00:00Z",
+        )
+    )
+
+    updated = ledger.patch_operation(
+        "visible-op",
+        state=ChatOperationState.COMPLETED,
+        first_visible_feedback_at="2026-04-15T01:05:00Z",
+    )
+
+    assert updated is not None
+    assert updated.first_visible_feedback_at == "2026-04-15T01:00:00Z"

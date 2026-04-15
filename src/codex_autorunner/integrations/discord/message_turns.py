@@ -2598,7 +2598,7 @@ def _load_discord_pma_turn_timeout_seconds(service: Any) -> float:
     if overridden_timeout != _DEFAULT_DISCORD_PMA_TIMEOUT_SECONDS:
         return float(overridden_timeout)
     try:
-        hub_config = load_hub_config(service._config.root)
+        hub_config = load_hub_config(Path(service._config.root))
     except (ConfigError, OSError, RuntimeError, TypeError, ValueError):
         return float(_DEFAULT_DISCORD_PMA_TIMEOUT_SECONDS)
     configured_timeout = getattr(

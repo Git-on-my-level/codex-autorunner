@@ -483,7 +483,6 @@ class TelegramBotService(
                 record.operation_id,
                 state=ChatOperationState.COMPLETED,
                 delivery_state="delivered",
-                first_visible_feedback_at=now_iso(),
                 anchor_ref=(
                     str(delivered_message_id)
                     if isinstance(delivered_message_id, int)
@@ -1712,7 +1711,7 @@ class TelegramBotService(
         message_id: Optional[int],
         kind: str,
     ) -> None:
-        self._chat_operation_store.register_operation(
+        registration = self._chat_operation_store.register_operation(
             operation_id=operation_id,
             surface_kind="telegram",
             surface_operation_key=surface_operation_key,
@@ -1725,6 +1724,10 @@ class TelegramBotService(
                 "user_id": user_id,
                 "message_id": message_id,
             },
+        )
+        self._chat_operation_store.patch_operation(
+            registration.snapshot.operation_id,
+            ack_requested_at=now_iso(),
         )
 
     async def _mark_chat_operation_state(
@@ -1749,6 +1752,10 @@ class TelegramBotService(
             snapshot = self._chat_operation_store.get_operation(normalized_operation_id)
             if snapshot is None:
                 return
+            if snapshot.first_visible_feedback_at is not None:
+                changes["first_visible_feedback_at"] = (
+                    snapshot.first_visible_feedback_at
+                )
             self._chat_operation_store.upsert_operation(
                 snapshot.__class__(
                     **{

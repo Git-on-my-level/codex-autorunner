@@ -54,7 +54,7 @@ def _extract_retry_after_seconds(exc: Exception) -> Optional[float]:
     return None
 
 
-def _coalesce_ready_records(records: list[OutboxRecord]) -> list[OutboxRecord]:
+def _coalesce_latest_records(records: list[OutboxRecord]) -> list[OutboxRecord]:
     if not records:
         return []
 
@@ -222,22 +222,22 @@ class DiscordOutboxManager:
 
     async def _flush(self, records: list[OutboxRecord]) -> None:
         now = self._now()
-        ready: list[OutboxRecord] = []
+        pending: list[OutboxRecord] = []
         exhausted: list[OutboxRecord] = []
         for record in records:
             if record.attempts >= self._max_attempts:
                 exhausted.append(record)
                 continue
-            next_at = _parse_next_attempt_at(record.next_attempt_at)
-            if next_at is not None and now < next_at:
-                continue
-            ready.append(record)
+            pending.append(record)
 
         for record in exhausted:
             await self._drop_exhausted(record)
 
-        coalesced = _coalesce_ready_records(ready)
+        coalesced = _coalesce_latest_records(pending)
         for record in coalesced:
+            next_at = _parse_next_attempt_at(record.next_attempt_at)
+            if next_at is not None and now < next_at:
+                continue
             await self._attempt_send(record)
 
     async def _attempt_send(self, record: OutboxRecord) -> bool:
@@ -364,7 +364,7 @@ class DiscordOutboxManager:
                     current.record_id,
                     exc_info=True,
                 )
-        await self._store.mark_outbox_delivered(current.record_id)
+        await self._mark_records_delivered(current)
         self._logger.info("discord.outbox.delivered record_id=%s", current.record_id)
         return True
 
@@ -376,6 +376,14 @@ class DiscordOutboxManager:
             record.last_error,
         )
         await self._store.mark_outbox_delivered(record.record_id)
+
+    async def _mark_records_delivered(self, record: OutboxRecord) -> None:
+        if record.operation_id is None:
+            await self._store.mark_outbox_delivered(record.record_id)
+            return
+        for sibling in await self._store.list_outbox():
+            if sibling.operation_id == record.operation_id:
+                await self._store.mark_outbox_delivered(sibling.record_id)
 
     async def _should_drop_terminal_notification(self, record: OutboxRecord) -> bool:
         if record.operation != "send":

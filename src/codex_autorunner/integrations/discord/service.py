@@ -5552,6 +5552,10 @@ class DiscordBotService:
             conversation_id=conversation_id,
             metadata=self._interaction_ledger_metadata(ctx),
         )
+        store.patch_operation(
+            registration.snapshot.operation_id,
+            ack_requested_at=now_iso(),
+        )
         if registration.inserted:
             return registration.snapshot
         return store.patch_operation(
@@ -5585,6 +5589,8 @@ class DiscordBotService:
             current = store.get_operation(interaction_id)
             if current is None:
                 return None
+            if current.first_visible_feedback_at is not None:
+                changes["first_visible_feedback_at"] = current.first_visible_feedback_at
             fallback_state = state or current.state
             merged_metadata = dict(current.metadata)
             if metadata_updates:
@@ -5711,9 +5717,6 @@ class DiscordBotService:
         await self._patch_chat_operation(
             interaction_id,
             state=state,
-            first_visible_feedback_at=(
-                now_iso() if state is ChatOperationState.VISIBLE else None
-            ),
             anchor_ref=original_response_message_id,
             delivery_state=delivery_state,
             terminal_outcome=terminal_outcome,

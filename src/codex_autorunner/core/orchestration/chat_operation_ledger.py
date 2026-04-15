@@ -231,6 +231,14 @@ class SQLiteChatOperationLedger(ChatOperationStore):
             next_delivery_attempt_count = current.delivery_attempt_count or 0
         else:
             next_delivery_attempt_count = int(delivery_attempt_count)
+        first_visible_feedback_at = changes.get("first_visible_feedback_at", _UNSET)
+        next_first_visible_feedback_at: Optional[str]
+        if current.first_visible_feedback_at is not None:
+            next_first_visible_feedback_at = current.first_visible_feedback_at
+        elif first_visible_feedback_at is _UNSET:
+            next_first_visible_feedback_at = current.first_visible_feedback_at
+        else:
+            next_first_visible_feedback_at = first_visible_feedback_at
         updated = replace(
             current,
             state=next_state,
@@ -242,9 +250,7 @@ class SQLiteChatOperationLedger(ChatOperationStore):
             conversation_id=changes.get("conversation_id", current.conversation_id),
             ack_requested_at=changes.get("ack_requested_at", current.ack_requested_at),
             ack_completed_at=changes.get("ack_completed_at", current.ack_completed_at),
-            first_visible_feedback_at=changes.get(
-                "first_visible_feedback_at", current.first_visible_feedback_at
-            ),
+            first_visible_feedback_at=next_first_visible_feedback_at,
             anchor_ref=changes.get("anchor_ref", current.anchor_ref),
             interrupt_ref=changes.get("interrupt_ref", current.interrupt_ref),
             delivery_state=changes.get("delivery_state", current.delivery_state),

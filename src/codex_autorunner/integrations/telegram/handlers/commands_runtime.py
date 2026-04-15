@@ -14,6 +14,7 @@ from ....agents.opencode.supervisor import OpenCodeSupervisorError
 from ....core.coercion import coerce_int
 from ....core.config import load_hub_config
 from ....core.logging_utils import log_event
+from ....core.orchestration.chat_operation_state import ChatOperationState
 from ....core.state import now_iso
 from ....core.update import (
     _available_update_target_options,
@@ -788,18 +789,6 @@ class TelegramCommandHandlers(
         )
         _interrupt_snapshot = _Snap(platform="telegram", channel_id=str(chat_id))
         _interrupt_snapshot.record(ChatUxMilestone.RAW_EVENT_RECEIVED)
-        _interrupt_snapshot.record(ChatUxMilestone.INTERRUPT_REQUESTED_VISIBLE)
-        log_event(
-            self._logger,
-            logging.INFO,
-            "telegram.interrupt.acknowledged",
-            chat_ux_platform="telegram",
-            chat_id=chat_id,
-            thread_id=thread_id,
-            message_id=message_id,
-            turn_id=turn_id,
-            **_interrupt_snapshot.to_log_fields(),
-        )
         payload_text, parse_mode = self._prepare_outgoing_text(
             "Stopping current turn...",
             chat_id=chat_id,
@@ -816,6 +805,25 @@ class TelegramCommandHandlers(
         response_message_id = (
             response.get("message_id") if isinstance(response, dict) else None
         )
+        _interrupt_snapshot.record(ChatUxMilestone.INTERRUPT_REQUESTED_VISIBLE)
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.interrupt.acknowledged",
+            chat_id=chat_id,
+            thread_id=thread_id,
+            message_id=message_id,
+            turn_id=turn_id,
+            **_interrupt_snapshot.to_log_fields(),
+        )
+        operation_id_getter = getattr(self, "_current_chat_operation_id", None)
+        operation_id = operation_id_getter() if callable(operation_id_getter) else None
+        if operation_id is not None and isinstance(response_message_id, int):
+            await self._mark_chat_operation_state(
+                operation_id,
+                state=ChatOperationState.INTERRUPTING,
+                interrupt_ref=str(response_message_id),
+            )
         codex_thread_id = None
         if runtime.current_turn_key and runtime.current_turn_key[1] == turn_id:
             codex_thread_id = runtime.current_turn_key[0]

@@ -544,7 +544,7 @@ class TelegramNotificationHandlers:
                 projector.bind_anchor(
                     str(ctx.placeholder_message_id),
                     owned=True,
-                    reused=True,
+                    reused=bool(getattr(ctx, "placeholder_reused", False)),
                 )
         else:
             chat_id = None

@@ -208,3 +208,41 @@ async def test_interrupt_controller_marks_failed_to_dispatch_when_turn_remains_r
     assert stored is not None
     assert stored.state == ChatOperationState.FAILED
     assert stored.terminal_outcome == "failed_to_dispatch"
+
+
+@pytest.mark.anyio
+async def test_interrupt_controller_returns_already_finished_for_completed_inflight(
+    tmp_path,
+) -> None:
+    ledger = SQLiteChatOperationLedger(tmp_path)
+    _register_operation(ledger, operation_id="existing-op")
+    ledger.patch_operation(
+        "existing-op",
+        state=ChatOperationState.INTERRUPTING,
+        thread_target_id="thread-1",
+        execution_id="turn-1",
+        metadata_updates={
+            "control": "interrupt",
+            "interrupt_state": "requested",
+            "referenced_execution_id": "turn-1",
+        },
+    )
+    service = _InterruptServiceStub(
+        running_execution=None,
+        latest_execution=SimpleNamespace(execution_id="turn-1", status="completed"),
+    )
+
+    outcome = await request_managed_thread_interrupt(
+        orchestration_service=service,
+        thread_target_id="thread-1",
+        cancel_queued=True,
+        operation_store=ledger,
+        operation_id="op-5",
+    )
+
+    assert outcome.state == SharedInterruptState.ALREADY_FINISHED
+    assert service.stop_calls == []
+    stored = ledger.get_operation("existing-op")
+    assert stored is not None
+    assert stored.state == ChatOperationState.COMPLETED
+    assert stored.terminal_outcome == "already_finished"

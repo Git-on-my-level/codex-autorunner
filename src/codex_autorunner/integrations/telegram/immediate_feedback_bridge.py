@@ -26,6 +26,7 @@ from ..chat.models import (
     ChatMessageRef,
     ChatThreadRef,
 )
+from .adapter import encode_cancel_callback
 
 
 def _thread_ref(chat_id: Optional[int], thread_id: Optional[int]) -> ChatThreadRef:
@@ -253,11 +254,25 @@ async def telegram_publish_queued_notice(
     thread = _thread_ref(chat_id, thread_id)
     reply_to = _message_ref(chat_id, reply_to_message_id, thread_id)
     state_writer = _make_state_writer(handlers)
+    actions: tuple[ChatAction, ...] = ()
+    if reply_to_message_id is not None:
+        source = str(reply_to_message_id)
+        actions = (
+            ChatAction(
+                label=cancel_label,
+                action_id=encode_cancel_callback(f"queue_cancel:{source}"),
+            ),
+            ChatAction(
+                label="Interrupt + Send",
+                action_id=encode_cancel_callback(f"queue_interrupt_send:{source}"),
+            ),
+        )
     return await publish_queued_notice(
         transport,
         thread,
         reply_to=reply_to,
         text=text,
+        actions=actions,
         cancel_action_id=cancel_action_id,
         cancel_label=cancel_label,
         operation_id=operation_id,

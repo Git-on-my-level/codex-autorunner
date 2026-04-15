@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -454,6 +455,74 @@ async def test_outbox_operation_id_delivery_cleans_all_same_op(
         assert sent == ["new"]
         records = await store.list_outbox()
         assert len(records) == 0
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_outbox_skips_ready_older_record_when_newer_same_op_is_backed_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(outbox_module, "OUTBOX_IMMEDIATE_RETRY_DELAYS", [])
+    store = TelegramStateStore(tmp_path / "telegram_state.sqlite3")
+    try:
+        sent: list[str] = []
+
+        async def send_message(
+            _chat_id: int,
+            text: str,
+            *,
+            thread_id: Optional[int] = None,
+            reply_to: Optional[int] = None,
+        ) -> int:
+            sent.append(text)
+            return len(sent)
+
+        async def edit_message_text(*_args, **_kwargs) -> bool:
+            return False
+
+        async def delete_message(*_args, **_kwargs) -> bool:
+            return False
+
+        manager = TelegramOutboxManager(
+            store,
+            send_message=send_message,
+            edit_message_text=edit_message_text,
+            delete_message=delete_message,
+            logger=logging.getLogger("test"),
+        )
+        manager.start()
+
+        await store.enqueue_outbox(
+            OutboxRecord(
+                record_id="old-ready",
+                chat_id=123,
+                thread_id=None,
+                reply_to_message_id=None,
+                placeholder_message_id=None,
+                text="old",
+                created_at="2026-01-01T00:00:00Z",
+                operation_id="op-backoff",
+            )
+        )
+        await store.enqueue_outbox(
+            OutboxRecord(
+                record_id="new-backoff",
+                chat_id=123,
+                thread_id=None,
+                reply_to_message_id=None,
+                placeholder_message_id=None,
+                text="new",
+                created_at="2026-01-01T00:01:00Z",
+                next_attempt_at=(
+                    datetime.now(timezone.utc) + timedelta(hours=1)
+                ).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                operation_id="op-backoff",
+            )
+        )
+
+        await manager._flush(await store.list_outbox())
+        assert sent == []
     finally:
         await store.close()
 

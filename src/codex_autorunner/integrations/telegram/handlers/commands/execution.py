@@ -1030,6 +1030,7 @@ async def _run_telegram_managed_thread_turn(
             codex_thread_id=backend_thread_id,
             reply_to_message_id=message.message_id,
             placeholder_message_id=prepared_placeholder_id,
+            placeholder_reused=placeholder_id is not None,
         )
         if handlers._register_turn_context(turn_key, backend_turn_id, ctx):
             registered_turn_key = turn_key

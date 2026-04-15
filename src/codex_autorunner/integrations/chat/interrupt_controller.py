@@ -273,8 +273,9 @@ async def request_managed_thread_interrupt(
                 getattr(resolved_execution, "status", "") or ""
             ).strip()
             if resolved_execution is not None and resolved_status.lower() != "running":
+                operation = None
                 if operation_store is not None:
-                    operation_store.patch_operation(
+                    operation = operation_store.patch_operation(
                         inflight_interrupt.operation_id,
                         state=ChatOperationState.COMPLETED,
                         validate_transition=False,
@@ -285,6 +286,15 @@ async def request_managed_thread_interrupt(
                             referenced_execution_id=inflight_execution_id,
                         ),
                     )
+                return SharedInterruptOutcome(
+                    state=SharedInterruptState.ALREADY_FINISHED,
+                    thread_target_id=normalized_thread_target_id,
+                    execution_id=inflight_execution_id,
+                    referenced_execution_id=normalized_execution_id
+                    or inflight_execution_id,
+                    duplicate_of_operation_id=inflight_interrupt.operation_id,
+                    operation=operation,
+                )
             else:
                 operation = _write_interrupt_operation(
                     operation_store,
