@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from contextlib import suppress
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,7 @@ from codex_autorunner.agents.acp.errors import (
     ACPProcessCrashedError,
     ACPProtocolError,
 )
+from codex_autorunner.agents.acp.events import normalize_notification
 from codex_autorunner.agents.acp.protocol import (
     ACPSessionForkResult,
     ACPSetModelResult,
@@ -88,6 +90,36 @@ def test_client_maps_shared_lifecycle_fixtures_without_turn_id(
 
     expected_turn_id = "turn-2" if expected["uses_turn_id_fallback"] else None
     assert mapped.get("params", {}).get("turnId") == expected_turn_id
+
+
+@pytest.mark.asyncio
+async def test_client_infers_server_turn_alias_from_inflight_prompt_event() -> None:
+    client = ACPClient(fixture_command("official"))
+    state = client._ensure_prompt_state("session-1", "turn-1")
+    client._session_active_turns["session-1"] = "turn-1"
+    request_task = asyncio.create_task(asyncio.sleep(10))
+    state.request_task = request_task
+    event = normalize_notification(
+        {
+            "method": "prompt/completed",
+            "params": {
+                "sessionId": "session-1",
+                "turnId": "server-turn-1",
+                "status": "completed",
+                "finalOutput": "fixture reply",
+            },
+        }
+    )
+
+    try:
+        resolved = await client._resolve_prompt_state_for_event(event)
+
+        assert resolved is state
+        assert client._prompts["server-turn-1"] is state
+    finally:
+        request_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await request_task
 
 
 @pytest.mark.asyncio

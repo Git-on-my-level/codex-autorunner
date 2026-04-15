@@ -23,7 +23,10 @@ from ..components import (
     build_model_picker,
 )
 from ..interaction_registry import AGENT_PROFILE_SELECT_ID
-from ..interaction_runtime import ensure_ephemeral_response_deferred
+from ..interaction_runtime import (
+    ensure_ephemeral_response_deferred,
+    send_runtime_ephemeral,
+)
 from ..rendering import format_discord_message
 
 MODEL_SEARCH_FETCH_LIMIT = 200
@@ -505,7 +508,8 @@ async def handle_car_model(
         model_name = resolved_model_name
 
     if current_agent == "opencode" and not _is_valid_opencode_model_name(model_name):
-        await service.respond_ephemeral(
+        await send_runtime_ephemeral(
+            service,
             interaction_id,
             interaction_token,
             "OpenCode model must be in `provider/model` format.",
