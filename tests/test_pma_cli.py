@@ -10,7 +10,7 @@ from typer.testing import CliRunner
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.filebox import BOXES
 from codex_autorunner.core.pma_audit import PmaActionType, PmaAuditLog
-from codex_autorunner.surfaces.cli import pma_cli
+from codex_autorunner.surfaces.cli import pma_cli, pma_control_plane
 from codex_autorunner.surfaces.cli.pma_cli import pma_app
 
 
@@ -1332,11 +1332,12 @@ def test_pma_cli_thread_send_recovers_timeout_from_status_probe(
         pma_cli, "_request_json_with_status", _fake_request_json_with_status
     )
     monkeypatch.setattr(pma_cli, "_request_json", _fake_request_json)
+    monkeypatch.setattr(pma_control_plane, "request_json", _fake_request_json)
     monotonic_values = iter([100.0, 103.0])
     monkeypatch.setattr(
-        pma_cli.time, "monotonic", lambda: next(monotonic_values, 103.0)
+        pma_control_plane.time, "monotonic", lambda: next(monotonic_values, 103.0)
     )
-    monkeypatch.setattr(pma_cli.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(pma_control_plane.time, "sleep", lambda seconds: None)
 
     runner = CliRunner()
     result = runner.invoke(
@@ -1428,11 +1429,12 @@ def test_pma_cli_thread_send_recovers_queued_timeout_from_status_probe(
         pma_cli, "_request_json_with_status", _fake_request_json_with_status
     )
     monkeypatch.setattr(pma_cli, "_request_json", _fake_request_json)
+    monkeypatch.setattr(pma_control_plane, "request_json", _fake_request_json)
     monotonic_values = iter([100.0, 103.0])
     monkeypatch.setattr(
-        pma_cli.time, "monotonic", lambda: next(monotonic_values, 103.0)
+        pma_control_plane.time, "monotonic", lambda: next(monotonic_values, 103.0)
     )
-    monkeypatch.setattr(pma_cli.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(pma_control_plane.time, "sleep", lambda seconds: None)
 
     runner = CliRunner()
     result = runner.invoke(
@@ -1534,11 +1536,12 @@ def test_pma_cli_thread_send_retries_timeout_recovery_until_status_catches_up(
         pma_cli, "_request_json_with_status", _fake_request_json_with_status
     )
     monkeypatch.setattr(pma_cli, "_request_json", _fake_request_json)
+    monkeypatch.setattr(pma_control_plane, "request_json", _fake_request_json)
     monkeypatch.setattr(
-        pma_cli.time, "monotonic", lambda: next(monotonic_values, 101.0)
+        pma_control_plane.time, "monotonic", lambda: next(monotonic_values, 101.0)
     )
     monkeypatch.setattr(
-        pma_cli.time, "sleep", lambda seconds: sleep_calls.append(seconds)
+        pma_control_plane.time, "sleep", lambda seconds: sleep_calls.append(seconds)
     )
 
     message_path = tmp_path / "prompt.md"
@@ -1562,7 +1565,9 @@ def test_pma_cli_thread_send_retries_timeout_recovery_until_status_catches_up(
     assert result.exit_code == 0
     assert "send_state=accepted managed_turn_id=turn-2" in result.stdout
     assert "recovered delivery from thread status" in result.stdout
-    assert sleep_calls == [pma_cli._MANAGED_THREAD_SEND_TIMEOUT_RECOVERY_POLL_SECONDS]
+    assert sleep_calls == [
+        pma_control_plane.MANAGED_THREAD_SEND_TIMEOUT_RECOVERY_POLL_SECONDS
+    ]
 
 
 def test_pma_cli_thread_send_timeout_warns_before_retry_when_status_unclear(
@@ -1626,11 +1631,12 @@ def test_pma_cli_thread_send_timeout_warns_before_retry_when_status_unclear(
         pma_cli, "_request_json_with_status", _fake_request_json_with_status
     )
     monkeypatch.setattr(pma_cli, "_request_json", _fake_request_json)
+    monkeypatch.setattr(pma_control_plane, "request_json", _fake_request_json)
     monotonic_values = iter([100.0, 103.0])
     monkeypatch.setattr(
-        pma_cli.time, "monotonic", lambda: next(monotonic_values, 103.0)
+        pma_control_plane.time, "monotonic", lambda: next(monotonic_values, 103.0)
     )
-    monkeypatch.setattr(pma_cli.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(pma_control_plane.time, "sleep", lambda seconds: None)
 
     runner = CliRunner()
     result = runner.invoke(
