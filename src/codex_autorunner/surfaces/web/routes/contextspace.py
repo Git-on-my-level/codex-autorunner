@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from pathlib import Path
+
 from fastapi import APIRouter, HTTPException, Request
 
 from ....contextspace.paths import (
     CONTEXTSPACE_DOC_KINDS,
+    contextspace_dir,
     read_contextspace_docs,
     serialize_contextspace_doc_catalog,
     write_contextspace_doc,
@@ -31,10 +35,68 @@ def build_contextspace_routes() -> APIRouter:
             "kinds": serialize_contextspace_doc_catalog(),
         }
 
+    def _contextspace_tree_payload(repo_root):
+        base = contextspace_dir(repo_root)
+        base.mkdir(parents=True, exist_ok=True)
+        pinned_paths = {entry["path"] for entry in serialize_contextspace_doc_catalog()}
+
+        def _serialize_node(path: Path) -> dict[str, object]:
+            rel_path = path.relative_to(base).as_posix()
+            stat = path.stat()
+            modified_at = datetime.fromtimestamp(
+                stat.st_mtime, tz=timezone.utc
+            ).isoformat()
+            if path.is_dir():
+                children = [
+                    _serialize_node(child)
+                    for child in sorted(
+                        path.iterdir(),
+                        key=lambda child: (
+                            child.is_file(),
+                            child.name.lower(),
+                        ),
+                    )
+                ]
+                return {
+                    "name": path.name,
+                    "path": rel_path,
+                    "type": "folder",
+                    "modified_at": modified_at,
+                    "size": None,
+                    "is_pinned": False,
+                    "children": children,
+                }
+            return {
+                "name": path.name,
+                "path": rel_path,
+                "type": "file",
+                "modified_at": modified_at,
+                "size": stat.st_size,
+                "is_pinned": rel_path in pinned_paths,
+            }
+
+        tree = [
+            _serialize_node(child)
+            for child in sorted(
+                base.iterdir(),
+                key=lambda child: (
+                    child.is_file(),
+                    0 if child.name in pinned_paths else 1,
+                    child.name.lower(),
+                ),
+            )
+        ]
+        return {"tree": tree, "defaultPath": "active_context.md"}
+
     @router.get("/contextspace", response_model=ContextspaceResponse)
     def get_contextspace(request: Request):
         repo_root = request.app.state.engine.repo_root
         return _contextspace_payload(repo_root)
+
+    @router.get("/contextspace/tree")
+    def get_contextspace_tree(request: Request):
+        repo_root = request.app.state.engine.repo_root
+        return _contextspace_tree_payload(repo_root)
 
     @router.put("/contextspace/{kind}", response_model=ContextspaceResponse)
     def put_contextspace(
