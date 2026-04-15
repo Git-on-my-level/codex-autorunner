@@ -1067,3 +1067,84 @@ def test_ticket_flow_runs_endpoint_returns_completed_run(tmp_path, monkeypatch):
         assert len(found) == 1
         assert found[0]["status"] == "completed"
         assert found[0]["flow_type"] == "ticket_flow"
+
+
+def test_ticket_list_returns_ascending_numeric_order(tmp_path, monkeypatch):
+    """Ticket-first: ticket list must respect ascending numeric order."""
+    ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True)
+    (ticket_dir / "TICKET-003.md").write_text(
+        '---\nticket_id: "tkt_order003"\nagent: codex\ndone: false\ntitle: Three\n---\n\nThree\n',
+        encoding="utf-8",
+    )
+    (ticket_dir / "TICKET-001.md").write_text(
+        '---\nticket_id: "tkt_order001"\nagent: codex\ndone: false\ntitle: One\n---\n\nOne\n',
+        encoding="utf-8",
+    )
+    (ticket_dir / "TICKET-002.md").write_text(
+        '---\nticket_id: "tkt_order002"\nagent: codex\ndone: false\ntitle: Two\n---\n\nTwo\n',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
+
+    app = FastAPI()
+    app.include_router(flow_routes.build_flow_routes())
+
+    with TestClient(app) as client:
+        resp = client.get("/api/flows/ticket_flow/tickets")
+        assert resp.status_code == 200
+        indices = [t["index"] for t in resp.json()["tickets"]]
+        assert indices == sorted(indices)
+
+
+def test_user_agent_ticket_is_visible_but_not_auto_executable(tmp_path, monkeypatch):
+    """Ticket-first: user-agent tickets surface in the list with agent=user."""
+    ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True)
+    (ticket_dir / "TICKET-001.md").write_text(
+        '---\nticket_id: "tkt_user001"\nagent: user\ndone: false\ntitle: Manual task\n---\n\nDo this manually\n',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
+
+    app = FastAPI()
+    app.include_router(flow_routes.build_flow_routes())
+
+    with TestClient(app) as client:
+        resp = client.get("/api/flows/ticket_flow/tickets")
+        assert resp.status_code == 200
+        tickets = resp.json()["tickets"]
+        assert len(tickets) == 1
+        assert tickets[0]["frontmatter"]["agent"] == "user"
+
+
+def test_ticket_update_preserves_chat_key_stability(tmp_path, monkeypatch):
+    """Ticket-first: updating ticket content must not change chat_key."""
+    ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True)
+    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
+
+    app = FastAPI()
+    app.include_router(flow_routes.build_flow_routes())
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/flows/ticket_flow/tickets",
+            json={"agent": "codex", "title": "Test", "body": "Original"},
+        )
+        assert created.status_code == 200
+        original_chat_key = created.json()["chat_key"]
+        ticket_id = created.json()["frontmatter"].get("ticket_id") or created.json()[
+            "frontmatter"
+        ].get("extra", {}).get("ticket_id")
+        index = created.json()["index"]
+
+        updated_content = f'---\nagent: "codex"\ndone: false\nticket_id: "{ticket_id}"\ntitle: "Updated"\n---\n\nUpdated body\n'
+        updated = client.put(
+            f"/api/flows/ticket_flow/tickets/{index}",
+            json={"content": updated_content},
+        )
+        assert updated.status_code == 200
+        assert updated.json()["chat_key"] == original_chat_key
