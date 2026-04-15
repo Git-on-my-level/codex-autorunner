@@ -704,6 +704,26 @@ def test_create_turn_recovers_old_running_execution_when_status_turn_matches(
     assert stale_after["finished_at"]
 
 
+def test_get_running_turn_uses_read_only_status_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = PmaThreadStore(tmp_path / "hub")
+    thread = store.create_thread("codex", tmp_path / "workspace")
+    running_turn = store.create_turn(thread["managed_thread_id"], prompt="first")
+
+    def _fail_write_conn():  # type: ignore[no-untyped-def]
+        raise AssertionError("passive running-turn lookup should not write")
+
+    monkeypatch.setattr(store, "_write_conn", _fail_write_conn)
+
+    fetched = store.get_running_turn(thread["managed_thread_id"])
+
+    assert fetched is not None
+    assert fetched["managed_turn_id"] == running_turn["managed_turn_id"]
+    assert fetched["status"] == "running"
+
+
 def test_claim_next_queued_turn_recovers_old_running_execution_when_status_turn_matches(
     tmp_path: Path,
 ) -> None:
