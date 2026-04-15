@@ -874,4 +874,56 @@ __all__ = [
     "preferred_non_pma_chat_notification_sources_by_workspace",
     "repo_has_active_chat_binding",
     "repo_has_active_non_pma_chat_binding",
+    "resolve_chat_state_path",
+    "resolve_repo_id_by_workspace_path",
+    "resolve_bound_repo_id",
+    "normalize_workspace_path",
+    "resolve_discord_state_path",
+    "resolve_telegram_state_path",
 ]
+
+
+def resolve_chat_state_path(
+    *,
+    hub_root: Path,
+    raw_config: Mapping[str, Any],
+    section: str,
+    default_state_file: str,
+) -> Path:
+    return _resolve_state_path(
+        hub_root=hub_root,
+        raw_config=raw_config,
+        section=section,
+        default_state_file=default_state_file,
+    )
+
+
+def resolve_repo_id_by_workspace_path(
+    hub_root: Path, raw_config: Mapping[str, Any]
+) -> dict[str, str]:
+    return _repo_id_by_workspace_path(hub_root, raw_config)
+
+
+def resolve_bound_repo_id(
+    *,
+    repo_id: Any,
+    repo_id_by_workspace: Mapping[str, str],
+    workspace_values: tuple[Any, ...] = (),
+) -> str | None:
+    return _resolve_bound_repo_id(
+        repo_id=repo_id,
+        repo_id_by_workspace=repo_id_by_workspace,
+        workspace_values=workspace_values,
+    )
+
+
+def normalize_workspace_path(value: Any) -> str | None:
+    return _normalize_workspace_path(value)
+
+
+def resolve_discord_state_path(hub_root: Path, raw_config: Mapping[str, Any]) -> Path:
+    return _resolve_discord_state_path(hub_root, raw_config)
+
+
+def resolve_telegram_state_path(hub_root: Path, raw_config: Mapping[str, Any]) -> Path:
+    return _resolve_telegram_state_path(hub_root, raw_config)
