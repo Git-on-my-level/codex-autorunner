@@ -38,6 +38,23 @@ def test_contextspace_get_includes_catalog(tmp_path: Path) -> None:
     assert [entry["kind"] for entry in payload["kinds"]] == list(CONTEXTSPACE_DOC_KINDS)
 
 
+def test_contextspace_tree_lists_seeded_docs(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    client = _client_for_repo(repo_root)
+
+    res = client.get("/api/contextspace/tree")
+
+    assert res.status_code == 200
+    payload = res.json()
+    assert payload["defaultPath"] == "active_context.md"
+    nodes = {entry["path"]: entry for entry in payload["tree"]}
+    assert set(nodes) >= {"active_context.md", "decisions.md", "spec.md"}
+    assert nodes["active_context.md"]["type"] == "file"
+    assert nodes["active_context.md"]["is_pinned"] is True
+    assert isinstance(nodes["active_context.md"]["size"], int)
+
+
 def test_contextspace_put_rejects_unknown_keys(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
