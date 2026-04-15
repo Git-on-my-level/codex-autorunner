@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import threading
-import time
 from datetime import datetime, timedelta, timezone
 
 from codex_autorunner.core.hub_lifecycle import (
@@ -202,11 +201,13 @@ def test_hub_lifecycle_worker_logs_and_keeps_polling_after_failure(caplog) -> No
 
 def test_hub_lifecycle_worker_stops_after_unrecoverable_schema_error(caplog) -> None:
     attempts = 0
+    attempted = threading.Event()
     logger = logging.getLogger("test.hub_lifecycle.worker.schema")
 
     def _process_once() -> None:
         nonlocal attempts
         attempts += 1
+        attempted.set()
         raise RuntimeError(
             "orchestration.sqlite3 schema is newer than this build supports"
         )
@@ -221,7 +222,7 @@ def test_hub_lifecycle_worker_stops_after_unrecoverable_schema_error(caplog) -> 
     with caplog.at_level(logging.ERROR, logger=logger.name):
         worker.start()
         try:
-            time.sleep(0.05)
+            assert attempted.wait(timeout=1.0)
         finally:
             worker.stop()
 

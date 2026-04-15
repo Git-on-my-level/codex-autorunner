@@ -66,6 +66,13 @@ from .type_debt_ledger import (
     ledger_to_dict,
     render_markdown_report,
 )
+from .validation_lanes import (
+    ValidationLane,
+    ValidationLaneSelection,
+    classify_changed_files,
+    lane_selection_to_payload,
+    render_lane_selection,
+)
 
 __all__ = [
     "CAR_AWARENESS_BLOCK",
@@ -122,6 +129,11 @@ __all__ = [
     "render_injected_car_context",
     "render_markdown_report",
     "render_runtime_compat_agents_md",
+    "ValidationLane",
+    "ValidationLaneSelection",
+    "classify_changed_files",
+    "lane_selection_to_payload",
+    "render_lane_selection",
     "should_emit_reaction",
     "stable_reaction_fingerprint",
     "stable_reaction_operation_key",
