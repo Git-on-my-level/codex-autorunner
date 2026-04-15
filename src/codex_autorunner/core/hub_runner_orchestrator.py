@@ -26,6 +26,18 @@ BackendOrchestratorBuilder = Callable[[Path, RepoConfig], BackendOrchestratorPro
 
 
 class RunnerOrchestrator:
+    """Owns repo-process lifecycle: start, stop, reconcile, resume, and kill.
+
+    Ownership contract:
+    - This class manages process-level repo runners.  It constructs runners,
+      reconciles startup state, and controls the process lifecycle.
+    - It must **not** own managed-thread restart recovery, completion-gap
+      handling, or backend binding validation.  Those concerns belong to
+      ``_ThreadRecoveryHelper`` and ``runtime_thread_events``.
+    - Thread execution state (running executions, queue depth, backend bindings)
+      is owned by the orchestration service layer, not by this class.
+    """
+
     def __init__(
         self,
         hub_config: HubConfig,
@@ -103,7 +115,7 @@ class RunnerOrchestrator:
         timeout_seconds: float = 30.0,
         poll_interval_seconds: float = 0.2,
     ) -> None:
-        from .hub import LockStatus, read_lock_status
+        from .hub_topology import LockStatus, read_lock_status
 
         runner = self.ensure_runner(repo_id, allow_uninitialized=True)
         if not runner:

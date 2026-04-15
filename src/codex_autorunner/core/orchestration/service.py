@@ -732,11 +732,24 @@ class _ThreadQueueRequestAdapter:
 
 @dataclass
 class _ThreadExecutionLifecycle:
-    """Owns runtime-thread start and queued replay lifecycle concerns."""
+    """Owns runtime-thread start and queued replay lifecycle concerns.
+
+    Ownership contract:
+    - This class is responsible for starting new executions and replaying
+      queued executions.  It handles harness preparation, conversation
+      creation/resumption, rehydration prefix assembly, and fresh-conversation
+      retries.
+    - It must **not** own recovery or completion-gap logic. Stale-runtime
+      mismatch hints for resume are delegated to ``_ThreadRecoveryHelper``
+      (logging only; binding clearing stays in proven-failure paths here).
+    - It never records terminal execution results directly; that responsibility
+      belongs to the thread store and recovery helper.
+    """
 
     thread_store: ThreadExecutionStore
     get_execution: Callable[[str, str], Optional[ExecutionRecord]]
     harness_for_thread: Callable[[ThreadTarget], RuntimeThreadHarness]
+    _stale_binding_checker: Optional[Callable[..., bool]] = None
 
     @staticmethod
     def resolve_runtime_prompt(request: MessageRequest) -> str:
@@ -837,22 +850,11 @@ class _ThreadExecutionLifecycle:
                 if runtime_binding is not None
                 else None
             )
-            if (
-                conversation_id
-                and runtime_instance_id
-                and runtime_binding
-                and runtime_binding.backend_runtime_instance_id
-                and runtime_binding.backend_runtime_instance_id != runtime_instance_id
-            ):
-                log_event(
-                    logger,
-                    logging.INFO,
-                    "orchestration.thread.stale_backend_binding",
+            if self._stale_binding_checker is not None:
+                self._stale_binding_checker(
                     thread_target_id=thread.thread_target_id,
                     backend_thread_id=conversation_id,
-                    stored_runtime_instance_id=runtime_binding.backend_runtime_instance_id,
-                    current_runtime_instance_id=runtime_instance_id,
-                    action="attempt_resume",
+                    runtime_instance_id=runtime_instance_id,
                 )
             while True:
                 used_existing_conversation = conversation_id is not None
@@ -1268,12 +1270,56 @@ class _ThreadExecutionLifecycle:
 
 @dataclass
 class _ThreadRecoveryHelper:
-    """Owns interrupt, stop, and restart recovery behavior."""
+    """Owns interrupt, stop, restart recovery, and stale-binding validation.
+
+    Ownership contract:
+    - This helper is the sole authority for managed-thread recovery decisions.
+    - It never synthesizes a successful completion outcome. All recovery paths
+      record either ``error`` or ``interrupted`` status.
+    - Stale backend binding **hints** (stored runtime instance id differs from
+      the live harness id) are logged from execution start via this helper.
+      Bindings are not cleared merely for that mismatch; ``start_execution``
+      attempts ``resume_conversation`` first and only clears after proven
+      backend failure paths.
+    - Callers must not substitute their own stale-binding detection logic.
+    """
 
     thread_store: ThreadExecutionStore
     get_thread_target: Callable[[str], Optional[ThreadTarget]]
     get_running_execution: Callable[[str], Optional[ExecutionRecord]]
     harness_for_thread: Callable[[ThreadTarget], RuntimeThreadHarness]
+
+    def hint_stale_backend_binding_for_resume(
+        self,
+        *,
+        thread_target_id: str,
+        backend_thread_id: Optional[str],
+        runtime_instance_id: Optional[str],
+    ) -> bool:
+        """Log a stale-runtime hint; never clears ``backend_thread_id`` here."""
+        if not backend_thread_id or not runtime_instance_id:
+            return False
+        runtime_binding = _resolve_thread_runtime_binding(
+            self.thread_store, thread_target_id
+        )
+        if runtime_binding is None:
+            return False
+        if (
+            not runtime_binding.backend_runtime_instance_id
+            or runtime_binding.backend_runtime_instance_id == runtime_instance_id
+        ):
+            return False
+        log_event(
+            logger,
+            logging.INFO,
+            "orchestration.thread.stale_backend_binding",
+            thread_target_id=thread_target_id,
+            backend_thread_id=backend_thread_id,
+            stored_runtime_instance_id=runtime_binding.backend_runtime_instance_id,
+            current_runtime_instance_id=runtime_instance_id,
+            action="attempt_resume",
+        )
+        return False
 
     async def interrupt_thread(self, thread_target_id: str) -> ExecutionRecord:
         thread = self.get_thread_target(thread_target_id)
@@ -1560,7 +1606,19 @@ class _ThreadRecoveryHelper:
 
 @dataclass
 class HarnessBackedOrchestrationService(OrchestrationThreadService):
-    """Canonical runtime-thread orchestration service used by PMA and later surfaces."""
+    """Canonical runtime-thread orchestration service used by PMA and later surfaces.
+
+    Ownership boundary:
+    - ``RunnerOrchestrator`` owns repo-process lifecycle (start/stop/reconcile/resume/kill).
+    - ``_ThreadExecutionLifecycle`` (via ``_execution_lifecycle``) owns execution start,
+      rehydration, and fresh-conversation retries.
+    - ``_ThreadRecoveryHelper`` (via ``_recovery_helper``) owns interrupt, stop, restart
+      recovery, and stale-backend-binding validation.
+    - ``runtime_thread_events`` owns backend-specific event normalization and bounded
+      completion-gap recovery.
+    These seams must not overlap: recovery code must not start executions, and execution
+    start code must not synthesize completion outcomes.
+    """
 
     definition_catalog: AgentDefinitionCatalog
     thread_store: ThreadExecutionStore
@@ -1581,16 +1639,17 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             thread_store=self.thread_store,
             get_thread_target=self.get_thread_target,
         )
-        self._execution_lifecycle = _ThreadExecutionLifecycle(
-            thread_store=self.thread_store,
-            get_execution=self.get_execution,
-            harness_for_thread=self._runtime_adapter.harness_for_thread,
-        )
         self._recovery_helper = _ThreadRecoveryHelper(
             thread_store=self.thread_store,
             get_thread_target=self.get_thread_target,
             get_running_execution=self.get_running_execution,
             harness_for_thread=self._runtime_adapter.harness_for_thread,
+        )
+        self._execution_lifecycle = _ThreadExecutionLifecycle(
+            thread_store=self.thread_store,
+            get_execution=self.get_execution,
+            harness_for_thread=self._runtime_adapter.harness_for_thread,
+            _stale_binding_checker=self._recovery_helper.hint_stale_backend_binding_for_resume,
         )
 
     def _harness_for_agent(

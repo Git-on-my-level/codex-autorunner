@@ -1,8 +1,5 @@
 import asyncio
-import dataclasses
-import enum
 import importlib
-import json
 import logging
 import shutil
 import sqlite3
@@ -15,7 +12,6 @@ from ..discovery import DiscoveryRecord, discover_and_init
 from ..manifest import (
     Manifest,
     ManifestAgentWorkspace,
-    ManifestRepo,
     load_manifest,
     normalize_manifest_destination,
     sanitize_repo_id,
@@ -33,19 +29,16 @@ from .config import (
     derive_repo_config,
     load_hub_config,
 )
-from .destinations import (
-    default_local_destination,
-    resolve_effective_agent_workspace_destination,
-    resolve_effective_repo_destination,
-)
 from .git_utils import (
     GitError,
     git_available,
     git_branch,
     git_default_branch,
+    git_failure_detail,
     git_head_sha,
     git_is_clean,
     git_upstream_status,
+    resolve_ref_sha,
     run_git,
 )
 from .hub_lifecycle import (
@@ -53,21 +46,35 @@ from .hub_lifecycle import (
     LifecycleEventProcessor,
     LifecycleRetryPolicy,
 )
+from .hub_lifecycle_routing import LifecycleEventRouter
 from .hub_repo_manager import RepoManager
 from .hub_runner_orchestrator import RunnerOrchestrator
+from .hub_topology import (
+    AgentWorkspaceSnapshot,
+    HubState,
+    LockStatus,  # noqa: F401  re-exported for consumers
+    RepoSnapshot,
+    RepoStatus,  # noqa: F401  re-exported for consumers
+    build_agent_workspace_snapshot,
+    build_agent_workspace_snapshots,
+    build_full_topology,
+    build_repo_snapshot,
+    build_repo_snapshots,
+    load_hub_state,
+    normalize_pinned_parent_repo_ids,
+    prune_pinned_parent_repo_ids,
+    read_lock_status,  # noqa: F401  re-exported for consumers
+    save_hub_state,
+)
 from .hub_worktree_manager import WorktreeManager
 from .lifecycle_events import (
     LifecycleEvent,
     LifecycleEventEmitter,
     LifecycleEventStore,
-    LifecycleEventType,
 )
-from .locks import DEFAULT_RUNNER_CMD_HINTS, assess_lock, process_alive
 from .orchestration.sqlite import open_orchestration_sqlite
 from .pma_automation_store import DEFAULT_PMA_LANE_ID, PmaAutomationStore
-from .pma_dispatch_interceptor import PmaDispatchInterceptor
 from .pma_queue import PmaQueue
-from .pma_reactive import PmaReactiveStore
 from .pma_safety import PmaSafetyChecker, PmaSafetyConfig
 from .pma_thread_store import PmaThreadStore
 from .ports.backend_orchestrator import (
@@ -75,10 +82,9 @@ from .ports.backend_orchestrator import (
 )
 from .runner_controller import ProcessRunnerController, SpawnRunnerFn
 from .runtime import RuntimeContext
-from .state import RunnerState, load_state, now_iso
+from .state import RunnerState, now_iso  # noqa: F401
 from .state_roots import resolve_hub_agent_workspace_root
 from .types import AppServerSupervisorFactory, BackendFactory
-from .utils import atomic_write
 
 logger = logging.getLogger("codex_autorunner.hub")
 
@@ -90,21 +96,66 @@ AppServerSupervisorFactoryBuilder = Callable[[RepoConfig], AppServerSupervisorFa
 BackendOrchestratorBuilder = Callable[[Path, RepoConfig], BackendOrchestratorProtocol]
 
 
-def _git_failure_detail(proc) -> str:
-    return (proc.stderr or proc.stdout or "").strip() or f"exit {proc.returncode}"
+class _HubWorktreeBridge:
+    """Concrete WorktreeHubContext that delegates to HubSupervisor."""
 
+    def __init__(self, supervisor: "HubSupervisor") -> None:
+        self._supervisor = supervisor
 
-def _resolve_ref_sha(repo_root: Path, ref: str) -> str:
-    try:
-        proc = run_git(["rev-parse", "--verify", ref], repo_root, check=False)
-    except GitError as exc:
-        raise ValueError(f"git rev-parse failed for {ref}: {exc}") from exc
-    if proc.returncode != 0:
-        raise ValueError(f"Unable to resolve ref {ref}: {_git_failure_detail(proc)}")
-    sha = (proc.stdout or "").strip()
-    if not sha:
-        raise ValueError(f"Unable to resolve ref {ref}: empty output")
-    return sha
+    def invalidate_cache(self) -> None:
+        self._supervisor._invalidate_list_cache()
+
+    def snapshot_for_repo(self, repo_id: str) -> "RepoSnapshot":
+        return self._supervisor._snapshot_for_repo(repo_id)
+
+    def stop_runner(
+        self,
+        *,
+        repo_id: str,
+        repo_path: Path,
+        timeout_seconds: float = 30.0,
+        poll_interval_seconds: float = 0.2,
+    ) -> None:
+        self._supervisor._stop_runner_and_wait_for_exit(
+            repo_id=repo_id,
+            repo_path=repo_path,
+            timeout_seconds=timeout_seconds,
+            poll_interval_seconds=poll_interval_seconds,
+        )
+
+    def archive_repo_state(
+        self,
+        *,
+        repo_id: str,
+        archive_note: Optional[str] = None,
+        archive_profile: Optional[str] = None,
+    ) -> Dict[str, object]:
+        return self._supervisor.archive_repo_state(
+            repo_id=repo_id,
+            archive_note=archive_note,
+            archive_profile=archive_profile,
+        )
+
+    def base_repo_paths(self, manifest: "Manifest") -> dict[str, Path]:
+        return self._supervisor._base_repo_paths(manifest)
+
+    def collect_unbound_repo_threads(
+        self,
+        *,
+        manifest: Optional["Manifest"] = None,
+    ) -> dict[str, list[str]]:
+        return self._supervisor._collect_unbound_repo_threads(manifest=manifest)
+
+    def archive_unbound_repo_threads(
+        self,
+        *,
+        repo_id: str,
+        unbound_threads_by_repo: Optional[dict[str, list[str]]] = None,
+    ) -> list[str]:
+        return self._supervisor._archive_unbound_repo_threads(
+            repo_id=repo_id,
+            unbound_threads_by_repo=unbound_threads_by_repo,
+        )
 
 
 def _load_managed_runtime_module() -> Any:
@@ -188,313 +239,6 @@ def _runtime_preflight_blocks_enable(
         return False
     status = str(preflight.get("status") or "").strip().lower()
     return bool(status and status not in {"ready", "deferred"})
-
-
-class RepoStatus(str, enum.Enum):
-    UNINITIALIZED = "uninitialized"
-    INITIALIZING = "initializing"
-    IDLE = "idle"
-    RUNNING = "running"
-    ERROR = "error"
-    LOCKED = "locked"
-    MISSING = "missing"
-    INIT_ERROR = "init_error"
-
-
-class LockStatus(str, enum.Enum):
-    UNLOCKED = "unlocked"
-    LOCKED_ALIVE = "locked_alive"
-    LOCKED_STALE = "locked_stale"
-
-
-@dataclasses.dataclass
-class RepoSnapshot:
-    id: str
-    path: Path
-    display_name: str
-    enabled: bool
-    auto_run: bool
-    worktree_setup_commands: Optional[List[str]]
-    kind: str  # base|worktree
-    worktree_of: Optional[str]
-    branch: Optional[str]
-    exists_on_disk: bool
-    is_clean: Optional[bool]
-    initialized: bool
-    init_error: Optional[str]
-    status: RepoStatus
-    lock_status: LockStatus
-    last_run_id: Optional[int]
-    last_run_started_at: Optional[str]
-    last_run_finished_at: Optional[str]
-    last_exit_code: Optional[int]
-    runner_pid: Optional[int]
-    last_run_duration_seconds: Optional[float] = None
-    effective_destination: Dict[str, Any] = dataclasses.field(
-        default_factory=default_local_destination
-    )
-    chat_bound: bool = False
-    chat_bound_thread_count: int = 0
-    pma_chat_bound_thread_count: int = 0
-    discord_chat_bound_thread_count: int = 0
-    telegram_chat_bound_thread_count: int = 0
-    non_pma_chat_bound_thread_count: int = 0
-    unbound_managed_thread_count: int = 0
-    cleanup_blocked_by_chat_binding: bool = False
-    has_car_state: bool = False
-    resource_kind: str = "repo"
-
-    def to_dict(self, hub_root: Path) -> Dict[str, object]:
-        try:
-            rel_path = self.path.relative_to(hub_root)
-        except ValueError:
-            rel_path = self.path
-        return {
-            "id": self.id,
-            "path": str(rel_path),
-            "display_name": self.display_name,
-            "enabled": self.enabled,
-            "auto_run": self.auto_run,
-            "worktree_setup_commands": self.worktree_setup_commands,
-            "kind": self.kind,
-            "worktree_of": self.worktree_of,
-            "branch": self.branch,
-            "exists_on_disk": self.exists_on_disk,
-            "is_clean": self.is_clean,
-            "initialized": self.initialized,
-            "init_error": self.init_error,
-            "status": self.status.value,
-            "lock_status": self.lock_status.value,
-            "last_run_id": self.last_run_id,
-            "last_run_started_at": self.last_run_started_at,
-            "last_run_finished_at": self.last_run_finished_at,
-            "last_run_duration_seconds": self.last_run_duration_seconds,
-            "last_exit_code": self.last_exit_code,
-            "runner_pid": self.runner_pid,
-            "effective_destination": self.effective_destination,
-            "chat_bound": self.chat_bound,
-            "chat_bound_thread_count": self.chat_bound_thread_count,
-            "pma_chat_bound_thread_count": self.pma_chat_bound_thread_count,
-            "discord_chat_bound_thread_count": self.discord_chat_bound_thread_count,
-            "telegram_chat_bound_thread_count": self.telegram_chat_bound_thread_count,
-            "non_pma_chat_bound_thread_count": self.non_pma_chat_bound_thread_count,
-            "unbound_managed_thread_count": self.unbound_managed_thread_count,
-            "cleanup_blocked_by_chat_binding": self.cleanup_blocked_by_chat_binding,
-            "has_car_state": self.has_car_state,
-            "resource_kind": self.resource_kind,
-        }
-
-
-@dataclasses.dataclass
-class AgentWorkspaceSnapshot:
-    id: str
-    runtime: str
-    path: Path
-    display_name: str
-    enabled: bool
-    exists_on_disk: bool
-    effective_destination: Dict[str, Any] = dataclasses.field(
-        default_factory=default_local_destination
-    )
-    resource_kind: str = "agent_workspace"
-
-    def to_dict(self, hub_root: Path) -> Dict[str, object]:
-        try:
-            rel_path = self.path.relative_to(hub_root)
-        except ValueError:
-            rel_path = self.path
-        return {
-            "id": self.id,
-            "runtime": self.runtime,
-            "path": str(rel_path),
-            "display_name": self.display_name,
-            "enabled": self.enabled,
-            "exists_on_disk": self.exists_on_disk,
-            "effective_destination": self.effective_destination,
-            "resource_kind": self.resource_kind,
-        }
-
-
-@dataclasses.dataclass
-class HubState:
-    last_scan_at: Optional[str]
-    repos: List[RepoSnapshot]
-    agent_workspaces: List[AgentWorkspaceSnapshot] = dataclasses.field(
-        default_factory=list
-    )
-    pinned_parent_repo_ids: List[str] = dataclasses.field(default_factory=list)
-
-    def to_dict(self, hub_root: Path) -> Dict[str, object]:
-        return {
-            "last_scan_at": self.last_scan_at,
-            "repos": [repo.to_dict(hub_root) for repo in self.repos],
-            "agent_workspaces": [
-                workspace.to_dict(hub_root) for workspace in self.agent_workspaces
-            ],
-            "pinned_parent_repo_ids": list(self.pinned_parent_repo_ids or []),
-        }
-
-
-def read_lock_status(lock_path: Path) -> LockStatus:
-    if not lock_path.exists():
-        return LockStatus.UNLOCKED
-    assessment = assess_lock(
-        lock_path,
-        expected_cmd_substrings=DEFAULT_RUNNER_CMD_HINTS,
-    )
-    if not assessment.freeable and assessment.pid and process_alive(assessment.pid):
-        return LockStatus.LOCKED_ALIVE
-    return LockStatus.LOCKED_STALE
-
-
-def load_hub_state(state_path: Path, hub_root: Path) -> HubState:
-    if not state_path.exists():
-        return HubState(
-            last_scan_at=None,
-            repos=[],
-            agent_workspaces=[],
-            pinned_parent_repo_ids=[],
-        )
-    data = state_path.read_text(encoding="utf-8")
-    try:
-        import json
-
-        payload = json.loads(data)
-    except (json.JSONDecodeError, ValueError) as exc:
-        logger.warning("Failed to parse hub state from %s: %s", state_path, exc)
-        return HubState(
-            last_scan_at=None,
-            repos=[],
-            agent_workspaces=[],
-            pinned_parent_repo_ids=[],
-        )
-    last_scan_at = payload.get("last_scan_at")
-    pinned_parent_repo_ids = _normalize_pinned_parent_repo_ids(
-        payload.get("pinned_parent_repo_ids")
-    )
-    repos_payload = payload.get("repos") or []
-    agent_workspaces_payload = payload.get("agent_workspaces") or []
-    repos: List[RepoSnapshot] = []
-    agent_workspaces: List[AgentWorkspaceSnapshot] = []
-    for entry in repos_payload:
-        try:
-            repo = RepoSnapshot(
-                id=str(entry.get("id")),
-                path=hub_root / entry.get("path", ""),
-                display_name=str(entry.get("display_name", "")),
-                enabled=bool(entry.get("enabled", True)),
-                auto_run=bool(entry.get("auto_run", False)),
-                worktree_setup_commands=(
-                    [
-                        str(cmd).strip()
-                        for cmd in (entry.get("worktree_setup_commands") or [])
-                        if isinstance(cmd, str) and str(cmd).strip()
-                    ]
-                    or None
-                ),
-                kind=str(entry.get("kind", "base")),
-                worktree_of=entry.get("worktree_of"),
-                branch=entry.get("branch"),
-                exists_on_disk=bool(entry.get("exists_on_disk", False)),
-                is_clean=entry.get("is_clean"),
-                initialized=bool(entry.get("initialized", False)),
-                init_error=entry.get("init_error"),
-                status=RepoStatus(entry.get("status", RepoStatus.UNINITIALIZED.value)),
-                lock_status=LockStatus(
-                    entry.get("lock_status", LockStatus.UNLOCKED.value)
-                ),
-                last_run_id=entry.get("last_run_id"),
-                last_run_started_at=entry.get("last_run_started_at"),
-                last_run_finished_at=entry.get("last_run_finished_at"),
-                last_run_duration_seconds=entry.get("last_run_duration_seconds"),
-                last_exit_code=entry.get("last_exit_code"),
-                runner_pid=entry.get("runner_pid"),
-                effective_destination=(
-                    normalize_manifest_destination(entry.get("effective_destination"))
-                    or default_local_destination()
-                ),
-            )
-            repos.append(repo)
-        except (ValueError, TypeError, KeyError) as exc:
-            repo_id = entry.get("id", "unknown")
-            logger.warning(
-                "Failed to load repo snapshot for id=%s from hub state: %s",
-                repo_id,
-                exc,
-            )
-            continue
-    for entry in agent_workspaces_payload:
-        try:
-            workspace = AgentWorkspaceSnapshot(
-                id=str(entry.get("id")),
-                runtime=str(entry.get("runtime", "")),
-                path=hub_root / entry.get("path", ""),
-                display_name=str(entry.get("display_name", "")),
-                enabled=bool(entry.get("enabled", True)),
-                exists_on_disk=bool(entry.get("exists_on_disk", False)),
-                effective_destination=(
-                    normalize_manifest_destination(entry.get("effective_destination"))
-                    or default_local_destination()
-                ),
-            )
-            agent_workspaces.append(workspace)
-        except (ValueError, TypeError, KeyError) as exc:
-            workspace_id = entry.get("id", "unknown")
-            logger.warning(
-                "Failed to load agent workspace snapshot for id=%s from hub state: %s",
-                workspace_id,
-                exc,
-            )
-            continue
-    return HubState(
-        last_scan_at=last_scan_at,
-        repos=repos,
-        agent_workspaces=agent_workspaces,
-        pinned_parent_repo_ids=pinned_parent_repo_ids,
-    )
-
-
-def save_hub_state(
-    state_path: Path,
-    state: HubState,
-    hub_root: Path,
-    *,
-    refresh_pma_threads_artifact: bool = True,
-) -> None:
-    payload = state.to_dict(hub_root)
-    atomic_write(state_path, json.dumps(payload, indent=2) + "\n")
-    if refresh_pma_threads_artifact:
-        try:
-            _save_pma_threads_artifact(hub_root)
-        except (OSError, ValueError, TypeError) as exc:
-            logger.warning("Failed to write PMA thread snapshot artifact: %s", exc)
-
-
-def _save_pma_threads_artifact(hub_root: Path) -> None:
-    from .pma_context import _snapshot_pma_threads
-
-    payload = {
-        "generated_at": now_iso(),
-        "threads": _snapshot_pma_threads(hub_root),
-    }
-    artifact_path = hub_root / ".codex-autorunner" / "pma_threads.json"
-    atomic_write(artifact_path, json.dumps(payload, indent=2) + "\n")
-
-
-def _normalize_pinned_parent_repo_ids(value: Any) -> List[str]:
-    if not isinstance(value, list):
-        return []
-    out: List[str] = []
-    seen: set[str] = set()
-    for item in value:
-        if not isinstance(item, str):
-            continue
-        repo_id = item.strip()
-        if not repo_id or repo_id in seen:
-            continue
-        seen.add(repo_id)
-        out.append(repo_id)
-    return out
 
 
 class RepoRunner:
@@ -588,6 +332,15 @@ class HubSupervisor:
         self._startup_repo_state_pending = bool(self.state.repos)
         self._list_lock = threading.Lock()
         self._lifecycle_emitter = LifecycleEventEmitter(hub_config.root)
+        self._lifecycle_router = LifecycleEventRouter(
+            hub_config=hub_config,
+            lifecycle_store=self.lifecycle_store,
+            list_repos_fn=self.list_repos,
+            ensure_pma_automation_store_fn=self.ensure_pma_automation_store,
+            ensure_pma_safety_checker_fn=self.ensure_pma_safety_checker,
+            run_coroutine_fn=self._run_coroutine,
+            logger=logger,
+        )
         self._lifecycle_event_processor = LifecycleEventProcessor(
             store=self.lifecycle_store,
             process_event=lambda event: self._process_lifecycle_event(event),
@@ -601,7 +354,6 @@ class HubSupervisor:
             thread_name="lifecycle-event-processor",
             logger=logger,
         )
-        self._dispatch_interceptor: Optional[PmaDispatchInterceptor] = None
         self._pma_safety_checker: Optional[PmaSafetyChecker] = None
         self._pma_automation_store: Optional[PmaAutomationStore] = None
         self._pma_lane_worker_starter: Optional[Callable[[str], None]] = None
@@ -615,15 +367,10 @@ class HubSupervisor:
             on_list_repos=self.list_repos,
             runners=self._runner_orchestrator.runners,
         )
+        self._worktree_bridge = _HubWorktreeBridge(self)
         self._worktree_manager = WorktreeManager(
             hub_config,
-            on_invalidate_cache=self._invalidate_list_cache,
-            on_snapshot_for_repo=self._snapshot_for_repo,
-            on_stop_runner=self._stop_runner_and_wait_for_exit,
-            on_archive_repo_state=self.archive_repo_state,
-            on_base_repo_paths=self._base_repo_paths,
-            on_collect_unbound_repo_threads=self._collect_unbound_repo_threads,
-            on_archive_unbound_repo_threads=self._archive_unbound_repo_threads,
+            ctx=self._worktree_bridge,
         )
         self._wire_outbox_lifecycle()
         self._reconcile_startup()
@@ -654,11 +401,12 @@ class HubSupervisor:
     def scan(self) -> List[RepoSnapshot]:
         self._invalidate_list_cache()
         manifest, records = discover_and_init(self.hub_config)
-        snapshots = self._build_snapshots(records)
-        agent_workspaces = self._build_agent_workspace_snapshots(
-            manifest.agent_workspaces
+        snapshots, agent_workspaces, pinned_parent_repo_ids = build_full_topology(
+            records,
+            manifest.agent_workspaces,
+            self.state.pinned_parent_repo_ids,
+            self.hub_config.root,
         )
-        pinned_parent_repo_ids = self._prune_pinned_parent_repo_ids(snapshots)
         self.state = HubState(
             last_scan_at=now_iso(),
             repos=snapshots,
@@ -680,11 +428,12 @@ class HubSupervisor:
                 return self._list_cache
             self._startup_repo_state_pending = False
             manifest, records = self._manifest_records(manifest_only=True)
-            snapshots = self._build_snapshots(records)
-            agent_workspaces = self._build_agent_workspace_snapshots(
-                manifest.agent_workspaces
+            snapshots, agent_workspaces, pinned_parent_repo_ids = build_full_topology(
+                records,
+                manifest.agent_workspaces,
+                self.state.pinned_parent_repo_ids,
+                self.hub_config.root,
             )
-            pinned_parent_repo_ids = self._prune_pinned_parent_repo_ids(snapshots)
             self.state = HubState(
                 last_scan_at=self.state.last_scan_at,
                 repos=snapshots,
@@ -726,7 +475,7 @@ class HubSupervisor:
                 last_scan_at=self.state.last_scan_at,
                 repos=self.state.repos,
                 agent_workspaces=self.state.agent_workspaces,
-                pinned_parent_repo_ids=_normalize_pinned_parent_repo_ids(current),
+                pinned_parent_repo_ids=normalize_pinned_parent_repo_ids(current),
             )
             save_hub_state(
                 self.state_path,
@@ -978,7 +727,7 @@ class HubSupervisor:
         except GitError as exc:
             raise ValueError(f"git fetch failed: {exc}") from exc
         if proc.returncode != 0:
-            raise ValueError(f"git fetch failed: {_git_failure_detail(proc)}")
+            raise ValueError(f"git fetch failed: {git_failure_detail(proc)}")
 
         default_branch = git_default_branch(repo_root)
         if not default_branch:
@@ -998,7 +747,7 @@ class HubSupervisor:
             except GitError as exc:
                 raise ValueError(f"git checkout failed: {exc}") from exc
             if proc.returncode != 0:
-                raise ValueError(f"git checkout failed: {_git_failure_detail(proc)}")
+                raise ValueError(f"git checkout failed: {git_failure_detail(proc)}")
 
         try:
             proc = run_git(
@@ -1010,12 +759,12 @@ class HubSupervisor:
         except GitError as exc:
             raise ValueError(f"git pull failed: {exc}") from exc
         if proc.returncode != 0:
-            raise ValueError(f"git pull failed: {_git_failure_detail(proc)}")
+            raise ValueError(f"git pull failed: {git_failure_detail(proc)}")
         local_sha = git_head_sha(repo_root)
         if not local_sha:
             raise ValueError("Unable to resolve local HEAD after sync")
         origin_ref = f"refs/remotes/origin/{default_branch}"
-        origin_sha = _resolve_ref_sha(repo_root, origin_ref)
+        origin_sha = resolve_ref_sha(repo_root, origin_ref)
         if local_sha != origin_sha:
             raise ValueError(
                 "Sync main did not land on origin/%s: local=%s origin=%s. "
@@ -1535,21 +1284,17 @@ class HubSupervisor:
         return manifest, records
 
     def _build_snapshots(self, records: List[DiscoveryRecord]) -> List[RepoSnapshot]:
-        repos_by_id = {record.repo.id: record.repo for record in records}
-        snapshots: List[RepoSnapshot] = []
-        for record in records:
-            snapshots.append(self._snapshot_from_record(record, repos_by_id))
-        return snapshots
+        return build_repo_snapshots(records)
 
     def _build_agent_workspace_snapshots(
         self, workspaces: List[ManifestAgentWorkspace]
     ) -> List[AgentWorkspaceSnapshot]:
-        return [self._snapshot_from_agent_workspace(entry) for entry in workspaces]
+        return build_agent_workspace_snapshots(workspaces, self.hub_config.root)
 
     def _prune_pinned_parent_repo_ids(self, snapshots: List[RepoSnapshot]) -> List[str]:
-        base_repo_ids = {snap.id for snap in snapshots if snap.kind == "base"}
-        pinned = _normalize_pinned_parent_repo_ids(self.state.pinned_parent_repo_ids)
-        return [repo_id for repo_id in pinned if repo_id in base_repo_ids]
+        return prune_pinned_parent_repo_ids(
+            self.state.pinned_parent_repo_ids, snapshots
+        )
 
     def _snapshot_for_repo(self, repo_id: str) -> RepoSnapshot:
         _, records = self._manifest_records(manifest_only=True)
@@ -1557,7 +1302,7 @@ class HubSupervisor:
         if not record:
             raise ValueError(f"Repo {repo_id} not found in manifest")
         repos_by_id = {entry.repo.id: entry.repo for entry in records}
-        snapshot = self._snapshot_from_record(record, repos_by_id)
+        snapshot = build_repo_snapshot(record, repos_by_id)
         self.list_repos(use_cache=False)
         return snapshot
 
@@ -1568,7 +1313,7 @@ class HubSupervisor:
         workspace = manifest.get_agent_workspace(workspace_id)
         if not workspace:
             raise ValueError(f"Agent workspace {workspace_id} not found in manifest")
-        return self._snapshot_from_agent_workspace(workspace)
+        return build_agent_workspace_snapshot(workspace, self.hub_config.root)
 
     def _invalidate_list_cache(self) -> None:
         with self._list_lock:
@@ -1727,35 +1472,6 @@ class HubSupervisor:
 
         set_lifecycle_emitter(_emit_outbox_event)
 
-    def _on_dispatch_intercept(self, event_id: str, result: Any) -> None:
-        logger.info(
-            "Dispatch intercepted: event_id=%s action=%s reason=%s",
-            event_id,
-            (
-                result.get("action")
-                if isinstance(result, dict)
-                else getattr(result, "action", None)
-            ),
-            (
-                result.get("reason")
-                if isinstance(result, dict)
-                else getattr(result, "reason", None)
-            ),
-        )
-
-    def _ensure_dispatch_interceptor(self) -> Optional[PmaDispatchInterceptor]:
-        if not self.hub_config.pma.enabled:
-            return None
-        if not self.hub_config.pma.dispatch_interception_enabled:
-            return None
-        if self._dispatch_interceptor is None:
-            self._dispatch_interceptor = PmaDispatchInterceptor(
-                hub_root=self.hub_config.root,
-                supervisor=self,
-                on_intercept=self._on_dispatch_intercept,
-            )
-        return self._dispatch_interceptor
-
     def _run_coroutine(self, coro: Any) -> Any:
         try:
             asyncio.get_running_loop()
@@ -1767,138 +1483,6 @@ class HubSupervisor:
                 return loop.run_until_complete(coro)
             finally:
                 loop.close()
-
-    def _lifecycle_transition_payload(
-        self, event: LifecycleEvent
-    ) -> dict[str, Optional[str]]:
-        data = event.data if isinstance(event.data, dict) else {}
-        to_state_fallback = {
-            LifecycleEventType.FLOW_PAUSED: "blocked",
-            LifecycleEventType.FLOW_COMPLETED: "completed",
-            LifecycleEventType.FLOW_FAILED: "failed",
-            LifecycleEventType.FLOW_STOPPED: "stopped",
-            LifecycleEventType.DISPATCH_CREATED: "dispatch_created",
-        }
-        from_state = (
-            str(data.get("from_state")).strip()
-            if isinstance(data.get("from_state"), str)
-            else None
-        )
-        to_state = (
-            str(data.get("to_state")).strip()
-            if isinstance(data.get("to_state"), str)
-            else to_state_fallback.get(event.event_type)
-        )
-        if from_state is None:
-            if event.event_type == LifecycleEventType.DISPATCH_CREATED:
-                from_state = "paused"
-            elif to_state in {"paused", "blocked", "completed", "failed", "stopped"}:
-                from_state = "running"
-
-        reason = (
-            str(data.get("reason")).strip()
-            if isinstance(data.get("reason"), str) and str(data.get("reason")).strip()
-            else event.event_type.value
-        )
-        timestamp = (
-            str(event.timestamp).strip()
-            if isinstance(event.timestamp, str) and str(event.timestamp).strip()
-            else now_iso()
-        )
-        thread_id = (
-            str(data.get("thread_id")).strip()
-            if isinstance(data.get("thread_id"), str)
-            and str(data.get("thread_id")).strip()
-            else None
-        )
-        repo_id = (
-            event.repo_id.strip()
-            if isinstance(event.repo_id, str) and event.repo_id.strip()
-            else (
-                str(data.get("repo_id")).strip()
-                if isinstance(data.get("repo_id"), str)
-                and str(data.get("repo_id")).strip()
-                else None
-            )
-        )
-        run_id = (
-            event.run_id.strip()
-            if isinstance(event.run_id, str) and event.run_id.strip()
-            else (
-                str(data.get("run_id")).strip()
-                if isinstance(data.get("run_id"), str)
-                and str(data.get("run_id")).strip()
-                else None
-            )
-        )
-        return {
-            "repo_id": repo_id,
-            "run_id": run_id,
-            "thread_id": thread_id,
-            "from_state": from_state,
-            "to_state": to_state,
-            "reason": reason,
-            "timestamp": timestamp,
-        }
-
-    def _enqueue_automation_wakeups_for_lifecycle_event(
-        self, event: LifecycleEvent
-    ) -> int:
-        transition = self._lifecycle_transition_payload(event)
-        try:
-            store = self.ensure_pma_automation_store()
-            matches = store.match_lifecycle_subscriptions(
-                event_type=event.event_type.value,
-                repo_id=transition.get("repo_id"),
-                run_id=transition.get("run_id"),
-                thread_id=transition.get("thread_id"),
-                from_state=transition.get("from_state"),
-                to_state=transition.get("to_state"),
-            )
-        except (sqlite3.Error, OSError, ValueError, TypeError):
-            logger.exception(
-                "Failed to match lifecycle subscriptions for event %s", event.event_id
-            )
-            return 0
-
-        if not matches:
-            return 0
-
-        created = 0
-        for subscription in matches:
-            subscription_id = str(subscription.get("subscription_id") or "").strip()
-            idempotency_key = f"lifecycle:{event.event_id}:subscription:{subscription_id or 'unknown'}"
-            reason = (
-                str(subscription.get("reason")).strip()
-                if isinstance(subscription.get("reason"), str)
-                and str(subscription.get("reason")).strip()
-                else transition.get("reason")
-            )
-            _, deduped = store.enqueue_wakeup(
-                source="lifecycle_subscription",
-                repo_id=transition.get("repo_id"),
-                run_id=transition.get("run_id"),
-                thread_id=transition.get("thread_id"),
-                lane_id=(
-                    str(subscription.get("lane_id")).strip()
-                    if isinstance(subscription.get("lane_id"), str)
-                    and str(subscription.get("lane_id")).strip()
-                    else "pma:default"
-                ),
-                from_state=transition.get("from_state"),
-                to_state=transition.get("to_state"),
-                reason=reason,
-                timestamp=transition.get("timestamp"),
-                idempotency_key=idempotency_key,
-                subscription_id=subscription_id or None,
-                event_id=event.event_id,
-                event_type=event.event_type.value,
-                event_data=event.data if isinstance(event.data, dict) else {},
-                metadata={"origin": event.origin},
-            )
-            if not deduped:
-                created += 1
-        return created
 
     def process_pma_automation_timers(self, *, limit: int = 100) -> int:
         take = max(0, int(limit))
@@ -2134,28 +1718,6 @@ class HubSupervisor:
                 drained += 1
         return drained
 
-    def _build_pma_lifecycle_message(
-        self, event: LifecycleEvent, *, reason: str
-    ) -> str:
-        lines = [
-            "Lifecycle event received.",
-            f"type: {event.event_type.value}",
-            f"repo_id: {event.repo_id}",
-            f"run_id: {event.run_id}",
-            f"event_id: {event.event_id}",
-        ]
-        if reason:
-            lines.append(f"reason: {reason}")
-        if event.data:
-            try:
-                payload = json.dumps(event.data, sort_keys=True, ensure_ascii=True)
-            except (TypeError, ValueError):
-                payload = str(event.data)
-            lines.append(f"data: {payload}")
-        if event.event_type == LifecycleEventType.DISPATCH_CREATED:
-            lines.append("Dispatch requires attention; check the repo inbox.")
-        return "\n".join(lines)
-
     def _build_lifecycle_retry_policy(self) -> LifecycleRetryPolicy:
         raw = getattr(self.hub_config, "raw", {})
         pma_config = raw.get("pma", {}) if isinstance(raw, dict) else {}
@@ -2236,282 +1798,5 @@ class HubSupervisor:
     def get_pma_safety_checker(self) -> PmaSafetyChecker:
         return self.ensure_pma_safety_checker()
 
-    def _pma_reactive_gate(self, event: LifecycleEvent) -> tuple[bool, str]:
-        pma = self.hub_config.pma
-        reactive_enabled = getattr(pma, "reactive_enabled", True)
-        if not reactive_enabled:
-            return False, "reactive_disabled"
-
-        origin = (event.origin or "").strip().lower()
-        blocked_origins = getattr(pma, "reactive_origin_blocklist", [])
-        if blocked_origins:
-            blocked = {str(value).strip().lower() for value in blocked_origins}
-            if origin and origin in blocked:
-                logger.info(
-                    "Skipping PMA reactive trigger for event %s due to origin=%s",
-                    event.event_id,
-                    origin,
-                )
-                return False, "reactive_origin_blocked"
-
-        allowlist = getattr(pma, "reactive_event_types", None)
-        if allowlist:
-            if event.event_type.value not in set(allowlist):
-                return False, "reactive_filtered"
-
-        debounce_seconds = int(getattr(pma, "reactive_debounce_seconds", 0) or 0)
-        if debounce_seconds > 0:
-            key = f"{event.event_type.value}:{event.repo_id}:{event.run_id}"
-            store = PmaReactiveStore(self.hub_config.root)
-            if not store.check_and_update(key, debounce_seconds):
-                return False, "reactive_debounced"
-
-        safety_checker = self.ensure_pma_safety_checker()
-        safety_check = safety_checker.check_reactive_turn()
-        if not safety_check.allowed:
-            logger.info(
-                "Blocked PMA reactive trigger for event %s: %s",
-                event.event_id,
-                safety_check.reason,
-            )
-            return False, safety_check.reason or "reactive_blocked"
-
-        return True, "reactive_allowed"
-
-    def _enqueue_pma_for_lifecycle_event(
-        self, event: LifecycleEvent, *, reason: str
-    ) -> bool:
-        if not self.hub_config.pma.enabled:
-            return False
-
-        async def _enqueue() -> tuple[object, Optional[str]]:
-            queue = PmaQueue(self.hub_config.root)
-            message = self._build_pma_lifecycle_message(event, reason=reason)
-            payload = {
-                "message": message,
-                "agent": None,
-                "model": None,
-                "reasoning": None,
-                "client_turn_id": event.event_id,
-                "stream": False,
-                "hub_root": str(self.hub_config.root),
-                "lifecycle_event": {
-                    "event_id": event.event_id,
-                    "event_type": event.event_type.value,
-                    "repo_id": event.repo_id,
-                    "run_id": event.run_id,
-                    "timestamp": event.timestamp,
-                    "data": event.data,
-                    "origin": event.origin,
-                },
-            }
-            idempotency_key = f"lifecycle:{event.event_id}"
-            return await queue.enqueue("pma:default", idempotency_key, payload)
-
-        _, dupe_reason = self._run_coroutine(_enqueue())
-        if dupe_reason:
-            logger.info(
-                "Deduped PMA queue item for lifecycle event %s: %s",
-                event.event_id,
-                dupe_reason,
-            )
-        return True
-
     def _process_lifecycle_event(self, event: LifecycleEvent) -> None:
-        if event.processed:
-            return
-        event_id = event.event_id
-        if not event_id:
-            return
-
-        decision = "skip"
-        processed = False
-        automation_wakeups = 0
-        try:
-            automation_wakeups = self._enqueue_automation_wakeups_for_lifecycle_event(
-                event
-            )
-        except (sqlite3.Error, OSError, ValueError, TypeError, RuntimeError):
-            logger.exception(
-                "Failed to enqueue lifecycle automation wake-ups for event %s",
-                event.event_id,
-            )
-            automation_wakeups = 0
-
-        if event.event_type == LifecycleEventType.DISPATCH_CREATED:
-            if not self.hub_config.pma.enabled:
-                decision = "pma_disabled"
-                processed = True
-            else:
-                interceptor = self._ensure_dispatch_interceptor()
-                repo_snapshot = None
-                try:
-                    snapshots = self.list_repos()
-                    for snap in snapshots:
-                        if snap.id == event.repo_id:
-                            repo_snapshot = snap
-                            break
-                except (RuntimeError, OSError, ValueError, TypeError):
-                    logger.exception(
-                        "Failed to get repo snapshot for repo_id=%s", event.repo_id
-                    )
-                    repo_snapshot = None
-
-                if repo_snapshot is None or not repo_snapshot.exists_on_disk:
-                    decision = "repo_missing"
-                    processed = True
-                elif interceptor is not None:
-                    result = self._run_coroutine(
-                        interceptor.process_dispatch_event(event, repo_snapshot.path)
-                    )
-                    if result and result.action == "auto_resolved":
-                        decision = "dispatch_auto_resolved"
-                        processed = True
-                    elif result and result.action == "ignore":
-                        decision = "dispatch_ignored"
-                        processed = True
-                    else:
-                        allowed, gate_reason = self._pma_reactive_gate(event)
-                        if not allowed:
-                            decision = gate_reason
-                            processed = True
-                        else:
-                            decision = "dispatch_escalated"
-                            processed = self._enqueue_pma_for_lifecycle_event(
-                                event, reason="dispatch_escalated"
-                            )
-                else:
-                    allowed, gate_reason = self._pma_reactive_gate(event)
-                    if not allowed:
-                        decision = gate_reason
-                        processed = True
-                    else:
-                        decision = "dispatch_enqueued"
-                        processed = self._enqueue_pma_for_lifecycle_event(
-                            event, reason="dispatch_created"
-                        )
-        elif event.event_type in (
-            LifecycleEventType.FLOW_PAUSED,
-            LifecycleEventType.FLOW_COMPLETED,
-            LifecycleEventType.FLOW_FAILED,
-            LifecycleEventType.FLOW_STOPPED,
-        ):
-            if not self.hub_config.pma.enabled:
-                decision = "pma_disabled"
-                processed = True
-            else:
-                allowed, gate_reason = self._pma_reactive_gate(event)
-                if not allowed:
-                    decision = gate_reason
-                    processed = True
-                else:
-                    decision = "flow_enqueued"
-                    processed = self._enqueue_pma_for_lifecycle_event(
-                        event, reason=event.event_type.value
-                    )
-
-        if processed:
-            self.lifecycle_store.mark_processed(event_id)
-            self.lifecycle_store.prune_processed(keep_last=50)
-
-        logger.info(
-            "Lifecycle event processed: event_id=%s type=%s repo_id=%s run_id=%s decision=%s processed=%s automation_wakeups=%s",
-            event.event_id,
-            event.event_type.value,
-            event.repo_id,
-            event.run_id,
-            decision,
-            processed,
-            automation_wakeups,
-        )
-
-    def _snapshot_from_record(
-        self,
-        record: DiscoveryRecord,
-        repos_by_id: Optional[Dict[str, ManifestRepo]] = None,
-    ) -> RepoSnapshot:
-        repo_path = record.absolute_path
-        lock_path = repo_path / ".codex-autorunner" / "lock"
-        lock_status = read_lock_status(lock_path)
-
-        runner_state: Optional[RunnerState] = None
-        if record.initialized:
-            runner_state = load_state(repo_path / ".codex-autorunner" / "state.sqlite3")
-
-        is_clean: Optional[bool] = None
-        if record.exists_on_disk and git_available(repo_path):
-            is_clean = git_is_clean(repo_path)
-
-        status = self._derive_status(record, lock_status, runner_state)
-        last_run_id = runner_state.last_run_id if runner_state else None
-        repo_index = repos_by_id or {record.repo.id: record.repo}
-        effective_destination = resolve_effective_repo_destination(
-            record.repo, repo_index
-        ).to_dict()
-        return RepoSnapshot(
-            id=record.repo.id,
-            path=repo_path,
-            display_name=record.repo.display_name or repo_path.name or record.repo.id,
-            enabled=record.repo.enabled,
-            auto_run=record.repo.auto_run,
-            worktree_setup_commands=record.repo.worktree_setup_commands,
-            kind=record.repo.kind,
-            worktree_of=record.repo.worktree_of,
-            branch=record.repo.branch,
-            exists_on_disk=record.exists_on_disk,
-            is_clean=is_clean,
-            initialized=record.initialized,
-            init_error=record.init_error,
-            status=status,
-            lock_status=lock_status,
-            last_run_id=last_run_id,
-            last_run_started_at=(
-                runner_state.last_run_started_at if runner_state else None
-            ),
-            last_run_finished_at=(
-                runner_state.last_run_finished_at if runner_state else None
-            ),
-            last_run_duration_seconds=None,
-            last_exit_code=runner_state.last_exit_code if runner_state else None,
-            runner_pid=runner_state.runner_pid if runner_state else None,
-            effective_destination=effective_destination,
-        )
-
-    def _snapshot_from_agent_workspace(
-        self, workspace: ManifestAgentWorkspace
-    ) -> AgentWorkspaceSnapshot:
-        workspace_path = (self.hub_config.root / workspace.path).resolve()
-        effective_destination = resolve_effective_agent_workspace_destination(
-            workspace
-        ).to_dict()
-        return AgentWorkspaceSnapshot(
-            id=workspace.id,
-            runtime=workspace.runtime,
-            path=workspace_path,
-            display_name=workspace.display_name or workspace_path.name or workspace.id,
-            enabled=workspace.enabled,
-            exists_on_disk=workspace_path.exists(),
-            effective_destination=effective_destination,
-        )
-
-    def _derive_status(
-        self,
-        record: DiscoveryRecord,
-        lock_status: LockStatus,
-        runner_state: Optional[RunnerState],
-    ) -> RepoStatus:
-        if not record.exists_on_disk:
-            return RepoStatus.MISSING
-        if record.init_error:
-            return RepoStatus.INIT_ERROR
-        if not record.initialized:
-            return RepoStatus.UNINITIALIZED
-        if runner_state and runner_state.status == "running":
-            if lock_status == LockStatus.LOCKED_ALIVE:
-                return RepoStatus.RUNNING
-            return RepoStatus.IDLE
-        if lock_status in (LockStatus.LOCKED_ALIVE, LockStatus.LOCKED_STALE):
-            return RepoStatus.LOCKED
-        if runner_state and runner_state.status == "error":
-            return RepoStatus.ERROR
-        return RepoStatus.IDLE
+        self._lifecycle_router.route_event(event)

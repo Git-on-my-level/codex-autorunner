@@ -10,7 +10,12 @@ from typing import Any
 from urllib.parse import unquote
 
 from ..manifest import load_manifest
-from .hub_projection_store import HubProjectionStore, path_stat_fingerprint
+from .hub_projection_store import (
+    CHAT_BINDING_PROJECTION_KEY,
+    CHAT_BINDING_PROJECTION_NAMESPACE,
+    HubProjectionStore,
+    path_stat_fingerprint,
+)
 from .orchestration.sqlite import (
     open_orchestration_sqlite,
     resolve_orchestration_sqlite_path,
@@ -23,8 +28,6 @@ logger = logging.getLogger("codex_autorunner.core.chat_bindings")
 DISCORD_STATE_FILE_DEFAULT = ".codex-autorunner/discord_state.sqlite3"
 TELEGRAM_STATE_FILE_DEFAULT = ".codex-autorunner/telegram_state.sqlite3"
 MANIFEST_FILE_DEFAULT = ".codex-autorunner/manifest.yml"
-_CHAT_BINDING_PROJECTION_NAMESPACE = "chat_binding_counts_v1"
-_CHAT_BINDING_PROJECTION_KEY = "active_by_source"
 
 
 def _normalize_repo_id(value: Any) -> str | None:
@@ -711,8 +714,8 @@ def active_chat_binding_counts_by_source(
         raw_config=raw_config,
     )
     cached = projection_store.get(
-        namespace=_CHAT_BINDING_PROJECTION_NAMESPACE,
-        key=_CHAT_BINDING_PROJECTION_KEY,
+        namespace=CHAT_BINDING_PROJECTION_NAMESPACE,
+        key=CHAT_BINDING_PROJECTION_KEY,
         fingerprint=fingerprint,
     )
     normalized_cached = _normalize_cached_source_counts(cached)
@@ -757,8 +760,8 @@ def active_chat_binding_counts_by_source(
         _merge_counts("telegram", {repo_id: count})
 
     projection_store.put(
-        namespace=_CHAT_BINDING_PROJECTION_NAMESPACE,
-        key=_CHAT_BINDING_PROJECTION_KEY,
+        namespace=CHAT_BINDING_PROJECTION_NAMESPACE,
+        key=CHAT_BINDING_PROJECTION_KEY,
         fingerprint=fingerprint,
         payload=source_counts,
     )

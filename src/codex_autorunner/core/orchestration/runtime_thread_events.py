@@ -4,9 +4,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from ..acp_lifecycle import (
-    analyze_acp_lifecycle_message,
-)
+from ..acp_lifecycle import analyze_acp_lifecycle_message
 from ..acp_lifecycle import (
     extract_error_message as _shared_acp_error_message,
 )
@@ -23,10 +21,7 @@ from ..acp_lifecycle import (
     extract_session_update as _shared_acp_session_update,
 )
 from ..acp_lifecycle import (
-    extract_session_update_kind as _shared_acp_session_update_kind,
-)
-from ..acp_lifecycle import (
-    status_indicates_successful_completion as _status_indicates_successful_completion,
+    extract_usage as _shared_extract_usage,
 )
 from ..ports.run_event import (
     RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
@@ -311,7 +306,21 @@ def recover_post_completion_outcome(
     outcome: RuntimeThreadOutcome,
     state: RuntimeThreadRunEventState,
 ) -> RuntimeThreadOutcome:
-    """Prefer a streamed completion over a later transport error or interrupt."""
+    """Prefer a streamed completion over a later transport error or interrupt.
+
+    Bounded compatibility contract:
+    - This function may upgrade an ``error`` or ``interrupted`` outcome to
+      ``ok`` **only** when all three conditions hold:
+      1. ``state.completed_seen`` is True (a terminal completion signal was
+         observed in the event stream).
+      2. The outcome status is ``error`` or ``interrupted`` (not already ``ok``).
+      3. Non-empty assistant text exists (either from the outcome or from the
+         event state).
+    - It must **not** widen into a general fallback matrix.  Missing evidence
+      (no completion signal, no assistant text) means the original outcome is
+      returned unchanged.
+    - An already-ok outcome passes through unchanged.
+    """
 
     if outcome.status not in {"error", "interrupted"} or not state.completed_seen:
         return outcome
@@ -422,7 +431,7 @@ def normalize_runtime_thread_message(
 
     if method == "session/update":
         update = _extract_session_update(params)
-        update_kind = _extract_session_update_kind(update)
+        update_kind = acp_lifecycle.session_update_kind or ""
         if update_kind == "agent_message_chunk":
             return _assistant_stream_events(
                 _extract_session_update_message_params(update),
@@ -539,10 +548,7 @@ def normalize_runtime_thread_message(
                     delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
                 )
             )
-        if _status_indicates_successful_completion(
-            params.get("status"),
-            assume_true_when_missing=method.endswith("completed"),
-        ):
+        if acp_lifecycle.runtime_terminal_status == "ok":
             state.completed_seen = True
         return events
 
@@ -681,6 +687,8 @@ def normalize_runtime_thread_message(
             _extract_message_role(params),
             timestamp=event_timestamp,
         )
+        if _extract_message_phase(params) == "commentary":
+            return role_events
         content = _extract_message_text(params)
         if not content:
             return role_events
@@ -745,19 +753,17 @@ def normalize_runtime_thread_message(
         ]
 
     if method == "turn/completed":
-        if _status_indicates_successful_completion(
-            params.get("status") or params.get("turn"),
-            assume_true_when_missing=True,
-        ):
+        if acp_lifecycle.runtime_terminal_status == "ok":
             state.completed_seen = True
         return []
 
     if method == "session.idle":
-        state.completed_seen = True
+        if acp_lifecycle.runtime_terminal_status == "ok":
+            state.completed_seen = True
         return []
 
     if method == "session.status":
-        if acp_lifecycle.session_status == "idle":
+        if acp_lifecycle.runtime_terminal_status == "ok":
             state.completed_seen = True
             return []
         status_type = acp_lifecycle.session_status or ""
@@ -921,10 +927,6 @@ def _extract_output_delta(params: dict[str, Any]) -> str:
 
 def _extract_session_update(params: dict[str, Any]) -> dict[str, Any]:
     return _shared_acp_session_update(params)
-
-
-def _extract_session_update_kind(update: dict[str, Any]) -> str:
-    return _shared_acp_session_update_kind(update) or ""
 
 
 def _extract_session_update_message_params(update: dict[str, Any]) -> dict[str, Any]:
@@ -1234,11 +1236,20 @@ def _is_commentary_agent_message(item: dict[str, Any]) -> bool:
     return str(item.get("phase") or "").strip().lower() == "commentary"
 
 
-def _extract_usage(params: dict[str, Any]) -> Optional[dict[str, Any]]:
-    usage = params.get("usage") or params.get("tokenUsage")
-    if isinstance(usage, dict):
-        return usage
+def _extract_message_phase(params: dict[str, Any]) -> Optional[str]:
+    phase = params.get("phase")
+    if isinstance(phase, str) and phase.strip():
+        return phase.strip().lower()
+    info = _extract_message_info(params)
+    nested_phase = info.get("phase")
+    if isinstance(nested_phase, str) and nested_phase.strip():
+        return nested_phase.strip().lower()
     return None
+
+
+def _extract_usage(params: dict[str, Any]) -> Optional[dict[str, Any]]:
+    result = _shared_extract_usage(params)
+    return result if result else None
 
 
 def _request_id_for_event(method: str, params: dict[str, Any]) -> str:

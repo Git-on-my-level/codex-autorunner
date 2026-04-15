@@ -31,6 +31,25 @@ def test_discord_pma_turn_timeout_reads_hub_config(tmp_path: Path) -> None:
     assert discord_message_turns._load_discord_pma_turn_timeout_seconds(service) == 123
 
 
+def test_discord_repo_managed_thread_coordinator_ignores_pma_turn_timeout(
+    tmp_path: Path,
+) -> None:
+    """Repo-mode Discord turns keep the legacy 7200s cap; PMA config is PMA-only."""
+    _write_hub_config(tmp_path, timeout_seconds=30)
+
+    service = SimpleNamespace(_config=SimpleNamespace(root=tmp_path))
+    coordinator = discord_message_turns._build_discord_managed_thread_coordinator(
+        service=service,
+        orchestration_service=SimpleNamespace(),
+        channel_id="channel-1",
+        public_execution_error="e",
+        timeout_error="t",
+        interrupted_error="i",
+        pma_enabled=False,
+    )
+    assert coordinator.errors.timeout_seconds == 7200.0
+
+
 def test_telegram_pma_turn_timeout_reads_hub_config(tmp_path: Path) -> None:
     _write_hub_config(tmp_path, timeout_seconds=234)
 
@@ -41,6 +60,31 @@ def test_telegram_pma_turn_timeout_reads_hub_config(tmp_path: Path) -> None:
     )
 
     assert telegram_execution._load_telegram_pma_turn_timeout_seconds(handlers) == 234
+
+
+def test_telegram_repo_managed_thread_coordinator_ignores_pma_turn_timeout(
+    tmp_path: Path,
+) -> None:
+    """Repo-mode Telegram turns keep the legacy 7200s cap; PMA config is PMA-only."""
+    _write_hub_config(tmp_path, timeout_seconds=30)
+
+    handlers = SimpleNamespace(
+        _hub_root=tmp_path,
+        _config=SimpleNamespace(root=tmp_path),
+        _hub_supervisor=None,
+    )
+    coordinator = telegram_execution._build_telegram_managed_thread_coordinator(
+        handlers,
+        orchestration_service=SimpleNamespace(),
+        surface_key="telegram:-1:1",
+        chat_id=-1,
+        thread_id=1,
+        public_execution_error="e",
+        timeout_error="t",
+        interrupted_error="i",
+        pma_enabled=False,
+    )
+    assert coordinator.errors.timeout_seconds == 7200.0
 
 
 def test_web_pma_turn_timeout_reads_request_config() -> None:

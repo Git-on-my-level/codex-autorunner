@@ -7,7 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional, cast
 
-from ..core.config import ResolvedAgentTarget, load_hub_config, load_repo_config
+from ..core.agent_config import AgentConfig, resolve_agent_target_from_agents
+from ..core.config import load_hub_config, load_repo_config
 from ..core.config_contract import ConfigError
 from ..plugin_api import CAR_AGENT_ENTRYPOINT_GROUP, CAR_PLUGIN_API_VERSION
 from .aliased_harness import AliasedAgentHarness
@@ -93,6 +94,14 @@ def normalize_agent_capabilities(
     capabilities: Iterable[str],
 ) -> frozenset[AgentCapability]:
     return normalize_runtime_capabilities(capabilities)
+
+
+def _normalize_optional_text(value: object) -> Optional[str]:
+    """Normalize an optional text value: strip, lowercase, or return None."""
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    return normalized or None
 
 
 def _make_codex_harness(ctx: Any) -> AgentHarness:
@@ -313,7 +322,9 @@ def _resolve_runtime_agent_config(ctx: Any) -> Any:
         lambda path: load_hub_config(path),
         lambda path: load_repo_config(path),
     )
-    if isinstance(ctx, Path):
+    if isinstance(ctx, Path) or any(
+        isinstance(getattr(ctx, attr, None), Path) for attr in ("root", "repo_root")
+    ):
         loaders = tuple(reversed(loaders))
 
     for loader in loaders:
@@ -341,17 +352,10 @@ def _resolve_context_root(ctx: Any) -> Optional[Path]:
     return None
 
 
-def _normalize_optional_text(value: object) -> Optional[str]:
-    if not isinstance(value, str):
-        return None
-    normalized = value.strip().lower()
-    return normalized or None
-
-
-def _agent_runtime_kind(agent_id: str, descriptor: Any) -> str:
-    raw_runtime_kind = getattr(descriptor, "runtime_kind", None)
-    if isinstance(raw_runtime_kind, str) and raw_runtime_kind.strip():
-        return raw_runtime_kind.strip().lower()
+def _descriptor_runtime_kind(agent_id: str, descriptor: Any) -> str:
+    runtime_kind = str(getattr(descriptor, "runtime_kind", "") or "").strip().lower()
+    if runtime_kind:
+        return runtime_kind
     normalized_agent_id = str(agent_id or "").strip().lower()
     for separator in ("-", "_"):
         if separator not in normalized_agent_id:
@@ -362,28 +366,6 @@ def _agent_runtime_kind(agent_id: str, descriptor: Any) -> str:
     return normalized_agent_id
 
 
-def _strip_runtime_kind_prefix(agent_id: str, runtime_kind: str) -> str:
-    aid = str(agent_id or "").strip().lower()
-    rk = str(runtime_kind or "").strip().lower()
-    if not rk:
-        return aid
-    dash = f"{rk}-"
-    under = f"{rk}_"
-    if aid.startswith(dash):
-        suffix = aid[len(dash) :].strip()
-        return suffix if suffix else aid
-    if aid.startswith(under):
-        suffix = aid[len(under) :].strip()
-        return suffix if suffix else aid
-    return aid
-
-
-def _coerce_resolved_agent_target(value: object) -> Optional[ResolvedAgentTarget]:
-    if isinstance(value, ResolvedAgentTarget):
-        return value
-    return None
-
-
 def resolve_agent_runtime(
     agent_id: str,
     profile: Optional[str] = None,
@@ -391,71 +373,45 @@ def resolve_agent_runtime(
     context: Any = None,
 ) -> AgentRuntimeResolution:
     normalized_agent_id = str(agent_id or "").strip().lower()
-    normalized_profile = _normalize_optional_text(profile)
     if not normalized_agent_id:
         raise ValueError("agent_id is required")
 
     descriptors = get_registered_agents(context)
-    logical_agent_id = normalized_agent_id
-    logical_profile = normalized_profile
-
-    descriptor = descriptors.get(normalized_agent_id)
-    if descriptor is not None:
-        runtime_kind = _agent_runtime_kind(normalized_agent_id, descriptor)
-        if runtime_kind != normalized_agent_id:
-            derived_profile = _strip_runtime_kind_prefix(
-                normalized_agent_id,
-                runtime_kind,
-            )
-            if derived_profile != normalized_agent_id:
-                logical_agent_id = runtime_kind
-                if logical_profile is None:
-                    logical_profile = derived_profile
+    runtime_alias_kinds: dict[str, str] = {}
+    for descriptor_id, descriptor in descriptors.items():
+        runtime_kind = _descriptor_runtime_kind(descriptor_id, descriptor)
+        if runtime_kind != descriptor_id:
+            runtime_alias_kinds[descriptor_id] = runtime_kind
 
     config = _resolve_runtime_agent_config(context)
-    resolver = getattr(config, "resolve_runtime_agent_target", None)
-    if callable(resolver):
-        try:
-            resolved_target = _coerce_resolved_agent_target(
-                resolver(logical_agent_id, profile=logical_profile)
-            )
-        except (ValueError, TypeError, RuntimeError, ConfigError):
-            resolved_target = None
-        if resolved_target is not None:
-            return AgentRuntimeResolution(
-                logical_agent_id=resolved_target.logical_agent_id,
-                logical_profile=resolved_target.logical_profile,
-                runtime_agent_id=resolved_target.runtime_agent_id,
-                runtime_profile=resolved_target.runtime_profile,
-                resolution_kind=resolved_target.resolution_kind,
-            )
-
-    if logical_profile is not None:
-        for candidate_id, candidate_descriptor in descriptors.items():
-            if candidate_id == logical_agent_id:
-                continue
-            if (
-                _agent_runtime_kind(candidate_id, candidate_descriptor)
-                != logical_agent_id
-            ):
-                continue
-            derived_profile = _strip_runtime_kind_prefix(candidate_id, logical_agent_id)
-            if derived_profile != logical_profile:
-                continue
-            return AgentRuntimeResolution(
-                logical_agent_id=logical_agent_id,
-                logical_profile=logical_profile,
-                runtime_agent_id=candidate_id,
-                runtime_profile=None,
-                resolution_kind="alias_profile",
-            )
+    raw_config_agents = getattr(config, "agents", None)
+    has_config_agents = isinstance(raw_config_agents, dict)
+    config_agents = (
+        cast(dict[str, AgentConfig], raw_config_agents) if has_config_agents else {}
+    )
+    try:
+        resolved_target = resolve_agent_target_from_agents(
+            config_agents if has_config_agents else {},
+            normalized_agent_id,
+            profile=profile,
+            runtime_alias_kinds=runtime_alias_kinds,
+            allow_runtime_alias_fallback=not has_config_agents,
+        )
+    except (ValueError, TypeError, RuntimeError, ConfigError):
+        resolved_target = resolve_agent_target_from_agents(
+            {},
+            normalized_agent_id,
+            profile=profile,
+            runtime_alias_kinds=runtime_alias_kinds,
+            allow_runtime_alias_fallback=True,
+        )
 
     return AgentRuntimeResolution(
-        logical_agent_id=logical_agent_id,
-        logical_profile=logical_profile,
-        runtime_agent_id=logical_agent_id,
-        runtime_profile=logical_profile,
-        resolution_kind="passthrough",
+        logical_agent_id=resolved_target.logical_agent_id,
+        logical_profile=resolved_target.logical_profile,
+        runtime_agent_id=resolved_target.runtime_agent_id,
+        runtime_profile=resolved_target.runtime_profile,
+        resolution_kind=resolved_target.resolution_kind,
     )
 
 
@@ -493,34 +449,28 @@ def _infer_backend_id_by_prefix(
     return None
 
 
-def _configured_profile_target(
-    config: Any,
+def _check_canonical_profile(
+    config_agents: dict[str, Any],
     agent_id: str,
-    base_agents: dict[str, AgentDescriptor],
 ) -> Optional[tuple[str, str]]:
-    profile_getter = getattr(config, "agent_profiles", None)
-    if not callable(profile_getter):
+    normalized = str(agent_id or "").strip().lower()
+    if not normalized:
         return None
-    normalized_agent_id = str(agent_id or "").strip().lower()
-    if not normalized_agent_id:
-        return None
-    for backend_id, descriptor in base_agents.items():
-        runtime_kind = _agent_runtime_kind(backend_id, descriptor)
-        if runtime_kind != backend_id:
+    for raw_base_id, agent_cfg in config_agents.items():
+        base = str(raw_base_id or "").strip().lower()
+        if not base or base == normalized:
             continue
-        derived_profile = _strip_runtime_kind_prefix(normalized_agent_id, runtime_kind)
-        if derived_profile == normalized_agent_id:
-            continue
-        try:
-            profiles = profile_getter(backend_id)
-        except (KeyError, AttributeError, TypeError, ValueError, RuntimeError):
-            continue
+        profiles = getattr(agent_cfg, "profiles", None)
         if not isinstance(profiles, dict):
             continue
-        if derived_profile in {
-            str(profile_id or "").strip().lower() for profile_id in profiles
-        }:
-            return backend_id, derived_profile
+        profile_keys = {str(k).strip().lower() for k in profiles}
+        for sep in ("-", "_"):
+            prefix = f"{base}{sep}"
+            if not normalized.startswith(prefix):
+                continue
+            suffix = normalized[len(prefix) :].strip()
+            if suffix and suffix in profile_keys:
+                return base, suffix
     return None
 
 
@@ -540,7 +490,7 @@ def _build_config_alias_agents(context: Any) -> dict[str, AgentDescriptor]:
         if agent_id in base_agents:
             continue
         backend_id = agent_id
-        profile_target = _configured_profile_target(config, agent_id, base_agents)
+        profile_target = _check_canonical_profile(configured_agents, agent_id)
         if callable(getattr(config, "agent_backend", None)):
             try:
                 backend_id = str(config.agent_backend(agent_id) or "").strip().lower()

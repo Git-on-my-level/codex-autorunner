@@ -28,6 +28,7 @@ from .runner_post_turn import (
     check_ticket_frontmatter,
     checkpoint_git,
     create_runner_pause_dispatch,
+    handle_frontmatter_recheck,
 )
 from .runner_prompt import build_prompt
 from .runner_selection import (
@@ -58,6 +59,7 @@ __all__ = [
     "compute_loop_guard",
     "create_runner_pause_dispatch",
     "execute_turn",
+    "handle_frontmatter_recheck",
     "process_commit_required",
     "select_ticket",
     "should_pause_for_loop",

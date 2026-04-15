@@ -514,8 +514,13 @@ def _build_telegram_managed_thread_coordinator(
     public_execution_error: str,
     timeout_error: str,
     interrupted_error: str,
+    pma_enabled: bool,
 ) -> ManagedThreadTurnCoordinator:
-    timeout_seconds = _load_telegram_pma_turn_timeout_seconds(handlers)
+    timeout_seconds = (
+        _load_telegram_pma_turn_timeout_seconds(handlers)
+        if pma_enabled
+        else float(_DEFAULT_TELEGRAM_PMA_TIMEOUT_SECONDS)
+    )
     return ManagedThreadTurnCoordinator(
         orchestration_service=orchestration_service,
         state_root=_telegram_state_root(handlers),
@@ -866,6 +871,7 @@ async def _run_telegram_managed_thread_turn(
         public_execution_error=public_execution_error,
         timeout_error=timeout_error,
         interrupted_error=interrupted_error,
+        pma_enabled=pma_enabled,
     )
 
     async def _begin_execution(

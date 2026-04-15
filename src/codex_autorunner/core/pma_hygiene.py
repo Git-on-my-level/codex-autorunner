@@ -10,6 +10,11 @@ from .freshness import build_freshness_payload, iso_now, resolve_stale_threshold
 from .orchestration.bindings import OrchestrationBindingStore
 from .pma_automation_store import PmaAutomationStore
 from .pma_dispatches import list_pma_dispatches
+from .pma_thread_classification import (
+    classify_thread_followup,
+    is_thread_cleanup_protected,
+    thread_cleanup_protection_reason,
+)
 from .pma_thread_store import PmaThreadStore
 
 PMA_HYGIENE_CATEGORY_ALIASES = {
@@ -193,7 +198,13 @@ def _build_thread_candidates(
         freshness = build_freshness_payload(
             generated_at=generated_at,
             stale_threshold_seconds=stale_threshold_seconds,
-            candidates=[("thread_updated_at", thread.get("updated_at"))],
+            candidates=[
+                (
+                    "thread_status_changed_at",
+                    thread.get("status_changed_at") or thread.get("status_updated_at"),
+                ),
+                ("thread_updated_at", thread.get("updated_at")),
+            ],
         )
         if freshness.get("is_stale") is not True:
             continue
@@ -214,12 +225,24 @@ def _build_thread_candidates(
         )
         has_binding = bool(bindings)
         has_busy_work = managed_thread_id in busy_ids
-        group = "protected" if (has_binding or has_busy_work) else "needs-confirmation"
-        reason = (
-            "Managed thread still has an active binding or work in flight."
-            if group == "protected"
-            else "Idle managed-thread followup is dormant but may still be reusable."
+        is_protected = is_thread_cleanup_protected(
+            has_binding=has_binding,
+            has_busy_work=has_busy_work,
         )
+        group = "protected" if is_protected else "needs-confirmation"
+        reason = thread_cleanup_protection_reason(
+            has_binding=has_binding,
+            has_busy_work=has_busy_work,
+        )
+        if not is_protected:
+            followup = classify_thread_followup(
+                {**thread, "status": normalized_status or lifecycle_status},
+                is_stale=True,
+                is_chat_bound=False,
+            )
+            if str(followup.get("followup_state") or "") != "idle_archive_candidate":
+                continue
+            reason = str(followup.get("why_selected") or "").strip() or reason
         candidates.append(
             _build_candidate(
                 group=group,
@@ -561,6 +584,11 @@ def _revalidate_managed_thread_cleanup(
     queued_ids = set(thread_store.list_thread_ids_with_pending_queue(limit=None))
     if normalized_thread_id in queued_ids:
         return "managed thread has queued work"
+    if normalized_status not in {"idle", "completed", "interrupted"}:
+        return (
+            f"managed thread status is {normalized_status or 'unknown'} "
+            "and is not a cleanup candidate"
+        )
     return None
 
 
@@ -635,7 +663,7 @@ def apply_pma_hygiene_report(
                 )
                 if blocked_reason is not None:
                     raise RuntimeError(
-                        "Managed thread cleanup no longer safe: " f"{blocked_reason}"
+                        f"Managed thread cleanup no longer safe: {blocked_reason}"
                     )
                 thread_store.archive_thread(managed_thread_id)
                 ok = True

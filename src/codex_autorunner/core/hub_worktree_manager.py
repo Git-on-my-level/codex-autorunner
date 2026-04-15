@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
     Dict,
     List,
     Mapping,
@@ -45,9 +44,15 @@ from .git_utils import (
     git_available,
     git_branch,
     git_default_branch,
+    git_failure_detail,
     git_head_sha,
     git_is_clean,
+    resolve_ref_sha,
     run_git,
+)
+from .hub_worktree_lifecycle import (
+    WorktreeCleanupReport,
+    WorktreeHubContext,
 )
 from .state import now_iso
 from .utils import is_within, subprocess_env
@@ -66,44 +71,15 @@ _DOCKER_RM_TIMEOUT_SECONDS = 30
 _WORKTREE_SETUP_COMMAND_TIMEOUT_SECONDS = 600
 
 
-def _git_failure_detail(proc: Any) -> str:
-    return (proc.stderr or proc.stdout or "").strip() or f"exit {proc.returncode}"
-
-
-def _resolve_ref_sha(repo_root: Path, ref: str) -> str:
-    try:
-        proc = run_git(["rev-parse", "--verify", ref], repo_root, check=False)
-    except GitError as exc:
-        raise ValueError(f"git rev-parse failed for {ref}: {exc}") from exc
-    if proc.returncode != 0:
-        raise ValueError(f"Unable to resolve ref {ref}: {_git_failure_detail(proc)}")
-    sha = (proc.stdout or "").strip()
-    if not sha:
-        raise ValueError(f"Unable to resolve ref {ref}: empty output")
-    return sha
-
-
 class WorktreeManager:
     def __init__(
         self,
         hub_config: HubConfig,
         *,
-        on_invalidate_cache: Callable[[], None],
-        on_snapshot_for_repo: Callable[[str], RepoSnapshot],
-        on_stop_runner: Callable[..., None],
-        on_archive_repo_state: Callable[..., Dict[str, object]],
-        on_base_repo_paths: Callable[[Manifest], dict[str, Path]],
-        on_collect_unbound_repo_threads: Callable[..., dict[str, list[str]]],
-        on_archive_unbound_repo_threads: Callable[..., list[str]],
+        ctx: WorktreeHubContext,
     ):
         self._hub_config = hub_config
-        self._on_invalidate_cache = on_invalidate_cache
-        self._on_snapshot_for_repo = on_snapshot_for_repo
-        self._on_stop_runner = on_stop_runner
-        self._on_archive_repo_state = on_archive_repo_state
-        self._on_base_repo_paths = on_base_repo_paths
-        self._on_collect_unbound_repo_threads = on_collect_unbound_repo_threads
-        self._on_archive_unbound_repo_threads = on_archive_unbound_repo_threads
+        self._ctx = ctx
 
     def create_worktree(
         self,
@@ -113,7 +89,7 @@ class WorktreeManager:
         force: bool = False,
         start_point: Optional[str] = None,
     ) -> RepoSnapshot:
-        self._on_invalidate_cache()
+        self._ctx.invalidate_cache()
         branch = (branch or "").strip()
         if not branch:
             raise ValueError("branch is required")
@@ -162,7 +138,7 @@ class WorktreeManager:
             if fetch_proc.returncode != 0:
                 raise ValueError(
                     "Unable to refresh origin before creating worktree: %s"
-                    % _git_failure_detail(fetch_proc)
+                    % git_failure_detail(fetch_proc)
                 )
 
         if effective_start_ref is None:
@@ -172,7 +148,7 @@ class WorktreeManager:
             effective_start_ref = f"origin/{default_branch}"
 
         assert effective_start_ref is not None
-        start_sha = _resolve_ref_sha(base_path, effective_start_ref)
+        start_sha = resolve_ref_sha(base_path, effective_start_ref)
         try:
             exists = run_git(
                 ["show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
@@ -183,7 +159,7 @@ class WorktreeManager:
             raise ValueError(f"git worktree add failed: {exc}") from exc
         try:
             if exists.returncode == 0:
-                branch_sha = _resolve_ref_sha(base_path, f"refs/heads/{branch}")
+                branch_sha = resolve_ref_sha(base_path, f"refs/heads/{branch}")
                 if branch_sha != start_sha:
                     raise ValueError(
                         "Branch %r already exists and points to %s, but %s resolves to %s. "
@@ -219,7 +195,7 @@ class WorktreeManager:
         except GitError as exc:
             raise ValueError(f"git worktree add failed: {exc}") from exc
         if proc.returncode != 0:
-            raise ValueError(f"git worktree add failed: {_git_failure_detail(proc)}")
+            raise ValueError(f"git worktree add failed: {git_failure_detail(proc)}")
 
         seed_repo_files(worktree_path, force=force, git_required=False)
         manifest.ensure_repo(
@@ -234,7 +210,7 @@ class WorktreeManager:
         self._run_worktree_setup_commands(
             worktree_path, base.worktree_setup_commands, base_repo_id=base_repo_id
         )
-        return self._on_snapshot_for_repo(repo_id)
+        return self._ctx.snapshot_for_repo(repo_id)
 
     def _archive_worktree_snapshot(
         self,
@@ -263,7 +239,7 @@ class WorktreeManager:
         if not worktree_path.exists():
             raise ValueError(f"Worktree path does not exist: {worktree_path}")
 
-        self._on_stop_runner(
+        self._ctx.stop_runner(
             repo_id=worktree_repo_id,
             repo_path=worktree_path,
         )
@@ -563,7 +539,7 @@ class WorktreeManager:
         except GitError as exc:
             raise ValueError(f"git worktree remove failed: {exc}") from exc
         if proc.returncode != 0:
-            detail = _git_failure_detail(proc)
+            detail = git_failure_detail(proc)
             detail_lower = detail.lower()
             if "not a working tree" not in detail_lower:
                 raise ValueError(f"git worktree remove failed: {detail}")
@@ -571,7 +547,7 @@ class WorktreeManager:
             proc = run_git(["worktree", "prune"], base_path, check=False)
             if proc.returncode != 0:
                 logger.warning(
-                    "git worktree prune failed: %s", _git_failure_detail(proc)
+                    "git worktree prune failed: %s", git_failure_detail(proc)
                 )
         except GitError as exc:
             logger.warning("git worktree prune failed: %s", exc)
@@ -581,7 +557,7 @@ class WorktreeManager:
                 proc = run_git(["branch", "-D", branch], base_path, check=False)
                 if proc.returncode != 0:
                     logger.warning(
-                        "git branch delete failed: %s", _git_failure_detail(proc)
+                        "git branch delete failed: %s", git_failure_detail(proc)
                     )
             except GitError as exc:
                 logger.warning("git branch delete failed: %s", exc)
@@ -595,7 +571,7 @@ class WorktreeManager:
                 )
                 if proc.returncode != 0:
                     logger.warning(
-                        "git push delete failed: %s", _git_failure_detail(proc)
+                        "git push delete failed: %s", git_failure_detail(proc)
                     )
             except GitError as exc:
                 logger.warning("git push delete failed: %s", exc)
@@ -621,7 +597,7 @@ class WorktreeManager:
             logger=logger,
             action="hub.cleanup_worktree",
         )
-        self._on_invalidate_cache()
+        self._ctx.invalidate_cache()
         manifest = load_manifest(self._hub_config.manifest_path, self._hub_config.root)
         entry = manifest.get(worktree_repo_id)
         if not entry or entry.kind != "worktree":
@@ -672,6 +648,7 @@ class WorktreeManager:
         force_attestation: Optional[Mapping[str, object]] = None,
         archive_profile: Optional[str] = None,
     ) -> Dict[str, object]:
+        report = WorktreeCleanupReport()
         manifest, entry, base, base_path, worktree_path = (
             self._validate_cleanup_worktree(
                 worktree_repo_id=worktree_repo_id,
@@ -681,22 +658,26 @@ class WorktreeManager:
                 force_attestation=force_attestation,
             )
         )
+        report.add_step("validate", "ok")
 
-        self._on_stop_runner(
+        self._ctx.stop_runner(
             repo_id=worktree_repo_id,
             repo_path=worktree_path,
         )
+        report.add_step("stop_runner", "ok")
 
         try:
             from .flows.flow_telemetry_hooks import housekeep_on_worktree_cleanup
 
             housekeep_on_worktree_cleanup(worktree_path)
+            report.add_step("telemetry_housekeep", "ok")
         except Exception as exc:
             logger.warning(
                 "Worktree telemetry housekeeping failed for %s: %s",
                 worktree_repo_id,
                 exc,
             )
+            report.add_step("telemetry_housekeep", "error", detail=str(exc))
 
         if archive:
             self._ensure_worktree_clean_for_archive(
@@ -710,6 +691,7 @@ class WorktreeManager:
                 archive_profile=archive_profile,
                 cleanup=True,
             )
+            report.add_step("archive_snapshot", "ok")
 
         repos_by_id = {repo.id: repo for repo in manifest.repos}
         effective_destination = resolve_effective_repo_destination(entry, repos_by_id)
@@ -723,7 +705,19 @@ class WorktreeManager:
                 worktree_path=worktree_path,
                 destination=effective_destination.destination,
             )
-
+        docker_status = docker_cleanup.get("status", "unknown")
+        report.add_step(
+            "docker_cleanup",
+            (
+                "ok"
+                if docker_status
+                in ("removed", "not_found", "not_applicable", "skipped_explicit")
+                else "error"
+            ),
+            detail=(
+                str(docker_cleanup.get("message")) if docker_status == "error" else None
+            ),
+        )
         self._remove_worktree_git_refs(
             worktree_path=worktree_path,
             base_path=base_path,
@@ -731,14 +725,28 @@ class WorktreeManager:
             delete_branch=delete_branch,
             delete_remote=delete_remote,
         )
+        report.add_step("git_remove", "ok")
 
         manifest.repos = [r for r in manifest.repos if r.id != worktree_repo_id]
         save_manifest(self._hub_config.manifest_path, manifest, self._hub_config.root)
-        self._archive_bound_pma_threads(
+        report.add_step("manifest_remove", "ok")
+
+        archived_thread_ids = self._archive_bound_pma_threads(
             worktree_repo_id=worktree_repo_id,
             worktree_path=worktree_path,
         )
-        return {"status": "ok", "docker_cleanup": docker_cleanup}
+        report.add_step(
+            "archive_pma_threads", "ok", detail=f"archived={len(archived_thread_ids)}"
+        )
+
+        return {
+            "status": "ok",
+            "docker_cleanup": docker_cleanup,
+            "cleanup_steps": [
+                {"step": s.step, "status": s.status, "detail": s.detail}
+                for s in report.steps
+            ],
+        }
 
     def archive_worktree(
         self,
@@ -808,7 +816,7 @@ class WorktreeManager:
         entry = manifest.get(worktree_repo_id)
         if not entry or entry.kind != "worktree":
             raise ValueError(f"Worktree repo not found: {worktree_repo_id}")
-        return self._on_archive_repo_state(
+        return self._ctx.archive_repo_state(
             repo_id=worktree_repo_id,
             archive_note=archive_note,
             archive_profile=archive_profile,
@@ -930,7 +938,7 @@ class WorktreeManager:
 
     def cleanup_all(self, *, dry_run: bool = False) -> Dict[str, object]:
         manifest = load_manifest(self._hub_config.manifest_path, self._hub_config.root)
-        unbound_threads_by_repo = self._on_collect_unbound_repo_threads(
+        unbound_threads_by_repo = self._ctx.collect_unbound_repo_threads(
             manifest=manifest
         )
 
@@ -944,8 +952,8 @@ class WorktreeManager:
             threads_by_repo.append({"repo_id": repo_id, "count": count})
 
         if not dry_run:
-            for repo_id in self._on_base_repo_paths(manifest).keys():
-                self._on_archive_unbound_repo_threads(
+            for repo_id in self._ctx.base_repo_paths(manifest).keys():
+                self._ctx.archive_unbound_repo_threads(
                     repo_id=repo_id,
                     unbound_threads_by_repo=unbound_threads_by_repo,
                 )
@@ -963,7 +971,7 @@ class WorktreeManager:
         if not dry_run and (
             total_thread_count or len(worktree_items) or total_flow_count
         ):
-            self._on_invalidate_cache()
+            self._ctx.invalidate_cache()
 
         if dry_run:
             if total_thread_count or len(worktree_items) or total_flow_count:
