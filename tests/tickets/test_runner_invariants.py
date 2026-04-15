@@ -773,3 +773,221 @@ class TestWorkspaceDocsInPrompt:
         end = prompts[0].index("</CAR_WORKSPACE_DOCS>")
         section = prompts[0][start:end].strip()
         assert section == ""
+
+
+class TestLoopGuardIntegrationInvariants:
+    @pytest.mark.asyncio
+    async def test_loop_guard_resets_on_ticket_change(self, tmp_path: Path) -> None:
+        """Loop guard no_change_count must reset when ticket changes mid-run."""
+        workspace_root = tmp_path
+        ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+        ticket_dir.mkdir(parents=True, exist_ok=True)
+
+        t1 = ticket_dir / "TICKET-001.md"
+        t2 = ticket_dir / "TICKET-002.md"
+        _write_ticket(t1, done=False)
+        _write_ticket(t2, done=False)
+
+        turn_count = 0
+
+        def handler(req: AgentTurnRequest) -> AgentTurnResult:
+            nonlocal turn_count
+            turn_count += 1
+            if turn_count == 1:
+                return AgentTurnResult(
+                    agent_id=req.agent_id,
+                    conversation_id="conv",
+                    turn_id=f"t{turn_count}",
+                    text="no change on t1",
+                )
+            _set_ticket_done(t1, done=True)
+            return AgentTurnResult(
+                agent_id=req.agent_id,
+                conversation_id="conv",
+                turn_id=f"t{turn_count}",
+                text="done t1",
+            )
+
+        runner = TicketRunner(
+            workspace_root=workspace_root,
+            run_id="run-1",
+            config=TicketRunConfig(
+                ticket_dir=Path(".codex-autorunner/tickets"),
+                auto_commit=False,
+            ),
+            agent_pool=FakeAgentPool(handler),
+        )
+
+        r1 = await runner.step({})
+        assert r1.status == "continue"
+
+        r2 = await runner.step(r1.state)
+        assert r2.status == "continue"
+
+        r3 = await runner.step(r2.state)
+        assert r3.status == "continue"
+        guard = r3.state.get("loop_guard", {})
+        ticket_id = r3.state.get("current_ticket_id")
+        assert guard.get("ticket") == ticket_id
+        assert guard.get("no_change_count") == 0 or guard.get("no_change_count") == 1
+
+    @pytest.mark.asyncio
+    async def test_loop_guard_skips_pause_during_lint_retry(
+        self, tmp_path: Path
+    ) -> None:
+        """Loop guard must not trigger pause when lint_retry_mode is active."""
+        import subprocess
+
+        workspace_root = tmp_path
+        subprocess.run(
+            ["git", "init"], cwd=workspace_root, check=True, capture_output=True
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=workspace_root,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"],
+            cwd=workspace_root,
+            check=True,
+            capture_output=True,
+        )
+        (workspace_root / "README.md").write_text("seed\n", encoding="utf-8")
+        subprocess.run(
+            ["git", "add", "README.md"],
+            cwd=workspace_root,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "init"],
+            cwd=workspace_root,
+            check=True,
+            capture_output=True,
+        )
+
+        state = {
+            "loop_guard": {
+                "ticket": "tkt-lint-retry",
+                "no_change_count": LOOP_NO_CHANGE_THRESHOLD - 1,
+            },
+        }
+        result = compute_loop_guard(
+            state=state,
+            current_ticket_id="tkt-lint-retry",
+            repo_fingerprint_before="abc\n",
+            repo_fingerprint_after="abc\n",
+            lint_retry_mode=True,
+        )
+        assert result["loop_guard"] is None
+
+
+class TestShrinkPromptSectionOrder:
+    def test_ticket_block_is_last_resort(self, tmp_path: Path) -> None:
+        """Ticket block should be truncated last among shrinkable sections."""
+        from codex_autorunner.tickets.runner_prompt_support import shrink_prompt
+
+        large_a = "A" * 2000
+        large_b = "B" * 2000
+        large_ticket = "C" * 2000
+
+        sections = {
+            "prev_block": large_a,
+            "prev_ticket_block": large_b,
+            "ticket_block": large_ticket,
+        }
+
+        def render() -> str:
+            return (
+                "<PROMPT>\n"
+                + sections["prev_block"]
+                + "\n"
+                + sections["prev_ticket_block"]
+                + "\n"
+                + sections["ticket_block"]
+                + "\n</PROMPT>"
+            )
+
+        result = shrink_prompt(
+            max_bytes=1000,
+            render=render,
+            sections=sections,
+            order=["prev_block", "prev_ticket_block", "ticket_block"],
+        )
+
+        assert len(result.encode("utf-8")) <= 1000
+        assert (
+            sections["prev_block"] != large_a
+            or sections["prev_ticket_block"] != large_b
+        )
+
+
+class TestBuildPromptBlockHelpers:
+    def test_build_checkpoint_block_empty_when_no_error(self) -> None:
+        from codex_autorunner.tickets.runner_prompt_support import (
+            build_checkpoint_block,
+        )
+
+        assert build_checkpoint_block(None) == ""
+        assert build_checkpoint_block("") == ""
+
+    def test_build_checkpoint_block_contains_error_text(self) -> None:
+        from codex_autorunner.tickets.runner_prompt_support import (
+            build_checkpoint_block,
+        )
+
+        result = build_checkpoint_block("disk full")
+        assert "<CAR_CHECKPOINT_WARNING>" in result
+        assert "disk full" in result
+
+    def test_build_commit_block_empty_when_not_required(self) -> None:
+        from codex_autorunner.tickets.runner_prompt_support import build_commit_block
+
+        assert (
+            build_commit_block(
+                commit_required=False, commit_attempt=0, commit_max_attempts=2
+            )
+            == ""
+        )
+
+    def test_build_commit_block_shows_remaining_attempts(self) -> None:
+        from codex_autorunner.tickets.runner_prompt_support import build_commit_block
+
+        result = build_commit_block(
+            commit_required=True, commit_attempt=1, commit_max_attempts=3
+        )
+        assert "<CAR_COMMIT_REQUIRED>" in result
+        assert "Attempts remaining" in result
+
+    def test_build_lint_block_empty_when_no_errors(self) -> None:
+        from codex_autorunner.tickets.runner_prompt_support import build_lint_block
+
+        assert build_lint_block(None) == ""
+        assert build_lint_block([]) == ""
+
+    def test_build_lint_block_lists_errors(self) -> None:
+        from codex_autorunner.tickets.runner_prompt_support import build_lint_block
+
+        result = build_lint_block(["done must be boolean", "agent is required"])
+        assert "<CAR_TICKET_FRONTMATTER_LINT_REPAIR>" in result
+        assert "done must be boolean" in result
+        assert "agent is required" in result
+
+    def test_build_loop_guard_block_empty_at_zero(self) -> None:
+        from codex_autorunner.tickets.runner_prompt_support import (
+            build_loop_guard_block,
+        )
+
+        assert build_loop_guard_block(0) == ""
+        assert build_loop_guard_block(-1) == ""
+
+    def test_build_loop_guard_block_shows_count(self) -> None:
+        from codex_autorunner.tickets.runner_prompt_support import (
+            build_loop_guard_block,
+        )
+
+        result = build_loop_guard_block(3)
+        assert "<CAR_LOOP_GUARD>" in result
+        assert "Consecutive no-change turns so far: 3" in result
