@@ -7,6 +7,7 @@ import pytest
 
 from codex_autorunner.core.pma_lane_worker import PmaLaneWorker
 from codex_autorunner.core.pma_queue import PmaQueue, QueueItemState
+from tests.support.waits import wait_for_async_event, wait_for_async_predicate
 
 
 @pytest.mark.anyio
@@ -35,11 +36,15 @@ async def test_enqueue_sync_cross_process_wakes_worker(tmp_path: Path) -> None:
         {"message": "hello"},
     )
 
-    await asyncio.wait_for(processed.wait(), timeout=3.0)
+    await wait_for_async_event(
+        processed,
+        timeout_seconds=3.0,
+        description="cross-process enqueue to wake the lane worker",
+    )
 
-    for _ in range(20):
+    async def _item_terminal() -> bool:
         items = await worker_queue.list_items(lane_id)
-        if (
+        return (
             items
             and items[0].item_id == item.item_id
             and items[0].state
@@ -47,9 +52,13 @@ async def test_enqueue_sync_cross_process_wakes_worker(tmp_path: Path) -> None:
                 QueueItemState.COMPLETED,
                 QueueItemState.FAILED,
             )
-        ):
-            break
-        await asyncio.sleep(0.05)
+        )
+
+    await wait_for_async_predicate(
+        _item_terminal,
+        timeout_seconds=3.0,
+        description="cross-process queue item to reach terminal state",
+    )
 
     items = await worker_queue.list_items(lane_id)
     assert items, "queue item should be present"
@@ -222,18 +231,28 @@ async def test_lane_write_cancellation_waits_for_offloaded_store_call(
     monkeypatch.setattr(asyncio, "to_thread", _blocked_to_thread)
 
     update_task = asyncio.create_task(queue._update_in_file(item))
-    await asyncio.wait_for(started.wait(), timeout=1.0)
+    await wait_for_async_event(
+        started,
+        timeout_seconds=1.0,
+        description="offloaded lane write to start",
+    )
 
     update_task.cancel()
 
     lock_reacquired = asyncio.Event()
+    waiter_started = asyncio.Event()
 
     async def _wait_for_lane_lock() -> None:
+        waiter_started.set()
         async with queue._ensure_lane_lock(lane_id):
             lock_reacquired.set()
 
     waiter = asyncio.create_task(_wait_for_lane_lock())
-    await asyncio.sleep(0)
+    await wait_for_async_event(
+        waiter_started,
+        timeout_seconds=1.0,
+        description="lane-lock waiter task to start",
+    )
     assert lock_reacquired.is_set() is False
 
     release.set()

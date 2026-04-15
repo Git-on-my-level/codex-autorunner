@@ -10,6 +10,7 @@ from codex_autorunner.core.hub_lifecycle import (
     LifecycleRetryPolicy,
 )
 from codex_autorunner.core.lifecycle_events import LifecycleEvent, LifecycleEventType
+from tests.support.waits import wait_for_thread_event
 
 
 class _StoreStub:
@@ -190,7 +191,11 @@ def test_hub_lifecycle_worker_logs_and_keeps_polling_after_failure(caplog) -> No
     with caplog.at_level(logging.ERROR, logger=logger.name):
         worker.start()
         try:
-            assert completed.wait(timeout=1.0)
+            wait_for_thread_event(
+                completed,
+                timeout_seconds=1.0,
+                description="lifecycle worker retry cycle to complete",
+            )
         finally:
             worker.stop()
 
@@ -222,7 +227,11 @@ def test_hub_lifecycle_worker_stops_after_unrecoverable_schema_error(caplog) -> 
     with caplog.at_level(logging.ERROR, logger=logger.name):
         worker.start()
         try:
-            assert attempted.wait(timeout=1.0)
+            wait_for_thread_event(
+                attempted,
+                timeout_seconds=1.0,
+                description="lifecycle worker to attempt processing once",
+            )
         finally:
             worker.stop()
 

@@ -4,7 +4,6 @@ import json
 import shutil
 import sqlite3
 import subprocess
-import time
 import types
 from pathlib import Path
 from typing import Optional
@@ -45,6 +44,7 @@ from codex_autorunner.integrations.agents.wiring import (
 from codex_autorunner.manifest import load_manifest, sanitize_repo_id, save_manifest
 from codex_autorunner.server import create_hub_app
 from tests.conftest import write_test_config
+from tests.support.waits import wait_for_predicate
 
 pytestmark = pytest.mark.slow
 
@@ -2052,7 +2052,6 @@ def test_parallel_run_smoke(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
 
     def fake_start(self, once: bool = False) -> None:
         run_calls.append(self.ctx.repo_root.name)
-        time.sleep(0.05)
 
     monkeypatch.setattr(ProcessRunnerController, "start", fake_start)
 
@@ -2066,7 +2065,11 @@ def test_parallel_run_smoke(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     supervisor.run_repo("alpha", once=True)
     supervisor.run_repo("beta", once=True)
 
-    time.sleep(0.2)
+    wait_for_predicate(
+        lambda: set(run_calls) == {"alpha", "beta"},
+        timeout_seconds=1.0,
+        description="both repo runners to receive start calls",
+    )
 
     snapshots = supervisor.list_repos()
     assert set(run_calls) == {"alpha", "beta"}
