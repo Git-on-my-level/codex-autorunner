@@ -119,10 +119,13 @@ surface-visible operation.
 | State | Meaning | Typical source |
 | --- | --- | --- |
 | `received` | A normalized chat event has been admitted and assigned an operation id. | shared ingress |
+| `acknowledged` | The transport-specific ack, defer, or equivalent immediate acceptance step completed. | adapter immediate-feedback path |
+| `visible` | The user has a visible placeholder, anchor, or equivalent progress affordance. | adapter immediate-feedback path |
 | `routing` | CAR is resolving the target, busy policy, and execution path. | orchestration ingress |
 | `blocked` | Work is waiting on explicit user or operator input, such as approval or a required answer. | orchestration + chat handlers |
 | `queued` | Work has been accepted but is waiting for execution ownership. | orchestration queue |
 | `running` | Execution is active and may emit progress. | runtime-backed worker |
+| `interrupting` | An interrupt request has been accepted, but execution has not yet settled into a terminal state. | adapter + orchestration coordination |
 | `delivering` | Execution finished and CAR is finalizing the visible reply or terminal artifact. | adapter delivery path |
 | `completed` | Work finished successfully and terminal delivery succeeded. | control plane |
 | `interrupted` | Work stopped due to an explicit interrupt or equivalent cancellation of active execution. | control plane |
@@ -133,16 +136,22 @@ surface-visible operation.
 
 The state machine is intentionally conservative:
 
-- `received -> routing | cancelled | failed`
-- `routing -> blocked | queued | running | failed | cancelled`
+- `received -> acknowledged | visible | routing | queued | running | interrupting | cancelled | failed`
+- `acknowledged -> visible | queued | running | interrupting | delivering | completed | interrupted | failed | cancelled`
+- `visible -> queued | running | interrupting | delivering | completed | interrupted | failed | cancelled`
+- `routing -> acknowledged | visible | blocked | queued | running | interrupting | failed | cancelled`
 - `blocked -> routing | queued | failed | cancelled`
-- `queued -> running | interrupted | failed | cancelled`
-- `running -> blocked | delivering | interrupted | failed`
-- `delivering -> completed | interrupted | failed`
+- `queued -> visible | running | interrupting | interrupted | failed | cancelled`
+- `running -> blocked | visible | delivering | interrupting | completed | interrupted | failed`
+- `interrupting -> delivering | interrupted | failed | cancelled`
+- `delivering -> visible | completed | interrupted | failed | cancelled`
 - `completed`, `interrupted`, `failed`, and `cancelled` are terminal
 
 Notes:
 
+- `acknowledged` and `visible` are separate by design. Some transports can ack
+  immediately but create the visible placeholder later, and recovery must not
+  collapse those events into one step.
 - `blocked` is the shared state for approval waits, questions, or other
   explicit user actions. Adapters can render different controls, but they must
   map back to the same shared state.
@@ -157,15 +166,23 @@ Each state-machine instance is represented by one control-plane snapshot.
 Required durable fields:
 
 - `operation_id`
+- `surface_kind`
+- `surface_operation_key`
 - `thread_target_id`
 - `state`
 
 Expected bridge fields for future tickets:
 
+- `conversation_id`
 - `execution_id`
 - `backend_turn_id`
 - `status_message`
 - `blocking_reason`
+- `ack_completed_at`
+- `first_visible_feedback_at`
+- `anchor_ref`
+- `delivery_state`
+- `delivery_cursor`
 - `updated_at`
 - adapter-safe metadata for display hints that can be recomputed or ignored
 
@@ -182,8 +199,14 @@ modules.
 - `src/codex_autorunner/core/orchestration/chat_operation_state.py`
   Introduce the authoritative enum, transition table, snapshot dataclass, and
   store protocol
+- `src/codex_autorunner/core/orchestration/chat_operation_ledger.py`
+  Provide the first orchestration-backed store implementation and recovery
+  planning boundary without moving lifecycle authority out of the control plane
 - `src/codex_autorunner/integrations/chat/ux_contract.py`
   Introduce shared presentation metadata derived from the control-plane states
+- `src/codex_autorunner/integrations/chat/immediate_feedback.py`
+  Use the shared control-plane states when adapters ack, create anchors, queue,
+  and interrupt, while keeping transport mechanics local
 
 ### Phase 1: persistence wiring
 

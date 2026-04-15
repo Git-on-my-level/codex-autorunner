@@ -4,6 +4,10 @@ This module belongs to `integrations/chat` because it defines adapter-layer UX
 semantics shared by multiple transports. It may depend on control-plane state
 definitions, but it must remain presentation-only: labels, phase grouping, and
 affordances live here; durable lifecycle authority does not.
+
+Future tickets should extend this module when they need shared rendering
+semantics across Telegram and Discord. They should not move durable lifecycle
+truth here or create transport-specific copies of these descriptors.
 """
 
 from __future__ import annotations
@@ -23,7 +27,12 @@ CHAT_UX_CONTRACT_VERSION = "chat-ux-foundation-v1"
 
 @dataclass(frozen=True)
 class ChatUxStateDescriptor:
-    """Adapter-facing metadata for rendering a shared chat operation state."""
+    """Adapter-facing metadata for rendering a shared chat operation state.
+
+    This descriptor answers UX questions only: what title to show, whether a
+    spinner is appropriate, and which user affordances remain valid. It is not
+    a durable state record.
+    """
 
     state: ChatOperationState
     phase: ChatUxPhase

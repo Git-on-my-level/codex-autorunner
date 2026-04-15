@@ -1,9 +1,16 @@
 """Control-plane contract for shared chat-surface operation state.
 
-This module is intentionally placed in `core/orchestration` because the state
-machine and durable snapshot shape are control-plane authority. Adapter-layer
-code may render or mirror these states, but it must not redefine them or
-become the long-term source of truth for recovery.
+This module is intentionally placed in `core/orchestration` because the shared
+chat operation state machine and durable snapshot shape are control-plane
+authority. Adapter-layer code may render or mirror these states, but it must
+not redefine them or become the long-term source of truth for recovery.
+
+Two distinctions matter for future tickets:
+
+- `ACKNOWLEDGED` and `VISIBLE` are separate because an adapter can accept a
+  transport interaction before it has produced a visible placeholder or anchor.
+- `DELIVERING` is still control-plane state because delivery retry and recovery
+  must be driven by durable truth rather than transport-local message objects.
 """
 
 from __future__ import annotations
@@ -14,7 +21,12 @@ from typing import Any, Mapping, Optional, Protocol, runtime_checkable
 
 
 class ChatOperationState(str, Enum):
-    """Authoritative lifecycle states for one surface-visible chat operation."""
+    """Authoritative lifecycle states for one surface-visible chat operation.
+
+    Future tickets may add finer-grained state, but they must preserve the
+    separation of concerns encoded here: control plane owns lifecycle truth,
+    adapters own presentation semantics derived from it.
+    """
 
     RECEIVED = "received"
     ACKNOWLEDGED = "acknowledged"
@@ -42,7 +54,8 @@ CHAT_OPERATION_TERMINAL_STATES = frozenset(
 
 # Future tickets may fill in finer-grained implementation details, but they
 # must preserve the broad lifecycle envelope encoded here so Telegram and
-# Discord converge on one shared operation model.
+# Discord converge on one shared operation model. When new states are added,
+# they should extend this table rather than creating transport-specific enums.
 CHAT_OPERATION_ALLOWED_TRANSITIONS: dict[
     ChatOperationState, frozenset[ChatOperationState]
 ] = {
@@ -199,7 +212,9 @@ class ChatOperationStore(Protocol):
     Future implementations may persist these snapshots in orchestration sqlite
     or another control-plane artifact, but recovery must be possible from this
     store plus existing orchestration records rather than transport-local UI
-    state.
+    state. The store boundary intentionally carries only operation-lifecycle
+    data; transcript, full execution history, and transport payload details
+    remain in their existing subsystems.
     """
 
     def get_operation(self, operation_id: str) -> Optional[ChatOperationSnapshot]: ...

@@ -47,6 +47,13 @@ def test_chat_ux_descriptors_cover_every_shared_state() -> None:
         descriptor = get_chat_ux_state_descriptor(state)
         assert descriptor.state is state
         assert descriptor.terminal == is_terminal_chat_ux_state(state)
+    assert get_chat_ux_state_descriptor(ChatOperationState.ACKNOWLEDGED).phase == (
+        "pending"
+    )
+    assert get_chat_ux_state_descriptor(ChatOperationState.VISIBLE).phase == "active"
+    assert get_chat_ux_state_descriptor(ChatOperationState.INTERRUPTING).title == (
+        "Interrupting"
+    )
 
 
 def test_chat_operation_snapshot_and_store_protocol_surface_smoke() -> None:
