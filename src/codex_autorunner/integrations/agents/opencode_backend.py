@@ -10,8 +10,8 @@ import httpx
 from ...agents.opencode.client import OpenCodeClient, OpenCodeProtocolError
 from ...agents.opencode.event_decoder import decode_sse_event
 from ...agents.opencode.logging import OpenCodeEventFormatter
+from ...agents.opencode.output_assembly import apply_prompt_response_fallback
 from ...agents.opencode.runtime import (
-    OpenCodeTurnOutput,
     build_turn_id,
     collect_opencode_output,
     extract_session_id,
@@ -460,20 +460,12 @@ class OpenCodeBackend(AgentBackend):
                 )
                 return
 
-            if prompt_response is not None and not output_result.text:
-                fallback = parse_message_response(prompt_response)
-                if fallback.text:
-                    output_result = OpenCodeTurnOutput(
-                        text=fallback.text,
-                        error=output_result.error,
-                        usage=output_result.usage,
-                    )
-                if fallback.error and not output_result.error:
-                    output_result = OpenCodeTurnOutput(
-                        text=output_result.text,
-                        error=fallback.error,
-                        usage=output_result.usage,
-                    )
+            if prompt_response is not None:
+                output_result = apply_prompt_response_fallback(
+                    output_result,
+                    prompt_response,
+                    prompt=message,
+                )
 
             canonical_usage = output_result.usage or latest_usage_snapshot
             if isinstance(canonical_usage, dict):

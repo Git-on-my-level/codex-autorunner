@@ -84,20 +84,6 @@ class OpenCodeTurnOutput:
     usage: Optional[dict[str, Any]] = None
 
 
-_extract_error_text = extract_error_text
-_extract_message_phase = extract_message_phase
-_extract_permission_request = extract_permission_request
-_extract_question_request = extract_question_request
-_extract_status_type = extract_status_type
-_status_is_idle = status_is_idle
-_normalize_question_policy = normalize_question_policy
-_normalize_permission_decision = normalize_permission_decision
-_permission_policy_reply = permission_policy_reply
-_auto_answers_for_questions = auto_answers_for_questions
-_normalize_question_answers = normalize_question_answers
-_summarize_question_answers = summarize_question_answers
-
-
 def opencode_event_is_progress_signal(
     event: SSEEvent,
     *,
@@ -132,7 +118,7 @@ def opencode_event_is_progress_signal(
             return False
 
     if event_type == "session.status":
-        return _status_is_idle(_extract_status_type(payload))
+        return status_is_idle(extract_status_type(payload))
 
     return True
 
@@ -243,11 +229,12 @@ async def collect_opencode_output_from_events(
     first_event_timeout_seconds: Optional[
         float
     ] = _OPENCODE_FIRST_EVENT_TIMEOUT_SECONDS,
+    prompt_response_awaitable: Optional[Awaitable[Any]] = None,
     logger: Optional[logging.Logger] = None,
 ) -> OpenCodeTurnOutput:
     seen_question_request_ids: set[tuple[Optional[str], str]] = set()
     logged_permission_errors: set[str] = set()
-    normalized_question_policy = _normalize_question_policy(question_policy)
+    normalized_question_policy = normalize_question_policy(question_policy)
     if logger is None:
         logger = logging.getLogger(__name__)
 
@@ -342,7 +329,7 @@ async def collect_opencode_output_from_events(
             lifecycle.on_relevant_event(now=now)
             is_primary_session = event_session_id == session_id or not event_session_id
             if event.event == "question.asked":
-                request_id, props = _extract_question_request(payload)
+                request_id, props = extract_question_request(payload)
                 questions = props.get("questions") if isinstance(props, dict) else []
                 question_count = len(questions) if isinstance(questions, list) else 0
                 log_event(
@@ -390,7 +377,7 @@ async def collect_opencode_output_from_events(
                                     exc_info=True,
                                 )
                         continue
-                    normalized_answers = _normalize_question_answers(
+                    normalized_answers = normalize_question_answers(
                         answers, question_count=question_count
                     )
                     if reply_question is not None:
@@ -431,11 +418,11 @@ async def collect_opencode_output_from_events(
                                 exc=exc,
                             )
                     continue
-                auto_answers = _auto_answers_for_questions(
+                auto_answers = auto_answers_for_questions(
                     questions if isinstance(questions, list) else [],
                     normalized_question_policy,
                 )
-                normalized_answers = _normalize_question_answers(
+                normalized_answers = normalize_question_answers(
                     auto_answers, question_count=question_count
                 )
                 if reply_question is not None:
@@ -449,7 +436,7 @@ async def collect_opencode_output_from_events(
                             question_count=question_count,
                             session_id=event_session_id,
                             policy=normalized_question_policy,
-                            answers=_summarize_question_answers(normalized_answers),
+                            answers=summarize_question_answers(normalized_answers),
                         )
                     except (OSError, RuntimeError, ValueError) as exc:
                         log_event(
@@ -462,7 +449,7 @@ async def collect_opencode_output_from_events(
                         )
                 continue
             if event.event == "permission.asked":
-                request_id, props = _extract_permission_request(payload)
+                request_id, props = extract_permission_request(payload)
                 if request_id and respond_permission is not None:
                     if (
                         permission_policy == PERMISSION_ASK
@@ -472,9 +459,9 @@ async def collect_opencode_output_from_events(
                             perm_decision = await permission_handler(request_id, props)
                         except Exception:  # intentional: pluggable callback handler
                             perm_decision = OPENCODE_PERMISSION_REJECT
-                        reply = _normalize_permission_decision(perm_decision)
+                        reply = normalize_permission_decision(perm_decision)
                     else:
-                        reply = _permission_policy_reply(permission_policy)
+                        reply = permission_policy_reply(permission_policy)
                     try:
                         await respond_permission(request_id, reply)
                     except (httpx.HTTPError, OSError, ValueError, RuntimeError) as exc:
@@ -512,7 +499,7 @@ async def collect_opencode_output_from_events(
                                 exc=exc,
                             )
                         if is_primary_session:
-                            detail = body_preview or _extract_error_text(payload)
+                            detail = body_preview or extract_error_text(payload)
                             perm_error = "OpenCode permission reply failed"
                             if status_code is not None:
                                 perm_error = f"{perm_error} ({status_code})"
@@ -521,7 +508,7 @@ async def collect_opencode_output_from_events(
                             assembler.error = perm_error
                             break
             if event.event == "session.error":
-                error_text = _extract_error_text(payload) or "OpenCode session error"
+                error_text = extract_error_text(payload) or "OpenCode session error"
                 log_event(
                     logger,
                     logging.ERROR,
@@ -620,12 +607,12 @@ async def collect_opencode_output_from_events(
                 assembler.on_primary_assistant_completion(payload, message_role)
                 if (
                     message_role == "assistant"
-                    and _extract_message_phase(payload) != "commentary"
+                    and extract_message_phase(payload) != "commentary"
                 ):
                     lifecycle.on_primary_completion()
             if event.event == "session.idle" or (
                 event.event == "session.status"
-                and _status_is_idle(_extract_status_type(payload))
+                and status_is_idle(extract_status_type(payload))
             ):
                 if event_session_id != session_id:
                     continue
@@ -645,6 +632,13 @@ async def collect_opencode_output_from_events(
                 break
     finally:
         await lifecycle.close()
+
+    if prompt_response_awaitable is not None:
+        try:
+            prompt_response = await prompt_response_awaitable
+            assembler.on_prompt_response(prompt_response)
+        except Exception:
+            pass
 
     result = await assembler.build_result()
     return OpenCodeTurnOutput(
@@ -673,6 +667,7 @@ async def collect_opencode_output(
     first_event_timeout_seconds: Optional[
         float
     ] = _OPENCODE_FIRST_EVENT_TIMEOUT_SECONDS,
+    prompt_response_awaitable: Optional[Awaitable[Any]] = None,
     logger: Optional[logging.Logger] = None,
 ) -> OpenCodeTurnOutput:
     async def _respond(request_id: str, reply: str) -> None:
@@ -733,6 +728,7 @@ async def collect_opencode_output(
         messages_fetcher=_fetch_messages,
         stall_timeout_seconds=stall_timeout_seconds,
         first_event_timeout_seconds=first_event_timeout_seconds,
+        prompt_response_awaitable=prompt_response_awaitable,
         logger=logger,
     )
 

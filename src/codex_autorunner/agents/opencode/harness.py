@@ -38,6 +38,7 @@ from ..types import (
     TerminalTurnResult,
     TurnRef,
 )
+from .output_assembly import OutputAssembler, apply_prompt_response_fallback
 from .progress_synthesis import (
     DescendantSessionTracker,
     start_silent_turn_progress,
@@ -63,14 +64,12 @@ from .runtime import (
     map_approval_policy_to_permission,
     opencode_event_is_progress_signal,
     opencode_stream_timeouts,
-    parse_message_response,
-    recover_last_assistant_message,
     split_model_id,
 )
 from .supervisor_protocol import OpenCodeHarnessSupervisorProtocol
 
 _logger = logging.getLogger(__name__)
-_GLOB_META_RE = re.compile(r"[*?\[\]{]")
+_GLOB_META_RE = re.compile(r"[*?\[\]{}]")
 
 
 @dataclass
@@ -1014,11 +1013,21 @@ class OpenCodeHarness(AgentHarness):
                             turn_id=turn_id or "",
                             error=str(exc),
                         )
-                    recovered = recover_last_assistant_message(messages_payload)
-                    if recovered.text:
-                        assistant_text = recovered.text
-                    if recovered.error:
-                        errors = [recovered.error]
+
+                    async def _return_fetched(
+                        payload=messages_payload,
+                    ) -> Any:
+                        return payload
+
+                    recovery_asm = OutputAssembler(
+                        session_id=conversation_id,
+                        messages_fetcher=_return_fetched,
+                    )
+                    recovery_result = await recovery_asm.build_result()
+                    if recovery_result.text:
+                        assistant_text = recovery_result.text
+                    if recovery_result.error:
+                        errors = [recovery_result.error]
                 if stream_error is not None and not (
                     assistant_text and _saw_terminal_completion(raw_events)
                 ):
@@ -1231,31 +1240,27 @@ class OpenCodeHarness(AgentHarness):
                             collect_task.cancel()
                             with contextlib.suppress(asyncio.CancelledError):
                                 await collect_task
-                            recovered = parse_message_response(command_result)
-                            if not recovered.text and not recovered.error:
-                                messages_payload = await _fetch_messages()
-                                recovered = recover_last_assistant_message(
-                                    messages_payload,
-                                    prompt=pending.prompt,
-                                )
+                            early_asm = OutputAssembler(
+                                session_id=conversation_id,
+                                prompt=(
+                                    pending.prompt if pending is not None else None
+                                ),
+                                messages_fetcher=_fetch_messages,
+                            )
+                            early_asm.on_prompt_response(command_result)
+                            early_result = await early_asm.build_result()
                             output = OpenCodeTurnOutput(
-                                text=recovered.text,
-                                error=recovered.error,
+                                text=early_result.text,
+                                error=early_result.error,
                             )
                         else:
                             output = await collect_task
-                    if (
-                        command_result is not None
-                        and not output.text
-                        and not output.error
-                    ):
-                        recovered = parse_message_response(command_result)
-                        if recovered.text or recovered.error:
-                            output = OpenCodeTurnOutput(
-                                text=recovered.text or output.text,
-                                error=recovered.error or output.error,
-                                usage=output.usage,
-                            )
+                    if command_result is not None:
+                        output = apply_prompt_response_fallback(
+                            output,
+                            command_result,
+                            prompt=(pending.prompt if pending is not None else None),
+                        )
                 except (
                     Exception
                 ) as exc:  # intentional: top-level turn error → error result conversion
