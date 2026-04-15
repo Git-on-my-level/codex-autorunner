@@ -61,6 +61,55 @@ class TestFacadeReexportIdentity:
         assert facade.is_loopback_host is config_validation.is_loopback_host
 
     def test_parser_helpers_identity(self) -> None:
+        assert (
+            facade._APP_SERVER_OUTPUT_POLICIES
+            is config_parsers._APP_SERVER_OUTPUT_POLICIES
+        )
+        assert facade._parse_optional_int is config_parsers._parse_optional_int
+        assert facade._parse_prompt_int is config_parsers._parse_prompt_int
+        assert (
+            facade._parse_security_config_section
+            is config_parsers._parse_security_config_section
+        )
+        assert (
+            facade._parse_notification_target_section
+            is config_parsers._parse_notification_target_section
+        )
+        assert (
+            facade._parse_notifications_config_section
+            is config_parsers._parse_notifications_config_section
+        )
+        assert (
+            facade._parse_voice_config_section
+            is config_parsers._parse_voice_config_section
+        )
+        assert (
+            facade._parse_destination_config_section
+            is config_parsers._parse_destination_config_section
+        )
+        assert (
+            facade._parse_ticket_flow_config is config_parsers._parse_ticket_flow_config
+        )
+        assert (
+            facade._parse_app_server_output_config
+            is config_parsers._parse_app_server_output_config
+        )
+        assert (
+            facade._parse_app_server_config is config_parsers._parse_app_server_config
+        )
+        assert facade._parse_opencode_config is config_parsers._parse_opencode_config
+        assert facade._parse_pma_config is config_parsers._parse_pma_config
+        assert facade._parse_usage_config is config_parsers._parse_usage_config
+        assert facade._parse_templates_config is config_parsers._parse_templates_config
+        assert (
+            facade._parse_static_assets_config
+            is config_parsers._parse_static_assets_config
+        )
+        assert facade._parse_update_backend is config_parsers._parse_update_backend
+        assert (
+            facade._parse_update_linux_service_names
+            is config_parsers._parse_update_linux_service_names
+        )
         assert facade.normalize_base_path is config_parsers.normalize_base_path
         assert (
             facade.parse_flow_retention_config
@@ -255,38 +304,24 @@ class TestParserOutputEquivalence:
             assert facade_result == canon_result
 
 
-class TestCompatibilityExceptionOutputPolicyDefault:
-    """Document the known compatibility difference in _parse_app_server_output_config.
-
-    When neither cfg nor defaults specify a policy:
-      - config_parsers defaults to ``"final_only"`` via ``defaults.get("policy", "final_only")``
-      - config.py has no fallback, producing empty string which fails validation
-
-    In the canonical load path, ``DEFAULT_REPO_CONFIG["app_server"]["output"]["policy"]``
-    always provides ``"final_only"``, so the difference never manifests.  The facade
-    raises on bare None/None input; the canon gracefully defaults.
-
-    The facade copy is a compatibility shim; the canonical owner is config_parsers.
-    """
-
-    def test_canon_provides_final_only_default_when_none(self) -> None:
-        result = config_parsers._parse_app_server_output_config(None, None)
+class TestFacadeParserDelegation:
+    def test_parse_app_server_output_config_defaults_through_canonical_owner(
+        self,
+    ) -> None:
+        result = facade._parse_app_server_output_config(None, None)
         assert result.policy == "final_only"
 
-    def test_facade_raises_when_both_none(self) -> None:
+    def test_parse_app_server_config_preserves_canonical_path_errors(
+        self, tmp_path: Path
+    ) -> None:
         from codex_autorunner.core.config_contract import ConfigError
 
-        with pytest.raises(ConfigError, match="must be one of"):
-            facade._parse_app_server_output_config(None, None)
-
-    def test_default_repo_config_provides_policy_so_difference_is_hidden(self) -> None:
-        defaults = facade.DEFAULT_REPO_CONFIG["app_server"].get("output")
-        assert defaults is not None
-        assert defaults.get("policy") == "final_only"
-
-        facade_result = facade._parse_app_server_output_config(None, defaults)
-        canon_result = config_parsers._parse_app_server_output_config(None, defaults)
-        assert facade_result.policy == canon_result.policy == "final_only"
+        with pytest.raises(ConfigError, match="app_server.state_root"):
+            facade._parse_app_server_config(
+                {"state_root": "../outside"},
+                tmp_path,
+                {},
+            )
 
 
 class TestPrivateHelperAliases:
