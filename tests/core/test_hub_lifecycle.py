@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import threading
-import time
 from datetime import datetime, timedelta, timezone
 
 from codex_autorunner.core.hub_lifecycle import (
@@ -11,6 +10,7 @@ from codex_autorunner.core.hub_lifecycle import (
     LifecycleRetryPolicy,
 )
 from codex_autorunner.core.lifecycle_events import LifecycleEvent, LifecycleEventType
+from tests.support.waits import wait_for_thread_event
 
 
 class _StoreStub:
@@ -191,7 +191,11 @@ def test_hub_lifecycle_worker_logs_and_keeps_polling_after_failure(caplog) -> No
     with caplog.at_level(logging.ERROR, logger=logger.name):
         worker.start()
         try:
-            assert completed.wait(timeout=1.0)
+            wait_for_thread_event(
+                completed,
+                timeout_seconds=1.0,
+                description="lifecycle worker retry cycle to complete",
+            )
         finally:
             worker.stop()
 
@@ -202,11 +206,13 @@ def test_hub_lifecycle_worker_logs_and_keeps_polling_after_failure(caplog) -> No
 
 def test_hub_lifecycle_worker_stops_after_unrecoverable_schema_error(caplog) -> None:
     attempts = 0
+    attempted = threading.Event()
     logger = logging.getLogger("test.hub_lifecycle.worker.schema")
 
     def _process_once() -> None:
         nonlocal attempts
         attempts += 1
+        attempted.set()
         raise RuntimeError(
             "orchestration.sqlite3 schema is newer than this build supports"
         )
@@ -221,9 +227,11 @@ def test_hub_lifecycle_worker_stops_after_unrecoverable_schema_error(caplog) -> 
     with caplog.at_level(logging.ERROR, logger=logger.name):
         worker.start()
         try:
-            deadline = time.monotonic() + 2.0
-            while attempts == 0 and time.monotonic() < deadline:
-                time.sleep(0.01)
+            wait_for_thread_event(
+                attempted,
+                timeout_seconds=1.0,
+                description="lifecycle worker to attempt processing once",
+            )
         finally:
             worker.stop()
 

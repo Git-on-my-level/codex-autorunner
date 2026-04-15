@@ -1215,28 +1215,30 @@ def test_managed_thread_crud_routes_use_orchestration_service(
             thread_target_id,
         ):
             self.calls.append(("resume", {"thread_target_id": thread_target_id}))
-            self.thread = ThreadTarget(
-                **{
-                    **self.thread.to_dict(),
+            payload = self.thread.to_dict()
+            payload.update(
+                {
                     "status": "idle",
                     "lifecycle_status": "active",
                     "status_reason": "thread_resumed",
                     "status_terminal": False,
                 }
             )
+            self.thread = ThreadTarget.from_mapping(payload)
             return self.thread
 
         def archive_thread_target(self, thread_target_id):
             self.calls.append(("archive", {"thread_target_id": thread_target_id}))
-            self.thread = ThreadTarget(
-                **{
-                    **self.thread.to_dict(),
+            payload = self.thread.to_dict()
+            payload.update(
+                {
                     "status": "archived",
                     "lifecycle_status": "archived",
                     "status_reason": "thread_archived",
                     "status_terminal": True,
                 }
             )
+            self.thread = ThreadTarget.from_mapping(payload)
             return self.thread
 
     fake_service = FakeService()

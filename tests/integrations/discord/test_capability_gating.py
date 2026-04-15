@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from codex_autorunner.agents.registry import (
     get_agent_descriptor,
     get_registered_agents,
@@ -69,9 +71,8 @@ class TestAgentPickerIncludesHermes:
 
 
 class TestCapabilityHelpers:
-    def test_agent_supports_capability_for_hermes(self) -> None:
+    def test_agent_supports_capability_for_hermes(self, tmp_path: Path) -> None:
         import logging
-        from pathlib import Path
 
         from codex_autorunner.integrations.discord.config import (
             DiscordBotConfig,
@@ -80,7 +81,7 @@ class TestCapabilityHelpers:
         from codex_autorunner.integrations.discord.service import DiscordBotService
 
         config = DiscordBotConfig(
-            root=Path("/tmp"),
+            root=tmp_path,
             enabled=True,
             bot_token_env="TOKEN",
             app_id_env="APP",
@@ -94,7 +95,7 @@ class TestCapabilityHelpers:
                 scope="guild",
                 guild_ids=(),
             ),
-            state_file=Path("/tmp/state.sqlite3"),
+            state_file=tmp_path / "state.sqlite3",
             intents=1,
             max_message_length=2000,
             message_overflow="split",
@@ -120,9 +121,10 @@ class TestCapabilityHelpers:
         assert service._agent_supports_capability("opencode", "model_listing") is True
         assert service._agent_supports_capability("opencode", "review") is True
 
-    def test_agents_supporting_capability_returns_correct_agents(self) -> None:
+    def test_agents_supporting_capability_returns_correct_agents(
+        self, tmp_path: Path
+    ) -> None:
         import logging
-        from pathlib import Path
 
         from codex_autorunner.integrations.discord.config import (
             DiscordBotConfig,
@@ -131,7 +133,7 @@ class TestCapabilityHelpers:
         from codex_autorunner.integrations.discord.service import DiscordBotService
 
         config = DiscordBotConfig(
-            root=Path("/tmp"),
+            root=tmp_path,
             enabled=True,
             bot_token_env="TOKEN",
             app_id_env="APP",
@@ -145,7 +147,7 @@ class TestCapabilityHelpers:
                 scope="guild",
                 guild_ids=(),
             ),
-            state_file=Path("/tmp/state.sqlite3"),
+            state_file=tmp_path / "state.sqlite3",
             intents=1,
             max_message_length=2000,
             message_overflow="split",
@@ -172,9 +174,8 @@ class TestCapabilityHelpers:
         assert "opencode" in message_turns_agents
         assert "hermes" in message_turns_agents
 
-    def test_agent_display_name_returns_correct_name(self) -> None:
+    def test_agent_display_name_returns_correct_name(self, tmp_path: Path) -> None:
         import logging
-        from pathlib import Path
 
         from codex_autorunner.integrations.discord.config import (
             DiscordBotConfig,
@@ -183,7 +184,7 @@ class TestCapabilityHelpers:
         from codex_autorunner.integrations.discord.service import DiscordBotService
 
         config = DiscordBotConfig(
-            root=Path("/tmp"),
+            root=tmp_path,
             enabled=True,
             bot_token_env="TOKEN",
             app_id_env="APP",
@@ -197,7 +198,7 @@ class TestCapabilityHelpers:
                 scope="guild",
                 guild_ids=(),
             ),
-            state_file=Path("/tmp/state.sqlite3"),
+            state_file=tmp_path / "state.sqlite3",
             intents=1,
             max_message_length=2000,
             message_overflow="split",
@@ -213,9 +214,8 @@ class TestCapabilityHelpers:
         assert service._agent_display_name("codex") == "Codex"
         assert service._agent_display_name("opencode") == "OpenCode"
 
-    def test_agent_supports_resume_uses_capability(self) -> None:
+    def test_agent_supports_resume_uses_capability(self, tmp_path: Path) -> None:
         import logging
-        from pathlib import Path
 
         from codex_autorunner.integrations.discord.config import (
             DiscordBotConfig,
@@ -224,7 +224,7 @@ class TestCapabilityHelpers:
         from codex_autorunner.integrations.discord.service import DiscordBotService
 
         config = DiscordBotConfig(
-            root=Path("/tmp"),
+            root=tmp_path,
             enabled=True,
             bot_token_env="TOKEN",
             app_id_env="APP",
@@ -238,7 +238,7 @@ class TestCapabilityHelpers:
                 scope="guild",
                 guild_ids=(),
             ),
-            state_file=Path("/tmp/state.sqlite3"),
+            state_file=tmp_path / "state.sqlite3",
             intents=1,
             max_message_length=2000,
             message_overflow="split",
@@ -255,9 +255,10 @@ class TestCapabilityHelpers:
         assert service._agent_supports_resume("hermes") is True
         assert service._agent_supports_resume("zeroclaw") is True
 
-    def test_agent_supports_effort_uses_chat_capability_helper(self) -> None:
+    def test_agent_supports_effort_uses_chat_capability_helper(
+        self, tmp_path: Path
+    ) -> None:
         import logging
-        from pathlib import Path
 
         from codex_autorunner.integrations.discord.config import (
             DiscordBotConfig,
@@ -266,7 +267,7 @@ class TestCapabilityHelpers:
         from codex_autorunner.integrations.discord.service import DiscordBotService
 
         config = DiscordBotConfig(
-            root=Path("/tmp"),
+            root=tmp_path,
             enabled=True,
             bot_token_env="TOKEN",
             app_id_env="APP",
@@ -280,7 +281,7 @@ class TestCapabilityHelpers:
                 scope="guild",
                 guild_ids=(),
             ),
-            state_file=Path("/tmp/state.sqlite3"),
+            state_file=tmp_path / "state.sqlite3",
             intents=1,
             max_message_length=2000,
             message_overflow="split",

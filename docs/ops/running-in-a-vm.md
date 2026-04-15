@@ -8,8 +8,10 @@ Notes for running codex-autorunner inside containerized or cloud-provisioned VMs
 | Service | How to run | Notes |
 |---------|-----------|-------|
 | Web Hub (FastAPI/Uvicorn) | `make serve-dev` (port 4173) | Set `CAR_DEV_INCLUDE_ROOT_REPO=1` to include the repo itself in the hub |
-| Python tests | `make test` or `.venv/bin/python -m pytest -m "not integration"` | Uses pytest with xdist for parallel runs |
-| Linting | `make check` (full suite) or individually: `black --check`, `ruff check`, `mypy`, `pnpm lint` | See `scripts/check.sh` for the full pre-commit check sequence |
+| Python tests | `make test` or `.venv/bin/python -m pytest -m "not integration"` | Serial by default; use `-n auto` for xdist parallelism |
+| Lane-aware checks | `./scripts/check.sh` (auto-detect) or `./scripts/check.sh --lane <lane>` | Lanes: `core`, `web-ui`, `chat-apps`, `aggregate` (full) |
+| Full validation | `./scripts/check.sh --full` or `make check-full` | Runs all lanes plus extended checks |
+| Linting | `black --check src tests`, `ruff check src tests`, `make typecheck-strict` | Individual linters for targeted runs |
 | TS build | `pnpm run build` or `make build` | Compiles `src/codex_autorunner/static_src/*.ts` → `src/codex_autorunner/static/*.js`; always rebuild after TS changes |
 
 ## Startup caveats
@@ -19,9 +21,11 @@ Notes for running codex-autorunner inside containerized or cloud-provisioned VMs
 - **Dev server binding**: Use `make serve-dev HOST=0.0.0.0` (not the default `127.0.0.1`) to make the UI accessible outside the VM. Health check: `curl http://localhost:4173/health`.
 - **Process termination tests**: A few tests in `tests/test_opencode_supervisor_process_management.py` and `tests/test_process_termination.py` may fail in containerized environments due to PID namespace / signal handling constraints. These are environment-specific, not code bugs.
 - **Text delta coalescer**: `tests/unit/test_text_delta_coalescer.py::test_multibyte_unicode_newline` may occasionally error in containerized VMs. This is environment-specific.
-- **Test suite is large**: ~5500 tests run serially via `make test`. Expect 60–100 min wall time in single-core VMs. Use `-n auto` (via `scripts/check.sh`) for parallelism when available.
+- **Test suite is large**: ~6300+ tests. Run via `make test` (serial, `-m "not integration"`) or in parallel with `-n auto` (used by `scripts/check.sh`).
+- **Lane-based validation**: `scripts/check.sh` auto-detects the appropriate lane from staged files. Backend-only changes run the `core` lane (no frontend build); UI changes run `web-ui`; chat integration changes run `chat-apps`. Multi-lane or shared-risk diffs fall back to `aggregate` (full checks). Force full checks with `--full`.
+- **Tests are hermetic**: Tests use isolated temp directories (via fixtures and `tmp_path`). A guard script (`scripts/check_test_tmp_usage.py`) runs as part of the standard check flow and blocks new non-hermetic `/tmp` writable patterns in tests. Known read-only exceptions are allowlisted in `scripts/test_tmp_usage_allowlist.json`.
 - **No external services required**: SQLite is embedded (stdlib); no Postgres/Redis/Docker needed for core dev workflows.
-- **Pre-commit subset**: The pre-commit hook (`scripts/check.sh`) runs `pytest -m "not integration and not slow"`. Use the same marker set when iterating locally to match pre-commit behavior.
+- **Pre-commit subset**: The pre-commit hook (`scripts/check.sh`) runs `pytest -m "not integration and not slow"` with lane-aware scoping. Use the same marker set when iterating locally to match pre-commit behavior.
 - **Individual lint commands**: `black --check src tests`, `ruff check src tests`, `pnpm lint`, `make typecheck-strict`. The full suite is `make check`.
 
 ## Optional Docker Profile Probe

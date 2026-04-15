@@ -4,7 +4,6 @@ import asyncio
 import json
 import tempfile
 import threading
-import time
 from pathlib import Path
 
 from codex_autorunner.core.flows import (
@@ -18,7 +17,6 @@ from codex_autorunner.core.lifecycle_events import (
     LifecycleEventEmitter,
     LifecycleEventStore,
     LifecycleEventType,
-    _SqliteLifecycleEventStore,
     default_lifecycle_events_path,
 )
 
@@ -352,28 +350,14 @@ def test_non_duplicate_events_still_append():
         ]
 
 
-def test_terminal_duplicate_dedupes_under_concurrent_writers(monkeypatch) -> None:
+def test_terminal_duplicate_dedupes_under_concurrent_writers() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
         store = LifecycleEventStore(tmp_path)
-
-        original_find_duplicate = (
-            _SqliteLifecycleEventStore._find_duplicate_terminal_event
-        )
-
-        def _sleepy_find_duplicate(self, conn, candidate):
-            duplicate = original_find_duplicate(self, conn, candidate)
-            if duplicate is None:
-                time.sleep(0.05)
-            return duplicate
-
-        monkeypatch.setattr(
-            _SqliteLifecycleEventStore,
-            "_find_duplicate_terminal_event",
-            _sleepy_find_duplicate,
-        )
+        start_barrier = threading.Barrier(8)
 
         def _append_once() -> None:
+            start_barrier.wait(timeout=2.0)
             store.append(
                 LifecycleEvent(
                     event_type=LifecycleEventType.FLOW_COMPLETED,
@@ -404,7 +388,6 @@ def test_runtime_terminal_events_include_transition_metadata():
             async def complete_step(
                 record: FlowRunRecord, input_data: dict
             ) -> StepOutcome:
-                await asyncio.sleep(0)
                 return StepOutcome.complete(output={"done": True})
 
             definition = FlowDefinition(

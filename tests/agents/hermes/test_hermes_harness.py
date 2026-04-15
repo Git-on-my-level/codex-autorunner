@@ -175,10 +175,12 @@ async def test_hermes_harness_reports_capabilities_from_contract() -> None:
 
 
 @pytest.mark.asyncio
-async def test_hermes_harness_session_lifecycle_and_model_override() -> None:
+async def test_hermes_harness_session_lifecycle_and_model_override(
+    tmp_path: Path,
+) -> None:
     supervisor = _StubSupervisor()
     harness = HermesHarness(supervisor)
-    workspace_root = Path("/tmp/hermes-workspace")
+    workspace_root = tmp_path / "workspace"
 
     await harness.ensure_ready(workspace_root)
     conversation = await harness.new_conversation(workspace_root, title="Hermes Test")

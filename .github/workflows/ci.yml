@@ -7,7 +7,99 @@ on:
       - main
 
 jobs:
-  check:
+  route:
+    name: route
+    runs-on: ubuntu-latest
+    outputs:
+      lane: ${{ steps.route.outputs.lane }}
+      reason: ${{ steps.route.outputs.reason }}
+      run_core: ${{ steps.route.outputs.run_core }}
+      run_web_ui: ${{ steps.route.outputs.run_web_ui }}
+      run_chat_apps: ${{ steps.route.outputs.run_chat_apps }}
+      run_aggregate: ${{ steps.route.outputs.run_aggregate }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Resolve lane routing
+        id: route
+        run: |
+          set -euo pipefail
+          CHANGED_FILES_PATH="$RUNNER_TEMP/changed-files.txt"
+          : > "$CHANGED_FILES_PATH"
+
+          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+            if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+              git fetch --no-tags --depth=1 origin "${BASE_SHA}" || true
+            fi
+            if git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+              git diff --name-only --diff-filter=ACMR "${BASE_SHA}...HEAD" > "$CHANGED_FILES_PATH" || true
+            fi
+          elif [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            BEFORE_SHA="${{ github.event.before }}"
+            AFTER_SHA="${GITHUB_SHA}"
+            if [[ -n "${BEFORE_SHA}" && "${BEFORE_SHA}" != "0000000000000000000000000000000000000000" ]]; then
+              if ! git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null; then
+                git fetch --no-tags --depth=1 origin "${BEFORE_SHA}" || true
+              fi
+              if git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null; then
+                git diff --name-only --diff-filter=ACMR "${BEFORE_SHA}" "${AFTER_SHA}" > "$CHANGED_FILES_PATH" || true
+              fi
+            fi
+          fi
+
+          echo "Changed files for lane routing:"
+          if [[ -s "$CHANGED_FILES_PATH" ]]; then
+            cat "$CHANGED_FILES_PATH"
+          else
+            echo "(none; classifier will use aggregate fallback)"
+          fi
+
+          python scripts/select_ci_validation_jobs.py \
+            --format text \
+            --github-output "$GITHUB_OUTPUT" \
+            < "$CHANGED_FILES_PATH"
+
+  core:
+    name: core
+    needs: route
+    if: needs.route.outputs.run_core == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install Python deps
+        run: pip install -e .[dev]
+
+      - name: Run Discord interaction stress coverage
+        run: >
+          python -m pytest
+          tests/integrations/discord/test_reliability.py
+          tests/integrations/discord/test_interaction_runtime_chaos.py
+          tests/integrations/discord/test_interaction_runtime_contracts.py
+          -q
+
+      - name: Run core lane checks
+        run: ./scripts/check.sh --lane core
+
+  web-ui:
+    name: web-ui
+    needs: route
+    if: needs.route.outputs.run_web_ui == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -47,8 +139,33 @@ jobs:
           echo "pnpm install failed after 3 attempts" >&2
           exit 1
 
-      - name: Check import boundaries
-        run: python scripts/check_import_boundaries.py
+      - name: Run Discord interaction stress coverage
+        run: >
+          python -m pytest
+          tests/integrations/discord/test_reliability.py
+          tests/integrations/discord/test_interaction_runtime_chaos.py
+          tests/integrations/discord/test_interaction_runtime_contracts.py
+          -q
+
+      - name: Run web-ui lane checks
+        run: ./scripts/check.sh --lane web-ui
+
+  chat-apps:
+    name: chat-apps
+    needs: route
+    if: needs.route.outputs.run_chat_apps == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install Python deps
+        run: pip install -e .[dev]
 
       - name: Run Discord interaction stress coverage
         run: >
@@ -58,5 +175,142 @@ jobs:
           tests/integrations/discord/test_interaction_runtime_contracts.py
           -q
 
-      - name: Run checks
-        run: ./scripts/check.sh
+      - name: Run chat-apps lane checks
+        run: ./scripts/check.sh --lane chat-apps
+
+  aggregate:
+    name: aggregate
+    needs: route
+    if: needs.route.outputs.run_aggregate == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@9.15.4 --activate
+
+      - name: Install Python deps
+        run: pip install -e .[dev]
+
+      - name: Install Node deps
+        run: |
+          pnpm config set registry https://registry.npmjs.org
+          for attempt in 1 2 3; do
+            if pnpm install --frozen-lockfile; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              sleep $((attempt * 5))
+            fi
+          done
+          echo "pnpm install failed after 3 attempts" >&2
+          exit 1
+
+      - name: Run Discord interaction stress coverage
+        run: >
+          python -m pytest
+          tests/integrations/discord/test_reliability.py
+          tests/integrations/discord/test_interaction_runtime_chaos.py
+          tests/integrations/discord/test_interaction_runtime_contracts.py
+          -q
+
+      - name: Run aggregate full checks
+        run: ./scripts/check.sh --full
+
+  check:
+    name: check
+    if: always()
+    needs:
+      - route
+      - core
+      - web-ui
+      - chat-apps
+      - aggregate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Assert lane routing contract
+        run: |
+          set -euo pipefail
+
+          lane="${{ needs.route.outputs.lane }}"
+          reason="${{ needs.route.outputs.reason }}"
+          run_core="${{ needs.route.outputs.run_core }}"
+          run_web_ui="${{ needs.route.outputs.run_web_ui }}"
+          run_chat_apps="${{ needs.route.outputs.run_chat_apps }}"
+          run_aggregate="${{ needs.route.outputs.run_aggregate }}"
+
+          core_result="${{ needs.core.result }}"
+          web_ui_result="${{ needs['web-ui'].result }}"
+          chat_apps_result="${{ needs['chat-apps'].result }}"
+          aggregate_result="${{ needs.aggregate.result }}"
+
+          echo "lane=${lane}"
+          echo "reason=${reason}"
+          echo "results: core=${core_result}, web-ui=${web_ui_result}, chat-apps=${chat_apps_result}, aggregate=${aggregate_result}"
+
+          selected_count=0
+          for flag in "${run_core}" "${run_web_ui}" "${run_chat_apps}" "${run_aggregate}"; do
+            case "${flag}" in
+              true) selected_count=$((selected_count + 1)) ;;
+              false) ;;
+              *)
+                echo "Unexpected routing flag value: ${flag}" >&2
+                exit 1
+                ;;
+            esac
+          done
+          if [[ "${selected_count}" -ne 1 ]]; then
+            echo "Expected exactly one selected lane job; got ${selected_count}" >&2
+            exit 1
+          fi
+
+          case "${lane}" in
+            core)
+              [[ "${run_core}" == "true" && "${core_result}" == "success" ]] || exit 1
+              ;;
+            web-ui)
+              [[ "${run_web_ui}" == "true" && "${web_ui_result}" == "success" ]] || exit 1
+              ;;
+            chat-apps)
+              [[ "${run_chat_apps}" == "true" && "${chat_apps_result}" == "success" ]] || exit 1
+              ;;
+            aggregate)
+              [[ "${run_aggregate}" == "true" && "${aggregate_result}" == "success" ]] || exit 1
+              ;;
+            *)
+              echo "Unexpected lane output: ${lane}" >&2
+              exit 1
+              ;;
+          esac
+
+          if [[ "${run_core}" != "true" && "${core_result}" != "skipped" ]]; then
+            echo "core job should be skipped when not selected" >&2
+            exit 1
+          fi
+          if [[ "${run_web_ui}" != "true" && "${web_ui_result}" != "skipped" ]]; then
+            echo "web-ui job should be skipped when not selected" >&2
+            exit 1
+          fi
+          if [[ "${run_chat_apps}" != "true" && "${chat_apps_result}" != "skipped" ]]; then
+            echo "chat-apps job should be skipped when not selected" >&2
+            exit 1
+          fi
+          if [[ "${run_aggregate}" != "true" && "${aggregate_result}" != "skipped" ]]; then
+            echo "aggregate job should be skipped when not selected" >&2
+            exit 1
+          fi

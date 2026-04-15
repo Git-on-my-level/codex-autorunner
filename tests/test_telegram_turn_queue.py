@@ -1,5 +1,7 @@
 import asyncio
 import logging
+import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional
 
@@ -372,7 +374,7 @@ def _message(*, message_id: int, thread_id: int) -> TelegramMessage:
 
 def _record(thread_id: str) -> TelegramTopicRecord:
     return TelegramTopicRecord(
-        workspace_path="/tmp",
+        workspace_path=str(Path(tempfile.gettempdir()) / "telegram-turn-queue"),
         active_thread_id=thread_id,
         thread_ids=[thread_id],
     )
@@ -692,7 +694,9 @@ async def test_normal_opencode_turn_appends_summary_footer_after_final_response(
     wait.set()
     client = _ClientStub(turn_wait_events=[wait])
     record = TelegramTopicRecord(
-        workspace_path="/tmp",
+        workspace_path=str(
+            Path(tempfile.gettempdir()) / "telegram-turn-queue-opencode"
+        ),
         active_thread_id="thread-1",
         thread_ids=["thread-1"],
         agent="opencode",
@@ -743,7 +747,9 @@ async def test_normal_opencode_turn_drops_no_response_sentinel_when_summary_pres
     wait.set()
     client = _ClientStub(turn_wait_events=[wait])
     record = TelegramTopicRecord(
-        workspace_path="/tmp",
+        workspace_path=str(
+            Path(tempfile.gettempdir()) / "telegram-turn-queue-opencode"
+        ),
         active_thread_id="thread-1",
         thread_ids=["thread-1"],
         agent="opencode",

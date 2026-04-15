@@ -8767,7 +8767,7 @@ async def test_discord_managed_thread_queue_worker_sends_placeholder_for_empty_r
     class _Service:
         def __init__(self) -> None:
             self._spawned_tasks: list[asyncio.Task[Any]] = []
-            self._config = SimpleNamespace(root=".")
+            self._config = SimpleNamespace(root=Path("."))
 
         def _spawn_task(self, coro: Any) -> asyncio.Task[Any]:
             task = asyncio.create_task(coro)
@@ -8881,7 +8881,7 @@ async def test_discord_managed_thread_queue_worker_formats_local_file_links(
     class _Service:
         def __init__(self) -> None:
             self._spawned_tasks: list[asyncio.Task[Any]] = []
-            self._config = SimpleNamespace(root=".")
+            self._config = SimpleNamespace(root=Path("."))
 
         def _spawn_task(self, coro: Any) -> asyncio.Task[Any]:
             task = asyncio.create_task(coro)

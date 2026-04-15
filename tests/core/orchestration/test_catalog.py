@@ -14,6 +14,8 @@ from codex_autorunner.core.orchestration import (
     merge_agent_capabilities,
 )
 
+_WORKSPACE_ROOT = "/workspace/repo"
+
 
 def _make_descriptor(
     agent_id: str,
@@ -64,7 +66,7 @@ def test_build_agent_definition_preserves_registry_boundary() -> None:
     definition = build_agent_definition(
         descriptor,
         repo_id="repo-1",
-        workspace_root="/tmp/repo",
+        workspace_root=_WORKSPACE_ROOT,
         available=False,
     )
 
@@ -72,7 +74,7 @@ def test_build_agent_definition_preserves_registry_boundary() -> None:
     assert definition.runtime_kind == "codex"
     assert definition.display_name == "Codex"
     assert definition.repo_id == "repo-1"
-    assert definition.workspace_root == "/tmp/repo"
+    assert definition.workspace_root == _WORKSPACE_ROOT
     assert definition.available is False
     assert definition.capabilities == frozenset(
         ["durable_threads", "message_turns", "review"]
@@ -114,7 +116,7 @@ def test_list_and_lookup_agent_definitions_are_pma_agnostic() -> None:
     definitions = list_agent_definitions(
         descriptors,
         repo_id="repo-1",
-        workspace_root="/tmp/repo",
+        workspace_root=_WORKSPACE_ROOT,
         availability={"codex": True, "opencode": False},
         runtime_capability_reports={
             "codex": ["interrupt", "active_thread_discovery"],
@@ -133,7 +135,7 @@ def test_list_and_lookup_agent_definitions_are_pma_agnostic() -> None:
         descriptors,
         "codex",
         repo_id="repo-1",
-        workspace_root="/tmp/repo",
+        workspace_root=_WORKSPACE_ROOT,
         availability={"codex": True},
         runtime_capability_reports={
             "codex": ["interrupt", "active_thread_discovery"],
@@ -177,13 +179,13 @@ def test_build_native_target_definition_with_custom_availability() -> None:
     definition = build_native_target_definition(
         "ticket_flow",
         repo_id="repo-1",
-        workspace_root="/tmp/repo",
+        workspace_root=_WORKSPACE_ROOT,
         available=False,
     )
 
     assert definition.target_id == "ticket_flow"
     assert definition.repo_id == "repo-1"
-    assert definition.workspace_root == "/tmp/repo"
+    assert definition.workspace_root == _WORKSPACE_ROOT
     assert definition.available is False
 
 
@@ -212,7 +214,7 @@ def test_native_target_catalog_groups_targets_by_family() -> None:
 
     catalog = NativeTargetCatalog(
         repo_id="repo-1",
-        workspace_root="/tmp/repo",
+        workspace_root=_WORKSPACE_ROOT,
         availability={"ticket_flow": True, "pma": False},
     )
 

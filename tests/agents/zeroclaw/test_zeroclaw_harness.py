@@ -100,14 +100,17 @@ async def test_zeroclaw_harness_reports_capabilities_from_contract() -> None:
 
 
 @pytest.mark.asyncio
-async def test_zeroclaw_harness_creates_resumes_and_waits_for_turns() -> None:
+async def test_zeroclaw_harness_creates_resumes_and_waits_for_turns(
+    tmp_path: Path,
+) -> None:
     supervisor = _StubSupervisor()
     harness = ZeroClawHarness(supervisor)
+    workspace = tmp_path / "workspace"
 
-    conversation = await harness.new_conversation(Path("/tmp/workspace"), title="Test")
-    resumed = await harness.resume_conversation(Path("/tmp/workspace"), conversation.id)
+    conversation = await harness.new_conversation(workspace, title="Test")
+    resumed = await harness.resume_conversation(workspace, conversation.id)
     turn = await harness.start_turn(
-        Path("/tmp/workspace"),
+        workspace,
         resumed.id,
         prompt="hello",
         model="openrouter/gpt-5",
@@ -116,7 +119,7 @@ async def test_zeroclaw_harness_creates_resumes_and_waits_for_turns() -> None:
         sandbox_policy=None,
     )
     terminal = await harness.wait_for_turn(
-        Path("/tmp/workspace"),
+        workspace,
         resumed.id,
         turn.turn_id,
     )
@@ -126,23 +129,26 @@ async def test_zeroclaw_harness_creates_resumes_and_waits_for_turns() -> None:
     assert turn.turn_id == "zc-turn-1"
     assert terminal.status == "completed"
     assert terminal.assistant_text == "wrapper-backed reply"
-    assert supervisor.created == [(Path("/tmp/workspace"), "Test")]
-    assert supervisor.attached == [(Path("/tmp/workspace"), "zc-session-1")]
+    assert supervisor.created == [(workspace, "Test")]
+    assert supervisor.attached == [(workspace, "zc-session-1")]
     assert supervisor.started == [
-        (Path("/tmp/workspace"), "zc-session-1", "hello", "openrouter/gpt-5")
+        (workspace, "zc-session-1", "hello", "openrouter/gpt-5")
     ]
 
 
 @pytest.mark.asyncio
-async def test_zeroclaw_harness_lists_conversations_and_streams_events() -> None:
+async def test_zeroclaw_harness_lists_conversations_and_streams_events(
+    tmp_path: Path,
+) -> None:
     supervisor = _StubSupervisor()
     harness = ZeroClawHarness(supervisor)
+    workspace = tmp_path / "workspace"
 
-    conversations = await harness.list_conversations(Path("/tmp/workspace"))
+    conversations = await harness.list_conversations(workspace)
     events = [
         event
         async for event in harness.stream_events(
-            Path("/tmp/workspace"),
+            workspace,
             "zc-session-1",
             "zc-turn-1",
         )

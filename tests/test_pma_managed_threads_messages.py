@@ -45,6 +45,7 @@ def _enable_pma(
     reasoning: str | None = None,
     max_text_chars: int | None = None,
     managed_thread_terminal_followup_default: bool | None = None,
+    reactive_enabled: bool | None = None,
 ) -> None:
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
     cfg.setdefault("pma", {})
@@ -59,6 +60,8 @@ def _enable_pma(
         cfg["pma"][
             "managed_thread_terminal_followup_default"
         ] = managed_thread_terminal_followup_default
+    if reactive_enabled is not None:
+        cfg["pma"]["reactive_enabled"] = reactive_enabled
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
 
@@ -124,7 +127,13 @@ async def _bind_thread_to_telegram(
 
 
 def test_send_message_persists_turns_and_reuses_backend_thread(hub_env) -> None:
-    _enable_pma(hub_env.hub_root, model="model-default", reasoning="high")
+    _enable_pma(
+        hub_env.hub_root,
+        model="model-default",
+        reasoning="high",
+        reactive_enabled=False,
+        managed_thread_terminal_followup_default=False,
+    )
     app = create_hub_app(hub_env.hub_root)
 
     class FakeTurnHandle:
@@ -668,7 +677,11 @@ def test_send_message_rejects_legacy_background_alias(hub_env) -> None:
 def test_send_message_compact_seed_used_only_before_backend_thread_exists(
     hub_env,
 ) -> None:
-    _enable_pma(hub_env.hub_root)
+    _enable_pma(
+        hub_env.hub_root,
+        reactive_enabled=False,
+        managed_thread_terminal_followup_default=False,
+    )
     app = create_hub_app(hub_env.hub_root)
 
     class FakeTurnHandle:
@@ -1429,7 +1442,11 @@ def test_send_message_notifies_automation_on_failure(hub_env) -> None:
 
 
 def test_send_message_defaults_agent_from_agent_workspace_runtime(hub_env) -> None:
-    _enable_pma(hub_env.hub_root)
+    _enable_pma(
+        hub_env.hub_root,
+        reactive_enabled=False,
+        managed_thread_terminal_followup_default=False,
+    )
     app = create_hub_app(hub_env.hub_root)
     workspace = app.state.hub_supervisor.create_agent_workspace(
         workspace_id="zc-main",
