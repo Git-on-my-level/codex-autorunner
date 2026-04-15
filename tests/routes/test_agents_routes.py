@@ -9,6 +9,8 @@ from fastapi.testclient import TestClient
 from codex_autorunner.integrations.chat.agents import ChatAgentProfileOption
 from codex_autorunner.surfaces.web.routes.agents import build_agents_routes
 
+_TEST_REPO_ROOT = "/workspace/test-repo"
+
 
 def _build_client(with_supervisors: bool = False) -> TestClient:
     app = FastAPI()
@@ -19,7 +21,7 @@ def _build_client(with_supervisors: bool = False) -> TestClient:
         app.state.config = SimpleNamespace(
             agent_binary=lambda _agent_id: "zeroclaw",
         )
-        app.state.engine = SimpleNamespace(repo_root="/tmp/test-repo")
+        app.state.engine = SimpleNamespace(repo_root=_TEST_REPO_ROOT)
     app.include_router(build_agents_routes())
     return TestClient(app)
 
@@ -61,7 +63,7 @@ def test_agent_turn_events_route_preserves_resume_offset_for_codex() -> None:
 
     app = FastAPI()
     app.state.app_server_events = FakeEvents()
-    app.state.engine = SimpleNamespace(repo_root="/tmp/test-repo")
+    app.state.engine = SimpleNamespace(repo_root=_TEST_REPO_ROOT)
     app.include_router(build_agents_routes())
 
     with TestClient(app) as client:
@@ -265,7 +267,7 @@ def test_list_agents_includes_configured_profiles(monkeypatch) -> None:
         ),
         agent_default_profile=lambda agent_id: "m4" if agent_id == "hermes" else None,
     )
-    app.state.engine = SimpleNamespace(repo_root="/tmp/test-repo")
+    app.state.engine = SimpleNamespace(repo_root=_TEST_REPO_ROOT)
     app.include_router(build_agents_routes())
 
     with TestClient(app) as client:
@@ -321,7 +323,7 @@ def test_list_agents_merges_alias_only_hermes_profiles(monkeypatch) -> None:
         ),
         agent_default_profile=lambda _agent_id: None,
     )
-    app.state.engine = SimpleNamespace(repo_root="/tmp/test-repo")
+    app.state.engine = SimpleNamespace(repo_root=_TEST_REPO_ROOT)
     app.include_router(build_agents_routes())
 
     with TestClient(app) as client:

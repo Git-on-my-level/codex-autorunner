@@ -474,7 +474,7 @@ def test_runtime_protocols_match_orchestration_contract() -> None:
     thread = ThreadTarget(
         thread_target_id="thread-1",
         agent_id="codex",
-        workspace_root="/tmp/workspace",
+        workspace_root="/workspace/thread-1",
         status="running",
     )
     execution = ExecutionRecord(

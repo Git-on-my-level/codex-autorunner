@@ -184,7 +184,9 @@ def test_build_docker_container_spec_applies_user_override_for_expanded_mount_pa
     assert codex_mounts[0].read_only is True
 
 
-def test_ensure_container_running_starts_existing_stopped_container() -> None:
+def test_ensure_container_running_starts_existing_stopped_container(
+    tmp_path: Path,
+) -> None:
     calls: list[list[str]] = []
 
     def _run(cmd, **kwargs):  # type: ignore[no-untyped-def]
@@ -197,10 +199,11 @@ def test_ensure_container_running_starts_existing_stopped_container() -> None:
         raise AssertionError(f"Unexpected command: {cmd}")
 
     runtime = DockerRuntime(run_fn=_run)
+    repo_root = tmp_path / "repo"
     spec = build_docker_container_spec(
         name="demo",
         image="busybox:latest",
-        repo_root=Path("/tmp/repo"),
+        repo_root=repo_root,
     )
     runtime.ensure_container_running(spec)
     assert calls[0][:3] == ["docker", "inspect", "--format"]
@@ -257,7 +260,7 @@ def test_build_docker_container_spec_ignores_invalid_explicit_env(
     assert spec.env == {}
 
 
-def test_ensure_container_running_raises_on_run_failure() -> None:
+def test_ensure_container_running_raises_on_run_failure(tmp_path: Path) -> None:
     def _run(cmd, **kwargs):  # type: ignore[no-untyped-def]
         _ = kwargs
         if cmd[1] == "inspect":
@@ -267,10 +270,11 @@ def test_ensure_container_running_raises_on_run_failure() -> None:
         raise AssertionError(f"Unexpected command: {cmd}")
 
     runtime = DockerRuntime(run_fn=_run)
+    repo_root = tmp_path / "repo"
     spec = build_docker_container_spec(
         name="demo",
         image="does-not-exist:latest",
-        repo_root=Path("/tmp/repo"),
+        repo_root=repo_root,
     )
     with pytest.raises(DockerRuntimeError, match="Failed to create container demo"):
         runtime.ensure_container_running(spec)

@@ -25,7 +25,7 @@ async def test_channel_binding_crud(tmp_path: Path) -> None:
         await store.upsert_binding(
             channel_id="123",
             guild_id="456",
-            workspace_path="/tmp/workspace",
+            workspace_path=str(tmp_path / "workspace"),
             repo_id="repo-1",
             resource_kind="repo",
             resource_id="repo-1",
@@ -35,7 +35,7 @@ async def test_channel_binding_crud(tmp_path: Path) -> None:
         assert binding is not None
         assert binding["channel_id"] == "123"
         assert binding["guild_id"] == "456"
-        assert binding["workspace_path"] == "/tmp/workspace"
+        assert binding["workspace_path"] == str(tmp_path / "workspace")
         assert binding["repo_id"] == "repo-1"
         assert binding["resource_kind"] == "repo"
         assert binding["resource_id"] == "repo-1"
@@ -43,7 +43,7 @@ async def test_channel_binding_crud(tmp_path: Path) -> None:
         await store.upsert_binding(
             channel_id="123",
             guild_id="789",
-            workspace_path="/tmp/new-workspace",
+            workspace_path=str(tmp_path / "new-workspace"),
             repo_id=None,
             resource_kind="agent_workspace",
             resource_id="agent-workspace-1",
@@ -51,7 +51,7 @@ async def test_channel_binding_crud(tmp_path: Path) -> None:
         binding = await store.get_binding(channel_id="123")
         assert binding is not None
         assert binding["guild_id"] == "789"
-        assert binding["workspace_path"] == "/tmp/new-workspace"
+        assert binding["workspace_path"] == str(tmp_path / "new-workspace")
         assert binding["repo_id"] is None
         assert binding["resource_kind"] == "agent_workspace"
         assert binding["resource_id"] == "agent-workspace-1"
@@ -70,7 +70,7 @@ async def test_pending_compact_seed_round_trip(tmp_path: Path) -> None:
         await store.upsert_binding(
             channel_id="123",
             guild_id="456",
-            workspace_path="/tmp/workspace",
+            workspace_path=str(tmp_path / "workspace"),
             repo_id="repo-1",
         )
 

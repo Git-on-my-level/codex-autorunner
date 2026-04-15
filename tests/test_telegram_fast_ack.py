@@ -1,5 +1,7 @@
 import asyncio
 import logging
+import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional
 
@@ -178,7 +180,7 @@ def _message(*, message_id: int, thread_id: int) -> TelegramMessage:
 
 def _record(thread_id: str) -> TelegramTopicRecord:
     return TelegramTopicRecord(
-        workspace_path="/tmp",
+        workspace_path=str(Path(tempfile.gettempdir()) / "telegram-fast-ack"),
         active_thread_id=thread_id,
         thread_ids=[thread_id],
     )

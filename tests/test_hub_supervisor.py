@@ -16,6 +16,7 @@ from starlette.routing import Mount
 
 import codex_autorunner.core.hub as hub_module
 import codex_autorunner.core.hub_runner_orchestrator as orch_module
+import codex_autorunner.core.hub_topology as hub_topology_module
 import codex_autorunner.core.hub_worktree_manager as wtm_module
 from codex_autorunner.bootstrap import seed_repo_files
 from codex_autorunner.core.config import (
@@ -324,7 +325,9 @@ def test_list_repos_does_not_refresh_pma_threads_artifact(
     def _record_artifact_call(path: Path) -> None:
         calls.append(path)
 
-    monkeypatch.setattr(hub_module, "_save_pma_threads_artifact", _record_artifact_call)
+    monkeypatch.setattr(
+        hub_topology_module, "_save_pma_threads_artifact", _record_artifact_call
+    )
     try:
         supervisor.list_repos(use_cache=False)
     finally:
@@ -4159,7 +4162,9 @@ def test_build_pma_lifecycle_message(tmp_path: Path) -> None:
             data={"key": "val"},
             origin="test",
         )
-        msg = supervisor._build_pma_lifecycle_message(event, reason="auto")
+        msg = supervisor._lifecycle_router._build_lifecycle_message(  # noqa: SLF001
+            event, reason="auto"
+        )
         assert "dispatch_created" in msg
         assert "demo" in msg
         assert "reason: auto" in msg
@@ -4188,7 +4193,7 @@ def test_pma_reactive_gate_allows_by_default(tmp_path: Path) -> None:
             data=None,
             origin="test",
         )
-        allowed, reason = supervisor._pma_reactive_gate(event)
+        allowed, reason = supervisor._lifecycle_router.check_reactive_gate(event)
         assert allowed is True
         assert reason == "reactive_allowed"
     finally:
@@ -4216,7 +4221,7 @@ def test_pma_reactive_gate_blocks_disabled(tmp_path: Path) -> None:
             data=None,
             origin="test",
         )
-        allowed, reason = supervisor._pma_reactive_gate(event)
+        allowed, reason = supervisor._lifecycle_router.check_reactive_gate(event)
         assert allowed is False
         assert reason == "reactive_disabled"
     finally:
@@ -4244,7 +4249,7 @@ def test_pma_reactive_gate_blocks_origin(tmp_path: Path) -> None:
             data=None,
             origin="blocked_bot",
         )
-        allowed, reason = supervisor._pma_reactive_gate(event)
+        allowed, reason = supervisor._lifecycle_router.check_reactive_gate(event)
         assert allowed is False
         assert reason == "reactive_origin_blocked"
     finally:
@@ -4272,7 +4277,7 @@ def test_pma_reactive_gate_filters_event_types(tmp_path: Path) -> None:
             data=None,
             origin="test",
         )
-        allowed, reason = supervisor._pma_reactive_gate(event)
+        allowed, reason = supervisor._lifecycle_router.check_reactive_gate(event)
         assert allowed is False
         assert reason == "reactive_filtered"
     finally:
@@ -4342,13 +4347,13 @@ def test_load_hub_state_handles_malformed_repo_entry(tmp_path: Path) -> None:
 
 
 def test_normalize_pinned_parent_repo_ids_filters() -> None:
-    assert hub_module._normalize_pinned_parent_repo_ids(None) == []
-    assert hub_module._normalize_pinned_parent_repo_ids("not_a_list") == []
-    assert hub_module._normalize_pinned_parent_repo_ids(["a", "b", "a", "", "  "]) == [
+    assert hub_module.normalize_pinned_parent_repo_ids(None) == []
+    assert hub_module.normalize_pinned_parent_repo_ids("not_a_list") == []
+    assert hub_module.normalize_pinned_parent_repo_ids(["a", "b", "a", "", "  "]) == [
         "a",
         "b",
     ]
-    assert hub_module._normalize_pinned_parent_repo_ids([1, 2]) == []
+    assert hub_module.normalize_pinned_parent_repo_ids([1, 2]) == []
 
 
 def test_runtime_preflight_blocks_enable() -> None:
@@ -4368,21 +4373,21 @@ def test_git_failure_detail() -> None:
         stderr = " err "
         stdout = " out "
 
-    assert hub_module._git_failure_detail(_Proc()) == "err"
+    assert hub_module.git_failure_detail(_Proc()) == "err"
 
     class _Proc2:
         returncode = 2
         stderr = ""
         stdout = " out "
 
-    assert hub_module._git_failure_detail(_Proc2()) == "out"
+    assert hub_module.git_failure_detail(_Proc2()) == "out"
 
     class _Proc3:
         returncode = 3
         stderr = None
         stdout = None
 
-    assert hub_module._git_failure_detail(_Proc3()) == "exit 3"
+    assert hub_module.git_failure_detail(_Proc3()) == "exit 3"
 
 
 def test_get_agent_workspace_runtime_readiness_rejects_missing(tmp_path: Path) -> None:

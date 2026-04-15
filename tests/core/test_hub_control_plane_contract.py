@@ -441,7 +441,7 @@ async def test_http_client_uses_extended_timeout_for_workspace_setup_commands() 
 
     result = await client.run_workspace_setup_commands(
         WorkspaceSetupCommandRequest(
-            workspace_root="/tmp/workspace",
+            workspace_root="/workspace/repo-1",
             repo_id_hint="repo-1",
         )
     )
@@ -452,7 +452,7 @@ async def test_http_client_uses_extended_timeout_for_workspace_setup_commands() 
             "method": "POST",
             "path": "/hub/api/control-plane/workspace-setup-commands",
             "json": {
-                "workspace_root": "/tmp/workspace",
+                "workspace_root": "/workspace/repo-1",
                 "repo_id_hint": "repo-1",
             },
             "params": None,

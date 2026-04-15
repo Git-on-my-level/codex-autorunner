@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import tempfile
+from pathlib import Path
 from typing import Optional
 
 import pytest
@@ -111,7 +113,10 @@ def _message() -> TelegramMessage:
 
 @pytest.mark.anyio
 async def test_status_opencode_skips_rate_limits() -> None:
-    record = TelegramTopicRecord(workspace_path="/tmp", agent="opencode")
+    record = TelegramTopicRecord(
+        workspace_path=str(Path(tempfile.gettempdir()) / "telegram-status"),
+        agent="opencode",
+    )
     runtime = _RuntimeStub()
     handler = _StatusHandlerStub(record, runtime)
 
@@ -131,7 +136,10 @@ async def test_status_opencode_skips_rate_limits() -> None:
 
 @pytest.mark.anyio
 async def test_status_codex_includes_rate_limits() -> None:
-    record = TelegramTopicRecord(workspace_path="/tmp", agent="codex")
+    record = TelegramTopicRecord(
+        workspace_path=str(Path(tempfile.gettempdir()) / "telegram-status"),
+        agent="codex",
+    )
     runtime = _RuntimeStub()
     handler = _StatusHandlerStub(record, runtime, client=_RateLimitClientStub())
 

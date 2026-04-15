@@ -6,6 +6,8 @@ from fastapi.testclient import TestClient
 from codex_autorunner.flows.review.models import ReviewState, ReviewStatus
 from codex_autorunner.surfaces.web.routes.review import build_review_routes
 
+_TEST_REVIEW_RUN_DIR = "/workspace/review/run-123"
+
 
 class _ReviewServiceStub:
     def __init__(self) -> None:
@@ -13,9 +15,9 @@ class _ReviewServiceStub:
             id="run-123",
             status=ReviewStatus.RUNNING,
             agent="opencode",
-            run_dir="/tmp/review/run-123",
-            scratchpad_dir="/tmp/review/run-123/scratchpad",
-            final_output_path="/tmp/review/run-123/final_report.md",
+            run_dir=_TEST_REVIEW_RUN_DIR,
+            scratchpad_dir=f"{_TEST_REVIEW_RUN_DIR}/scratchpad",
+            final_output_path=f"{_TEST_REVIEW_RUN_DIR}/final_report.md",
             prompt_kind="code",
         )
 

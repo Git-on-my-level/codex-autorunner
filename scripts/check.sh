@@ -161,6 +161,9 @@ echo "Checking destination contract drift..."
 echo "Checking keyword contracts..."
 "$PYTHON_BIN" scripts/check_keyword_contracts.py --report-only
 
+echo "Checking test /tmp hermetic usage..."
+"$PYTHON_BIN" scripts/check_test_tmp_usage.py
+
 # --- Core lane checks --------------------------------------------------------
 if [[ "$RUN_CORE" == true ]]; then
   echo "Linting injected context hints..."

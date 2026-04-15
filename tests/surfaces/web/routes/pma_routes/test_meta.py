@@ -8,6 +8,9 @@ from fastapi.testclient import TestClient
 
 from codex_autorunner.surfaces.web.routes.pma_routes.meta import build_pma_meta_routes
 
+_TEST_HUB_ROOT = "/workspace/test-hub"
+_TEST_REPO_ROOT = "/workspace/test-repo"
+
 
 def _build_client(with_supervisors: bool = False) -> TestClient:
     app = FastAPI()
@@ -18,11 +21,11 @@ def _build_client(with_supervisors: bool = False) -> TestClient:
         app.state.opencode_supervisor = MagicMock()
         app.state.app_server_events = MagicMock()
         app.state.config = SimpleNamespace(
-            root="/tmp/test-hub",
+            root=_TEST_HUB_ROOT,
             raw={"pma": {"enabled": True}},
             agent_binary=lambda _agent_id: "zeroclaw",
         )
-        app.state.engine = SimpleNamespace(repo_root="/tmp/test-repo")
+        app.state.engine = SimpleNamespace(repo_root=_TEST_REPO_ROOT)
 
     def get_runtime_state():
         return SimpleNamespace(
@@ -127,7 +130,7 @@ def test_pma_agents_includes_profile_defaults(monkeypatch) -> None:
     app.state.opencode_supervisor = MagicMock()
     app.state.app_server_events = MagicMock()
     app.state.config = SimpleNamespace(
-        root="/tmp/test-hub",
+        root=_TEST_HUB_ROOT,
         raw={"pma": {"enabled": True, "profile": "m4"}},
         agent_binary=lambda _agent_id, profile=None: (
             "hermes" if profile else "zeroclaw"
@@ -139,7 +142,7 @@ def test_pma_agents_includes_profile_defaults(monkeypatch) -> None:
         ),
         agent_default_profile=lambda agent_id: "m4" if agent_id == "hermes" else None,
     )
-    app.state.engine = SimpleNamespace(repo_root="/tmp/test-repo")
+    app.state.engine = SimpleNamespace(repo_root=_TEST_REPO_ROOT)
 
     def get_runtime_state():
         return SimpleNamespace(
