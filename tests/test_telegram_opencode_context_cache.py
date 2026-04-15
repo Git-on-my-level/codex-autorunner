@@ -42,12 +42,12 @@ class _FakeOpenCodeListClient:
 
 
 @pytest.mark.anyio
-async def test_opencode_context_cache_scoped_by_workspace() -> None:
+async def test_opencode_context_cache_scoped_by_workspace(tmp_path: Path) -> None:
     handler = TelegramCommandHandlers()
     client = _FakeOpenCodeClient()
     model_payload = {"providerID": "provider", "modelID": "model-a"}
-    workspace_a = Path("/tmp/workspace_a")
-    workspace_b = Path("/tmp/workspace_b")
+    workspace_a = tmp_path / "workspace_a"
+    workspace_b = tmp_path / "workspace_b"
 
     context_a = await handler._resolve_opencode_model_context_window(
         client, workspace_a, model_payload
@@ -61,11 +61,11 @@ async def test_opencode_context_cache_scoped_by_workspace() -> None:
 
 
 @pytest.mark.anyio
-async def test_opencode_context_window_from_list_models() -> None:
+async def test_opencode_context_window_from_list_models(tmp_path: Path) -> None:
     handler = TelegramCommandHandlers()
     client = _FakeOpenCodeListClient()
     model_payload = {"providerID": "provider", "modelID": "model-a"}
-    workspace = Path("/tmp/workspace_list")
+    workspace = tmp_path / "workspace_list"
 
     context = await handler._resolve_opencode_model_context_window(
         client, workspace, model_payload

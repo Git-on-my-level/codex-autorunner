@@ -50,8 +50,8 @@ class TestOpenCodeBackendClose:
 
         assert backend._client is None
 
-    def test_close_returns_none_when_no_client(self) -> None:
-        backend = OpenCodeBackend(supervisor=MagicMock(), workspace_root=Path("/tmp"))
+    def test_close_returns_none_when_no_client(self, tmp_path: Path) -> None:
+        backend = OpenCodeBackend(supervisor=MagicMock(), workspace_root=tmp_path)
         assert backend._client is None
 
         result = backend.close()
@@ -69,11 +69,9 @@ class TestOpenCodeBackendClose:
         if result:
             await result
 
-    def test_close_does_not_close_supervisor(self) -> None:
+    def test_close_does_not_close_supervisor(self, tmp_path: Path) -> None:
         mock_supervisor = MagicMock(spec=OpenCodeSupervisor)
-        backend = OpenCodeBackend(
-            supervisor=mock_supervisor, workspace_root=Path("/tmp")
-        )
+        backend = OpenCodeBackend(supervisor=mock_supervisor, workspace_root=tmp_path)
 
         backend.close()
 
@@ -86,26 +84,26 @@ class TestOpenCodeBackendLifecycle:
 
         assert backend._client is not None
 
-    def test_backend_without_base_url_waits_for_supervisor(self) -> None:
+    def test_backend_without_base_url_waits_for_supervisor(
+        self, tmp_path: Path
+    ) -> None:
         mock_supervisor = MagicMock(spec=OpenCodeSupervisor)
         mock_client = _make_mock_client()
         mock_supervisor.get_client = AsyncMock(return_value=mock_client)
 
-        backend = OpenCodeBackend(
-            supervisor=mock_supervisor, workspace_root=Path("/tmp")
-        )
+        backend = OpenCodeBackend(supervisor=mock_supervisor, workspace_root=tmp_path)
 
         assert backend._client is None
 
     @pytest.mark.anyio
-    async def test_ensure_client_gets_client_from_supervisor(self) -> None:
+    async def test_ensure_client_gets_client_from_supervisor(
+        self, tmp_path: Path
+    ) -> None:
         mock_supervisor = MagicMock(spec=OpenCodeSupervisor)
         mock_client = _make_mock_client()
         mock_supervisor.get_client = AsyncMock(return_value=mock_client)
 
-        backend = OpenCodeBackend(
-            supervisor=mock_supervisor, workspace_root=Path("/tmp")
-        )
+        backend = OpenCodeBackend(supervisor=mock_supervisor, workspace_root=tmp_path)
 
         client = await backend._ensure_client()
 
@@ -149,14 +147,14 @@ class TestSafeCloseClient:
 
 
 class TestOpenCodeBackendTurnLifecycle:
-    def test_mark_turn_started_called_when_supervisor_configured(self) -> None:
+    def test_mark_turn_started_called_when_supervisor_configured(
+        self, tmp_path: Path
+    ) -> None:
         mock_supervisor = MagicMock()
         mock_supervisor.mark_turn_started = AsyncMock()
         mock_supervisor.mark_turn_finished = AsyncMock()
 
-        backend = OpenCodeBackend(
-            supervisor=mock_supervisor, workspace_root=Path("/tmp")
-        )
+        backend = OpenCodeBackend(supervisor=mock_supervisor, workspace_root=tmp_path)
 
         # Check that _mark_turn_started calls the supervisor
         import asyncio
@@ -165,14 +163,14 @@ class TestOpenCodeBackendTurnLifecycle:
 
         mock_supervisor.mark_turn_started.assert_called_once()
 
-    def test_mark_turn_finished_called_when_supervisor_configured(self) -> None:
+    def test_mark_turn_finished_called_when_supervisor_configured(
+        self, tmp_path: Path
+    ) -> None:
         mock_supervisor = MagicMock()
         mock_supervisor.mark_turn_started = AsyncMock()
         mock_supervisor.mark_turn_finished = AsyncMock()
 
-        backend = OpenCodeBackend(
-            supervisor=mock_supervisor, workspace_root=Path("/tmp")
-        )
+        backend = OpenCodeBackend(supervisor=mock_supervisor, workspace_root=tmp_path)
 
         import asyncio
 
@@ -189,14 +187,12 @@ class TestOpenCodeBackendTurnLifecycle:
         asyncio.get_event_loop().run_until_complete(backend._mark_turn_started())
         asyncio.get_event_loop().run_until_complete(backend._mark_turn_finished())
 
-    def test_ensure_client_no_cache_when_using_supervisor(self) -> None:
+    def test_ensure_client_no_cache_when_using_supervisor(self, tmp_path: Path) -> None:
         mock_supervisor = MagicMock()
         mock_client = _make_mock_client()
         mock_supervisor.get_client = AsyncMock(return_value=mock_client)
 
-        backend = OpenCodeBackend(
-            supervisor=mock_supervisor, workspace_root=Path("/tmp")
-        )
+        backend = OpenCodeBackend(supervisor=mock_supervisor, workspace_root=tmp_path)
 
         # When using supervisor, _client should remain None
         # because we always get fresh clients from supervisor
@@ -218,11 +214,11 @@ class TestOpenCodeBackendTurnLifecycle:
 
     @pytest.mark.anyio
     async def test_run_turn_events_ensures_client_before_marking_turn_started(
-        self,
+        self, tmp_path: Path
     ) -> None:
         backend = OpenCodeBackend(
             supervisor=MagicMock(),
-            workspace_root=Path("/tmp"),
+            workspace_root=tmp_path,
         )
         observed: list[str] = []
 

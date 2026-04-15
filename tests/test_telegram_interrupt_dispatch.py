@@ -86,15 +86,18 @@ class _DispatchServiceStub:
 
 
 @pytest.mark.anyio
-async def test_interrupt_uses_turn_context_topic_for_codex_workspace() -> None:
+async def test_interrupt_uses_turn_context_topic_for_codex_workspace(
+    tmp_path: Path,
+) -> None:
     codex_client = _CodexClientStub()
+    scoped_workspace = str(tmp_path / "scoped-workspace")
     records = {
         "current": SimpleNamespace(
             agent="codex", workspace_path=None, active_thread_id=None
         ),
         "scoped": SimpleNamespace(
             agent="codex",
-            workspace_path="/tmp/scoped-workspace",
+            workspace_path=scoped_workspace,
             active_thread_id="thread-scoped",
         ),
     }
@@ -119,23 +122,26 @@ async def test_interrupt_uses_turn_context_topic_for_codex_workspace() -> None:
         thread_id=456,
     )
 
-    assert service.workspace_requests == ["/tmp/scoped-workspace"]
+    assert service.workspace_requests == [scoped_workspace]
     assert codex_client.calls == [("turn-1", "thread-scoped")]
     assert service.edits == []
 
 
 @pytest.mark.anyio
-async def test_interrupt_uses_turn_context_topic_for_opencode_session() -> None:
+async def test_interrupt_uses_turn_context_topic_for_opencode_session(
+    tmp_path: Path,
+) -> None:
     codex_client = _CodexClientStub()
     opencode_client = _OpenCodeClientStub()
     opencode_supervisor = _OpenCodeSupervisorStub(opencode_client)
+    opencode_workspace = tmp_path / "opencode-workspace"
     records = {
         "current": SimpleNamespace(
             agent="codex", workspace_path=None, active_thread_id=None
         ),
         "scoped": SimpleNamespace(
             agent="opencode",
-            workspace_path="/tmp/opencode-workspace",
+            workspace_path=str(opencode_workspace),
             active_thread_id=None,
         ),
     }
@@ -162,13 +168,13 @@ async def test_interrupt_uses_turn_context_topic_for_opencode_session() -> None:
     )
 
     assert service.workspace_requests == []
-    assert opencode_supervisor.roots == [Path("/tmp/opencode-workspace")]
+    assert opencode_supervisor.roots == [opencode_workspace]
     assert opencode_client.abort_calls == ["session-from-turn"]
     assert service.edits == []
 
 
 @pytest.mark.anyio
-async def test_interrupt_uses_hub_root_for_pma_codex_topics() -> None:
+async def test_interrupt_uses_hub_root_for_pma_codex_topics(tmp_path: Path) -> None:
     codex_client = _CodexClientStub()
     records = {
         "pma": SimpleNamespace(
@@ -184,7 +190,8 @@ async def test_interrupt_uses_hub_root_for_pma_codex_topics() -> None:
         turn_ctx=SimpleNamespace(topic_key=None),
         codex_client=codex_client,
     )
-    service._hub_root = Path("/tmp/hub-root")
+    hub_root = tmp_path / "hub-root"
+    service._hub_root = hub_root
     runtime = SimpleNamespace(
         interrupt_requested=True,
         interrupt_message_id=55,
@@ -200,13 +207,13 @@ async def test_interrupt_uses_hub_root_for_pma_codex_topics() -> None:
         thread_id=456,
     )
 
-    assert service.workspace_requests == ["/tmp/hub-root"]
+    assert service.workspace_requests == [str(hub_root)]
     assert codex_client.calls == [("turn-pma", "thread-pma")]
     assert service.edits == []
 
 
 @pytest.mark.anyio
-async def test_interrupt_uses_hub_root_for_pma_opencode_topics() -> None:
+async def test_interrupt_uses_hub_root_for_pma_opencode_topics(tmp_path: Path) -> None:
     codex_client = _CodexClientStub()
     opencode_client = _OpenCodeClientStub()
     opencode_supervisor = _OpenCodeSupervisorStub(opencode_client)
@@ -225,7 +232,8 @@ async def test_interrupt_uses_hub_root_for_pma_opencode_topics() -> None:
         codex_client=codex_client,
         opencode_supervisor=opencode_supervisor,
     )
-    service._hub_root = Path("/tmp/hub-root")
+    hub_root = tmp_path / "hub-root"
+    service._hub_root = hub_root
     runtime = SimpleNamespace(
         interrupt_requested=True,
         interrupt_message_id=56,
@@ -242,6 +250,6 @@ async def test_interrupt_uses_hub_root_for_pma_opencode_topics() -> None:
     )
 
     assert service.workspace_requests == []
-    assert opencode_supervisor.roots == [Path("/tmp/hub-root")]
+    assert opencode_supervisor.roots == [hub_root]
     assert opencode_client.abort_calls == ["session-pma"]
     assert service.edits == []

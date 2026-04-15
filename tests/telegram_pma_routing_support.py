@@ -2870,18 +2870,17 @@ async def test_resolve_telegram_managed_thread_reuses_archived_thread(
     )
     orchestration_service.archive_thread_target(current_thread.thread_target_id)
 
-    (
-        _service,
-        resolved,
-    ) = await execution_commands_module._resolve_telegram_managed_thread(
-        handler,
-        surface_key="telegram:-1001:101",
-        workspace_root=workspace.resolve(),
-        agent="codex",
-        repo_id="repo-1",
-        mode="pma",
-        pma_enabled=True,
-        allow_new_thread=False,
+    _service, resolved = (
+        await execution_commands_module._resolve_telegram_managed_thread(
+            handler,
+            surface_key="telegram:-1001:101",
+            workspace_root=workspace.resolve(),
+            agent="codex",
+            repo_id="repo-1",
+            mode="pma",
+            pma_enabled=True,
+            allow_new_thread=False,
+        )
     )
     assert resolved is not None
     assert resolved.thread_target_id == current_thread.thread_target_id
@@ -4996,10 +4995,10 @@ def _patch_newt_branch_reset(
 
 
 @pytest.mark.anyio
-async def test_sync_telegram_thread_binding_archives_after_lost_backend_recovery() -> (
-    None
-):
-    workspace = Path("/tmp/telegram-recovery-workspace").resolve()
+async def test_sync_telegram_thread_binding_archives_after_lost_backend_recovery(
+    tmp_path: Path,
+) -> None:
+    workspace = (tmp_path / "workspace").resolve()
     calls: list[tuple[str, str]] = []
 
     class _FakeThreadService:
@@ -5047,21 +5046,20 @@ async def test_sync_telegram_thread_binding_archives_after_lost_backend_recovery
         ),
     )
     try:
-        (
-            _service,
-            thread,
-        ) = await execution_commands_module._sync_telegram_thread_binding(
-            handlers,
-            surface_key="topic-1",
-            workspace_root=workspace,
-            agent="codex",
-            repo_id="repo-1",
-            resource_kind="repo",
-            resource_id="repo-1",
-            backend_thread_id="backend-2",
-            mode="repo",
-            pma_enabled=False,
-            replace_existing=True,
+        _service, thread = (
+            await execution_commands_module._sync_telegram_thread_binding(
+                handlers,
+                surface_key="topic-1",
+                workspace_root=workspace,
+                agent="codex",
+                repo_id="repo-1",
+                resource_kind="repo",
+                resource_id="repo-1",
+                backend_thread_id="backend-2",
+                mode="repo",
+                pma_enabled=False,
+                replace_existing=True,
+            )
         )
     finally:
         monkeypatch.undo()
@@ -5077,8 +5075,10 @@ async def test_sync_telegram_thread_binding_archives_after_lost_backend_recovery
 
 
 @pytest.mark.anyio
-async def test_sync_telegram_thread_binding_ignores_backend_id_in_pma_mode() -> None:
-    workspace = Path("/tmp/telegram-sync-pma-workspace").resolve()
+async def test_sync_telegram_thread_binding_ignores_backend_id_in_pma_mode(
+    tmp_path: Path,
+) -> None:
+    workspace = (tmp_path / "workspace").resolve()
     calls: list[tuple[str, dict[str, Any]]] = []
 
     class _FakeThreadService:
@@ -5159,8 +5159,10 @@ async def test_sync_telegram_thread_binding_ignores_backend_id_in_pma_mode() -> 
 
 
 @pytest.mark.anyio
-async def test_sync_telegram_thread_binding_allows_missing_runtime_instance() -> None:
-    workspace = Path("/tmp/telegram-runtime-missing-workspace").resolve()
+async def test_sync_telegram_thread_binding_allows_missing_runtime_instance(
+    tmp_path: Path,
+) -> None:
+    workspace = (tmp_path / "workspace").resolve()
     calls: list[tuple[str, str, object]] = []
 
     class _FakeThreadService:
@@ -5231,10 +5233,10 @@ async def test_sync_telegram_thread_binding_allows_missing_runtime_instance() ->
 
 
 @pytest.mark.anyio
-async def test_resolve_telegram_managed_thread_allows_missing_runtime_instance() -> (
-    None
-):
-    workspace = Path("/tmp/telegram-runtime-missing-resolve-workspace").resolve()
+async def test_resolve_telegram_managed_thread_allows_missing_runtime_instance(
+    tmp_path: Path,
+) -> None:
+    workspace = (tmp_path / "workspace").resolve()
     calls: list[tuple[str, str, object]] = []
 
     class _FakeThreadService:
@@ -5308,10 +5310,10 @@ async def test_resolve_telegram_managed_thread_allows_missing_runtime_instance()
 
 
 @pytest.mark.anyio
-async def test_sync_telegram_thread_binding_rejects_rebind_when_runtime_missing() -> (
-    None
-):
-    workspace = Path("/tmp/telegram-runtime-missing-rebind-workspace").resolve()
+async def test_sync_telegram_thread_binding_rejects_rebind_when_runtime_missing(
+    tmp_path: Path,
+) -> None:
+    workspace = (tmp_path / "workspace").resolve()
     calls: list[tuple[str, str, object]] = []
 
     current_thread = SimpleNamespace(
@@ -5386,10 +5388,10 @@ async def test_sync_telegram_thread_binding_rejects_rebind_when_runtime_missing(
 
 
 @pytest.mark.anyio
-async def test_resolve_telegram_managed_thread_rejects_rebind_when_runtime_missing() -> (
-    None
-):
-    workspace = Path("/tmp/telegram-runtime-missing-resolve-rebind-workspace").resolve()
+async def test_resolve_telegram_managed_thread_rejects_rebind_when_runtime_missing(
+    tmp_path: Path,
+) -> None:
+    workspace = (tmp_path / "workspace").resolve()
     calls: list[tuple[str, str, object]] = []
 
     thread = SimpleNamespace(
@@ -5423,21 +5425,20 @@ async def test_resolve_telegram_managed_thread_rejects_rebind_when_runtime_missi
         ),
     )
     try:
-        (
-            _service,
-            resolved_thread,
-        ) = await execution_commands_module._resolve_telegram_managed_thread(
-            handlers,
-            surface_key="topic-1",
-            workspace_root=workspace,
-            agent="opencode",
-            repo_id="repo-1",
-            resource_kind="repo",
-            resource_id="repo-1",
-            mode="repo",
-            pma_enabled=False,
-            backend_thread_id="backend-new",
-            allow_new_thread=True,
+        _service, resolved_thread = (
+            await execution_commands_module._resolve_telegram_managed_thread(
+                handlers,
+                surface_key="topic-1",
+                workspace_root=workspace,
+                agent="opencode",
+                repo_id="repo-1",
+                resource_kind="repo",
+                resource_id="repo-1",
+                mode="repo",
+                pma_enabled=False,
+                backend_thread_id="backend-new",
+                allow_new_thread=True,
+            )
         )
     finally:
         monkeypatch.undo()
@@ -5451,11 +5452,11 @@ async def test_resolve_telegram_managed_thread_rejects_rebind_when_runtime_missi
 
 
 @pytest.mark.anyio
-async def test_resolve_telegram_managed_thread_keeps_requested_backend_thread_id_for_new_thread() -> (
-    None
-):
-    workspace = Path("/tmp/telegram-runtime-missing-resolve-new-workspace").resolve()
-    other_workspace = Path("/tmp/telegram-runtime-missing-existing-workspace").resolve()
+async def test_resolve_telegram_managed_thread_keeps_requested_backend_thread_id_for_new_thread(
+    tmp_path: Path,
+) -> None:
+    workspace = (tmp_path / "workspace-new").resolve()
+    other_workspace = (tmp_path / "workspace-existing").resolve()
     calls: list[tuple[str, str, object]] = []
 
     thread = SimpleNamespace(
@@ -5531,10 +5532,10 @@ async def test_resolve_telegram_managed_thread_keeps_requested_backend_thread_id
     ]
 
 
-async def test_reset_telegram_thread_binding_archives_after_lost_backend_recovery() -> (
-    None
-):
-    workspace = Path("/tmp/telegram-reset-workspace").resolve()
+async def test_reset_telegram_thread_binding_archives_after_lost_backend_recovery(
+    tmp_path: Path,
+) -> None:
+    workspace = (tmp_path / "workspace").resolve()
     calls: list[tuple[str, str]] = []
 
     class _FakeThreadService:
@@ -5582,19 +5583,18 @@ async def test_reset_telegram_thread_binding_archives_after_lost_backend_recover
         ),
     )
     try:
-        (
-            had_previous,
-            new_thread_id,
-        ) = await execution_commands_module._reset_telegram_thread_binding(
-            handlers,
-            surface_key="topic-1",
-            workspace_root=workspace,
-            agent="codex",
-            repo_id="repo-1",
-            resource_kind="repo",
-            resource_id="repo-1",
-            mode="pma",
-            pma_enabled=True,
+        had_previous, new_thread_id = (
+            await execution_commands_module._reset_telegram_thread_binding(
+                handlers,
+                surface_key="topic-1",
+                workspace_root=workspace,
+                agent="codex",
+                repo_id="repo-1",
+                resource_kind="repo",
+                resource_id="repo-1",
+                mode="pma",
+                pma_enabled=True,
+            )
         )
     finally:
         monkeypatch.undo()
@@ -5612,8 +5612,9 @@ async def test_reset_telegram_thread_binding_archives_after_lost_backend_recover
 @pytest.mark.anyio
 async def test_resume_thread_by_id_rebinds_managed_thread_before_topic_mirror_update(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
-    workspace = Path("/tmp/telegram-resume-managed-thread").resolve()
+    workspace = (tmp_path / "workspace").resolve()
     record = TelegramTopicRecord(
         agent="codex",
         workspace_path=str(workspace),
@@ -6062,6 +6063,7 @@ async def test_apply_compact_summary_preserves_pma_mode_for_replacement_thread(
 @pytest.mark.anyio
 async def test_repo_managed_thread_turn_matches_pending_compact_seed_by_managed_thread_id(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     captured_input_items: list[dict[str, Any]] | None = None
 
@@ -6134,7 +6136,7 @@ async def test_repo_managed_thread_turn_matches_pending_compact_seed_by_managed_
     )
     handler = _Handler()
     record = TelegramTopicRecord(
-        workspace_path="/tmp/workspace",
+        workspace_path=str(tmp_path / "workspace"),
         pending_compact_seed="summary seed",
         pending_compact_seed_thread_id="managed-new",
     )
@@ -6175,10 +6177,10 @@ async def test_repo_managed_thread_turn_matches_pending_compact_seed_by_managed_
 
 
 @pytest.mark.anyio
-async def test_sync_telegram_thread_binding_keeps_requested_backend_thread_id_for_replacement() -> (
-    None
-):
-    workspace = Path("/tmp/telegram-sync-runtime-missing-workspace").resolve()
+async def test_sync_telegram_thread_binding_keeps_requested_backend_thread_id_for_replacement(
+    tmp_path: Path,
+) -> None:
+    workspace = (tmp_path / "workspace").resolve()
     calls: list[tuple[str, str, object]] = []
 
     class _FakeThreadService:
@@ -7043,9 +7045,11 @@ def _make_pma_message(
 
 
 @pytest.mark.anyio
-async def test_mcp_lists_failure_message_on_app_server_response_error() -> None:
+async def test_mcp_lists_failure_message_on_app_server_response_error(
+    tmp_path: Path,
+) -> None:
     record = TelegramTopicRecord(
-        workspace_path="/tmp/workspace",
+        workspace_path=str(tmp_path / "workspace"),
         workspace_id="workspace-1",
     )
     handler = _McpHandler(

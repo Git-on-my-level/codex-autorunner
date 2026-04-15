@@ -234,8 +234,10 @@ async def test_opencode_harness_list_progress_events_warns_when_no_pending_turn(
 
 
 @pytest.mark.asyncio
-async def test_opencode_harness_exposes_backend_runtime_instance_id() -> None:
-    workspace_root = Path("/tmp/workspace").resolve()
+async def test_opencode_harness_exposes_backend_runtime_instance_id(
+    tmp_path: Path,
+) -> None:
+    workspace_root = (tmp_path / "workspace").resolve()
     supervisor = _StubSupervisor(
         _StubClient([]),
         runtime_instance_id=" opencode:scope=workspace:pid=4242 ",
@@ -354,10 +356,10 @@ async def test_opencode_harness_start_review_requires_fresh_binding_for_invalid_
 
 
 @pytest.mark.asyncio
-async def test_opencode_harness_keeps_turn_guard_through_resume_start_and_wait() -> (
-    None
-):
-    workspace = Path("/tmp/workspace").resolve()
+async def test_opencode_harness_keeps_turn_guard_through_resume_start_and_wait(
+    tmp_path: Path,
+) -> None:
+    workspace = (tmp_path / "workspace").resolve()
     client = _StubClient(
         [
             SSEEvent(
@@ -400,10 +402,10 @@ async def test_opencode_harness_keeps_turn_guard_through_resume_start_and_wait()
 
 
 @pytest.mark.asyncio
-async def test_opencode_harness_start_turn_uses_backend_turn_id_from_prompt_response() -> (
-    None
-):
-    workspace = Path("/tmp/workspace").resolve()
+async def test_opencode_harness_start_turn_uses_backend_turn_id_from_prompt_response(
+    tmp_path: Path,
+) -> None:
+    workspace = (tmp_path / "workspace").resolve()
     client = _StubClient([])
 
     async def _prompt_async(session_id: str, **kwargs: object) -> dict[str, object]:
@@ -431,10 +433,10 @@ async def test_opencode_harness_start_turn_uses_backend_turn_id_from_prompt_resp
 
 
 @pytest.mark.asyncio
-async def test_opencode_harness_start_review_uses_backend_turn_id_from_command_response() -> (
-    None
-):
-    workspace = Path("/tmp/workspace").resolve()
+async def test_opencode_harness_start_review_uses_backend_turn_id_from_command_response(
+    tmp_path: Path,
+) -> None:
+    workspace = (tmp_path / "workspace").resolve()
     client = _StubClient([])
 
     async def _send_command(session_id: str, **kwargs: object) -> dict[str, object]:
@@ -462,10 +464,10 @@ async def test_opencode_harness_start_review_uses_backend_turn_id_from_command_r
 
 
 @pytest.mark.asyncio
-async def test_opencode_harness_start_turn_returns_before_prompt_finishes_and_synthesizes_events() -> (
-    None
-):
-    workspace = Path("/tmp/workspace").resolve()
+async def test_opencode_harness_start_turn_returns_before_prompt_finishes_and_synthesizes_events(
+    tmp_path: Path,
+) -> None:
+    workspace = (tmp_path / "workspace").resolve()
     client = _StubClient([])
     release_prompt = asyncio.Event()
 
@@ -520,8 +522,9 @@ async def test_opencode_harness_start_turn_returns_before_prompt_finishes_and_sy
 @pytest.mark.asyncio
 async def test_opencode_harness_polls_messages_for_rich_progress_when_sse_is_silent(
     monkeypatch,
+    tmp_path: Path,
 ) -> None:
-    workspace = Path("/tmp/workspace").resolve()
+    workspace = (tmp_path / "workspace").resolve()
     client = _StubClient([])
     release_prompt = asyncio.Event()
 
@@ -650,8 +653,9 @@ async def test_opencode_harness_polls_messages_for_rich_progress_when_sse_is_sil
 @pytest.mark.asyncio
 async def test_opencode_harness_polls_messages_when_preconnected_stream_only_has_keepalives_and_busy(
     monkeypatch,
+    tmp_path: Path,
 ) -> None:
-    workspace = Path("/tmp/workspace").resolve()
+    workspace = (tmp_path / "workspace").resolve()
     client = _StubClient(
         [
             SSEEvent(event="server.connected", data='{"type":"server.connected"}'),
@@ -764,10 +768,10 @@ async def test_opencode_harness_polls_messages_when_preconnected_stream_only_has
 
 
 @pytest.mark.asyncio
-async def test_opencode_harness_releases_reserved_turn_when_start_turn_setup_fails() -> (
-    None
-):
-    workspace = Path("/tmp/workspace").resolve()
+async def test_opencode_harness_releases_reserved_turn_when_start_turn_setup_fails(
+    tmp_path: Path,
+) -> None:
+    workspace = (tmp_path / "workspace").resolve()
     supervisor = _StubSupervisor(_StubClient([]))
     harness = OpenCodeHarness(supervisor)
 
@@ -822,10 +826,12 @@ async def test_opencode_harness_wait_for_turn_collects_plain_text_output() -> No
 @pytest.mark.asyncio
 async def test_opencode_harness_wait_for_turn_resolves_stall_timeout_per_workspace(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     client = _StubClient([])
     supervisor = _StubSupervisor(client, session_stall_timeout_seconds=17.0)
     harness = OpenCodeHarness(supervisor)
+    workspace = (tmp_path / "workspace").resolve()
     captured: dict[str, object] = {}
 
     async def _fake_collect(*args: object, **kwargs: object) -> object:
@@ -842,7 +848,7 @@ async def test_opencode_harness_wait_for_turn_resolves_stall_timeout_per_workspa
     )
 
     turn = await harness.start_turn(
-        Path("/tmp/workspace"),
+        workspace,
         "session-1",
         prompt="hello",
         model=None,
@@ -852,7 +858,7 @@ async def test_opencode_harness_wait_for_turn_resolves_stall_timeout_per_workspa
     )
 
     result = await harness.wait_for_turn(
-        Path("/tmp/workspace"),
+        workspace,
         "session-1",
         turn.turn_id,
     )
@@ -861,7 +867,7 @@ async def test_opencode_harness_wait_for_turn_resolves_stall_timeout_per_workspa
     assert result.assistant_text == "done"
     assert captured["stall_timeout_seconds"] == 17.0
     assert captured["first_event_timeout_seconds"] == 17.0
-    assert supervisor.timeout_workspace_roots == [Path("/tmp/workspace").resolve()]
+    assert supervisor.timeout_workspace_roots == [workspace]
 
 
 @pytest.mark.asyncio
@@ -929,10 +935,10 @@ async def test_opencode_harness_wait_for_turn_uses_stream_output_over_commentary
 
 
 @pytest.mark.asyncio
-async def test_opencode_harness_progress_event_stream_reuses_pending_turn_collector() -> (
-    None
-):
-    workspace = Path("/tmp/workspace").resolve()
+async def test_opencode_harness_progress_event_stream_reuses_pending_turn_collector(
+    tmp_path: Path,
+) -> None:
+    workspace = (tmp_path / "workspace").resolve()
     client = _StubClient(
         [
             SSEEvent(
@@ -979,10 +985,10 @@ async def test_opencode_harness_progress_event_stream_reuses_pending_turn_collec
 
 
 @pytest.mark.asyncio
-async def test_opencode_harness_progress_event_stream_accepts_nested_item_session_id() -> (
-    None
-):
-    workspace = Path("/tmp/workspace").resolve()
+async def test_opencode_harness_progress_event_stream_accepts_nested_item_session_id(
+    tmp_path: Path,
+) -> None:
+    workspace = (tmp_path / "workspace").resolve()
     client = _StubClient(
         [
             SSEEvent(
@@ -1032,8 +1038,9 @@ async def test_opencode_harness_progress_event_stream_accepts_nested_item_sessio
 @pytest.mark.asyncio
 async def test_opencode_harness_publishes_progress_events_without_session_id(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
-    workspace = Path("/tmp/workspace").resolve()
+    workspace = (tmp_path / "workspace").resolve()
     client = _StubClient(
         [
             SSEEvent(
@@ -1082,10 +1089,10 @@ async def test_opencode_harness_publishes_progress_events_without_session_id(
 
 
 @pytest.mark.asyncio
-async def test_opencode_harness_progress_event_stream_replays_buffer_before_live_events() -> (
-    None
-):
-    workspace = Path("/tmp/workspace").resolve()
+async def test_opencode_harness_progress_event_stream_replays_buffer_before_live_events(
+    tmp_path: Path,
+) -> None:
+    workspace = (tmp_path / "workspace").resolve()
     harness = OpenCodeHarness(_StubSupervisor(_StubClient([])))
 
     turn = await harness.start_turn(
@@ -1125,16 +1132,17 @@ async def test_opencode_harness_progress_event_stream_replays_buffer_before_live
 
 
 @pytest.mark.asyncio
-async def test_opencode_harness_progress_event_stream_is_empty_after_pending_turn_cleanup() -> (
-    None
-):
+async def test_opencode_harness_progress_event_stream_is_empty_after_pending_turn_cleanup(
+    tmp_path: Path,
+) -> None:
     harness = OpenCodeHarness(_StubSupervisor(_StubClient([])))
+    workspace = (tmp_path / "workspace").resolve()
 
     streamed = [
         raw_event
         async for raw_event in harness_progress_event_stream(
             harness,
-            Path("/tmp/workspace").resolve(),
+            workspace,
             "session-1",
             "turn-1",
         )
@@ -1150,8 +1158,10 @@ async def test_opencode_harness_list_progress_events_empty_without_pending() -> 
 
 
 @pytest.mark.asyncio
-async def test_opencode_harness_list_progress_events_returns_buffered_copy() -> None:
-    workspace = Path("/tmp/workspace").resolve()
+async def test_opencode_harness_list_progress_events_returns_buffered_copy(
+    tmp_path: Path,
+) -> None:
+    workspace = (tmp_path / "workspace").resolve()
     harness = OpenCodeHarness(_StubSupervisor(_StubClient([])))
     turn = await harness.start_turn(
         workspace,
@@ -1174,10 +1184,10 @@ async def test_opencode_harness_list_progress_events_returns_buffered_copy() -> 
 
 
 @pytest.mark.asyncio
-async def test_opencode_harness_wait_for_turn_uses_session_scoped_event_stream() -> (
-    None
-):
-    workspace = Path("/tmp/workspace").resolve()
+async def test_opencode_harness_wait_for_turn_uses_session_scoped_event_stream(
+    tmp_path: Path,
+) -> None:
+    workspace = (tmp_path / "workspace").resolve()
 
     class _SessionScopedClient(_StubClient):
         async def stream_events(
@@ -1235,10 +1245,10 @@ async def test_opencode_harness_wait_for_turn_uses_session_scoped_event_stream()
 
 
 @pytest.mark.asyncio
-async def test_opencode_harness_stream_events_uses_session_scoped_event_stream() -> (
-    None
-):
-    workspace = Path("/tmp/workspace").resolve()
+async def test_opencode_harness_stream_events_uses_session_scoped_event_stream(
+    tmp_path: Path,
+) -> None:
+    workspace = (tmp_path / "workspace").resolve()
     client = _StubClient(
         [
             SSEEvent(
@@ -1574,18 +1584,22 @@ async def test_opencode_harness_wait_for_turn_recovers_late_disconnect_after_idl
 
 
 @pytest.mark.asyncio
-async def test_opencode_harness_repo_scoped_turn_rejects_out_of_workspace_permission() -> (
-    None
-):
-    workspace = Path("/tmp/workspace").resolve()
+async def test_opencode_harness_repo_scoped_turn_rejects_out_of_workspace_permission(
+    tmp_path: Path,
+) -> None:
+    workspace = (tmp_path / "workspace").resolve()
+    outside_dir = str(workspace.parent / "elsewhere")
+    outside_file = str(workspace.parent / "elsewhere" / "file.py")
     client = _StubClient(
         [
             SSEEvent(
                 event="permission.asked",
                 data=(
                     '{"sessionID":"session-1","properties":{"id":"perm-1",'
-                    '"permission":"external_directory","patterns":["/tmp/elsewhere/*"],'
-                    '"metadata":{"filepath":"/tmp/elsewhere/file.py"}}}'
+                    '"permission":"external_directory","patterns":["'
+                    + outside_dir
+                    + '/*"],'
+                    '"metadata":{"filepath":"' + outside_file + '"}}}'
                 ),
             ),
             SSEEvent(
@@ -1612,10 +1626,10 @@ async def test_opencode_harness_repo_scoped_turn_rejects_out_of_workspace_permis
 
 
 @pytest.mark.asyncio
-async def test_opencode_harness_repo_scoped_turn_allows_in_workspace_permission() -> (
-    None
-):
-    workspace = Path("/tmp/workspace").resolve()
+async def test_opencode_harness_repo_scoped_turn_allows_in_workspace_permission(
+    tmp_path: Path,
+) -> None:
+    workspace = (tmp_path / "workspace").resolve()
     client = _StubClient(
         [
             SSEEvent(
@@ -1650,8 +1664,10 @@ async def test_opencode_harness_repo_scoped_turn_allows_in_workspace_permission(
 
 
 @pytest.mark.asyncio
-async def test_opencode_harness_noninteractive_turn_rejects_questions() -> None:
-    workspace = Path("/tmp/workspace").resolve()
+async def test_opencode_harness_noninteractive_turn_rejects_questions(
+    tmp_path: Path,
+) -> None:
+    workspace = (tmp_path / "workspace").resolve()
     client = _StubClient(
         [
             SSEEvent(
@@ -1685,10 +1701,12 @@ async def test_opencode_harness_noninteractive_turn_rejects_questions() -> None:
 
 
 @pytest.mark.asyncio
-async def test_opencode_harness_stream_events_yields_sessionless_events() -> None:
+async def test_opencode_harness_stream_events_yields_sessionless_events(
+    tmp_path: Path,
+) -> None:
     """stream_events() should yield events that lack a sessionID instead of
     dropping them."""
-    workspace = Path("/tmp/workspace").resolve()
+    workspace = (tmp_path / "workspace").resolve()
     client = _StubClient(
         [
             SSEEvent(
@@ -1726,12 +1744,12 @@ async def test_opencode_harness_stream_events_yields_sessionless_events() -> Non
 
 
 @pytest.mark.asyncio
-async def test_opencode_harness_wait_for_turn_recovers_sessionless_roleless_text() -> (
-    None
-):
+async def test_opencode_harness_wait_for_turn_recovers_sessionless_roleless_text(
+    tmp_path: Path,
+) -> None:
     """wait_for_turn() should recover final text from a sessionless,
     roleless message.completed when the text differs from the prompt."""
-    workspace = Path("/tmp/workspace").resolve()
+    workspace = (tmp_path / "workspace").resolve()
     client = _StubClient(
         [
             SSEEvent(
@@ -1761,10 +1779,10 @@ async def test_opencode_harness_wait_for_turn_recovers_sessionless_roleless_text
 
 
 @pytest.mark.asyncio
-async def test_opencode_harness_wait_for_turn_recovers_final_text_from_session_messages() -> (
-    None
-):
-    workspace = Path("/tmp/workspace").resolve()
+async def test_opencode_harness_wait_for_turn_recovers_final_text_from_session_messages(
+    tmp_path: Path,
+) -> None:
+    workspace = (tmp_path / "workspace").resolve()
     client = _StubClient(
         [
             SSEEvent(
@@ -1802,18 +1820,21 @@ async def test_opencode_harness_wait_for_turn_recovers_final_text_from_session_m
 
 
 @pytest.mark.asyncio
-async def test_opencode_harness_managed_turn_auto_approves_child_session_permission() -> (
-    None
-):
-    workspace = Path("/tmp/workspace").resolve()
+async def test_opencode_harness_managed_turn_auto_approves_child_session_permission(
+    tmp_path: Path,
+) -> None:
+    workspace = (tmp_path / "workspace").resolve()
+    _tests_diff = str(workspace.parent / "tests_diff.txt")
     client = _StubClient(
         [
             SSEEvent(
                 event="permission.asked",
                 data=(
                     '{"sessionID":"child-1","properties":{"id":"perm-1",'
-                    '"permission":"external_directory","patterns":["/tmp/tests_diff.txt"],'
-                    '"metadata":{"filepath":"/tmp/tests_diff.txt"}}}'
+                    '"permission":"external_directory","patterns":["'
+                    + _tests_diff
+                    + '"],'
+                    '"metadata":{"filepath":"' + _tests_diff + '"}}}'
                 ),
             ),
             SSEEvent(
@@ -1845,10 +1866,10 @@ async def test_opencode_harness_managed_turn_auto_approves_child_session_permiss
 
 
 @pytest.mark.asyncio
-async def test_opencode_harness_rewrites_child_text_parts_into_accumulated_thinking() -> (
-    None
-):
-    workspace = Path("/tmp/workspace").resolve()
+async def test_opencode_harness_rewrites_child_text_parts_into_accumulated_thinking(
+    tmp_path: Path,
+) -> None:
+    workspace = (tmp_path / "workspace").resolve()
     client = _StubClient(
         [
             SSEEvent(
@@ -1937,10 +1958,10 @@ async def test_opencode_harness_rewrites_child_text_parts_into_accumulated_think
 
 
 @pytest.mark.asyncio
-async def test_opencode_harness_rewrites_child_agent_messages_without_polluting_final_output() -> (
-    None
-):
-    workspace = Path("/tmp/workspace").resolve()
+async def test_opencode_harness_rewrites_child_agent_messages_without_polluting_final_output(
+    tmp_path: Path,
+) -> None:
+    workspace = (tmp_path / "workspace").resolve()
     client = _StubClient(
         [
             SSEEvent(
