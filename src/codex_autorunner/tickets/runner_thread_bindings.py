@@ -43,6 +43,55 @@ def _persist_ticket_thread_bindings(
         state.pop(TICKET_THREAD_BINDINGS_KEY, None)
 
 
+def validate_lint_retry_conversation_id(
+    *,
+    lint_state: dict[str, Any],
+    conversation_id: Optional[str],
+    current_ticket_path: str,
+    current_ticket_id: str,
+    canonical_agent_id: str,
+    current_ticket_profile: Optional[str],
+) -> Optional[str]:
+    if conversation_id is None:
+        return None
+    lint_retry_ticket_path = lint_state.get("ticket_path")
+    lint_retry_ticket_id = lint_state.get("ticket_id")
+    lint_retry_agent_id = normalize_profile(lint_state.get("agent_id"))
+    lint_retry_profile = normalize_profile(lint_state.get("profile"))
+    if (
+        (
+            isinstance(lint_retry_ticket_path, str)
+            and lint_retry_ticket_path != current_ticket_path
+        )
+        or (
+            isinstance(lint_retry_ticket_id, str)
+            and current_ticket_id != "lint-retry-ticket"
+            and lint_retry_ticket_id != current_ticket_id
+        )
+        or (
+            lint_retry_agent_id is not None
+            and lint_retry_agent_id != canonical_agent_id
+        )
+        or ("profile" in lint_state and lint_retry_profile != current_ticket_profile)
+    ):
+        return None
+    return conversation_id
+
+
+def clear_previous_ticket_binding(
+    state: dict[str, Any],
+    *,
+    previous_ticket_id: Optional[str],
+    current_ticket_id: str,
+) -> None:
+    if previous_ticket_id and previous_ticket_id != current_ticket_id:
+        clear_ticket_thread_binding(
+            state,
+            ticket_id=previous_ticket_id,
+            reason="ticket_changed",
+        )
+
+
 def _set_ticket_thread_debug(state: dict[str, Any], **payload: Any) -> None:
     cleaned = {key: value for key, value in payload.items() if value is not None}
     if cleaned:

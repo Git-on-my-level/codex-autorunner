@@ -50,8 +50,10 @@ from .runner_step_support import (
     record_turn_runtime_state,
 )
 from .runner_thread_bindings import (
+    clear_previous_ticket_binding,
     clear_ticket_thread_binding,
     normalize_profile,
+    validate_lint_retry_conversation_id,
 )
 
 _is_network_error = is_network_error
@@ -263,37 +265,19 @@ class TicketRunner:
         )
         current_ticket_profile = canonical.profile
         canonical_agent_id = canonical.agent
-        lint_retry_ticket_id = lint_state.get("ticket_id")
-        lint_retry_ticket_path = lint_state.get("ticket_path")
-        lint_retry_agent_id = normalize_profile(lint_state.get("agent_id"))
-        lint_retry_profile = normalize_profile(lint_state.get("profile"))
-        if lint_retry_conversation_id is not None:
-            if (
-                (
-                    isinstance(lint_retry_ticket_path, str)
-                    and lint_retry_ticket_path != current_ticket_path
-                )
-                or (
-                    isinstance(lint_retry_ticket_id, str)
-                    and current_ticket_id != "lint-retry-ticket"
-                    and lint_retry_ticket_id != current_ticket_id
-                )
-                or (
-                    lint_retry_agent_id is not None
-                    and lint_retry_agent_id != canonical_agent_id
-                )
-                or (
-                    "profile" in lint_state
-                    and lint_retry_profile != current_ticket_profile
-                )
-            ):
-                lint_retry_conversation_id = None
-        if previous_ticket_id and previous_ticket_id != current_ticket_id:
-            clear_ticket_thread_binding(
-                state,
-                ticket_id=previous_ticket_id,
-                reason="ticket_changed",
-            )
+        lint_retry_conversation_id = validate_lint_retry_conversation_id(
+            lint_state=lint_state,
+            conversation_id=lint_retry_conversation_id,
+            current_ticket_path=current_ticket_path,
+            current_ticket_id=current_ticket_id,
+            canonical_agent_id=canonical_agent_id,
+            current_ticket_profile=current_ticket_profile,
+        )
+        clear_previous_ticket_binding(
+            state,
+            previous_ticket_id=previous_ticket_id,
+            current_ticket_id=current_ticket_id,
+        )
         if validation_result.validated.skip_execution:
             return TicketResult(status="continue", state=state)
 
