@@ -9,105 +9,26 @@ Ensure tests always import the in-repo code.
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import importlib
 import json
 import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 import yaml
 
+from tests.support.hermetic_roots import HermeticTestRoots
+
 DEFAULT_NON_INTEGRATION_TIMEOUT_SECONDS = 30
 DEFAULT_INTEGRATION_TIMEOUT_SECONDS = 30
 _OPENCODE_PROCESS_KIND = "opencode"
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-_PYTEST_RUNTIME_KEY = hashlib.sha1(
-    str(_REPO_ROOT.expanduser().resolve(strict=False)).encode("utf-8")
-).hexdigest()[:10]
-_PYTEST_OPENCODE_STATE_ROOT = _REPO_ROOT / ".codex-autorunner" / "pytest-opencode-state"
-_PYTEST_RUN_TOKEN = os.environ.setdefault("CAR_PYTEST_RUN_TOKEN", uuid.uuid4().hex[:8])
-_PYTEST_TEMP_ROOT_MAX_BYTES = int(
-    os.environ.get("CAR_PYTEST_TEMP_ROOT_MAX_BYTES", str(5 * 1024 * 1024 * 1024))
-)
+_HERMETIC_ROOTS = HermeticTestRoots.from_repo_root(_REPO_ROOT)
 os.environ.setdefault("CODEX_DISABLE_APP_SERVER_AUTORESTART_FOR_TESTS", "1")
-
-
-def _pytest_process_token() -> str:
-    worker_id = os.environ.get("PYTEST_XDIST_WORKER")
-    if worker_id:
-        return worker_id
-    return f"p{os.getpid():x}"
-
-
-def _pytest_temp_env_root() -> Path:
-    return _pytest_temp_run_root() / _pytest_process_token()
-
-
-def _pytest_temp_run_root() -> Path:
-    return _PYTEST_TEMP_ROOT / _PYTEST_RUN_TOKEN
-
-
-def _pytest_global_state_root() -> Path:
-    return _PYTEST_OPENCODE_STATE_ROOT / _PYTEST_RUN_TOKEN / _pytest_process_token()
-
-
-def _load_pytest_temp_cleanup_module():
-    src_dir = _REPO_ROOT / "src"
-    src_path = str(src_dir)
-    if sys.path[:1] != [src_path] and src_path not in sys.path:
-        sys.path.insert(0, src_path)
-    return importlib.import_module("codex_autorunner.core.pytest_temp_cleanup")
-
-
-def _system_temp_root() -> Path:
-    cleanup_module = _load_pytest_temp_cleanup_module()
-    return cleanup_module.system_temp_root()
-
-
-def _prepare_repo_local_tmpdir() -> None:
-    temp_root = _pytest_temp_env_root()
-    temp_root.mkdir(parents=True, exist_ok=True)
-    for key in ("TMPDIR", "TMP", "TEMP"):
-        os.environ[key] = str(temp_root)
-    tempfile.tempdir = None
-
-
-_PYTEST_RUNTIME_ROOT = _system_temp_root() / f"cp-{_PYTEST_RUNTIME_KEY}"
-_PYTEST_TEMP_ROOT = _PYTEST_RUNTIME_ROOT / "t"
-
-
-def _prune_old_runtime_dirs(
-    root: Path, *, keep: set[str], max_age_seconds: int
-) -> None:
-    if not root.exists():
-        return
-    cutoff = time.time() - max_age_seconds
-    for path in root.iterdir():
-        if path.name in keep:
-            continue
-        try:
-            if path.stat().st_mtime >= cutoff:
-                continue
-        except OSError:
-            continue
-        shutil.rmtree(path, ignore_errors=True)
-
-
-def _prune_inactive_pytest_temp_runs(*, keep: set[str]) -> None:
-    cleanup_module = _load_pytest_temp_cleanup_module()
-    cleanup_module.cleanup_repo_pytest_temp_runs(
-        _REPO_ROOT,
-        keep_run_tokens=keep,
-        min_age_seconds=300,
-    )
 
 
 def _format_temp_processes(processes: tuple[object, ...]) -> str:
@@ -126,11 +47,9 @@ def _format_temp_processes(processes: tuple[object, ...]) -> str:
     return "; ".join(parts)
 
 
-_prepare_repo_local_tmpdir()
-_prune_inactive_pytest_temp_runs(keep={_PYTEST_RUN_TOKEN})
-_prune_old_runtime_dirs(
-    _PYTEST_OPENCODE_STATE_ROOT, keep={_PYTEST_RUN_TOKEN}, max_age_seconds=86400
-)
+_HERMETIC_ROOTS.prepare_process_environment()
+_HERMETIC_ROOTS.prune_inactive_pytest_temp_runs(min_age_seconds=300.0)
+_HERMETIC_ROOTS.prune_old_opencode_state_runs(max_age_seconds=86400)
 
 
 _ORIGINAL_UNRAISABLE_HOOK = sys.unraisablehook
@@ -151,6 +70,11 @@ sys.unraisablehook = _silence_event_loop_closed_unraisable
 def write_test_config(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+
+
+@pytest.fixture(scope="session")
+def hermetic_roots() -> HermeticTestRoots:
+    return _HERMETIC_ROOTS
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -592,13 +516,17 @@ def docker_managed_cleanup(request: pytest.FixtureRequest) -> None:
 
 @pytest.fixture(autouse=True)
 def _configure_opencode_global_state_root(
-    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+    hermetic_roots: HermeticTestRoots,
 ) -> None:
     node_path = str(getattr(request.node, "path", request.node.nodeid))
     if "opencode" not in node_path:
         yield
         return
-    monkeypatch.setenv("CAR_GLOBAL_STATE_ROOT", str(_pytest_global_state_root()))
+    monkeypatch.setenv(
+        "CAR_GLOBAL_STATE_ROOT", str(hermetic_roots.pytest_global_state_root)
+    )
     yield
 
 
@@ -622,22 +550,18 @@ def _cleanup_codex_app_server_clients(_cleanup_pytest_temp_runs_session) -> None
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _cleanup_opencode_processes_session(_cleanup_pytest_temp_runs_session) -> None:
+def _cleanup_opencode_processes_session(
+    _cleanup_pytest_temp_runs_session, hermetic_roots: HermeticTestRoots
+) -> None:
     """
     Reap stale prior-run OpenCode records and fail if this run leaks any.
     """
-    prior_state_roots = (
-        {
-            path
-            for path in _PYTEST_OPENCODE_STATE_ROOT.iterdir()
-            if path.is_dir() and path.name != _PYTEST_RUN_TOKEN
-        }
-        if _PYTEST_OPENCODE_STATE_ROOT.exists()
-        else set()
-    )
+    prior_state_roots = hermetic_roots.prior_state_run_roots()
     _reap_opencode_processes(prior_state_roots, force=False)
     yield
-    failures = _reap_opencode_processes({_pytest_global_state_root()}, force=True)
+    failures = _reap_opencode_processes(
+        {hermetic_roots.pytest_global_state_root}, force=True
+    )
     if failures:
         raise AssertionError(
             "Leaked OpenCode managed processes remained after the test session: "
@@ -646,10 +570,10 @@ def _cleanup_opencode_processes_session(_cleanup_pytest_temp_runs_session) -> No
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _cleanup_pytest_temp_runs_session() -> None:
+def _cleanup_pytest_temp_runs_session(hermetic_roots: HermeticTestRoots) -> None:
     yield
-    cleanup_module = _load_pytest_temp_cleanup_module()
-    env_root = _pytest_temp_env_root()
+    cleanup_module = hermetic_roots.load_pytest_temp_cleanup_module()
+    env_root = hermetic_roots.pytest_process_root
     summary = cleanup_module.cleanup_temp_paths((env_root,))
     if env_root.exists() and not summary.active_paths:
         for _attempt in range(3):
@@ -668,11 +592,11 @@ def _cleanup_pytest_temp_runs_session() -> None:
         )
     if summary.failed_paths:
         failures.append("; ".join(summary.failed_paths))
-    if summary.bytes_before > _PYTEST_TEMP_ROOT_MAX_BYTES:
+    if summary.bytes_before > hermetic_roots.temp_root_max_bytes:
         gib = summary.bytes_before / float(1024**3)
         failures.append(
             "pytest temp root exceeded size guard "
-            f"({gib:.2f} GiB > {_PYTEST_TEMP_ROOT_MAX_BYTES / float(1024**3):.2f} GiB)"
+            f"({gib:.2f} GiB > {hermetic_roots.temp_root_max_bytes / float(1024**3):.2f} GiB)"
         )
     if env_root.exists():
         failures.append(f"pytest temp env root still exists after cleanup: {env_root}")
@@ -727,9 +651,11 @@ async def _cleanup_codex_app_server_clients_per_test() -> None:
 
 
 @pytest.fixture(autouse=True)
-def _cleanup_opencode_processes_per_test(request: pytest.FixtureRequest) -> None:
+def _cleanup_opencode_processes_per_test(
+    request: pytest.FixtureRequest, hermetic_roots: HermeticTestRoots
+) -> None:
     yield
-    roots = {_pytest_global_state_root()}
+    roots = {hermetic_roots.pytest_global_state_root}
     tmp_path = request.node.funcargs.get("tmp_path")
     if tmp_path is not None:
         roots.update(_iter_opencode_registry_roots(tmp_path))
