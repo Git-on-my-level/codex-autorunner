@@ -55,3 +55,22 @@ def test_select_validation_lane_script_text_output_from_stdin() -> None:
             "shared_risk_paths: scripts/check.sh",
         ]
     )
+
+
+def test_select_validation_lane_script_runs_without_site_packages() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-S",
+            str(_script_path()),
+            "--format",
+            "json",
+            "src/codex_autorunner/core/update_targets.py",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["lane"] == "core"

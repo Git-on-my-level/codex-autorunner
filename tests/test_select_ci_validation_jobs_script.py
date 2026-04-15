@@ -74,3 +74,22 @@ def test_select_ci_validation_jobs_script_writes_github_outputs(tmp_path: Path) 
         "run_chat_apps": "false",
         "run_aggregate": "true",
     }
+
+
+def test_select_ci_validation_jobs_script_runs_without_site_packages() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-S",
+            str(_script_path()),
+            "--format",
+            "json",
+            ".github/workflows/ci.yml",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["lane"] == "aggregate"
