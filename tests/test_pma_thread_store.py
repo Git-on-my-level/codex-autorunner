@@ -724,6 +724,44 @@ def test_get_running_turn_uses_read_only_status_path(
     assert fetched["status"] == "running"
 
 
+def test_get_running_turn_hides_logically_stale_running_rows_without_writing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = PmaThreadStore(tmp_path / "hub")
+    thread = store.create_thread("codex", tmp_path / "workspace")
+    running_turn = store.create_turn(thread["managed_thread_id"], prompt="first")
+
+    with store._write_conn() as conn:
+        with conn:
+            conn.execute(
+                """
+                UPDATE orch_thread_targets
+                   SET status_turn_id = ?,
+                       updated_at = ?
+                 WHERE thread_target_id = ?
+                """,
+                (
+                    "different-execution",
+                    running_turn["started_at"],
+                    thread["managed_thread_id"],
+                ),
+            )
+
+    def _fail_write_conn():  # type: ignore[no-untyped-def]
+        raise AssertionError("passive running-turn lookup should not write")
+
+    monkeypatch.setattr(store, "_write_conn", _fail_write_conn)
+
+    assert store.get_running_turn(thread["managed_thread_id"]) is None
+
+    stale_row = store.get_turn(
+        thread["managed_thread_id"], running_turn["managed_turn_id"]
+    )
+    assert stale_row is not None
+    assert stale_row["status"] == "running"
+
+
 def test_claim_next_queued_turn_recovers_old_running_execution_when_status_turn_matches(
     tmp_path: Path,
 ) -> None:
