@@ -236,6 +236,7 @@ async def _dispatch_callback(
         thread_id=callback.thread_id,
         message_id=callback.message_id,
         operation_id=operation_id,
+        ux_entry=callback_ux,
         logger=handlers._logger if hasattr(handlers, "_logger") else None,
     )
 

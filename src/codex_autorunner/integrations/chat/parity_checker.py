@@ -18,25 +18,6 @@ from .action_ux_contract import (
     telegram_callback_ux_contract_for_callback,
     telegram_command_ux_contract_for_name,
 )
-from .callbacks import (
-    CALLBACK_AGENT,
-    CALLBACK_AGENT_PROFILE,
-    CALLBACK_APPROVAL,
-    CALLBACK_BIND,
-    CALLBACK_COMPACT,
-    CALLBACK_EFFORT,
-    CALLBACK_FLOW,
-    CALLBACK_FLOW_RUN,
-    CALLBACK_MODEL,
-    CALLBACK_QUESTION_CANCEL,
-    CALLBACK_QUESTION_CUSTOM,
-    CALLBACK_QUESTION_DONE,
-    CALLBACK_QUESTION_OPTION,
-    CALLBACK_RESUME,
-    CALLBACK_REVIEW_COMMIT,
-    CALLBACK_UPDATE,
-    CALLBACK_UPDATE_CONFIRM,
-)
 from .command_contract import (
     COMMAND_CONTRACT,
     CommandContractEntry,
@@ -438,6 +419,15 @@ def _check_shared_action_ux_contract_complete(
     contract: Sequence[CommandContractEntry],
     action_ux_contract: Sequence[ChatActionUxContractEntry],
 ) -> ParityCheckResult:
+    from ..discord.interaction_registry import (
+        cataloged_autocomplete_contract_scenarios,
+        cataloged_component_contract_scenarios,
+        cataloged_modal_contract_scenarios,
+    )
+    from ..telegram.chat_callbacks import (
+        cataloged_telegram_callback_contract_scenarios,
+    )
+
     missing_telegram_commands = sorted(
         name
         for name in telegram_runtime_command_names_from_contract(tuple(contract))
@@ -455,128 +445,58 @@ def _check_shared_action_ux_contract_complete(
         is None
     )
 
-    telegram_callback_scenarios: tuple[tuple[str, str, dict[str, Any]], ...] = (
-        ("approval", CALLBACK_APPROVAL, {}),
-        ("question_option", CALLBACK_QUESTION_OPTION, {}),
-        ("question_done", CALLBACK_QUESTION_DONE, {}),
-        ("question_custom", CALLBACK_QUESTION_CUSTOM, {}),
-        ("question_cancel", CALLBACK_QUESTION_CANCEL, {}),
-        ("resume", CALLBACK_RESUME, {}),
-        ("bind", CALLBACK_BIND, {}),
-        ("agent", CALLBACK_AGENT, {}),
-        ("agent_profile", CALLBACK_AGENT_PROFILE, {}),
-        ("model", CALLBACK_MODEL, {}),
-        ("effort", CALLBACK_EFFORT, {}),
-        ("update", CALLBACK_UPDATE, {}),
-        ("update_confirm", CALLBACK_UPDATE_CONFIRM, {}),
-        ("review_commit", CALLBACK_REVIEW_COMMIT, {}),
-        ("compact", CALLBACK_COMPACT, {}),
-        ("flow", CALLBACK_FLOW, {"action": "resume"}),
-        ("flow_refresh", CALLBACK_FLOW, {"action": "refresh"}),
-        ("flow_run", CALLBACK_FLOW_RUN, {}),
-        ("selection_cancel", "cancel", {"kind": "cancel"}),
-        ("interrupt", "cancel", {"kind": "interrupt"}),
-        ("queue_cancel", "cancel", {"kind": "queue_cancel:exec-1"}),
-        (
-            "queue_interrupt_send",
-            "cancel",
-            {"kind": "queue_interrupt_send:exec-1"},
-        ),
-        ("pagination", "page", {"kind": "resume", "page": 1}),
-    )
     missing_telegram_callbacks = sorted(
-        label
-        for label, callback_id, payload in telegram_callback_scenarios
-        if telegram_callback_ux_contract_for_callback(
-            callback_id,
-            payload,
-            ux_contract=action_ux_contract,
-        )
-        is None
+        {
+            scenario.label
+            for scenario in cataloged_telegram_callback_contract_scenarios()
+            if telegram_callback_ux_contract_for_callback(
+                scenario.callback_id,
+                scenario.payload,
+                ux_contract=action_ux_contract,
+            )
+            is None
+        }
     )
 
-    discord_component_scenarios = (
-        ("tickets.filter", "tickets.filter", "tickets_filter_select"),
-        ("tickets.select", "tickets.select", "tickets_select"),
-        ("bind.page.pagination", "bind.page", "bind_page:next"),
-        ("bind.select", "bind.select", "bind_select"),
-        ("flow.runs_select", "flow.runs_select", "flow_runs_select"),
-        ("agent.select", "agent.select", "agent_select"),
-        ("agent.profile_select", "agent.profile_select", "agent_profile_select"),
-        ("model.select", "model.select", "model_select"),
-        ("model.effort_select", "model.effort_select", "model_effort_select"),
-        ("session.resume_select", "session.resume_select", "session_resume_select"),
-        ("update.target_select", "update.target_select", "update_target_select"),
-        ("update.confirm", "update.confirm", "update_confirm:discord"),
-        ("update.cancel", "update.cancel", "update_cancel:discord"),
-        ("newt.hard_reset", "newt.hard_reset", "newt_hard_reset:workspace-1"),
-        ("newt.cancel", "newt.cancel", "newt_cancel:workspace-1"),
-        ("review.commit_select", "review.commit_select", "review_commit_select"),
-        ("flow.action_select", "flow.action_select", "flow_action_select:reply"),
-        ("flow.button", "flow.button", "flow:run-1:stop"),
-        ("flow.button.refresh", "flow.button", "flow:run-1:refresh"),
-        ("approval.component", "approval.component", "approval:req-1:approve"),
-        ("queue.cancel", "queue.cancel", "queue_cancel:message-1"),
-        ("queued_turn.cancel", "queued_turn.cancel", "qcancel:exec-1"),
-        (
-            "queue.interrupt_send",
-            "queue.interrupt_send",
-            "queue_interrupt_send:message-1",
-        ),
-        (
-            "queued_turn.interrupt_send",
-            "queued_turn.interrupt_send",
-            "qis:exec-1:message-1",
-        ),
-        ("turn.cancel", "turn.cancel", "cancel_turn"),
-        ("turn.cancel_scoped", "turn.cancel_scoped", "cancel_turn:thread-1:exec-1"),
-        ("turn.continue", "turn.continue", "continue_turn"),
-    )
     missing_discord_components = sorted(
-        label
-        for label, route_id, custom_id in discord_component_scenarios
-        if discord_component_ux_contract_for_route(
-            route_id,
-            custom_id=custom_id,
-            ux_contract=action_ux_contract,
-        )
-        is None
+        {
+            route_id
+            for route_id, custom_id in cataloged_component_contract_scenarios()
+            if discord_component_ux_contract_for_route(
+                route_id,
+                custom_id=custom_id,
+                ux_contract=action_ux_contract,
+            )
+            is None
+        }
     )
 
-    discord_modal_scenarios = (("tickets.modal_submit", "tickets.modal_submit"),)
     missing_discord_modals = sorted(
-        label
-        for label, route_id in discord_modal_scenarios
-        if discord_modal_ux_contract_for_route(
-            route_id,
-            ux_contract=action_ux_contract,
-        )
-        is None
+        {
+            route_id
+            for route_id, _custom_id in cataloged_modal_contract_scenarios()
+            if discord_modal_ux_contract_for_route(
+                route_id,
+                ux_contract=action_ux_contract,
+            )
+            is None
+        }
     )
 
-    discord_autocomplete_scenarios = (
-        ("car.bind.workspace", "car.bind.workspace", ("car", "bind"), "workspace"),
-        ("car.model.name", "car.model.name", ("car", "model"), "name"),
-        ("car.skills.search", "car.skills.search", ("car", "skills"), "search"),
-        ("car.tickets.search", "car.tickets.search", ("car", "tickets"), "search"),
-        (
-            "car.resume.thread_id",
-            "car.resume.thread_id",
-            ("car", "session", "resume"),
-            "thread_id",
-        ),
-        ("flow.run_picker", None, ("car", "flow", "status"), "run_id"),
-    )
     missing_discord_autocomplete = sorted(
-        label
-        for label, route_id, command_path, focused_name in discord_autocomplete_scenarios
-        if discord_autocomplete_ux_contract_for_route(
-            route_id,
-            command_path=command_path,
-            focused_name=focused_name,
-            ux_contract=action_ux_contract,
-        )
-        is None
+        {
+            route_id or f"{'.'.join(command_path)}.{focused_name}"
+            for route_id, command_path, focused_name in (
+                cataloged_autocomplete_contract_scenarios()
+            )
+            if discord_autocomplete_ux_contract_for_route(
+                route_id,
+                command_path=command_path,
+                focused_name=focused_name,
+                ux_contract=action_ux_contract,
+            )
+            is None
+        }
     )
 
     plain_text_modes = ("always", "mentions")

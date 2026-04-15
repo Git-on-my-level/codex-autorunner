@@ -99,6 +99,14 @@ class SlashCommandRoute:
     workspace_lock_policy: WorkspaceLockPolicy = "none"
     group_description: Optional[str] = None
 
+    def __post_init__(self) -> None:
+        if not self.catalog_in_contract:
+            return
+        contract_kwargs = _slash_contract_kwargs(self.id)
+        object.__setattr__(self, "ack_policy", contract_kwargs["ack_policy"])
+        object.__setattr__(self, "ack_timing", contract_kwargs["ack_timing"])
+        object.__setattr__(self, "exposure", contract_kwargs["exposure"])
+
 
 @dataclass(frozen=True)
 class ComponentRoute:
@@ -109,6 +117,28 @@ class ComponentRoute:
     scheduler_ack_strategy: SchedulerAckStrategy = "scheduler_component_update"
     workspace_lock_policy: WorkspaceLockPolicy = "none"
     prepare: Optional[ComponentPrepare] = None
+    contract_custom_ids: tuple[str, ...] = ()
+    catalog_in_contract: bool = True
+
+    def __post_init__(self) -> None:
+        if not self.catalog_in_contract:
+            return
+        contract_kwargs = _component_contract_kwargs(
+            self.id,
+            exact_custom_id=self.exact_custom_id,
+            custom_id_prefix=self.custom_id_prefix,
+            contract_custom_ids=self.contract_custom_ids,
+        )
+        object.__setattr__(
+            self,
+            "scheduler_ack_strategy",
+            contract_kwargs["scheduler_ack_strategy"],
+        )
+        object.__setattr__(
+            self,
+            "contract_custom_ids",
+            contract_kwargs["contract_custom_ids"],
+        )
 
     def matches(self, custom_id: str) -> bool:
         if self.exact_custom_id is not None:
@@ -126,6 +156,28 @@ class ModalRoute:
     custom_id_prefix: Optional[str] = None
     scheduler_ack_strategy: SchedulerAckStrategy = "scheduler_ephemeral"
     workspace_lock_policy: WorkspaceLockPolicy = "bound_workspace"
+    contract_custom_id: Optional[str] = None
+    catalog_in_contract: bool = True
+
+    def __post_init__(self) -> None:
+        if not self.catalog_in_contract:
+            return
+        contract_kwargs = _modal_contract_kwargs(
+            self.id,
+            exact_custom_id=self.exact_custom_id,
+            custom_id_prefix=self.custom_id_prefix,
+            contract_custom_id=self.contract_custom_id,
+        )
+        object.__setattr__(
+            self,
+            "scheduler_ack_strategy",
+            contract_kwargs["scheduler_ack_strategy"],
+        )
+        object.__setattr__(
+            self,
+            "contract_custom_id",
+            contract_kwargs["contract_custom_id"],
+        )
 
     def matches(self, custom_id: str) -> bool:
         if self.exact_custom_id is not None:
@@ -141,6 +193,20 @@ class AutocompleteRoute:
     command_path: tuple[str, ...]
     focused_name: str
     choices_builder: AutocompleteChoicesBuilder
+    catalog_in_contract: bool = True
+
+    def __post_init__(self) -> None:
+        if not self.catalog_in_contract:
+            return
+        ux_entry = discord_autocomplete_ux_contract_for_route(
+            self.id,
+            command_path=self.command_path,
+            focused_name=self.focused_name,
+        )
+        if ux_entry is None:
+            raise ValueError(
+                f"missing shared Discord autocomplete UX contract for {self.id}"
+            )
 
     def matches(
         self,
@@ -149,6 +215,149 @@ class AutocompleteRoute:
         focused_name: Optional[str],
     ) -> bool:
         return command_path == self.command_path and focused_name == self.focused_name
+
+
+def _default_contract_custom_ids(
+    *,
+    exact_custom_id: Optional[str],
+    custom_id_prefix: Optional[str],
+) -> tuple[str, ...]:
+    if exact_custom_id is not None:
+        return (exact_custom_id,)
+    if custom_id_prefix is not None:
+        return (f"{custom_id_prefix}sample",)
+    return ()
+
+
+def _slash_contract_kwargs(command_id: str) -> dict[str, Any]:
+    ux_entry = discord_slash_command_ux_contract_for_id(command_id)
+    if ux_entry is None:
+        raise ValueError(f"missing shared Discord slash UX contract for {command_id}")
+    ack_policy = discord_ack_policy_for_entry(ux_entry)
+    exposure = discord_exposure_for_entry(ux_entry)
+    if ack_policy is None:
+        raise ValueError(
+            f"shared Discord slash UX contract missing ack policy for {command_id}"
+        )
+    if exposure is None:
+        raise ValueError(
+            f"shared Discord slash UX contract missing exposure for {command_id}"
+        )
+    return {
+        "ack_policy": ack_policy,
+        "ack_timing": ux_entry.ack_timing,
+        "exposure": exposure,
+    }
+
+
+def _component_contract_kwargs(
+    route_id: str,
+    *,
+    exact_custom_id: Optional[str],
+    custom_id_prefix: Optional[str],
+    contract_custom_ids: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    resolved_custom_ids = contract_custom_ids or _default_contract_custom_ids(
+        exact_custom_id=exact_custom_id,
+        custom_id_prefix=custom_id_prefix,
+    )
+    if not resolved_custom_ids:
+        raise ValueError(f"missing contract custom id sample for {route_id}")
+    ux_entry = discord_component_ux_contract_for_route(
+        route_id,
+        custom_id=resolved_custom_ids[0],
+    )
+    if ux_entry is None:
+        raise ValueError(f"missing shared Discord component UX contract for {route_id}")
+    for custom_id in resolved_custom_ids[1:]:
+        if (
+            discord_component_ux_contract_for_route(route_id, custom_id=custom_id)
+            is None
+        ):
+            raise ValueError(
+                f"missing shared Discord component UX contract for {route_id} via {custom_id}"
+            )
+    strategy = discord_scheduler_ack_strategy_for_entry(ux_entry)
+    return {
+        "scheduler_ack_strategy": (
+            strategy if strategy != "none" else "scheduler_component_update"
+        ),
+        "contract_custom_ids": resolved_custom_ids,
+    }
+
+
+def _modal_contract_kwargs(
+    route_id: str,
+    *,
+    exact_custom_id: Optional[str],
+    custom_id_prefix: Optional[str],
+    contract_custom_id: Optional[str] = None,
+) -> dict[str, Any]:
+    resolved_custom_id = contract_custom_id
+    if resolved_custom_id is None:
+        fallback_ids = _default_contract_custom_ids(
+            exact_custom_id=exact_custom_id,
+            custom_id_prefix=custom_id_prefix,
+        )
+        resolved_custom_id = fallback_ids[0] if fallback_ids else None
+    if resolved_custom_id is None:
+        raise ValueError(f"missing contract custom id sample for modal {route_id}")
+    ux_entry = discord_modal_ux_contract_for_route(route_id)
+    if ux_entry is None:
+        raise ValueError(f"missing shared Discord modal UX contract for {route_id}")
+    strategy = discord_scheduler_ack_strategy_for_entry(ux_entry)
+    return {
+        "scheduler_ack_strategy": (
+            strategy if strategy != "none" else "scheduler_ephemeral"
+        ),
+        "contract_custom_id": resolved_custom_id,
+    }
+
+
+def _component_route(**kwargs: Any) -> ComponentRoute:
+    route_id = str(kwargs["id"])
+    exact_custom_id = kwargs.get("exact_custom_id")
+    custom_id_prefix = kwargs.get("custom_id_prefix")
+    contract_custom_ids = tuple(kwargs.pop("contract_custom_ids", ()))
+    return ComponentRoute(
+        **kwargs,
+        **_component_contract_kwargs(
+            route_id,
+            exact_custom_id=exact_custom_id,
+            custom_id_prefix=custom_id_prefix,
+            contract_custom_ids=contract_custom_ids,
+        ),
+    )
+
+
+def _modal_route(**kwargs: Any) -> ModalRoute:
+    route_id = str(kwargs["id"])
+    exact_custom_id = kwargs.get("exact_custom_id")
+    custom_id_prefix = kwargs.get("custom_id_prefix")
+    contract_custom_id = kwargs.pop("contract_custom_id", None)
+    return ModalRoute(
+        **kwargs,
+        **_modal_contract_kwargs(
+            route_id,
+            exact_custom_id=exact_custom_id,
+            custom_id_prefix=custom_id_prefix,
+            contract_custom_id=contract_custom_id,
+        ),
+    )
+
+
+def _autocomplete_route(**kwargs: Any) -> AutocompleteRoute:
+    route = AutocompleteRoute(**kwargs)
+    ux_entry = discord_autocomplete_ux_contract_for_route(
+        route.id,
+        command_path=route.command_path,
+        focused_name=route.focused_name,
+    )
+    if ux_entry is None:
+        raise ValueError(
+            f"missing shared Discord autocomplete UX contract for {route.id}"
+        )
+    return route
 
 
 def _string_option(
@@ -1906,12 +2115,11 @@ def _interrupt_component_route(
     exact_custom_id: Optional[str] = None,
     custom_id_prefix: Optional[str] = None,
 ) -> ComponentRoute:
-    return ComponentRoute(
+    return _component_route(
         id=id,
         exact_custom_id=exact_custom_id,
         custom_id_prefix=custom_id_prefix,
         handler=handler,
-        scheduler_ack_strategy="scheduler_ephemeral",
     )
 
 
@@ -2020,6 +2228,7 @@ _COMPONENT_ROUTES: tuple[ComponentRoute, ...] = (
         custom_id_prefix="flow:",
         handler=_handle_flow_button_component,
         workspace_lock_policy="bound_workspace",
+        contract_custom_ids=("flow:run-1:stop", "flow:run-1:refresh"),
     ),
     ComponentRoute(
         id="approval.component",
@@ -2065,7 +2274,7 @@ _COMPONENT_ROUTES: tuple[ComponentRoute, ...] = (
 )
 
 _MODAL_ROUTES: tuple[ModalRoute, ...] = (
-    ModalRoute(
+    _modal_route(
         id="tickets.modal_submit",
         custom_id_prefix=f"{TICKETS_MODAL_PREFIX}:",
         handler=lambda service, ctx: service._handle_ticket_modal_submit(
@@ -2079,31 +2288,31 @@ _MODAL_ROUTES: tuple[ModalRoute, ...] = (
 )
 
 _AUTOCOMPLETE_ROUTES: tuple[AutocompleteRoute, ...] = (
-    AutocompleteRoute(
+    _autocomplete_route(
         id="car.bind.workspace",
         command_path=("car", "bind"),
         focused_name="workspace",
         choices_builder=_build_bind_autocomplete_choices,
     ),
-    AutocompleteRoute(
+    _autocomplete_route(
         id="car.model.name",
         command_path=("car", "model"),
         focused_name="name",
         choices_builder=_build_model_autocomplete_choices,
     ),
-    AutocompleteRoute(
+    _autocomplete_route(
         id="car.skills.search",
         command_path=("car", "skills"),
         focused_name="search",
         choices_builder=_build_skills_autocomplete_choices,
     ),
-    AutocompleteRoute(
+    _autocomplete_route(
         id="car.tickets.search",
         command_path=("car", "tickets"),
         focused_name="search",
         choices_builder=_build_ticket_autocomplete_choices,
     ),
-    AutocompleteRoute(
+    _autocomplete_route(
         id="car.resume.thread_id",
         command_path=("car", "session", "resume"),
         focused_name="thread_id",
@@ -2218,6 +2427,46 @@ def autocomplete_route_for(
             choices_builder=_build_flow_run_autocomplete_choices,
         )
     return None
+
+
+def cataloged_component_contract_scenarios() -> tuple[tuple[str, str], ...]:
+    scenarios: list[tuple[str, str]] = []
+    for route in _COMPONENT_ROUTES:
+        if not route.catalog_in_contract:
+            continue
+        for custom_id in route.contract_custom_ids:
+            scenarios.append((route.id, custom_id))
+    return tuple(scenarios)
+
+
+def cataloged_modal_contract_scenarios() -> tuple[tuple[str, str], ...]:
+    scenarios: list[tuple[str, str]] = []
+    for route in _MODAL_ROUTES:
+        if not route.catalog_in_contract or route.contract_custom_id is None:
+            continue
+        scenarios.append((route.id, route.contract_custom_id))
+    return tuple(scenarios)
+
+
+def cataloged_autocomplete_contract_scenarios(
+    *,
+    include_dynamic_flow_run_picker: bool = True,
+) -> tuple[tuple[Optional[str], tuple[str, ...], str], ...]:
+    scenarios: list[tuple[Optional[str], tuple[str, ...], str]] = [
+        (route.id, route.command_path, route.focused_name)
+        for route in _AUTOCOMPLETE_ROUTES
+        if route.catalog_in_contract
+    ]
+    if include_dynamic_flow_run_picker:
+        scenarios.extend(
+            (
+                None,
+                ("car", "flow", action),
+                "run_id",
+            )
+            for action in sorted(FLOW_ACTIONS_WITH_RUN_PICKER)
+        )
+    return tuple(scenarios)
 
 
 def slash_command_ack_metadata_for_path(

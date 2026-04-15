@@ -4,11 +4,21 @@ from codex_autorunner.integrations.chat.action_ux_contract import (
     CHAT_ACTION_UX_CONTRACT,
     CHAT_ACTION_UX_CONTRACT_VERSION,
     callback_entry_bypasses_queue,
+    discord_autocomplete_ux_contract_for_route,
     discord_component_ux_contract_for_route,
+    discord_modal_ux_contract_for_route,
     discord_slash_command_ux_contract_for_id,
     plain_text_turn_ux_contract_for_mode,
     telegram_callback_ux_contract_for_callback,
     telegram_command_ux_contract_for_name,
+)
+from codex_autorunner.integrations.discord.interaction_registry import (
+    cataloged_autocomplete_contract_scenarios,
+    cataloged_component_contract_scenarios,
+    cataloged_modal_contract_scenarios,
+)
+from codex_autorunner.integrations.telegram.chat_callbacks import (
+    cataloged_telegram_callback_contract_scenarios,
 )
 
 
@@ -54,6 +64,52 @@ def test_action_ux_contract_reuses_shared_control_entries_across_surfaces() -> N
     assert pagination.id == "control.pagination"
     assert refresh is not None
     assert refresh.id == "control.refresh"
+
+
+def test_action_ux_contract_covers_cataloged_telegram_callbacks() -> None:
+    missing = [
+        scenario.label
+        for scenario in cataloged_telegram_callback_contract_scenarios()
+        if telegram_callback_ux_contract_for_callback(
+            scenario.callback_id,
+            scenario.payload,
+        )
+        is None
+    ]
+    assert missing == []
+
+
+def test_action_ux_contract_covers_cataloged_discord_components() -> None:
+    missing = [
+        route_id
+        for route_id, custom_id in cataloged_component_contract_scenarios()
+        if discord_component_ux_contract_for_route(route_id, custom_id=custom_id)
+        is None
+    ]
+    assert missing == []
+
+
+def test_action_ux_contract_covers_cataloged_discord_modals_and_autocomplete() -> None:
+    missing_modals = [
+        route_id
+        for route_id, _custom_id in cataloged_modal_contract_scenarios()
+        if discord_modal_ux_contract_for_route(route_id) is None
+    ]
+    missing_autocomplete = [
+        route_id or f"{'.'.join(command_path)}.{focused_name}"
+        for route_id, command_path, focused_name in (
+            cataloged_autocomplete_contract_scenarios()
+        )
+        if discord_autocomplete_ux_contract_for_route(
+            route_id,
+            command_path=command_path,
+            focused_name=focused_name,
+        )
+        is None
+    ]
+
+    assert missing_modals == []
+    assert missing_autocomplete == []
 
 
 def test_action_ux_contract_bridges_command_and_plain_text_policies() -> None:

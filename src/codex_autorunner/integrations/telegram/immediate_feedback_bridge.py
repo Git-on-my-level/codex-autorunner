@@ -12,6 +12,7 @@ import logging
 from typing import Any, Optional, Sequence
 
 from ...core.orchestration.chat_operation_state import ChatOperationState
+from ..chat.action_ux_contract import ChatActionUxContractEntry
 from ..chat.immediate_feedback import (
     QUEUED_NOTICE_TEXT,
     ChatOperationStateWriter,
@@ -220,19 +221,24 @@ async def telegram_immediate_callback_ack(
     thread_id: Optional[int] = None,
     message_id: Optional[int] = None,
     operation_id: Optional[str] = None,
+    ux_entry: Optional[ChatActionUxContractEntry] = None,
     ack_text: Optional[str] = None,
     logger: Optional[logging.Logger] = None,
 ) -> ImmediateAckResult:
     transport = _TelegramFeedbackTransport(handlers)
     interaction = _interaction_ref(callback_id, chat_id, thread_id)
     state_writer = _make_state_writer(handlers)
+    ack_class = ux_entry.ack_class if ux_entry is not None else "callback_answer"
+    anchor_message_reuse = (
+        ux_entry.anchor_message_reuse if ux_entry is not None else "never"
+    )
     return await immediate_ack(
         transport,
         interaction,
-        ack_class="callback_answer",
+        ack_class=ack_class,
         operation_id=operation_id,
         state_writer=state_writer,
-        anchor_message_reuse="never",
+        anchor_message_reuse=anchor_message_reuse,
         existing_anchor=_message_ref(chat_id, message_id, thread_id),
         logger=logger or getattr(handlers, "_logger", None),
     )
