@@ -29,7 +29,8 @@ from ...core.runtime import RuntimeContext
 from ...integrations.agents import build_backend_orchestrator
 from ...integrations.agents.build_agent_pool import build_agent_pool
 from ...tickets import DEFAULT_MAX_TOTAL_TURNS
-from ...tickets.files import list_ticket_paths, safe_relpath
+from ...tickets.files import list_ticket_paths, safe_relpath, ticket_is_done
+from ...tickets.frontmatter import generate_ticket_id
 from .definition import build_ticket_flow_definition
 
 logger = logging.getLogger(__name__)
@@ -419,3 +420,56 @@ You are the first ticket in a new ticket_flow run.
   - Use `mode: pause` (handoff) to wait for user response. This pauses execution.
   - Use `mode: notify` (informational) to message the user but keep running.
 """
+
+
+@dataclass(frozen=True)
+class RunReuseResult:
+    action: str
+    run: Optional[FlowRunRecord] = None
+    pending_ticket_count: int = 0
+    stale_terminal_runs: tuple[FlowRunRecord, ...] = ()
+
+
+def resolve_run_reuse_policy(
+    records: list[FlowRunRecord],
+    *,
+    force_new: bool,
+    ticket_dir: Path,
+) -> RunReuseResult:
+    stale = tuple(
+        r for r in records if r.status in (FlowRunStatus.FAILED, FlowRunStatus.STOPPED)
+    )
+
+    if force_new:
+        return RunReuseResult(action="start_new", stale_terminal_runs=stale)
+
+    existing_run, reason = select_resumable_run(records)
+    if existing_run and reason == "active":
+        return RunReuseResult(
+            action="reuse_active",
+            run=existing_run,
+            stale_terminal_runs=stale,
+        )
+
+    if existing_run and reason == "completed_pending":
+        pending = sum(1 for t in list_ticket_paths(ticket_dir) if not ticket_is_done(t))
+        return RunReuseResult(
+            action="completed_pending",
+            run=existing_run,
+            pending_ticket_count=pending,
+            stale_terminal_runs=stale,
+        )
+
+    return RunReuseResult(action="start_new", stale_terminal_runs=stale)
+
+
+def seed_bootstrap_ticket_if_needed(ticket_dir: Path) -> bool:
+    existing = list_ticket_paths(ticket_dir)
+    ticket_path = ticket_dir / "TICKET-001.md"
+    if existing or ticket_path.exists():
+        return False
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    bootstrap_ticket_id = generate_ticket_id()
+    template = render_bootstrap_ticket_template(bootstrap_ticket_id)
+    ticket_path.write_text(template, encoding="utf-8")
+    return True

@@ -58,7 +58,8 @@ from ....core.utils import atomic_write, find_repo_root
 from ....flows.ticket_flow import build_ticket_flow_definition
 from ....flows.ticket_flow.runtime_helpers import (
     normalize_ticket_flow_input_data,
-    render_bootstrap_ticket_template,
+    resolve_run_reuse_policy,
+    seed_bootstrap_ticket_if_needed,
     select_active_or_paused_run,
 )
 from ....integrations.agents.build_agent_pool import build_agent_pool
@@ -944,47 +945,58 @@ def build_flow_routes() -> APIRouter:
         repo_root = find_repo_root()
         ticket_dir = repo_root / ".codex-autorunner" / "tickets"
         ticket_dir.mkdir(parents=True, exist_ok=True)
-        ticket_path = ticket_dir / "TICKET-001.md"
         existing_tickets = list_ticket_paths(ticket_dir)
         tickets_exist = bool(existing_tickets)
         flow_request = request or FlowStartRequest()
         meta = flow_request.metadata if isinstance(flow_request.metadata, dict) else {}
         force_new = bool(meta.get("force_new"))
 
-        if not force_new:
-            records = _safe_list_flow_runs(
-                repo_root, flow_type="ticket_flow", recover_stuck=True
-            )
-            active = _active_or_paused_run(records)
-            if active:
-                # Validate tickets before reusing active run
-                lint_errors = _validate_tickets(ticket_dir)
-                if lint_errors:
-                    raise HTTPException(
-                        status_code=400,
-                        detail={
-                            "message": "Ticket validation failed",
-                            "errors": lint_errors,
-                        },
-                    )
-                _reap_dead_worker(active.id, state)
-                _start_flow_worker(repo_root, active.id, state)
-                store = _require_flow_store(repo_root)
-                try:
-                    resp = _build_flow_status_response(active, repo_root, store=store)
-                finally:
-                    if store:
-                        store.close()
-                resp.state = resp.state or {}
-                resp.state["hint"] = "active_run_reused"
-                return resp
+        records = _safe_list_flow_runs(
+            repo_root, flow_type="ticket_flow", recover_stuck=True
+        )
+        reuse = resolve_run_reuse_policy(
+            records, force_new=force_new, ticket_dir=ticket_dir
+        )
 
-        seeded = False
-        if not tickets_exist and not ticket_path.exists():
-            bootstrap_ticket_id = generate_ticket_id()
-            template = render_bootstrap_ticket_template(bootstrap_ticket_id)
-            ticket_path.write_text(template, encoding="utf-8")
-            seeded = True
+        if reuse.action == "reuse_active":
+            assert reuse.run is not None
+            lint_errors = _validate_tickets(ticket_dir)
+            if lint_errors:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "message": "Ticket validation failed",
+                        "errors": lint_errors,
+                    },
+                )
+            _reap_dead_worker(reuse.run.id, state)
+            _start_flow_worker(repo_root, reuse.run.id, state)
+            store = _require_flow_store(repo_root)
+            try:
+                resp = _build_flow_status_response(reuse.run, repo_root, store=store)
+            finally:
+                if store:
+                    store.close()
+            resp.state = resp.state or {}
+            resp.state["hint"] = "active_run_reused"
+            return resp
+
+        if reuse.action == "completed_pending" and reuse.pending_ticket_count > 0:
+            assert reuse.run is not None
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": (
+                        f"Run {reuse.run.id} completed with "
+                        f"{reuse.pending_ticket_count} pending tickets. "
+                        "Use force_new=true to create a new run."
+                    ),
+                    "run_id": reuse.run.id,
+                    "pending_ticket_count": reuse.pending_ticket_count,
+                },
+            )
+
+        seeded = seed_bootstrap_ticket_if_needed(ticket_dir)
 
         meta = flow_request.metadata if isinstance(flow_request.metadata, dict) else {}
         payload = FlowStartRequest(

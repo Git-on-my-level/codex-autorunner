@@ -51,13 +51,13 @@ from ....core.utils import resolve_executable
 from ....flows.ticket_flow.runtime_helpers import (
     ensure_ticket_flow_worker,
     flow_run_record_from_target,
-    render_bootstrap_ticket_template,
+    resolve_run_reuse_policy,
+    seed_bootstrap_ticket_if_needed,
     select_resumable_run,
     stop_ticket_flow_worker,
 )
 from ....tickets import DEFAULT_MAX_TOTAL_TURNS, AgentPool
-from ....tickets.files import list_ticket_paths, read_ticket, ticket_is_done
-from ....tickets.frontmatter import generate_ticket_id
+from ....tickets.files import list_ticket_paths, read_ticket
 from ..hub_path_option import hub_root_path_option
 
 logger = logging.getLogger(__name__)
@@ -85,12 +85,6 @@ def _build_force_attestation(
         "user_request": force_attestation,
         "target_scope": target_scope,
     }
-
-
-def _stale_terminal_runs(records: list[FlowRunRecord]) -> list[FlowRunRecord]:
-    return [
-        r for r in records if r.status in (FlowRunStatus.FAILED, FlowRunStatus.STOPPED)
-    ]
 
 
 def register_flow_commands(
@@ -733,51 +727,41 @@ def register_flow_commands(
         guard_unregistered_hub_repo(engine.repo_root, hub)
         _, _, ticket_dir = _ticket_flow_paths(engine)
         ticket_dir.mkdir(parents=True, exist_ok=True)
-        ticket_path = ticket_dir / "TICKET-001.md"
 
         service = _ticket_flow_orchestration_service(engine)
         records = [
             flow_run_record_from_target(target) for target in service.list_flow_runs()
         ]
-        stale_terminal = _stale_terminal_runs(records)
-        if not force_new:
-            existing_run, reason = select_resumable_run(records)
-            if existing_run and reason == "active":
-                ensure_ticket_flow_worker(
-                    engine.repo_root, existing_run.id, is_terminal=False
-                )
-                typer.echo(
-                    f"reused run={existing_run.id} | car ticket-flow status --run-id {existing_run.id}"
-                )
-                return
-            elif existing_run and reason == "completed_pending":
-                existing_tickets = list_ticket_paths(ticket_dir)
-                pending_count = len(
-                    [t for t in existing_tickets if not ticket_is_done(t)]
-                )
-                if pending_count > 0:
-                    typer.echo(
-                        f"run {existing_run.id} completed with {pending_count} pending tickets. "
-                        f"use --force-new to reset dispatch history."
-                    )
-                    raise_exit("Add --force-new to create a new run.")
+        reuse = resolve_run_reuse_policy(
+            records, force_new=force_new, ticket_dir=ticket_dir
+        )
 
-        if stale_terminal:
-            stale_id = stale_terminal[0].id
+        if reuse.action == "reuse_active":
+            assert reuse.run is not None
+            ensure_ticket_flow_worker(engine.repo_root, reuse.run.id, is_terminal=False)
             typer.echo(
-                f"warning: {len(stale_terminal)} stale runs (FAILED/STOPPED). "
+                f"reused run={reuse.run.id} | car ticket-flow status --run-id {reuse.run.id}"
+            )
+            return
+
+        if reuse.action == "completed_pending" and reuse.pending_ticket_count > 0:
+            assert reuse.run is not None
+            typer.echo(
+                f"run {reuse.run.id} completed with {reuse.pending_ticket_count} pending tickets. "
+                f"use --force-new to reset dispatch history."
+            )
+            raise_exit("Add --force-new to create a new run.")
+
+        if reuse.stale_terminal_runs:
+            stale_id = reuse.stale_terminal_runs[0].id
+            typer.echo(
+                f"warning: {len(reuse.stale_terminal_runs)} stale runs (FAILED/STOPPED). "
                 f"inspect: car ticket-flow status --run-id {stale_id}. "
                 f"archive: car ticket-flow archive --run-id {stale_id} --force. "
                 f"use --force-new to suppress."
             )
 
-        existing_tickets = list_ticket_paths(ticket_dir)
-        seeded = False
-        if not existing_tickets and not ticket_path.exists():
-            bootstrap_ticket_id = generate_ticket_id()
-            template = render_bootstrap_ticket_template(bootstrap_ticket_id)
-            ticket_path.write_text(template, encoding="utf-8")
-            seeded = True
+        seeded = seed_bootstrap_ticket_if_needed(ticket_dir)
 
         run_id = str(uuid.uuid4())
         input_data: dict[str, object] = {}
@@ -847,38 +831,35 @@ def register_flow_commands(
         records = [
             flow_run_record_from_target(target) for target in service.list_flow_runs()
         ]
-        stale_terminal = _stale_terminal_runs(records)
-        if not force_new:
-            existing_run, reason = select_resumable_run(records)
-            if existing_run and reason == "active":
-                report = _ticket_flow_preflight(engine, ticket_dir)
-                if report.has_errors():
-                    typer.echo("Ticket flow preflight failed:", err=True)
-                    _print_preflight_report(report)
-                    raise_exit("Fix the above errors before starting the ticket flow.")
-                ensure_ticket_flow_worker(
-                    engine.repo_root, existing_run.id, is_terminal=False
-                )
-                typer.echo(
-                    f"reused run={existing_run.id} | car ticket-flow status --run-id {existing_run.id}"
-                )
-                return
-            elif existing_run and reason == "completed_pending":
-                existing_tickets = list_ticket_paths(ticket_dir)
-                pending_count = len(
-                    [t for t in existing_tickets if not ticket_is_done(t)]
-                )
-                if pending_count > 0:
-                    typer.echo(
-                        f"run {existing_run.id} completed with {pending_count} pending tickets. "
-                        f"use --force-new to reset dispatch history."
-                    )
-                    raise_exit("Add --force-new to create a new run.")
+        reuse = resolve_run_reuse_policy(
+            records, force_new=force_new, ticket_dir=ticket_dir
+        )
 
-        if stale_terminal:
-            stale_id = stale_terminal[0].id
+        if reuse.action == "reuse_active":
+            assert reuse.run is not None
+            report = _ticket_flow_preflight(engine, ticket_dir)
+            if report.has_errors():
+                typer.echo("Ticket flow preflight failed:", err=True)
+                _print_preflight_report(report)
+                raise_exit("Fix the above errors before starting the ticket flow.")
+            ensure_ticket_flow_worker(engine.repo_root, reuse.run.id, is_terminal=False)
             typer.echo(
-                f"warning: {len(stale_terminal)} stale runs (FAILED/STOPPED). "
+                f"reused run={reuse.run.id} | car ticket-flow status --run-id {reuse.run.id}"
+            )
+            return
+
+        if reuse.action == "completed_pending" and reuse.pending_ticket_count > 0:
+            assert reuse.run is not None
+            typer.echo(
+                f"run {reuse.run.id} completed with {reuse.pending_ticket_count} pending tickets. "
+                f"use --force-new to reset dispatch history."
+            )
+            raise_exit("Add --force-new to create a new run.")
+
+        if reuse.stale_terminal_runs:
+            stale_id = reuse.stale_terminal_runs[0].id
+            typer.echo(
+                f"warning: {len(reuse.stale_terminal_runs)} stale runs (FAILED/STOPPED). "
                 f"inspect: car ticket-flow status --run-id {stale_id}. "
                 f"archive: car ticket-flow archive --run-id {stale_id} --force. "
                 f"use --force-new to suppress."

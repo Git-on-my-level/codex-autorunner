@@ -16,7 +16,6 @@ from .commands.doctor import (
     register_doctor_commands,
 )
 from .commands.flow import (  # noqa: F401
-    _stale_terminal_runs,  # noqa: F401
     register_flow_commands,
 )
 from .commands.hub import register_hub_commands
