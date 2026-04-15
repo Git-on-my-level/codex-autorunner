@@ -622,10 +622,12 @@ function renderCompactLiveOutputText() {
 function compactLiveOutputBufferText() {
     const recentLines = liveOutputBuffer
         .map((line) => line.trim())
-        .filter((line) => line && !/^--- Step: .* ---$/.test(line));
+        .filter((line) => line);
     if (!recentLines.length)
         return "";
-    return recentLines.slice(-3).join(" ").replace(/\s+/g, " ").trim();
+    const nonStepLines = recentLines.filter((line) => !/^--- Step: .* ---$/.test(line));
+    const compactLines = nonStepLines.length ? nonStepLines : recentLines;
+    return compactLines.slice(-3).join(" ").replace(/\s+/g, " ").trim();
 }
 function updateLiveOutputViewToggle() {
     const viewToggle = document.getElementById("ticket-live-output-view-toggle");

@@ -85,3 +85,76 @@ def test_ticket_flow_compact_live_output_falls_back_to_stream_deltas() -> None:
     )
 
     subprocess.run(["node", "--input-type=module", "-e", script], check=True)
+
+
+def test_ticket_flow_compact_live_output_shows_step_progress_when_no_agent_text() -> (
+    None
+):
+    repo_root = Path(__file__).resolve().parents[1]
+    tickets_js = (
+        repo_root / "src" / "codex_autorunner" / "static" / "generated" / "tickets.js"
+    )
+
+    script = textwrap.dedent(
+        f"""
+        import assert from "node:assert/strict";
+        import {{ pathToFileURL }} from "node:url";
+        import {{ JSDOM }} from "jsdom";
+
+        const dom = new JSDOM(
+          `<!doctype html><html><body>
+            <div id="ticket-live-output-status"></div>
+            <button id="ticket-live-output-view-toggle" type="button"></button>
+            <div id="ticket-live-output-compact"></div>
+            <div id="ticket-live-output-detail" class="hidden"></div>
+            <pre id="ticket-live-output-text"></pre>
+            <div id="ticket-live-output-events" class="hidden">
+              <span id="ticket-live-output-events-count"></span>
+              <div id="ticket-live-output-events-list"></div>
+            </div>
+          </body></html>`,
+          {{ url: "http://localhost/repos/test/" }}
+        );
+
+        globalThis.window = dom.window;
+        globalThis.document = dom.window.document;
+        globalThis.HTMLElement = dom.window.HTMLElement;
+        globalThis.HTMLButtonElement = dom.window.HTMLButtonElement;
+        globalThis.Node = dom.window.Node;
+        globalThis.Event = dom.window.Event;
+        globalThis.CustomEvent = dom.window.CustomEvent;
+        globalThis.DOMParser = dom.window.DOMParser;
+        globalThis.localStorage = dom.window.localStorage;
+        globalThis.sessionStorage = dom.window.sessionStorage;
+        globalThis.requestAnimationFrame = (cb) => setTimeout(() => cb(Date.now()), 0);
+        globalThis.cancelAnimationFrame = (id) => clearTimeout(id);
+        globalThis.fetch = async () => {{
+          throw new Error("unexpected fetch in ticket flow integration test");
+        }};
+
+        const moduleUrl = pathToFileURL("{tickets_js.as_posix()}").href;
+        const mod = await import(moduleUrl);
+        const helpers = mod.__ticketFlowTest;
+
+        helpers.clearLiveOutput();
+        helpers.initLiveOutputPanel();
+        helpers.setFlowStartedAt(Date.parse("2026-04-12T00:00:00Z"));
+
+        helpers.handleFlowEvent({{
+          event_type: "step_started",
+          timestamp: "2026-04-12T00:00:01Z",
+          data: {{ step_name: "ticket_turn" }},
+        }});
+
+        await new Promise((resolve) => setTimeout(resolve, 20));
+
+        const compact = document.getElementById("ticket-live-output-compact")?.textContent || "";
+        const detail = document.getElementById("ticket-live-output-text")?.textContent || "";
+
+        assert.match(detail, /--- Step: ticket_turn ---/);
+        assert.match(compact, /--- Step: ticket_turn ---/);
+        assert.doesNotMatch(compact, /Waiting for agent output/);
+        """
+    )
+
+    subprocess.run(["node", "--input-type=module", "-e", script], check=True)
