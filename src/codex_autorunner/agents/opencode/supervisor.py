@@ -103,6 +103,17 @@ class OpenCodeSupervisorSnapshot:
 
 
 class OpenCodeSupervisor:
+    """Manages per-workspace OpenCode server handles.
+
+    Ownership (TICKET-1170):
+    - Owns process lifecycle: spawning, registry-based reuse, attach, idle
+      eviction, close_all.
+    - Owns workspace-scoped client caching (OpenCodeHandle per workspace_id).
+    - Owns active-turn counting (mark_turn_started/finished) for idle-eviction
+      protection.
+    - Does NOT own session/turn state (that lives in OpenCodeBackend).
+    """
+
     def __init__(
         self,
         command: Sequence[str],

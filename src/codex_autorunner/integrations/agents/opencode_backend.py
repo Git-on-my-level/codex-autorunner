@@ -48,6 +48,16 @@ _logger = logging.getLogger(__name__)
 
 
 class OpenCodeBackend(AgentBackend):
+    """Adapts OpenCode SSE/REST protocol to the AgentBackend interface.
+
+    Ownership (TICKET-1170):
+    - Owns protocol-specific session state: _session_id, _temporary_session_id.
+    - Owns turn-level state: _last_turn_id, _last_token_total, _message_count.
+    - Delegates process lifecycle and client caching to OpenCodeSupervisor.
+    - Delegates active-turn counting to OpenCodeSupervisor via
+      mark_turn_started/finished.
+    """
+
     def __init__(
         self,
         *,

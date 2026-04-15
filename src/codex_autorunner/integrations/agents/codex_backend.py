@@ -41,6 +41,17 @@ ApprovalHandler = Callable[[Dict[str, Any]], Awaitable[ApprovalDecision]]
 
 
 class CodexAppServerBackend(AgentBackend):
+    """Adapts Codex app-server JSON-RPC protocol to the AgentBackend interface.
+
+    Ownership (TICKET-1170):
+    - Owns protocol-specific session/thread state: _session_id, _thread_id,
+      _turn_id, _thread_info.
+    - Delegates process lifecycle and client caching to
+      WorkspaceAppServerSupervisor.
+    - Does NOT participate in active-turn counting (the Codex supervisor has
+      no turn-counting concept; idle eviction uses time only).
+    """
+
     def __init__(
         self,
         *,
