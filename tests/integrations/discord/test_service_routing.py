@@ -5,6 +5,7 @@ import contextlib
 import hashlib
 import json
 import logging
+import time
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -186,6 +187,22 @@ class _FakeRest:
             }
         )
         return commands
+
+
+class _TypingExpiryFakeRest(_FakeRest):
+    def __init__(self, *, ttl_seconds: float) -> None:
+        super().__init__()
+        self._ttl_seconds = ttl_seconds
+        self._visible_until_by_channel: dict[str, float] = {}
+
+    async def trigger_typing(self, *, channel_id: str) -> None:
+        await super().trigger_typing(channel_id=channel_id)
+        self._visible_until_by_channel[channel_id] = (
+            time.monotonic() + self._ttl_seconds
+        )
+
+    def typing_visible(self, channel_id: str) -> bool:
+        return time.monotonic() < self._visible_until_by_channel.get(channel_id, 0.0)
 
 
 class _FakeGateway:
@@ -10363,6 +10380,80 @@ async def test_typing_indicator_reference_count_waits_for_last_end(
         assert await service._typing_session_active("channel-1")
         await service._end_typing_indicator("channel-1")
         assert not await service._typing_session_active("channel-1")
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_typing_indicator_can_remain_visible_briefly_after_local_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _TypingExpiryFakeRest(ttl_seconds=0.1)
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    monkeypatch.setattr(
+        discord_service_module,
+        "DISCORD_TYPING_HEARTBEAT_INTERVAL_SECONDS",
+        0.02,
+    )
+
+    async def _work() -> None:
+        deadline = time.monotonic() + 1.0
+        while len(rest.typing_calls) < 2:
+            assert time.monotonic() < deadline
+            await asyncio.sleep(0.005)
+
+    try:
+        await service._run_with_typing_indicator(channel_id="channel-1", work=_work)
+        assert rest.typing_calls[:2] == ["channel-1", "channel-1"]
+        assert not await service._typing_session_active("channel-1")
+        assert rest.typing_visible("channel-1")
+        await asyncio.sleep(0.15)
+        assert not rest.typing_visible("channel-1")
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_typing_indicator_cleans_up_if_begin_is_cancelled_after_start(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    original_begin = service._begin_typing_indicator
+
+    async def _cancel_after_start(channel_id: str) -> None:
+        await original_begin(channel_id)
+        raise asyncio.CancelledError()
+
+    service._begin_typing_indicator = _cancel_after_start  # type: ignore[method-assign]
+
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await service._run_with_typing_indicator(
+                channel_id="channel-1",
+                work=lambda: asyncio.sleep(0),
+            )
+        assert not await service._typing_session_active("channel-1")
+        assert service._typing_sessions == {}
+        assert service._typing_tasks == {}
     finally:
         await store.close()
 

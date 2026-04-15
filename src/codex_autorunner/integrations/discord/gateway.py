@@ -12,7 +12,8 @@ from typing import Any, Awaitable, Callable, Optional
 
 from ...core.logging_utils import log_event
 from .constants import DISCORD_GATEWAY_URL
-from .errors import DiscordAPIError, DiscordPermanentError
+from .effects import DiscordEffectDeliveryError
+from .errors import DiscordAPIError, DiscordPermanentError, is_unknown_interaction_error
 from .rest import DiscordRestClient
 
 try:
@@ -471,9 +472,28 @@ class DiscordGatewayClient:
             return
         if exc is None:
             return
+        if self._is_ignored_expired_interaction_failure(exc):
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.gateway.dispatch.expired_interaction_ignored",
+                interaction_id=getattr(exc, "interaction_id", None),
+                delivery_status=getattr(exc, "delivery_status", None),
+                delivery_error=getattr(exc, "delivery_error", None),
+                error=str(exc),
+            )
+            return
         failure_future = self._dispatch_failure_future
         if failure_future is not None and not failure_future.done():
             failure_future.set_exception(exc)
+
+    @staticmethod
+    def _is_ignored_expired_interaction_failure(exc: BaseException) -> bool:
+        if isinstance(exc, DiscordEffectDeliveryError) and is_unknown_interaction_error(
+            exc.delivery_error
+        ):
+            return True
+        return is_unknown_interaction_error(exc)
 
     async def _recv_gateway_message(self, websocket_iter: Any) -> Any | None:
         dispatch_task = self._dispatch_worker_task
@@ -621,7 +641,16 @@ class DiscordGatewayClient:
             if failure_future is not None and failure_future.done():
                 failure_future.result()
             return
-        await asyncio.gather(*tuple(self._dispatch_callback_tasks))
+        results = await asyncio.gather(
+            *tuple(self._dispatch_callback_tasks),
+            return_exceptions=True,
+        )
+        for result in results:
+            if not isinstance(result, BaseException):
+                continue
+            if self._is_ignored_expired_interaction_failure(result):
+                continue
+            raise result
 
     async def _cancel_dispatch_worker(self) -> None:
         queue = self._dispatch_queue
