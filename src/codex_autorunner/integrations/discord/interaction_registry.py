@@ -14,6 +14,19 @@ from typing import Any, Awaitable, Callable, Literal, Optional
 
 from ...core.flows.catalog import FLOW_ACTION_SPECS, FLOW_ACTIONS_WITH_RUN_PICKER
 from ...core.update_targets import update_target_command_choices
+from ..chat.action_ux_contract import (
+    DiscordAckPolicy,
+    DiscordAckTiming,
+    DiscordExposure,
+    SchedulerAckStrategy,
+    discord_ack_policy_for_entry,
+    discord_autocomplete_ux_contract_for_route,
+    discord_component_ux_contract_for_route,
+    discord_exposure_for_entry,
+    discord_modal_ux_contract_for_route,
+    discord_scheduler_ack_strategy_for_entry,
+    discord_slash_command_ux_contract_for_id,
+)
 from ..chat.agents import (
     chat_agent_command_choices,
     chat_agent_description,
@@ -28,19 +41,6 @@ from .interaction_runtime import (
     ensure_ephemeral_response_deferred,
 )
 
-DiscordAckPolicy = Literal[
-    "immediate",
-    "defer_ephemeral",
-    "defer_public",
-    "defer_component_update",
-]
-DiscordAckTiming = Literal["dispatch", "post_private_preflight"]
-DiscordExposure = Literal["public", "operator"]
-SchedulerAckStrategy = Literal[
-    "none",
-    "scheduler_component_update",
-    "scheduler_ephemeral",
-]
 WorkspaceLockPolicy = Literal[
     "none",
     "bound_workspace",
@@ -72,18 +72,6 @@ TICKETS_SELECT_ID = "tickets_select"
 TICKETS_MODAL_PREFIX = "tickets_modal"
 NEWT_HARD_RESET_CUSTOM_ID = "newt_hard_reset"
 NEWT_CANCEL_CUSTOM_ID = "newt_cancel"
-
-FLOW_COMPONENT_DISPATCH_ACK_ACTIONS = frozenset(
-    {
-        "archive",
-        "archive_cancel",
-        "archive_cancel_prompt",
-        "archive_confirm",
-        "archive_confirm_prompt",
-        "refresh",
-        "restart",
-    }
-)
 
 SlashOptionsFactory = Callable[[Any], list[dict[str, Any]]]
 SlashHandler = Callable[..., Awaitable[None]]
@@ -2238,7 +2226,10 @@ def slash_command_ack_metadata_for_path(
     route = slash_command_route_for_path(command_path)
     if route is None:
         return None, "dispatch", False
-    return route.ack_policy, route.ack_timing, route.requires_workspace
+    ux_entry = discord_slash_command_ux_contract_for_id(route.id)
+    ack_policy = discord_ack_policy_for_entry(ux_entry)
+    ack_timing = ux_entry.ack_timing if ux_entry is not None else "dispatch"
+    return ack_policy, ack_timing, route.requires_workspace
 
 
 def slash_command_workspace_lock_policy(
@@ -2250,21 +2241,19 @@ def slash_command_workspace_lock_policy(
 
 def component_scheduler_ack_strategy(custom_id: str) -> SchedulerAckStrategy:
     route = component_route_for_custom_id(custom_id)
-    return (
-        route.scheduler_ack_strategy
-        if route is not None
-        else "scheduler_component_update"
-    )
+    if route is None:
+        return "scheduler_component_update"
+    ux_entry = discord_component_ux_contract_for_route(route.id, custom_id=custom_id)
+    strategy = discord_scheduler_ack_strategy_for_entry(ux_entry)
+    return strategy if strategy != "none" else route.scheduler_ack_strategy
 
 
 def component_dispatch_ack_policy(custom_id: str) -> Optional[DiscordAckPolicy]:
-    if not custom_id.startswith("flow:"):
+    route = component_route_for_custom_id(custom_id)
+    if route is None:
         return None
-    flow_parts = custom_id.split(":")
-    flow_action = flow_parts[2].strip().lower() if len(flow_parts) >= 3 else ""
-    if flow_action in FLOW_COMPONENT_DISPATCH_ACK_ACTIONS:
-        return "defer_component_update"
-    return None
+    ux_entry = discord_component_ux_contract_for_route(route.id, custom_id=custom_id)
+    return discord_ack_policy_for_entry(ux_entry, dispatch=True)
 
 
 def component_admission_ack_policy(custom_id: str) -> Optional[DiscordAckPolicy]:
@@ -2283,7 +2272,11 @@ def component_workspace_lock_policy(custom_id: str) -> WorkspaceLockPolicy:
 
 def modal_scheduler_ack_strategy(custom_id: str) -> SchedulerAckStrategy:
     route = modal_route_for_custom_id(custom_id)
-    return route.scheduler_ack_strategy if route is not None else "scheduler_ephemeral"
+    if route is None:
+        return "scheduler_ephemeral"
+    ux_entry = discord_modal_ux_contract_for_route(route.id)
+    strategy = discord_scheduler_ack_strategy_for_entry(ux_entry)
+    return strategy if strategy != "none" else route.scheduler_ack_strategy
 
 
 def modal_admission_ack_policy(custom_id: str) -> Optional[DiscordAckPolicy]:
@@ -2304,23 +2297,28 @@ def discord_contract_metadata_for_id(command_id: str) -> dict[str, Any]:
     routes = _SLASH_ROUTES_BY_ID.get(command_id, ())
     visible_routes = tuple(route for route in routes if route.catalog_in_contract)
     discord_paths = tuple(route.registered_path for route in visible_routes)
+    ux_entry = discord_slash_command_ux_contract_for_id(command_id)
     if not visible_routes:
         required_capabilities: tuple[str, ...] = ()
         if routes:
             required_capabilities = routes[0].required_capabilities
         return {
             "discord_paths": (),
-            "discord_ack_policy": None,
-            "discord_ack_timing": "dispatch",
-            "discord_exposure": None,
+            "discord_ack_policy": discord_ack_policy_for_entry(ux_entry),
+            "discord_ack_timing": (
+                ux_entry.ack_timing if ux_entry is not None else "dispatch"
+            ),
+            "discord_exposure": discord_exposure_for_entry(ux_entry),
             "required_capabilities": required_capabilities,
         }
     route = visible_routes[0]
     return {
         "discord_paths": discord_paths,
-        "discord_ack_policy": route.ack_policy,
-        "discord_ack_timing": route.ack_timing,
-        "discord_exposure": route.exposure,
+        "discord_ack_policy": discord_ack_policy_for_entry(ux_entry),
+        "discord_ack_timing": (
+            ux_entry.ack_timing if ux_entry is not None else route.ack_timing
+        ),
+        "discord_exposure": discord_exposure_for_entry(ux_entry),
         "required_capabilities": route.required_capabilities,
     }
 
@@ -2359,6 +2357,8 @@ async def dispatch_slash_command(
             "Command not implemented yet for Discord.",
         )
         return False
+    if discord_slash_command_ux_contract_for_id(route.id) is None:
+        raise ValueError(f"missing shared Discord slash UX contract for {route.id}")
 
     await route.handler(
         service,
@@ -2383,6 +2383,8 @@ async def dispatch_component_interaction(service: Any, ctx: Any) -> bool:
             f"Unknown component: {custom_id}",
         )
         return False
+    if discord_component_ux_contract_for_route(route.id, custom_id=custom_id) is None:
+        raise ValueError(f"missing shared Discord component UX contract for {route.id}")
     if route.prepare is not None:
         prepared_result = route.prepare(service, ctx)
         if inspect.isawaitable(prepared_result):
@@ -2404,6 +2406,8 @@ async def dispatch_modal_submit(service: Any, ctx: Any) -> bool:
             "Unknown modal submission.",
         )
         return False
+    if discord_modal_ux_contract_for_route(route.id) is None:
+        raise ValueError(f"missing shared Discord modal UX contract for {route.id}")
     await route.handler(service, ctx)
     return True
 
@@ -2421,12 +2425,37 @@ async def dispatch_autocomplete(
 ) -> bool:
     route = autocomplete_route_for(command_path, focused_name)
     if route is None:
+        if (
+            discord_autocomplete_ux_contract_for_route(
+                None,
+                command_path=normalize_discord_command_path(command_path),
+                focused_name=focused_name,
+            )
+            is None
+        ):
+            await service.respond_autocomplete(
+                interaction_id,
+                interaction_token,
+                choices=[],
+            )
+            return False
         await service.respond_autocomplete(
             interaction_id,
             interaction_token,
             choices=[],
         )
         return False
+    if (
+        discord_autocomplete_ux_contract_for_route(
+            route.id,
+            command_path=normalize_discord_command_path(command_path),
+            focused_name=focused_name,
+        )
+        is None
+    ):
+        raise ValueError(
+            f"missing shared Discord autocomplete UX contract for {route.id}"
+        )
     choices_result = route.choices_builder(
         service,
         channel_id=channel_id,

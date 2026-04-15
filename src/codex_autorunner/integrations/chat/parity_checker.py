@@ -7,6 +7,36 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
 
+from .action_ux_contract import (
+    CHAT_ACTION_UX_CONTRACT,
+    ChatActionUxContractEntry,
+    discord_autocomplete_ux_contract_for_route,
+    discord_component_ux_contract_for_route,
+    discord_modal_ux_contract_for_route,
+    discord_slash_command_ux_contract_for_id,
+    plain_text_turn_ux_contract_for_mode,
+    telegram_callback_ux_contract_for_callback,
+    telegram_command_ux_contract_for_name,
+)
+from .callbacks import (
+    CALLBACK_AGENT,
+    CALLBACK_AGENT_PROFILE,
+    CALLBACK_APPROVAL,
+    CALLBACK_BIND,
+    CALLBACK_COMPACT,
+    CALLBACK_EFFORT,
+    CALLBACK_FLOW,
+    CALLBACK_FLOW_RUN,
+    CALLBACK_MODEL,
+    CALLBACK_QUESTION_CANCEL,
+    CALLBACK_QUESTION_CUSTOM,
+    CALLBACK_QUESTION_DONE,
+    CALLBACK_QUESTION_OPTION,
+    CALLBACK_RESUME,
+    CALLBACK_REVIEW_COMMIT,
+    CALLBACK_UPDATE,
+    CALLBACK_UPDATE_CONFIRM,
+)
 from .command_contract import (
     COMMAND_CONTRACT,
     CommandContractEntry,
@@ -51,6 +81,7 @@ def run_parity_checks(
     *,
     repo_root: Path | None = None,
     contract: Sequence[CommandContractEntry] = COMMAND_CONTRACT,
+    action_ux_contract: Sequence[ChatActionUxContractEntry] = CHAT_ACTION_UX_CONTRACT,
 ) -> tuple[ParityCheckResult, ...]:
     source_paths = {
         "discord_service": _resolve_source_path(
@@ -123,6 +154,10 @@ def run_parity_checks(
     return (
         _check_contract_discord_metadata_complete(contract=contract),
         _check_contract_telegram_metadata_complete(contract=contract),
+        _check_shared_action_ux_contract_complete(
+            contract=contract,
+            action_ux_contract=action_ux_contract,
+        ),
         _check_contract_registry_entries_cataloged(
             contract=contract,
             discord_commands_ast=discord_commands_ast,
@@ -221,6 +256,12 @@ def _source_unavailable_results(
         ),
         ParityCheckResult(
             id="contract.telegram_metadata_complete",
+            passed=True,
+            message=message,
+            metadata=metadata,
+        ),
+        ParityCheckResult(
+            id="contract.shared_action_ux_complete",
             passed=True,
             message=message,
             metadata=metadata,
@@ -335,6 +376,195 @@ def _check_contract_telegram_metadata_complete(
             "missing_exposure": missing_exposure,
             "missing_response_policy": missing_response_policy,
             "missing_allow_during_turn": missing_allow_during_turn,
+        },
+    )
+
+
+def _check_shared_action_ux_contract_complete(
+    *,
+    contract: Sequence[CommandContractEntry],
+    action_ux_contract: Sequence[ChatActionUxContractEntry],
+) -> ParityCheckResult:
+    missing_telegram_commands = sorted(
+        name
+        for name in telegram_runtime_command_names_from_contract(tuple(contract))
+        if telegram_command_ux_contract_for_name(name, ux_contract=action_ux_contract)
+        is None
+    )
+    missing_discord_commands = sorted(
+        entry.id
+        for entry in contract
+        if entry.discord_paths
+        and discord_slash_command_ux_contract_for_id(
+            entry.id,
+            ux_contract=action_ux_contract,
+        )
+        is None
+    )
+
+    telegram_callback_scenarios: tuple[tuple[str, str, dict[str, Any]], ...] = (
+        ("approval", CALLBACK_APPROVAL, {}),
+        ("question_option", CALLBACK_QUESTION_OPTION, {}),
+        ("question_done", CALLBACK_QUESTION_DONE, {}),
+        ("question_custom", CALLBACK_QUESTION_CUSTOM, {}),
+        ("question_cancel", CALLBACK_QUESTION_CANCEL, {}),
+        ("resume", CALLBACK_RESUME, {}),
+        ("bind", CALLBACK_BIND, {}),
+        ("agent", CALLBACK_AGENT, {}),
+        ("agent_profile", CALLBACK_AGENT_PROFILE, {}),
+        ("model", CALLBACK_MODEL, {}),
+        ("effort", CALLBACK_EFFORT, {}),
+        ("update", CALLBACK_UPDATE, {}),
+        ("update_confirm", CALLBACK_UPDATE_CONFIRM, {}),
+        ("review_commit", CALLBACK_REVIEW_COMMIT, {}),
+        ("compact", CALLBACK_COMPACT, {}),
+        ("flow", CALLBACK_FLOW, {"action": "resume"}),
+        ("flow_refresh", CALLBACK_FLOW, {"action": "refresh"}),
+        ("flow_run", CALLBACK_FLOW_RUN, {}),
+        ("selection_cancel", "cancel", {"kind": "cancel"}),
+        ("interrupt", "cancel", {"kind": "interrupt"}),
+        ("queue_cancel", "cancel", {"kind": "queue_cancel:exec-1"}),
+        (
+            "queue_interrupt_send",
+            "cancel",
+            {"kind": "queue_interrupt_send:exec-1"},
+        ),
+        ("pagination", "page", {"kind": "resume", "page": 1}),
+    )
+    missing_telegram_callbacks = sorted(
+        label
+        for label, callback_id, payload in telegram_callback_scenarios
+        if telegram_callback_ux_contract_for_callback(
+            callback_id,
+            payload,
+            ux_contract=action_ux_contract,
+        )
+        is None
+    )
+
+    discord_component_scenarios = (
+        ("tickets.filter", "tickets.filter", "tickets_filter_select"),
+        ("tickets.select", "tickets.select", "tickets_select"),
+        ("bind.page.pagination", "bind.page", "bind_page:next"),
+        ("bind.select", "bind.select", "bind_select"),
+        ("flow.runs_select", "flow.runs_select", "flow_runs_select"),
+        ("agent.select", "agent.select", "agent_select"),
+        ("agent.profile_select", "agent.profile_select", "agent_profile_select"),
+        ("model.select", "model.select", "model_select"),
+        ("model.effort_select", "model.effort_select", "model_effort_select"),
+        ("session.resume_select", "session.resume_select", "session_resume_select"),
+        ("update.target_select", "update.target_select", "update_target_select"),
+        ("update.confirm", "update.confirm", "update_confirm:discord"),
+        ("update.cancel", "update.cancel", "update_cancel:discord"),
+        ("newt.hard_reset", "newt.hard_reset", "newt_hard_reset:workspace-1"),
+        ("newt.cancel", "newt.cancel", "newt_cancel:workspace-1"),
+        ("review.commit_select", "review.commit_select", "review_commit_select"),
+        ("flow.action_select", "flow.action_select", "flow_action_select:reply"),
+        ("flow.button", "flow.button", "flow:run-1:stop"),
+        ("flow.button.refresh", "flow.button", "flow:run-1:refresh"),
+        ("approval.component", "approval.component", "approval:req-1:approve"),
+        ("queue.cancel", "queue.cancel", "queue_cancel:message-1"),
+        ("queued_turn.cancel", "queued_turn.cancel", "qcancel:exec-1"),
+        (
+            "queue.interrupt_send",
+            "queue.interrupt_send",
+            "queue_interrupt_send:message-1",
+        ),
+        (
+            "queued_turn.interrupt_send",
+            "queued_turn.interrupt_send",
+            "qis:exec-1:message-1",
+        ),
+        ("turn.cancel", "turn.cancel", "cancel_turn"),
+        ("turn.cancel_scoped", "turn.cancel_scoped", "cancel_turn:thread-1:exec-1"),
+        ("turn.continue", "turn.continue", "continue_turn"),
+    )
+    missing_discord_components = sorted(
+        label
+        for label, route_id, custom_id in discord_component_scenarios
+        if discord_component_ux_contract_for_route(
+            route_id,
+            custom_id=custom_id,
+            ux_contract=action_ux_contract,
+        )
+        is None
+    )
+
+    discord_modal_scenarios = (("tickets.modal_submit", "tickets.modal_submit"),)
+    missing_discord_modals = sorted(
+        label
+        for label, route_id in discord_modal_scenarios
+        if discord_modal_ux_contract_for_route(
+            route_id,
+            ux_contract=action_ux_contract,
+        )
+        is None
+    )
+
+    discord_autocomplete_scenarios = (
+        ("car.bind.workspace", "car.bind.workspace", ("car", "bind"), "workspace"),
+        ("car.model.name", "car.model.name", ("car", "model"), "name"),
+        ("car.skills.search", "car.skills.search", ("car", "skills"), "search"),
+        ("car.tickets.search", "car.tickets.search", ("car", "tickets"), "search"),
+        (
+            "car.resume.thread_id",
+            "car.resume.thread_id",
+            ("car", "session", "resume"),
+            "thread_id",
+        ),
+        ("flow.run_picker", None, ("car", "flow", "status"), "run_id"),
+    )
+    missing_discord_autocomplete = sorted(
+        label
+        for label, route_id, command_path, focused_name in discord_autocomplete_scenarios
+        if discord_autocomplete_ux_contract_for_route(
+            route_id,
+            command_path=command_path,
+            focused_name=focused_name,
+            ux_contract=action_ux_contract,
+        )
+        is None
+    )
+
+    plain_text_modes = ("always", "mentions")
+    missing_plain_text_turns = sorted(
+        mode
+        for mode in plain_text_modes
+        if plain_text_turn_ux_contract_for_mode(
+            mode,
+            ux_contract=action_ux_contract,
+        )
+        is None
+    )
+
+    passed = not any(
+        (
+            missing_telegram_commands,
+            missing_discord_commands,
+            missing_telegram_callbacks,
+            missing_discord_components,
+            missing_discord_modals,
+            missing_discord_autocomplete,
+            missing_plain_text_turns,
+        )
+    )
+    message = (
+        "Shared action UX contract covers public commands, callbacks, controls, and interactive routes."
+        if passed
+        else "One or more public chat actions are missing shared action UX coverage."
+    )
+    return ParityCheckResult(
+        id="contract.shared_action_ux_complete",
+        passed=passed,
+        message=message,
+        metadata={
+            "missing_telegram_commands": missing_telegram_commands,
+            "missing_discord_commands": missing_discord_commands,
+            "missing_telegram_callbacks": missing_telegram_callbacks,
+            "missing_discord_components": missing_discord_components,
+            "missing_discord_modals": missing_discord_modals,
+            "missing_discord_autocomplete": missing_discord_autocomplete,
+            "missing_plain_text_turns": missing_plain_text_turns,
         },
     )
 
@@ -1603,12 +1833,6 @@ def _module_has_call(tree: ast.Module | None, *, callee_name: str) -> bool:
     return False
 
 
-def _count_calls(tree: ast.Module | None, *, callee_name: str) -> int:
-    if tree is None:
-        return 0
-    return sum(1 for call in _iter_calls(tree) if _call_name(call.func) == callee_name)
-
-
 def _has_call_with_string_argument(
     functions: Sequence[ast.FunctionDef | ast.AsyncFunctionDef],
     *,
@@ -1841,12 +2065,6 @@ def _string_tuple(expr: ast.expr) -> tuple[str, ...] | None:
 
 def _string_constant_value(expr: ast.expr) -> str | None:
     if isinstance(expr, ast.Constant) and isinstance(expr.value, str):
-        return expr.value
-    return None
-
-
-def _bool_constant_value(expr: ast.expr) -> bool | None:
-    if isinstance(expr, ast.Constant) and isinstance(expr.value, bool):
         return expr.value
     return None
 

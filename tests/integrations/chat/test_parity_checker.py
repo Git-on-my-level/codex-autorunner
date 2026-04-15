@@ -5,6 +5,9 @@ from pathlib import Path
 import pytest
 
 from codex_autorunner.integrations.chat import parity_checker
+from codex_autorunner.integrations.chat.action_ux_contract import (
+    CHAT_ACTION_UX_CONTRACT,
+)
 from codex_autorunner.integrations.chat.command_contract import (
     COMMAND_CONTRACT,
     CommandContractEntry,
@@ -100,6 +103,22 @@ def test_parity_checker_fails_when_registered_telegram_metadata_is_missing() -> 
     assert "future" in metadata_check.metadata["missing_exposure"]
     assert "future" in metadata_check.metadata["missing_response_policy"]
     assert "future" in metadata_check.metadata["missing_allow_during_turn"]
+
+
+def test_parity_checker_fails_when_public_callback_action_ux_is_missing() -> None:
+    action_ux_contract = tuple(
+        entry for entry in CHAT_ACTION_UX_CONTRACT if entry.id != "control.queue_cancel"
+    )
+    results_by_id = {
+        result.id: result
+        for result in run_parity_checks(action_ux_contract=action_ux_contract)
+    }
+
+    coverage_check = results_by_id["contract.shared_action_ux_complete"]
+    assert not coverage_check.passed
+    assert "queue_cancel" in coverage_check.metadata["missing_telegram_callbacks"]
+    assert "queue.cancel" in coverage_check.metadata["missing_discord_components"]
+    assert "queued_turn.cancel" in coverage_check.metadata["missing_discord_components"]
 
 
 def test_parity_checker_fails_when_contract_route_is_missing(tmp_path: Path) -> None:

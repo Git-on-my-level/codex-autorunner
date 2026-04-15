@@ -7,17 +7,22 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Literal, Optional, overload
 
+from .action_ux_contract import (
+    DiscordAckPolicy,
+    DiscordAckTiming,
+    DiscordExposure,
+    TelegramExposure,
+    TelegramResponsePolicy,
+    discord_ack_policy_for_entry,
+    discord_exposure_for_entry,
+    discord_slash_command_ux_contract_for_id,
+    telegram_allow_during_turn_for_entry,
+    telegram_command_ux_contract_for_name,
+    telegram_exposure_for_entry,
+    telegram_response_policy_for_entry,
+)
+
 CommandStatus = Literal["stable", "partial", "unsupported"]
-TelegramExposure = Literal["public", "hidden", "legacy_alias"]
-TelegramResponsePolicy = Literal["typing"]
-DiscordAckPolicy = Literal[
-    "immediate",
-    "defer_ephemeral",
-    "defer_public",
-    "defer_component_update",
-]
-DiscordAckTiming = Literal["dispatch", "post_private_preflight"]
-DiscordExposure = Literal["public", "operator"]
 
 
 @dataclass(frozen=True)
@@ -45,9 +50,11 @@ def _apply_discord_registry(entry: CommandContractEntry) -> CommandContractEntry
     from ..discord.interaction_registry import discord_contract_metadata_for_id
 
     metadata = discord_contract_metadata_for_id(entry.id)
+    ux_entry = discord_slash_command_ux_contract_for_id(entry.id)
     required_capabilities = (
         metadata["required_capabilities"] or entry.required_capabilities
     )
+    has_cataloged_discord_paths = bool(metadata["discord_paths"])
     return CommandContractEntry(
         id=entry.id,
         path=entry.path,
@@ -55,9 +62,21 @@ def _apply_discord_registry(entry: CommandContractEntry) -> CommandContractEntry
         status=entry.status,
         telegram_commands=entry.telegram_commands,
         discord_paths=metadata["discord_paths"],
-        discord_ack_policy=metadata["discord_ack_policy"],
-        discord_ack_timing=metadata["discord_ack_timing"],
-        discord_exposure=metadata["discord_exposure"],
+        discord_ack_policy=(
+            discord_ack_policy_for_entry(ux_entry)
+            if has_cataloged_discord_paths
+            else None
+        ),
+        discord_ack_timing=(
+            ux_entry.ack_timing
+            if has_cataloged_discord_paths and ux_entry is not None
+            else "dispatch"
+        ),
+        discord_exposure=(
+            discord_exposure_for_entry(ux_entry)
+            if has_cataloged_discord_paths
+            else None
+        ),
         required_capabilities=required_capabilities,
     )
 
@@ -581,174 +600,21 @@ class _LazyCommandContract(Sequence[CommandContractEntry]):
 
 COMMAND_CONTRACT: Sequence[CommandContractEntry] = _LazyCommandContract()
 
-_TELEGRAM_COMMAND_METADATA: dict[str, TelegramCommandMetadata] = {
-    "repos": TelegramCommandMetadata(
-        exposure="public",
-        response_policy="typing",
-        allow_during_turn=True,
-    ),
-    "bind": TelegramCommandMetadata(
-        exposure="public",
-        response_policy="typing",
-        allow_during_turn=False,
-    ),
-    "new": TelegramCommandMetadata(
-        exposure="public",
-        response_policy="typing",
-        allow_during_turn=False,
-    ),
-    "newt": TelegramCommandMetadata(
-        exposure="public",
-        response_policy="typing",
-        allow_during_turn=False,
-    ),
-    "archive": TelegramCommandMetadata(
-        exposure="public",
-        response_policy="typing",
-        allow_during_turn=False,
-    ),
-    "reset": TelegramCommandMetadata(
-        exposure="public",
-        response_policy="typing",
-        allow_during_turn=False,
-    ),
-    "resume": TelegramCommandMetadata(
-        exposure="public",
-        response_policy="typing",
-        allow_during_turn=False,
-    ),
-    "review": TelegramCommandMetadata(
-        exposure="public",
-        response_policy="typing",
-        allow_during_turn=False,
-    ),
-    "flow": TelegramCommandMetadata(
-        exposure="public",
-        response_policy="typing",
-        allow_during_turn=True,
-    ),
-    "reply": TelegramCommandMetadata(
-        exposure="legacy_alias",
-        response_policy="typing",
-        allow_during_turn=True,
-    ),
-    "agent": TelegramCommandMetadata(
-        exposure="public",
-        response_policy="typing",
-        allow_during_turn=False,
-    ),
-    "model": TelegramCommandMetadata(
-        exposure="public",
-        response_policy="typing",
-        allow_during_turn=False,
-    ),
-    "approvals": TelegramCommandMetadata(
-        exposure="public",
-        response_policy="typing",
-        allow_during_turn=False,
-    ),
-    "pma": TelegramCommandMetadata(
-        exposure="public",
-        response_policy="typing",
-        allow_during_turn=True,
-    ),
-    "status": TelegramCommandMetadata(
-        exposure="public",
-        response_policy="typing",
-        allow_during_turn=True,
-    ),
-    "processes": TelegramCommandMetadata(
-        exposure="public",
-        response_policy="typing",
-        allow_during_turn=True,
-    ),
-    "files": TelegramCommandMetadata(
-        exposure="public",
-        response_policy="typing",
-        allow_during_turn=True,
-    ),
-    "debug": TelegramCommandMetadata(
-        exposure="public",
-        response_policy="typing",
-        allow_during_turn=True,
-    ),
-    "ids": TelegramCommandMetadata(
-        exposure="public",
-        response_policy="typing",
-        allow_during_turn=True,
-    ),
-    "diff": TelegramCommandMetadata(
-        exposure="public",
-        response_policy="typing",
-        allow_during_turn=True,
-    ),
-    "mention": TelegramCommandMetadata(
-        exposure="public",
-        response_policy="typing",
-        allow_during_turn=True,
-    ),
-    "skills": TelegramCommandMetadata(
-        exposure="public",
-        response_policy="typing",
-        allow_during_turn=True,
-    ),
-    "mcp": TelegramCommandMetadata(
-        exposure="hidden",
-        response_policy="typing",
-        allow_during_turn=True,
-    ),
-    "experimental": TelegramCommandMetadata(
-        exposure="hidden",
-        response_policy="typing",
-        allow_during_turn=False,
-    ),
-    "init": TelegramCommandMetadata(
-        exposure="public",
-        response_policy="typing",
-        allow_during_turn=False,
-    ),
-    "compact": TelegramCommandMetadata(
-        exposure="public",
-        response_policy="typing",
-        allow_during_turn=False,
-    ),
-    "rollout": TelegramCommandMetadata(
-        exposure="public",
-        response_policy="typing",
-        allow_during_turn=True,
-    ),
-    "update": TelegramCommandMetadata(
-        exposure="public",
-        response_policy="typing",
-        allow_during_turn=False,
-    ),
-    "logout": TelegramCommandMetadata(
-        exposure="public",
-        response_policy="typing",
-        allow_during_turn=False,
-    ),
-    "feedback": TelegramCommandMetadata(
-        exposure="public",
-        response_policy="typing",
-        allow_during_turn=True,
-    ),
-    "interrupt": TelegramCommandMetadata(
-        exposure="public",
-        response_policy="typing",
-        allow_during_turn=True,
-    ),
-    "help": TelegramCommandMetadata(
-        exposure="public",
-        response_policy="typing",
-        allow_during_turn=True,
-    ),
-}
-
 
 def telegram_command_metadata_for_name(
     name: str,
 ) -> Optional[TelegramCommandMetadata]:
-    return _TELEGRAM_COMMAND_METADATA.get(name.strip())
+    ux_entry = telegram_command_ux_contract_for_name(name)
+    exposure = telegram_exposure_for_entry(ux_entry)
+    response_policy = telegram_response_policy_for_entry(ux_entry)
+    allow_during_turn = telegram_allow_during_turn_for_entry(ux_entry)
+    if exposure is None or response_policy is None or allow_during_turn is None:
+        return None
+    return TelegramCommandMetadata(
+        exposure=exposure,
+        response_policy=response_policy,
+        allow_during_turn=allow_during_turn,
+    )
 
 
 def telegram_runtime_command_names_from_contract(
