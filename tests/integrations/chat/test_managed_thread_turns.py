@@ -2313,3 +2313,240 @@ class TestFinalizationSideEffectsCharacterization:
 
         assert result.status == "error"
         assert len(fake_hub_client.activity_requests) == 0
+
+
+class TestResolveThreadStateCharacterization:
+    def test_resolve_thread_state_prefers_live_over_fallback(self) -> None:
+        live_thread = SimpleNamespace(
+            thread_target_id="thread-1",
+            agent_id="codex",
+            workspace_root="/ws",
+            backend_thread_id="backend-live",
+            repo_id="repo-1",
+            resource_kind="repo",
+            resource_id="repo-1",
+        )
+        fallback_thread = SimpleNamespace(
+            thread_target_id="thread-1",
+            agent_id="codex",
+            workspace_root="/ws",
+            backend_thread_id="backend-fallback",
+        )
+        service = SimpleNamespace(
+            get_thread_target=lambda tid: live_thread,
+            get_thread_runtime_binding=lambda tid: SimpleNamespace(
+                backend_thread_id="backend-binding"
+            ),
+        )
+        state = managed_thread_turns_module._resolve_thread_state(
+            service,
+            managed_thread_id="thread-1",
+            fallback_thread=fallback_thread,
+            initial_backend_thread_id="",
+        )
+        assert state.thread is live_thread
+        assert state.backend_thread_id == "backend-binding"
+        assert state.metadata["repo_id"] == "repo-1"
+
+    def test_resolve_thread_state_falls_back_when_service_raises(self) -> None:
+        fallback_thread = SimpleNamespace(
+            thread_target_id="thread-1",
+            agent_id="codex",
+            workspace_root="/ws",
+            backend_thread_id="backend-fallback",
+        )
+
+        class _Service:
+            def get_thread_target(self, tid: str) -> Any:
+                raise RuntimeError("unavailable")
+
+            def get_thread_runtime_binding(self, tid: str) -> None:
+                return None
+
+        state = managed_thread_turns_module._resolve_thread_state(
+            _Service(),
+            managed_thread_id="thread-1",
+            fallback_thread=fallback_thread,
+            initial_backend_thread_id="backend-initial",
+        )
+        assert state.thread is fallback_thread
+        assert state.backend_thread_id == "backend-fallback"
+
+    def test_resolve_thread_state_uses_initial_when_binding_empty(self) -> None:
+        thread = SimpleNamespace(
+            thread_target_id="thread-1",
+            agent_id="codex",
+            workspace_root="/ws",
+            backend_thread_id=None,
+        )
+
+        class _Service:
+            def get_thread_target(self, tid: str) -> Any:
+                return thread
+
+            def get_thread_runtime_binding(self, tid: str) -> None:
+                return None
+
+        state = managed_thread_turns_module._resolve_thread_state(
+            _Service(),
+            managed_thread_id="thread-1",
+            fallback_thread=thread,
+            initial_backend_thread_id="initial-id",
+        )
+        assert state.backend_thread_id == "initial-id"
+
+
+class TestTranscriptFailureDoesNotBlockOrchestration:
+    @pytest.mark.anyio
+    async def test_transcript_write_failure_still_records_orchestration_result(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        started = _started_execution_with_backend_ids(tmp_path)
+        recorded_results: list[dict[str, Any]] = []
+        monkeypatch.setattr(
+            managed_thread_turns_module,
+            "harness_supports_progress_event_stream",
+            lambda _harness: False,
+        )
+
+        async def _ok_outcome(*args: Any, **kwargs: Any) -> RuntimeThreadOutcome:
+            return RuntimeThreadOutcome(
+                status="ok",
+                assistant_text="result despite transcript failure",
+                error=None,
+                backend_thread_id="session-1",
+                backend_turn_id="turn-1",
+            )
+
+        monkeypatch.setattr(
+            managed_thread_turns_module,
+            "await_runtime_thread_outcome",
+            _ok_outcome,
+        )
+
+        class _FailingTranscriptClient:
+            async def persist_execution_timeline(self, request: Any) -> Any:
+                return SimpleNamespace(
+                    execution_id=request.execution_id,
+                    persisted_event_count=len(request.events),
+                )
+
+            async def finalize_execution_cold_trace(self, request: Any) -> Any:
+                return SimpleNamespace(
+                    execution_id=request.execution_id,
+                    trace_manifest_id="trace-1",
+                )
+
+            async def write_transcript(self, request: Any) -> Any:
+                raise RuntimeError("transcript service unavailable")
+
+            async def record_thread_activity(self, request: Any) -> None:
+                pass
+
+        orchestration_service = SimpleNamespace(
+            get_thread_target=lambda mid: SimpleNamespace(
+                backend_thread_id="session-1"
+            ),
+            get_thread_runtime_binding=lambda mid: SimpleNamespace(
+                backend_thread_id="session-1"
+            ),
+            record_execution_result=lambda *args, **kwargs: (
+                recorded_results.append(kwargs),
+                SimpleNamespace(status="ok", error=None),
+            )[1],
+        )
+
+        result = await managed_thread_turns_module.finalize_managed_thread_execution(
+            orchestration_service=orchestration_service,
+            started=started,
+            state_root=tmp_path,
+            hub_client=_FailingTranscriptClient(),
+            surface=managed_thread_turns_module.ManagedThreadSurfaceInfo(
+                log_label="Test",
+                surface_kind="test",
+                surface_key="test:s-1",
+            ),
+            errors=managed_thread_turns_module.ManagedThreadErrorMessages(
+                public_execution_error="failed",
+                timeout_error="timeout",
+                interrupted_error="interrupted",
+                timeout_seconds=5,
+            ),
+            logger=logging.getLogger("test.transcript_failure"),
+            turn_preview="preview",
+        )
+
+        assert result.status == "ok"
+        assert result.assistant_text == "result despite transcript failure"
+        assert len(recorded_results) == 1
+        assert recorded_results[0]["status"] == "ok"
+
+
+class TestActivityWriteOnlyAfterAcknowledgedOk:
+    @pytest.mark.anyio
+    async def test_activity_not_written_when_orchestration_overrides_to_error(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        started = _started_execution_with_backend_ids(tmp_path)
+        fake_hub_client = _FakeHubPersistenceClient()
+        monkeypatch.setattr(
+            managed_thread_turns_module,
+            "harness_supports_progress_event_stream",
+            lambda _harness: False,
+        )
+
+        async def _ok_outcome(*args: Any, **kwargs: Any) -> RuntimeThreadOutcome:
+            return RuntimeThreadOutcome(
+                status="ok",
+                assistant_text="should be overridden",
+                error=None,
+                backend_thread_id="session-1",
+                backend_turn_id="turn-1",
+            )
+
+        monkeypatch.setattr(
+            managed_thread_turns_module,
+            "await_runtime_thread_outcome",
+            _ok_outcome,
+        )
+
+        orchestration_service = SimpleNamespace(
+            get_thread_target=lambda mid: SimpleNamespace(
+                backend_thread_id="session-1"
+            ),
+            get_thread_runtime_binding=lambda mid: SimpleNamespace(
+                backend_thread_id="session-1"
+            ),
+            record_execution_result=lambda *args, **kwargs: SimpleNamespace(
+                status="error",
+                error="persist failed",
+            ),
+            get_execution=lambda mid, tid: None,
+        )
+
+        result = await managed_thread_turns_module.finalize_managed_thread_execution(
+            orchestration_service=orchestration_service,
+            started=started,
+            state_root=tmp_path,
+            hub_client=fake_hub_client,
+            surface=managed_thread_turns_module.ManagedThreadSurfaceInfo(
+                log_label="Test",
+                surface_kind="test",
+                surface_key="test:s-1",
+            ),
+            errors=managed_thread_turns_module.ManagedThreadErrorMessages(
+                public_execution_error="failed",
+                timeout_error="timeout",
+                interrupted_error="interrupted",
+                timeout_seconds=5,
+            ),
+            logger=logging.getLogger("test.activity_no_override"),
+            turn_preview="preview",
+        )
+
+        assert result.status == "error"
+        assert len(fake_hub_client.activity_requests) == 0

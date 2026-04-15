@@ -1,3 +1,27 @@
+"""Shared managed-thread turn coordinator for long-lived PMA and chat threads.
+
+Ownership boundaries:
+- **Coordinator** (this module): submission, execution lifecycle, outcome
+  determination, progress event pumping, runtime event state, and queue-worker
+  management.  The coordinator is the *only* execution path for managed PMA
+  turns; surfaces must not bypass it.
+- **Hub control-plane side effects** (bridged through this module):
+  timeline persistence, cold-trace finalization, transcript writes, and thread
+  activity records.  These are always best-effort; failure must not prevent
+  orchestration-level result recording or finalization.
+- **PR-binding self-claim** (`self_claim_and_arm_pr_binding`): coordinator-level
+  responsibility that runs only on ok outcomes, after orchestration recording
+  but before thread-activity writes.
+- **Post-completion recovery** (`recover_post_completion_outcome`): evidence-based
+  recovery from transport errors using runtime event state.  The coordinator
+  never synthesizes success without a `completed_seen` signal and assistant text.
+
+Invariants preserved across PMA, Discord, and Telegram surfaces:
+- No PMA-only bypasses around submission, queueing, interruption, or finalization.
+- PMA-specific timeout config applies to PMA surfaces only; repo-scoped
+  coordinators keep the legacy 7200-second contract.
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -904,6 +928,47 @@ def _thread_target_metadata(thread: Any) -> dict[str, Any]:
     }
 
 
+@dataclass(frozen=True)
+class _ResolvedThreadState:
+    thread: Any
+    metadata: dict[str, Any]
+    runtime_binding: Any
+    backend_thread_id: str
+
+
+def _resolve_thread_state(
+    orchestration_service: Any,
+    *,
+    managed_thread_id: str,
+    fallback_thread: Any,
+    initial_backend_thread_id: str,
+) -> _ResolvedThreadState:
+    try:
+        thread = orchestration_service.get_thread_target(managed_thread_id)
+    except (AttributeError, KeyError, TypeError, RuntimeError):
+        thread = None
+    if thread is None:
+        thread = fallback_thread
+    metadata = _thread_target_metadata(thread)
+    runtime_binding = get_thread_runtime_binding(
+        orchestration_service, managed_thread_id
+    )
+    backend_thread_id = (
+        str(
+            getattr(runtime_binding, "backend_thread_id", None)
+            or getattr(thread, "backend_thread_id", None)
+            or ""
+        ).strip()
+        or initial_backend_thread_id
+    )
+    return _ResolvedThreadState(
+        thread=thread,
+        metadata=metadata,
+        runtime_binding=runtime_binding,
+        backend_thread_id=backend_thread_id,
+    )
+
+
 def _resolve_repo_raw_config_for_workspace(
     *,
     state_root: Path,
@@ -1383,21 +1448,15 @@ async def finalize_managed_thread_execution(
         orchestration_service,
         hub_client,
     )
-    try:
-        current_thread = orchestration_service.get_thread_target(managed_thread_id)
-    except (AttributeError, KeyError, TypeError, RuntimeError):
-        current_thread = None
-    if current_thread is None:
-        current_thread = started.thread
-    current_thread_metadata = _thread_target_metadata(current_thread)
-    runtime_binding = get_thread_runtime_binding(
-        orchestration_service, managed_thread_id
+    initial_state = _resolve_thread_state(
+        orchestration_service,
+        managed_thread_id=managed_thread_id,
+        fallback_thread=started.thread,
+        initial_backend_thread_id=str(started.thread.backend_thread_id or "").strip(),
     )
-    current_backend_thread_id = str(
-        getattr(runtime_binding, "backend_thread_id", None)
-        or started.thread.backend_thread_id
-        or ""
-    ).strip()
+    current_thread = initial_state.thread
+    current_thread_metadata = initial_state.metadata
+    current_backend_thread_id = initial_state.backend_thread_id
     started_execution_status = str(
         getattr(started.execution, "status", "") or ""
     ).strip()
@@ -1947,31 +2006,20 @@ async def finalize_managed_thread_execution(
     resolved_assistant_text = (
         outcome.assistant_text or event_state.best_assistant_text()
     )
-    try:
-        finalized_thread = orchestration_service.get_thread_target(managed_thread_id)
-    except (AttributeError, KeyError, TypeError, RuntimeError):
-        finalized_thread = None
-    if finalized_thread is None:
-        finalized_thread = current_thread
-    finalized_thread_metadata = _thread_target_metadata(finalized_thread)
-    finalized_runtime_binding = get_thread_runtime_binding(
+    finalized_state = _resolve_thread_state(
         orchestration_service,
-        managed_thread_id,
+        managed_thread_id=managed_thread_id,
+        fallback_thread=current_thread,
+        initial_backend_thread_id=outcome.backend_thread_id
+        or current_backend_thread_id,
     )
+    finalized_thread_metadata = finalized_state.metadata
     (
         session_notice,
         fresh_backend_session_reason,
         fresh_backend_session_started,
     ) = managed_thread_session_metadata(started.request)
-    resolved_backend_thread_id = (
-        str(
-            getattr(finalized_runtime_binding, "backend_thread_id", None)
-            or getattr(finalized_thread, "backend_thread_id", None)
-            or ""
-        ).strip()
-        or outcome.backend_thread_id
-        or current_backend_thread_id
-    )
+    resolved_backend_thread_id = finalized_state.backend_thread_id
     completion_source = _managed_thread_completion_source(
         outcome,
         recovered_after_completion=recovered_after_completion,
@@ -1987,6 +2035,7 @@ async def finalize_managed_thread_execution(
         raw_thread_metadata = getattr(started.thread, "metadata", None)
         if isinstance(raw_thread_metadata, Mapping):
             thread_payload = {"metadata": dict(raw_thread_metadata)}
+        # Coordinator-level: PR-binding self-claim (best-effort, ok outcomes only).
         try:
             self_claim_and_arm_pr_binding(
                 hub_root=state_root,
@@ -2008,6 +2057,8 @@ async def finalize_managed_thread_execution(
                 managed_thread_id,
                 managed_turn_id,
             )
+        # Hub control-plane: transcript write (best-effort, ok outcomes only).
+        # Must run before record_execution_result so transcript_turn_id is available.
         transcript_turn_id: Optional[str] = None
         transcript_metadata = {
             "managed_thread_id": managed_thread_id,
@@ -2050,6 +2101,7 @@ async def finalize_managed_thread_execution(
                 managed_turn_id,
                 exc,
             )
+        # Orchestration: canonical execution result recording (must succeed).
         try:
             finalized_execution = orchestration_service.record_execution_result(
                 managed_thread_id,
@@ -2134,6 +2186,7 @@ async def finalize_managed_thread_execution(
             fresh_backend_session_reason=fresh_backend_session_reason,
             **_managed_thread_runtime_trace_fields(event_state),
         )
+        # Hub control-plane: thread activity record (best-effort, ok outcomes only).
         try:
             if resolved_hub_client is None:
                 raise RuntimeError("Hub control-plane client unavailable")
