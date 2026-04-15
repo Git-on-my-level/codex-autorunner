@@ -127,10 +127,10 @@ def default_housekeeping_rule_named(
 
 # Import validation helpers after approval-mode constants are defined.
 from .config_validation import (  # noqa: E402,I001
-    _is_loopback_host as _is_loopback_host_impl,
     _normalize_ticket_flow_approval_mode,
     _validate_hub_config,
     _validate_repo_config,
+    is_loopback_host,  # noqa: F401 — backward-compat re-export
 )
 
 __all__ = [
@@ -139,11 +139,11 @@ __all__ = [
 ]
 
 
-def _is_loopback_host(host: str) -> bool:
-    return _is_loopback_host_impl(host)
+_is_loopback_host = is_loopback_host
 
 
 from .config_parsers import (  # noqa: E402
+    normalize_base_path,  # noqa: F401 — backward-compat re-export
     parse_flow_retention_config,  # noqa: F401 — backward-compat re-export
 )
 from .config_types import (  # noqa: E402
@@ -394,15 +394,7 @@ def update_override_templates(repo_root: Path, repos: List[Dict[str, Any]]) -> N
     atomic_write(override_path, rendered)
 
 
-def _normalize_base_path(path: Optional[str]) -> str:
-    """Normalize base path to either '' or a single-leading-slash path without trailing slash."""
-    if not path:
-        return ""
-    normalized = str(path).strip()
-    if not normalized.startswith("/"):
-        normalized = "/" + normalized
-    normalized = normalized.rstrip("/")
-    return normalized or ""
+_normalize_base_path = normalize_base_path
 
 
 def _parse_prompt_int(cfg: Dict[str, Any], defaults: Dict[str, Any], key: str) -> int:

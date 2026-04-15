@@ -1,6 +1,5 @@
 """Root-level CLI commands extracted from the main CLI surface."""
 
-import ipaddress
 import json
 import logging
 import os
@@ -20,12 +19,13 @@ from ....core.config import (
     CONFIG_FILENAME,
     ConfigError,
     HubConfig,
-    _normalize_base_path,
     ensure_hub_config_at,
     find_nearest_hub_config_path,
     load_hub_config,
     load_repo_config,
 )
+from ....core.config_parsers import normalize_base_path
+from ....core.config_validation import is_loopback_host
 from ....core.git_utils import GitError, run_git
 from ....core.runtime import RuntimeContext, clear_stale_lock
 from ....core.state import RunnerState, load_state, now_iso, save_state, state_lock
@@ -87,7 +87,7 @@ def _build_server_url(
     config: object, path: str, *, base_path_override: Optional[str] = None
 ) -> str:
     base_path = (
-        _normalize_base_path(base_path_override)
+        normalize_base_path(base_path_override)
         if base_path_override is not None
         else (getattr(config, "server_base_path", None) or "")
     )
@@ -155,17 +155,8 @@ def _resolve_auth_token(env_name: str) -> Optional[str]:
     return value or None
 
 
-def _is_loopback_host(host: str) -> bool:
-    if host == "localhost":
-        return True
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return False
-
-
 def _enforce_bind_auth(host: str, token_env: str) -> None:
-    if _is_loopback_host(host):
+    if is_loopback_host(host):
         return
     if _resolve_auth_token(token_env):
         return
@@ -741,7 +732,7 @@ def register_root_commands(app: typer.Typer) -> None:
         bind_host = host or config.server_host
         bind_port = port or config.server_port
         normalized_base = (
-            _normalize_base_path(base_path)
+            normalize_base_path(base_path)
             if base_path is not None
             else config.server_base_path
         )

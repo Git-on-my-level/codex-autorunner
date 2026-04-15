@@ -15,13 +15,13 @@ from ...core.config import (
     AppServerConfig,
     ConfigError,
     HubConfig,
-    _normalize_base_path,
     collect_env_overrides,
     derive_repo_config,
     load_hub_config,
     load_repo_config,
     resolve_env_for_root,
 )
+from ...core.config_parsers import normalize_base_path
 from ...core.flows.workspace_root import resolve_ticket_flow_workspace_root
 from ...core.hub_control_plane.service import HubSharedStateService
 from ...core.hub_projection_store import HubProjectionStore
@@ -344,7 +344,7 @@ def build_app_context(
         env = resolve_env_for_root(target_root)
         config = derive_repo_config(hub_config, target_root, load_env=False)
     normalized_base = (
-        _normalize_base_path(base_path)
+        normalize_base_path(base_path)
         if base_path is not None
         else config.server_base_path
     )
@@ -667,7 +667,7 @@ def build_hub_context(
         config = replace(config, include_root_repo=True)
         dev_mode_root_repo_enabled = True
     normalized_base = (
-        _normalize_base_path(base_path)
+        normalize_base_path(base_path)
         if base_path is not None
         else config.server_base_path
     )

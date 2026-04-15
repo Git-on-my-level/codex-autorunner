@@ -84,7 +84,7 @@ def parse_flow_retention_config(raw: Optional[Dict[str, Any]]) -> FlowRetentionC
     )
 
 
-def _normalize_base_path(path: Optional[str]) -> str:
+def normalize_base_path(path: Optional[str]) -> str:
     if not path:
         return ""
     normalized = str(path).strip()
@@ -92,6 +92,9 @@ def _normalize_base_path(path: Optional[str]) -> str:
         normalized = "/" + normalized
     normalized = normalized.rstrip("/")
     return normalized or ""
+
+
+_normalize_base_path = normalize_base_path
 
 
 def _parse_prompt_int(cfg: Dict[str, Any], defaults: Dict[str, Any], key: str) -> int:

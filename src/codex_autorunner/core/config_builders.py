@@ -16,8 +16,7 @@ from ..housekeeping import parse_housekeeping_config
 from .agent_config import parse_agents_config
 from .config_contract import ConfigError
 from .config_layering import DEFAULT_HUB_CONFIG, DEFAULT_REPO_CONFIG
-from .config_parsers import (
-    _normalize_base_path,
+from .config_parsers import (  # noqa: I001
     _parse_app_server_config,
     _parse_notifications_config_section,
     _parse_opencode_config,
@@ -30,6 +29,7 @@ from .config_parsers import (
     _parse_update_linux_service_names,
     _parse_usage_config,
     _parse_voice_config_section,
+    normalize_base_path,
     parse_flow_retention_config,
 )
 from .config_types import (
@@ -138,7 +138,7 @@ def build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         security=security_cfg,
         server_host=str(cfg["server"].get("host")),
         server_port=int(cfg["server"].get("port")),
-        server_base_path=_normalize_base_path(cfg["server"].get("base_path", "")),
+        server_base_path=normalize_base_path(cfg["server"].get("base_path", "")),
         server_access_log=bool(cfg["server"].get("access_log", False)),
         server_auth_token_env=str(cfg["server"].get("auth_token_env", "")),
         server_allowed_hosts=list(cfg["server"].get("allowed_hosts") or []),
@@ -260,7 +260,7 @@ def build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
         ),
         server_host=str(cfg["server"]["host"]),
         server_port=int(cfg["server"]["port"]),
-        server_base_path=_normalize_base_path(cfg["server"].get("base_path", "")),
+        server_base_path=normalize_base_path(cfg["server"].get("base_path", "")),
         server_access_log=bool(cfg["server"].get("access_log", False)),
         server_auth_token_env=str(cfg["server"].get("auth_token_env", "")),
         server_allowed_hosts=list(cfg["server"].get("allowed_hosts") or []),

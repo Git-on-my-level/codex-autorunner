@@ -6,7 +6,6 @@ import pytest
 
 from codex_autorunner.core.config_contract import CONFIG_VERSION, ConfigError
 from codex_autorunner.core.config_validation import (
-    _is_loopback_host,
     _is_strict_int,
     _normalize_ticket_flow_approval_mode,
     _validate_agents_config,
@@ -21,6 +20,7 @@ from codex_autorunner.core.config_validation import (
     _validate_update_config,
     _validate_usage_config,
     _validate_version,
+    is_loopback_host,
 )
 
 
@@ -95,16 +95,16 @@ class TestIsLoopbackHost:
         ["localhost", "127.0.0.1", "::1"],
     )
     def test_loopback_hosts(self, host: str) -> None:
-        assert _is_loopback_host(host) is True
+        assert is_loopback_host(host) is True
 
     def test_unspecified_is_not_loopback(self) -> None:
-        assert _is_loopback_host("0.0.0.0") is False
+        assert is_loopback_host("0.0.0.0") is False
 
     def test_non_loopback_ip(self) -> None:
-        assert _is_loopback_host("192.168.1.1") is False
+        assert is_loopback_host("192.168.1.1") is False
 
     def test_non_ip_string(self) -> None:
-        assert _is_loopback_host("example.com") is False
+        assert is_loopback_host("example.com") is False
 
 
 class TestIsStrictInt:
