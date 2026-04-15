@@ -360,20 +360,11 @@ def _collect_pma_threads(
     generated_at: str,
     stale_threshold_seconds: int,
 ) -> list[dict[str, Any]]:
-    return [
-        {
-            **thread,
-            "freshness": build_freshness_payload(
-                generated_at=generated_at,
-                stale_threshold_seconds=stale_threshold_seconds,
-                candidates=[
-                    ("thread_status_changed_at", thread.get("status_changed_at")),
-                    ("thread_updated_at", thread.get("updated_at")),
-                ],
-            ),
-        }
-        for thread in _snapshot_pma_threads(hub_root)
-    ]
+    return _snapshot_pma_threads(
+        hub_root,
+        generated_at=generated_at,
+        stale_threshold_seconds=stale_threshold_seconds,
+    )
 
 
 def _load_repo_message_context(

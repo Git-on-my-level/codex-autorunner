@@ -8,6 +8,7 @@ from typing import Any, Optional
 from ..tickets.files import safe_relpath
 from .chat_bindings import active_chat_binding_metadata_by_thread
 from .freshness import build_freshness_payload
+from .managed_thread_status import derive_managed_thread_operator_status
 from .pma_context_shared import _truncate
 from .pma_thread_store import PmaThreadStore
 
@@ -90,5 +91,9 @@ def snapshot_pma_threads(
                     ("thread_updated_at", entry.get("updated_at")),
                 ],
             )
+        entry["operator_status"] = derive_managed_thread_operator_status(
+            normalized_status=entry.get("status"),
+            lifecycle_status=entry.get("lifecycle_status"),
+        )
         snapshot_threads.append(entry)
     return snapshot_threads
