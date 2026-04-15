@@ -1,7 +1,16 @@
 import dataclasses
 from pathlib import Path
-from typing import List, Literal, Optional, TypedDict, Union
+from typing import Any, Dict, List, Literal, Optional, TypedDict, Union, cast
 
+from ..housekeeping import HousekeepingConfig
+from .agent_config import (
+    AgentConfig,
+    AgentProfileConfig,
+    ResolvedAgentTarget,
+    resolve_agent_target_from_agents,
+)
+from .config_contract import ConfigError
+from .destinations import default_local_destination
 from .report_retention import (
     DEFAULT_REPORT_MAX_HISTORY_FILES,
     DEFAULT_REPORT_MAX_TOTAL_BYTES,
@@ -110,6 +119,7 @@ class PmaConfig:
     profile: Optional[str]
     model: Optional[str]
     reasoning: Optional[str]
+    turn_timeout_seconds: int
     managed_thread_terminal_followup_default: bool
     max_upload_bytes: int
     max_repos: int
@@ -215,3 +225,180 @@ class DestinationConfigSection(TypedDict, total=False):
     workdir: str
     profile: str
     env: dict[str, str]
+
+
+class AgentConfigMixin:
+    agents: Dict[str, AgentConfig]
+
+    def resolve_runtime_agent_target(
+        self, agent_id: str, *, profile: Optional[str] = None
+    ) -> ResolvedAgentTarget:
+        return resolve_agent_target_from_agents(self.agents, agent_id, profile=profile)
+
+    def resolved_agent_config(
+        self, agent_id: str, *, profile: Optional[str] = None
+    ) -> AgentConfig:
+        resolved_target = self.resolve_runtime_agent_target(agent_id, profile=profile)
+        agent = self.agents.get(resolved_target.runtime_agent_id)
+        if agent is None:
+            raise ConfigError(f"agents.{agent_id}.binary is required")
+        normalized_profile = str(resolved_target.runtime_profile or "").strip().lower()
+        if not normalized_profile:
+            return agent
+        profile_config = (agent.profiles or {}).get(normalized_profile)
+        if profile_config is None:
+            raise ConfigError(
+                f"agents.{resolved_target.runtime_agent_id}.profiles.{normalized_profile} is not configured"
+            )
+        return AgentConfig(
+            backend=profile_config.backend or agent.backend,
+            binary=profile_config.binary or agent.binary,
+            serve_command=(
+                list(profile_config.serve_command)
+                if profile_config.serve_command
+                else (list(agent.serve_command) if agent.serve_command else None)
+            ),
+            base_url=profile_config.base_url or agent.base_url,
+            subagent_models=(
+                dict(profile_config.subagent_models)
+                if profile_config.subagent_models
+                else (
+                    dict(agent.subagent_models)
+                    if agent.subagent_models is not None
+                    else None
+                )
+            ),
+            default_profile=agent.default_profile,
+            profiles=agent.profiles,
+        )
+
+    def agent_binary(self, agent_id: str, *, profile: Optional[str] = None) -> str:
+        agent = self.resolved_agent_config(agent_id, profile=profile)
+        if agent and agent.binary:
+            return agent.binary
+        raise ConfigError(f"agents.{agent_id}.binary is required")
+
+    def agent_backend(self, agent_id: str, *, profile: Optional[str] = None) -> str:
+        agent = self.resolved_agent_config(agent_id, profile=profile)
+        backend = getattr(agent, "backend", None) if agent is not None else None
+        if isinstance(backend, str) and backend.strip():
+            return backend.strip().lower()
+        return str(agent_id or "").strip().lower()
+
+    def agent_serve_command(
+        self, agent_id: str, *, profile: Optional[str] = None
+    ) -> Optional[List[str]]:
+        agent = self.resolved_agent_config(agent_id, profile=profile)
+        if agent:
+            return list(agent.serve_command) if agent.serve_command else None
+        return None
+
+    def agent_profiles(self, agent_id: str) -> Dict[str, AgentProfileConfig]:
+        agent = self.agents.get(agent_id)
+        if agent is None or not isinstance(agent.profiles, dict):
+            return {}
+        return dict(agent.profiles)
+
+    def agent_default_profile(self, agent_id: str) -> Optional[str]:
+        agent = self.agents.get(agent_id)
+        if agent is None:
+            return None
+        value = str(agent.default_profile or "").strip().lower()
+        return value or None
+
+
+@dataclasses.dataclass
+class RepoConfig(AgentConfigMixin):
+    raw: Dict[str, Any]
+    root: Path
+    version: int
+    mode: str
+    security: SecurityConfigSection
+    docs: Dict[str, Path]
+    codex_binary: str
+    codex_args: List[str]
+    codex_terminal_args: List[str]
+    codex_model: Optional[str]
+    codex_reasoning: Optional[str]
+    agents: Dict[str, AgentConfig]
+    prompt_prev_run_max_chars: int
+    prompt_template: Optional[Path]
+    runner_sleep_seconds: int
+    runner_stop_after_runs: Optional[int]
+    runner_max_wallclock_seconds: Optional[int]
+    runner_no_progress_threshold: int
+    autorunner_reuse_session: bool
+    ticket_flow: TicketFlowConfig
+    git_auto_commit: bool
+    git_commit_message_template: str
+    update_skip_checks: bool
+    update_backend: str
+    update_linux_service_names: Dict[str, str]
+    app_server: AppServerConfig
+    opencode: OpenCodeConfig
+    pma: PmaConfig
+    usage: UsageConfig
+    server_host: str
+    server_port: int
+    server_base_path: str
+    server_access_log: bool
+    server_auth_token_env: str
+    server_allowed_hosts: List[str]
+    server_allowed_origins: List[str]
+    notifications: NotificationsConfigSection
+    terminal_idle_timeout_seconds: Optional[int]
+    log: LogConfig
+    server_log: LogConfig
+    voice: VoiceConfigSection
+    static_assets: StaticAssetsConfig
+    housekeeping: HousekeepingConfig
+    flow_retention: FlowRetentionConfig
+    durable_writes: bool
+    templates: TemplatesConfig
+    effective_destination: DestinationConfigSection = dataclasses.field(
+        default_factory=lambda: cast(
+            DestinationConfigSection, dict(default_local_destination())
+        )
+    )
+
+    def doc_path(self, key: str) -> Path:
+        return self.root / self.docs[key]
+
+
+@dataclasses.dataclass
+class HubConfig(AgentConfigMixin):
+    raw: Dict[str, Any]
+    root: Path
+    version: int
+    mode: str
+    repo_defaults: Dict[str, Any]
+    agents: Dict[str, AgentConfig]
+    templates: TemplatesConfig
+    repos_root: Path
+    worktrees_root: Path
+    manifest_path: Path
+    discover_depth: int
+    auto_init_missing: bool
+    include_root_repo: bool
+    repo_server_inherit: bool
+    update_repo_url: str
+    update_repo_ref: str
+    update_skip_checks: bool
+    update_backend: str
+    update_linux_service_names: Dict[str, str]
+    app_server: AppServerConfig
+    opencode: OpenCodeConfig
+    pma: PmaConfig
+    usage: UsageConfig
+    server_host: str
+    server_port: int
+    server_base_path: str
+    server_access_log: bool
+    server_auth_token_env: str
+    server_allowed_hosts: List[str]
+    server_allowed_origins: List[str]
+    log: LogConfig
+    server_log: LogConfig
+    static_assets: StaticAssetsConfig
+    housekeeping: HousekeepingConfig
+    durable_writes: bool

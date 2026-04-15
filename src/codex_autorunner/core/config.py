@@ -8,10 +8,8 @@ from typing import (
     Any,
     Dict,
     List,
-    Literal,
     Mapping,
     Optional,
-    TypedDict,
     Union,
     cast,
 )
@@ -47,35 +45,6 @@ from .utils import atomic_write
 
 logger = logging.getLogger("codex_autorunner.core.config")
 
-_DEFAULT_FLOW_RETENTION_DAYS = 7
-_DEFAULT_FLOW_SWEEP_INTERVAL_SECONDS = 24 * 60 * 60
-
-
-@dataclasses.dataclass(frozen=True)
-class FlowRetentionConfig:
-    retention_days: int = _DEFAULT_FLOW_RETENTION_DAYS
-    sweep_interval_seconds: int = _DEFAULT_FLOW_SWEEP_INTERVAL_SECONDS
-
-
-def parse_flow_retention_config(raw: Optional[Dict[str, Any]]) -> FlowRetentionConfig:
-    if not isinstance(raw, dict):
-        return FlowRetentionConfig()
-    retention_days = raw.get("retention_days")
-    sweep_interval_seconds = raw.get("sweep_interval_seconds")
-    return FlowRetentionConfig(
-        retention_days=(
-            int(retention_days)
-            if retention_days is not None
-            else _DEFAULT_FLOW_RETENTION_DAYS
-        ),
-        sweep_interval_seconds=(
-            int(sweep_interval_seconds)
-            if sweep_interval_seconds is not None
-            else _DEFAULT_FLOW_SWEEP_INTERVAL_SECONDS
-        ),
-    )
-
-
 DOTENV_AVAILABLE = True
 try:
     from dotenv import dotenv_values, load_dotenv
@@ -106,10 +75,16 @@ ACTIVE_HUB_ROOT_ENV = "CAR_HUB_ROOT"
 TWELVE_HOUR_SECONDS = 12 * 60 * 60
 PMA_DEFAULT_TURN_TIMEOUT_SECONDS = 7200
 
+from .config_builders import (  # noqa: E402
+    build_hub_config as _build_hub_config_impl,
+)
+from .config_builders import (  # noqa: E402
+    build_repo_config as _build_repo_config_impl,
+)
 from .config_layering import (  # noqa: E402
     CONFIG_FILENAME,
-    DEFAULT_HUB_CONFIG,
-    DEFAULT_REPO_CONFIG,
+    DEFAULT_HUB_CONFIG,  # noqa: F401 — backward-compat re-export
+    DEFAULT_REPO_CONFIG,  # noqa: F401 — backward-compat re-export
     GENERATED_CONFIG_HEADER,  # noqa: F401 — backward-compat re-export
     PMA_DEFAULT_MAX_TEXT_CHARS,
     REPO_OVERRIDE_FILENAME,  # noqa: F401 — backward-compat re-export
@@ -194,390 +169,40 @@ def _is_loopback_host(host: str) -> bool:
     return _is_loopback_host_impl(host)
 
 
-@dataclasses.dataclass
-class LogConfig:
-    path: Path
-    max_bytes: int
-    backup_count: int
-
-
-@dataclasses.dataclass
-class StaticAssetsConfig:
-    cache_root: Path
-    max_cache_entries: int
-    max_cache_age_days: Optional[int]
-
-
-@dataclasses.dataclass
-class AppServerDocChatPromptConfig:
-    max_chars: int
-    message_max_chars: int
-    target_excerpt_max_chars: int
-    recent_summary_max_chars: int
-
-
-@dataclasses.dataclass
-class AppServerSpecIngestPromptConfig:
-    max_chars: int
-    message_max_chars: int
-    spec_excerpt_max_chars: int
-
-
-@dataclasses.dataclass
-class AppServerAutorunnerPromptConfig:
-    max_chars: int
-    message_max_chars: int
-    todo_excerpt_max_chars: int
-    prev_run_max_chars: int
-
-
-@dataclasses.dataclass
-class AppServerPromptsConfig:
-    doc_chat: AppServerDocChatPromptConfig
-    spec_ingest: AppServerSpecIngestPromptConfig
-    autorunner: AppServerAutorunnerPromptConfig
-
-
-@dataclasses.dataclass
-class AppServerClientConfig:
-    max_message_bytes: int
-    oversize_preview_bytes: int
-    max_oversize_drain_bytes: int
-    restart_backoff_initial_seconds: float
-    restart_backoff_max_seconds: float
-    restart_backoff_jitter_ratio: float
-
-
-@dataclasses.dataclass
-class AppServerOutputConfig:
-    policy: str
-
-
-@dataclasses.dataclass
-class AppServerConfig:
-    command: List[str]
-    state_root: Path
-    auto_restart: Optional[bool]
-    max_handles: Optional[int]
-    idle_ttl_seconds: Optional[int]
-    turn_timeout_seconds: Optional[float]
-    turn_stall_timeout_seconds: Optional[float]
-    turn_stall_poll_interval_seconds: Optional[float]
-    turn_stall_recovery_min_interval_seconds: Optional[float]
-    turn_stall_max_recovery_attempts: Optional[int]
-    request_timeout: Optional[float]
-    client: AppServerClientConfig
-    output: AppServerOutputConfig
-    prompts: AppServerPromptsConfig
-
-
-@dataclasses.dataclass
-class OpenCodeConfig:
-    server_scope: str
-    session_stall_timeout_seconds: Optional[float]
-    max_text_chars: Optional[int]
-    max_handles: Optional[int]
-    idle_ttl_seconds: Optional[int]
-
-
-@dataclasses.dataclass
-class PmaConfig:
-    enabled: bool
-    default_agent: str
-    profile: Optional[str]
-    model: Optional[str]
-    reasoning: Optional[str]
-    turn_timeout_seconds: int
-    managed_thread_terminal_followup_default: bool
-    max_upload_bytes: int
-    max_repos: int
-    max_messages: int
-    max_text_chars: int
-    # Hub-level PMA durable context docs
-    docs_max_chars: int = 12_000
-    active_context_max_lines: int = 200
-    context_log_tail_lines: int = 120
-    freshness_stale_threshold_seconds: int = 1800
-    dispatch_interception_enabled: bool = False
-    reactive_enabled: bool = True
-    reactive_event_types: List[str] = dataclasses.field(default_factory=list)
-    reactive_debounce_seconds: int = 300
-    reactive_origin_blocklist: List[str] = dataclasses.field(default_factory=list)
-    filebox_inbox_max_age_days: int = 7
-    filebox_outbox_max_age_days: int = 7
-    report_max_history_files: int = DEFAULT_REPORT_MAX_HISTORY_FILES
-    report_max_total_bytes: int = DEFAULT_REPORT_MAX_TOTAL_BYTES
-    app_server_workspace_max_age_days: int = 7
-    inbox_auto_dismiss_grace_seconds: int = 3600
-    # Worktree cleanup policies
-    cleanup_require_archive: bool = True
-    cleanup_auto_delete_orphans: bool = False
-    worktree_archive_profile: str = "portable"
-    worktree_archive_max_snapshots_per_repo: int = 10
-    worktree_archive_max_age_days: int = 30
-    worktree_archive_max_total_bytes: int = 1_000_000_000
-    run_archive_max_entries: int = 200
-    run_archive_max_age_days: int = 30
-    run_archive_max_total_bytes: int = 1_000_000_000
-    orchestration_compaction_max_hot_rows: int = 16
-    orchestration_hot_history_retention_days: int = 30
-    orchestration_cold_trace_retention_days: int = 90
-
-
-@dataclasses.dataclass
-class UsageConfig:
-    cache_scope: str
-    global_cache_root: Path
-    repo_cache_path: Path
-
-
-@dataclasses.dataclass(frozen=True)
-class TemplateRepoConfig:
-    id: str
-    url: str
-    trusted: bool
-    default_ref: str
-
-
-@dataclasses.dataclass(frozen=True)
-class TemplatesConfig:
-    enabled: bool
-    repos: List[TemplateRepoConfig]
-
-
-@dataclasses.dataclass(frozen=True)
-class TicketFlowConfig:
-    approval_mode: str
-    default_approval_decision: str
-    include_previous_ticket_context: bool
-    auto_resume: bool = False
-    max_total_turns: Optional[int] = None
-
-
-class SecurityConfigSection(TypedDict, total=False):
-    redact_run_logs: bool
-    redact_patterns: List[str]
-
-
-class NotificationTargetSection(TypedDict, total=False):
-    enabled: bool
-    webhook_url_env: str
-    bot_token_env: str
-    chat_id_env: str
-
-
-class NotificationsConfigSection(TypedDict, total=False):
-    enabled: Union[bool, Literal["auto"]]
-    events: List[str]
-    tui_idle_seconds: int
-    timeout_seconds: float
-    discord: NotificationTargetSection
-    telegram: NotificationTargetSection
-
-
-class VoiceConfigSection(TypedDict, total=False):
-    enabled: bool
-    provider: str
-    latency_mode: str
-    chunk_ms: int
-    sample_rate: int
-    warn_on_remote_api: bool
-    push_to_talk: dict[str, object]
-    providers: dict[str, dict[str, object]]
-
-
-class DestinationConfigSection(TypedDict, total=False):
-    kind: str
-    image: str
-    container_name: str
-    mounts: List[dict[str, object]]
-    env_passthrough: List[str]
-    workdir: str
-    profile: str
-    env: dict[str, str]
+from .config_parsers import (  # noqa: E402
+    parse_flow_retention_config,  # noqa: F401 — backward-compat re-export
+)
+from .config_types import (  # noqa: E402
+    AppServerAutorunnerPromptConfig,
+    AppServerClientConfig,
+    AppServerConfig,
+    AppServerDocChatPromptConfig,
+    AppServerOutputConfig,
+    AppServerPromptsConfig,
+    AppServerSpecIngestPromptConfig,
+    DestinationConfigSection,
+    FlowRetentionConfig,  # noqa: F401 — backward-compat re-export
+    HubConfig,
+    LogConfig,  # noqa: F401 — backward-compat re-export
+    NotificationsConfigSection,
+    NotificationTargetSection,
+    OpenCodeConfig,
+    PmaConfig,
+    RepoConfig,
+    SecurityConfigSection,
+    StaticAssetsConfig,
+    TemplateRepoConfig,
+    TemplatesConfig,
+    TicketFlowConfig,
+    UsageConfig,
+    VoiceConfigSection,
+)
 
 
 def _parse_optional_int(value: Any) -> Optional[int]:
     if value is None:
         return None
     return int(value)
-
-
-class AgentConfigMixin:
-    agents: Dict[str, AgentConfig]
-
-    def resolve_runtime_agent_target(
-        self, agent_id: str, *, profile: Optional[str] = None
-    ) -> ResolvedAgentTarget:
-        return resolve_agent_target_from_agents(self.agents, agent_id, profile=profile)
-
-    def resolved_agent_config(
-        self, agent_id: str, *, profile: Optional[str] = None
-    ) -> AgentConfig:
-        resolved_target = self.resolve_runtime_agent_target(agent_id, profile=profile)
-        agent = self.agents.get(resolved_target.runtime_agent_id)
-        if agent is None:
-            raise ConfigError(f"agents.{agent_id}.binary is required")
-        normalized_profile = str(resolved_target.runtime_profile or "").strip().lower()
-        if not normalized_profile:
-            return agent
-        profile_config = (agent.profiles or {}).get(normalized_profile)
-        if profile_config is None:
-            raise ConfigError(
-                f"agents.{resolved_target.runtime_agent_id}.profiles.{normalized_profile} is not configured"
-            )
-        return AgentConfig(
-            backend=profile_config.backend or agent.backend,
-            binary=profile_config.binary or agent.binary,
-            serve_command=(
-                list(profile_config.serve_command)
-                if profile_config.serve_command
-                else (list(agent.serve_command) if agent.serve_command else None)
-            ),
-            base_url=profile_config.base_url or agent.base_url,
-            subagent_models=(
-                dict(profile_config.subagent_models)
-                if profile_config.subagent_models
-                else (
-                    dict(agent.subagent_models)
-                    if agent.subagent_models is not None
-                    else None
-                )
-            ),
-            default_profile=agent.default_profile,
-            profiles=agent.profiles,
-        )
-
-    def agent_binary(self, agent_id: str, *, profile: Optional[str] = None) -> str:
-        agent = self.resolved_agent_config(agent_id, profile=profile)
-        if agent and agent.binary:
-            return agent.binary
-        raise ConfigError(f"agents.{agent_id}.binary is required")
-
-    def agent_backend(self, agent_id: str, *, profile: Optional[str] = None) -> str:
-        agent = self.resolved_agent_config(agent_id, profile=profile)
-        backend = getattr(agent, "backend", None) if agent is not None else None
-        if isinstance(backend, str) and backend.strip():
-            return backend.strip().lower()
-        return str(agent_id or "").strip().lower()
-
-    def agent_serve_command(
-        self, agent_id: str, *, profile: Optional[str] = None
-    ) -> Optional[List[str]]:
-        agent = self.resolved_agent_config(agent_id, profile=profile)
-        if agent:
-            return list(agent.serve_command) if agent.serve_command else None
-        return None
-
-    def agent_profiles(self, agent_id: str) -> Dict[str, AgentProfileConfig]:
-        agent = self.agents.get(agent_id)
-        if agent is None or not isinstance(agent.profiles, dict):
-            return {}
-        return dict(agent.profiles)
-
-    def agent_default_profile(self, agent_id: str) -> Optional[str]:
-        agent = self.agents.get(agent_id)
-        if agent is None:
-            return None
-        value = str(agent.default_profile or "").strip().lower()
-        return value or None
-
-
-@dataclasses.dataclass
-class RepoConfig(AgentConfigMixin):
-    raw: Dict[str, Any]
-    root: Path
-    version: int
-    mode: str
-    security: SecurityConfigSection
-    docs: Dict[str, Path]
-    codex_binary: str
-    codex_args: List[str]
-    codex_terminal_args: List[str]
-    codex_model: Optional[str]
-    codex_reasoning: Optional[str]
-    agents: Dict[str, AgentConfig]
-    prompt_prev_run_max_chars: int
-    prompt_template: Optional[Path]
-    runner_sleep_seconds: int
-    runner_stop_after_runs: Optional[int]
-    runner_max_wallclock_seconds: Optional[int]
-    runner_no_progress_threshold: int
-    autorunner_reuse_session: bool
-    ticket_flow: TicketFlowConfig
-    git_auto_commit: bool
-    git_commit_message_template: str
-    update_skip_checks: bool
-    update_backend: str
-    update_linux_service_names: Dict[str, str]
-    app_server: AppServerConfig
-    opencode: OpenCodeConfig
-    pma: PmaConfig
-    usage: UsageConfig
-    server_host: str
-    server_port: int
-    server_base_path: str
-    server_access_log: bool
-    server_auth_token_env: str
-    server_allowed_hosts: List[str]
-    server_allowed_origins: List[str]
-    notifications: NotificationsConfigSection
-    terminal_idle_timeout_seconds: Optional[int]
-    log: LogConfig
-    server_log: LogConfig
-    voice: VoiceConfigSection
-    static_assets: StaticAssetsConfig
-    housekeeping: HousekeepingConfig
-    flow_retention: FlowRetentionConfig
-    durable_writes: bool
-    templates: TemplatesConfig
-    effective_destination: DestinationConfigSection = dataclasses.field(
-        default_factory=lambda: _parse_destination_config_section(
-            default_local_destination()
-        )
-    )
-
-    def doc_path(self, key: str) -> Path:
-        return self.root / self.docs[key]
-
-
-@dataclasses.dataclass
-class HubConfig(AgentConfigMixin):
-    raw: Dict[str, Any]
-    root: Path
-    version: int
-    mode: str
-    repo_defaults: Dict[str, Any]
-    agents: Dict[str, AgentConfig]
-    templates: TemplatesConfig
-    repos_root: Path
-    worktrees_root: Path
-    manifest_path: Path
-    discover_depth: int
-    auto_init_missing: bool
-    include_root_repo: bool
-    repo_server_inherit: bool
-    update_repo_url: str
-    update_repo_ref: str
-    update_skip_checks: bool
-    update_backend: str
-    update_linux_service_names: Dict[str, str]
-    app_server: AppServerConfig
-    opencode: OpenCodeConfig
-    pma: PmaConfig
-    usage: UsageConfig
-    server_host: str
-    server_port: int
-    server_base_path: str
-    server_access_log: bool
-    server_auth_token_env: str
-    server_allowed_hosts: List[str]
-    server_allowed_origins: List[str]
-    log: LogConfig
-    server_log: LogConfig
-    static_assets: StaticAssetsConfig
-    housekeeping: HousekeepingConfig
-    durable_writes: bool
 
 
 # Alias used by existing code paths that only support repo mode
@@ -1710,239 +1335,8 @@ def load_repo_config(start: Path, hub_path: Optional[Path] = None) -> RepoConfig
 
 
 def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
-    root = config_path.parent.parent.resolve()
-    docs = {
-        "active_context": Path(cfg["docs"]["active_context"]),
-        "decisions": Path(cfg["docs"]["decisions"]),
-        "spec": Path(cfg["docs"]["spec"]),
-    }
-    voice_cfg = _parse_voice_config_section(cfg.get("voice"))
-    template_val = cfg["prompt"].get("template")
-    template = root / template_val if template_val else None
-    term_args = cfg["codex"].get("terminal_args") or []
-    terminal_cfg = cfg.get("terminal") if isinstance(cfg.get("terminal"), dict) else {}
-    terminal_cfg = cast(Dict[str, Any], terminal_cfg)
-    idle_timeout_value = terminal_cfg.get("idle_timeout_seconds")
-    idle_timeout_seconds: Optional[int]
-    if idle_timeout_value is None:
-        idle_timeout_seconds = None
-    else:
-        idle_timeout_seconds = int(idle_timeout_value)
-        if idle_timeout_seconds <= 0:
-            idle_timeout_seconds = None
-    notifications_cfg = _parse_notifications_config_section(cfg.get("notifications"))
-    security_cfg = _parse_security_config_section(cfg.get("security"))
-    log_cfg = cfg.get("log", {})
-    log_cfg = cast(Dict[str, Any], log_cfg if isinstance(log_cfg, dict) else {})
-    server_log_cfg = cfg.get("server_log", {}) or {}
-    server_log_cfg = cast(
-        Dict[str, Any], server_log_cfg if isinstance(server_log_cfg, dict) else {}
-    )
-    update_cfg = cfg.get("update")
-    update_cfg = cast(
-        Dict[str, Any], update_cfg if isinstance(update_cfg, dict) else {}
-    )
-    update_skip_checks = bool(update_cfg.get("skip_checks", False))
-    update_backend = _parse_update_backend(update_cfg)
-    update_linux_service_names = _parse_update_linux_service_names(update_cfg)
-    autorunner_cfg = cfg.get("autorunner")
-    autorunner_cfg = cast(
-        Dict[str, Any], autorunner_cfg if isinstance(autorunner_cfg, dict) else {}
-    )
-    reuse_session_value = autorunner_cfg.get("reuse_session")
-    autorunner_reuse_session = (
-        bool(reuse_session_value) if reuse_session_value is not None else False
-    )
-    storage_cfg = cfg.get("storage")
-    storage_cfg = cast(
-        Dict[str, Any], storage_cfg if isinstance(storage_cfg, dict) else {}
-    )
-    durable_writes = bool(storage_cfg.get("durable_writes", False))
-    return RepoConfig(
-        raw=cfg,
-        root=root,
-        version=int(cfg["version"]),
-        mode="repo",
-        docs=docs,
-        codex_binary=cfg["codex"]["binary"],
-        codex_args=list(cfg["codex"].get("args", [])),
-        codex_terminal_args=list(term_args) if isinstance(term_args, list) else [],
-        codex_model=cfg["codex"].get("model"),
-        codex_reasoning=cfg["codex"].get("reasoning"),
-        agents=_parse_agents_config(cfg, DEFAULT_REPO_CONFIG),
-        prompt_prev_run_max_chars=int(cfg["prompt"]["prev_run_max_chars"]),
-        prompt_template=template,
-        runner_sleep_seconds=int(cfg["runner"]["sleep_seconds"]),
-        runner_stop_after_runs=cfg["runner"].get("stop_after_runs"),
-        runner_max_wallclock_seconds=cfg["runner"].get("max_wallclock_seconds"),
-        runner_no_progress_threshold=int(cfg["runner"].get("no_progress_threshold", 3)),
-        autorunner_reuse_session=autorunner_reuse_session,
-        git_auto_commit=bool(cfg["git"].get("auto_commit", False)),
-        git_commit_message_template=str(cfg["git"].get("commit_message_template")),
-        update_skip_checks=update_skip_checks,
-        update_backend=update_backend,
-        update_linux_service_names=update_linux_service_names,
-        ticket_flow=_parse_ticket_flow_config(
-            cfg.get("ticket_flow"),
-            cast(Dict[str, Any], DEFAULT_REPO_CONFIG.get("ticket_flow")),
-        ),
-        app_server=_parse_app_server_config(
-            cfg.get("app_server"),
-            root,
-            DEFAULT_REPO_CONFIG["app_server"],
-        ),
-        opencode=_parse_opencode_config(
-            cfg.get("opencode"), root, DEFAULT_REPO_CONFIG.get("opencode")
-        ),
-        pma=_parse_pma_config(cfg.get("pma"), root, DEFAULT_HUB_CONFIG.get("pma")),
-        usage=_parse_usage_config(
-            cfg.get("usage"), root, DEFAULT_REPO_CONFIG.get("usage")
-        ),
-        security=security_cfg,
-        server_host=str(cfg["server"].get("host")),
-        server_port=int(cfg["server"].get("port")),
-        server_base_path=_normalize_base_path(cfg["server"].get("base_path", "")),
-        server_access_log=bool(cfg["server"].get("access_log", False)),
-        server_auth_token_env=str(cfg["server"].get("auth_token_env", "")),
-        server_allowed_hosts=list(cfg["server"].get("allowed_hosts") or []),
-        server_allowed_origins=list(cfg["server"].get("allowed_origins") or []),
-        notifications=notifications_cfg,
-        terminal_idle_timeout_seconds=idle_timeout_seconds,
-        log=LogConfig(
-            path=root / log_cfg.get("path", DEFAULT_REPO_CONFIG["log"]["path"]),
-            max_bytes=int(
-                log_cfg.get("max_bytes", DEFAULT_REPO_CONFIG["log"]["max_bytes"])
-            ),
-            backup_count=int(
-                log_cfg.get("backup_count", DEFAULT_REPO_CONFIG["log"]["backup_count"])
-            ),
-        ),
-        server_log=LogConfig(
-            path=root
-            / server_log_cfg.get("path", DEFAULT_REPO_CONFIG["server_log"]["path"]),
-            max_bytes=int(
-                server_log_cfg.get(
-                    "max_bytes", DEFAULT_REPO_CONFIG["server_log"]["max_bytes"]
-                )
-            ),
-            backup_count=int(
-                server_log_cfg.get(
-                    "backup_count",
-                    DEFAULT_REPO_CONFIG["server_log"]["backup_count"],
-                )
-            ),
-        ),
-        voice=voice_cfg,
-        static_assets=_parse_static_assets_config(
-            cfg.get("static_assets"), root, DEFAULT_REPO_CONFIG["static_assets"]
-        ),
-        housekeeping=parse_housekeeping_config(cfg.get("housekeeping")),
-        flow_retention=parse_flow_retention_config(cfg.get("flow_retention")),
-        durable_writes=durable_writes,
-        templates=_parse_templates_config(
-            cfg.get("templates"), DEFAULT_HUB_CONFIG.get("templates")
-        ),
-    )
+    return _build_repo_config_impl(config_path, cfg)
 
 
 def _build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
-    root = config_path.parent.parent.resolve()
-    hub_cfg = cfg["hub"]
-    log_cfg = hub_cfg["log"]
-    server_log_cfg = cfg.get("server_log")
-    # Default to hub log if server_log is not configured.
-    if not isinstance(server_log_cfg, dict):
-        server_log_cfg = {
-            "path": log_cfg["path"],
-            "max_bytes": log_cfg["max_bytes"],
-            "backup_count": log_cfg["backup_count"],
-        }
-
-    log_path_str = log_cfg["path"]
-    try:
-        log_path = resolve_config_path(log_path_str, root, scope="log.path")
-    except ConfigPathError as exc:
-        raise ConfigError(str(exc)) from exc
-
-    server_log_path_str = str(server_log_cfg.get("path", log_cfg["path"]))
-    try:
-        server_log_path = resolve_config_path(
-            server_log_path_str,
-            root,
-            scope="server_log.path",
-        )
-    except ConfigPathError as exc:
-        raise ConfigError(str(exc)) from exc
-
-    update_cfg = cfg.get("update")
-    update_cfg = cast(
-        Dict[str, Any], update_cfg if isinstance(update_cfg, dict) else {}
-    )
-    update_skip_checks = bool(update_cfg.get("skip_checks", False))
-    update_backend = _parse_update_backend(update_cfg)
-    update_linux_service_names = _parse_update_linux_service_names(update_cfg)
-    storage_cfg = cfg.get("storage")
-    storage_cfg = cast(
-        Dict[str, Any], storage_cfg if isinstance(storage_cfg, dict) else {}
-    )
-    durable_writes = bool(storage_cfg.get("durable_writes", False))
-
-    return HubConfig(
-        raw=cfg,
-        root=root,
-        version=int(cfg["version"]),
-        mode="hub",
-        repo_defaults=cast(Dict[str, Any], cfg.get("repo_defaults") or {}),
-        agents=_parse_agents_config(cfg, DEFAULT_HUB_CONFIG),
-        templates=_parse_templates_config(
-            cfg.get("templates"), DEFAULT_HUB_CONFIG.get("templates")
-        ),
-        repos_root=(root / hub_cfg["repos_root"]).resolve(),
-        worktrees_root=(root / hub_cfg["worktrees_root"]).resolve(),
-        manifest_path=root / hub_cfg["manifest"],
-        discover_depth=int(hub_cfg["discover_depth"]),
-        auto_init_missing=bool(hub_cfg["auto_init_missing"]),
-        include_root_repo=bool(hub_cfg.get("include_root_repo", False)),
-        repo_server_inherit=bool(hub_cfg.get("repo_server_inherit", True)),
-        update_repo_url=str(hub_cfg.get("update_repo_url", "")),
-        update_repo_ref=str(hub_cfg.get("update_repo_ref", "main")),
-        update_skip_checks=update_skip_checks,
-        update_backend=update_backend,
-        update_linux_service_names=update_linux_service_names,
-        durable_writes=durable_writes,
-        app_server=_parse_app_server_config(
-            cfg.get("app_server"),
-            root,
-            DEFAULT_HUB_CONFIG["app_server"],
-        ),
-        opencode=_parse_opencode_config(
-            cfg.get("opencode"), root, DEFAULT_HUB_CONFIG.get("opencode")
-        ),
-        pma=_parse_pma_config(cfg.get("pma"), root, DEFAULT_HUB_CONFIG.get("pma")),
-        usage=_parse_usage_config(
-            cfg.get("usage"), root, DEFAULT_HUB_CONFIG.get("usage")
-        ),
-        server_host=str(cfg["server"]["host"]),
-        server_port=int(cfg["server"]["port"]),
-        server_base_path=_normalize_base_path(cfg["server"].get("base_path", "")),
-        server_access_log=bool(cfg["server"].get("access_log", False)),
-        server_auth_token_env=str(cfg["server"].get("auth_token_env", "")),
-        server_allowed_hosts=list(cfg["server"].get("allowed_hosts") or []),
-        server_allowed_origins=list(cfg["server"].get("allowed_origins") or []),
-        log=LogConfig(
-            path=log_path,
-            max_bytes=int(log_cfg["max_bytes"]),
-            backup_count=int(log_cfg["backup_count"]),
-        ),
-        server_log=LogConfig(
-            path=server_log_path,
-            max_bytes=int(server_log_cfg.get("max_bytes", log_cfg["max_bytes"])),
-            backup_count=int(
-                server_log_cfg.get("backup_count", log_cfg["backup_count"])
-            ),
-        ),
-        static_assets=_parse_static_assets_config(
-            cfg.get("static_assets"), root, DEFAULT_HUB_CONFIG["static_assets"]
-        ),
-        housekeeping=parse_housekeeping_config(cfg.get("housekeeping")),
-    )
+    return _build_hub_config_impl(config_path, cfg)
