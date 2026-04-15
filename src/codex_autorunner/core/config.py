@@ -26,6 +26,11 @@ from ..housekeeping import (
     parse_housekeeping_config,
 )
 from ..manifest import ManifestError, load_manifest
+from .agent_config import (  # noqa: F401 — backward-compat re-exports
+    AgentConfig,
+    AgentProfileConfig,
+    ResolvedAgentTarget,
+)
 from .app_server_command import (
     GLOBAL_APP_SERVER_COMMAND_ENV,
     LEGACY_TELEGRAM_APP_SERVER_COMMAND_ENV,
@@ -1068,36 +1073,6 @@ class UsageConfig:
     cache_scope: str
     global_cache_root: Path
     repo_cache_path: Path
-
-
-@dataclasses.dataclass(frozen=True)
-class AgentProfileConfig:
-    display_name: Optional[str] = None
-    backend: Optional[str] = None
-    binary: Optional[str] = None
-    serve_command: Optional[List[str]] = None
-    base_url: Optional[str] = None
-    subagent_models: Optional[Dict[str, str]] = None
-
-
-@dataclasses.dataclass(frozen=True)
-class AgentConfig:
-    backend: Optional[str]
-    binary: str
-    serve_command: Optional[List[str]]
-    base_url: Optional[str]
-    subagent_models: Optional[Dict[str, str]]
-    default_profile: Optional[str] = None
-    profiles: Optional[Dict[str, AgentProfileConfig]] = None
-
-
-@dataclasses.dataclass(frozen=True)
-class ResolvedAgentTarget:
-    logical_agent_id: str
-    logical_profile: Optional[str]
-    runtime_agent_id: str
-    runtime_profile: Optional[str]
-    resolution_kind: Literal["passthrough", "canonical_profile", "alias_profile"]
 
 
 @dataclasses.dataclass(frozen=True)

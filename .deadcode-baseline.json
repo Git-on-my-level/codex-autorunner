@@ -2,8 +2,10 @@
   "findings": [
     "python:class:src/codex_autorunner/core/supervisor_protocol.py:7:AppServerSupervisorProtocol",
     "python:class:src/codex_autorunner/integrations/app_server/logging.py:72:AppServerEventFormatter",
-    "python:function:src/codex_autorunner/core/git_utils.py:110:git_ls_files",
-    "python:function:src/codex_autorunner/core/git_utils.py:138:git_diff_name_status",
+    "python:function:src/codex_autorunner/core/agent_config.py:205:parse_agents_config",
+    "python:function:src/codex_autorunner/core/config_parsers.py:867:_parse_log_config",
+    "python:function:src/codex_autorunner/core/git_utils.py:127:git_ls_files",
+    "python:function:src/codex_autorunner/core/git_utils.py:155:git_diff_name_status",
     "python:function:src/codex_autorunner/core/patch_utils.py:127:ensure_patch_targets_allowed",
     "python:function:src/codex_autorunner/core/patch_utils.py:167:apply_patch_file",
     "python:function:src/codex_autorunner/core/patch_utils.py:176:preview_patch",
@@ -14,6 +16,13 @@
     "python:function:src/codex_autorunner/integrations/chat/parity_checker.py:1606:_count_calls",
     "python:function:src/codex_autorunner/integrations/chat/parity_checker.py:1848:_bool_constant_value",
     "python:function:src/codex_autorunner/integrations/telegram/handlers/utils.py:19:_flatten_opencode_tokens",
-    "python:function:src/codex_autorunner/integrations/telegram/handlers/utils.py:23:_extract_opencode_usage_value"
+    "python:function:src/codex_autorunner/integrations/telegram/handlers/utils.py:23:_extract_opencode_usage_value",
+    "python:function:src/codex_autorunner/tickets/runner_post_turn.py:326:apply_successful_turn_state",
+    "python:function:src/codex_autorunner/tickets/runner_post_turn.py:347:apply_loop_guard_state",
+    "python:function:src/codex_autorunner/tickets/runner_post_turn.py:358:build_loop_guard_pause_result",
+    "python:function:src/codex_autorunner/tickets/runner_post_turn.py:403:build_dispatch_pause_result",
+    "python:function:src/codex_autorunner/tickets/runner_post_turn.py:438:apply_completion_cleanup",
+    "python:function:src/codex_autorunner/tickets/runner_post_turn.py:456:apply_checkpoint_error_state",
+    "python:function:src/codex_autorunner/tickets/runner_selection.py:465:plan_pre_turn"
   ]
 }

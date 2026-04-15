@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, Sequence
 
 from .git_utils import git_branch
 from .managed_thread_status import ManagedThreadStatusSnapshot
@@ -12,6 +12,177 @@ from .orchestration.models import (
     normalize_resource_owner_fields,
 )
 from .text_utils import _json_loads_object
+
+THREAD_EXECUTION_SOURCE_KIND = "thread_execution"
+
+THREAD_EXECUTION_PENDING_STATES = ("pending", "queued", "waiting")
+
+QUEUE_ITEM_INSERT_SQL = """
+INSERT INTO orch_queue_items (
+    queue_item_id,
+    lane_id,
+    source_kind,
+    source_key,
+    dedupe_key,
+    state,
+    visible_at,
+    claimed_at,
+    completed_at,
+    payload_json,
+    created_at,
+    updated_at,
+    idempotency_key,
+    error_text,
+    dedupe_reason,
+    result_json
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+"""
+
+INTERRUPTED_RESULT_JSON = '{"status":"interrupted"}'
+
+
+def insert_thread_execution_queue_item(
+    conn: Any,
+    *,
+    queue_item_id: str,
+    lane_id: str,
+    source_key: str,
+    dedupe_key: str,
+    state: str,
+    visible_at: str,
+    payload_json: str,
+    created_at: str,
+    idempotency_key: str,
+    result_json: str = "{}",
+) -> None:
+    conn.execute(
+        QUEUE_ITEM_INSERT_SQL,
+        (
+            queue_item_id,
+            lane_id,
+            THREAD_EXECUTION_SOURCE_KIND,
+            source_key,
+            dedupe_key,
+            state,
+            visible_at,
+            None,
+            None,
+            payload_json,
+            created_at,
+            created_at,
+            idempotency_key,
+            None,
+            None,
+            result_json,
+        ),
+    )
+
+
+def complete_thread_execution_queue_item(
+    conn: Any,
+    *,
+    source_key: str,
+    target_state: str,
+    completed_at: str,
+    error_text: Optional[str] = None,
+    result_json: str = "{}",
+) -> int:
+    cursor = conn.execute(
+        """
+        UPDATE orch_queue_items
+           SET state = ?,
+               completed_at = ?,
+               updated_at = ?,
+               error_text = ?,
+               result_json = ?
+         WHERE source_kind = ?
+           AND source_key = ?
+           AND state = 'running'
+        """,
+        (
+            target_state,
+            completed_at,
+            completed_at,
+            error_text,
+            result_json,
+            THREAD_EXECUTION_SOURCE_KIND,
+            source_key,
+        ),
+    )
+    return int(cursor.rowcount)
+
+
+def fail_thread_execution_running_items(
+    conn: Any,
+    *,
+    source_keys: Sequence[str],
+    completed_at: str,
+    error_text: Optional[str] = None,
+    result_json: str = INTERRUPTED_RESULT_JSON,
+) -> None:
+    if not source_keys:
+        return
+    placeholders = ",".join("?" for _ in source_keys)
+    conn.execute(
+        f"""
+        UPDATE orch_queue_items
+           SET state = 'failed',
+               completed_at = ?,
+               updated_at = ?,
+               error_text = COALESCE(error_text, ?),
+               result_json = ?
+         WHERE source_kind = ?
+           AND source_key IN ({placeholders})
+           AND state = 'running'
+        """,
+        (
+            completed_at,
+            completed_at,
+            error_text,
+            result_json,
+            THREAD_EXECUTION_SOURCE_KIND,
+            *source_keys,
+        ),
+    )
+
+
+def fail_thread_execution_pending_items(
+    conn: Any,
+    *,
+    source_keys: Sequence[str],
+    lane_id: str,
+    completed_at: str,
+    error_text: Optional[str] = None,
+    result_json: str = INTERRUPTED_RESULT_JSON,
+) -> None:
+    if not source_keys:
+        return
+    placeholders = ",".join("?" for _ in source_keys)
+    pending_placeholders = ",".join("?" for _ in THREAD_EXECUTION_PENDING_STATES)
+    conn.execute(
+        f"""
+        UPDATE orch_queue_items
+           SET state = 'failed',
+               completed_at = ?,
+               updated_at = ?,
+               error_text = COALESCE(error_text, ?),
+               result_json = ?
+         WHERE source_kind = ?
+           AND lane_id = ?
+           AND source_key IN ({placeholders})
+           AND state IN ({pending_placeholders})
+        """,
+        (
+            completed_at,
+            completed_at,
+            error_text,
+            result_json,
+            THREAD_EXECUTION_SOURCE_KIND,
+            lane_id,
+            *source_keys,
+            *THREAD_EXECUTION_PENDING_STATES,
+        ),
+    )
 
 
 def row_to_dict(row: Any) -> dict[str, Any]:
@@ -253,11 +424,19 @@ class PmaPendingQueueItem:
 
 
 __all__ = [
+    "INTERRUPTED_RESULT_JSON",
     "PmaExecutionRecord",
     "PmaPendingQueueItem",
     "PmaThreadRecord",
+    "QUEUE_ITEM_INSERT_SQL",
+    "THREAD_EXECUTION_PENDING_STATES",
+    "THREAD_EXECUTION_SOURCE_KIND",
     "coerce_text",
+    "complete_thread_execution_queue_item",
     "enrich_thread_metadata_for_workspace",
+    "fail_thread_execution_pending_items",
+    "fail_thread_execution_running_items",
+    "insert_thread_execution_queue_item",
     "normalize_request_kind",
     "row_to_dict",
     "sanitize_thread_metadata",

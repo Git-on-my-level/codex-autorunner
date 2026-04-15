@@ -1,6 +1,7 @@
 """App server integration package."""
 
-from .client import CodexAppServerClient, is_missing_thread_error
+from .client import CodexAppServerClient
+from .errors import is_missing_thread_error
 from .retention import (
     DEFAULT_WORKSPACE_MAX_AGE_DAYS,
     WorkspacePruneSummary,
