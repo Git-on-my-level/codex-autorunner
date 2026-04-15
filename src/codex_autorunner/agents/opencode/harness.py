@@ -51,6 +51,8 @@ from .progress_synthesis import (
 from .protocol_payload import (
     extract_message_info,
     extract_message_phase,
+    extract_status_type,
+    status_is_idle,
 )
 from .runtime import (
     OpenCodeTurnOutput,
@@ -321,15 +323,8 @@ def _saw_terminal_completion(payloads: list[dict[str, Any]]) -> bool:
         if method == "session.idle":
             return True
         if method == "session.status":
-            properties = params.get("properties")
-            if isinstance(properties, dict):
-                status = properties.get("status") or {}
-            else:
-                status = params.get("status") or {}
-            if isinstance(status, dict):
-                status_type = status.get("type") or status.get("status")
-                if isinstance(status_type, str) and status_type.lower() == "idle":
-                    return True
+            if status_is_idle(extract_status_type(params)):
+                return True
         if method == "message.completed":
             return _extract_message_phase(params) != "commentary"
         if method == "item/completed":
@@ -894,21 +889,11 @@ class OpenCodeHarness(AgentHarness):
             except json.JSONDecodeError:
                 parsed = {"raw": payload}
             session_id = extract_session_id(parsed)
-            status_type = None
-            if event.event == "session.status" and isinstance(parsed, dict):
-                properties = parsed.get("properties")
-                if isinstance(properties, dict):
-                    status = properties.get("status") or {}
-                else:
-                    status = parsed.get("status") or {}
-                if isinstance(status, dict):
-                    status_type = status.get("type") or status.get("status")
             if (
                 event.event == "session.idle"
                 or (
                     event.event == "session.status"
-                    and isinstance(status_type, str)
-                    and status_type.lower() == "idle"
+                    and status_is_idle(extract_status_type(parsed))
                 )
             ) and session_id == conversation_id:
                 break
@@ -1066,19 +1051,9 @@ class OpenCodeHarness(AgentHarness):
                     await tracker.maybe_track_descendant_session(parsed, client)
                     wrapped = {"message": {"method": event.event, "params": parsed}}
                     event_session_id = extract_session_id(parsed)
-                    status_type = None
-                    if event.event == "session.status":
-                        properties = parsed.get("properties")
-                        if isinstance(properties, dict):
-                            status = properties.get("status") or {}
-                        else:
-                            status = parsed.get("status") or {}
-                        if isinstance(status, dict):
-                            status_type = status.get("type") or status.get("status")
                     is_idle = event.event == "session.idle" or (
                         event.event == "session.status"
-                        and isinstance(status_type, str)
-                        and status_type.lower() == "idle"
+                        and status_is_idle(extract_status_type(parsed))
                     )
                     if is_idle:
                         pending.progress_events_idle += 1

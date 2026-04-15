@@ -43,8 +43,10 @@ from .protocol_payload import (
     OpenCodeMessageResult,
     auto_answers_for_questions,
     build_turn_id,
+    extract_delta_text_value,
     extract_error_text,
     extract_message_phase,
+    extract_part_and_delta,
     extract_permission_request,
     extract_question_request,
     extract_session_id,
@@ -538,16 +540,7 @@ async def collect_opencode_output_from_events(
                     msg_id, role = assembler.on_register_message_role(payload)
                     assembler.on_handle_role_update(msg_id, role)
             if event.event in ("message.part.updated", "message.part.delta"):
-                properties = (
-                    payload.get("properties") if isinstance(payload, dict) else None
-                )
-                if isinstance(properties, dict):
-                    part = properties.get("part")
-                    delta = properties.get("delta")
-                else:
-                    part = payload.get("part")
-                    delta = payload.get("delta")
-                part_dict = part if isinstance(part, dict) else None
+                part_dict, delta = extract_part_and_delta(payload)
                 part_with_session = None
                 if isinstance(part_dict, dict):
                     part_with_session = dict(part_dict)
@@ -574,12 +567,7 @@ async def collect_opencode_output_from_events(
                         part_with_session["messageID"] = part_message_id
                     if isinstance(resolved_part_type, str) and resolved_part_type:
                         part_with_session["type"] = resolved_part_type
-                if isinstance(delta, dict):
-                    delta_text = delta.get("text")
-                elif isinstance(delta, str):
-                    delta_text = delta
-                else:
-                    delta_text = None
+                delta_text = extract_delta_text_value(delta)
                 if isinstance(delta_text, str) and delta_text:
                     if resolved_part_type == "reasoning":
                         if part_handler and part_with_session:
