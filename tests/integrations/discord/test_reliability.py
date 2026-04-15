@@ -28,6 +28,11 @@ from codex_autorunner.integrations.discord.command_runner import (
     CommandRunner,
     RunnerConfig,
 )
+from codex_autorunner.integrations.discord.effects import (
+    DiscordEffectDeliveryError,
+    DiscordResponseEffect,
+)
+from codex_autorunner.integrations.discord.errors import DiscordPermanentError
 from codex_autorunner.integrations.discord.gateway import DiscordGatewayClient
 from codex_autorunner.integrations.discord.ingress import (
     CommandSpec,
@@ -1360,6 +1365,50 @@ async def test_gateway_emits_reconnect_lifecycle_logs(
 
 
 @pytest.mark.anyio
+async def test_gateway_ignores_expired_interaction_delivery_failure() -> None:
+    client = DiscordGatewayClient(
+        bot_token="token",
+        intents=1,
+        logger=logging.getLogger("test.reliability.gateway.expired_interaction"),
+        gateway_url="wss://example.invalid",
+    )
+    client._dispatch_callback_semaphore = asyncio.Semaphore(1)
+    client._dispatch_failure_future = asyncio.get_running_loop().create_future()
+
+    async def _raise_expired_delivery(
+        _event_type: str,
+        _payload: dict[str, Any],
+    ) -> None:
+        raise DiscordEffectDeliveryError(
+            effect=DiscordResponseEffect(
+                text="stale interaction",
+                ephemeral=True,
+            ),
+            interaction_id="inter-expired",
+            interaction_token="token-expired",
+            delivery_status="ack_failed",
+            delivery_error=(
+                "Discord API request failed for POST /interactions/inter-expired/"
+                "token-expired/callback: status=404 body="
+                '\'{"message":"Unknown interaction","code":10062}\''
+            ),
+        )
+
+    await client._start_dispatch_callback(
+        event_type="INTERACTION_CREATE",
+        payload={},
+        on_dispatch=_raise_expired_delivery,
+    )
+    await asyncio.sleep(0)
+    # Callback exceptions surface here; expired unknown-interaction failures must
+    # not propagate (they are logged from the task done callback asynchronously).
+    await client._wait_for_dispatch_callbacks()
+
+    assert client._dispatch_failure_future is not None
+    assert client._dispatch_failure_future.done() is False
+
+
+@pytest.mark.anyio
 async def test_duplicate_interaction_id_does_not_attempt_second_ack(
     tmp_path: Path,
 ) -> None:
@@ -1381,6 +1430,101 @@ async def test_duplicate_interaction_id_does_not_attempt_second_ack(
         record = await store.get_interaction("inter-1")
         assert record is not None
         assert record.execution_status == "received"
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_responder_skips_followup_after_unknown_interaction_ack_failure(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    rest = _FakeRest()
+    logger = logging.getLogger("test.reliability.expired_ack_dead_session")
+    config = SimpleNamespace(application_id="app-1", max_message_length=2000)
+    try:
+        await store.initialize()
+        await store.register_interaction(
+            interaction_id="expired-ack-1",
+            interaction_token="token-expired-ack-1",
+            interaction_kind="slash_command",
+            channel_id="chan-1",
+            guild_id="guild-1",
+            user_id="user-1",
+            metadata_json={"command_path": ["car", "status"]},
+        )
+
+        async def load_ack_mode(interaction_id: str) -> Optional[str]:
+            record = await store.get_interaction(interaction_id)
+            return record.ack_mode if record is not None else None
+
+        async def record_ack(
+            interaction_id: str,
+            interaction_token: str,
+            ack_mode: str,
+            original_response_message_id: Optional[str],
+        ) -> None:
+            _ = interaction_token
+            await store.mark_interaction_acknowledged(
+                interaction_id,
+                ack_mode=ack_mode,
+                original_response_message_id=original_response_message_id,
+            )
+
+        async def record_delivery(
+            interaction_id: str,
+            delivery_status: str,
+            delivery_error: Optional[str],
+            original_response_message_id: Optional[str],
+        ) -> None:
+            await store.record_interaction_delivery(
+                interaction_id,
+                delivery_status=delivery_status,
+                delivery_error=delivery_error,
+                original_response_message_id=original_response_message_id,
+            )
+
+        async def fail_unknown_interaction(**_kwargs: Any) -> None:
+            raise DiscordPermanentError(
+                "Discord API request failed for POST /interactions/"
+                "expired-ack-1/token-expired-ack-1/callback: status=404 body="
+                '\'{"message":"Unknown interaction","code":10062}\''
+            )
+
+        rest.create_interaction_response = fail_unknown_interaction  # type: ignore[assignment]
+
+        responder = DiscordResponder(
+            rest=rest,
+            config=config,
+            logger=logger,
+            hydrate_ack_mode=load_ack_mode,
+            record_ack=record_ack,
+            record_delivery=record_delivery,
+        )
+
+        deferred = await responder.defer(
+            interaction_id="expired-ack-1",
+            interaction_token="token-expired-ack-1",
+            ephemeral=True,
+        )
+        sent = await responder.send_followup(
+            interaction_id="expired-ack-1",
+            interaction_token="token-expired-ack-1",
+            content="should be skipped",
+            ephemeral=True,
+        )
+
+        assert deferred is False
+        assert sent is False
+        assert rest.followup_messages == []
+
+        session = responder.get_session("token-expired-ack-1")
+        assert session is not None
+        assert session.interaction_has_expired() is True
+
+        record = await store.get_interaction("expired-ack-1")
+        assert record is not None
+        assert record.final_delivery_status == "ack_failed"
     finally:
         await store.close()
 

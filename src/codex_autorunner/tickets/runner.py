@@ -32,11 +32,13 @@ from .runner_execution import (
     should_pause_for_loop,
 )
 from .runner_prompt import (
-    TRUNCATION_MARKER,  # noqa: F401  # re-exported for backwards compatibility
     _build_car_hud,
     _preserve_ticket_structure,  # noqa: F401  # re-exported for backwards compatibility
     _shrink_prompt,
     _truncate_text_by_bytes,
+)
+from .runner_prompt_support import (
+    TRUNCATION_MARKER,  # noqa: F401  # re-exported for backwards compatibility
 )
 from .runner_step_support import (
     build_reply_context,

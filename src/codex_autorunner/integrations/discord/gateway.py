@@ -10,9 +10,10 @@ import random
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional
 
-from ...core.logging_utils import log_event
+from ...core import logging_utils
 from .constants import DISCORD_GATEWAY_URL
-from .errors import DiscordAPIError, DiscordPermanentError
+from .effects import DiscordEffectDeliveryError
+from .errors import DiscordAPIError, DiscordPermanentError, is_unknown_interaction_error
 from .rest import DiscordRestClient
 
 try:
@@ -161,7 +162,7 @@ class DiscordGatewayClient:
             self._ready_in_connection = False
             try:
                 gateway_url = await self._resolve_gateway_url()
-                log_event(
+                logging_utils.log_event(
                     self._logger,
                     logging.INFO,
                     "discord.gateway.transport.connect.start",
@@ -170,7 +171,7 @@ class DiscordGatewayClient:
                 )
                 async with websockets.connect(gateway_url) as websocket:
                     self._websocket = websocket
-                    log_event(
+                    logging_utils.log_event(
                         self._logger,
                         logging.INFO,
                         "discord.gateway.transport.connect.success",
@@ -185,7 +186,7 @@ class DiscordGatewayClient:
             except DiscordPermanentError as exc:
                 fatal_failure = True
                 fatal_reason = str(exc)
-                log_event(
+                logging_utils.log_event(
                     self._logger,
                     logging.ERROR,
                     "discord.gateway.reconnect.failure",
@@ -203,7 +204,7 @@ class DiscordGatewayClient:
                 if close_code in FATAL_GATEWAY_CLOSE_CODES:
                     fatal_failure = True
                     fatal_reason = f"gateway_close_code={close_code}"
-                log_event(
+                logging_utils.log_event(
                     self._logger,
                     logging.WARNING,
                     "discord.gateway.reconnect.failure",
@@ -222,7 +223,7 @@ class DiscordGatewayClient:
             except (
                 Exception
             ) as exc:  # intentional: reconnect loop catches all transient failures
-                log_event(
+                logging_utils.log_event(
                     self._logger,
                     logging.WARNING,
                     "discord.gateway.reconnect.failure",
@@ -236,7 +237,7 @@ class DiscordGatewayClient:
                 self._websocket = None
                 await self._cancel_heartbeat()
                 await self._cancel_dispatch_worker()
-                log_event(
+                logging_utils.log_event(
                     self._logger,
                     logging.INFO,
                     "discord.gateway.transport.disconnect",
@@ -258,7 +259,7 @@ class DiscordGatewayClient:
                 break
             if established_session or self._ready_in_connection:
                 if reconnect_attempt > 0:
-                    log_event(
+                    logging_utils.log_event(
                         self._logger,
                         logging.INFO,
                         "discord.gateway.reconnect.success",
@@ -268,7 +269,7 @@ class DiscordGatewayClient:
                     )
                 reconnect_attempt = 0
             backoff = calculate_reconnect_backoff(reconnect_attempt)
-            log_event(
+            logging_utils.log_event(
                 self._logger,
                 logging.INFO,
                 "discord.gateway.reconnect.scheduled",
@@ -471,9 +472,28 @@ class DiscordGatewayClient:
             return
         if exc is None:
             return
+        if self._is_ignored_expired_interaction_failure(exc):
+            logging_utils.log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.gateway.dispatch.expired_interaction_ignored",
+                interaction_id=getattr(exc, "interaction_id", None),
+                delivery_status=getattr(exc, "delivery_status", None),
+                delivery_error=getattr(exc, "delivery_error", None),
+                error=str(exc),
+            )
+            return
         failure_future = self._dispatch_failure_future
         if failure_future is not None and not failure_future.done():
             failure_future.set_exception(exc)
+
+    @staticmethod
+    def _is_ignored_expired_interaction_failure(exc: BaseException) -> bool:
+        if isinstance(exc, DiscordEffectDeliveryError) and is_unknown_interaction_error(
+            exc.delivery_error
+        ):
+            return True
+        return is_unknown_interaction_error(exc)
 
     async def _recv_gateway_message(self, websocket_iter: Any) -> Any | None:
         dispatch_task = self._dispatch_worker_task
@@ -621,7 +641,16 @@ class DiscordGatewayClient:
             if failure_future is not None and failure_future.done():
                 failure_future.result()
             return
-        await asyncio.gather(*tuple(self._dispatch_callback_tasks))
+        results = await asyncio.gather(
+            *tuple(self._dispatch_callback_tasks),
+            return_exceptions=True,
+        )
+        for result in results:
+            if not isinstance(result, BaseException):
+                continue
+            if self._is_ignored_expired_interaction_failure(result):
+                continue
+            raise result
 
     async def _cancel_dispatch_worker(self) -> None:
         queue = self._dispatch_queue

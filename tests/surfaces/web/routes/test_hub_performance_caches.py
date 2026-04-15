@@ -488,7 +488,9 @@ def test_hub_repo_listing_service_enriches_repos_in_parallel(tmp_path: Path) -> 
     listing_service = HubRepoListingService(
         context,
         _AsyncMountManager(),  # type: ignore[arg-type]
-        SimpleNamespace(enrich_repo=enrich_repo),
+        SimpleNamespace(
+            enrich_repo=enrich_repo, repo_state_fingerprint=lambda *_a, **_kw: ()
+        ),
     )
 
     payload = asyncio.run(listing_service.list_repos(sections={"repos"}))
@@ -609,7 +611,9 @@ def test_hub_repo_listing_service_reuses_stale_response_while_refreshing(
     listing_service = HubRepoListingService(
         context,
         _AsyncMountManager(),  # type: ignore[arg-type]
-        SimpleNamespace(enrich_repo=enrich_repo),
+        SimpleNamespace(
+            enrich_repo=enrich_repo, repo_state_fingerprint=lambda *_a, **_kw: ()
+        ),
     )
 
     async def run_scenario() -> None:
@@ -679,7 +683,9 @@ def test_hub_repo_listing_service_invalidates_cache_when_manifest_changes(
     listing_service = HubRepoListingService(
         context,
         _AsyncMountManager(),  # type: ignore[arg-type]
-        SimpleNamespace(enrich_repo=enrich_repo),
+        SimpleNamespace(
+            enrich_repo=enrich_repo, repo_state_fingerprint=lambda *_a, **_kw: ()
+        ),
     )
 
     first = asyncio.run(listing_service.list_repos(sections={"repos"}))

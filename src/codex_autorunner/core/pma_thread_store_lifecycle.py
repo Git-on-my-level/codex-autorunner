@@ -5,8 +5,12 @@ from typing import Any, Callable, Optional
 
 from .freshness import parse_iso_datetime
 from .managed_thread_status import ManagedThreadStatusReason
-from .pma_thread_store_rows import PmaPendingQueueItem
-from .text_utils import _json_dumps, _json_loads_object
+from .pma_thread_store_rows import (
+    PmaPendingQueueItem,
+    fail_thread_execution_pending_items,
+    fail_thread_execution_running_items,
+)
+from .text_utils import _json_loads_object
 from .time_utils import now_iso
 
 _STALE_RUNNING_RECOVERY_ERROR = "stale_running_execution_recovered"
@@ -139,25 +143,11 @@ class PmaThreadStoreLifecycle:
                     *stale_execution_ids,
                 ),
             )
-            conn.execute(
-                f"""
-                UPDATE orch_queue_items
-                   SET state = 'failed',
-                       completed_at = ?,
-                       updated_at = ?,
-                       error_text = COALESCE(error_text, ?),
-                       result_json = ?
-                 WHERE source_kind = 'thread_execution'
-                   AND source_key IN ({placeholders})
-                   AND state = 'running'
-                """,
-                (
-                    recovered_at,
-                    recovered_at,
-                    _STALE_RUNNING_RECOVERY_ERROR,
-                    _json_dumps({"status": "interrupted"}),
-                    *stale_execution_ids,
-                ),
+            fail_thread_execution_running_items(
+                conn,
+                source_keys=stale_execution_ids,
+                completed_at=recovered_at,
+                error_text=_STALE_RUNNING_RECOVERY_ERROR,
             )
         return len(stale_execution_ids)
 
@@ -233,26 +223,12 @@ class PmaThreadStoreLifecycle:
                 """,
                 (cancelled_at, *execution_ids),
             )
-            conn.execute(
-                f"""
-                UPDATE orch_queue_items
-                   SET state = 'failed',
-                       completed_at = ?,
-                       updated_at = ?,
-                       error_text = COALESCE(error_text, 'interrupted'),
-                       result_json = ?
-                 WHERE source_kind = 'thread_execution'
-                   AND lane_id = ?
-                   AND source_key IN ({placeholders})
-                   AND state IN ('pending', 'queued', 'waiting')
-                """,
-                (
-                    cancelled_at,
-                    cancelled_at,
-                    _json_dumps({"status": "interrupted"}),
-                    thread_queue_lane_id(managed_thread_id),
-                    *execution_ids,
-                ),
+            fail_thread_execution_pending_items(
+                conn,
+                source_keys=execution_ids,
+                lane_id=thread_queue_lane_id(managed_thread_id),
+                completed_at=cancelled_at,
+                error_text="interrupted",
             )
         return len(execution_ids)
 
@@ -297,26 +273,12 @@ class PmaThreadStoreLifecycle:
                 """,
                 (cancelled_at, execution_id),
             )
-            conn.execute(
-                """
-                UPDATE orch_queue_items
-                   SET state = 'failed',
-                       completed_at = ?,
-                       updated_at = ?,
-                       error_text = COALESCE(error_text, 'interrupted'),
-                       result_json = ?
-                 WHERE source_kind = 'thread_execution'
-                   AND lane_id = ?
-                   AND source_key = ?
-                   AND state IN ('pending', 'queued', 'waiting')
-                """,
-                (
-                    cancelled_at,
-                    cancelled_at,
-                    _json_dumps({"status": "interrupted"}),
-                    thread_queue_lane_id(managed_thread_id),
-                    execution_id,
-                ),
+            fail_thread_execution_pending_items(
+                conn,
+                source_keys=[execution_id],
+                lane_id=thread_queue_lane_id(managed_thread_id),
+                completed_at=cancelled_at,
+                error_text="interrupted",
             )
         return bool(execution_cursor.rowcount)
 

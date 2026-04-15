@@ -19,7 +19,9 @@ def _assert_process_gone(pid: int) -> None:
             return
         except PermissionError:
             return
-        # Linux zombies still answer signal 0 until reaped; treat as terminated.
+        # Reaped children can remain as zombies until the parent waits; Linux
+        # still answers signal 0 for Z until reaped. Parse state after comm in
+        # /proc/pid/stat (comm may contain spaces) rather than naive whitespace split.
         if os.path.isdir("/proc"):
             stat_path = f"/proc/{pid}/stat"
             try:
@@ -28,7 +30,7 @@ def _assert_process_gone(pid: int) -> None:
             except (FileNotFoundError, OSError):
                 return
             rparen = data.rfind(")")
-            if rparen != -1 and data[rparen + 2 : rparen + 3] == "Z":
+            if rparen != -1 and len(data) > rparen + 2 and data[rparen + 2] == "Z":
                 return
         time.sleep(0.05)
     pytest.fail(f"process {pid} still running after termination")

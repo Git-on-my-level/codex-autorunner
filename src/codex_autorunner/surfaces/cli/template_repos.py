@@ -6,12 +6,9 @@ from typing import Any, Optional
 import typer
 import yaml
 
-from ...core.config import (
-    CONFIG_FILENAME,
-    GENERATED_CONFIG_HEADER,
-    load_hub_config,
-    save_hub_config_data,
-)
+from ...core.config import CONFIG_FILENAME, load_hub_config
+from ...core.config_layering import GENERATED_CONFIG_HEADER
+from ...core.generated_hub_config import save_hub_config_data
 from ...core.locks import file_lock
 
 
