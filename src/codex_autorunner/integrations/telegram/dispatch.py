@@ -19,6 +19,10 @@ from .adapter import (
     allowlist_allows,
 )
 from .chat_callbacks import parse_callback_data
+from .immediate_feedback_bridge import (
+    telegram_immediate_callback_ack,
+    telegram_publish_queued_notice,
+)
 from .state import topic_key
 
 
@@ -237,6 +241,17 @@ async def _dispatch_callback(
             or parsed.kind.startswith("queue_interrupt_send:")
         )
     )
+
+    await telegram_immediate_callback_ack(
+        handlers,
+        callback_id=callback.callback_id,
+        chat_id=callback.chat_id,
+        thread_id=callback.thread_id,
+        message_id=callback.message_id,
+        operation_id=operation_id,
+        logger=handlers._logger if hasattr(handlers, "_logger") else None,
+    )
+
     if context.topic_key:
         if not should_bypass_queue:
             handlers._enqueue_topic_work(
@@ -309,22 +324,34 @@ async def _dispatch_message(
                 ),
             )()
             return
-        placeholder_id = await handlers._maybe_send_queued_placeholder(
-            message, topic_key=context.topic_key
+
+        runtime = _get_topic_runtime(handlers, context.topic_key)
+        is_busy = runtime is not None and (
+            runtime.current_turn_id is not None or runtime.queue.pending() > 0
         )
-        if placeholder_id is not None:
+
+        if is_busy:
+            queued_result = await telegram_publish_queued_notice(
+                handlers,
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                reply_to_message_id=message.message_id,
+                operation_id=operation_id,
+                logger=handlers._logger if hasattr(handlers, "_logger") else None,
+            )
+            if queued_result.anchor_ref is not None:
+                _set_queued_placeholder(
+                    handlers,
+                    message.chat_id,
+                    message.message_id,
+                    queued_result.anchor_ref,
+                )
+        else:
             await _mark_chat_operation_state(
                 handlers,
                 operation_id,
-                state=ChatOperationState.VISIBLE,
-                first_visible_feedback_at=now_iso(),
-                anchor_ref=str(placeholder_id),
+                state=ChatOperationState.QUEUED,
             )
-        await _mark_chat_operation_state(
-            handlers,
-            operation_id,
-            state=ChatOperationState.QUEUED,
-        )
         handlers._enqueue_topic_work(
             context.topic_key,
             lambda: _with_chat_operation(
@@ -351,6 +378,35 @@ async def _dispatch_message(
             work=_handle,
         ),
     )()
+
+
+def _get_topic_runtime(handlers: Any, topic_key_str: str) -> Any:
+    router = getattr(handlers, "_router", None)
+    if router is None:
+        return None
+    runtime_fn = getattr(router, "runtime_for", None)
+    if not callable(runtime_fn):
+        return None
+    return runtime_fn(topic_key_str)
+
+
+def _set_queued_placeholder(
+    handlers: Any,
+    chat_id: int,
+    message_id: int,
+    placeholder_id: str,
+) -> None:
+    setter = getattr(handlers, "_set_queued_placeholder", None)
+    if callable(setter):
+        try:
+            int_placeholder = int(placeholder_id)
+            setter(chat_id, message_id, int_placeholder)
+            return
+        except (TypeError, ValueError):
+            pass
+    placeholder_map = getattr(handlers, "_queued_placeholder_map", None)
+    if isinstance(placeholder_map, dict):
+        placeholder_map[(chat_id, message_id)] = placeholder_id
 
 
 _ROUTES: tuple[tuple[str, DispatchRoute], ...] = (
