@@ -13,6 +13,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from codex_autorunner.core.orchestration import (
+    SQLiteChatOperationLedger,
+    initialize_orchestration_sqlite,
+)
 from codex_autorunner.integrations.chat.collaboration_policy import (
     CollaborationEvaluationResult,
 )
@@ -194,9 +198,15 @@ class _ChaosRest:
 
 class _ChaosHarness:
     def __init__(self, tmp_path: Path) -> None:
+        initialize_orchestration_sqlite(tmp_path, durable=False)
         self.store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+        self.operation_store = SQLiteChatOperationLedger(tmp_path, durable=False)
         self.rest = _ChaosRest()
-        self.config = SimpleNamespace(application_id="app-1", max_message_length=2000)
+        self.config = SimpleNamespace(
+            application_id="app-1",
+            max_message_length=2000,
+            root=tmp_path,
+        )
         self.logger = logging.getLogger("test.discord.chaos")
 
     async def initialize(self) -> None:
@@ -439,11 +449,17 @@ def _build_recovery_service(
     *,
     store: DiscordStateStore,
     rest: _ChaosRest,
+    operation_store: SQLiteChatOperationLedger,
 ) -> DiscordBotService:
     service = DiscordBotService.__new__(DiscordBotService)
     service._store = store
+    service._chat_operation_store = operation_store
     service._rest = rest
-    service._config = SimpleNamespace(application_id="app-1", max_message_length=2000)
+    service._config = SimpleNamespace(
+        application_id="app-1",
+        max_message_length=2000,
+        root=Path("."),
+    )
     service._logger = logging.getLogger("test.discord.chaos.recovery")
     service._handle_car_command = AsyncMock()
     service._handle_pma_command = AsyncMock()
@@ -757,7 +773,11 @@ async def test_recovery_resumes_acked_not_executed_without_second_ack(
     harness = _ChaosHarness(tmp_path)
     await harness.initialize()
     try:
-        service = _build_recovery_service(store=harness.store, rest=harness.rest)
+        service = _build_recovery_service(
+            store=harness.store,
+            rest=harness.rest,
+            operation_store=harness.operation_store,
+        )
         ctx = _make_ctx(
             interaction_id="recover-ack-1",
             interaction_token="token-recover-ack-1",
@@ -821,7 +841,11 @@ async def test_recovery_replays_delivery_without_rerunning_business_logic(
     harness = _ChaosHarness(tmp_path)
     await harness.initialize()
     try:
-        service = _build_recovery_service(store=harness.store, rest=harness.rest)
+        service = _build_recovery_service(
+            store=harness.store,
+            rest=harness.rest,
+            operation_store=harness.operation_store,
+        )
         ctx = _make_ctx(
             interaction_id="recover-delivery-1",
             interaction_token="token-recover-delivery-1",
@@ -898,7 +922,11 @@ async def test_recovery_skips_execution_replay_during_backoff_window(
     harness = _ChaosHarness(tmp_path)
     await harness.initialize()
     try:
-        service = _build_recovery_service(store=harness.store, rest=harness.rest)
+        service = _build_recovery_service(
+            store=harness.store,
+            rest=harness.rest,
+            operation_store=harness.operation_store,
+        )
         ctx = _make_ctx(
             interaction_id="recover-backoff-1",
             interaction_token="token-recover-backoff-1",
@@ -956,7 +984,11 @@ async def test_recovery_abandons_unchanged_delivery_cursor_after_budget(
     harness = _ChaosHarness(tmp_path)
     await harness.initialize()
     try:
-        service = _build_recovery_service(store=harness.store, rest=harness.rest)
+        service = _build_recovery_service(
+            store=harness.store,
+            rest=harness.rest,
+            operation_store=harness.operation_store,
+        )
         ctx = _make_ctx(
             interaction_id="recover-unchanged-cursor-1",
             interaction_token="token-recover-unchanged-cursor-1",
@@ -1037,7 +1069,11 @@ async def test_duplicate_completed_interaction_is_rejected_without_rerun(
     harness = _ChaosHarness(tmp_path)
     await harness.initialize()
     try:
-        service = _build_recovery_service(store=harness.store, rest=harness.rest)
+        service = _build_recovery_service(
+            store=harness.store,
+            rest=harness.rest,
+            operation_store=harness.operation_store,
+        )
         ctx = _make_ctx(
             interaction_id="recover-dup-done-1",
             interaction_token="token-recover-dup-done-1",
@@ -1101,7 +1137,11 @@ async def test_recovery_replays_execution_when_defer_ack_hint_is_pending(
     harness = _ChaosHarness(tmp_path)
     await harness.initialize()
     try:
-        service = _build_recovery_service(store=harness.store, rest=harness.rest)
+        service = _build_recovery_service(
+            store=harness.store,
+            rest=harness.rest,
+            operation_store=harness.operation_store,
+        )
 
         async def _recovered_handler(
             interaction_id: str,
@@ -1173,13 +1213,96 @@ async def test_recovery_replays_execution_when_defer_ack_hint_is_pending(
 
 
 @pytest.mark.anyio
+async def test_recovery_replays_public_anchor_delivery_after_completed_execution(
+    tmp_path: Path,
+) -> None:
+    harness = _ChaosHarness(tmp_path)
+    await harness.initialize()
+    try:
+        service = _build_recovery_service(
+            store=harness.store,
+            rest=harness.rest,
+            operation_store=harness.operation_store,
+        )
+        ctx = _make_ctx(
+            interaction_id="recover-public-anchor-1",
+            interaction_token="token-recover-public-anchor-1",
+        )
+        payload = _slash_payload(
+            interaction_id="recover-public-anchor-1",
+            interaction_token="token-recover-public-anchor-1",
+            subcommand_name="new",
+        )
+        await harness.store.register_interaction(
+            interaction_id=ctx.interaction_id,
+            interaction_token=ctx.interaction_token,
+            interaction_kind=ctx.kind.value,
+            channel_id=ctx.channel_id,
+            guild_id=ctx.guild_id,
+            user_id=ctx.user_id,
+            metadata_json=service._interaction_ledger_metadata(ctx),
+        )
+        envelope = RuntimeInteractionEnvelope(
+            context=ctx,
+            conversation_id="conversation:discord:chan-1:guild-1",
+            resource_keys=("conversation:discord:chan-1:guild-1",),
+            dispatch_ack_policy="defer_public",
+        )
+        await service._persist_runtime_interaction(
+            envelope,
+            payload,
+            scheduler_state="delivery_pending",
+        )
+        await harness.store.mark_interaction_acknowledged(
+            ctx.interaction_id,
+            ack_mode="defer_public",
+        )
+        await harness.store.mark_interaction_execution(
+            ctx.interaction_id,
+            execution_status="completed",
+        )
+        await harness.store.update_interaction_delivery_cursor(
+            ctx.interaction_id,
+            delivery_cursor_json={
+                "state": "pending",
+                "operation": "edit_original_component_message",
+                "payload": {"text": "Recovered final public message."},
+            },
+            scheduler_state="delivery_pending",
+        )
+
+        await service._resume_interaction_recovery()
+        await service._command_runner.shutdown(grace_seconds=2.0)
+
+        service._handle_car_command.assert_not_awaited()
+        assert harness.rest.followup_messages == []
+        assert len(harness.rest.edited_original_responses) == 1
+        assert (
+            harness.rest.edited_original_responses[0]["payload"]["content"]
+            == "Recovered final public message."
+        )
+
+        record = await harness.store.get_interaction(ctx.interaction_id)
+        assert record is not None
+        assert record.execution_status == "completed"
+        assert record.final_delivery_status == "original_response_edited"
+        assert record.scheduler_state == "completed"
+    finally:
+        await harness.close()
+
+
+@pytest.mark.anyio
 async def test_successful_immediate_response_clears_delivery_cursor_and_recovery_set(
     tmp_path: Path,
 ) -> None:
     harness = _ChaosHarness(tmp_path)
     await harness.initialize()
     try:
-        service = _build_recovery_service(store=harness.store, rest=harness.rest)
+        service = _build_recovery_service(
+            store=harness.store,
+            rest=harness.rest,
+            operation_store=harness.operation_store,
+        )
 
         async def _immediate_handler(
             interaction_id: str,

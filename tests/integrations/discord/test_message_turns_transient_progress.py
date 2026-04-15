@@ -7,6 +7,15 @@ from typing import Any, Optional
 import pytest
 from tests import discord_message_turns_support as support
 
+from codex_autorunner.core.ports.run_event import (
+    ApprovalRequested,
+    Completed,
+    ToolCall,
+)
+from codex_autorunner.integrations.chat.managed_thread_progress_projector import (
+    ManagedThreadProgressProjector,
+)
+from codex_autorunner.integrations.chat.progress_primitives import TurnProgressTracker
 from codex_autorunner.integrations.discord.errors import DiscordTransientError
 
 pytestmark = pytest.mark.slow
@@ -69,6 +78,63 @@ async def test_spawn_discord_progress_background_task_uses_service_tracking() ->
         "channel_id": "channel-1",
         "message_id": "msg-1",
     }
+
+
+@pytest.mark.anyio
+async def test_apply_discord_progress_run_event_tracks_shared_semantic_phase_order() -> (
+    None
+):
+    tracker = TurnProgressTracker(
+        started_at=0.0,
+        agent="codex",
+        model="default",
+        label="working",
+        max_actions=8,
+        max_output_chars=400,
+    )
+    projector = ManagedThreadProgressProjector(
+        tracker,
+        min_render_interval_seconds=1.0,
+        heartbeat_interval_seconds=2.0,
+    )
+    projector.mark_queued()
+    projector.mark_working()
+    edits: list[dict[str, Any]] = []
+
+    async def _edit_progress(**kwargs: Any) -> None:
+        edits.append(kwargs)
+
+    for event in (
+        ApprovalRequested(
+            timestamp="2026-03-15T00:00:00Z",
+            request_id="req-1",
+            description="Need approval to run tests",
+            context={},
+        ),
+        ToolCall(
+            timestamp="2026-03-15T00:00:01Z",
+            tool_name="exec",
+            tool_input={"cmd": "pytest -q"},
+        ),
+        Completed(
+            timestamp="2026-03-15T00:00:02Z",
+            final_message="tests passed",
+        ),
+    ):
+        await support.discord_message_turns_module._apply_discord_progress_run_event(
+            projector,
+            event,
+            edit_progress=_edit_progress,
+        )
+
+    assert projector.phase_sequence() == (
+        "queued",
+        "working",
+        "approval",
+        "progress",
+        "terminal",
+    )
+    assert len(edits) == 3
 
 
 @pytest.mark.anyio

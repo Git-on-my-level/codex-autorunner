@@ -223,8 +223,17 @@ async def test_recover_orphaned_managed_thread_executions_skips_chat_bound_threa
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("surface_kind", "surface_key"),
+    (
+        ("discord", "channel-123"),
+        ("telegram", "123:456"),
+    ),
+)
 async def test_recover_orphaned_managed_thread_executions_recovers_pma_runs_on_chat_bound_threads(
     hub_env,
+    surface_kind: str,
+    surface_key: str,
 ) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
@@ -239,8 +248,8 @@ async def test_recover_orphaned_managed_thread_executions_recovers_pma_runs_on_c
     running = store.create_turn(managed_thread_id, prompt="running")
     queued = store.create_turn(managed_thread_id, prompt="queued", busy_policy="queue")
     bindings.upsert_binding(
-        surface_kind="discord",
-        surface_key="channel-123",
+        surface_kind=surface_kind,
+        surface_key=surface_key,
         thread_target_id=managed_thread_id,
         agent_id="codex",
         repo_id=hub_env.repo_id,

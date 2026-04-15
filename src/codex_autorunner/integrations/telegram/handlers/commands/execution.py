@@ -69,6 +69,12 @@ from .....integrations.app_server.threads import (
     pma_legacy_migration_fallback_keys,
     pma_topic_scoped_key,
 )
+from .....integrations.chat.chat_ux_telemetry import (
+    ChatUxFailureReason,
+    ChatUxMilestone,
+    ChatUxTimingSnapshot,
+    emit_chat_ux_timing,
+)
 from .....integrations.chat.compaction import match_pending_compact_seed
 from .....integrations.chat.constants import (
     APP_SERVER_UNAVAILABLE_MESSAGE,
@@ -136,6 +142,7 @@ from ...helpers import (
     format_public_error,
     is_interrupt_status,
 )
+from ...immediate_feedback_bridge import telegram_create_or_reuse_working_anchor
 from ...state import topic_key as build_topic_key
 from ..utils import (
     _build_opencode_token_usage,
@@ -785,7 +792,11 @@ async def _run_telegram_managed_thread_turn(
     interrupted_error: str = TELEGRAM_PMA_INTERRUPTED_ERROR,
     approval_policy: Optional[str] = None,
     sandbox_policy: Optional[Any] = None,
+    chat_ux_snapshot: Optional[ChatUxTimingSnapshot] = None,
 ) -> _TurnRunResult | _TurnRunFailure:
+    if chat_ux_snapshot is not None:
+        chat_ux_snapshot.record(ChatUxMilestone.ACK_FINISHED)
+        chat_ux_snapshot.record(ChatUxMilestone.FIRST_VISIBLE_FEEDBACK)
     prepared_placeholder_id = await handlers._prepare_turn_placeholder(
         message,
         placeholder_id=placeholder_id,
@@ -1021,6 +1032,7 @@ async def _run_telegram_managed_thread_turn(
             codex_thread_id=backend_thread_id,
             reply_to_message_id=message.message_id,
             placeholder_message_id=prepared_placeholder_id,
+            placeholder_reused=placeholder_id is not None,
         )
         if handlers._register_turn_context(turn_key, backend_turn_id, ctx):
             registered_turn_key = turn_key
@@ -1035,6 +1047,8 @@ async def _run_telegram_managed_thread_turn(
             )
 
     async def _on_submission_error(exc: BaseException) -> _TurnRunFailure:
+        if isinstance(exc, asyncio.TimeoutError) and chat_ux_snapshot is not None:
+            chat_ux_snapshot.failure_reason = ChatUxFailureReason.SUBMISSION_TIMEOUT
         failure_message = _sanitize_runtime_thread_result_error(
             exc,
             public_error=public_execution_error,
@@ -1078,6 +1092,8 @@ async def _run_telegram_managed_thread_turn(
         )
 
     async def _on_queued(_flow: Any) -> _TurnRunResult:
+        if chat_ux_snapshot is not None:
+            chat_ux_snapshot.record(ChatUxMilestone.QUEUE_VISIBLE)
         return _TurnRunResult(
             record=record,
             thread_id=queued_thread_id,
@@ -1211,6 +1227,18 @@ async def _run_telegram_managed_thread_turn(
         interrupt_status_fallback_text = None
         if runtime.interrupt_turn_id == backend_turn_id:
             interrupt_status_fallback_text = "Interrupt requested; turn completed."
+        if chat_ux_snapshot is not None:
+            chat_ux_snapshot.record(ChatUxMilestone.TERMINAL_DELIVERY)
+            emit_chat_ux_timing(
+                handlers._logger,
+                logging.INFO,
+                chat_ux_snapshot,
+                event_suffix="managed_thread_turn",
+                topic_key=topic_key,
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                status="ok",
+            )
         return _TurnRunResult(
             record=record,
             thread_id=resolved_backend_thread_id,
@@ -1230,6 +1258,19 @@ async def _run_telegram_managed_thread_turn(
     if not isinstance(queue_task_map, dict):
         queue_task_map = {}
         handlers._telegram_managed_thread_queue_tasks = queue_task_map
+
+    _first_progress_recorded = False
+
+    async def _handle_progress_event(run_event: Any) -> None:
+        nonlocal _first_progress_recorded
+        if registered_turn_key is not None:
+            await handlers._apply_run_event_to_progress(
+                registered_turn_key,
+                run_event,
+            )
+        if not _first_progress_recorded and chat_ux_snapshot is not None:
+            _first_progress_recorded = True
+            chat_ux_snapshot.record(ChatUxMilestone.FIRST_SEMANTIC_PROGRESS)
 
     return await run_managed_surface_turn(
         MessageRequest(
@@ -1251,16 +1292,7 @@ async def _run_telegram_managed_thread_turn(
             client_request_id=(f"telegram:{topic_key}:{secrets.token_hex(6)}"),
             sandbox_policy=sandbox_policy,
             hooks=ManagedThreadCoordinatorHooks(
-                on_progress_event=(
-                    lambda run_event: (
-                        handlers._apply_run_event_to_progress(
-                            registered_turn_key,
-                            run_event,
-                        )
-                        if registered_turn_key is not None
-                        else None
-                    )
-                ),
+                on_progress_event=_handle_progress_event,
                 deliver_result=_deliver_queued_result,
                 run_with_indicator=_run_with_telegram_typing_indicator,
             ),
@@ -3106,12 +3138,28 @@ class ExecutionCommands(TelegramCommandSupportMixin):
         if queued:
             placeholder_text = QUEUED_PLACEHOLDER_TEXT
         if placeholder_id is None and send_placeholder:
-            placeholder_id = await self._send_placeholder(
-                message.chat_id,
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-                text=placeholder_text,
-            )
+            if getattr(self, "_bot", None) is not None:
+                placeholder_result = await telegram_create_or_reuse_working_anchor(
+                    self,
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    reply_to_message_id=message.message_id,
+                    text=placeholder_text,
+                    operation_id=None,
+                    logger=self._logger,
+                )
+                if placeholder_result.anchor_ref is not None:
+                    try:
+                        placeholder_id = int(placeholder_result.anchor_ref)
+                    except (TypeError, ValueError):
+                        placeholder_id = None
+            else:
+                placeholder_id = await self._send_placeholder(
+                    message.chat_id,
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                    text=placeholder_text,
+                )
             key = await self._resolve_topic_key(message.chat_id, message.thread_id)
             log_event(
                 self._logger,
@@ -3146,6 +3194,8 @@ class ExecutionCommands(TelegramCommandSupportMixin):
         key = surface_key_override or await self._resolve_topic_key(
             message.chat_id, message.thread_id
         )
+        _chat_ux_snapshot = ChatUxTimingSnapshot(platform="telegram")
+        _chat_ux_snapshot.record(ChatUxMilestone.RAW_EVENT_RECEIVED)
         record = record or await self._router.get_topic(key)
         pma_enabled = bool(record and getattr(record, "pma_enabled", False))
         if pma_enabled:
@@ -3293,6 +3343,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 missing_thread_message=missing_thread_message,
                 approval_policy=approval_policy,
                 sandbox_policy=sandbox_policy,
+                chat_ux_snapshot=_chat_ux_snapshot,
             )
 
         if uses_managed_thread_runtime:
@@ -3320,6 +3371,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 interrupted_error=TELEGRAM_REPO_INTERRUPTED_ERROR,
                 approval_policy=approval_policy,
                 sandbox_policy=sandbox_policy,
+                chat_ux_snapshot=_chat_ux_snapshot,
             )
 
         turn_semaphore = self._ensure_turn_semaphore()

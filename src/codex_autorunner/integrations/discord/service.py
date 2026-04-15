@@ -88,8 +88,14 @@ from ...core.logging_utils import log_event
 from ...core.managed_processes import reap_managed_processes
 from ...core.orchestration import (
     ORCHESTRATION_SCHEMA_VERSION,
+    ChatOperationRecoveryAction,
+    ChatOperationSnapshot,
+    ChatOperationState,
+    SQLiteChatOperationLedger,
     build_ticket_flow_orchestration_service,
+    plan_chat_operation_recovery,
 )
+from ...core.state import now_iso
 from ...core.state_roots import resolve_global_state_root
 from ...core.update import (  # noqa: F401 - kept for test monkeypatching
     UpdateInProgressError,
@@ -358,6 +364,7 @@ _INTERACTION_RECOVERY_INITIAL_BACKOFF_SECONDS = 5.0
 _INTERACTION_RECOVERY_MAX_BACKOFF_SECONDS = 300.0
 _INTERACTION_RECOVERY_MAX_UNCHANGED_CURSOR_ATTEMPTS = 3
 _INTERACTION_RECOVERY_METADATA_KEY = "_recovery"
+_PATCH_STATE_UNSET = object()
 
 
 def _parse_interaction_recovery_datetime(value: Any) -> Optional[datetime]:
@@ -691,6 +698,7 @@ class DiscordBotService:
             else DiscordStateStore(config.state_file)
         )
         self._owns_store = state_store is None
+        self._chat_operation_store = SQLiteChatOperationLedger(self._config.root)
 
         self._outbox = (
             outbox_manager
@@ -1783,6 +1791,10 @@ class DiscordBotService:
         *,
         scheduler_state: str,
     ) -> None:
+        await self._register_chat_operation_received(
+            envelope.context,
+            conversation_id=envelope.conversation_id,
+        )
         await self._store.persist_interaction_runtime(
             envelope.context.interaction_id,
             route_key=self._interaction_route_key(envelope.context),
@@ -1792,6 +1804,19 @@ class DiscordBotService:
             resource_keys=envelope.resource_keys,
             payload_json=payload,
             envelope_json=self._serialize_runtime_envelope(envelope),
+        )
+        await self._patch_chat_operation(
+            envelope.context.interaction_id,
+            state=self._discord_chat_operation_state_for_scheduler(scheduler_state),
+            conversation_id=envelope.conversation_id,
+            validate_transition=False,
+            metadata_updates={
+                "route_key": self._interaction_route_key(envelope.context),
+                "handler_id": self._interaction_handler_id(envelope.context),
+                "resource_keys": list(envelope.resource_keys),
+                "dispatch_ack_policy": envelope.dispatch_ack_policy,
+                "queue_wait_ack_policy": envelope.queue_wait_ack_policy,
+            },
         )
 
     async def _wake_dispatcher_conversation(self, conversation_id: str) -> None:
@@ -3524,6 +3549,7 @@ class DiscordBotService:
         orchestrator_channel_key: str,
         managed_thread_surface_key: Optional[str] = None,
         supervision: Optional[Any] = None,
+        chat_ux_snapshot: Optional[Any] = None,
     ) -> DiscordMessageTurnResult:
         async def _run_turn() -> DiscordMessageTurnResult:
             if orchestrator_channel_key.startswith("pma:"):
@@ -3540,7 +3566,25 @@ class DiscordBotService:
                     orchestrator_channel_key=orchestrator_channel_key,
                     managed_thread_surface_key=managed_thread_surface_key,
                     supervision=supervision,
+                    chat_ux_snapshot=chat_ux_snapshot,
                 )
+            return await run_agent_turn_for_message(
+                self,
+                workspace_root=workspace_root,
+                prompt_text=prompt_text,
+                input_items=input_items,
+                source_message_id=source_message_id,
+                agent=agent,
+                model_override=model_override,
+                reasoning_effort=reasoning_effort,
+                session_key=session_key,
+                orchestrator_channel_key=orchestrator_channel_key,
+                max_actions=DISCORD_TURN_PROGRESS_MAX_ACTIONS,
+                min_edit_interval_seconds=DISCORD_TURN_PROGRESS_MIN_EDIT_INTERVAL_SECONDS,
+                heartbeat_interval_seconds=DISCORD_TURN_PROGRESS_HEARTBEAT_INTERVAL_SECONDS,
+                log_event_fn=log_event,
+                chat_ux_snapshot=chat_ux_snapshot,
+            )
             return await run_agent_turn_for_message(
                 self,
                 workspace_root=workspace_root,
@@ -4360,6 +4404,10 @@ class DiscordBotService:
                             now=dispatch_started_at,
                             envelope=envelope,
                         ),
+                    )
+                    await self._register_chat_operation_received(
+                        ctx,
+                        conversation_id=envelope.conversation_id,
                     )
                     acked = await self._acknowledge_runtime_envelope(
                         envelope,
@@ -5440,6 +5488,169 @@ class DiscordBotService:
         hint = cursor.get("ack_mode_hint")
         return hint if isinstance(hint, str) and hint.strip() else None
 
+    def _chat_operation_store_or_none(self) -> Optional[SQLiteChatOperationLedger]:
+        store = getattr(self, "_chat_operation_store", None)
+        if isinstance(store, SQLiteChatOperationLedger):
+            return store
+        return None
+
+    def _chat_operation_terminal_duplicate(
+        self, snapshot: ChatOperationSnapshot
+    ) -> bool:
+        if snapshot.terminal_outcome in {"abandoned", "expired"}:
+            return True
+        return snapshot.state in {
+            ChatOperationState.COMPLETED,
+            ChatOperationState.INTERRUPTED,
+            ChatOperationState.FAILED,
+            ChatOperationState.CANCELLED,
+        }
+
+    def _discord_chat_operation_state_for_scheduler(
+        self, scheduler_state: str
+    ) -> Optional[ChatOperationState]:
+        normalized = str(scheduler_state or "").strip().lower()
+        if normalized in {
+            "received",
+            "dispatch_ready",
+            "dispatch_ack_pending",
+            "queue_wait_ack_pending",
+        }:
+            return ChatOperationState.RECEIVED
+        if normalized == "acknowledged":
+            return ChatOperationState.ACKNOWLEDGED
+        if normalized in {"scheduled", "waiting_on_resources", "recovery_scheduled"}:
+            return ChatOperationState.QUEUED
+        if normalized == "executing":
+            return ChatOperationState.RUNNING
+        if normalized in {"delivery_pending", "delivery_replaying"}:
+            return ChatOperationState.DELIVERING
+        if normalized == "completed":
+            return ChatOperationState.COMPLETED
+        if normalized == "abandoned":
+            return ChatOperationState.FAILED
+        if normalized == "delivery_expired":
+            return ChatOperationState.CANCELLED
+        if "interrupt" in normalized:
+            return ChatOperationState.INTERRUPTING
+        return None
+
+    async def _register_chat_operation_received(
+        self,
+        ctx: IngressContext,
+        *,
+        conversation_id: Optional[str] = None,
+    ) -> Optional[ChatOperationSnapshot]:
+        store = self._chat_operation_store_or_none()
+        if store is None:
+            return None
+        registration = store.register_operation(
+            operation_id=ctx.interaction_id,
+            surface_kind="discord",
+            surface_operation_key=ctx.interaction_id,
+            state=ChatOperationState.RECEIVED,
+            conversation_id=conversation_id,
+            metadata=self._interaction_ledger_metadata(ctx),
+        )
+        store.patch_operation(
+            registration.snapshot.operation_id,
+            ack_requested_at=now_iso(),
+        )
+        if registration.inserted:
+            return registration.snapshot
+        return store.patch_operation(
+            ctx.interaction_id,
+            conversation_id=conversation_id or registration.snapshot.conversation_id,
+            metadata_updates=self._interaction_ledger_metadata(ctx),
+        )
+
+    async def _patch_chat_operation(
+        self,
+        interaction_id: str,
+        *,
+        state: Optional[ChatOperationState] = None,
+        validate_transition: bool = True,
+        metadata_updates: Optional[Mapping[str, Any]] = None,
+        **changes: Any,
+    ) -> Optional[ChatOperationSnapshot]:
+        store = self._chat_operation_store_or_none()
+        if store is None:
+            return None
+        patch_state = state if state is not None else _PATCH_STATE_UNSET
+        try:
+            return store.patch_operation(
+                interaction_id,
+                state=patch_state,
+                validate_transition=validate_transition,
+                metadata_updates=metadata_updates,
+                **changes,
+            )
+        except ValueError:
+            current = store.get_operation(interaction_id)
+            if current is None:
+                return None
+            if current.first_visible_feedback_at is not None:
+                changes["first_visible_feedback_at"] = current.first_visible_feedback_at
+            fallback_state = state or current.state
+            merged_metadata = dict(current.metadata)
+            if metadata_updates:
+                merged_metadata.update(dict(metadata_updates))
+            return store.upsert_operation(
+                replace(
+                    current,
+                    state=fallback_state,
+                    execution_id=changes.get("execution_id", current.execution_id),
+                    backend_turn_id=changes.get(
+                        "backend_turn_id", current.backend_turn_id
+                    ),
+                    status_message=changes.get(
+                        "status_message", current.status_message
+                    ),
+                    blocking_reason=changes.get(
+                        "blocking_reason", current.blocking_reason
+                    ),
+                    conversation_id=changes.get(
+                        "conversation_id", current.conversation_id
+                    ),
+                    ack_requested_at=changes.get(
+                        "ack_requested_at", current.ack_requested_at
+                    ),
+                    ack_completed_at=changes.get(
+                        "ack_completed_at", current.ack_completed_at
+                    ),
+                    first_visible_feedback_at=changes.get(
+                        "first_visible_feedback_at",
+                        current.first_visible_feedback_at,
+                    ),
+                    anchor_ref=changes.get("anchor_ref", current.anchor_ref),
+                    interrupt_ref=changes.get("interrupt_ref", current.interrupt_ref),
+                    delivery_state=changes.get(
+                        "delivery_state", current.delivery_state
+                    ),
+                    delivery_cursor=changes.get(
+                        "delivery_cursor", current.delivery_cursor
+                    ),
+                    delivery_attempt_count=int(
+                        changes.get(
+                            "delivery_attempt_count",
+                            current.delivery_attempt_count,
+                        )
+                        or 0
+                    ),
+                    delivery_claimed_at=changes.get(
+                        "delivery_claimed_at", current.delivery_claimed_at
+                    ),
+                    terminal_outcome=changes.get(
+                        "terminal_outcome", current.terminal_outcome
+                    ),
+                    terminal_detail=changes.get(
+                        "terminal_detail", current.terminal_detail
+                    ),
+                    updated_at=changes.get("updated_at", now_iso()),
+                    metadata=merged_metadata,
+                )
+            )
+
     async def _record_interaction_ack(
         self,
         interaction_id: str,
@@ -5451,6 +5662,18 @@ class DiscordBotService:
             interaction_id,
             ack_mode=ack_mode,
             original_response_message_id=original_response_message_id,
+        )
+        visible_delivery = ack_mode in {"immediate_message", "component_update"}
+        await self._patch_chat_operation(
+            interaction_id,
+            state=(
+                ChatOperationState.VISIBLE
+                if visible_delivery
+                else ChatOperationState.ACKNOWLEDGED
+            ),
+            ack_completed_at=now_iso(),
+            first_visible_feedback_at=(now_iso() if visible_delivery else None),
+            anchor_ref=original_response_message_id,
         )
 
     async def _record_interaction_delivery(
@@ -5465,6 +5688,39 @@ class DiscordBotService:
             delivery_status=delivery_status,
             delivery_error=delivery_error,
             original_response_message_id=original_response_message_id,
+        )
+        state = None
+        delivery_state = "delivered"
+        terminal_outcome = None
+        record = await self._store.get_interaction(interaction_id)
+        if delivery_status in {
+            "initial_response_sent",
+            "followup_sent",
+            "original_message_edited",
+            "component_message_updated",
+        }:
+            state = (
+                ChatOperationState.COMPLETED
+                if record is not None and record.execution_status == "completed"
+                else ChatOperationState.VISIBLE
+            )
+        elif delivery_status in {
+            "ack_deferred_ephemeral",
+            "ack_deferred_public",
+            "ack_deferred_component_update",
+        }:
+            state = ChatOperationState.ACKNOWLEDGED
+        elif delivery_status.endswith("_failed"):
+            state = ChatOperationState.DELIVERING
+            delivery_state = "failed"
+            terminal_outcome = "delivery_failed"
+        await self._patch_chat_operation(
+            interaction_id,
+            state=state,
+            anchor_ref=original_response_message_id,
+            delivery_state=delivery_state,
+            terminal_outcome=terminal_outcome,
+            terminal_detail=delivery_error,
         )
 
     async def _record_interaction_delivery_cursor(
@@ -5497,6 +5753,33 @@ class DiscordBotService:
             delivery_cursor_json=cursor,
             scheduler_state=scheduler_state,
         )
+        shared_state = None
+        delivery_state = None
+        delivery_attempt_count = None
+        if isinstance(cursor, dict):
+            delivery_state = str(cursor.get("state") or "").strip() or None
+            if delivery_state in {"pending", "failed"}:
+                shared_state = ChatOperationState.DELIVERING
+            elif delivery_state == "completed":
+                record = await self._store.get_interaction(interaction_id)
+                if record is not None and record.execution_status == "completed":
+                    shared_state = ChatOperationState.COMPLETED
+            record = await self._store.get_interaction(interaction_id)
+            if record is not None:
+                delivery_attempt_count = int(record.attempt_count or 0)
+        elif cursor is None:
+            record = await self._store.get_interaction(interaction_id)
+            if record is not None and record.execution_status == "completed":
+                shared_state = ChatOperationState.COMPLETED
+            delivery_state = "delivered"
+        await self._patch_chat_operation(
+            interaction_id,
+            state=shared_state,
+            delivery_state=delivery_state,
+            delivery_cursor=cursor,
+            delivery_attempt_count=delivery_attempt_count,
+            validate_transition=False,
+        )
 
     async def _mark_interaction_scheduler_state(
         self,
@@ -5509,6 +5792,21 @@ class DiscordBotService:
             ctx.interaction_id,
             scheduler_state=scheduler_state,
             increment_attempt_count=increment_attempt_count,
+        )
+        record = await self._store.get_interaction(ctx.interaction_id)
+        terminal_outcome = None
+        if scheduler_state == "abandoned":
+            terminal_outcome = "abandoned"
+        elif scheduler_state == "delivery_expired":
+            terminal_outcome = "expired"
+        await self._patch_chat_operation(
+            ctx.interaction_id,
+            state=self._discord_chat_operation_state_for_scheduler(scheduler_state),
+            delivery_attempt_count=(
+                int(record.attempt_count or 0) if record is not None else None
+            ),
+            terminal_outcome=terminal_outcome,
+            validate_transition=False,
         )
 
     async def mark_interaction_scheduler_state(
@@ -5649,6 +5947,17 @@ class DiscordBotService:
             record.interaction_id,
             scheduler_state=scheduler_state,
         )
+        await self._patch_chat_operation(
+            record.interaction_id,
+            state=self._discord_chat_operation_state_for_scheduler(scheduler_state),
+            terminal_outcome=(
+                "abandoned"
+                if scheduler_state == "abandoned"
+                else ("expired" if scheduler_state == "delivery_expired" else None)
+            ),
+            terminal_detail=reason,
+            validate_transition=False,
+        )
         log_event(
             self._logger,
             log_level,
@@ -5662,6 +5971,7 @@ class DiscordBotService:
     async def _resume_interaction_recovery(self) -> None:
         records = await self._store.list_recoverable_interactions()
         now = datetime.now(timezone.utc)
+        shared_store = self._chat_operation_store_or_none()
         for record in records:
             envelope = self._envelope_from_ledger_record(record)
             if envelope is None or record.payload_json is None:
@@ -5672,6 +5982,11 @@ class DiscordBotService:
                     log_level=logging.ERROR,
                 )
                 continue
+            snapshot = (
+                shared_store.get_operation(record.interaction_id)
+                if shared_store is not None
+                else None
+            )
             if int(record.attempt_count or 0) >= _INTERACTION_RECOVERY_MAX_ATTEMPTS:
                 await self._mark_interaction_recovery_terminal(
                     record,
@@ -5719,6 +6034,41 @@ class DiscordBotService:
                     reason="initial_ack_not_durable",
                 )
                 continue
+            should_replay_execution = record.execution_status in {
+                "acknowledged",
+                "running",
+            } or (
+                record.execution_status == "received"
+                and cursor_state == "pending"
+                and ack_mode_hint
+                in {"defer_ephemeral", "defer_public", "defer_component_update"}
+            )
+            if snapshot is not None:
+                decision = plan_chat_operation_recovery(
+                    snapshot,
+                    now=now,
+                    max_delivery_attempts=_INTERACTION_RECOVERY_MAX_ATTEMPTS,
+                )
+                if decision.action == ChatOperationRecoveryAction.MARK_EXPIRED:
+                    await self._mark_interaction_recovery_terminal(
+                        record,
+                        scheduler_state="delivery_expired",
+                        reason=decision.reason,
+                    )
+                    continue
+                if decision.action == ChatOperationRecoveryAction.MARK_ABANDONED:
+                    await self._mark_interaction_recovery_terminal(
+                        record,
+                        scheduler_state="abandoned",
+                        reason=decision.reason,
+                    )
+                    continue
+                if (
+                    decision.action == ChatOperationRecoveryAction.NOOP
+                    and not has_pending_delivery
+                    and not should_replay_execution
+                ):
+                    continue
             if has_pending_delivery:
                 updated_cursor, terminal_reason = _plan_delivery_recovery_cursor(
                     cursor=cursor if isinstance(cursor, dict) else {},
@@ -5740,6 +6090,25 @@ class DiscordBotService:
                     scheduler_state="delivery_replaying",
                     increment_attempt_count=True,
                 )
+                updated_record = await self._store.get_interaction(
+                    record.interaction_id
+                )
+                await self._patch_chat_operation(
+                    record.interaction_id,
+                    state=ChatOperationState.DELIVERING,
+                    delivery_state="pending",
+                    delivery_cursor=updated_cursor,
+                    delivery_attempt_count=(
+                        int(updated_record.attempt_count or 0)
+                        if updated_record is not None
+                        else (
+                            snapshot.delivery_attempt_count
+                            if snapshot is not None
+                            else 0
+                        )
+                    ),
+                    validate_transition=False,
+                )
                 self._command_runner.submit_recovery(
                     envelope.context,
                     record.payload_json,
@@ -5748,15 +6117,6 @@ class DiscordBotService:
                     replay_mode="delivery_replay",
                 )
                 continue
-            should_replay_execution = record.execution_status in {
-                "acknowledged",
-                "running",
-            } or (
-                record.execution_status == "received"
-                and cursor_state == "pending"
-                and ack_mode_hint
-                in {"defer_ephemeral", "defer_public", "defer_component_update"}
-            )
             if should_replay_execution:
                 if _interaction_recovery_backoff_active(
                     updated_at=record.updated_at,
@@ -5764,8 +6124,8 @@ class DiscordBotService:
                     now=now,
                 ):
                     continue
-                await self._store.mark_interaction_scheduler_state(
-                    record.interaction_id,
+                await self._mark_interaction_scheduler_state(
+                    envelope.context,
                     scheduler_state="recovery_scheduled",
                     increment_attempt_count=True,
                 )
@@ -5781,6 +6141,11 @@ class DiscordBotService:
         await self._store.mark_interaction_scheduler_state(
             ctx.interaction_id,
             scheduler_state="executing",
+        )
+        await self._patch_chat_operation(
+            ctx.interaction_id,
+            state=ChatOperationState.RUNNING,
+            validate_transition=False,
         )
         return True
 
@@ -5900,20 +6265,34 @@ class DiscordBotService:
             if ctx.interaction_id in reservations:
                 return True
             reservations.add(ctx.interaction_id)
+        snapshot = None
+        store = self._chat_operation_store_or_none()
+        if store is not None:
+            snapshot = store.get_operation(ctx.interaction_id)
         record = await self._store.get_interaction(ctx.interaction_id)
-        if record is None:
+        if snapshot is None and record is None:
             return False
 
         has_pending_delivery = bool(
-            isinstance(record.delivery_cursor_json, dict)
+            record is not None
+            and isinstance(record.delivery_cursor_json, dict)
             and str(record.delivery_cursor_json.get("state") or "").strip()
             in {"pending", "failed"}
         )
-        if record.scheduler_state in {"completed", "delivery_expired", "abandoned"}:
+        if snapshot is not None and self._chat_operation_terminal_duplicate(snapshot):
+            await self._release_interaction_ingress(ctx.interaction_id)
+            return True
+        if record is not None and record.scheduler_state in {
+            "completed",
+            "delivery_expired",
+            "abandoned",
+        }:
             await self._release_interaction_ingress(ctx.interaction_id)
             return True
         if (
-            record.execution_status in {"completed", "failed", "timeout", "cancelled"}
+            record is not None
+            and record.execution_status
+            in {"completed", "failed", "timeout", "cancelled"}
             and not has_pending_delivery
         ):
             await self._release_interaction_ingress(ctx.interaction_id)
@@ -5923,8 +6302,9 @@ class DiscordBotService:
             logging.INFO,
             "discord.interaction.duplicate_resuming",
             interaction_id=ctx.interaction_id,
-            scheduler_state=record.scheduler_state,
-            execution_status=record.execution_status,
+            scheduler_state=(record.scheduler_state if record is not None else None),
+            execution_status=(record.execution_status if record is not None else None),
+            shared_state=snapshot.state.value if snapshot is not None else None,
         )
         return False
 
@@ -5952,11 +6332,17 @@ class DiscordBotService:
         if registration.inserted:
             return False
         record = registration.record
+        snapshot = None
+        store = self._chat_operation_store_or_none()
+        if store is not None:
+            snapshot = store.get_operation(ctx.interaction_id)
         has_pending_delivery = bool(
             isinstance(record.delivery_cursor_json, dict)
             and str(record.delivery_cursor_json.get("state") or "").strip()
             in {"pending", "failed"}
         )
+        if snapshot is not None and self._chat_operation_terminal_duplicate(snapshot):
+            return True
         if record.scheduler_state in {"completed", "delivery_expired", "abandoned"}:
             return True
         if (
@@ -5971,11 +6357,19 @@ class DiscordBotService:
             interaction_id=ctx.interaction_id,
             scheduler_state=record.scheduler_state,
             execution_status=record.execution_status,
+            shared_state=snapshot.state.value if snapshot is not None else None,
         )
         return False
 
     async def _begin_interaction_execution(self, ctx: IngressContext) -> bool:
-        return await self._store.claim_interaction_execution(ctx.interaction_id)
+        claimed = await self._store.claim_interaction_execution(ctx.interaction_id)
+        if claimed:
+            await self._patch_chat_operation(
+                ctx.interaction_id,
+                state=ChatOperationState.RUNNING,
+                validate_transition=False,
+            )
+        return claimed
 
     async def begin_interaction_execution(self, ctx: IngressContext) -> bool:
         return await self._begin_interaction_execution(ctx)
@@ -5991,6 +6385,39 @@ class DiscordBotService:
             ctx.interaction_id,
             execution_status=execution_status,
             execution_error=execution_error,
+        )
+        shared_state: Optional[ChatOperationState]
+        terminal_outcome = None
+        if execution_status == "completed":
+            record = await self._store.get_interaction(ctx.interaction_id)
+            has_pending_delivery = bool(
+                record is not None
+                and isinstance(record.delivery_cursor_json, dict)
+                and str(record.delivery_cursor_json.get("state") or "").strip()
+                in {"pending", "failed"}
+            )
+            shared_state = (
+                ChatOperationState.DELIVERING
+                if has_pending_delivery
+                else ChatOperationState.COMPLETED
+            )
+        elif execution_status == "cancelled":
+            shared_state = ChatOperationState.CANCELLED
+        elif execution_status == "timeout":
+            shared_state = ChatOperationState.FAILED
+            terminal_outcome = "timeout"
+        elif execution_status == "failed":
+            shared_state = ChatOperationState.FAILED
+        elif execution_status == "running":
+            shared_state = ChatOperationState.RUNNING
+        else:
+            shared_state = None
+        await self._patch_chat_operation(
+            ctx.interaction_id,
+            state=shared_state,
+            terminal_outcome=terminal_outcome,
+            terminal_detail=execution_error,
+            validate_transition=False,
         )
 
     async def finish_interaction_execution(
@@ -8885,6 +9312,22 @@ class DiscordBotService:
             interaction_token,
             "Stopping current turn...",
             components=[],
+        )
+        from ..chat.chat_ux_telemetry import ChatUxMilestone, ChatUxTimingSnapshot
+
+        cancel_snapshot = ChatUxTimingSnapshot(
+            platform="discord", channel_id=channel_id
+        )
+        cancel_snapshot.record(ChatUxMilestone.RAW_EVENT_RECEIVED)
+        cancel_snapshot.record(ChatUxMilestone.INTERRUPT_REQUESTED_VISIBLE)
+        log_event(
+            self._logger,
+            logging.INFO,
+            "discord.turn.cancel_acknowledged",
+            channel_id=channel_id,
+            thread_target_id=thread_target_id,
+            execution_id=execution_id,
+            **cancel_snapshot.to_log_fields(),
         )
         await self._handle_car_interrupt(
             interaction_id,

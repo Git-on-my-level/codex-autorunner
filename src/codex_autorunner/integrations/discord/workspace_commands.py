@@ -37,8 +37,13 @@ from .components import (
     build_bind_picker,
     build_button,
 )
-from .interaction_registry import BIND_PAGE_CUSTOM_ID_PREFIX
+from .interaction_registry import (
+    BIND_PAGE_CUSTOM_ID_PREFIX,
+    BIND_SELECT_CUSTOM_ID,
+    discord_component_ux_contract_for_route,
+)
 from .interaction_runtime import (
+    defer_and_update_runtime_component_message,
     ensure_component_response_deferred,
     send_runtime_components_ephemeral,
     send_runtime_ephemeral,
@@ -563,6 +568,7 @@ async def _bind_to_workspace_candidate(
     selected_resource_kind: Optional[str],
     selected_resource_id: Optional[str],
     workspace_path: str,
+    component_response: bool = False,
 ) -> None:
     workspace = canonicalize_path(Path(workspace_path))
     if not workspace.exists() or not workspace.is_dir():
@@ -593,12 +599,16 @@ async def _bind_to_workspace_candidate(
         message = f"Bound this channel to: {selected_resource_id} ({workspace})"
     else:
         message = f"Bound this channel to workspace: {workspace}"
-    await send_runtime_ephemeral(
-        service,
-        interaction_id,
-        interaction_token,
-        message,
-    )
+    if component_response:
+        await update_runtime_component_message(
+            service,
+            interaction_id,
+            interaction_token,
+            message,
+            components=[],
+        )
+        return
+    await send_runtime_ephemeral(service, interaction_id, interaction_token, message)
 
 
 async def handle_bind_selection(
@@ -633,11 +643,25 @@ async def handle_bind_selection(
         )
         return
 
-    await ensure_component_response_deferred(
-        service,
-        interaction_id,
-        interaction_token,
+    ux_entry = discord_component_ux_contract_for_route(
+        "bind.select",
+        custom_id=BIND_SELECT_CUSTOM_ID,
     )
+    component_response = bool(ux_entry is not None and ux_entry.optimistic_ui_allowed)
+    if component_response:
+        await defer_and_update_runtime_component_message(
+            service,
+            interaction_id,
+            interaction_token,
+            "Binding workspace...",
+            components=[],
+        )
+    else:
+        await ensure_component_response_deferred(
+            service,
+            interaction_id,
+            interaction_token,
+        )
     await _bind_to_workspace_candidate(
         service,
         interaction_id,
@@ -647,6 +671,7 @@ async def handle_bind_selection(
         selected_resource_kind=resolved_workspace[0],
         selected_resource_id=resolved_workspace[1],
         workspace_path=resolved_workspace[2],
+        component_response=component_response,
     )
 
 

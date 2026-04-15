@@ -413,3 +413,322 @@ async def test_flush_drops_terminal_notice_for_archived_run(tmp_path: Path) -> N
         assert await store.get_outbox(f"terminal:chan-1:{run_id}") is None
     finally:
         await store.close()
+
+
+@pytest.mark.anyio
+async def test_flush_coalesces_by_operation_id(tmp_path: Path) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    clock = _Clock()
+    sent: list[dict] = []
+
+    async def send_message(_channel_id: str, payload: dict) -> dict:
+        sent.append(payload)
+        return {"id": f"msg-{len(sent)}"}
+
+    manager = DiscordOutboxManager(
+        store,
+        send_message=send_message,
+        logger=logging.getLogger("test"),
+        now_fn=clock.now,
+        sleep_fn=clock.sleep,
+    )
+
+    try:
+        await store.initialize()
+        manager.start()
+        ts = now_iso()
+        await store.enqueue_outbox(
+            OutboxRecord(
+                record_id="r1",
+                channel_id="chan-1",
+                message_id=None,
+                operation="send",
+                payload_json={"content": "stale"},
+                created_at=ts,
+                operation_id="op-100",
+            )
+        )
+        await store.enqueue_outbox(
+            OutboxRecord(
+                record_id="r2",
+                channel_id="chan-1",
+                message_id=None,
+                operation="send",
+                payload_json={"content": "fresh"},
+                created_at=ts,
+                operation_id="op-100",
+            )
+        )
+        await store.enqueue_outbox(
+            OutboxRecord(
+                record_id="r3",
+                channel_id="chan-1",
+                message_id=None,
+                operation="send",
+                payload_json={"content": "other"},
+                created_at=ts,
+                operation_id="op-200",
+            )
+        )
+
+        await manager._flush(await store.list_outbox())
+        assert len(sent) == 2
+        contents = {s.get("content") for s in sent}
+        assert "fresh" in contents
+        assert "other" in contents
+        assert "stale" not in contents
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_inflight_dedup_by_operation_id(tmp_path: Path) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    clock = _Clock()
+    send_count = {"n": 0}
+
+    async def send_message(_channel_id: str, payload: dict) -> dict:
+        send_count["n"] += 1
+        if send_count["n"] == 1:
+            raise _RetryAfterError(1.0)
+        return {"id": "msg-ok"}
+
+    manager = DiscordOutboxManager(
+        store,
+        send_message=send_message,
+        logger=logging.getLogger("test"),
+        immediate_retry_delays=(0.0,),
+        now_fn=clock.now,
+        sleep_fn=clock.sleep,
+    )
+
+    try:
+        await store.initialize()
+        manager.start()
+        delivered = await manager.send_with_outbox(
+            OutboxRecord(
+                record_id="r1",
+                channel_id="chan-1",
+                message_id=None,
+                operation="send",
+                payload_json={"content": "hello"},
+                created_at=now_iso(),
+                operation_id="op-dedup",
+            )
+        )
+        assert delivered is True
+        assert send_count["n"] == 2
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_replay_after_restart_preserves_operation_id(tmp_path: Path) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    clock = _Clock()
+    attempts = {"n": 0}
+
+    async def send_message(_channel_id: str, payload: dict) -> dict:
+        attempts["n"] += 1
+        if attempts["n"] <= 1:
+            raise RuntimeError("transient")
+        return {"id": "msg-ok"}
+
+    manager = DiscordOutboxManager(
+        store,
+        send_message=send_message,
+        logger=logging.getLogger("test"),
+        max_attempts=5,
+        immediate_retry_delays=(0.0,),
+        now_fn=clock.now,
+        sleep_fn=clock.sleep,
+    )
+
+    try:
+        await store.initialize()
+        manager.start()
+
+        ts = now_iso()
+        await store.enqueue_outbox(
+            OutboxRecord(
+                record_id="r-replay",
+                channel_id="chan-1",
+                message_id=None,
+                operation="send",
+                payload_json={"content": "replay-me"},
+                created_at=ts,
+                operation_id="op-replay-1",
+            )
+        )
+
+        records = await store.list_outbox()
+        assert len(records) == 1
+        assert records[0].operation_id == "op-replay-1"
+
+        await manager._flush(records)
+        assert attempts["n"] == 1
+
+        failed_record = await store.get_outbox("r-replay")
+        assert failed_record is not None
+        assert failed_record.operation_id == "op-replay-1"
+        assert failed_record.attempts == 1
+
+        records2 = await store.list_outbox()
+        await manager._flush(records2)
+        assert attempts["n"] == 2
+
+        remaining = await store.list_outbox()
+        assert len(remaining) == 0
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_coalesce_prefers_latest_created_at(tmp_path: Path) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    clock = _Clock()
+    sent: list[str] = []
+
+    async def send_message(_channel_id: str, payload: dict) -> dict:
+        sent.append(payload.get("content", ""))
+        return {"id": f"msg-{len(sent)}"}
+
+    manager = DiscordOutboxManager(
+        store,
+        send_message=send_message,
+        logger=logging.getLogger("test"),
+        now_fn=clock.now,
+        sleep_fn=clock.sleep,
+    )
+
+    try:
+        await store.initialize()
+        manager.start()
+        ts_early = "2026-01-01T00:00:00Z"
+        ts_late = "2026-01-01T00:01:00Z"
+        await store.enqueue_outbox(
+            OutboxRecord(
+                record_id="early",
+                channel_id="chan-1",
+                message_id=None,
+                operation="send",
+                payload_json={"content": "first"},
+                created_at=ts_early,
+                operation_id="op-same",
+            )
+        )
+        await store.enqueue_outbox(
+            OutboxRecord(
+                record_id="late",
+                channel_id="chan-1",
+                message_id=None,
+                operation="send",
+                payload_json={"content": "second"},
+                created_at=ts_late,
+                operation_id="op-same",
+            )
+        )
+
+        await manager._flush(await store.list_outbox())
+        assert sent == ["second"]
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_edit_failure_does_not_duplicate_on_retry(tmp_path: Path) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    clock = _Clock()
+    send_count = {"n": 0}
+
+    async def send_message(_channel_id: str, payload: dict) -> dict:
+        send_count["n"] += 1
+        if send_count["n"] == 1:
+            raise _RetryAfterError(1.0)
+        return {"id": "msg-edit-ok"}
+
+    manager = DiscordOutboxManager(
+        store,
+        send_message=send_message,
+        logger=logging.getLogger("test"),
+        immediate_retry_delays=(0.0,),
+        now_fn=clock.now,
+        sleep_fn=clock.sleep,
+    )
+
+    try:
+        await store.initialize()
+        manager.start()
+
+        delivered = await manager.send_with_outbox(
+            OutboxRecord(
+                record_id="edit-1",
+                channel_id="chan-1",
+                message_id="msg-old",
+                operation="send",
+                payload_json={"content": "edited text"},
+                created_at=now_iso(),
+                operation_id="op-edit-1",
+            )
+        )
+        assert delivered is True
+        assert send_count["n"] == 2
+
+        remaining = await store.list_outbox()
+        assert len(remaining) == 0
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_flush_skips_ready_older_record_when_newer_same_op_is_backed_off(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    clock = _Clock()
+    sent: list[str] = []
+
+    async def send_message(_channel_id: str, payload: dict) -> dict:
+        sent.append(str(payload.get("content")))
+        return {"id": f"msg-{len(sent)}"}
+
+    manager = DiscordOutboxManager(
+        store,
+        send_message=send_message,
+        logger=logging.getLogger("test"),
+        immediate_retry_delays=(0.0,),
+        now_fn=clock.now,
+        sleep_fn=clock.sleep,
+    )
+
+    try:
+        await store.initialize()
+        manager.start()
+        await store.enqueue_outbox(
+            OutboxRecord(
+                record_id="ready-old",
+                channel_id="chan-1",
+                message_id=None,
+                operation="send",
+                payload_json={"content": "old"},
+                created_at="2026-01-01T00:00:00Z",
+                operation_id="op-backoff",
+            )
+        )
+        await store.enqueue_outbox(
+            OutboxRecord(
+                record_id="backoff-new",
+                channel_id="chan-1",
+                message_id=None,
+                operation="send",
+                payload_json={"content": "new"},
+                created_at="2026-01-01T00:01:00Z",
+                next_attempt_at="2026-01-01T00:02:00Z",
+                operation_id="op-backoff",
+            )
+        )
+
+        await manager._flush(await store.list_outbox())
+        assert sent == []
+    finally:
+        await store.close()

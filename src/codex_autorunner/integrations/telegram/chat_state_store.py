@@ -214,6 +214,7 @@ def _outbox_to_chat(record: OutboxRecord) -> ChatOutboxRecord:
         operation=record.operation,
         message_id=str(record.message_id) if record.message_id is not None else None,
         outbox_key=record.outbox_key,
+        operation_id=record.operation_id,
     )
 
 
@@ -233,4 +234,5 @@ def _outbox_from_chat(record: ChatOutboxRecord) -> OutboxRecord:
         operation=record.operation,
         message_id=_parse_optional_int(record.message_id),
         outbox_key=record.outbox_key,
+        operation_id=record.operation_id,
     )

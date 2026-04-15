@@ -130,6 +130,14 @@ class _FakeOutboxManager:
         await asyncio.Event().wait()
 
 
+def _latest_public_response_payload(rest: _FakeRest) -> dict[str, Any]:
+    if rest.edited_original_interaction_responses:
+        return rest.edited_original_interaction_responses[-1]["payload"]
+    if rest.followup_messages:
+        return rest.followup_messages[-1]["payload"]
+    raise AssertionError("expected a Discord public response payload")
+
+
 class _FlowServiceStub:
     def __init__(self) -> None:
         self.start_calls: list[dict[str, Any]] = []
@@ -374,8 +382,11 @@ async def test_flow_status_and_runs_render_expected_output(tmp_path: Path) -> No
         assert len(rest.interaction_responses) == 2
         assert rest.interaction_responses[0]["payload"]["type"] == 5
         assert rest.interaction_responses[1]["payload"]["type"] == 5
-        assert len(rest.followup_messages) in (2, 3)
-        status_payload = rest.followup_messages[0]["payload"]["content"]
+        assert len(rest.edited_original_interaction_responses) == 1
+        assert len(rest.followup_messages) in (1, 2)
+        status_payload = rest.edited_original_interaction_responses[0]["payload"][
+            "content"
+        ]
         runs_payload = rest.followup_messages[-1]["payload"]["content"]
 
         assert f"Run: {paused_run_id}" in status_payload
@@ -383,8 +394,8 @@ async def test_flow_status_and_runs_render_expected_output(tmp_path: Path) -> No
         assert "Freshness:" in status_payload
         assert "Worker:" in status_payload
         assert "Current ticket:" in status_payload
-        if len(rest.followup_messages) == 3:
-            queue_wait_payload = rest.followup_messages[1]["payload"]["content"].lower()
+        if len(rest.followup_messages) == 2:
+            queue_wait_payload = rest.followup_messages[0]["payload"]["content"].lower()
             assert "queued behind /car flow status" in queue_wait_payload
             assert "in this channel" in queue_wait_payload
 
@@ -450,7 +461,7 @@ async def test_flow_status_without_run_id_uses_authoritative_run_and_includes_pi
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 5
-        payload = rest.followup_messages[0]["payload"]
+        payload = _latest_status_message(rest)
         content = payload["content"]
         components = payload["components"]
 
@@ -507,7 +518,7 @@ async def test_flow_status_without_run_id_shows_no_current_run_for_history_only(
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 5
-        payload = rest.followup_messages[0]["payload"]
+        payload = _latest_status_message(rest)
         content = payload["content"]
         components = payload["components"]
 
@@ -563,7 +574,7 @@ async def test_flow_status_without_run_uses_ticket_summary_fallback(
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 5
-        payload = rest.followup_messages[0]["payload"]
+        payload = _latest_status_message(rest)
         content = payload["content"]
         assert content == "Status: Done\nTickets: 2/2"
         assert not payload.get("components")
@@ -600,7 +611,7 @@ async def test_flow_root_alias_routes_to_authoritative_status(tmp_path: Path) ->
     try:
         await service.run_forever()
         assert rest.interaction_responses[0]["payload"]["type"] == 5
-        content = rest.followup_messages[0]["payload"]["content"]
+        content = _latest_status_message(rest)["content"]
         assert f"Run: {completed_run_id}" in content
         assert "Status: completed" in content
     finally:
@@ -649,7 +660,7 @@ async def test_flow_status_shows_elapsed_for_completed_run(tmp_path: Path) -> No
     try:
         await service.run_forever()
         assert rest.interaction_responses[0]["payload"]["type"] == 5
-        content = rest.followup_messages[0]["payload"]["content"]
+        content = _latest_status_message(rest)["content"]
         assert "Status: completed" in content
         assert "Elapsed: 2h 30m" in content
     finally:
@@ -747,7 +758,7 @@ async def test_flow_status_with_archived_explicit_run_id_renders_archived_state(
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 5
-        content = rest.followup_messages[0]["payload"]["content"]
+        content = _latest_status_message(rest)["content"]
         assert f"Run {run_id} has already been archived." in content
         assert "Status: archived" in content
         assert f"Archive path: .codex-autorunner/archive/runs/{run_id}" in content
@@ -908,13 +919,13 @@ async def test_flow_refresh_button_updates_existing_status_message(
         refresh_payload = rest.interaction_responses[1]["payload"]
 
         assert initial_defer["type"] == 5
-        assert len(rest.followup_messages) == 1
-        initial_payload = rest.followup_messages[0]["payload"]
+        assert rest.followup_messages == []
+        assert len(rest.edited_original_interaction_responses) == 3
+        initial_payload = rest.edited_original_interaction_responses[0]["payload"]
         assert "Status: running" in initial_payload["content"]
 
         assert refresh_payload["type"] == 6
-        assert len(rest.edited_original_interaction_responses) == 2
-        progress_payload = rest.edited_original_interaction_responses[0]["payload"]
+        progress_payload = rest.edited_original_interaction_responses[1]["payload"]
         assert progress_payload["content"] == f"Refreshing run {run_id}..."
         assert progress_payload["components"] == []
         assert (
@@ -1054,7 +1065,7 @@ async def test_flow_start_reuses_active_or_paused_run(
         await service.run_forever()
         assert flow_service.ensure_calls == [(paused_run_id, False)]
         assert rest.interaction_responses[0]["payload"]["type"] == 5
-        payload = rest.followup_messages[0]["payload"]
+        payload = _latest_status_message(rest)
         content = payload["content"]
         assert f"Reusing ticket_flow run {paused_run_id} (paused)." in content
         assert f"Run: {paused_run_id}" in content
@@ -1125,8 +1136,7 @@ async def test_flow_start_acknowledges_before_slow_start_work(
         await service.run_forever()
         assert observed["deferred_type"] == 5
         assert len(flow_service.start_calls) == 1
-        assert len(rest.followup_messages) == 1
-        content = rest.followup_messages[0]["payload"]["content"]
+        content = _latest_status_message(rest)["content"]
         assert "Started ticket_flow run run-slow." in content
     finally:
         await store.close()
@@ -1199,7 +1209,7 @@ async def test_flow_restart_starts_new_run_for_failed_flow(
         assert flow_service.start_calls[0]["metadata"]["force_new"] is True
         assert flow_service.start_calls[0]["metadata"]["origin"] == "discord"
         assert rest.interaction_responses[0]["payload"]["type"] == 5
-        payload = rest.followup_messages[0]["payload"]
+        payload = _latest_status_message(rest)
         content = payload["content"]
         assert f"Started new ticket_flow run {new_run_id}." in content
         assert f"Run: {new_run_id}" in content
@@ -1255,7 +1265,7 @@ async def test_flow_restart_aborts_when_active_run_does_not_terminate(
         assert flow_service.stop_calls == [running_run_id]
         assert flow_service.start_calls == []
         assert rest.interaction_responses[0]["payload"]["type"] == 5
-        content = rest.followup_messages[0]["payload"]["content"]
+        content = _latest_status_message(rest)["content"]
         assert "restart aborted to avoid concurrent workers" in content
     finally:
         await store.close()

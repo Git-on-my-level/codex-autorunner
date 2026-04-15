@@ -14,7 +14,7 @@ from ...core.sqlite_utils import connect_sqlite
 from ...core.state import now_iso
 from ..chat.agents import normalize_hermes_profile
 
-DISCORD_STATE_SCHEMA_VERSION = 12
+DISCORD_STATE_SCHEMA_VERSION = 13
 DISCORD_INTERACTION_LEDGER_RETENTION_DAYS = 14
 _UNSET = object()
 _logger = logging.getLogger(__name__)
@@ -31,6 +31,7 @@ class OutboxRecord:
     next_attempt_at: Optional[str] = None
     created_at: str = ""
     last_error: Optional[str] = None
+    operation_id: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -592,7 +593,8 @@ class DiscordStateStore:
                     attempts INTEGER NOT NULL DEFAULT 0,
                     next_attempt_at TEXT,
                     created_at TEXT NOT NULL,
-                    last_error TEXT
+                    last_error TEXT,
+                    operation_id TEXT
                 )
                 """
             )
@@ -690,11 +692,18 @@ class DiscordStateStore:
             )
             self._ensure_channel_binding_columns(conn)
             self._ensure_interaction_ledger_columns(conn)
+            self._ensure_outbox_columns(conn)
             if current_version < DISCORD_STATE_SCHEMA_VERSION:
                 conn.execute(
                     "UPDATE schema_info SET version = ?",
                     (DISCORD_STATE_SCHEMA_VERSION,),
                 )
+
+    def _ensure_outbox_columns(self, conn: sqlite3.Connection) -> None:
+        rows = conn.execute("PRAGMA table_info(outbox)").fetchall()
+        names = {str(row["name"]) for row in rows}
+        if "operation_id" not in names:
+            conn.execute("ALTER TABLE outbox ADD COLUMN operation_id TEXT")
 
     def _ensure_channel_binding_columns(self, conn: sqlite3.Connection) -> None:
         rows = conn.execute("PRAGMA table_info(channel_bindings)").fetchall()
@@ -1272,9 +1281,10 @@ class DiscordStateStore:
                     attempts,
                     next_attempt_at,
                     created_at,
-                    last_error
+                    last_error,
+                    operation_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(record_id) DO UPDATE SET
                     channel_id=excluded.channel_id,
                     message_id=excluded.message_id,
@@ -1283,7 +1293,8 @@ class DiscordStateStore:
                     attempts=excluded.attempts,
                     next_attempt_at=excluded.next_attempt_at,
                     created_at=excluded.created_at,
-                    last_error=excluded.last_error
+                    last_error=excluded.last_error,
+                    operation_id=excluded.operation_id
                 """,
                 (
                     record.record_id,
@@ -1295,6 +1306,7 @@ class DiscordStateStore:
                     record.next_attempt_at,
                     created_at,
                     record.last_error,
+                    record.operation_id,
                 ),
             )
         row = conn.execute(
@@ -1331,6 +1343,9 @@ class DiscordStateStore:
             created_at=str(row["created_at"]),
             last_error=(
                 row["last_error"] if isinstance(row["last_error"], str) else None
+            ),
+            operation_id=(
+                row["operation_id"] if isinstance(row["operation_id"], str) else None
             ),
         )
 
@@ -1784,7 +1799,7 @@ class DiscordStateStore:
             conn.execute(
                 f"""
                 UPDATE turn_progress_leases
-                   SET {', '.join(assignments)}
+                   SET {", ".join(assignments)}
                  WHERE lease_id = ?
                 """,
                 tuple(params),

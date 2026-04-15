@@ -42,6 +42,7 @@ class ChatOutboxRecord:
     operation: Optional[str] = None
     message_id: Optional[str] = None
     outbox_key: Optional[str] = None
+    operation_id: Optional[str] = None
 
 
 class ChatStateStore(Protocol):

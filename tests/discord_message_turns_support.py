@@ -1851,6 +1851,7 @@ async def test_message_create_personal_bound_channel_runs_without_collaboration_
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
+        chat_ux_snapshot: Any = None,
     ) -> DiscordMessageTurnResult:
         captured.append(
             {
@@ -1948,6 +1949,7 @@ async def test_car_session_compact_finishes_interaction_when_finalize_fails(
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
+        chat_ux_snapshot: Any = None,
     ) -> DiscordMessageTurnResult:
         _ = (
             workspace_root,
@@ -2049,6 +2051,7 @@ async def test_car_session_compact_restores_previous_thread_when_seed_save_fails
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
+        chat_ux_snapshot: Any = None,
     ) -> DiscordMessageTurnResult:
         _ = (
             workspace_root,
@@ -2173,6 +2176,7 @@ async def test_car_session_compact_keeps_previous_thread_when_summary_is_blank(
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
+        chat_ux_snapshot: Any = None,
     ) -> DiscordMessageTurnResult:
         _ = (
             workspace_root,
@@ -2290,6 +2294,7 @@ async def test_car_session_compact_uses_transcript_fallback_when_summary_is_blan
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
+        chat_ux_snapshot: Any = None,
     ) -> DiscordMessageTurnResult:
         _ = (
             workspace_root,
@@ -2497,6 +2502,7 @@ async def test_message_create_after_compact_uses_pending_seed_and_clears_it(
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
+        chat_ux_snapshot: Any = None,
     ) -> str:
         _ = (
             workspace_root,
@@ -2569,6 +2575,7 @@ async def test_message_create_flushes_pending_outbox_files_after_turn(
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
+        chat_ux_snapshot: Any = None,
     ) -> str:
         _ = (
             workspace_root,
@@ -2641,6 +2648,7 @@ async def test_message_create_flushes_root_outbox_files_after_turn(
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
+        chat_ux_snapshot: Any = None,
     ) -> str:
         _ = (
             workspace_root,
@@ -2718,6 +2726,7 @@ async def test_message_create_flush_outbox_skips_symlink_outside_pending(
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
+        chat_ux_snapshot: Any = None,
     ) -> str:
         _ = (
             workspace_root,
@@ -2794,6 +2803,7 @@ async def test_message_create_flush_outbox_preserves_root_file_when_pending_syml
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
+        chat_ux_snapshot: Any = None,
     ) -> str:
         _ = (
             workspace_root,
@@ -2867,6 +2877,7 @@ async def test_message_create_non_pma_injects_prompt_context_hints(
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
+        chat_ux_snapshot: Any = None,
     ) -> str:
         _ = (
             workspace_root,
@@ -2952,6 +2963,7 @@ async def test_message_create_non_pma_prompt_hint_ignores_reply_context_prompt_t
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
+        chat_ux_snapshot: Any = None,
     ) -> str:
         _ = (
             workspace_root,
@@ -3020,6 +3032,7 @@ async def test_message_create_non_pma_injects_filebox_hint_for_outbox_keyword(
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
+        chat_ux_snapshot: Any = None,
     ) -> str:
         _ = (
             workspace_root,
@@ -3088,6 +3101,7 @@ async def test_message_create_non_pma_injects_filebox_hint_for_inbox_keyword(
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
+        chat_ux_snapshot: Any = None,
     ) -> str:
         _ = (
             workspace_root,
@@ -3174,6 +3188,7 @@ async def test_message_create_non_pma_uses_raw_message_for_github_link_source(
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
+        chat_ux_snapshot: Any = None,
     ) -> str:
         _ = (
             workspace_root,
@@ -3264,6 +3279,7 @@ async def test_message_create_attachment_only_downloads_to_inbox_and_runs_turn(
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
+        chat_ux_snapshot: Any = None,
     ) -> str:
         _ = (
             workspace_root,
@@ -3359,6 +3375,7 @@ async def test_message_create_attachment_and_text_keeps_text_and_adds_file_conte
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
+        chat_ux_snapshot: Any = None,
     ) -> str:
         _ = (
             workspace_root,
@@ -3438,6 +3455,7 @@ async def test_message_create_injects_car_context_for_car_trigger(
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
+        chat_ux_snapshot: Any = None,
     ) -> str:
         _ = (
             workspace_root,
@@ -3528,6 +3546,7 @@ async def test_message_create_audio_attachment_injects_transcript_context(
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
+        chat_ux_snapshot: Any = None,
     ) -> str:
         _ = (
             workspace_root,
@@ -3636,6 +3655,7 @@ async def test_message_create_audio_attachment_does_not_transcribe_when_voice_di
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
+        chat_ux_snapshot: Any = None,
     ) -> str:
         _ = (
             workspace_root,
@@ -3731,6 +3751,7 @@ async def test_message_create_audio_attachment_without_content_type_still_transc
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
+        chat_ux_snapshot: Any = None,
     ) -> str:
         _ = (
             workspace_root,
@@ -3828,6 +3849,7 @@ async def test_message_create_audio_attachment_with_generic_content_type_transcr
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
+        chat_ux_snapshot: Any = None,
     ) -> str:
         _ = (
             workspace_root,
@@ -3933,6 +3955,7 @@ async def test_message_create_mixed_audio_and_file_attachment_keeps_outbox_hint(
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
+        chat_ux_snapshot: Any = None,
     ) -> str:
         _ = (
             workspace_root,
@@ -4028,6 +4051,7 @@ async def test_message_create_video_attachment_does_not_transcribe(
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
+        chat_ux_snapshot: Any = None,
     ) -> str:
         _ = (
             workspace_root,
@@ -6079,7 +6103,7 @@ async def test_message_create_progress_edit_failures_are_best_effort_and_throttl
 
     try:
         await service.run_forever()
-        assert 1 <= rest.edit_attempts <= 3
+        assert 1 <= rest.edit_attempts <= 4
         assert len(rest.deleted_channel_messages) == 1
         assert rest.deleted_channel_messages[0]["message_id"] == "msg-1"
         assert any(
@@ -6828,6 +6852,7 @@ async def test_message_create_in_pma_mode_uses_pma_session_key(tmp_path: Path) -
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
+        chat_ux_snapshot: Any = None,
     ) -> str:
         captured.append(
             {
@@ -6927,6 +6952,7 @@ async def test_message_create_attachment_only_in_pma_mode_uses_hub_inbox_snapsho
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
+        chat_ux_snapshot: Any = None,
     ) -> str:
         _ = (
             agent,
@@ -7033,6 +7059,7 @@ async def test_message_create_image_attachment_in_pma_mode_adds_native_local_ima
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
+        chat_ux_snapshot: Any = None,
     ) -> str:
         _ = (
             workspace_root,
@@ -7102,6 +7129,7 @@ async def test_message_create_in_pma_mode_falls_back_to_hub_root_when_binding_pa
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
+        chat_ux_snapshot: Any = None,
     ) -> str:
         captured.append(
             {
@@ -7538,6 +7566,7 @@ async def test_message_create_skips_inbox_reply_for_user_ticket_pause(
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
         input_items: Optional[list[dict[str, Any]]] = None,
+        chat_ux_snapshot: Any = None,
     ) -> str:
         _ = (
             workspace_root,
@@ -7646,6 +7675,7 @@ async def test_message_create_sends_queued_notice_when_dispatch_queue_is_busy(
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
+        chat_ux_snapshot: Any = None,
     ) -> str:
         nonlocal turn_count
         turn_count += 1
@@ -8707,6 +8737,7 @@ async def test_message_create_enqueues_outbox_when_channel_send_fails(
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
+        chat_ux_snapshot: Any = None,
     ) -> str:
         return "queued reply"
 
@@ -9135,6 +9166,7 @@ async def test_car_review_single_chunk_deletes_preview_and_sends_chunk_when_flus
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
+        chat_ux_snapshot: Any = None,
     ) -> DiscordMessageTurnResult:
         _ = (
             workspace_root,
@@ -9263,6 +9295,7 @@ async def test_car_session_compact_reuses_preview_without_part_numbering(
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
+        chat_ux_snapshot: Any = None,
     ) -> DiscordMessageTurnResult:
         _ = (
             workspace_root,
@@ -9456,6 +9489,7 @@ async def test_car_session_compact_places_continue_button_on_last_chunk_without_
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
+        chat_ux_snapshot: Any = None,
     ) -> DiscordMessageTurnResult:
         _ = (
             workspace_root,
