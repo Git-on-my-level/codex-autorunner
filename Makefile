@@ -21,7 +21,7 @@ PIPX_ROOT ?= $(HOME)/.local/pipx
 PIPX_VENV ?= $(PIPX_ROOT)/venvs/codex-autorunner
 PIPX_PYTHON ?= $(PIPX_VENV)/bin/python
 
-.PHONY: install dev hooks build test test-chat-platform-contract test-managed-thread-cutover check check-extended preflight-hub-startup format serve serve-dev launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts lint-html dom-check frontend-check _inject-static-banners agent-compatibility-check agent-compatibility-refresh protocol-schemas-check protocol-schemas-refresh typecheck-strict
+.PHONY: install dev hooks build test test-chat-platform-contract test-managed-thread-cutover check check-full check-extended preflight-hub-startup format serve serve-dev launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts lint-html dom-check frontend-check _inject-static-banners agent-compatibility-check agent-compatibility-refresh protocol-schemas-check protocol-schemas-refresh typecheck-strict
 
 _inject-static-banners:
 	pnpm run postbuild
@@ -110,13 +110,16 @@ typecheck-strict:
 
 check:
 	./scripts/check.sh
+
+check-full:
+	./scripts/check.sh --full
 	@if [ -d node_modules ]; then \
 		pnpm lint:html && pnpm test:dom && pnpm test:markdown; \
 	else \
 		echo "Skipping frontend checks (node_modules missing). Run 'make npm-install' first." >&2; \
 	fi
 
-check-extended: check
+check-extended: check-full
 	$(MAKE) test-chat-platform-contract PYTHON="$(PYTHON)"
 
 preflight-hub-startup:

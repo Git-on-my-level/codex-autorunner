@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Git pre-commit hook to run formatting/tests.
+# Git pre-commit hook — runs lane-aware validation.
+# check.sh auto-detects the lane from staged files.
+# Force full checks: ./scripts/check.sh --full
 set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
