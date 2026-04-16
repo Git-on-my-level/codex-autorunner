@@ -13,7 +13,11 @@ from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional
 from ...core.locks import file_lock
 from ...core.orchestration.sqlite import open_orchestration_sqlite
 from ...core.pma_thread_store import PmaThreadStore
-from ...core.pr_binding_runtime import backfill_pr_binding_thread_target_ids
+from ...core.pr_binding_runtime import (
+    backfill_pr_binding_thread_target_ids,
+    thread_contexts,
+    thread_head_branch_hint,
+)
 from ...core.pr_bindings import PrBinding, PrBindingStore
 from ...core.scm_events import ScmEventStore
 from ...core.scm_polling_watches import ScmPollingWatch, ScmPollingWatchStore
@@ -47,8 +51,6 @@ _RATE_LIMIT_QUOTA_CACHE_TTL_SECONDS = 10 * 60
 _RATE_LIMIT_QUOTA_NEAR_LIMIT_FALLBACK_TTL_SECONDS = 60
 _RATE_LIMIT_QUOTA_ERROR_CACHE_TTL_SECONDS = 30
 _RATE_LIMIT_RESOURCES = ("graphql", "core")
-_THREAD_BRANCH_KEYS = ("head_branch", "branch", "git_branch")
-_THREAD_CONTEXT_KEYS = ("manual_context", "scm", "scm_context", "context")
 _PR_HINT_METADATA_KEYS = ("pr_number", "pr_url", "pull_request_url", "pr_ref")
 # Bounded match for GitHub browser PR URLs (avoids loose substring checks on user text).
 _GITHUB_PR_URL_HINT_RE = re.compile(
@@ -132,29 +134,9 @@ def _pr_hint_present_in_context(context: Mapping[str, Any]) -> bool:
     return False
 
 
-def _thread_branch_hint(thread: Mapping[str, Any]) -> Optional[str]:
-    metadata = _mapping(thread.get("metadata"))
-    contexts: list[Mapping[str, Any]] = [metadata]
-    for key in _THREAD_CONTEXT_KEYS:
-        nested = _mapping(metadata.get(key))
-        if nested:
-            contexts.append(nested)
-    for context in contexts:
-        for key in _THREAD_BRANCH_KEYS:
-            branch = _normalize_text(context.get(key))
-            if branch is not None:
-                return branch
-    return None
-
-
 def _thread_has_pr_open_hint(thread: Mapping[str, Any]) -> bool:
     metadata = _mapping(thread.get("metadata"))
-    contexts: list[Mapping[str, Any]] = [metadata]
-    for key in _THREAD_CONTEXT_KEYS:
-        nested = _mapping(metadata.get(key))
-        if nested:
-            contexts.append(nested)
-    for context in contexts:
+    for context in thread_contexts(metadata):
         if _pr_hint_present_in_context(context):
             return True
     for key in ("status_reason", "last_message_preview"):
@@ -197,7 +179,7 @@ def _is_recent_terminal_thread_candidate(
         return True
     status_reason = _normalize_lower_text(thread.get("status_reason")) or ""
     if status_reason in {"managed_turn_completed", "completed"}:
-        return _thread_branch_hint(thread) is not None
+        return thread_head_branch_hint(thread) is not None
     return False
 
 
@@ -1742,7 +1724,7 @@ class GitHubScmPollingService:
                 Path(workspace_root),
                 repo_id=_normalize_text(thread.get("repo_id")),
                 thread_target_id=_normalize_text(thread.get("managed_thread_id")),
-                branch_hint=_thread_branch_hint(thread),
+                branch_hint=thread_head_branch_hint(thread),
             )
 
         for thread in terminal_thread_candidates:
@@ -1761,7 +1743,7 @@ class GitHubScmPollingService:
                 Path(workspace_root),
                 repo_id=_normalize_text(thread.get("repo_id")),
                 thread_target_id=_normalize_text(thread.get("managed_thread_id")),
-                branch_hint=_thread_branch_hint(thread),
+                branch_hint=thread_head_branch_hint(thread),
             )
 
         for (
@@ -1793,7 +1775,8 @@ class GitHubScmPollingService:
                 Path(workspace_root),
                 repo_id=_normalize_text(bound_thread.get("repo_id")) or binding.repo_id,
                 thread_target_id=binding.thread_target_id,
-                branch_hint=_thread_branch_hint(bound_thread) or binding.head_branch,
+                branch_hint=thread_head_branch_hint(bound_thread)
+                or binding.head_branch,
             )
 
         if polling_config.discovery_include_manifest_repos:
