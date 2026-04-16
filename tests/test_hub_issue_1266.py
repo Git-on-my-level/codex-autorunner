@@ -1,6 +1,6 @@
 """Regression tests for hub startup / health ordering and legacy backfill guards (GitHub #1266).
 
-Hub heavy startup is deferred via `_deferred_hub_startup`; legacy JSON→SQLite backfill is gated by
+Hub heavy startup is deferred via `_deferred_hub_startup`; legacy JSON->SQLite backfill is gated by
 `ensure_legacy_orchestration_backfill` / `orch_legacy_backfill_flags`.
 """
 
@@ -15,11 +15,16 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from codex_autorunner.core.hub import (
+    HUB_STARTUP_READY,
+    HUB_STARTUP_STARTED,
+)
 from codex_autorunner.core.orchestration import (
     legacy_backfill_gate as legacy_backfill_gate_module,
 )
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web import app as web_app_module
+from codex_autorunner.surfaces.web import app_state as web_app_state_module
 from tests.conftest import write_test_config
 from tests.test_hub_app_context import _stub_opencode_supervisor
 
@@ -290,3 +295,126 @@ def test_pma_automation_load_does_not_retrigger_backfill_after_explicit_prepare(
     PmaAutomationStore(hub_root).load()
 
     assert calls == [], "routine loads must not retrigger legacy backfill after prepare"
+
+
+def test_hub_supervisor_startup_phase_transitions(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_opencode_supervisor(monkeypatch)
+    app = create_hub_app(hub_env.hub_root)
+    supervisor = app.state.hub_supervisor
+
+    assert supervisor.startup_phase == HUB_STARTUP_READY
+
+    with TestClient(app):
+        assert supervisor.startup_phase == HUB_STARTUP_STARTED
+
+
+def test_hub_supervisor_startup_phase_ready_before_lifecycle_worker(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured_phases: list[str] = []
+    _original_build_hub_context = web_app_state_module.build_hub_context
+
+    def _capturing_build_hub_context(hub_root, base_path):
+        ctx = _original_build_hub_context(hub_root, base_path)
+        captured_phases.append(ctx.supervisor.startup_phase)
+        return ctx
+
+    monkeypatch.setattr(
+        web_app_module,
+        "build_hub_context",
+        _capturing_build_hub_context,
+    )
+    _stub_opencode_supervisor(monkeypatch)
+
+    app = create_hub_app(hub_env.hub_root)
+    assert captured_phases[-1] == HUB_STARTUP_READY
+
+    with TestClient(app):
+        assert app.state.hub_supervisor.startup_phase == HUB_STARTUP_STARTED
+
+
+@pytest.mark.skipif(
+    not _hub_lifespan_yields_before_blocking_startup_work(),
+    reason="Hub lifespan does not yield before managed-thread recovery / repo lifespans yet.",
+)
+def test_health_reports_startup_phase_before_deferred_startup_finishes(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_opencode_supervisor(monkeypatch)
+    entered = threading.Event()
+
+    async def _hanging_recover(app: object) -> None:
+        entered.set()
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(
+        web_app_module,
+        "recover_orphaned_managed_thread_executions",
+        _hanging_recover,
+    )
+
+    app = create_hub_app(
+        hub_env.hub_root,
+        endpoint_host="127.0.0.1",
+        endpoint_port=4517,
+    )
+
+    with TestClient(app) as client:
+        assert entered.wait(timeout=10.0)
+        response = client.get("/health")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["hub_startup_phase"] == HUB_STARTUP_STARTED
+        assert body["hub_deferred_startup_complete"] is False
+
+
+def test_health_reports_deferred_startup_complete_after_lifespan(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_opencode_supervisor(monkeypatch)
+
+    app = create_hub_app(
+        hub_env.hub_root,
+        endpoint_host="127.0.0.1",
+        endpoint_port=4517,
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/health")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["hub_startup_phase"] == HUB_STARTUP_STARTED
+        assert body["hub_deferred_startup_complete"] is True
+
+
+def test_control_plane_error_codes_map_to_distinct_http_statuses() -> None:
+    from codex_autorunner.core.hub_control_plane.errors import HubControlPlaneError
+    from codex_autorunner.surfaces.web.routes.hub_control_plane import (
+        _status_code_for_error,
+    )
+
+    assert (
+        _status_code_for_error(HubControlPlaneError("hub_unavailable", "test")) == 503
+    )
+    assert (
+        _status_code_for_error(HubControlPlaneError("hub_incompatible", "test")) == 409
+    )
+    assert _status_code_for_error(HubControlPlaneError("hub_rejected", "test")) == 400
+    assert (
+        _status_code_for_error(HubControlPlaneError("transport_failure", "test")) == 502
+    )
+    assert (
+        _status_code_for_error(HubControlPlaneError("protocol_failure", "test")) == 500
+    )
+
+
+def test_control_plane_unavailable_is_retryable_incompatible_is_not() -> None:
+    from codex_autorunner.core.hub_control_plane.errors import HubControlPlaneError
+
+    unavailable = HubControlPlaneError("hub_unavailable", "test")
+    assert unavailable.retryable is True
+
+    incompatible = HubControlPlaneError("hub_incompatible", "test")
+    assert incompatible.retryable is False

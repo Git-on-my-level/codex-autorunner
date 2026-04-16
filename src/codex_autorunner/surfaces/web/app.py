@@ -170,6 +170,7 @@ def create_hub_app(
     app.include_router(build_hub_control_plane_routes())
 
     app.state.hub_started = False
+    app.state.hub_deferred_startup_complete = False
     repo_server_overrides: Optional[ServerOverrides] = None
     if context.config.repo_server_inherit:
         repo_server_overrides = ServerOverrides(
@@ -340,6 +341,7 @@ def create_hub_app(
                         "hub.deferred_startup.phase done=start_repo_lifespans elapsed_ms=%.2f",
                         (time.monotonic() - t_phase) * 1000,
                     )
+                app.state.hub_deferred_startup_complete = True
                 log.info(
                     "hub.deferred_startup.complete total_elapsed_ms=%.2f",
                     (time.monotonic() - t0) * 1000,

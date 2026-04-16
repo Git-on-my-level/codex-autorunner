@@ -101,12 +101,24 @@ def build_system_routes() -> APIRouter:
                 else:
                     missing = ["index.html"]
             if not missing:
-                return {
+                response: dict = {
                     "status": "ok",
                     "mode": mode,
                     "base_path": base_path,
                     "asset_version": asset_version,
                 }
+                if mode == "hub":
+                    supervisor = getattr(request.app.state, "hub_supervisor", None)
+                    if supervisor is not None:
+                        response["hub_startup_phase"] = getattr(
+                            supervisor, "startup_phase", None
+                        )
+                    deferred_done = getattr(
+                        request.app.state, "hub_deferred_startup_complete", None
+                    )
+                    if deferred_done is not None:
+                        response["hub_deferred_startup_complete"] = deferred_done
+                return response
             return JSONResponse(
                 {
                     "status": "error",
@@ -117,12 +129,24 @@ def build_system_routes() -> APIRouter:
                 },
                 status_code=500,
             )
-        return {
+        response = {
             "status": "ok",
             "mode": mode,
             "base_path": base_path,
             "asset_version": asset_version,
         }
+        if mode == "hub":
+            supervisor = getattr(request.app.state, "hub_supervisor", None)
+            if supervisor is not None:
+                response["hub_startup_phase"] = getattr(
+                    supervisor, "startup_phase", None
+                )
+            deferred_done = getattr(
+                request.app.state, "hub_deferred_startup_complete", None
+            )
+            if deferred_done is not None:
+                response["hub_deferred_startup_complete"] = deferred_done
+        return response
 
     @router.get("/system/update/check", response_model=SystemUpdateCheckResponse)
     async def system_update_check(request: Request):

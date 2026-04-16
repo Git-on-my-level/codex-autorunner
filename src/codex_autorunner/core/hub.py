@@ -294,6 +294,13 @@ class RepoRunner:
         self._controller.resume(once=once)
 
 
+HubStartupPhase = str
+HUB_STARTUP_CONSTRUCTED: HubStartupPhase = "constructed"
+HUB_STARTUP_RECONCILING: HubStartupPhase = "reconciling"
+HUB_STARTUP_READY: HubStartupPhase = "ready"
+HUB_STARTUP_STARTED: HubStartupPhase = "started"
+
+
 class HubSupervisor:
     def __init__(
         self,
@@ -309,6 +316,7 @@ class HubSupervisor:
         scm_poll_processor: Optional[Callable[[int], dict[str, int]]] = None,
         start_lifecycle_worker: bool = True,
     ):
+        self._startup_phase: HubStartupPhase = HUB_STARTUP_CONSTRUCTED
         self.hub_config = hub_config
         self.state_path = hub_config.root / ".codex-autorunner" / "hub_state.json"
         self._runner_orchestrator = RunnerOrchestrator(
@@ -375,7 +383,9 @@ class HubSupervisor:
             ctx=self._worktree_bridge,
         )
         self._wire_outbox_lifecycle()
+        self._startup_phase = HUB_STARTUP_RECONCILING
         self._reconcile_startup()
+        self._startup_phase = HUB_STARTUP_READY
         if start_lifecycle_worker:
             self.startup()
 
@@ -1455,8 +1465,13 @@ class HubSupervisor:
     def _stop_lifecycle_event_processor(self) -> None:
         self._lifecycle_worker.stop()
 
+    @property
+    def startup_phase(self) -> HubStartupPhase:
+        return self._startup_phase
+
     def startup(self) -> None:
         self._start_lifecycle_event_processor()
+        self._startup_phase = HUB_STARTUP_STARTED
 
     def shutdown(self) -> None:
         self._stop_lifecycle_event_processor()
