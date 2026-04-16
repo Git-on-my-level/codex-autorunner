@@ -2,6 +2,8 @@ import json
 import logging
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Optional
 
 import pytest
 
@@ -9,6 +11,9 @@ from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
 from codex_autorunner.core.flows import FlowStore
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.integrations.telegram.config import PauseDispatchNotifications
+from codex_autorunner.integrations.telegram.handlers.paused_flow_reply import (
+    submit_flow_reply_core,
+)
 from codex_autorunner.integrations.telegram.ticket_flow_bridge import (
     TelegramTicketFlowBridge,
 )
@@ -835,3 +840,64 @@ async def test_pause_scan_failure_retries_when_notice_delivery_returns_false(
     await bridge._notify_ticket_flow_pause(workspace, [("123:456", record)])
 
     assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_submit_flow_reply_uses_service_auto_resume_wrapper(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "ws"
+    message = SimpleNamespace(
+        chat_id=123,
+        thread_id=456,
+        message_id=789,
+        photos=None,
+        document=None,
+        audio=None,
+        voice=None,
+    )
+    sent_messages: list[tuple[int, str, int | None, int | None]] = []
+    resumed: list[tuple[Path, str]] = []
+
+    class _Handlers:
+        async def _write_user_reply_from_telegram(
+            self,
+            workspace_root: Path,
+            run_id: str,
+            run_record: object,
+            reply_message: object,
+            reply_text: str,
+            files: object,
+        ) -> tuple[bool, str]:
+            assert workspace_root == workspace
+            assert run_id == "run-123"
+            assert reply_message is message
+            assert reply_text == "reply body"
+            assert files is None
+            return True, "Reply saved."
+
+        async def _send_message(
+            self,
+            chat_id: int,
+            text: str,
+            *,
+            thread_id: Optional[int] = None,
+            reply_to: Optional[int] = None,
+        ) -> None:
+            sent_messages.append((chat_id, text, thread_id, reply_to))
+
+        async def _auto_resume_ticket_flow_run(
+            self, workspace_root: Path, run_id: str
+        ) -> None:
+            resumed.append((workspace_root, run_id))
+
+    await submit_flow_reply_core(
+        _Handlers(),
+        message,
+        ("run-123", object()),
+        workspace,
+        "reply body",
+    )
+
+    assert sent_messages == [(123, "Reply saved.", 456, 789)]
+    assert resumed == [(workspace, "run-123")]

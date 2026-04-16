@@ -74,4 +74,8 @@ async def submit_flow_reply_core(
         reply_to=message.message_id,
     )
     if success:
+        auto_resume = getattr(handlers, "_auto_resume_ticket_flow_run", None)
+        if callable(auto_resume):
+            await auto_resume(workspace_root, run_id)
+            return
         await handlers._ticket_flow_bridge.auto_resume_run(workspace_root, run_id)
