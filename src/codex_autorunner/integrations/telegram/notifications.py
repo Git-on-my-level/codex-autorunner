@@ -49,6 +49,13 @@ _PROGRESS_EDIT_FAILURE_INITIAL_BACKOFF_SECONDS = 15.0
 _PROGRESS_EDIT_FAILURE_MAX_BACKOFF_SECONDS = 120.0
 
 
+def _turn_log_fields(turn_key: tuple[str, str]) -> dict[str, str]:
+    return {
+        "backend_thread_id": turn_key[0],
+        "turn_id": turn_key[1],
+    }
+
+
 class TelegramNotificationHandlers:
     def _ensure_turn_progress_projectors(
         self,
@@ -211,8 +218,7 @@ class TelegramNotificationHandlers:
             chat_id=getattr(ctx, "chat_id", None),
             thread_id=getattr(ctx, "thread_id", None),
             topic_key=getattr(ctx, "topic_key", None),
-            turn_id=turn_key[0],
-            backend_thread_id=turn_key[1],
+            **_turn_log_fields(turn_key),
             delay_seconds=round(delay, 3),
             failure_streak=streak,
             degraded=degraded,
@@ -242,8 +248,7 @@ class TelegramNotificationHandlers:
                 self._logger,
                 logging.INFO,
                 "telegram.progress.edit_recovered",
-                turn_id=turn_key[0],
-                backend_thread_id=turn_key[1],
+                **_turn_log_fields(turn_key),
                 failure_streak=streak,
                 suppressed_edits=suppressed_count,
             )
@@ -905,8 +910,7 @@ class TelegramNotificationHandlers:
                         self._logger,
                         logging.WARNING,
                         "telegram.progress.heartbeat_expired",
-                        turn_id=turn_key[0],
-                        backend_thread_id=turn_key[1],
+                        **_turn_log_fields(turn_key),
                         max_seconds=PROGRESS_HEARTBEAT_MAX_SECONDS,
                     )
                     return

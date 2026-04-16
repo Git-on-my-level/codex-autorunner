@@ -391,7 +391,7 @@ class _HeartbeatExpiryHarness(TelegramNotificationHandlers):
             )
         )
         self._logger = logging.getLogger("test.telegram.heartbeat_expiry")
-        self._turn_key = ("turn-1", "thread-1")
+        self._turn_key = ("thread-1", "turn-1")
         self._turn_progress_trackers: dict[tuple[str, str], Any] = {
             self._turn_key: TurnProgressTracker(
                 started_at=0.0,
@@ -654,6 +654,7 @@ async def test_turn_completed_prunes_duplicate_terminal_output_from_progress() -
 
 @pytest.mark.anyio
 async def test_turn_progress_heartbeat_expires_after_max_lifetime(
+    caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     harness = _HeartbeatExpiryHarness()
@@ -677,10 +678,14 @@ async def test_turn_progress_heartbeat_expires_after_max_lifetime(
         _fake_sleep,
     )
 
-    await harness._turn_progress_heartbeat(key)
+    with caplog.at_level(logging.WARNING, logger=harness._logger.name):
+        await harness._turn_progress_heartbeat(key)
 
     assert harness.scheduled == [key]
     assert key not in harness._turn_progress_heartbeat_tasks
+    assert '"event":"telegram.progress.heartbeat_expired"' in caplog.text
+    assert '"turn_id":"turn-1"' in caplog.text
+    assert '"backend_thread_id":"thread-1"' in caplog.text
 
 
 @pytest.mark.anyio
