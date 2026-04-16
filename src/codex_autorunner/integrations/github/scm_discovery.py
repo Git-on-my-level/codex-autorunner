@@ -222,9 +222,13 @@ def arm_polling_watch_best_effort(
     """
     from .polling import GitHubScmPollingService
 
+    hub_root, _repo_id = binding_context_from_root(repo_root)
+    if hub_root is None:
+        return
+
     try:
         GitHubScmPollingService(
-            repo_root,
+            hub_root,
             raw_config=raw_config if isinstance(raw_config, dict) else None,
         ).arm_watch(
             binding=persisted_binding,
