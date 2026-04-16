@@ -82,6 +82,26 @@ class InteractionExecutionStatus(str, enum.Enum):
     CANCELLED = "cancelled"
 
 
+def _normalize_interaction_scheduler_state(value: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        raise ValueError("interaction scheduler state must be a non-empty string")
+    try:
+        return InteractionSchedulerState(normalized).value
+    except ValueError as exc:
+        raise ValueError(f"unknown interaction scheduler state: {normalized}") from exc
+
+
+def _normalize_interaction_execution_status(value: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        raise ValueError("interaction execution status must be a non-empty string")
+    try:
+        return InteractionExecutionStatus(normalized).value
+    except ValueError as exc:
+        raise ValueError(f"unknown interaction execution status: {normalized}") from exc
+
+
 @dataclass(frozen=True)
 class OutboxRecord:
     record_id: str
@@ -1648,8 +1668,8 @@ class DiscordStateStore:
                         guild_id,
                         user_id,
                         metadata_blob,
-                        "received",
-                        "received",
+                        InteractionSchedulerState.RECEIVED.value,
+                        InteractionExecutionStatus.RECEIVED.value,
                         now,
                         now,
                         now,
@@ -2001,6 +2021,9 @@ class DiscordStateStore:
         payload_json: dict[str, Any],
         envelope_json: dict[str, Any],
     ) -> None:
+        normalized_scheduler_state = _normalize_interaction_scheduler_state(
+            scheduler_state
+        )
         conn = self._connection_sync()
         now = now_iso()
         with conn:
@@ -2022,7 +2045,7 @@ class DiscordStateStore:
                     route_key,
                     handler_id,
                     conversation_id,
-                    scheduler_state,
+                    normalized_scheduler_state,
                     json.dumps(list(resource_keys), sort_keys=True),
                     json.dumps(payload_json, sort_keys=True),
                     json.dumps(envelope_json, sort_keys=True),
@@ -2038,6 +2061,9 @@ class DiscordStateStore:
         scheduler_state: str,
         increment_attempt_count: bool,
     ) -> None:
+        normalized_scheduler_state = _normalize_interaction_scheduler_state(
+            scheduler_state
+        )
         conn = self._connection_sync()
         now = now_iso()
         with conn:
@@ -2051,7 +2077,7 @@ class DiscordStateStore:
                 WHERE interaction_id = ?
                 """,
                 (
-                    scheduler_state,
+                    normalized_scheduler_state,
                     1 if increment_attempt_count else 0,
                     now,
                     now,
@@ -2066,6 +2092,11 @@ class DiscordStateStore:
         scheduler_state: Optional[str],
         increment_attempt_count: bool,
     ) -> None:
+        normalized_scheduler_state = (
+            _normalize_interaction_scheduler_state(scheduler_state)
+            if scheduler_state is not None
+            else None
+        )
         conn = self._connection_sync()
         now = now_iso()
         with conn:
@@ -2085,7 +2116,7 @@ class DiscordStateStore:
                         if delivery_cursor_json is not None
                         else None
                     ),
-                    scheduler_state,
+                    normalized_scheduler_state,
                     1 if increment_attempt_count else 0,
                     now,
                     now,
@@ -2176,10 +2207,13 @@ class DiscordStateStore:
         execution_status: str,
         execution_error: Optional[str],
     ) -> None:
+        normalized_execution_status = _normalize_interaction_execution_status(
+            execution_status
+        )
         conn = self._connection_sync()
         now = now_iso()
         error_text = str(execution_error)[:500] if execution_error is not None else None
-        if execution_status == "running":
+        if normalized_execution_status == InteractionExecutionStatus.RUNNING.value:
             with conn:
                 conn.execute(
                     """
@@ -2192,7 +2226,7 @@ class DiscordStateStore:
                     WHERE interaction_id = ?
                     """,
                     (
-                        execution_status,
+                        normalized_execution_status,
                         now,
                         error_text,
                         now,
@@ -2220,9 +2254,9 @@ class DiscordStateStore:
                 WHERE interaction_id = ?
                 """,
                 (
-                    execution_status,
-                    execution_status,
-                    execution_status,
+                    normalized_execution_status,
+                    normalized_execution_status,
+                    normalized_execution_status,
                     now,
                     error_text,
                     now,

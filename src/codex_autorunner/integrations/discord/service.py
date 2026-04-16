@@ -5115,6 +5115,11 @@ class DiscordBotService:
         reason: str,
         log_level: int = logging.WARNING,
     ) -> None:
+        recovery_event = (
+            "discord.interaction.recovery.delivery_expired"
+            if scheduler_state == "delivery_expired"
+            else "discord.interaction.recovery.abandoned"
+        )
         await self._store.mark_interaction_scheduler_state(
             record.interaction_id,
             scheduler_state=scheduler_state,
@@ -5133,7 +5138,7 @@ class DiscordBotService:
         log_event(
             self._logger,
             log_level,
-            "discord.interaction.recovery.abandoned",
+            recovery_event,
             interaction_id=record.interaction_id,
             scheduler_state=scheduler_state,
             execution_status=record.execution_status,
@@ -5146,11 +5151,19 @@ class DiscordBotService:
         shared_store = self._chat_operation_store_or_none()
         for record in records:
             envelope = self._envelope_from_ledger_record(record)
-            if envelope is None or record.payload_json is None:
+            if envelope is None:
                 await self._mark_interaction_recovery_terminal(
                     record,
                     scheduler_state="abandoned",
                     reason="missing_runtime_envelope",
+                    log_level=logging.ERROR,
+                )
+                continue
+            if record.payload_json is None:
+                await self._mark_interaction_recovery_terminal(
+                    record,
+                    scheduler_state="abandoned",
+                    reason="missing_runtime_payload",
                     log_level=logging.ERROR,
                 )
                 continue

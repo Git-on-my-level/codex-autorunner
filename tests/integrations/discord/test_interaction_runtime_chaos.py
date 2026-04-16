@@ -44,6 +44,20 @@ from codex_autorunner.integrations.discord.service import (
 from codex_autorunner.integrations.discord.state import DiscordStateStore
 
 
+def _logged_events(
+    caplog: pytest.LogCaptureFixture, logger_name: str
+) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    for record in caplog.records:
+        if record.name != logger_name:
+            continue
+        message = record.getMessage()
+        if not message.startswith("{"):
+            continue
+        events.append(json.loads(message))
+    return events
+
+
 def _make_ctx(
     *,
     interaction_id: str = "inter-1",
@@ -1563,6 +1577,59 @@ async def test_recovery_delivery_expired_when_initial_ack_not_durable(
 
 
 @pytest.mark.anyio
+async def test_recovery_delivery_expired_logs_expired_event(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    harness = _ChaosHarness(tmp_path)
+    await harness.initialize()
+    try:
+        service = _build_recovery_service(
+            store=harness.store,
+            rest=harness.rest,
+            operation_store=harness.operation_store,
+        )
+        ctx = _make_ctx(
+            interaction_id="chaos-expired-log-1",
+            interaction_token="token-chaos-expired-log-1",
+        )
+        payload = _slash_payload(
+            interaction_id="chaos-expired-log-1",
+            interaction_token="token-chaos-expired-log-1",
+        )
+        await harness.store.register_interaction(
+            interaction_id=ctx.interaction_id,
+            interaction_token=ctx.interaction_token,
+            interaction_kind=ctx.kind.value,
+            channel_id=ctx.channel_id,
+            guild_id=ctx.guild_id,
+            user_id=ctx.user_id,
+            metadata_json=service._interaction_ledger_metadata(ctx),
+        )
+        envelope = RuntimeInteractionEnvelope(
+            context=ctx,
+            conversation_id="conversation:discord:chan-1:guild-1",
+            resource_keys=("conversation:discord:chan-1:guild-1",),
+            dispatch_ack_policy="defer_ephemeral",
+        )
+        await service._persist_runtime_interaction(
+            envelope,
+            payload,
+            scheduler_state="received",
+        )
+
+        with caplog.at_level(logging.WARNING, logger=service._logger.name):
+            await service._resume_interaction_recovery()
+        await service._command_runner.shutdown(grace_seconds=2.0)
+
+        events = _logged_events(caplog, service._logger.name)
+        assert events[-1]["event"] == "discord.interaction.recovery.delivery_expired"
+        assert events[-1]["reason"] == "initial_ack_not_durable"
+        assert events[-1]["scheduler_state"] == "delivery_expired"
+    finally:
+        await harness.close()
+
+
+@pytest.mark.anyio
 async def test_recovery_abandoned_when_envelope_is_missing(
     tmp_path: Path,
 ) -> None:
@@ -1628,6 +1695,77 @@ async def test_recovery_abandoned_when_envelope_is_missing(
         record = await harness.store.get_interaction(ctx.interaction_id)
         assert record is not None
         assert record.scheduler_state == "abandoned"
+    finally:
+        await harness.close()
+
+
+@pytest.mark.anyio
+async def test_recovery_missing_payload_logs_payload_reason(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    harness = _ChaosHarness(tmp_path)
+    await harness.initialize()
+    try:
+        service = _build_recovery_service(
+            store=harness.store,
+            rest=harness.rest,
+            operation_store=harness.operation_store,
+        )
+        ctx = _make_ctx(
+            interaction_id="chaos-missing-payload-log-1",
+            interaction_token="token-chaos-missing-payload-log-1",
+        )
+        payload = _slash_payload(
+            interaction_id="chaos-missing-payload-log-1",
+            interaction_token="token-chaos-missing-payload-log-1",
+        )
+        await harness.store.register_interaction(
+            interaction_id=ctx.interaction_id,
+            interaction_token=ctx.interaction_token,
+            interaction_kind=ctx.kind.value,
+            channel_id=ctx.channel_id,
+            guild_id=ctx.guild_id,
+            user_id=ctx.user_id,
+            metadata_json=service._interaction_ledger_metadata(ctx),
+        )
+        envelope = RuntimeInteractionEnvelope(
+            context=ctx,
+            conversation_id="conversation:discord:chan-1:guild-1",
+            resource_keys=("conversation:discord:chan-1:guild-1",),
+            dispatch_ack_policy="defer_ephemeral",
+        )
+        await service._persist_runtime_interaction(
+            envelope,
+            payload,
+            scheduler_state="acknowledged",
+        )
+        await harness.store.mark_interaction_acknowledged(
+            ctx.interaction_id,
+            ack_mode="defer_ephemeral",
+        )
+        await harness.store.mark_interaction_execution(
+            ctx.interaction_id,
+            execution_status="running",
+        )
+
+        def _null_payload() -> None:
+            conn = harness.store._connection_sync()
+            conn.execute(
+                "UPDATE interaction_ledger SET payload_json = NULL WHERE interaction_id = ?",
+                (ctx.interaction_id,),
+            )
+            conn.commit()
+
+        await harness.store._run(_null_payload)
+
+        with caplog.at_level(logging.ERROR, logger=service._logger.name):
+            await service._resume_interaction_recovery()
+        await service._command_runner.shutdown(grace_seconds=2.0)
+
+        events = _logged_events(caplog, service._logger.name)
+        assert events[-1]["event"] == "discord.interaction.recovery.abandoned"
+        assert events[-1]["reason"] == "missing_runtime_payload"
+        assert events[-1]["scheduler_state"] == "abandoned"
     finally:
         await harness.close()
 
