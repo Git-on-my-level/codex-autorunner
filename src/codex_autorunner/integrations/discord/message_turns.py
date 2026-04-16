@@ -141,6 +141,7 @@ from .rendering import (  # noqa: F401  re-export for test monkeypatch compat
     sanitize_discord_outbound_text,
     truncate_for_discord,
 )
+from .state import ChannelBinding
 
 _logger = logging.getLogger(__name__)
 
@@ -274,7 +275,7 @@ def _resolve_discord_turn_policies(
     approval_mode = "yolo"
     explicit_approval_policy: Optional[str] = None
     explicit_sandbox_policy: Optional[Any] = None
-    if isinstance(binding, dict):
+    if isinstance(binding, (dict, ChannelBinding)):
         binding_mode = str(binding.get("approval_mode") or "").strip()
         if binding_mode:
             approval_mode = binding_mode
@@ -691,11 +692,21 @@ async def _submit_discord_thread_message(
         logical_agent, agent_profile = dispatch.service._resolve_agent_state(binding)
         if not isinstance(logical_agent, str) or not logical_agent.strip():
             logical_agent = dispatch.agent
-        repo_id = binding.get("repo_id") if isinstance(binding, dict) else None
-        resource_kind = (
-            binding.get("resource_kind") if isinstance(binding, dict) else None
+        repo_id = (
+            binding.get("repo_id")
+            if isinstance(binding, (dict, ChannelBinding))
+            else None
         )
-        resource_id = binding.get("resource_id") if isinstance(binding, dict) else None
+        resource_kind = (
+            binding.get("resource_kind")
+            if isinstance(binding, (dict, ChannelBinding))
+            else None
+        )
+        resource_id = (
+            binding.get("resource_id")
+            if isinstance(binding, (dict, ChannelBinding))
+            else None
+        )
         _orchestration_service, thread = resolve_discord_thread_target(
             dispatch.service,
             channel_id=dispatch.channel_id,
@@ -1551,9 +1562,19 @@ async def _run_discord_orchestrated_turn_for_message(
     logical_agent, agent_profile = service._resolve_agent_state(binding)
     if not isinstance(logical_agent, str) or not logical_agent.strip():
         logical_agent = agent
-    repo_id = binding.get("repo_id") if isinstance(binding, dict) else None
-    resource_kind = binding.get("resource_kind") if isinstance(binding, dict) else None
-    resource_id = binding.get("resource_id") if isinstance(binding, dict) else None
+    repo_id = (
+        binding.get("repo_id") if isinstance(binding, (dict, ChannelBinding)) else None
+    )
+    resource_kind = (
+        binding.get("resource_kind")
+        if isinstance(binding, (dict, ChannelBinding))
+        else None
+    )
+    resource_id = (
+        binding.get("resource_id")
+        if isinstance(binding, (dict, ChannelBinding))
+        else None
+    )
     orchestration_service, thread = resolve_discord_thread_target(
         service,
         channel_id=channel_id,

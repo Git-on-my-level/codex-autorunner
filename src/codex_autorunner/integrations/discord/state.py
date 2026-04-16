@@ -1,3 +1,37 @@
+"""Discord transport-local state store.
+
+Ownership contract
+==================
+``DiscordStateStore`` owns **transport-local** durability for the Discord
+adapter.  Its four concerns are:
+
+1. **Channel bindings / preferences** – per-channel user configuration
+   (workspace, repo, agent, model, approval mode, PMA toggle, compact seeds).
+   These are Discord-surface *input parameters* fed into shared orchestration
+   when routing managed-thread turns.  They are NOT the authoritative owner of
+   managed-thread lifecycle or execution status — that truth lives in
+   ``orchestration.sqlite3`` (see ``docs/STATE_ROOTS.md``).
+
+2. **Outbox delivery** – durable Discord message delivery queue.  Each record
+   represents a pending or retryable Discord API call.
+
+3. **Turn progress leases** – durable mapping from Discord progress-placeholder
+   messages to managed-thread / execution identities.  The orchestration IDs
+   stored here are foreign-key correlations, not lifecycle ownership.
+
+4. **Interaction ledger** – durable interaction ack/delivery/recovery state,
+   route metadata, stored payloads, replay cursors, and attempt counts.
+
+State authority boundary
+------------------------
+- Managed-thread target identity, PMA routing, ticket-flow state, and flow
+  execution truth remain in shared orchestration / control-plane stores.
+- Channel binding rows must NOT become a second durable owner for
+  managed-thread lifecycle or execution status.
+- ``discord_state.sqlite3`` is the transport-local durability root; delivery
+  and replay state must not move elsewhere.
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -114,7 +148,79 @@ class InteractionLedgerRegistration:
     inserted: bool
 
 
+@dataclass(frozen=True)
+class ChannelBinding:
+    """Typed shape for a ``channel_bindings`` row.
+
+    This is the Discord-surface binding record.  It stores per-channel user
+    configuration and transport-local delivery cursors.  It is NOT the
+    authoritative owner of managed-thread lifecycle or execution state — that
+    truth lives in the shared orchestration store (``orchestration.sqlite3``).
+
+    Backward-compatible dict-like access (``.get()``, ``[key]``) is provided
+    so that existing consumers can migrate incrementally.
+    """
+
+    channel_id: str
+    guild_id: Optional[str]
+    workspace_path: str
+    repo_id: Optional[str]
+    resource_kind: Optional[str]
+    resource_id: Optional[str]
+    pma_enabled: bool
+    pma_prev_workspace_path: Optional[str]
+    pma_prev_repo_id: Optional[str]
+    pma_prev_resource_kind: Optional[str]
+    pma_prev_resource_id: Optional[str]
+    agent: Optional[str]
+    agent_profile: Optional[str]
+    model_override: Optional[str]
+    reasoning_effort: Optional[str]
+    approval_mode: Optional[str]
+    approval_policy: Optional[str]
+    sandbox_policy: Optional[str]
+    rollout_path: Optional[str]
+    last_dispatch_run_id: Optional[str]
+    last_dispatch_seq: Optional[str]
+    last_pause_run_id: Optional[str]
+    last_pause_dispatch_seq: Optional[str]
+    last_terminal_run_id: Optional[str]
+    pending_compact_seed: Optional[str]
+    pending_compact_session_key: Optional[str]
+    updated_at: str
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return getattr(self, key, default)
+
+    def __getitem__(self, key: str) -> Any:
+        try:
+            return getattr(self, key)
+        except AttributeError:
+            raise KeyError(key) from None
+
+    def __contains__(self, key: str) -> bool:
+        return hasattr(self, key)
+
+    def keys(self) -> list[str]:
+        from dataclasses import fields as _dc_fields
+
+        return [f.name for f in _dc_fields(self)]
+
+    def to_dict(self) -> dict[str, Any]:
+        from dataclasses import asdict as _dc_asdict
+
+        return _dc_asdict(self)
+
+
+def _is_binding_like(obj: Any) -> bool:
+    return isinstance(obj, (dict, ChannelBinding))
+
+
 class DiscordStateStore:
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
     def __init__(self, db_path: Path) -> None:
         self._db_path = db_path
         self._executor = ThreadPoolExecutor(
@@ -168,14 +274,25 @@ class DiscordStateStore:
             resource_id,
         )
 
-    async def get_binding(self, *, channel_id: str) -> Optional[dict[str, Any]]:
+    async def get_binding(self, *, channel_id: str) -> Optional[ChannelBinding]:
         return await self._run(self._get_binding_sync, channel_id)  # type: ignore[no-any-return]
 
-    async def list_bindings(self) -> list[dict[str, Any]]:
+    async def list_bindings(self) -> list[ChannelBinding]:
         return await self._run(self._list_bindings_sync)  # type: ignore[no-any-return]
 
     async def delete_binding(self, *, channel_id: str) -> None:
         await self._run(self._delete_binding_sync, channel_id)
+
+    # ------------------------------------------------------------------
+    # Binding mutation: dispatch cursors, PMA, agent, model, approval, compact
+    #
+    # These mutate per-channel preferences and delivery cursors stored in
+    # the channel_bindings row.  They do NOT own managed-thread lifecycle.
+    # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Outbox delivery queue
+    # ------------------------------------------------------------------
 
     async def enqueue_outbox(self, record: OutboxRecord) -> OutboxRecord:
         return await self._run(self._upsert_outbox_sync, record)  # type: ignore[no-any-return]
@@ -188,6 +305,14 @@ class DiscordStateStore:
 
     async def mark_outbox_delivered(self, record_id: str) -> None:
         await self._run(self._delete_outbox_sync, record_id)
+
+    # ------------------------------------------------------------------
+    # Turn progress leases
+    #
+    # Discord progress placeholders mapped to managed-thread / execution
+    # IDs.  The orchestration IDs are correlation keys, not lifecycle
+    # ownership; thread truth lives in orchestration stores.
+    # ------------------------------------------------------------------
 
     async def upsert_turn_progress_lease(
         self,
@@ -412,6 +537,13 @@ class DiscordStateStore:
             retry_after_seconds,
             payload_json,
         )
+
+    # ------------------------------------------------------------------
+    # Interaction ledger
+    #
+    # Durable interaction ack/delivery/recovery state, route metadata,
+    # stored payloads, replay cursors, and attempt counts.
+    # ------------------------------------------------------------------
 
     async def register_interaction(
         self,
@@ -899,7 +1031,7 @@ class DiscordStateStore:
                 ),
             )
 
-    def _binding_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
+    def _binding_from_row(self, row: sqlite3.Row) -> ChannelBinding:
         pma_enabled_raw = row["pma_enabled"] if "pma_enabled" in row.keys() else 0
         agent_raw = row["agent"] if "agent" in row.keys() else None
         agent_profile_raw = (
@@ -950,108 +1082,108 @@ class DiscordStateStore:
                 agent_profile = raw_profile
         if agent_profile is not None:
             agent = "hermes"
-        return {
-            "channel_id": str(row["channel_id"]),
-            "guild_id": row["guild_id"] if isinstance(row["guild_id"], str) else None,
-            "workspace_path": str(row["workspace_path"]),
-            "repo_id": row["repo_id"] if isinstance(row["repo_id"], str) else None,
-            "last_dispatch_run_id": (
-                row["last_dispatch_run_id"]
-                if "last_dispatch_run_id" in row.keys()
-                and isinstance(row["last_dispatch_run_id"], str)
-                else None
-            ),
-            "last_dispatch_seq": (
-                row["last_dispatch_seq"]
-                if "last_dispatch_seq" in row.keys()
-                and isinstance(row["last_dispatch_seq"], str)
-                else None
-            ),
-            "last_pause_run_id": (
-                row["last_pause_run_id"]
-                if isinstance(row["last_pause_run_id"], str)
-                else None
-            ),
-            "last_pause_dispatch_seq": (
-                row["last_pause_dispatch_seq"]
-                if isinstance(row["last_pause_dispatch_seq"], str)
-                else None
-            ),
-            "pma_enabled": bool(pma_enabled_raw),
-            "pma_prev_workspace_path": (
-                row["pma_prev_workspace_path"]
-                if "pma_prev_workspace_path" in row.keys()
-                and isinstance(row["pma_prev_workspace_path"], str)
-                else None
-            ),
-            "pma_prev_repo_id": (
-                row["pma_prev_repo_id"]
-                if "pma_prev_repo_id" in row.keys()
-                and isinstance(row["pma_prev_repo_id"], str)
-                else None
-            ),
-            "resource_kind": (
+        return ChannelBinding(
+            channel_id=str(row["channel_id"]),
+            guild_id=row["guild_id"] if isinstance(row["guild_id"], str) else None,
+            workspace_path=str(row["workspace_path"]),
+            repo_id=row["repo_id"] if isinstance(row["repo_id"], str) else None,
+            resource_kind=(
                 row["resource_kind"]
                 if "resource_kind" in row.keys()
                 and isinstance(row["resource_kind"], str)
                 else None
             ),
-            "resource_id": (
+            resource_id=(
                 row["resource_id"]
                 if "resource_id" in row.keys() and isinstance(row["resource_id"], str)
                 else None
             ),
-            "pma_prev_resource_kind": (
+            pma_enabled=bool(pma_enabled_raw),
+            pma_prev_workspace_path=(
+                row["pma_prev_workspace_path"]
+                if "pma_prev_workspace_path" in row.keys()
+                and isinstance(row["pma_prev_workspace_path"], str)
+                else None
+            ),
+            pma_prev_repo_id=(
+                row["pma_prev_repo_id"]
+                if "pma_prev_repo_id" in row.keys()
+                and isinstance(row["pma_prev_repo_id"], str)
+                else None
+            ),
+            pma_prev_resource_kind=(
                 row["pma_prev_resource_kind"]
                 if "pma_prev_resource_kind" in row.keys()
                 and isinstance(row["pma_prev_resource_kind"], str)
                 else None
             ),
-            "pma_prev_resource_id": (
+            pma_prev_resource_id=(
                 row["pma_prev_resource_id"]
                 if "pma_prev_resource_id" in row.keys()
                 and isinstance(row["pma_prev_resource_id"], str)
                 else None
             ),
-            "agent": agent,
-            "agent_profile": agent_profile,
-            "model_override": (
+            agent=agent,
+            agent_profile=agent_profile,
+            model_override=(
                 model_override_raw if isinstance(model_override_raw, str) else None
             ),
-            "reasoning_effort": (
+            reasoning_effort=(
                 reasoning_effort_raw if isinstance(reasoning_effort_raw, str) else None
             ),
-            "approval_mode": (
+            approval_mode=(
                 approval_mode_raw if isinstance(approval_mode_raw, str) else None
             ),
-            "approval_policy": (
+            approval_policy=(
                 approval_policy_raw if isinstance(approval_policy_raw, str) else None
             ),
-            "sandbox_policy": (
+            sandbox_policy=(
                 sandbox_policy_raw if isinstance(sandbox_policy_raw, str) else None
             ),
-            "rollout_path": (
+            rollout_path=(
                 rollout_path_raw if isinstance(rollout_path_raw, str) else None
             ),
-            "last_terminal_run_id": (
+            last_dispatch_run_id=(
+                row["last_dispatch_run_id"]
+                if "last_dispatch_run_id" in row.keys()
+                and isinstance(row["last_dispatch_run_id"], str)
+                else None
+            ),
+            last_dispatch_seq=(
+                row["last_dispatch_seq"]
+                if "last_dispatch_seq" in row.keys()
+                and isinstance(row["last_dispatch_seq"], str)
+                else None
+            ),
+            last_pause_run_id=(
+                row["last_pause_run_id"]
+                if isinstance(row["last_pause_run_id"], str)
+                else None
+            ),
+            last_pause_dispatch_seq=(
+                row["last_pause_dispatch_seq"]
+                if isinstance(row["last_pause_dispatch_seq"], str)
+                else None
+            ),
+            last_terminal_run_id=(
                 last_terminal_run_id_raw
                 if isinstance(last_terminal_run_id_raw, str)
                 else None
             ),
-            "pending_compact_seed": (
+            pending_compact_seed=(
                 pending_compact_seed_raw
                 if isinstance(pending_compact_seed_raw, str)
                 else None
             ),
-            "pending_compact_session_key": (
+            pending_compact_session_key=(
                 pending_compact_session_key_raw
                 if isinstance(pending_compact_session_key_raw, str)
                 else None
             ),
-            "updated_at": str(row["updated_at"]),
-        }
+            updated_at=str(row["updated_at"]),
+        )
 
-    def _get_binding_sync(self, channel_id: str) -> Optional[dict[str, Any]]:
+    def _get_binding_sync(self, channel_id: str) -> Optional[ChannelBinding]:
         conn = self._connection_sync()
         row = conn.execute(
             "SELECT * FROM channel_bindings WHERE channel_id = ?",
@@ -1061,7 +1193,7 @@ class DiscordStateStore:
             return None
         return self._binding_from_row(row)
 
-    def _list_bindings_sync(self) -> list[dict[str, Any]]:
+    def _list_bindings_sync(self) -> list[ChannelBinding]:
         conn = self._connection_sync()
         rows = conn.execute(
             "SELECT * FROM channel_bindings ORDER BY updated_at DESC"

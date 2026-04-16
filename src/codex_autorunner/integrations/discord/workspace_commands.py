@@ -65,6 +65,7 @@ from .rendering import (
     format_discord_message,
     truncate_for_discord,
 )
+from .state import ChannelBinding
 
 _logger = logging.getLogger(__name__)
 
@@ -764,7 +765,7 @@ async def handle_status(
     )
     active_flow = None
     workspace_path = None
-    if isinstance(binding, dict):
+    if isinstance(binding, (dict, ChannelBinding)):
         workspace_raw = binding.get("workspace_path")
         if isinstance(workspace_raw, str) and workspace_raw.strip():
             workspace_path = workspace_raw.strip()
