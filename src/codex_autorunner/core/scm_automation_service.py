@@ -9,6 +9,7 @@ import logging
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional, Protocol
 
@@ -260,6 +261,25 @@ def _publish_notice_payload(
     }
 
 
+def _parse_iso_datetime(value: object) -> Optional[datetime]:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _isoformat_z(value: datetime) -> str:
+    return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _auxiliary_correlation_id(*, correlation_id: str, operation_key: str) -> str:
     digest = hashlib.sha256(operation_key.encode("utf-8")).hexdigest()[:12]
     return f"{correlation_id}:aux:{digest}"
@@ -299,46 +319,21 @@ def _trimmed_summary(value: Any, *, limit: int = 120) -> Optional[str]:
     return f"{text[: limit - 3].rstrip()}..."
 
 
-def _review_comment_location(payload: Mapping[str, Any]) -> Optional[str]:
-    path = _collapse_whitespace(payload.get("path"))
-    line = payload.get("line")
-    if path is None:
-        return None
-    if isinstance(line, int):
-        return f"{path}:{line}"
-    return path
-
-
-def _review_comment_url(payload: Mapping[str, Any]) -> Optional[str]:
-    url = _collapse_whitespace(payload.get("html_url"))
-    if url is None or not url.startswith(("http://", "https://")):
-        return None
-    return url
-
-
-def _review_comment_wakeup_message(
+def _review_comment_notice_message(
+    tracking: Mapping[str, Any],
     *,
-    event: ScmEvent,
-    binding: PrBinding,
+    enqueue_status: str,
 ) -> str:
-    payload = _event_payload(event)
-    subject = f"{binding.repo_slug}#{binding.pr_number}"
-    commenter_login = _collapse_whitespace(payload.get("author_login"))
-    location = _review_comment_location(payload)
-    comment_summary = _trimmed_summary(payload.get("body"))
-    review_url = _review_comment_url(payload)
-
-    lines = [f"PR review feedback on {subject}"]
-    if commenter_login is not None:
-        lines.append(f"From: {commenter_login}")
-    if location is not None:
-        lines.append(f"Location: {location}")
-    if comment_summary is not None:
-        lines.append(f"Summary: {comment_summary}")
-    if review_url is not None:
-        lines.append(f"Link: <{review_url}>")
-    lines.append("The bound agent thread is taking a look.")
-    return "\n".join(lines)
+    subject = _reaction_subject(tracking)
+    if enqueue_status == "queued":
+        return (
+            f"Queued the latest PR review batch for {subject}.\n"
+            "The bound agent thread has the work item and will pick it up next."
+        )
+    return (
+        f"Started the latest PR review batch for {subject}.\n"
+        "The bound agent thread is working on the latest review feedback now."
+    )
 
 
 def _reaction_subject(tracking: Mapping[str, Any]) -> str:
@@ -515,17 +510,43 @@ class ScmAutomationService:
             raise LookupError(f"SCM event '{event_id}' was not found")
         return event
 
-    def _review_comment_notice_key(
+    def _review_comment_enqueue_batch_key(
         self,
         *,
         event: ScmEvent,
         binding: PrBinding,
     ) -> str:
+        batch_window_seconds = self._reaction_config.review_comment_batch_window_seconds
+        if batch_window_seconds <= 0:
+            return stable_reaction_operation_key(
+                provider=event.provider,
+                event_id=event.event_id,
+                reaction_kind="review_comment",
+                operation_kind="enqueue_managed_turn",
+                repo_slug=binding.repo_slug,
+                repo_id=binding.repo_id or event.repo_id,
+                pr_number=binding.pr_number,
+                binding_id=binding.binding_id,
+                thread_target_id=binding.thread_target_id,
+            )
+        event_time = (
+            _parse_iso_datetime(event.received_at)
+            or _parse_iso_datetime(event.occurred_at)
+            or _parse_iso_datetime(event.created_at)
+            or datetime.now(timezone.utc)
+        )
+        bucket_start_seconds = (
+            int(event_time.timestamp()) // batch_window_seconds
+        ) * batch_window_seconds
+        batch_end = datetime.fromtimestamp(
+            bucket_start_seconds + batch_window_seconds,
+            tz=timezone.utc,
+        )
         return stable_reaction_operation_key(
             provider=event.provider,
-            event_id=event.event_id,
+            event_id=f"review-batch:{_isoformat_z(batch_end)}",
             reaction_kind="review_comment",
-            operation_kind="notify_chat",
+            operation_kind="enqueue_managed_turn",
             repo_slug=binding.repo_slug,
             repo_id=binding.repo_id or event.repo_id,
             pr_number=binding.pr_number,
@@ -533,22 +554,65 @@ class ScmAutomationService:
             thread_target_id=binding.thread_target_id,
         )
 
-    def _create_review_comment_notice_operation(
+    def _review_comment_enqueue_next_attempt_at(
         self,
         *,
         event: ScmEvent,
-        binding: PrBinding,
-        correlation_id: str,
+    ) -> Optional[str]:
+        batch_window_seconds = self._reaction_config.review_comment_batch_window_seconds
+        if batch_window_seconds <= 0:
+            return None
+        event_time = (
+            _parse_iso_datetime(event.received_at)
+            or _parse_iso_datetime(event.occurred_at)
+            or _parse_iso_datetime(event.created_at)
+        )
+        if event_time is None:
+            return None
+        bucket_start_seconds = (
+            int(event_time.timestamp()) // batch_window_seconds
+        ) * batch_window_seconds
+        return _isoformat_z(
+            datetime.fromtimestamp(
+                bucket_start_seconds + batch_window_seconds,
+                tz=timezone.utc,
+            )
+        )
+
+    def _review_comment_notice_key(
+        self,
+        *,
+        enqueue_operation_key: str,
+    ) -> str:
+        return stable_reaction_operation_key(
+            provider="scm",
+            event_id=enqueue_operation_key,
+            reaction_kind="review_comment",
+            operation_kind="notify_chat",
+        )
+
+    def _create_review_comment_notice_operation(
+        self,
+        *,
+        tracking: Mapping[str, Any],
+        enqueue_operation: PublishOperation,
         seen_operation_keys: set[str],
-        publish_operations: list[PublishOperation],
-    ) -> None:
-        thread_target_id = _normalize_text(binding.thread_target_id)
-        if thread_target_id is None:
-            return
-        operation_key = self._review_comment_notice_key(event=event, binding=binding)
+    ) -> Optional[PublishOperation]:
+        thread_target_id = _normalize_text(tracking.get("thread_target_id"))
+        enqueue_status = _normalize_text(enqueue_operation.response.get("status"))
+        if thread_target_id is None or enqueue_status not in {"queued", "running"}:
+            return None
+        operation_key = self._review_comment_notice_key(
+            enqueue_operation_key=enqueue_operation.operation_key
+        )
         if operation_key in seen_operation_keys:
-            return
+            return None
         seen_operation_keys.add(operation_key)
+        correlation_id = correlation_id_for_operation(
+            enqueue_operation
+        ) or _normalize_text(tracking.get("correlation_id"))
+        if correlation_id is None:
+            correlation_id = f"scm:{enqueue_operation.operation_id}"
         notice_correlation_id = _auxiliary_correlation_id(
             correlation_id=correlation_id,
             operation_key=operation_key,
@@ -556,9 +620,9 @@ class ScmAutomationService:
         payload = with_correlation_id(
             _publish_notice_payload(
                 thread_target_id=thread_target_id,
-                message=_review_comment_wakeup_message(
-                    event=event,
-                    binding=binding,
+                message=_review_comment_notice_message(
+                    tracking,
+                    enqueue_status=enqueue_status,
                 ),
             ),
             correlation_id=notice_correlation_id,
@@ -571,16 +635,16 @@ class ScmAutomationService:
         self._audit_recorder.record(
             action_type=SCM_AUDIT_PUBLISH_CREATED,
             correlation_id=correlation_id,
-            event=event,
-            binding=binding,
             operation=operation,
             payload={
                 "deduped": deduped,
                 "auxiliary": True,
-                "wake_notice": True,
+                "enqueue_notice": True,
+                "source_operation_key": enqueue_operation.operation_key,
+                "enqueue_status": enqueue_status,
             },
         )
-        publish_operations.append(operation)
+        return operation
 
     def ingest_event(
         self,
@@ -707,9 +771,23 @@ class ScmAutomationService:
                             metadata=tracking,
                         )
                     continue
-            if intent.operation_key in seen_operation_keys:
+            operation_key = intent.operation_key
+            next_attempt_at: Optional[str] = None
+            if (
+                binding is not None
+                and intent.reaction_kind == "review_comment"
+                and intent.operation_kind == "enqueue_managed_turn"
+            ):
+                operation_key = self._review_comment_enqueue_batch_key(
+                    event=event,
+                    binding=binding,
+                )
+                next_attempt_at = self._review_comment_enqueue_next_attempt_at(
+                    event=event
+                )
+            if operation_key in seen_operation_keys:
                 continue
-            seen_operation_keys.add(intent.operation_key)
+            seen_operation_keys.add(operation_key)
             payload = with_correlation_id(
                 copy.deepcopy(intent.payload),
                 correlation_id=correlation_id,
@@ -717,9 +795,10 @@ class ScmAutomationService:
             if tracking:
                 payload["scm_reaction"] = tracking
             operation, deduped = self._journal.create_operation(
-                operation_key=intent.operation_key,
+                operation_key=operation_key,
                 operation_kind=intent.operation_kind,
                 payload=payload,
+                next_attempt_at=next_attempt_at,
             )
             self._audit_recorder.record(
                 action_type=SCM_AUDIT_PUBLISH_CREATED,
@@ -740,22 +819,10 @@ class ScmAutomationService:
                     reaction_kind=reaction_state_kind,
                     fingerprint=fingerprint,
                     event_id=intent.event_id or event.event_id,
-                    operation_key=intent.operation_key,
+                    operation_key=operation_key,
                     metadata=tracking,
                 )
             publish_operations.append(operation)
-            if (
-                binding is not None
-                and intent.reaction_kind == "review_comment"
-                and intent.operation_kind == "enqueue_managed_turn"
-            ):
-                self._create_review_comment_notice_operation(
-                    event=event,
-                    binding=binding,
-                    correlation_id=correlation_id,
-                    seen_operation_keys=seen_operation_keys,
-                    publish_operations=publish_operations,
-                )
 
         return ScmAutomationIngestResult(
             event=event,
@@ -864,6 +931,18 @@ class ScmAutomationService:
             event_id = _normalize_text(tracking.get("event_id"))
             try:
                 if operation.state == "succeeded":
+                    if (
+                        operation.operation_kind == "enqueue_managed_turn"
+                        and _normalize_text(tracking.get("reaction_kind"))
+                        == "review_comment"
+                    ):
+                        notice_operation = self._create_review_comment_notice_operation(
+                            tracking=tracking,
+                            enqueue_operation=operation,
+                            seen_operation_keys=seen_operation_keys,
+                        )
+                        if notice_operation is not None:
+                            escalations.append(notice_operation)
                     self._reaction_state_store.mark_reaction_delivery_succeeded(
                         binding_id=binding_id,
                         reaction_kind=reaction_state_kind,

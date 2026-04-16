@@ -1435,6 +1435,9 @@ def test_process_due_watches_reacts_then_wakes_thread_and_notifies_bound_chat(
         )
 
     automation_config = _polling_config()
+    automation_config["github"]["automation"]["reactions"][
+        "review_comment_batch_window_seconds"
+    ] = 0
     automation_config["github"]["automation"]["policy"] = {
         "react_pr_review_comment": "allow"
     }
@@ -1479,7 +1482,7 @@ def test_process_due_watches_reacts_then_wakes_thread_and_notifies_bound_chat(
     processed_operations = []
     automation = ScmAutomationService(
         hub_root,
-        reaction_config=automation_config,
+        reaction_config=automation_config["github"]["automation"],
         publish_processor=processor,
     )
 
@@ -1538,10 +1541,10 @@ def test_process_due_watches_reacts_then_wakes_thread_and_notifies_bound_chat(
     outbox = asyncio.run(_load_outbox())
     assert any(
         record.channel_id == "repo-discord"
-        and "taking a look" in str(record.payload_json.get("content", "")).lower()
-        and "inline review wakeup path"
+        and "started the latest pr review batch"
         in str(record.payload_json.get("content", "")).lower()
-        and "discussion_r2844" in str(record.payload_json.get("content", ""))
+        and "working on the latest review feedback now"
+        in str(record.payload_json.get("content", "")).lower()
         for record in outbox
     )
 
@@ -1655,6 +1658,9 @@ def test_process_due_watches_keeps_distinct_bound_notices_for_multiple_review_co
         )
 
     automation_config = _polling_config()
+    automation_config["github"]["automation"]["reactions"][
+        "review_comment_batch_window_seconds"
+    ] = 0
     automation_config["github"]["automation"]["policy"] = {
         "react_pr_review_comment": "allow"
     }
@@ -1697,7 +1703,7 @@ def test_process_due_watches_keeps_distinct_bound_notices_for_multiple_review_co
     processed_operations = []
     automation = ScmAutomationService(
         hub_root,
-        reaction_config=automation_config,
+        reaction_config=automation_config["github"]["automation"],
         publish_processor=processor,
     )
 
@@ -1755,12 +1761,12 @@ def test_process_due_watches_keeps_distinct_bound_notices_for_multiple_review_co
     ]
     assert len(contents) == 2
     normalized_contents = [content.lower() for content in contents]
+    assert all("latest pr review batch" in content for content in normalized_contents)
     assert any(
-        "inline review wakeup path" in content for content in normalized_contents
+        "working on the latest review feedback now" in content
+        for content in normalized_contents
     )
-    assert any("discussion_r2844" in content for content in contents)
-    assert any("discussion_r2845" in content for content in contents)
-    assert any("does not dedupe away later comments" in content for content in contents)
+    assert any("will pick it up next" in content for content in normalized_contents)
 
 
 def test_process_due_watches_does_not_reemit_when_thread_is_reopened_without_new_comments(

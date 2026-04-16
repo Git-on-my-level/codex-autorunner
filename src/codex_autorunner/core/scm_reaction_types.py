@@ -88,6 +88,7 @@ class ScmReactionConfig:
     ci_failed: bool = True
     changes_requested: bool = True
     review_comment: bool = True
+    review_comment_batch_window_seconds: int = 15
     approved_and_green: bool = True
     merged: bool = True
     duplicate_escalation_threshold: int = 3
@@ -137,6 +138,11 @@ class ScmReactionConfig:
                     if default_enabled is None
                     else default_value
                 ),
+            ),
+            review_comment_batch_window_seconds=_int_from_mapping(
+                mapping,
+                "review_comment_batch_window_seconds",
+                default=15,
             ),
             approved_and_green=_bool_from_mapping(
                 mapping,

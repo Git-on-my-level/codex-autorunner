@@ -187,9 +187,9 @@ def test_route_scm_reactions_routes_commented_review_as_review_comment() -> None
     assert intents[0].reaction_kind == "review_comment"
     assert intents[0].operation_kind == "enqueue_managed_turn"
     assert intents[0].payload["request"]["message_text"] == (
-        "New PR comment on acme/widgets#42 from chatgpt-codex-connector[bot]: "
-        "Please extract the webhook normalization helper. "
-        "Address the feedback and reply on the PR after updating the branch."
+        "New PR review feedback arrived on acme/widgets#42. "
+        "Inspect the latest review comments on the PR, address the feedback, "
+        "and reply on the PR after updating the branch."
     )
 
 
@@ -273,10 +273,9 @@ def test_route_scm_reactions_routes_pr_comment_to_managed_thread() -> None:
     assert intents[0].reaction_kind == "review_comment"
     assert intents[0].operation_kind == "enqueue_managed_turn"
     assert intents[0].payload["request"]["message_text"] == (
-        "New PR comment on acme/widgets#42 from reviewer at "
-        "src/codex_autorunner/core/scm_reaction_router.py:164: "
-        "Please guard the wake-up path with a PR-comment filter. "
-        "Address the feedback and reply on the PR after updating the branch."
+        "New PR review feedback arrived on acme/widgets#42. "
+        "Inspect the latest review comments on the PR, address the feedback, "
+        "and reply on the PR after updating the branch."
     )
 
 

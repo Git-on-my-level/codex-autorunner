@@ -155,6 +155,11 @@ def build_review_comment_message(
 ) -> str:
     payload = _event_payload(event)
     subject = _reaction_subject(event, binding)
+    if operation_kind == "enqueue_managed_turn":
+        return _join_message(
+            f"New PR review feedback arrived on {subject}",
+            "Inspect the latest review comments on the PR, address the feedback, and reply on the PR after updating the branch",
+        )
     commenter_login = _reviewer_login(payload)
     comment_summary = _trimmed_summary(payload.get("body"))
     location = _comment_location(payload)
@@ -166,12 +171,6 @@ def build_review_comment_message(
         summary = f"{summary} at {location}"
     if comment_summary is not None:
         summary = f"{summary}: {comment_summary}"
-
-    if operation_kind == "enqueue_managed_turn":
-        return _join_message(
-            summary,
-            "Address the feedback and reply on the PR after updating the branch",
-        )
     return _ensure_sentence(summary)
 
 

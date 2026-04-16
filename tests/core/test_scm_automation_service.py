@@ -144,6 +144,7 @@ class _JournalFake:
     def __init__(self) -> None:
         self.operations_by_key: dict[str, PublishOperation] = {}
         self.create_calls: list[tuple[str, str]] = []
+        self.next_attempts_by_key: dict[str, Optional[str]] = {}
 
     def create_operation(
         self,
@@ -153,8 +154,8 @@ class _JournalFake:
         payload: Optional[dict] = None,
         next_attempt_at: Optional[str] = None,
     ) -> tuple[PublishOperation, bool]:
-        _ = next_attempt_at
         self.create_calls.append((operation_key, operation_kind))
+        self.next_attempts_by_key[operation_key] = next_attempt_at
         existing = self.operations_by_key.get(operation_key)
         if existing is not None:
             return existing, True
@@ -164,7 +165,11 @@ class _JournalFake:
             operation_kind=operation_kind,
         )
         created = PublishOperation(
-            **{**created.to_dict(), "payload": dict(payload or {})}
+            **{
+                **created.to_dict(),
+                "payload": dict(payload or {}),
+                "next_attempt_at": next_attempt_at or created.next_attempt_at,
+            }
         )
         self.operations_by_key[operation_key] = created
         return created, False
@@ -799,7 +804,6 @@ def test_ingest_event_tracks_review_comment_operations_in_separate_state_namespa
     assert [operation.operation_kind for operation in result.publish_operations] == [
         "react_pr_review_comment",
         "enqueue_managed_turn",
-        "notify_chat",
     ]
     assert state_store.should_calls == [
         (
@@ -828,7 +832,7 @@ def test_ingest_event_tracks_review_comment_operations_in_separate_state_namespa
     ]
 
 
-def test_ingest_event_formats_review_comment_notice_with_link_and_clean_summary(
+def test_ingest_event_batches_review_comment_enqueue_for_15_seconds(
     tmp_path: Path,
 ) -> None:
     event = ScmEvent(
@@ -836,7 +840,7 @@ def test_ingest_event_formats_review_comment_notice_with_link_and_clean_summary(
         provider="github",
         event_type="pull_request_review_comment",
         occurred_at="2026-03-26T00:00:00Z",
-        received_at="2026-03-26T00:00:01Z",
+        received_at="2026-03-26T00:00:14Z",
         created_at="2026-03-26T00:00:02Z",
         repo_slug="acme/widgets",
         repo_id="repo-1",
@@ -856,37 +860,34 @@ def test_ingest_event_formats_review_comment_notice_with_link_and_clean_summary(
         raw_payload=None,
     )
     binding = _binding()
+    journal = _JournalFake()
     service = ScmAutomationService(
         tmp_path,
         event_store=_EventStoreFake(event),
         binding_resolver=_BindingResolverFake(binding),
         reaction_router=route_scm_reactions,
         reaction_state_store=_PermissiveReactionStateFake(),
-        journal=_JournalFake(),
+        journal=journal,
         publish_processor=_ProcessorFake(processed=[]),
     )
 
     result = service.ingest_event(event.event_id)
 
-    notify_op = next(
+    enqueue_op = next(
         operation
         for operation in result.publish_operations
-        if operation.operation_kind == "notify_chat"
+        if operation.operation_kind == "enqueue_managed_turn"
     )
-    assert notify_op.payload["message"] == (
-        "PR review feedback on acme/widgets#42\n"
-        "From: reviewer\n"
-        "Location: src/codex_autorunner/integrations/discord/message_turns.py:942\n"
-        "Summary: P1 Surface startup timeouts as fallback regressions.\n"
-        "Link: <https://github.com/acme/widgets/pull/42#discussion_r2844>\n"
-        "The bound agent thread is taking a look."
+    assert enqueue_op.next_attempt_at == "2026-03-26T00:00:15Z"
+    assert journal.next_attempts_by_key[enqueue_op.operation_key] == (
+        "2026-03-26T00:00:15Z"
     )
 
 
-def test_ingest_event_preserves_angle_bracket_content_in_review_summary(
+def test_ingest_event_dedupes_review_comment_enqueue_within_same_batch_window(
     tmp_path: Path,
 ) -> None:
-    event = ScmEvent(
+    first = ScmEvent(
         event_id="github:event-inline-comment-generics",
         provider="github",
         event_type="pull_request_review_comment",
@@ -909,27 +910,109 @@ def test_ingest_event_preserves_angle_bracket_content_in_review_summary(
         },
         raw_payload=None,
     )
+    second = ScmEvent(
+        **{
+            **first.to_dict(),
+            "event_id": "github:event-inline-comment-generics-2",
+            "received_at": "2026-03-26T00:00:13Z",
+            "payload": {
+                **first.payload,
+                "comment_id": "2846",
+                "body": "Also keep batching stable within the first 15 seconds.",
+            },
+        }
+    )
     binding = _binding()
+    journal = _JournalFake()
     service = ScmAutomationService(
         tmp_path,
-        event_store=_EventStoreFake(event),
+        event_store=_EventStoreFake(first, second),
         binding_resolver=_BindingResolverFake(binding),
         reaction_router=route_scm_reactions,
         reaction_state_store=_PermissiveReactionStateFake(),
-        journal=_JournalFake(),
+        journal=journal,
         publish_processor=_ProcessorFake(processed=[]),
     )
 
-    result = service.ingest_event(event.event_id)
+    first_result = service.ingest_event(first.event_id)
+    second_result = service.ingest_event(second.event_id)
 
-    notify_op = next(
+    first_enqueue = next(
         operation
-        for operation in result.publish_operations
-        if operation.operation_kind == "notify_chat"
+        for operation in first_result.publish_operations
+        if operation.operation_kind == "enqueue_managed_turn"
     )
-    assert "Response<T>" in notify_op.payload["message"]
-    assert "<foo>" in notify_op.payload["message"]
-    assert "<sub>" not in notify_op.payload["message"]
+    second_enqueue = next(
+        operation
+        for operation in second_result.publish_operations
+        if operation.operation_kind == "enqueue_managed_turn"
+    )
+    assert first_enqueue.operation_key == second_enqueue.operation_key
+    assert (
+        journal.create_calls.count(
+            (first_enqueue.operation_key, "enqueue_managed_turn")
+        )
+        == 2
+    )
+
+
+def test_handle_processed_operations_creates_truthful_review_comment_notice_on_success(
+    tmp_path: Path,
+) -> None:
+    state_store = ScmReactionStateStore(tmp_path)
+    state_store.mark_reaction_emitted(
+        binding_id="binding-1",
+        reaction_kind="review_comment:enqueue_managed_turn",
+        fingerprint="fp-inline",
+        event_id="github:event-inline-comment",
+        operation_key="scm:key-inline",
+    )
+    journal = _JournalFake()
+    service = ScmAutomationService(
+        tmp_path,
+        event_store=_EventStoreFake(),
+        binding_resolver=_BindingResolverFake(None),
+        reaction_router=_ReactionRouterFake([]),
+        reaction_state_store=state_store,
+        journal=journal,
+        publish_processor=_ProcessorFake(processed=[]),
+    )
+    succeeded = PublishOperation(
+        **{
+            **_operation(
+                operation_id="op-inline",
+                operation_key="scm:key-inline",
+                operation_kind="enqueue_managed_turn",
+                state="succeeded",
+            ).to_dict(),
+            "payload": {
+                "scm_reaction": {
+                    "binding_id": "binding-1",
+                    "reaction_kind": "review_comment",
+                    "reaction_state_kind": "review_comment:enqueue_managed_turn",
+                    "fingerprint": "fp-inline",
+                    "event_id": "github:event-inline-comment",
+                    "operation_kind": "enqueue_managed_turn",
+                    "repo_slug": "acme/widgets",
+                    "pr_number": 42,
+                    "thread_target_id": "thread-1",
+                }
+            },
+            "response": {
+                "status": "queued",
+            },
+        }
+    )
+
+    follow_ups = service._handle_processed_operations([succeeded])
+
+    assert len(follow_ups) == 1
+    assert follow_ups[0].operation_kind == "notify_chat"
+    assert follow_ups[0].payload["thread_target_id"] == "thread-1"
+    assert (
+        "Queued the latest PR review batch for acme/widgets#42."
+        in follow_ups[0].payload["message"]
+    )
 
 
 def test_handle_processed_operations_uses_reaction_state_kind_tracking_key(
