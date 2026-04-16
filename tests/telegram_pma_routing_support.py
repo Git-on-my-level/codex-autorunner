@@ -66,7 +66,7 @@ from codex_autorunner.integrations.telegram.handlers.commands_runtime import (
     TelegramCommandHandlers,
     _RuntimeStub,
 )
-from codex_autorunner.integrations.telegram.handlers.messages import (
+from codex_autorunner.integrations.telegram.handlers.media_ingress import (
     handle_media_message,
 )
 from codex_autorunner.integrations.telegram.handlers.selections import SelectionState
@@ -649,10 +649,14 @@ async def test_telegram_text_messages_route_through_orchestration_ingress(
             captured["callbacks"] = set(kwargs)
             return SimpleNamespace(route="thread", thread_result=None)
 
+    import codex_autorunner.integrations.telegram.handlers.media_ingress as _mi_mod
+    import codex_autorunner.integrations.telegram.handlers.surface_ingress as _si_mod
+
     monkeypatch.setattr(
-        telegram_messages_module,
-        "build_surface_orchestration_ingress",
-        lambda **_: _IngressStub(),
+        _si_mod, "build_surface_orchestration_ingress", lambda **_: _IngressStub()
+    )
+    monkeypatch.setattr(
+        _mi_mod, "build_surface_orchestration_ingress", lambda **_: _IngressStub()
     )
 
     message = TelegramMessage(
@@ -902,10 +906,10 @@ async def test_telegram_media_messages_route_through_orchestration_ingress(
             captured["callbacks"] = set(kwargs)
             return SimpleNamespace(route="thread", thread_result=None)
 
+    import codex_autorunner.integrations.telegram.handlers.media_ingress as _mi_mod
+
     monkeypatch.setattr(
-        telegram_messages_module,
-        "build_surface_orchestration_ingress",
-        lambda **_: _IngressStub(),
+        _mi_mod, "build_surface_orchestration_ingress", lambda **_: _IngressStub()
     )
 
     message = TelegramMessage(
@@ -1251,10 +1255,10 @@ async def test_message_routing_submits_thread_work_through_orchestration_ingress
             await submit_thread_message(request)
             return SimpleNamespace(route="thread", thread_result=None)
 
+    import codex_autorunner.integrations.telegram.handlers.surface_ingress as _si_mod
+
     monkeypatch.setattr(
-        telegram_messages_module,
-        "build_surface_orchestration_ingress",
-        lambda **_: _FakeIngress(),
+        _si_mod, "build_surface_orchestration_ingress", lambda **_: _FakeIngress()
     )
 
     handler = _Handler()
@@ -2870,17 +2874,18 @@ async def test_resolve_telegram_managed_thread_reuses_archived_thread(
     )
     orchestration_service.archive_thread_target(current_thread.thread_target_id)
 
-    _service, resolved = (
-        await execution_commands_module._resolve_telegram_managed_thread(
-            handler,
-            surface_key="telegram:-1001:101",
-            workspace_root=workspace.resolve(),
-            agent="codex",
-            repo_id="repo-1",
-            mode="pma",
-            pma_enabled=True,
-            allow_new_thread=False,
-        )
+    (
+        _service,
+        resolved,
+    ) = await execution_commands_module._resolve_telegram_managed_thread(
+        handler,
+        surface_key="telegram:-1001:101",
+        workspace_root=workspace.resolve(),
+        agent="codex",
+        repo_id="repo-1",
+        mode="pma",
+        pma_enabled=True,
+        allow_new_thread=False,
     )
     assert resolved is not None
     assert resolved.thread_target_id == current_thread.thread_target_id
@@ -2936,18 +2941,19 @@ async def test_resolve_telegram_managed_thread_ignores_backend_thread_id_binding
         ),
     )
 
-    _service, resolved = (
-        await execution_commands_module._resolve_telegram_managed_thread(
-            SimpleNamespace(_logger=logging.getLogger("test")),
-            surface_key="telegram:-1001:101",
-            workspace_root=workspace.resolve(),
-            agent="codex",
-            repo_id="repo-1",
-            mode="pma",
-            pma_enabled=True,
-            backend_thread_id="stale-backend",
-            allow_new_thread=False,
-        )
+    (
+        _service,
+        resolved,
+    ) = await execution_commands_module._resolve_telegram_managed_thread(
+        SimpleNamespace(_logger=logging.getLogger("test")),
+        surface_key="telegram:-1001:101",
+        workspace_root=workspace.resolve(),
+        agent="codex",
+        repo_id="repo-1",
+        mode="pma",
+        pma_enabled=True,
+        backend_thread_id="stale-backend",
+        allow_new_thread=False,
     )
 
     assert resolved is not None
@@ -4210,10 +4216,10 @@ async def test_repo_message_ingress_callback_reaches_orchestrated_thread_executi
             await kwargs["submit_thread_message"](request)
             return SimpleNamespace(route="thread", thread_result=None)
 
+    import codex_autorunner.integrations.telegram.handlers.surface_ingress as _si_mod2
+
     monkeypatch.setattr(
-        telegram_messages_module,
-        "build_surface_orchestration_ingress",
-        lambda **_: _IngressStub(),
+        _si_mod2, "build_surface_orchestration_ingress", lambda **_: _IngressStub()
     )
 
     message = TelegramMessage(
@@ -4414,10 +4420,10 @@ async def test_repo_message_ingress_callback_reaches_hermes_orchestrated_thread_
             await kwargs["submit_thread_message"](request)
             return SimpleNamespace(route="thread", thread_result=None)
 
+    import codex_autorunner.integrations.telegram.handlers.surface_ingress as _si_mod3
+
     monkeypatch.setattr(
-        telegram_messages_module,
-        "build_surface_orchestration_ingress",
-        lambda **_: _IngressStub(),
+        _si_mod3, "build_surface_orchestration_ingress", lambda **_: _IngressStub()
     )
 
     message = TelegramMessage(
@@ -5046,20 +5052,21 @@ async def test_sync_telegram_thread_binding_archives_after_lost_backend_recovery
         ),
     )
     try:
-        _service, thread = (
-            await execution_commands_module._sync_telegram_thread_binding(
-                handlers,
-                surface_key="topic-1",
-                workspace_root=workspace,
-                agent="codex",
-                repo_id="repo-1",
-                resource_kind="repo",
-                resource_id="repo-1",
-                backend_thread_id="backend-2",
-                mode="repo",
-                pma_enabled=False,
-                replace_existing=True,
-            )
+        (
+            _service,
+            thread,
+        ) = await execution_commands_module._sync_telegram_thread_binding(
+            handlers,
+            surface_key="topic-1",
+            workspace_root=workspace,
+            agent="codex",
+            repo_id="repo-1",
+            resource_kind="repo",
+            resource_id="repo-1",
+            backend_thread_id="backend-2",
+            mode="repo",
+            pma_enabled=False,
+            replace_existing=True,
         )
     finally:
         monkeypatch.undo()
@@ -5425,20 +5432,21 @@ async def test_resolve_telegram_managed_thread_rejects_rebind_when_runtime_missi
         ),
     )
     try:
-        _service, resolved_thread = (
-            await execution_commands_module._resolve_telegram_managed_thread(
-                handlers,
-                surface_key="topic-1",
-                workspace_root=workspace,
-                agent="opencode",
-                repo_id="repo-1",
-                resource_kind="repo",
-                resource_id="repo-1",
-                mode="repo",
-                pma_enabled=False,
-                backend_thread_id="backend-new",
-                allow_new_thread=True,
-            )
+        (
+            _service,
+            resolved_thread,
+        ) = await execution_commands_module._resolve_telegram_managed_thread(
+            handlers,
+            surface_key="topic-1",
+            workspace_root=workspace,
+            agent="opencode",
+            repo_id="repo-1",
+            resource_kind="repo",
+            resource_id="repo-1",
+            mode="repo",
+            pma_enabled=False,
+            backend_thread_id="backend-new",
+            allow_new_thread=True,
         )
     finally:
         monkeypatch.undo()
@@ -5583,18 +5591,19 @@ async def test_reset_telegram_thread_binding_archives_after_lost_backend_recover
         ),
     )
     try:
-        had_previous, new_thread_id = (
-            await execution_commands_module._reset_telegram_thread_binding(
-                handlers,
-                surface_key="topic-1",
-                workspace_root=workspace,
-                agent="codex",
-                repo_id="repo-1",
-                resource_kind="repo",
-                resource_id="repo-1",
-                mode="pma",
-                pma_enabled=True,
-            )
+        (
+            had_previous,
+            new_thread_id,
+        ) = await execution_commands_module._reset_telegram_thread_binding(
+            handlers,
+            surface_key="topic-1",
+            workspace_root=workspace,
+            agent="codex",
+            repo_id="repo-1",
+            resource_kind="repo",
+            resource_id="repo-1",
+            mode="pma",
+            pma_enabled=True,
         )
     finally:
         monkeypatch.undo()

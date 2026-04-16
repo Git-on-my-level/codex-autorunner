@@ -375,8 +375,10 @@ class TestOrdinaryTurnRoutingInvariants:
                 await kwargs["submit_thread_message"](request)
                 return SimpleNamespace(route="thread", thread_result=None)
 
+        import codex_autorunner.integrations.telegram.handlers.surface_ingress as _si_mod
+
         monkeypatch.setattr(
-            telegram_messages_module,
+            _si_mod,
             "build_surface_orchestration_ingress",
             lambda **_: _IngressStub(),
         )
@@ -456,8 +458,10 @@ class TestOrdinaryTurnRoutingInvariants:
                 captured["workspace_root"] = request.workspace_root
                 return SimpleNamespace(route="thread", thread_result=None)
 
+        import codex_autorunner.integrations.telegram.handlers.media_ingress as _mi_mod
+
         monkeypatch.setattr(
-            telegram_messages_module,
+            _mi_mod,
             "build_surface_orchestration_ingress",
             lambda **_: _IngressStub(),
         )

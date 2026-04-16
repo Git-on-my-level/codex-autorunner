@@ -30,7 +30,8 @@ from ...config import TelegramMediaCandidate
 from ...forwarding import format_forwarded_telegram_message_text
 from ...helpers import _path_within, format_public_error
 from ...state import PendingVoiceRecord, TelegramTopicRecord
-from .. import messages as message_handlers
+from ..media_ingress import record_with_media_workspace as _record_with_media_workspace
+from ..media_ingress import select_file_candidate, select_image_candidate
 from .shared import FILES_HINT_TEMPLATE, TelegramCommandSupportMixin
 
 PMA_FILES_HINT_TEMPLATE = (
@@ -664,7 +665,7 @@ class FilesCommands(TelegramCommandSupportMixin):
             first_msg.chat_id, first_msg.thread_id
         )
         record = await self._router.get_topic(topic_key)
-        record, pma_error = message_handlers._record_with_media_workspace(self, record)
+        record, pma_error = _record_with_media_workspace(self, record)
         if pma_error:
             await self._send_message(
                 first_msg.chat_id,
@@ -706,8 +707,8 @@ class FilesCommands(TelegramCommandSupportMixin):
         saved_image_inbox_info: list[tuple[str, str, int]] = []
         saved_file_info: list[tuple[str, str, int]] = []
         for msg in context.sorted_messages:
-            image_candidate = message_handlers.select_image_candidate(msg)
-            file_candidate = message_handlers.select_file_candidate(msg)
+            image_candidate = select_image_candidate(msg)
+            file_candidate = select_file_candidate(msg)
             if not image_candidate and not file_candidate:
                 stats.unsupported += 1
                 stats.failed_count += 1
@@ -1487,7 +1488,7 @@ class FilesCommands(TelegramCommandSupportMixin):
             return
         key = await self._resolve_topic_key(message.chat_id, message.thread_id)
         record = await self._router.ensure_topic(message.chat_id, message.thread_id)
-        record, pma_error = message_handlers._record_with_media_workspace(self, record)
+        record, pma_error = _record_with_media_workspace(self, record)
         if pma_error:
             await self._send_message(
                 message.chat_id,

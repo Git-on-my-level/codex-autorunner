@@ -105,6 +105,7 @@ from .handlers import messages as message_handlers
 from .handlers.approvals import TelegramApprovalHandlers
 from .handlers.commands import build_command_specs
 from .handlers.commands_runtime import TelegramCommandHandlers
+from .handlers.media_ingress import MediaBatchBuffer as _MediaBatchBuffer
 from .handlers.messages import _CoalescedBuffer
 from .handlers.questions import TelegramQuestionHandlers
 from .handlers.selections import TelegramSelectionHandlers
@@ -416,7 +417,7 @@ class TelegramBotService(
         self._compact_pending: dict[str, CompactState] = {}
         self._coalesced_buffers: dict[str, _CoalescedBuffer] = {}
         self._coalesce_locks: dict[str, asyncio.Lock] = {}
-        self._media_batch_buffers: dict[str, message_handlers._MediaBatchBuffer] = {}
+        self._media_batch_buffers: dict[str, _MediaBatchBuffer] = {}
         self._media_batch_locks: dict[str, asyncio.Lock] = {}
         self._outbox_inflight: set[str] = set()
         self._outbox_lock: Optional[asyncio.Lock] = None
