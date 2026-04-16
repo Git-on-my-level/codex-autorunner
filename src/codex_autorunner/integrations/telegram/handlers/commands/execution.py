@@ -1108,28 +1108,35 @@ async def _run_telegram_managed_thread_turn(
 
     async def _after_completion(_flow: Any) -> None:
         nonlocal intermediate_response
-        if registered_turn_key is not None:
-            render_turn_progress_summary = getattr(
-                handlers, "_render_turn_progress_summary", None
-            )
-            if callable(render_turn_progress_summary):
-                intermediate_response = render_turn_progress_summary(
-                    registered_turn_key
+        try:
+            turn_delivery_state = _TurnDeliveryState()
+            finalize_turn_progress = getattr(handlers, "_finalize_turn_progress", None)
+            if callable(finalize_turn_progress):
+                finalize_turn_progress(
+                    registered_turn_key,
+                    turn_delivery_state,
                 )
             else:
-                render_final_turn_progress = getattr(
-                    handlers, "_render_final_turn_progress", None
-                )
-                if callable(render_final_turn_progress):
-                    intermediate_response = render_final_turn_progress(
-                        registered_turn_key
+                if registered_turn_key is None:
+                    turn_delivery_state.capture_progress_summary(
+                        handlers,
+                        registered_turn_key,
                     )
-            handlers._turn_contexts.pop(registered_turn_key, None)
-            handlers._clear_thinking_preview(registered_turn_key)
-            handlers._clear_turn_progress(registered_turn_key)
-        runtime.current_turn_id = None
-        runtime.current_turn_key = None
-        runtime.interrupt_requested = False
+                else:
+                    try:
+                        turn_delivery_state.capture_progress_summary(
+                            handlers,
+                            registered_turn_key,
+                        )
+                    finally:
+                        handlers._turn_contexts.pop(registered_turn_key, None)
+                        handlers._clear_thinking_preview(registered_turn_key)
+                        handlers._clear_turn_progress(registered_turn_key)
+            intermediate_response = turn_delivery_state.intermediate_response
+        finally:
+            runtime.current_turn_id = None
+            runtime.current_turn_key = None
+            runtime.interrupt_requested = False
 
     async def _on_finalized(
         _flow: Any,
@@ -1590,12 +1597,15 @@ class ExecutionCommands(TelegramCommandSupportMixin):
         turn_key: Optional[TurnKey],
         turn_delivery_state: _TurnDeliveryState,
     ) -> None:
-        turn_delivery_state.capture_progress_summary(self, turn_key)
         if turn_key is None:
+            turn_delivery_state.capture_progress_summary(self, turn_key)
             return
-        self._turn_contexts.pop(turn_key, None)
-        self._clear_thinking_preview(turn_key)
-        self._clear_turn_progress(turn_key)
+        try:
+            turn_delivery_state.capture_progress_summary(self, turn_key)
+        finally:
+            self._turn_contexts.pop(turn_key, None)
+            self._clear_thinking_preview(turn_key)
+            self._clear_turn_progress(turn_key)
 
     async def _log_queue_wait_and_update_placeholder(
         self,
