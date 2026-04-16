@@ -380,6 +380,56 @@ class _TurnCompletionProgressHarness(TelegramNotificationHandlers):
         self.cleared.append(turn_key)
 
 
+class _HeartbeatExpiryHarness(TelegramNotificationHandlers):
+    def __init__(self) -> None:
+        self._config = SimpleNamespace(
+            progress_stream=SimpleNamespace(
+                enabled=True,
+                min_edit_interval_seconds=0.5,
+                max_actions=8,
+                max_output_chars=400,
+            )
+        )
+        self._logger = logging.getLogger("test.telegram.heartbeat_expiry")
+        self._turn_key = ("thread-1", "turn-1")
+        self._turn_progress_trackers: dict[tuple[str, str], Any] = {
+            self._turn_key: TurnProgressTracker(
+                started_at=0.0,
+                agent="codex",
+                model="mock-model",
+                label="working",
+                max_actions=8,
+                max_output_chars=400,
+            )
+        }
+        self._turn_progress_rendered: dict[tuple[str, str], str] = {}
+        self._turn_progress_updated_at: dict[tuple[str, str], float] = {}
+        self._turn_progress_backoff_until: dict[tuple[str, str], float] = {}
+        self._turn_progress_failure_streaks: dict[tuple[str, str], int] = {}
+        self._turn_progress_suppressed_counts: dict[tuple[str, str], int] = {}
+        self._turn_progress_tasks: dict[tuple[str, str], Any] = {}
+        self._turn_progress_heartbeat_tasks: dict[tuple[str, str], Any] = {
+            self._turn_key: object()
+        }
+        self._turn_progress_locks: dict[tuple[str, str], Any] = {}
+        self._turn_contexts: dict[tuple[str, str], Any] = {
+            self._turn_key: SimpleNamespace(
+                chat_id=1,
+                thread_id=2,
+                topic_key="topic-1",
+                placeholder_message_id=100,
+            )
+        }
+        projector = self._get_turn_progress_projector(self._turn_key, create=True)
+        assert projector is not None
+        projector.last_rendered = "still working"
+        projector.last_render_at = 0.0
+        self.scheduled: list[tuple[str, str]] = []
+
+    async def _schedule_progress_edit(self, turn_key: tuple[str, str]) -> None:
+        self.scheduled.append(turn_key)
+
+
 class _OutputDeltaProgressHarness(TelegramNotificationHandlers):
     def __init__(self) -> None:
         self._turn_key = ("turn-1", "thread-1")
@@ -600,6 +650,42 @@ async def test_turn_completed_prunes_duplicate_terminal_output_from_progress() -
     assert tracker.finalized is True
     assert harness.edits == [(key, True, "final")]
     assert harness.cleared == [key]
+
+
+@pytest.mark.anyio
+async def test_turn_progress_heartbeat_expires_after_max_lifetime(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = _HeartbeatExpiryHarness()
+    key = harness._turn_key
+    monotonic_values = [0.0, 5.0, 1805.0]
+
+    async def _fake_sleep(_seconds: float) -> None:
+        return None
+
+    def _fake_monotonic() -> float:
+        if monotonic_values:
+            return monotonic_values.pop(0)
+        return 1805.0
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.telegram.notifications.time.monotonic",
+        _fake_monotonic,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.telegram.notifications.asyncio.sleep",
+        _fake_sleep,
+    )
+
+    with caplog.at_level(logging.WARNING, logger=harness._logger.name):
+        await harness._turn_progress_heartbeat(key)
+
+    assert harness.scheduled == [key]
+    assert key not in harness._turn_progress_heartbeat_tasks
+    assert '"event":"telegram.progress.heartbeat_expired"' in caplog.text
+    assert '"turn_id":"turn-1"' in caplog.text
+    assert '"backend_thread_id":"thread-1"' in caplog.text
 
 
 @pytest.mark.anyio

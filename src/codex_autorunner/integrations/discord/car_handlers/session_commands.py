@@ -1341,7 +1341,7 @@ async def handle_car_interrupt(
     interaction_token: str,
     *,
     channel_id: str,
-    active_turn_text: str = "Stopping current turn...",
+    active_turn_text: str = "Interrupt succeeded.",
     cancel_queued: bool = True,
     allow_promoted_no_active_success: bool = False,
     thread_target_id: Optional[str] = None,
@@ -1460,11 +1460,37 @@ async def handle_car_interrupt(
         text = format_discord_message("No active turn to interrupt.")
         await service.respond_ephemeral(interaction_id, interaction_token, text)
         return
-    deferred = await ensure_ephemeral_response_deferred(
-        service,
-        interaction_id,
-        interaction_token,
-    )
+    respond_via_component_update = source == "component"
+    if respond_via_component_update:
+        deferred = await ensure_component_response_deferred(
+            service,
+            interaction_id,
+            interaction_token,
+        )
+    else:
+        deferred = await ensure_ephemeral_response_deferred(
+            service,
+            interaction_id,
+            interaction_token,
+        )
+
+    async def _send_interrupt_response(text: str) -> None:
+        if respond_via_component_update:
+            await service.send_or_update_component_message(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=text,
+                components=[],
+            )
+            return
+        await service.send_or_respond_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text=text,
+        )
+
     get_running_execution = getattr(
         orchestration_service, "get_running_execution", None
     )
@@ -1501,12 +1527,7 @@ async def handle_car_interrupt(
             note=note,
         )
         text = format_discord_message("This progress message belongs to an older turn.")
-        await service.send_or_respond_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            deferred=deferred,
-            text=text,
-        )
+        await _send_interrupt_response(text)
         return
     try:
         operation_store = None
@@ -1549,21 +1570,11 @@ async def handle_car_interrupt(
                     thread_target_id=current_thread.thread_target_id,
                 )
             text = format_discord_message("Interrupt failed. Please try again.")
-            await service.send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=text,
-            )
+            await _send_interrupt_response(text)
             return
         if interrupt_outcome.state == SharedInterruptState.STILL_STOPPING:
             text = format_discord_message("Still stopping current turn...")
-            await service.send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=text,
-            )
+            await _send_interrupt_response(text)
             return
         if (
             not interrupted_active
@@ -1572,12 +1583,7 @@ async def handle_car_interrupt(
         ):
             if allow_promoted_no_active_success:
                 text = format_discord_message("Queued request moved to the front.")
-                await service.send_or_respond_ephemeral(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    deferred=deferred,
-                    text=text,
-                )
+                await _send_interrupt_response(text)
                 return
             get_execution = getattr(orchestration_service, "get_execution", None)
             get_latest_execution = getattr(
@@ -1616,15 +1622,10 @@ async def handle_car_interrupt(
                 note=note,
             )
             text = format_discord_message("No active turn to interrupt.")
-            await service.send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=(
-                    format_discord_message("Current turn already finished.")
-                    if interrupt_outcome.state == SharedInterruptState.ALREADY_FINISHED
-                    else text
-                ),
+            await _send_interrupt_response(
+                format_discord_message("Current turn already finished.")
+                if interrupt_outcome.state == SharedInterruptState.ALREADY_FINISHED
+                else text
             )
             return
         if interrupted_active:
@@ -1664,12 +1665,7 @@ async def handle_car_interrupt(
                 queued_text_template="Cancelled {count} queued turn(s).",
             )
         )
-        await service.send_or_respond_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            deferred=deferred,
-            text=text,
-        )
+        await _send_interrupt_response(text)
 
     except (RuntimeError, ConnectionError, OSError, ValueError) as exc:
         if progress_reuse_source_message_id or progress_reuse_acknowledgement:
@@ -1693,12 +1689,7 @@ async def handle_car_interrupt(
             exc=exc,
         )
         text = format_discord_message("Interrupt failed. Please try again.")
-        await service.send_or_respond_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            deferred=deferred,
-            text=text,
-        )
+        await _send_interrupt_response(text)
 
 
 # Keep explicit module-level references so dead-code heuristics treat the

@@ -158,6 +158,24 @@ def test_turn_delivery_state_falls_back_to_final_renderer() -> None:
     assert state.intermediate_response == "Interrupted."
 
 
+def test_finalize_turn_progress_clears_state_even_if_summary_capture_fails() -> None:
+    class _FailingExecutionProgressHandler(_ExecutionProgressHandler):
+        def _render_turn_progress_summary(self, _turn_key: tuple[str, str]) -> str:
+            raise RuntimeError("disk I/O error")
+
+    handler = _FailingExecutionProgressHandler()
+    state = _TurnDeliveryState()
+
+    with pytest.raises(RuntimeError, match="disk I/O error"):
+        handler._finalize_turn_progress(("thread-1", "turn-1"), state)
+
+    assert ("thread-1", "turn-1") not in handler._turn_contexts
+    assert handler.cleared == [
+        ("thinking", ("thread-1", "turn-1")),
+        ("progress", ("thread-1", "turn-1")),
+    ]
+
+
 def test_telegram_notice_context_round_trips_payload() -> None:
     context = TelegramNoticeContext(chat_id=10, thread_id=20, reply_to=30)
 

@@ -9241,7 +9241,7 @@ class DiscordBotService:
         interaction_token: str,
         *,
         channel_id: str,
-        active_turn_text: str = "Stopping current turn...",
+        active_turn_text: str = "Interrupt succeeded.",
         cancel_queued: bool = True,
         allow_promoted_no_active_success: bool = False,
         thread_target_id: Optional[str] = None,

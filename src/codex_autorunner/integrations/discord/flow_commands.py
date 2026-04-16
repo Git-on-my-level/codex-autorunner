@@ -302,6 +302,81 @@ def _format_archived_flow_status_text(
     return "\n".join(lines)
 
 
+def _archived_flow_status_summary_from_archive_result(
+    workspace_root: Path,
+    summary: dict[str, Any],
+) -> Optional[dict[str, Any]]:
+    run_id_value = summary.get("run_id")
+    if not isinstance(run_id_value, str) or not run_id_value.strip():
+        return None
+    normalized_run_id = _normalize_run_id(run_id_value)
+    if normalized_run_id is None:
+        return None
+
+    archive_dir_value = summary.get("archive_dir")
+    if isinstance(archive_dir_value, str) and archive_dir_value.strip():
+        archive_root = Path(archive_dir_value)
+    else:
+        archive_root = flow_run_archive_root(workspace_root, normalized_run_id)
+
+    has_tickets = bool(summary.get("archived_tickets"))
+    has_runs = bool(summary.get("archived_runs"))
+    has_contextspace = bool(summary.get("archived_contextspace"))
+    has_flow_state = bool(summary.get("archived_flow_state"))
+
+    artifact_children: list[Path] = []
+    if archive_root.exists() and archive_root.is_dir():
+        artifact_children = [
+            child
+            for child in archive_root.iterdir()
+            if child.is_dir()
+            and (
+                child.name == "archived_tickets"
+                or child.name == "contextspace"
+                or child.name.startswith("archived_runs")
+                or child.name.startswith("flow_state")
+            )
+        ]
+        has_tickets = has_tickets or any(
+            child.name == "archived_tickets" for child in artifact_children
+        )
+        has_runs = has_runs or any(
+            child.name.startswith("archived_runs") for child in artifact_children
+        )
+        has_contextspace = has_contextspace or any(
+            child.name == "contextspace" for child in artifact_children
+        )
+        has_flow_state = has_flow_state or any(
+            child.name.startswith("flow_state") for child in artifact_children
+        )
+
+    mtime_candidates = []
+    for child in artifact_children:
+        try:
+            mtime_candidates.append(child.stat().st_mtime)
+        except OSError:
+            continue
+    archived_at = None
+    if mtime_candidates:
+        archived_at = datetime.fromtimestamp(
+            max(mtime_candidates), tz=timezone.utc
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    try:
+        archive_path = archive_root.relative_to(workspace_root).as_posix()
+    except ValueError:
+        archive_path = str(archive_root)
+    return {
+        "run_id": normalized_run_id,
+        "archive_path": archive_path,
+        "archived_at": archived_at,
+        "has_tickets": has_tickets,
+        "has_runs": has_runs,
+        "has_contextspace": has_contextspace,
+        "has_flow_state": has_flow_state,
+    }
+
+
 def _format_flow_archive_completion_text(summary: dict[str, Any]) -> str:
     return (
         f"Archived run {summary['run_id']} "
@@ -2434,17 +2509,45 @@ async def handle_flow_button(
             )
             return
 
-        await handle_flow_status(
-            service,
-            interaction_id,
-            interaction_token,
-            workspace_root=workspace_root,
-            options={"run_id": summary["run_id"]},
-            channel_id=channel_id,
-            guild_id=guild_id,
-            update_message=True,
-            prefix=_format_flow_archive_completion_text(summary),
-        )
+        archive_prefix = _format_flow_archive_completion_text(summary)
+        try:
+            await handle_flow_status(
+                service,
+                interaction_id,
+                interaction_token,
+                workspace_root=workspace_root,
+                options={"run_id": summary["run_id"]},
+                channel_id=channel_id,
+                guild_id=guild_id,
+                update_message=True,
+                prefix=archive_prefix,
+            )
+        except DiscordTransientError as exc:
+            archived_summary = _archived_flow_status_summary_from_archive_result(
+                workspace_root,
+                summary,
+            )
+            if archived_summary is None:
+                raise
+            log_event(
+                service._logger,
+                logging.WARNING,
+                "discord.flow.archive.status_refresh_failed",
+                run_id=summary["run_id"],
+                workspace_root=str(workspace_root),
+                exc=exc,
+            )
+            await update_runtime_component_message(
+                service,
+                interaction_id,
+                interaction_token,
+                _format_archived_flow_status_text(
+                    summary["run_id"],
+                    archived_summary,
+                    prefix=archive_prefix,
+                ),
+                components=[],
+            )
         return
     elif action == "restart":
         await defer_and_update_runtime_component_message(

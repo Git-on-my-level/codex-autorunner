@@ -3918,25 +3918,36 @@ button.icon-btn {
   display: flex;
   align-items: center;
   gap: 6px;
-  width: 100%;
   padding: 4px 8px;
   background: rgba(255, 255, 255, 0.02);
-  border: 0;
-  appearance: none;
   user-select: none;
   border-bottom: 1px solid var(--border);
+}
+
+.ticket-live-output-panel-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  appearance: none;
+  background: transparent;
   color: inherit;
   cursor: pointer;
   text-align: left;
   text-transform: none;
   letter-spacing: normal;
+  font: inherit;
 }
 
-.ticket-live-output-header:hover {
-  background: rgba(255, 255, 255, 0.04);
+.ticket-live-output-panel-toggle:hover {
+  background: rgba(255, 255, 255, 0.02);
 }
 
-.ticket-live-output-header:focus-visible {
+.ticket-live-output-panel-toggle:focus-visible {
   outline: 1px solid rgba(108, 245, 216, 0.45);
   outline-offset: -1px;
 }
@@ -3977,18 +3988,62 @@ button.icon-btn {
   animation: pulse-running 1.5s ease-in-out infinite;
 }
 
-.ticket-live-output-view-toggle {
-  transition: background 0.12s ease;
+/* Summary vs full output toggle (⋯ / ≡) */
+.ticket-live-output-detail-toggle {
+  background: none;
+  border: 1px solid rgba(108, 245, 216, 0.25);
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+  color: var(--accent);
+  cursor: pointer;
+  transition: all 0.12s ease;
+  flex-shrink: 0;
+  line-height: 1.2;
+  text-transform: none;
+  letter-spacing: normal;
 }
 
-.ticket-live-output-view-toggle.active {
-  background: rgba(255, 255, 255, 0.03);
+.ticket-live-output-detail-toggle:hover {
+  background: rgba(108, 245, 216, 0.1);
+  border-color: rgba(108, 245, 216, 0.4);
+}
+
+.ticket-live-output-detail-toggle.active {
+  background: rgba(108, 245, 216, 0.15);
+  border-color: var(--accent);
 }
 
 .ticket-live-output-chevron {
   font-size: 11px;
   color: var(--accent);
   flex-shrink: 0;
+}
+
+/* Compact summary - max 3 lines */
+.ticket-live-output-compact {
+  margin: 0;
+  padding: 6px 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #a8adb8;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  max-height: calc(3 * 1.4em + 12px);
+  /* 3 lines + padding */
+}
+
+.ticket-live-output-compact:empty::before {
+  content: "Ready. Agent output will appear here.";
+  color: var(--muted);
+  font-style: italic;
+}
+
+.ticket-live-output-compact.hidden {
+  display: none;
 }
 
 .ticket-live-output-detail {

@@ -694,13 +694,18 @@
           </div>
           <!-- Live Agent Output Panel -->
           <div class="ticket-live-output-panel collapsed" id="ticket-live-output-panel">
-            <button class="ticket-live-output-header ticket-live-output-view-toggle" id="ticket-live-output-view-toggle" type="button"
-              aria-expanded="false" title="Show agent output">
-              <span class="ticket-live-output-title">Agent</span>
-              <span class="ticket-live-output-status" id="ticket-live-output-status">Disconnected</span>
-              <span class="ticket-live-output-spacer"></span>
-              <span class="ticket-live-output-chevron" id="ticket-live-output-chevron" aria-hidden="true">▾</span>
-            </button>
+            <div class="ticket-live-output-header">
+              <button class="ticket-live-output-panel-toggle" id="ticket-live-output-panel-toggle" type="button"
+                aria-expanded="false" title="Show agent output">
+                <span class="ticket-live-output-title">Agent</span>
+                <span class="ticket-live-output-status" id="ticket-live-output-status">Disconnected</span>
+                <span class="ticket-live-output-spacer"></span>
+                <span class="ticket-live-output-chevron" id="ticket-live-output-chevron" aria-hidden="true">▾</span>
+              </button>
+              <button class="ticket-live-output-detail-toggle" id="ticket-live-output-detail-toggle" type="button"
+                title="Show full output">⋯</button>
+            </div>
+            <pre class="ticket-live-output-compact" id="ticket-live-output-compact"></pre>
             <div class="ticket-live-output-detail hidden" id="ticket-live-output-detail">
               <div class="ticket-live-output-events hidden" id="ticket-live-output-events">
                 <div class="ticket-live-output-events-header">

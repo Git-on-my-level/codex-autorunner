@@ -18,6 +18,7 @@ from ..chat.managed_thread_progress_projector import (
 )
 from .constants import (
     PROGRESS_HEARTBEAT_INTERVAL_SECONDS,
+    PROGRESS_HEARTBEAT_MAX_SECONDS,
     STREAM_PREVIEW_PREFIX,
     TELEGRAM_MAX_MESSAGE_LENGTH,
     THINKING_PREVIEW_MAX_LEN,
@@ -46,6 +47,13 @@ _DEGRADED_PROGRESS_MARKERS = (
 _DEGRADED_PROGRESS_MIN_EDIT_INTERVAL_SECONDS = 30.0
 _PROGRESS_EDIT_FAILURE_INITIAL_BACKOFF_SECONDS = 15.0
 _PROGRESS_EDIT_FAILURE_MAX_BACKOFF_SECONDS = 120.0
+
+
+def _turn_log_fields(turn_key: tuple[str, str]) -> dict[str, str]:
+    return {
+        "backend_thread_id": turn_key[0],
+        "turn_id": turn_key[1],
+    }
 
 
 class TelegramNotificationHandlers:
@@ -210,8 +218,7 @@ class TelegramNotificationHandlers:
             chat_id=getattr(ctx, "chat_id", None),
             thread_id=getattr(ctx, "thread_id", None),
             topic_key=getattr(ctx, "topic_key", None),
-            turn_id=turn_key[0],
-            backend_thread_id=turn_key[1],
+            **_turn_log_fields(turn_key),
             delay_seconds=round(delay, 3),
             failure_streak=streak,
             degraded=degraded,
@@ -241,8 +248,7 @@ class TelegramNotificationHandlers:
                 self._logger,
                 logging.INFO,
                 "telegram.progress.edit_recovered",
-                turn_id=turn_key[0],
-                backend_thread_id=turn_key[1],
+                **_turn_log_fields(turn_key),
                 failure_streak=streak,
                 suppressed_edits=suppressed_count,
             )
@@ -891,9 +897,23 @@ class TelegramNotificationHandlers:
             self._turn_progress_tasks.pop(turn_key, None)
 
     async def _turn_progress_heartbeat(self, turn_key: tuple[str, str]) -> None:
+        heartbeat_started_at = time.monotonic()
         try:
             while True:
                 await asyncio.sleep(PROGRESS_HEARTBEAT_INTERVAL_SECONDS)
+                now = time.monotonic()
+                if (
+                    PROGRESS_HEARTBEAT_MAX_SECONDS > 0
+                    and (now - heartbeat_started_at) >= PROGRESS_HEARTBEAT_MAX_SECONDS
+                ):
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "telegram.progress.heartbeat_expired",
+                        **_turn_log_fields(turn_key),
+                        max_seconds=PROGRESS_HEARTBEAT_MAX_SECONDS,
+                    )
+                    return
                 tracker = self._turn_progress_trackers.get(turn_key)
                 projector = TelegramNotificationHandlers._get_turn_progress_projector(
                     self,
@@ -902,7 +922,7 @@ class TelegramNotificationHandlers:
                 )
                 if tracker is None or projector is None or tracker.finalized:
                     return
-                if not projector.should_emit_heartbeat(now=time.monotonic()):
+                if not projector.should_emit_heartbeat(now=now):
                     continue
                 ctx = self._turn_contexts.get(turn_key)
                 if ctx is None or ctx.placeholder_message_id is None:
