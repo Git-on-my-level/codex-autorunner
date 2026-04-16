@@ -12,6 +12,7 @@ from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.orchestration import ORCHESTRATION_SCHEMA_VERSION
 from codex_autorunner.integrations.discord.config import (
     DiscordBotConfig,
+    DiscordBotDispatchConfig,
     DiscordBotShellConfig,
     DiscordCommandRegistration,
 )
@@ -99,6 +100,7 @@ def _config(
     shell_max_output_chars: int = 3800,
     max_message_length: int = 2000,
     message_overflow: str = "split",
+    ack_budget_ms: int = 10_000,
 ) -> DiscordBotConfig:
     return DiscordBotConfig(
         root=root,
@@ -120,6 +122,7 @@ def _config(
         max_message_length=max_message_length,
         message_overflow=message_overflow,
         pma_enabled=pma_enabled,
+        dispatch=DiscordBotDispatchConfig(ack_budget_ms=ack_budget_ms),
         shell=DiscordBotShellConfig(
             enabled=shell_enabled,
             timeout_ms=shell_timeout_ms,

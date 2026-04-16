@@ -55,6 +55,7 @@ from codex_autorunner.integrations.discord.car_handlers import (
 )
 from codex_autorunner.integrations.discord.config import (
     DiscordBotConfig,
+    DiscordBotDispatchConfig,
     DiscordCommandRegistration,
 )
 from codex_autorunner.integrations.discord.errors import (
@@ -1236,6 +1237,7 @@ def _config(
     command_scope: str = "guild",
     command_guild_ids: tuple[str, ...] = ("guild-1",),
     collaboration_policy: CollaborationPolicy | None = None,
+    ack_budget_ms: int = 10_000,
 ) -> DiscordBotConfig:
     return DiscordBotConfig(
         root=root,
@@ -1257,6 +1259,9 @@ def _config(
         max_message_length=2000,
         message_overflow="split",
         pma_enabled=True,
+        # These tests primarily validate routing/business behavior; dedicated
+        # reliability coverage owns the real Discord ack-budget deadline paths.
+        dispatch=DiscordBotDispatchConfig(ack_budget_ms=ack_budget_ms),
         collaboration_policy=collaboration_policy,
     )
 
@@ -4820,36 +4825,33 @@ async def test_car_model_rejects_invalid_opencode_model_name(tmp_path: Path) -> 
     )
     await store.update_agent_state(channel_id="channel-1", agent="opencode")
     rest = _FakeRest()
-    gateway = _FakeGateway(
-        [
-            _interaction(
-                name="model",
-                options=[{"name": "name", "value": "gpt-5.3-codex-unknown"}],
-            )
-        ]
-    )
     service = DiscordBotService(
         _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
         logger=logging.getLogger("test"),
         rest_client=rest,
-        gateway_client=gateway,
+        gateway_client=_FakeGateway([]),
         state_store=store,
         outbox_manager=_FakeOutboxManager(),
     )
 
     try:
-        await service.run_forever()
+        await service._handle_car_model(
+            interaction_id="inter-1",
+            interaction_token="token-1",
+            channel_id="channel-1",
+            user_id="user-1",
+            options={"name": "gpt-5.3-codex-unknown"},
+        )
         binding = await store.get_binding(channel_id="channel-1")
         assert binding is not None
         assert binding.get("model_override") is None
         assert len(rest.interaction_responses) == 1
-        assert rest.interaction_responses[0]["payload"]["type"] == 5
-        delivery_payloads = [
-            item["payload"] for item in rest.edited_original_interaction_responses
-        ] + [item["payload"] for item in rest.followup_messages]
-        assert len(delivery_payloads) == 1
-        content = str(delivery_payloads[0]["content"]).lower()
+        payload = rest.interaction_responses[0]["payload"]
+        assert payload["type"] == 4
+        content = str(payload["data"]["content"]).lower()
         assert "provider/model" in content
+        assert rest.followup_messages == []
+        assert rest.edited_original_interaction_responses == []
     finally:
         await store.close()
 

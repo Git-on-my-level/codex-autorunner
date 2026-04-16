@@ -628,11 +628,9 @@ def test_hub_repo_listing_service_reuses_stale_response_while_refreshing(
         stale = await listing_service.list_repos(sections={"repos"})
         assert stale["repos"][0]["call"] == 1
 
-        for _ in range(50):
-            if calls["enrich_repo"] >= 2:
-                break
-            await asyncio.sleep(0.01)
-
+        refresh_task = listing_service._response_refresh_tasks.get(("repos",))
+        assert refresh_task is not None
+        await refresh_task
         assert calls["enrich_repo"] == 2
         refreshed = await listing_service.list_repos(sections={"repos"})
         assert refreshed["repos"][0]["call"] == 2

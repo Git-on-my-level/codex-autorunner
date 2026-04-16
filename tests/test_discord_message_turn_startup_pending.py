@@ -7,14 +7,15 @@ from types import SimpleNamespace
 
 import pytest
 
+from codex_autorunner.integrations.chat.dispatcher import build_dispatch_context
 from codex_autorunner.integrations.discord import (
     message_turns as discord_message_turns_module,
 )
 from codex_autorunner.integrations.discord.service import DiscordBotService
 from codex_autorunner.integrations.discord.state import DiscordStateStore
+from tests.chat_surface_harness.discord import drain_spawned_tasks
 from tests.discord_message_turns_support import (
     _config,
-    _FakeGateway,
     _FakeOutboxManager,
     _FakeRest,
     _message_create,
@@ -37,12 +38,10 @@ async def test_message_create_startup_failure_keeps_generic_error_without_raw_de
         repo_id="repo-1",
     )
     rest = _FakeRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("please continue"))])
     service = DiscordBotService(
         _config(tmp_path),
         logger=logging.getLogger("test"),
         rest_client=rest,
-        gateway_client=gateway,
         state_store=store,
         outbox_manager=_FakeOutboxManager(),
     )
@@ -74,7 +73,16 @@ async def test_message_create_startup_failure_keeps_generic_error_without_raw_de
     )
 
     try:
-        await asyncio.wait_for(service.run_forever(), timeout=5)
+        event = service._chat_adapter.parse_message_event(
+            _message_create("please continue")
+        )
+        assert event is not None
+        await asyncio.wait_for(
+            service._handle_message_event(event, build_dispatch_context(event)),
+            timeout=3,
+        )
+        await asyncio.wait_for(submit_started.wait(), timeout=1)
+        await asyncio.wait_for(drain_spawned_tasks(service), timeout=1)
         assert submit_started.is_set()
         assert rest.edited_channel_messages
         assert any(
