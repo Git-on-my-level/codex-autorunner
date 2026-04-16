@@ -57,6 +57,7 @@ from codex_autorunner.integrations.chat.compaction import build_compact_seed_pro
 from codex_autorunner.integrations.chat.dispatcher import build_dispatch_context
 from codex_autorunner.integrations.discord.config import (
     DiscordBotConfig,
+    DiscordBotDispatchConfig,
     DiscordBotMediaConfig,
     DiscordBotShellConfig,
     DiscordCommandRegistration,
@@ -1728,6 +1729,7 @@ def _config(
     media_voice: bool = True,
     media_max_voice_bytes: int = 10 * 1024 * 1024,
     collaboration_policy: CollaborationPolicy | None = None,
+    ack_budget_ms: int = 10_000,
 ) -> DiscordBotConfig:
     return DiscordBotConfig(
         root=root,
@@ -1749,6 +1751,7 @@ def _config(
         max_message_length=max_message_length,
         message_overflow=message_overflow,
         pma_enabled=pma_enabled,
+        dispatch=DiscordBotDispatchConfig(ack_budget_ms=ack_budget_ms),
         shell=DiscordBotShellConfig(
             enabled=shell_enabled,
             timeout_ms=shell_timeout_ms,

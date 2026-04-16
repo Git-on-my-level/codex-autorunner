@@ -128,3 +128,34 @@ def test_verify_fast_test_budget_offenders_filters_by_verified_call_duration() -
         FastTestBudgetOffender("c::test_fallback", 1.25, "passed"),
         FastTestBudgetOffender("b::test_still_slow", 1.1, "failed"),
     ]
+
+
+def test_verify_fast_test_budget_offenders_limits_verified_nodeids() -> None:
+    offenders = [
+        FastTestBudgetOffender("a::test_slowest", 4.0, "passed"),
+        FastTestBudgetOffender("b::test_second", 3.0, "passed"),
+        FastTestBudgetOffender("c::test_third", 2.0, "passed"),
+    ]
+    seen_nodeids: list[str] = []
+
+    def _collector(nodeids: list[str], repo_root: Path) -> dict[str, float]:
+        _ = repo_root
+        seen_nodeids.extend(nodeids)
+        return {
+            "a::test_slowest": 0.5,
+            "b::test_second": 2.5,
+        }
+
+    verified = verify_fast_test_budget_offenders(
+        offenders,
+        threshold_seconds=1.0,
+        repo_root=Path.cwd(),
+        duration_collector=_collector,
+        max_nodeids=2,
+    )
+
+    assert seen_nodeids == ["a::test_slowest", "b::test_second"]
+    assert verified == [
+        FastTestBudgetOffender("b::test_second", 2.5, "passed"),
+        FastTestBudgetOffender("c::test_third", 2.0, "passed"),
+    ]
