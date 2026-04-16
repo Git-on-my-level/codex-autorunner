@@ -28,6 +28,8 @@ from .state import OutboxRecord
 
 PAUSE_SCAN_INTERVAL_SECONDS = 5.0
 TERMINAL_SCAN_INTERVAL_SECONDS = 5.0
+_IDLE_BACKOFF_MAX_SECONDS = 30.0
+_IDLE_BACKOFF_STEP_SECONDS = 5.0
 
 
 def _truncate_error(error_message: Optional[str], limit: int = 200) -> str:
@@ -373,13 +375,27 @@ async def _scan_and_enqueue_terminal_notifications(service: Any) -> None:
         )
 
 
+def _next_idle_interval(
+    base: float,
+    consecutive_idle: int,
+    *,
+    step: float = _IDLE_BACKOFF_STEP_SECONDS,
+    maximum: float = _IDLE_BACKOFF_MAX_SECONDS,
+) -> float:
+    return min(base + consecutive_idle * step, maximum)
+
+
 async def watch_ticket_flow_pauses(service: Any) -> None:
+    consecutive_idle = 0
     while True:
+        found_work = False
         with track_loop("discord.flow_watchers.pause_scan") as scope:
             scope.record_db_read(1)
             try:
                 await _scan_and_enqueue_pause_notifications(service)
-                if await service._store.list_bindings():
+                bindings = await service._store.list_bindings()
+                if bindings:
+                    found_work = True
                     scope.mark_productive()
             except Exception as exc:  # intentional: supervisor loop must never die
                 log_event(
@@ -388,16 +404,26 @@ async def watch_ticket_flow_pauses(service: Any) -> None:
                     "discord.pause_watch.scan_failed",
                     exc=exc,
                 )
-        await asyncio.sleep(PAUSE_SCAN_INTERVAL_SECONDS)
+        if found_work:
+            consecutive_idle = 0
+        else:
+            consecutive_idle += 1
+        await asyncio.sleep(
+            _next_idle_interval(PAUSE_SCAN_INTERVAL_SECONDS, consecutive_idle)
+        )
 
 
 async def watch_ticket_flow_terminals(service: Any) -> None:
+    consecutive_idle = 0
     while True:
+        found_work = False
         with track_loop("discord.flow_watchers.terminal_scan") as scope:
             scope.record_db_read(1)
             try:
                 await _scan_and_enqueue_terminal_notifications(service)
-                if await service._store.list_bindings():
+                bindings = await service._store.list_bindings()
+                if bindings:
+                    found_work = True
                     scope.mark_productive()
             except Exception as exc:  # intentional: supervisor loop must never die
                 log_event(
@@ -406,4 +432,10 @@ async def watch_ticket_flow_terminals(service: Any) -> None:
                     "discord.terminal_watch.scan_failed",
                     exc=exc,
                 )
-        await asyncio.sleep(TERMINAL_SCAN_INTERVAL_SECONDS)
+        if found_work:
+            consecutive_idle = 0
+        else:
+            consecutive_idle += 1
+        await asyncio.sleep(
+            _next_idle_interval(TERMINAL_SCAN_INTERVAL_SECONDS, consecutive_idle)
+        )

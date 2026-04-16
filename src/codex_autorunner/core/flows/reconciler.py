@@ -31,6 +31,30 @@ _ACTIVE_STATUSES = (
     FlowRunStatus.PAUSED,
 )
 
+_mtime_cache: dict[Path, tuple[float, int]] = {}
+
+
+def _db_mtime_key(db_path: Path) -> tuple[float, int]:
+    try:
+        st = db_path.stat()
+        return (st.st_mtime, st.st_size)
+    except OSError:
+        return (0.0, 0)
+
+
+def _should_skip_reconcile(db_path: Path) -> bool:
+    current = _db_mtime_key(db_path)
+    cached = _mtime_cache.get(db_path)
+    if cached is None:
+        return False
+    if current != cached:
+        return False
+    return True
+
+
+def _record_reconcile_mtime(db_path: Path) -> None:
+    _mtime_cache[db_path] = _db_mtime_key(db_path)
+
 
 @dataclass
 class FlowReconcileSummary:
@@ -470,6 +494,12 @@ def reconcile_flow_runs(
     records: list[FlowRunRecord] = []
     try:
         store.initialize()
+        if _should_skip_reconcile(db_path):
+            active_count = store.count_active_flow_runs(flow_type=flow_type)
+            if active_count == 0:
+                return FlowReconcileResult(
+                    records=records, summary=FlowReconcileSummary()
+                )
         for record in store.list_flow_runs(flow_type=flow_type):
             if record.status in _ACTIVE_STATUSES:
                 summary.active += 1
@@ -482,6 +512,7 @@ def reconcile_flow_runs(
                 if locked:
                     summary.locked += 1
             records.append(record)
+        _record_reconcile_mtime(db_path)
     except (
         sqlite3.Error,
         RuntimeError,

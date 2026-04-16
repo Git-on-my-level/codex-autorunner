@@ -135,7 +135,10 @@ def _app_lifespan(context: AppContext):
 
         async def _flow_reconcile_loop():
             active_interval = 2.0
-            idle_interval = 5.0
+            idle_base = 5.0
+            idle_step = 5.0
+            idle_max = 30.0
+            consecutive_idle = 0
             try:
                 while True:
                     with track_loop("web.flow_reconcile") as scope:
@@ -147,8 +150,13 @@ def _app_lifespan(context: AppContext):
                         )
                         if result.summary.active > 0:
                             scope.mark_productive()
+                            consecutive_idle = 0
+                        else:
+                            consecutive_idle += 1
                     interval = (
-                        active_interval if result.summary.active > 0 else idle_interval
+                        active_interval
+                        if result.summary.active > 0
+                        else min(idle_base + consecutive_idle * idle_step, idle_max)
                     )
                     await asyncio.sleep(interval)
             except asyncio.CancelledError:

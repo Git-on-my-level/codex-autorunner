@@ -448,6 +448,20 @@ class FlowStore:
         rows = conn.execute(query, params).fetchall()
         return [self._row_to_flow_run(row) for row in rows]
 
+    def count_active_flow_runs(self, flow_type: Optional[str] = None) -> int:
+        conn = self._get_conn()
+        query = "SELECT COUNT(*) FROM flow_runs WHERE status IN (?, ?, ?)"
+        params: List[Any] = [
+            FlowRunStatus.RUNNING.value,
+            FlowRunStatus.STOPPING.value,
+            FlowRunStatus.PAUSED.value,
+        ]
+        if flow_type is not None:
+            query += " AND flow_type = ?"
+            params.append(flow_type)
+        row = conn.execute(query, params).fetchone()
+        return int(row[0]) if row is not None else 0
+
     def get_latest_flow_run(
         self, flow_type: Optional[str] = None, status: Optional[FlowRunStatus] = None
     ) -> Optional[FlowRunRecord]:
