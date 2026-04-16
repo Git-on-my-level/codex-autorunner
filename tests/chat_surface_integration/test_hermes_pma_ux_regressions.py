@@ -194,9 +194,17 @@ async def test_surfaces_acknowledge_interrupt_controls_before_final_confirmation
         assert discord.rest is not None
         assert discord.rest.interaction_responses[0]["payload"]["type"] == 6
         assert (
-            discord.rest.edited_original_interaction_responses[-1]["payload"]["content"]
+            discord.rest.edited_original_interaction_responses[0]["payload"]["content"]
             == "Stopping current turn..."
         )
+        discord_final_interrupt_content = (
+            discord.rest.edited_original_interaction_responses[-1]["payload"]["content"]
+        )
+        assert discord_final_interrupt_content != "Stopping current turn..."
+        assert discord_final_interrupt_content in {
+            "Interrupt succeeded.",
+            "Recovered stale session after backend thread was lost.",
+        }
         discord_ack = await discord.wait_for_log_event(
             "discord.turn.cancel_acknowledged"
         )

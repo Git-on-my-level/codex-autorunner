@@ -8799,7 +8799,7 @@ async def test_car_interrupt_uses_orchestration_thread_state(tmp_path: Path) -> 
         assert rest.interaction_responses[0]["payload"]["type"] == 5
         assert len(rest.followup_messages) == 1
         content = rest.followup_messages[0]["payload"]["content"].lower()
-        assert "stopping current turn" in content
+        assert "interrupt succeeded" in content
         assert "cancelled 2 queued turn" in content
     finally:
         await store.close()
@@ -9129,6 +9129,84 @@ async def test_car_interrupt_reports_already_finished_when_turn_is_no_longer_act
 
 
 @pytest.mark.anyio
+async def test_cancel_turn_button_updates_component_to_interrupt_success_on_confirmation(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    class _FakeThreadService:
+        def get_thread_target(self, thread_target_id: str) -> Any:
+            assert thread_target_id == "thread-1"
+            return SimpleNamespace(thread_target_id="thread-1")
+
+        def get_running_execution(self, thread_target_id: str) -> Any:
+            assert thread_target_id == "thread-1"
+            return SimpleNamespace(execution_id="turn-1", status="running")
+
+        async def stop_thread(self, thread_target_id: str) -> Any:
+            assert thread_target_id == "thread-1"
+            return SimpleNamespace(
+                interrupted_active=True,
+                recovered_lost_backend=False,
+                cancelled_queued=0,
+                execution=SimpleNamespace(execution_id="turn-1"),
+            )
+
+    service._discord_thread_service = lambda: _FakeThreadService()  # type: ignore[assignment]
+
+    try:
+        await service._handle_cancel_turn_button(
+            "interaction-1",
+            "token-1",
+            channel_id="channel-1",
+            user_id="user-1",
+            message_id="preview-1",
+            custom_id="cancel_turn:thread-1:turn-1",
+        )
+
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 6
+        assert rest.followup_messages == []
+        assert len(rest.edited_original_interaction_responses) == 2
+        assert (
+            rest.edited_original_interaction_responses[0]["payload"]["content"]
+            == "Stopping current turn..."
+        )
+        assert (
+            rest.edited_original_interaction_responses[0]["payload"]["components"] == []
+        )
+        assert (
+            rest.edited_original_interaction_responses[1]["payload"]["content"]
+            == "Interrupt succeeded."
+        )
+        assert (
+            rest.edited_original_interaction_responses[1]["payload"]["components"] == []
+        )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_cancel_turn_button_stale_execution_does_not_interrupt_newer_turn(
     tmp_path: Path,
 ) -> None:
@@ -9186,7 +9264,6 @@ async def test_cancel_turn_button_stale_execution_does_not_interrupt_newer_turn(
         )
 
         assert stop_calls == []
-        assert len(rest.edited_original_interaction_responses) == 1
         assert (
             rest.edited_original_interaction_responses[0]["payload"]["content"]
             == "Stopping current turn..."
@@ -9194,10 +9271,16 @@ async def test_cancel_turn_button_stale_execution_does_not_interrupt_newer_turn(
         assert (
             rest.edited_original_interaction_responses[0]["payload"]["components"] == []
         )
+        assert len(rest.edited_original_interaction_responses) == 2
+        assert "older turn" in (
+            rest.edited_original_interaction_responses[1]["payload"]["content"].lower()
+        )
+        assert (
+            rest.edited_original_interaction_responses[1]["payload"]["components"] == []
+        )
         assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 6
-        assert len(rest.followup_messages) == 1
-        assert "older turn" in rest.followup_messages[0]["payload"]["content"].lower()
+        assert rest.followup_messages == []
         assert len(rest.edited_channel_messages) == 1
         assert rest.edited_channel_messages[0]["payload"]["components"] == []
         assert "newer turn is active" in (
@@ -9276,8 +9359,11 @@ async def test_cancel_turn_button_stale_execution_ignores_message_fetch_failures
             custom_id="cancel_turn:thread-1:turn-1",
         )
 
-        assert len(rest.followup_messages) == 1
-        assert "older turn" in rest.followup_messages[0]["payload"]["content"].lower()
+        assert rest.followup_messages == []
+        assert len(rest.edited_original_interaction_responses) == 2
+        assert "older turn" in (
+            rest.edited_original_interaction_responses[1]["payload"]["content"].lower()
+        )
         assert (
             await store.list_turn_progress_leases(
                 managed_thread_id="thread-1",

@@ -1319,6 +1319,7 @@ async def _submit_discord_thread_message(
             timeout_error=timeout_error,
             interrupted_error=interrupted_error,
         )
+        interrupted_turn = failure_message == interrupted_error
         dispatch.log_event_fn(
             dispatch.service._logger,
             logging.WARNING,
@@ -1342,7 +1343,11 @@ async def _submit_discord_thread_message(
             "Status: this turn finished, but Discord failed before the final "
             "reply was delivered. Please retry if needed."
             if during_delivery
-            else f"Turn failed: {failure_message}"
+            else (
+                "Status: this turn was interrupted."
+                if interrupted_turn
+                else f"Turn failed: {failure_message}"
+            )
         )
         reconciled = await supervision.reconcile_failure(
             failure_note=reconciliation_note,
@@ -1364,7 +1369,11 @@ async def _submit_discord_thread_message(
             fallback_text = (
                 "Turn finished, but final reply delivery failed. Please retry."
                 if during_delivery
-                else f"Turn failed: {failure_message}"
+                else (
+                    "Turn interrupted."
+                    if interrupted_turn
+                    else f"Turn failed: {failure_message}"
+                )
             )
             await dispatch.service._send_channel_message_safe(
                 dispatch.channel_id,
@@ -2672,6 +2681,8 @@ def _build_discord_runner_hooks(
                     record_id=record_id,
                 )
             return
+        if finalized.status == "interrupted":
+            return
         await service._send_channel_message_safe(
             channel_id,
             {"content": (f"Turn failed: {finalized.error or public_execution_error}")},
@@ -3285,6 +3296,12 @@ async def _run_discord_orchestrated_turn_for_message(
                         execution_id=progress_execution_id,
                         send_final_message=not acknowledgement_delivered,
                     )
+                return DiscordMessageTurnResult(
+                    final_message="",
+                    preview_message_id=progress_message_id,
+                    execution_id=progress_execution_id,
+                    send_final_message=False,
+                )
             raise RuntimeError(str(finalized.error or public_execution_error))
         summary_snapshot = ""
         if (
