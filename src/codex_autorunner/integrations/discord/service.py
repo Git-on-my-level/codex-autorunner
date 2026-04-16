@@ -49,7 +49,7 @@ from ...core.filebox import (
     outbox_pending_dir,
     outbox_sent_dir,
 )
-from ...core.filebox_retention import (
+from ...core.filebox_retention import (  # noqa: F401 - re-exported for test monkeypatching
     prune_filebox_root,
     resolve_filebox_retention_policy,
 )
@@ -75,19 +75,12 @@ from ...core.git_utils import (  # noqa: F401 - kept for test monkeypatching
 from ...core.hub_control_plane import (
     HandshakeCompatibility,
     HttpHubControlPlaneClient,
-    HubControlPlaneError,
-    evaluate_handshake_compatibility,
-)
-from ...core.hub_control_plane.models import (
-    HandshakeRequest as _HandshakeRequest,
-)
-from ...core.hub_control_plane.service import (
-    CONTROL_PLANE_API_VERSION as _CONTROL_PLANE_API_VERSION,
 )
 from ...core.logging_utils import log_event
-from ...core.managed_processes import reap_managed_processes
+from ...core.managed_processes import (
+    reap_managed_processes,
+)  # noqa: F401 - re-exported for test monkeypatching
 from ...core.orchestration import (
-    ORCHESTRATION_SCHEMA_VERSION,
     ChatOperationRecoveryAction,
     ChatOperationSnapshot,
     ChatOperationState,
@@ -211,10 +204,36 @@ from ..telegram.constants import DEFAULT_SKILLS_LIST_LIMIT
 from ..telegram.helpers import _format_skills_list
 from .adapter import DiscordChatAdapter
 from .car_command_dispatch import handle_car_command as dispatch_car_command
+from .channel_messaging import (
+    _coerce_id as _cm_coerce_id,
+)
+from .channel_messaging import (
+    _first_non_empty_text as _cm_first_non_empty_text,
+)
+from .channel_messaging import (
+    _nested_text as _cm_nested_text,
+)
+from .channel_messaging import (
+    delete_channel_message as _delete_channel_message_impl,
+)
+from .channel_messaging import (
+    handle_discord_outbox_delivery as _handle_discord_outbox_delivery_impl,
+)
+from .channel_messaging import (
+    record_channel_directory_seen as _record_channel_directory_seen_impl,
+)
+from .channel_messaging import (
+    resolve_channel_name as _resolve_channel_name_impl,
+)
+from .channel_messaging import (
+    resolve_guild_name as _resolve_guild_name_impl,
+)
+from .channel_messaging import (
+    send_channel_message as _send_channel_message_impl,
+)
 from .collaboration_helpers import (
     collaboration_probe_text,
 )
-from .command_registry import sync_commands
 from .command_runner import CommandRunner as _CommandRunner
 from .command_runner import RunnerConfig as _RunnerConfig
 from .components import (
@@ -264,6 +283,7 @@ from .flow_watchers import (
 )
 from .flow_watchers import watch_ticket_flow_pauses, watch_ticket_flow_terminals
 from .gateway import DiscordGatewayClient
+from .hub_handshake import perform_hub_handshake as _perform_hub_handshake_impl
 from .ingress import (
     CommandSpec,
     IngressContext,
@@ -278,7 +298,6 @@ from .interaction_dispatch import (
 from .interaction_registry import (
     MODEL_EFFORT_SELECT_ID,
     TICKETS_MODAL_PREFIX,
-    build_application_commands,
     component_admission_ack_policy,
     component_dispatch_ack_policy,
     component_route_for_custom_id,
@@ -302,9 +321,7 @@ from .interaction_session import (
 from .interactions import extract_interaction_id, extract_interaction_token
 from .message_turns import (
     DiscordMessageTurnResult,
-    bind_discord_progress_task_context,
     build_discord_thread_orchestration_service,
-    reconcile_discord_turn_progress_leases,
     resolve_bound_workspace_root,
     run_agent_turn_for_message,
     run_managed_thread_turn_for_message,
@@ -334,11 +351,49 @@ from .pma_commands import (
 from .rendering import (
     chunk_discord_message,
     format_discord_message,
-    sanitize_discord_outbound_text,
     truncate_for_discord,
 )
 from .response_helpers import DiscordResponder
 from .rest import DISCORD_INTERACTION_CALLBACK_TIMEOUT_SECONDS, DiscordRestClient
+from .service_lifecycle import (
+    apply_pending_chat_queue_resets as _apply_pending_chat_queue_resets_impl,
+)
+from .service_lifecycle import (
+    close_all_app_server_supervisors as _close_all_app_server_supervisors_impl,
+)
+from .service_lifecycle import (
+    close_all_opencode_supervisors as _close_all_opencode_supervisors_impl,
+)
+from .service_lifecycle import (
+    is_within_cold_start_window as _is_within_cold_start_window_impl,
+)
+from .service_lifecycle import (
+    on_background_task_done as _on_background_task_done_impl,
+)
+from .service_lifecycle import (
+    reconcile_background_task_failure as _reconcile_background_task_failure_impl,
+)
+from .service_lifecycle import (
+    reconcile_progress_leases_on_startup as _reconcile_progress_leases_on_startup_impl,
+)
+from .service_lifecycle import (
+    run_chat_queue_reset_loop as _run_chat_queue_reset_loop_impl,
+)
+from .service_lifecycle import (
+    run_opencode_prune_loop as _run_opencode_prune_loop_impl,
+)
+from .service_lifecycle import (
+    service_uptime_ms as _service_uptime_ms_impl,
+)
+from .service_lifecycle import (
+    shutdown_service as _shutdown_impl,
+)
+from .service_lifecycle import (
+    sync_application_commands_on_startup as _sync_application_commands_on_startup_impl,
+)
+from .service_lifecycle import (
+    validate_command_sync_config as _validate_command_sync_config_impl,
+)
 from .service_normalization import (
     DiscordAttachmentAdapter,
     SavedDiscordAttachment,
@@ -483,13 +538,14 @@ def _plan_delivery_recovery_cursor(
 
 
 DISCORD_EPHEMERAL_FLAG = 64
-CHAT_QUEUE_RESET_POLL_INTERVAL_SECONDS = 2.0
 DISCORD_TURN_PROGRESS_MIN_EDIT_INTERVAL_SECONDS = 1.0
 DISCORD_TURN_PROGRESS_HEARTBEAT_INTERVAL_SECONDS = 2.0
 DISCORD_TURN_PROGRESS_MAX_ACTIONS = 12
 DISCORD_TYPING_HEARTBEAT_INTERVAL_SECONDS = 5.0
-DISCORD_BACKGROUND_TASK_SHUTDOWN_GRACE_SECONDS = 10.0
 DISCORD_INTERACTION_COLD_START_WINDOW_SECONDS = 120.0
+DISCORD_BACKGROUND_TASK_SHUTDOWN_GRACE_SECONDS = (
+    10.0  # noqa: F401 - re-exported for test monkeypatching
+)
 SHELL_OUTPUT_TRUNCATION_SUFFIX = "\n...[truncated]..."
 DISCORD_ATTACHMENT_MAX_BYTES = 100_000_000
 THREAD_LIST_MAX_PAGES = 5
@@ -562,7 +618,7 @@ class _DiscordAppServerSupervisorAdapter:
         return await supervisor.get_client(canonical_root)
 
     async def close_all(self) -> None:
-        await self._service._close_all_app_server_supervisors()
+        await _close_all_app_server_supervisors_impl(self._service)
 
 
 class _DiscordOpenCodeSupervisorAdapter:
@@ -636,7 +692,7 @@ class _DiscordOpenCodeSupervisorAdapter:
         await supervisor.mark_turn_finished(canonical_root)
 
     async def close_all(self) -> None:
-        await self._service._close_all_opencode_supervisors()
+        await _close_all_opencode_supervisors_impl(self._service)
 
 
 class DiscordBotService:
@@ -858,17 +914,21 @@ class DiscordBotService:
             raise SystemExit(1)
         self._reap_managed_processes(stage="startup")
         await self._store.initialize()
-        await self._reconcile_discord_progress_leases_on_startup()
+        await _reconcile_progress_leases_on_startup_impl(self)
         await self._resume_interaction_recovery()
-        self._validate_command_sync_config()
+        _validate_command_sync_config_impl(self)
         self._outbox.start()
         outbox_task = asyncio.create_task(self._outbox.run_loop())
-        self._opencode_prune_task = asyncio.create_task(self._run_opencode_prune_loop())
+        self._opencode_prune_task = asyncio.create_task(
+            _run_opencode_prune_loop_impl(self)
+        )
         if self._filebox_housekeeping_enabled():
             self._filebox_prune_task = asyncio.create_task(
                 self._run_filebox_prune_loop()
             )
-        chat_queue_reset_task = asyncio.create_task(self._run_chat_queue_reset_loop())
+        chat_queue_reset_task = asyncio.create_task(
+            _run_chat_queue_reset_loop_impl(self)
+        )
         pause_watch_task = asyncio.create_task(self._watch_ticket_flow_pauses())
         terminal_watch_task = asyncio.create_task(self._watch_ticket_flow_terminals())
         dispatcher_loop_task = asyncio.create_task(self._run_dispatcher_loop())
@@ -886,7 +946,7 @@ class DiscordBotService:
             )
             try:
                 await self._update_status_notifier.maybe_send_notice()
-            except Exception as exc:  # intentional: top-level error handler
+            except Exception as exc:
                 log_event(
                     self._logger,
                     logging.WARNING,
@@ -896,9 +956,9 @@ class DiscordBotService:
             await self._gateway.run(self._on_dispatch)
         finally:
             await self._command_runner.shutdown()
-            with contextlib.suppress(Exception):  # intentional: shutdown cleanup
+            with contextlib.suppress(Exception):
                 await self._dispatcher.wait_idle()
-            with contextlib.suppress(Exception):  # intentional: shutdown cleanup
+            with contextlib.suppress(Exception):
                 await self._dispatcher.close()
             dispatcher_loop_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -925,104 +985,26 @@ class DiscordBotService:
             outbox_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await outbox_task
-            await self._shutdown()
+            await _shutdown_impl(self)
 
     def _service_uptime_ms(self, *, now: Optional[float] = None) -> Optional[float]:
-        started_at_raw = getattr(self, "_service_started_at_monotonic", None)
-        started_at = (
-            float(started_at_raw) if isinstance(started_at_raw, (int, float)) else None
-        )
-        if started_at is None:
-            return None
-        current = time.monotonic() if now is None else now
-        return round(max(0.0, (current - started_at) * 1000), 1)
+        return _service_uptime_ms_impl(self, now=now)
 
     async def _perform_hub_handshake(self) -> bool:
-        expected_schema_generation = ORCHESTRATION_SCHEMA_VERSION
-        if self._hub_client is None:
-            log_event(
-                self._logger,
-                logging.ERROR,
-                "discord.hub_control_plane.client_not_configured",
-                hub_root=str(self._config.root),
-                expected_schema_generation=expected_schema_generation,
-            )
-            return False
-
-        try:
-            response = await self._hub_client.handshake(
-                _HandshakeRequest(
-                    client_name="discord",
-                    client_api_version=_CONTROL_PLANE_API_VERSION,
-                    expected_schema_generation=expected_schema_generation,
-                )
-            )
-            compatibility = evaluate_handshake_compatibility(
-                response,
-                client_api_version=_CONTROL_PLANE_API_VERSION,
-                expected_schema_generation=expected_schema_generation,
-            )
-            self._hub_handshake_compatibility = compatibility
-            if compatibility.compatible:
-                log_event(
-                    self._logger,
-                    logging.INFO,
-                    "discord.hub_control_plane.handshake_ok",
-                    hub_root=str(self._config.root),
-                    api_version=response.api_version,
-                    schema_generation=response.schema_generation,
-                    expected_schema_generation=expected_schema_generation,
-                )
-                return True
-            else:
-                log_event(
-                    self._logger,
-                    logging.ERROR,
-                    "discord.hub_control_plane.handshake_incompatible",
-                    hub_root=str(self._config.root),
-                    reason=compatibility.reason,
-                    server_api_version=compatibility.server_api_version,
-                    client_api_version=compatibility.client_api_version,
-                    server_schema_generation=compatibility.server_schema_generation,
-                    expected_schema_generation=compatibility.expected_schema_generation,
-                )
-                return False
-        except HubControlPlaneError as exc:
-            log_event(
-                self._logger,
-                logging.ERROR,
-                "discord.hub_control_plane.handshake_failed",
-                hub_root=str(self._config.root),
-                error_code=exc.code,
-                retryable=exc.retryable,
-                message=str(exc),
-                expected_schema_generation=expected_schema_generation,
-            )
-            return False
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.ERROR,
-                "discord.hub_control_plane.handshake_unexpected_error",
-                hub_root=str(self._config.root),
-                exc=exc,
-                expected_schema_generation=expected_schema_generation,
-            )
-            return False
+        result = await _perform_hub_handshake_impl(
+            self._hub_client,
+            self._logger,
+            str(self._config.root),
+        )
+        self._hub_handshake_compatibility = result.compatibility
+        return result.success
 
     @property
     def hub_client(self) -> Optional[HttpHubControlPlaneClient]:
         return self._hub_client
 
     def _is_within_cold_start_window(self, *, now: Optional[float] = None) -> bool:
-        started_at_raw = getattr(self, "_service_started_at_monotonic", None)
-        started_at = (
-            float(started_at_raw) if isinstance(started_at_raw, (int, float)) else None
-        )
-        if started_at is None:
-            return False
-        current = time.monotonic() if now is None else now
-        return current - started_at <= DISCORD_INTERACTION_COLD_START_WINDOW_SECONDS
+        return _is_within_cold_start_window_impl(self, now=now)
 
     def _interaction_telemetry_fields(
         self,
@@ -3244,20 +3226,14 @@ class DiscordBotService:
         return bool(repo_config.housekeeping.enabled)
 
     async def _next_opencode_prune_interval_seconds(self) -> float:
-        async with self._opencode_lock:
-            intervals = [
-                entry.prune_interval_seconds
-                for entry in self._opencode_supervisors.values()
-                if entry.prune_interval_seconds is not None
-            ]
-        if intervals:
-            return min(intervals)
-        return DISCORD_OPENCODE_PRUNE_FALLBACK_INTERVAL_SECONDS
+        from .service_lifecycle import (
+            next_opencode_prune_interval_seconds as _next_interval_impl,
+        )
+
+        return await _next_interval_impl(self)
 
     async def _run_opencode_prune_loop(self) -> None:
-        while True:
-            await asyncio.sleep(await self._next_opencode_prune_interval_seconds())
-            await self._prune_opencode_supervisors()
+        await _run_opencode_prune_loop_impl(self)
 
     async def _run_filebox_prune_loop(self) -> None:
         while True:
@@ -3420,9 +3396,9 @@ class DiscordBotService:
                     self._opencode_supervisors.pop(workspace_path, None)
                     evicted_supervisors += 1
                     evicted_objects.append(entry.supervisor)
-            for supervisor in evicted_objects:
-                with contextlib.suppress(Exception):  # intentional: shutdown cleanup
-                    await supervisor.close_all()
+        for supervisor in evicted_objects:
+            with contextlib.suppress(Exception):
+                await supervisor.close_all()
 
         async with self._opencode_lock:
             cached_supervisors_after = len(self._opencode_supervisors)
@@ -3858,50 +3834,10 @@ class DiscordBotService:
         )
 
     def _validate_command_sync_config(self) -> None:
-        registration = self._config.command_registration
-        if not registration.enabled:
-            return
-
-        application_id = (self._config.application_id or "").strip()
-        if not application_id:
-            raise ValueError("missing Discord application id for command sync")
-        if registration.scope == "guild" and not registration.guild_ids:
-            raise ValueError("guild scope requires at least one guild_id")
+        _validate_command_sync_config_impl(self)
 
     async def _sync_application_commands_on_startup(self) -> None:
-        registration = self._config.command_registration
-        if not registration.enabled:
-            log_event(
-                self._logger,
-                logging.INFO,
-                "discord.commands.sync.disabled",
-            )
-            return
-
-        self._validate_command_sync_config()
-
-        application_id = (self._config.application_id or "").strip()
-        commands = build_application_commands(self)
-        try:
-            await sync_commands(
-                self._rest,
-                application_id=application_id,
-                commands=commands,
-                scope=registration.scope,
-                guild_ids=registration.guild_ids,
-                logger=self._logger,
-            )
-        except ValueError:
-            raise
-        except (DiscordAPIError, OSError, RuntimeError) as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.commands.sync.startup_failed",
-                scope=registration.scope,
-                command_count=len(commands),
-                exc=exc,
-            )
+        await _sync_application_commands_on_startup_impl(self)
 
     async def _run_startup_command_sync_background(self) -> None:
         started_at = time.monotonic()
@@ -3913,7 +3849,7 @@ class DiscordBotService:
         )
         try:
             await self._sync_application_commands_on_startup()
-        except Exception as exc:  # intentional: background startup sync is best-effort
+        except Exception as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -3933,99 +3869,13 @@ class DiscordBotService:
         )
 
     async def _shutdown(self) -> None:
-        shutdown_deadline = (
-            time.monotonic() + DISCORD_BACKGROUND_TASK_SHUTDOWN_GRACE_SECONDS
-        )
-        pending_shutdown_tasks: list[asyncio.Task[Any]] = []
-        while True:
-            drainable_tasks = [
-                task
-                for task in list(self._background_shutdown_wait_tasks)
-                if not task.done()
-            ]
-            if not drainable_tasks:
-                break
-            remaining = shutdown_deadline - time.monotonic()
-            if remaining <= 0:
-                pending_shutdown_tasks = drainable_tasks
-                break
-            done, pending = await asyncio.wait(
-                drainable_tasks,
-                timeout=remaining,
-            )
-            self._background_shutdown_wait_tasks.difference_update(done)
-            pending_shutdown_tasks = list(pending)
-            if pending:
-                break
-        if pending_shutdown_tasks:
-            shutdown_reconcile_contexts: list[dict[str, Any]] = []
-            for task in pending_shutdown_tasks:
-                task_context = getattr(task, "_discord_progress_task_context", None)
-                if not isinstance(task_context, dict) or not task_context:
-                    continue
-                shutdown_context = dict(task_context)
-                shutdown_note = shutdown_context.get("shutdown_note")
-                if isinstance(shutdown_note, str) and shutdown_note.strip():
-                    shutdown_context["failure_note"] = shutdown_note.strip()
-                shutdown_reconcile_contexts.append(shutdown_context)
-            if shutdown_reconcile_contexts:
-                await asyncio.gather(
-                    *(
-                        self._reconcile_background_task_failure(
-                            task_context,
-                            allow_channel_fallback=False,
-                        )
-                        for task_context in shutdown_reconcile_contexts
-                    ),
-                    return_exceptions=True,
-                )
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.background_task.shutdown_timeout",
-                timeout_seconds=DISCORD_BACKGROUND_TASK_SHUTDOWN_GRACE_SECONDS,
-                pending_count=len(pending_shutdown_tasks),
-            )
-        if self._background_tasks:
-            for task in list(self._background_tasks):
-                task.cancel()
-            await asyncio.gather(*list(self._background_tasks), return_exceptions=True)
-            self._background_tasks.clear()
-        self._background_shutdown_wait_tasks.clear()
-        await self._command_runner.shutdown()
-        if self._owns_gateway:
-            with contextlib.suppress(Exception):  # intentional: shutdown cleanup
-                await self._gateway.stop()
-        if self._owns_rest and hasattr(self._rest, "close"):
-            with contextlib.suppress(Exception):  # intentional: shutdown cleanup
-                await self._rest.close()
-        if self._owns_store:
-            with contextlib.suppress(Exception):  # intentional: shutdown cleanup
-                await self._store.close()
-        await self._close_all_app_server_supervisors()
-        await self._close_all_opencode_supervisors()
-        if self._hub_client is not None:
-            with contextlib.suppress(Exception):
-                await self._hub_client.aclose()
-        self._reap_managed_processes(stage="shutdown")
+        await _shutdown_impl(self)
 
     async def _close_all_app_server_supervisors(self) -> None:
-        async with self._app_server_lock:
-            supervisors = list(self._app_server_supervisors.values())
-            self._app_server_supervisors.clear()
-        for supervisor in supervisors:
-            with contextlib.suppress(Exception):  # intentional: shutdown cleanup
-                await supervisor.close_all()
+        await _close_all_app_server_supervisors_impl(self)
 
     async def _close_all_opencode_supervisors(self) -> None:
-        async with self._opencode_lock:
-            opencode_supervisors = [
-                entry.supervisor for entry in self._opencode_supervisors.values()
-            ]
-            self._opencode_supervisors.clear()
-        for supervisor in opencode_supervisors:
-            with contextlib.suppress(Exception):  # intentional: shutdown cleanup
-                await supervisor.close_all()
+        await _close_all_opencode_supervisors_impl(self)
 
     async def _watch_ticket_flow_pauses(self) -> None:
         await watch_ticket_flow_pauses(self)
@@ -4034,39 +3884,10 @@ class DiscordBotService:
         await _scan_and_enqueue_pause_notifications_impl(self)
 
     async def _run_chat_queue_reset_loop(self) -> None:
-        while True:
-            try:
-                await self._apply_pending_chat_queue_resets()
-            except Exception as exc:  # intentional: long-running loop must not crash
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "discord.chat_queue.reset_scan_failed",
-                    exc=exc,
-                )
-            await asyncio.sleep(CHAT_QUEUE_RESET_POLL_INTERVAL_SECONDS)
+        await _run_chat_queue_reset_loop_impl(self)
 
     async def _apply_pending_chat_queue_resets(self) -> None:
-        requests = self._chat_queue_control_store.take_reset_requests(
-            platform="discord"
-        )
-        for request in requests:
-            conversation_id = str(request.get("conversation_id") or "").strip()
-            if not conversation_id:
-                continue
-            result = await self._dispatcher.force_reset(conversation_id)
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.chat_queue.reset_applied",
-                conversation_id=conversation_id,
-                chat_id=request.get("chat_id"),
-                thread_id=request.get("thread_id"),
-                requested_at=request.get("requested_at"),
-                requested_by=request.get("requested_by"),
-                cancelled_pending=result.get("cancelled_pending"),
-                cancelled_active=result.get("cancelled_active"),
-            )
+        await _apply_pending_chat_queue_resets_impl(self)
 
     async def _watch_ticket_flow_terminals(self) -> None:
         await watch_ticket_flow_terminals(self)
@@ -4074,37 +3895,12 @@ class DiscordBotService:
     async def _send_channel_message(
         self, channel_id: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
-        payload = dict(payload)
-        content = payload.get("content")
-        if isinstance(content, str):
-            payload["content"] = sanitize_discord_outbound_text(content)
-        content_len = len(payload.get("content", "") or "")
-        log_event(
-            self._logger,
-            logging.DEBUG,
-            "discord.channel_message.sending",
-            channel_id=channel_id,
-            content_len=content_len,
+        return await _send_channel_message_impl(
+            self._rest, self._logger, channel_id, payload
         )
-        response = await self._rest.create_channel_message(
-            channel_id=channel_id, payload=payload
-        )
-        message_id = response.get("id") if isinstance(response, dict) else None
-        log_event(
-            self._logger,
-            logging.DEBUG,
-            "discord.channel_message.sent",
-            channel_id=channel_id,
-            content_len=content_len,
-            message_id=message_id,
-        )
-        return response
 
     async def _delete_channel_message(self, channel_id: str, message_id: str) -> None:
-        await self._rest.delete_channel_message(
-            channel_id=channel_id,
-            message_id=message_id,
-        )
+        await _delete_channel_message_impl(self._rest, channel_id, message_id)
 
     async def _send_channel_message_safe(
         self,
@@ -4113,73 +3909,24 @@ class DiscordBotService:
         *,
         record_id: Optional[str] = None,
     ) -> None:
-        try:
-            await self._send_channel_message(channel_id, payload)
-            return
-        except (DiscordAPIError, OSError, RuntimeError) as exc:
-            outbox_record_id = (
-                record_id or f"retry:{channel_id}:{uuid.uuid4().hex[:12]}"
-            )
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.channel_message.send_failed",
-                channel_id=channel_id,
-                record_id=outbox_record_id,
-                exc=exc,
-            )
-            try:
-                await self._store.enqueue_outbox(
-                    OutboxRecord(
-                        record_id=outbox_record_id,
-                        channel_id=channel_id,
-                        message_id=None,
-                        operation="send",
-                        payload_json=dict(payload),
-                    )
-                )
-            except (OSError, ValueError, TypeError) as enqueue_exc:
-                log_event(
-                    self._logger,
-                    logging.ERROR,
-                    "discord.channel_message.enqueue_failed",
-                    channel_id=channel_id,
-                    record_id=outbox_record_id,
-                    exc=enqueue_exc,
-                )
+        from .channel_messaging import send_channel_message_safe as _impl
+
+        await _impl(
+            self._store,
+            self._rest,
+            self._logger,
+            self._send_channel_message,
+            channel_id,
+            payload,
+            record_id=record_id,
+        )
 
     async def _handle_discord_outbox_delivery(
         self, record: OutboxRecord, delivered_message_id: Optional[str]
     ) -> None:
-        if not isinstance(delivered_message_id, str) or not delivered_message_id:
-            return
-        if self._hub_client is None:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.outbox.delivery_mark.hub_client_unavailable",
-                record_id=record.record_id,
-            )
-            return
-        from ...core.hub_control_plane import (
-            NotificationDeliveryMarkRequest as _CPDeliveryMarkRequest,
+        await _handle_discord_outbox_delivery_impl(
+            self._hub_client, self._logger, record, delivered_message_id
         )
-
-        try:
-            await self._hub_client.mark_notification_delivered(
-                _CPDeliveryMarkRequest(
-                    delivery_record_id=record.record_id,
-                    delivered_message_id=delivered_message_id,
-                )
-            )
-        except (HubControlPlaneError, OSError, ValueError) as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.outbox.delivery_mark.control_plane_failed",
-                record_id=record.record_id,
-                exc=exc,
-            )
 
     async def _delete_channel_message_safe(
         self,
@@ -4188,45 +3935,16 @@ class DiscordBotService:
         *,
         record_id: Optional[str] = None,
     ) -> bool:
-        if not isinstance(message_id, str) or not message_id:
-            return False
-        try:
-            await self._delete_channel_message(channel_id, message_id)
-            return True
-        except (DiscordAPIError, OSError, RuntimeError) as exc:
-            outbox_record_id = (
-                record_id or f"retry:delete:{channel_id}:{uuid.uuid4().hex[:12]}"
-            )
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.channel_message.delete_failed",
-                channel_id=channel_id,
-                message_id=message_id,
-                record_id=outbox_record_id,
-                exc=exc,
-            )
-            try:
-                await self._store.enqueue_outbox(
-                    OutboxRecord(
-                        record_id=outbox_record_id,
-                        channel_id=channel_id,
-                        message_id=message_id,
-                        operation="delete",
-                        payload_json={},
-                    )
-                )
-            except (OSError, ValueError) as enqueue_exc:
-                log_event(
-                    self._logger,
-                    logging.ERROR,
-                    "discord.channel_message.delete_enqueue_failed",
-                    channel_id=channel_id,
-                    message_id=message_id,
-                    record_id=outbox_record_id,
-                    exc=enqueue_exc,
-                )
-        return False
+        from .channel_messaging import delete_channel_message_safe as _impl
+
+        return await _impl(
+            self._store,
+            self._delete_channel_message,
+            self._logger,
+            channel_id,
+            message_id,
+            record_id=record_id,
+        )
 
     def _spawn_task(
         self, coro: Awaitable[None], *, await_on_shutdown: bool = False
@@ -4235,31 +3953,11 @@ class DiscordBotService:
         self._background_tasks.add(task)
         if await_on_shutdown:
             self._background_shutdown_wait_tasks.add(task)
-        task.add_done_callback(self._on_background_task_done)
+        task.add_done_callback(lambda t: _on_background_task_done_impl(self, t))
         return task
 
     async def _reconcile_discord_progress_leases_on_startup(self) -> None:
-        try:
-            reconciled = await reconcile_discord_turn_progress_leases(
-                self,
-                orphaned=True,
-                startup=True,
-            )
-        except Exception as exc:  # intentional: startup reconciliation is best-effort
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.turn.progress_reconcile_startup_failed",
-                exc=exc,
-            )
-            return
-        if reconciled:
-            log_event(
-                self._logger,
-                logging.INFO,
-                "discord.turn.progress_reconcile_startup_finished",
-                reconciled=reconciled,
-            )
+        await _reconcile_progress_leases_on_startup_impl(self)
 
     async def _reconcile_background_task_failure(
         self,
@@ -4267,79 +3965,12 @@ class DiscordBotService:
         *,
         allow_channel_fallback: bool = True,
     ) -> int:
-        failure_note = task_context.get("failure_note")
-        if not isinstance(failure_note, str) or not failure_note.strip():
-            failure_note = "Status: this progress message lost its worker."
-        reconciled = await reconcile_discord_turn_progress_leases(
-            self,
-            lease_id=(
-                task_context.get("lease_id")
-                if isinstance(task_context.get("lease_id"), str)
-                else None
-            ),
-            managed_thread_id=(
-                task_context.get("managed_thread_id")
-                if isinstance(task_context.get("managed_thread_id"), str)
-                else None
-            ),
-            execution_id=(
-                task_context.get("execution_id")
-                if isinstance(task_context.get("execution_id"), str)
-                else None
-            ),
-            channel_id=(
-                task_context.get("channel_id")
-                if isinstance(task_context.get("channel_id"), str)
-                else None
-            ),
-            message_id=(
-                task_context.get("message_id")
-                if isinstance(task_context.get("message_id"), str)
-                else None
-            ),
-            failure_note=failure_note,
-            orphaned=bool(task_context.get("orphaned")),
+        return await _reconcile_background_task_failure_impl(
+            self, task_context, allow_channel_fallback=allow_channel_fallback
         )
-        if reconciled:
-            return int(reconciled)
-        if not allow_channel_fallback:
-            return 0
-        fallback_channel_id = (
-            task_context.get("channel_id")
-            if isinstance(task_context.get("channel_id"), str)
-            else None
-        )
-        if fallback_channel_id:
-            await self._send_channel_message_safe(
-                fallback_channel_id,
-                {"content": failure_note},
-            )
-        return 0
 
     def _on_background_task_done(self, task: asyncio.Task[Any]) -> None:
-        self._background_tasks.discard(task)
-        self._background_shutdown_wait_tasks.discard(task)
-        task_context = getattr(task, "_discord_progress_task_context", None)
-        try:
-            task.result()
-        except asyncio.CancelledError:
-            return
-        except (
-            Exception
-        ) as exc:  # intentional: top-level error handler for background tasks
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.background_task.failed",
-                exc=exc,
-            )
-            if isinstance(task_context, dict) and task_context:
-
-                async def _reconcile_failure() -> None:
-                    await self._reconcile_background_task_failure(task_context)
-
-                reconcile_task = self._spawn_task(_reconcile_failure())
-                bind_discord_progress_task_context(reconcile_task)
+        _on_background_task_done_impl(self, task)
 
     async def _on_dispatch(self, event_type: str, payload: dict[str, Any]) -> None:
         if event_type == "INTERACTION_CREATE":
@@ -4517,178 +4148,25 @@ class DiscordBotService:
     async def _record_channel_directory_seen_from_message_payload(
         self, payload: dict[str, Any]
     ) -> None:
-        channel_id = self._coerce_id(payload.get("channel_id"))
-        if channel_id is None:
-            return
-        guild_id = self._coerce_id(payload.get("guild_id"))
-
-        guild_label = self._first_non_empty_text(
-            payload.get("guild_name"),
-            self._nested_text(payload, "guild", "name"),
-        )
-        channel_label_raw = self._first_non_empty_text(
-            payload.get("channel_name"),
-            self._nested_text(payload, "channel", "name"),
-        )
-        if channel_label_raw is not None:
-            channel_label_raw = channel_label_raw.lstrip("#")
-            self._channel_name_cache[channel_id] = channel_label_raw
-        else:
-            if channel_id in self._channel_name_cache:
-                cached_channel = self._channel_name_cache[channel_id]
-                channel_label_raw = cached_channel if cached_channel else None
-            else:
-                channel_label_raw = await self._resolve_channel_name(channel_id)
-
-        if guild_id is not None:
-            if guild_label is not None:
-                self._guild_name_cache[guild_id] = guild_label
-            else:
-                if guild_id in self._guild_name_cache:
-                    cached_guild = self._guild_name_cache[guild_id]
-                    guild_label = cached_guild if cached_guild else None
-                else:
-                    guild_label = await self._resolve_guild_name(guild_id)
-
-        channel_label = (
-            f"#{channel_label_raw.lstrip('#')}"
-            if channel_label_raw is not None
-            else f"#{channel_id}"
-        )
-
-        if guild_id is not None:
-            display = f"{guild_label or f'guild:{guild_id}'} / {channel_label}"
-        else:
-            display = channel_label if channel_label_raw is not None else channel_id
-
-        meta: dict[str, Any] = {}
-        if guild_id is not None:
-            meta["guild_id"] = guild_id
-
-        try:
-            self._channel_directory_store.record_seen(
-                "discord",
-                channel_id,
-                None,
-                display,
-                meta,
-            )
-        except (OSError, ValueError, TypeError) as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.channel_directory.record_failed",
-                channel_id=channel_id,
-                guild_id=guild_id,
-                exc=exc,
-            )
+        await _record_channel_directory_seen_impl(self, payload)
 
     async def _resolve_channel_name(self, channel_id: str) -> Optional[str]:
-        fetch = getattr(self._rest, "get_channel", None)
-        if not callable(fetch):
-            self._channel_name_cache[channel_id] = ""
-            return None
-        in_flight = self._channel_name_lookups.get(channel_id)
-        if in_flight is None:
-
-            async def _load_channel_name() -> Optional[str]:
-                try:
-                    payload = await fetch(channel_id=channel_id)
-                except (DiscordAPIError, OSError) as exc:
-                    log_event(
-                        self._logger,
-                        logging.WARNING,
-                        "discord.channel_directory.channel_lookup_failed",
-                        channel_id=channel_id,
-                        exc=exc,
-                    )
-                    self._channel_name_cache[channel_id] = ""
-                    return None
-                if not isinstance(payload, dict):
-                    self._channel_name_cache[channel_id] = ""
-                    return None
-                channel_label = self._first_non_empty_text(payload.get("name"))
-                if channel_label is None:
-                    self._channel_name_cache[channel_id] = ""
-                    return None
-                normalized = channel_label.lstrip("#")
-                self._channel_name_cache[channel_id] = normalized
-                return normalized
-
-            in_flight = asyncio.create_task(_load_channel_name())
-            self._channel_name_lookups[channel_id] = in_flight
-        try:
-            return await in_flight
-        finally:
-            if self._channel_name_lookups.get(channel_id) is in_flight:
-                self._channel_name_lookups.pop(channel_id, None)
+        return await _resolve_channel_name_impl(self, channel_id)
 
     async def _resolve_guild_name(self, guild_id: str) -> Optional[str]:
-        fetch = getattr(self._rest, "get_guild", None)
-        if not callable(fetch):
-            self._guild_name_cache[guild_id] = ""
-            return None
-        in_flight = self._guild_name_lookups.get(guild_id)
-        if in_flight is None:
-
-            async def _load_guild_name() -> Optional[str]:
-                try:
-                    payload = await fetch(guild_id=guild_id)
-                except (DiscordAPIError, OSError) as exc:
-                    log_event(
-                        self._logger,
-                        logging.WARNING,
-                        "discord.channel_directory.guild_lookup_failed",
-                        guild_id=guild_id,
-                        exc=exc,
-                    )
-                    self._guild_name_cache[guild_id] = ""
-                    return None
-                if not isinstance(payload, dict):
-                    self._guild_name_cache[guild_id] = ""
-                    return None
-                guild_label = self._first_non_empty_text(payload.get("name"))
-                if guild_label is None:
-                    self._guild_name_cache[guild_id] = ""
-                    return None
-                self._guild_name_cache[guild_id] = guild_label
-                return guild_label
-
-            in_flight = asyncio.create_task(_load_guild_name())
-            self._guild_name_lookups[guild_id] = in_flight
-        try:
-            return await in_flight
-        finally:
-            if self._guild_name_lookups.get(guild_id) is in_flight:
-                self._guild_name_lookups.pop(guild_id, None)
+        return await _resolve_guild_name_impl(self, guild_id)
 
     @staticmethod
     def _nested_text(payload: dict[str, Any], key: str, field: str) -> Optional[str]:
-        candidate = payload.get(key)
-        if not isinstance(candidate, dict):
-            return None
-        return DiscordBotService._first_non_empty_text(candidate.get(field))
+        return _cm_nested_text(payload, key, field)
 
     @staticmethod
     def _first_non_empty_text(*values: Any) -> Optional[str]:
-        for value in values:
-            if isinstance(value, str):
-                normalized = value.strip()
-                if normalized:
-                    return normalized
-        return None
+        return _cm_first_non_empty_text(*values)
 
     @staticmethod
     def _coerce_id(value: Any) -> Optional[str]:
-        if isinstance(value, bool):
-            return None
-        if isinstance(value, int):
-            return str(value)
-        if isinstance(value, str):
-            normalized = value.strip()
-            if normalized:
-                return normalized
-        return None
+        return _cm_coerce_id(value)
 
     async def _handle_bind(
         self,
