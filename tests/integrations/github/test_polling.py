@@ -757,6 +757,82 @@ def test_process_due_watches_initializes_post_open_boost_for_baseline_pending_wa
     assert refreshed.snapshot["post_open_boost_until"] == "2026-03-30T01:15:00Z"
 
 
+def test_process_due_watches_closes_binding_when_live_pr_state_is_terminal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binding = PrBindingStore(tmp_path).upsert_binding(
+        provider="github",
+        repo_slug="acme/widgets",
+        pr_number=17,
+        pr_state="open",
+        head_branch="feature/scm-polling",
+        base_branch="main",
+    )
+    watch_store = ScmPollingWatchStore(tmp_path)
+    watch = watch_store.upsert_watch(
+        provider="github",
+        binding_id=binding.binding_id,
+        repo_slug=binding.repo_slug,
+        pr_number=binding.pr_number,
+        workspace_root=str((tmp_path / "repo").resolve()),
+        poll_interval_seconds=90,
+        next_poll_at="2026-03-30T00:00:00Z",
+        expires_at="2099-03-30T01:00:00Z",
+        reaction_config={"enabled": True},
+        snapshot={"head_sha": "oldsha", "pr_state": "open"},
+    )
+    assert watch is not None
+
+    def _factory(repo_root: Path, raw_config=None) -> _GitHubServiceStub:
+        return _GitHubServiceStub(
+            repo_root,
+            raw_config,
+            pr_view_payload={
+                "state": "MERGED",
+                "isDraft": False,
+                "headRefOid": "newsha",
+                "author": {"login": "pr-author"},
+            },
+            reviews_payload=[],
+            checks_payload=[],
+        )
+
+    monkeypatch.setattr(
+        github_polling,
+        "_utc_now",
+        lambda: datetime(2026, 3, 30, 1, 0, 0, tzinfo=timezone.utc),
+    )
+    monkeypatch.setattr(github_polling, "now_iso", lambda: "2026-03-30T01:00:00Z")
+    monkeypatch.setattr(scm_polling_watches, "now_iso", lambda: "2026-03-30T01:00:00Z")
+
+    service = GitHubScmPollingService(
+        tmp_path,
+        raw_config=_polling_config(),
+        github_service_factory=_factory,
+        watch_store=watch_store,
+        event_store=ScmEventStore(tmp_path),
+    )
+
+    result = service.process_due_watches(limit=10)
+
+    assert result["closed"] == 1
+    refreshed_watch = watch_store.get_watch(
+        provider="github",
+        binding_id=binding.binding_id,
+    )
+    assert refreshed_watch is not None
+    assert refreshed_watch.state == "closed"
+    refreshed_binding = PrBindingStore(tmp_path).get_binding_by_pr(
+        provider="github",
+        repo_slug=binding.repo_slug,
+        pr_number=binding.pr_number,
+    )
+    assert refreshed_binding is not None
+    assert refreshed_binding.pr_state == "merged"
+    assert refreshed_binding.closed_at is not None
+
+
 def test_arm_watch_preserves_rate_limit_backoff_even_when_post_open_boost_enabled(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
