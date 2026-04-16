@@ -3928,6 +3928,8 @@ button.icon-btn {
   color: inherit;
   cursor: pointer;
   text-align: left;
+  text-transform: none;
+  letter-spacing: normal;
 }
 
 .ticket-live-output-header:hover {
