@@ -451,11 +451,7 @@ def test_route_scm_reactions_routes_bot_pull_request_review_comment() -> None:
         event, binding=_binding(thread_target_id="thread-inline-bot")
     )
 
-    assert len(intents) == 2
-    assert intents[0].reaction_kind == "review_comment"
-    assert intents[0].operation_kind == "enqueue_managed_turn"
-    assert intents[1].reaction_kind == "review_comment"
-    assert intents[1].operation_kind == "react_pr_review_comment"
+    assert len(intents) == 0
 
 
 def test_route_scm_reactions_still_reacts_to_review_comment_without_chat_target() -> (

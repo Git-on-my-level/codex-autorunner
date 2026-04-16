@@ -232,9 +232,8 @@ def _match_reaction_kind(
             and author_login == issue_author_login
         ):
             return None
-        if event.event_type == "issue_comment" and (
-            author_type == "bot"
-            or (author_login is not None and author_login.endswith("[bot]"))
+        if author_type == "bot" or (
+            author_login is not None and author_login.endswith("[bot]")
         ):
             return None
         return "review_comment"
