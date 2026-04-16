@@ -367,7 +367,7 @@ def test_compaction_skips_small_executions_without_loading_timeline_rows(
     def fail_load(*_args, **_kwargs):
         raise AssertionError("small executions should be skipped by count precheck")
 
-    monkeypatch.setattr(maintenance_module, "_load_timeline_rows", fail_load)
+    monkeypatch.setattr(maintenance_module, "load_timeline_rows", fail_load)
 
     summary = compact_completed_execution_history(
         hub_root,
@@ -467,7 +467,7 @@ def test_compaction_precheck_ignores_summary_rows_for_threshold(
     def fail_load(*_args, **_kwargs):
         raise AssertionError("summary rows should not force a second compaction pass")
 
-    monkeypatch.setattr(maintenance_module, "_load_timeline_rows", fail_load)
+    monkeypatch.setattr(maintenance_module, "load_timeline_rows", fail_load)
 
     second_summary = compact_completed_execution_history(hub_root, policy=policy)
 
