@@ -8,25 +8,19 @@ import uuid
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
-from typing import Any, Awaitable, Optional, cast
+from typing import Any, Optional, cast
 
-from ...agents.registry import (
+from ...agents.registry import (  # noqa: F401  re-export for test monkeypatch compat
     get_registered_agents,
     resolve_agent_runtime,
     wrap_requested_agent_context,
 )
-from ...core.config import load_hub_config
-from ...core.config_contract import ConfigError
 from ...core.context_awareness import (
     maybe_inject_car_awareness,
     maybe_inject_filebox_hint,
     maybe_inject_prompt_writing_hint,
 )
 from ...core.filebox import inbox_dir, outbox_dir, outbox_pending_dir
-from ...core.hub_control_plane import (
-    RemoteSurfaceBindingStore,
-    RemoteThreadExecutionStore,
-)
 from ...core.injected_context import wrap_injected_context
 from ...core.logging_utils import log_event
 from ...core.orchestration import (
@@ -34,10 +28,8 @@ from ...core.orchestration import (
     MessageRequest,
     PausedFlowTarget,
     SurfaceThreadMessageRequest,
-    build_harness_backed_orchestration_service,
     build_surface_orchestration_ingress,
 )
-from ...core.orchestration.bindings import OrchestrationBindingStore
 from ...core.orchestration.runtime_thread_events import RuntimeThreadRunEventState
 from ...core.orchestration.runtime_threads import (
     RuntimeThreadExecution,
@@ -56,7 +48,6 @@ from ...core.pma_notification_store import (
 )
 from ...core.ports.run_event import TokenUsage
 from ...core.utils import canonicalize_path
-from ...integrations.chat.agents import resolve_chat_runtime_agent
 from ...integrations.chat.approval_modes import resolve_approval_mode_policies
 from ...integrations.chat.chat_ux_telemetry import (
     ChatUxFailureReason,
@@ -80,20 +71,11 @@ from ..chat.managed_thread_progress_projector import (
 )
 from ..chat.managed_thread_turns import (
     ManagedThreadCoordinatorHooks,
-    ManagedThreadErrorMessages,
     ManagedThreadFinalizationResult,
     ManagedThreadQueuedExecutionStarter,
-    ManagedThreadSurfaceInfo,
-    ManagedThreadTargetRequest,
-    ManagedThreadTurnCoordinator,
+    ManagedThreadTurnCoordinator,  # noqa: F401  re-export for test monkeypatch compat
     complete_managed_thread_execution,
     render_managed_thread_response_text,
-)
-from ..chat.managed_thread_turns import (
-    build_managed_thread_input_items as _shared_build_managed_thread_input_items,
-)
-from ..chat.managed_thread_turns import (
-    resolve_managed_thread_target as _shared_resolve_managed_thread_target,
 )
 from ..chat.managed_turn_runner import (
     ManagedSurfaceQueueConfig,
@@ -111,7 +93,48 @@ from .components import (
     build_queued_turn_progress_buttons,
 )
 from .errors import DiscordTransientError
-from .rendering import (
+from .managed_thread_routing import (
+    _build_discord_managed_thread_coordinator,
+    _build_discord_queue_worker_hooks,
+    _build_discord_runner_hooks,
+    _build_managed_thread_input_items,
+    _DiscordManagedThreadStatus,
+    _evict_cached_runtime_supervisors,
+    _load_discord_pma_turn_timeout_seconds,  # noqa: F401  re-export for test monkeypatch compat
+    build_discord_thread_orchestration_service,
+    resolve_discord_thread_target,
+)
+from .progress_leases import (  # noqa: F401  re-export for backward compat
+    DiscordTurnStartupFailure,
+    _acknowledge_discord_progress_reuse,
+    _claim_discord_reusable_progress_message,
+    _delete_discord_progress_lease,
+    _DiscordOrchestrationState,
+    _DiscordProgressReuseRequest,
+    _DiscordReusableProgressMessage,
+    _DiscordTurnExecutionSupervision,
+    _execution_field,
+    _get_discord_progress_lease,
+    _get_discord_thread_queue_task_map,
+    _list_discord_progress_leases,
+    _orphaned_progress_note,
+    _peek_discord_progress_reuse_request,
+    _progress_task_context,
+    _reconcile_other_discord_turn_progress_leases,
+    _retire_discord_progress_message,
+    _shutdown_progress_note,
+    _spawn_discord_background_task,
+    _spawn_discord_progress_background_task,
+    _stash_discord_reusable_progress_message,
+    _update_discord_progress_lease,
+    _upsert_discord_progress_lease,
+    bind_discord_progress_task_context,
+    clear_discord_turn_progress_leases,
+    clear_discord_turn_progress_reuse,
+    reconcile_discord_turn_progress_leases,
+    request_discord_turn_progress_reuse,
+)
+from .rendering import (  # noqa: F401  re-export for test monkeypatch compat
     DISCORD_MAX_MESSAGE_LENGTH,
     chunk_discord_message,
     format_discord_message,
@@ -133,8 +156,7 @@ _DISCORD_PROGRESS_LIVE_STATES = frozenset({"pending", "active"})
 _DISCORD_PROGRESS_RECONCILABLE_STATES = frozenset({"pending", "active", "retiring"})
 
 
-class DiscordTurnStartupFailure(RuntimeError):
-    """Raised after a Discord turn startup failure has been surfaced to the user."""
+_sanitize_runtime_thread_result_error = sanitize_runtime_thread_error
 
 
 @dataclass(frozen=True)
@@ -148,100 +170,6 @@ class DiscordMessageTurnResult:
     send_final_message: bool = True
     deferred_delivery: bool = False
     preserve_progress_lease: bool = False
-
-
-@dataclass(frozen=True)
-class _DiscordProgressReuseRequest:
-    source_message_id: str
-    acknowledgement: str
-
-
-@dataclass(frozen=True)
-class _DiscordReusableProgressMessage:
-    source_message_id: str
-    channel_id: str
-    message_id: str
-
-
-@dataclass
-class _DiscordOrchestrationState:
-    progress_reuse_requests: dict[str, _DiscordProgressReuseRequest]
-    reusable_progress_messages: dict[str, _DiscordReusableProgressMessage]
-    thread_queue_tasks: dict[str, asyncio.Task[Any]]
-
-
-@dataclass
-class _DiscordTurnExecutionSupervision:
-    service: Any
-    channel_id: str
-    task_context: dict[str, Any] = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        self._set_text_field("channel_id", self.channel_id)
-
-    def _set_text_field(self, key: str, value: Optional[str]) -> None:
-        normalized = str(value or "").strip()
-        if normalized:
-            self.task_context[key] = normalized
-            return
-        self.task_context.pop(key, None)
-
-    def _set_bool_field(self, key: str, value: bool) -> None:
-        if value:
-            self.task_context[key] = True
-            return
-        self.task_context.pop(key, None)
-
-    def bind_task(self, task: asyncio.Task[Any]) -> asyncio.Task[Any]:
-        cast(Any, task)._discord_progress_task_context = self.task_context
-        return task
-
-    def set_managed_thread_id(self, managed_thread_id: Optional[str]) -> None:
-        self._set_text_field("managed_thread_id", managed_thread_id)
-
-    def set_execution_id(self, execution_id: Optional[str]) -> None:
-        self._set_text_field("execution_id", execution_id)
-
-    def set_lease_id(self, lease_id: Optional[str]) -> None:
-        self._set_text_field("lease_id", lease_id)
-
-    def set_message_id(self, message_id: Optional[str]) -> None:
-        self._set_text_field("message_id", message_id)
-
-    def set_failure_note(self, failure_note: Optional[str]) -> None:
-        self._set_text_field("failure_note", failure_note)
-
-    def set_shutdown_note(self, shutdown_note: Optional[str]) -> None:
-        self._set_text_field("shutdown_note", shutdown_note)
-
-    def set_orphaned(self, orphaned: bool) -> None:
-        self._set_bool_field("orphaned", orphaned)
-
-    def clear_progress_tracking(self, *, keep_execution_id: bool = True) -> None:
-        self.task_context.pop("lease_id", None)
-        self.task_context.pop("message_id", None)
-        if not keep_execution_id:
-            self.task_context.pop("execution_id", None)
-
-    async def reconcile_failure(
-        self,
-        *,
-        failure_note: Optional[str] = None,
-        allow_channel_fallback: bool = True,
-    ) -> int:
-        context = dict(self.task_context)
-        if isinstance(failure_note, str) and failure_note.strip():
-            context["failure_note"] = failure_note.strip()
-        reconciler = getattr(self.service, "_reconcile_background_task_failure", None)
-        if not callable(reconciler):
-            return 0
-        return int(
-            await reconciler(
-                context,
-                allow_channel_fallback=allow_channel_fallback,
-            )
-            or 0
-        )
 
 
 @dataclass(frozen=True)
@@ -291,9 +219,6 @@ class _DiscordMessageTurnDispatch:
         )
 
 
-_sanitize_runtime_thread_result_error = sanitize_runtime_thread_error
-
-
 def _discord_surface_error_messages(*, pma_enabled: bool) -> tuple[str, str, str]:
     if pma_enabled:
         return (
@@ -308,551 +233,12 @@ def _discord_surface_error_messages(*, pma_enabled: bool) -> tuple[str, str, str
     )
 
 
-def _get_discord_progress_reuse_requests(
-    service: Any,
-) -> dict[str, _DiscordProgressReuseRequest]:
-    return _discord_orchestration_state(service).progress_reuse_requests
-
-
-def _get_discord_reusable_progress_messages(
-    service: Any,
-) -> dict[str, _DiscordReusableProgressMessage]:
-    return _discord_orchestration_state(service).reusable_progress_messages
-
-
-def _discord_orchestration_state(service: Any) -> _DiscordOrchestrationState:
-    requests = getattr(service, "_discord_turn_progress_reuse_requests", None)
-    if not isinstance(requests, dict):
-        requests = {}
-        service._discord_turn_progress_reuse_requests = requests
-    messages = getattr(service, "_discord_reusable_progress_messages", None)
-    if not isinstance(messages, dict):
-        messages = {}
-        service._discord_reusable_progress_messages = messages
-    task_map = getattr(service, "_discord_thread_queue_tasks", None)
-    if not isinstance(task_map, dict):
-        task_map = {}
-        service._discord_thread_queue_tasks = task_map
-        service._discord_managed_thread_queue_tasks = task_map
-    return _DiscordOrchestrationState(
-        progress_reuse_requests=requests,
-        reusable_progress_messages=messages,
-        thread_queue_tasks=task_map,
-    )
-
-
-def request_discord_turn_progress_reuse(
-    service: Any,
-    *,
-    thread_target_id: str,
-    source_message_id: str,
-    acknowledgement: str,
-) -> None:
-    normalized_thread_target_id = str(thread_target_id or "").strip()
-    normalized_source_message_id = str(source_message_id or "").strip()
-    normalized_acknowledgement = str(acknowledgement or "").strip()
-    if (
-        not normalized_thread_target_id
-        or not normalized_source_message_id
-        or not normalized_acknowledgement
-    ):
-        return
-    _get_discord_progress_reuse_requests(service)[normalized_thread_target_id] = (
-        _DiscordProgressReuseRequest(
-            source_message_id=normalized_source_message_id,
-            acknowledgement=normalized_acknowledgement,
-        )
-    )
-
-
-def clear_discord_turn_progress_reuse(
-    service: Any,
-    *,
-    thread_target_id: str,
-) -> None:
-    normalized_thread_target_id = str(thread_target_id or "").strip()
-    if not normalized_thread_target_id:
-        return
-    _get_discord_progress_reuse_requests(service).pop(normalized_thread_target_id, None)
-    _get_discord_reusable_progress_messages(service).pop(
-        normalized_thread_target_id, None
-    )
-
-
-def _peek_discord_progress_reuse_request(
-    service: Any,
-    *,
-    thread_target_id: str,
-) -> Optional[_DiscordProgressReuseRequest]:
-    normalized_thread_target_id = str(thread_target_id or "").strip()
-    if not normalized_thread_target_id:
-        return None
-    request = _get_discord_progress_reuse_requests(service).get(
-        normalized_thread_target_id
-    )
-    if isinstance(request, _DiscordProgressReuseRequest):
-        return request
-    return None
-
-
-def _stash_discord_reusable_progress_message(
-    service: Any,
-    *,
-    thread_target_id: str,
-    source_message_id: str,
-    channel_id: str,
-    message_id: str,
-) -> None:
-    normalized_thread_target_id = str(thread_target_id or "").strip()
-    normalized_source_message_id = str(source_message_id or "").strip()
-    normalized_channel_id = str(channel_id or "").strip()
-    normalized_message_id = str(message_id or "").strip()
-    if (
-        not normalized_thread_target_id
-        or not normalized_source_message_id
-        or not normalized_channel_id
-        or not normalized_message_id
-    ):
-        return
-    _get_discord_reusable_progress_messages(service)[normalized_thread_target_id] = (
-        _DiscordReusableProgressMessage(
-            source_message_id=normalized_source_message_id,
-            channel_id=normalized_channel_id,
-            message_id=normalized_message_id,
-        )
-    )
-
-
-def _execution_field(record: Any, field: str) -> Optional[str]:
-    if isinstance(record, dict):
-        value = record.get(field)
-    else:
-        value = getattr(record, field, None)
-    normalized = str(value or "").strip()
-    return normalized or None
-
-
-def _progress_task_context(
-    *,
-    managed_thread_id: Optional[str] = None,
-    execution_id: Optional[str] = None,
-    lease_id: Optional[str] = None,
-    channel_id: Optional[str] = None,
-    message_id: Optional[str] = None,
-    failure_note: Optional[str] = None,
-    shutdown_note: Optional[str] = None,
-    orphaned: bool = False,
-) -> dict[str, Any]:
-    context: dict[str, Any] = {}
-    if isinstance(managed_thread_id, str) and managed_thread_id.strip():
-        context["managed_thread_id"] = managed_thread_id.strip()
-    if isinstance(execution_id, str) and execution_id.strip():
-        context["execution_id"] = execution_id.strip()
-    if isinstance(lease_id, str) and lease_id.strip():
-        context["lease_id"] = lease_id.strip()
-    if isinstance(channel_id, str) and channel_id.strip():
-        context["channel_id"] = channel_id.strip()
-    if isinstance(message_id, str) and message_id.strip():
-        context["message_id"] = message_id.strip()
-    if isinstance(failure_note, str) and failure_note.strip():
-        context["failure_note"] = failure_note.strip()
-    if isinstance(shutdown_note, str) and shutdown_note.strip():
-        context["shutdown_note"] = shutdown_note.strip()
-    if orphaned:
-        context["orphaned"] = True
-    return context
-
-
-def bind_discord_progress_task_context(
-    task: asyncio.Task[Any],
-    *,
-    managed_thread_id: Optional[str] = None,
-    execution_id: Optional[str] = None,
-    lease_id: Optional[str] = None,
-    channel_id: Optional[str] = None,
-    message_id: Optional[str] = None,
-    failure_note: Optional[str] = None,
-    shutdown_note: Optional[str] = None,
-    orphaned: bool = False,
-) -> asyncio.Task[Any]:
-    context = _progress_task_context(
-        managed_thread_id=managed_thread_id,
-        execution_id=execution_id,
-        lease_id=lease_id,
-        channel_id=channel_id,
-        message_id=message_id,
-        failure_note=failure_note,
-        shutdown_note=shutdown_note,
-        orphaned=orphaned,
-    )
-    if context:
-        cast(Any, task)._discord_progress_task_context = context
-    return task
-
-
-async def _upsert_discord_progress_lease(
-    service: Any,
-    *,
-    lease_id: str,
-    managed_thread_id: str,
-    execution_id: Optional[str],
-    channel_id: str,
-    message_id: str,
-    source_message_id: Optional[str],
-    state: str,
-    progress_label: Optional[str],
-) -> Any:
-    upsert = getattr(service._store, "upsert_turn_progress_lease", None)
-    if not callable(upsert):
-        return None
-    return await upsert(
-        lease_id=lease_id,
-        managed_thread_id=managed_thread_id,
-        execution_id=execution_id,
-        channel_id=channel_id,
-        message_id=message_id,
-        source_message_id=source_message_id,
-        state=state,
-        progress_label=progress_label,
-    )
-
-
-async def _get_discord_progress_lease(service: Any, *, lease_id: str) -> Any:
-    getter = getattr(service._store, "get_turn_progress_lease", None)
-    if not callable(getter):
-        return None
-    return await getter(lease_id=lease_id)
-
-
-async def _list_discord_progress_leases(
-    service: Any,
-    *,
-    managed_thread_id: Optional[str] = None,
-    execution_id: Optional[str] = None,
-    channel_id: Optional[str] = None,
-    message_id: Optional[str] = None,
-) -> list[Any]:
-    lister = getattr(service._store, "list_turn_progress_leases", None)
-    if not callable(lister):
-        return []
-    return list(
-        await lister(
-            managed_thread_id=managed_thread_id,
-            execution_id=execution_id,
-            channel_id=channel_id,
-            message_id=message_id,
-        )
-        or []
-    )
-
-
-async def _update_discord_progress_lease(
-    service: Any,
-    *,
-    lease_id: str,
-    execution_id: Optional[str] | object = ...,
-    state: Optional[str] | object = ...,
-    progress_label: Optional[str] | object = ...,
-) -> Any:
-    updater = getattr(service._store, "update_turn_progress_lease", None)
-    if not callable(updater):
-        return None
-    kwargs: dict[str, Any] = {"lease_id": lease_id}
-    if execution_id is not ...:
-        kwargs["execution_id"] = execution_id
-    if state is not ...:
-        kwargs["state"] = state
-    if progress_label is not ...:
-        kwargs["progress_label"] = progress_label
-    return await updater(**kwargs)
-
-
-async def _delete_discord_progress_lease(service: Any, *, lease_id: str) -> None:
-    deleter = getattr(service._store, "delete_turn_progress_lease", None)
-    if not callable(deleter):
-        return
-    await deleter(lease_id=lease_id)
-
-
-async def _retire_discord_progress_message(
-    service: Any,
-    *,
-    channel_id: str,
-    message_id: str,
-    note: str,
-) -> bool:
-    normalized_channel_id = str(channel_id or "").strip()
-    normalized_message_id = str(message_id or "").strip()
-    normalized_note = str(note or "").strip()
-    if not normalized_channel_id or not normalized_message_id or not normalized_note:
-        return False
-    content = normalized_note
-    fetch_message = getattr(service._rest, "get_channel_message", None)
-    if callable(fetch_message):
-        try:
-            fetched = await fetch_message(
-                channel_id=normalized_channel_id,
-                message_id=normalized_message_id,
-            )
-        except (
-            DiscordTransientError,
-            RuntimeError,
-            ConnectionError,
-            OSError,
-            ValueError,
-            TypeError,
-            AttributeError,
-        ):
-            fetched = {}
-        existing_content = str(fetched.get("content") or "").strip()
-        if existing_content:
-            lowered_existing = existing_content.lower()
-            lowered_note = normalized_note.lower()
-            if lowered_note not in lowered_existing:
-                content = f"{existing_content.rstrip()}\n\n{normalized_note}"
-            else:
-                content = existing_content
-    try:
-        await service._rest.edit_channel_message(
-            channel_id=normalized_channel_id,
-            message_id=normalized_message_id,
-            payload={
-                "content": truncate_for_discord(
-                    content,
-                    max_len=max(int(service._config.max_message_length), 32),
-                ),
-                "components": [],
-            },
-        )
-    except (DiscordTransientError, RuntimeError, ConnectionError, OSError):
-        return False
-    return True
-
-
-def _orphaned_progress_note(*, startup: bool) -> str:
-    if startup:
-        return (
-            "Status: this progress message lost its Discord worker during restart. "
-            "Please retry if you still need a response."
-        )
-    return (
-        "Status: this progress message lost its Discord worker and is no longer live. "
-        "Please retry if needed."
-    )
-
-
-def _shutdown_progress_note() -> str:
-    return (
-        "Status: this progress message was interrupted during Discord shutdown and "
-        "is no longer live. Please retry if needed."
-    )
-
-
-def _resolve_discord_progress_reconcile_note(
-    *,
-    referenced_execution_id: Optional[str],
-    latest_execution: Any,
-    running_execution: Any,
-    resolved_execution: Any,
-    thread_missing: bool,
-    failure_note: Optional[str],
-    orphaned: bool,
-    startup: bool,
-) -> Optional[str]:
-    if isinstance(failure_note, str) and failure_note.strip():
-        return failure_note.strip()
-    if thread_missing:
-        return (
-            "Status: this progress message no longer maps to an active managed thread."
-        )
-    if orphaned:
-        return _orphaned_progress_note(startup=startup)
-    if referenced_execution_id is None:
-        return "Status: this turn failed before execution started."
-    latest_execution_id = _execution_field(latest_execution, "execution_id")
-    if latest_execution_id and latest_execution_id != referenced_execution_id:
-        return "Status: this progress message belongs to an older turn. A newer turn is active."
-    resolved_status = (_execution_field(resolved_execution, "status") or "").lower()
-    if resolved_status == "ok":
-        return "Status: this turn already completed."
-    if resolved_status == "interrupted":
-        return "Status: this turn was already stopped."
-    if resolved_status == "error":
-        return "Status: this turn already failed."
-    if resolved_status == "queued":
-        return "Status: this turn is queued and no longer has an active cancel surface."
-    if resolved_status == "running":
-        running_execution_id = _execution_field(running_execution, "execution_id")
-        if running_execution_id == referenced_execution_id:
-            return None
-    return "Status: this turn is no longer active."
-
-
-async def reconcile_discord_turn_progress_leases(
-    service: Any,
-    *,
-    lease_id: Optional[str] = None,
-    managed_thread_id: Optional[str] = None,
-    execution_id: Optional[str] = None,
-    channel_id: Optional[str] = None,
-    message_id: Optional[str] = None,
-    failure_note: Optional[str] = None,
-    orphaned: bool = False,
-    startup: bool = False,
-) -> int:
-    leases: list[Any]
-    if isinstance(lease_id, str) and lease_id.strip():
-        lease = await _get_discord_progress_lease(service, lease_id=lease_id)
-        leases = [lease] if lease is not None else []
-    else:
-        leases = await _list_discord_progress_leases(
-            service,
-            managed_thread_id=managed_thread_id,
-            execution_id=execution_id,
-            channel_id=channel_id,
-            message_id=message_id,
-        )
-    if not leases:
-        return 0
-
-    reconciled = 0
-    orchestration_service = build_discord_thread_orchestration_service(service)
-    get_thread_target = getattr(orchestration_service, "get_thread_target", None)
-    get_latest_execution = getattr(orchestration_service, "get_latest_execution", None)
-    get_running_execution = getattr(
-        orchestration_service,
-        "get_running_execution",
-        None,
-    )
-    get_execution = getattr(orchestration_service, "get_execution", None)
-
-    for lease in leases:
-        current_lease_id = _execution_field(lease, "lease_id")
-        current_thread_id = _execution_field(lease, "managed_thread_id")
-        current_execution_id = _execution_field(lease, "execution_id")
-        current_channel_id = _execution_field(lease, "channel_id")
-        current_message_id = _execution_field(lease, "message_id")
-        if (
-            not current_lease_id
-            or not current_thread_id
-            or not current_channel_id
-            or not current_message_id
-        ):
-            continue
-        current_state = (_execution_field(lease, "state") or "").lower()
-        if current_state and current_state not in _DISCORD_PROGRESS_RECONCILABLE_STATES:
-            continue
-
-        thread_missing = False
-        resolved_thread = None
-        if callable(get_thread_target):
-            try:
-                resolved_thread = get_thread_target(current_thread_id)
-            except (RuntimeError, ValueError, TypeError, AttributeError, KeyError):
-                resolved_thread = None
-        if resolved_thread is None:
-            thread_missing = True
-
-        latest_execution_record = None
-        if callable(get_latest_execution) and not thread_missing:
-            with contextlib.suppress(
-                RuntimeError, ValueError, TypeError, AttributeError, KeyError
-            ):
-                latest_execution_record = get_latest_execution(current_thread_id)
-        running_execution_record = None
-        if callable(get_running_execution) and not thread_missing:
-            with contextlib.suppress(
-                RuntimeError, ValueError, TypeError, AttributeError, KeyError
-            ):
-                running_execution_record = get_running_execution(current_thread_id)
-        resolved_execution_record = None
-        if (
-            callable(get_execution)
-            and not thread_missing
-            and current_execution_id is not None
-        ):
-            with contextlib.suppress(
-                RuntimeError, ValueError, TypeError, AttributeError, KeyError
-            ):
-                resolved_execution_record = get_execution(
-                    current_thread_id,
-                    current_execution_id,
-                )
-        if resolved_execution_record is None:
-            resolved_execution_record = latest_execution_record
-
-        note = _resolve_discord_progress_reconcile_note(
-            referenced_execution_id=current_execution_id,
-            latest_execution=latest_execution_record,
-            running_execution=running_execution_record,
-            resolved_execution=resolved_execution_record,
-            thread_missing=thread_missing,
-            failure_note=failure_note,
-            orphaned=orphaned,
-            startup=startup,
-        )
-        if note is None:
-            await _update_discord_progress_lease(
-                service,
-                lease_id=current_lease_id,
-                state="active",
-            )
-            continue
-        await _update_discord_progress_lease(
-            service,
-            lease_id=current_lease_id,
-            state="retiring",
-        )
-        retired = await _retire_discord_progress_message(
-            service,
-            channel_id=current_channel_id,
-            message_id=current_message_id,
-            note=note,
-        )
-        if retired:
-            await _delete_discord_progress_lease(service, lease_id=current_lease_id)
-            reconciled += 1
-    return reconciled
-
-
-async def clear_discord_turn_progress_leases(
-    service: Any,
-    *,
-    lease_id: Optional[str] = None,
-    managed_thread_id: Optional[str] = None,
-    execution_id: Optional[str] = None,
-    channel_id: Optional[str] = None,
-    message_id: Optional[str] = None,
-) -> int:
-    leases: list[Any]
-    if isinstance(lease_id, str) and lease_id.strip():
-        lease = await _get_discord_progress_lease(service, lease_id=lease_id)
-        leases = [lease] if lease is not None else []
-    else:
-        leases = await _list_discord_progress_leases(
-            service,
-            managed_thread_id=managed_thread_id,
-            execution_id=execution_id,
-            channel_id=channel_id,
-            message_id=message_id,
-        )
-    cleared = 0
-    for lease in leases:
-        current_lease_id = _execution_field(lease, "lease_id")
-        if not current_lease_id:
-            continue
-        await _delete_discord_progress_lease(service, lease_id=current_lease_id)
-        cleared += 1
-    return cleared
-
-
 def _maybe_inject_discord_filebox_hint(
     prompt_text: str,
     *,
     user_text: str,
     workspace_root: Path,
 ) -> tuple[str, bool]:
-    """Inject repo FileBox paths when the raw Discord turn requests them."""
     hint_text = wrap_injected_context(
         "\n".join(
             [
@@ -870,33 +256,6 @@ def _maybe_inject_discord_filebox_hint(
     )
 
 
-def _claim_discord_reusable_progress_message(
-    service: Any,
-    *,
-    thread_target_id: str,
-    source_message_id: Optional[str],
-) -> Optional[str]:
-    normalized_thread_target_id = str(thread_target_id or "").strip()
-    normalized_source_message_id = str(source_message_id or "").strip()
-    if not normalized_thread_target_id or not normalized_source_message_id:
-        return None
-    requests = _get_discord_progress_reuse_requests(service)
-    request = requests.get(normalized_thread_target_id)
-    if isinstance(request, _DiscordProgressReuseRequest):
-        if request.source_message_id != normalized_source_message_id:
-            return None
-        requests.pop(normalized_thread_target_id, None)
-    reusable = _get_discord_reusable_progress_messages(service).pop(
-        normalized_thread_target_id, None
-    )
-    if (
-        isinstance(reusable, _DiscordReusableProgressMessage)
-        and reusable.source_message_id == normalized_source_message_id
-    ):
-        return reusable.message_id
-    return None
-
-
 def _managed_thread_surface_key_for_notification_reply(
     notification_reply: Any,
 ) -> Optional[str]:
@@ -904,145 +263,6 @@ def _managed_thread_surface_key_for_notification_reply(
     if isinstance(notification_id, str) and notification_id.strip():
         return notification_surface_key(notification_id)
     return None
-
-
-def _spawn_discord_background_task(
-    service: Any,
-    coro: Awaitable[None],
-    *,
-    await_on_shutdown: bool = False,
-) -> asyncio.Task[Any]:
-    spawn_task = getattr(service, "_spawn_task", None)
-    if not callable(spawn_task):
-        return cast(asyncio.Task[Any], asyncio.ensure_future(coro))
-    if not await_on_shutdown:
-        return cast(asyncio.Task[Any], spawn_task(coro))
-    try:
-        return cast(
-            asyncio.Task[Any],
-            spawn_task(coro, await_on_shutdown=True),
-        )
-    except TypeError as exc:
-        if "await_on_shutdown" not in str(exc):
-            raise
-        return cast(asyncio.Task[Any], spawn_task(coro))
-
-
-def _spawn_discord_progress_background_task(
-    service: Any,
-    coro: Awaitable[None],
-    *,
-    managed_thread_id: Optional[str] = None,
-    execution_id: Optional[str] = None,
-    lease_id: Optional[str] = None,
-    channel_id: Optional[str] = None,
-    message_id: Optional[str] = None,
-    failure_note: Optional[str] = None,
-    orphaned: bool = False,
-    await_on_shutdown: bool = False,
-) -> asyncio.Task[Any]:
-    task = _spawn_discord_background_task(
-        service,
-        coro,
-        await_on_shutdown=await_on_shutdown,
-    )
-    return bind_discord_progress_task_context(
-        task,
-        managed_thread_id=managed_thread_id,
-        execution_id=execution_id,
-        lease_id=lease_id,
-        channel_id=channel_id,
-        message_id=message_id,
-        failure_note=failure_note,
-        orphaned=orphaned,
-    )
-
-
-def _discord_progress_lease_is_not_newer_than_terminal_turn(
-    lease: Any,
-    *,
-    terminal_message_id: Optional[str],
-    terminal_created_at: Optional[str],
-) -> bool:
-    lease_message_id = _execution_field(lease, "message_id")
-    if (
-        isinstance(lease_message_id, str)
-        and lease_message_id.isdigit()
-        and isinstance(terminal_message_id, str)
-        and terminal_message_id.isdigit()
-    ):
-        return int(lease_message_id) <= int(terminal_message_id)
-    return False
-
-
-async def _reconcile_other_discord_turn_progress_leases(
-    service: Any,
-    *,
-    managed_thread_id: Optional[str],
-    keep_lease_id: Optional[str] = None,
-    keep_message_id: Optional[str] = None,
-    terminal_message_id: Optional[str] = None,
-    terminal_created_at: Optional[str] = None,
-) -> int:
-    normalized_thread_id = str(managed_thread_id or "").strip()
-    if not normalized_thread_id:
-        return 0
-    retained_lease_id = str(keep_lease_id or "").strip() or None
-    retained_message_id = str(keep_message_id or "").strip() or None
-    reconciled = 0
-    for lease in await _list_discord_progress_leases(
-        service,
-        managed_thread_id=normalized_thread_id,
-    ):
-        current_lease_id = _execution_field(lease, "lease_id")
-        current_message_id = _execution_field(lease, "message_id")
-        if current_lease_id and current_lease_id == retained_lease_id:
-            continue
-        if current_message_id and current_message_id == retained_message_id:
-            continue
-        # A sibling lease on the same Discord message can only exist when a newer
-        # turn has reused that progress message and replaced the older lease row.
-        # Older-turn delivery must never retire that replacement lease.
-        if current_message_id and current_message_id == terminal_message_id:
-            continue
-        # Older-turn delivery should never retire a sibling lease that belongs to
-        # a newer turn on the same managed thread, even if that newer turn has
-        # already been assigned an execution id.
-        if not _discord_progress_lease_is_not_newer_than_terminal_turn(
-            lease,
-            terminal_message_id=terminal_message_id,
-            terminal_created_at=terminal_created_at,
-        ):
-            continue
-        reconciled += await reconcile_discord_turn_progress_leases(
-            service,
-            lease_id=current_lease_id,
-        )
-    return reconciled
-
-
-async def _acknowledge_discord_progress_reuse(
-    service: Any,
-    *,
-    channel_id: str,
-    message_id: str,
-    acknowledgement: str,
-) -> bool:
-    try:
-        await service._rest.edit_channel_message(
-            channel_id=channel_id,
-            message_id=message_id,
-            payload={
-                "content": truncate_for_discord(
-                    format_discord_message(acknowledgement),
-                    max_len=max(int(service._config.max_message_length), 32),
-                ),
-                "components": [],
-            },
-        )
-    except (DiscordTransientError, RuntimeError, ConnectionError, OSError):
-        return False
-    return True
 
 
 def _resolve_discord_turn_policies(
@@ -1279,6 +499,59 @@ async def _submit_discord_flow_reply(
     )
 
 
+def _resolve_discord_managed_thread_status(
+    service: Any,
+    *,
+    workspace_root: Path,
+    managed_thread_surface_key: Optional[str],
+    pma_enabled: bool,
+    channel_id: str,
+) -> _DiscordManagedThreadStatus:
+    orchestration_service = build_discord_thread_orchestration_service(service)
+    surface_key = managed_thread_surface_key or channel_id
+    get_binding = getattr(orchestration_service, "get_binding", None)
+    get_thread_target = getattr(orchestration_service, "get_thread_target", None)
+    if not callable(get_binding) or not callable(get_thread_target):
+        return _DiscordManagedThreadStatus(thread_target_id=None, busy=False)
+    try:
+        binding = get_binding(surface_kind="discord", surface_key=surface_key)
+    except (RuntimeError, ValueError, TypeError, KeyError, AttributeError):
+        return _DiscordManagedThreadStatus(thread_target_id=None, busy=False)
+    normalized_mode = "pma" if pma_enabled else "repo"
+    if str(getattr(binding, "mode", "") or "").strip().lower() != normalized_mode:
+        return _DiscordManagedThreadStatus(thread_target_id=None, busy=False)
+    thread_target_id = (
+        str(getattr(binding, "thread_target_id", "") or "").strip() or None
+    )
+    if not thread_target_id:
+        return _DiscordManagedThreadStatus(thread_target_id=None, busy=False)
+    try:
+        thread = get_thread_target(thread_target_id)
+    except (RuntimeError, ValueError, TypeError, KeyError, AttributeError):
+        return _DiscordManagedThreadStatus(thread_target_id=None, busy=False)
+    canonical_workspace = str(canonicalize_path(workspace_root))
+    if str(getattr(thread, "workspace_root", "") or "").strip() != canonical_workspace:
+        return _DiscordManagedThreadStatus(thread_target_id=None, busy=False)
+
+    busy = False
+    get_running_execution = getattr(
+        orchestration_service, "get_running_execution", None
+    )
+    if callable(get_running_execution):
+        with contextlib.suppress(RuntimeError, ValueError, TypeError, AttributeError):
+            busy = get_running_execution(thread_target_id) is not None
+    if not busy:
+        list_queued_executions = getattr(
+            orchestration_service, "list_queued_executions", None
+        )
+        if callable(list_queued_executions):
+            with contextlib.suppress(
+                RuntimeError, ValueError, TypeError, AttributeError
+            ):
+                busy = bool(list_queued_executions(thread_target_id, limit=1))
+    return _DiscordManagedThreadStatus(thread_target_id=thread_target_id, busy=busy)
+
+
 async def _submit_discord_thread_message(
     request: SurfaceThreadMessageRequest,
     *,
@@ -1288,10 +561,11 @@ async def _submit_discord_thread_message(
         dispatch.notification_reply
     )
     managed_thread_status = _resolve_discord_managed_thread_status(
-        dispatch,
+        dispatch.service,
         workspace_root=request.workspace_root,
         managed_thread_surface_key=managed_thread_surface_key,
         pma_enabled=request.pma_enabled,
+        channel_id=dispatch.channel_id,
     )
     thread_target_id: Optional[str] = None
     execution_id: Optional[str] = None
@@ -2240,480 +1514,6 @@ async def run_agent_turn_for_message(
     )
 
 
-def _build_managed_thread_input_items(
-    runtime_prompt: str,
-    input_items: Optional[list[dict[str, Any]]],
-) -> Optional[list[dict[str, Any]]]:
-    return _shared_build_managed_thread_input_items(
-        runtime_prompt,
-        input_items,
-    )
-
-
-def _coerce_launch_command(value: Any) -> Optional[list[str]]:
-    if isinstance(value, (list, tuple)):
-        command = [str(part) for part in value if str(part).strip()]
-        return command or None
-    return None
-
-
-def _runtime_launch_command_from_harness(harness: Any) -> Optional[list[str]]:
-    supervisor = getattr(harness, "_supervisor", None)
-    if supervisor is None:
-        return None
-    launch_command = getattr(supervisor, "launch_command", None)
-    if callable(launch_command):
-        try:
-            return _coerce_launch_command(launch_command())
-        except (RuntimeError, ValueError, TypeError, AttributeError):
-            return None
-    return _coerce_launch_command(launch_command)
-
-
-async def _evict_cached_runtime_supervisors(
-    service: Any,
-    *,
-    agent_id: str,
-    profile: Optional[str],
-    workspace_root: Path,
-) -> int:
-    cache = getattr(service, "_agent_runtime_supervisors", None)
-    if not isinstance(cache, dict) or not cache:
-        return 0
-    try:
-        resolution = resolve_agent_runtime(agent_id, profile, context=service)
-    except (KeyError, ValueError, TypeError, RuntimeError):
-        return 0
-    runtime_agent_id = str(getattr(resolution, "runtime_agent_id", "") or "").strip()
-    runtime_profile = (
-        str(getattr(resolution, "runtime_profile", "") or "").strip().lower()
-    )
-    if not runtime_agent_id:
-        return 0
-
-    matching_keys = [
-        key
-        for key in list(cache.keys())
-        if isinstance(key, tuple)
-        and len(key) == 3
-        and str(key[1] or "").strip() == runtime_agent_id
-        and str(key[2] or "").strip().lower() == runtime_profile
-    ]
-    if not matching_keys:
-        return 0
-
-    supervisors = [cache.pop(key, None) for key in matching_keys]
-    evicted = 0
-    for supervisor in supervisors:
-        if supervisor is None:
-            continue
-        evicted += 1
-        if getattr(service, "hermes_supervisor", None) is supervisor:
-            with contextlib.suppress(AttributeError):
-                service.hermes_supervisor = None
-        close_workspace = getattr(supervisor, "close_workspace", None)
-        close_all = getattr(supervisor, "close_all", None)
-        try:
-            if callable(close_workspace):
-                await close_workspace(workspace_root)
-            elif callable(close_all):
-                await close_all()
-        except (RuntimeError, ConnectionError, OSError, ValueError, TypeError):
-            _logger.debug(
-                "Runtime supervisor eviction cleanup failed for agent=%s profile=%s",
-                runtime_agent_id,
-                runtime_profile or None,
-                exc_info=True,
-            )
-    return evicted
-
-
-def build_discord_thread_orchestration_service(service: Any) -> Any:
-    cached = getattr(service, "_discord_thread_orchestration_service", None)
-    if cached is None:
-        cached = getattr(service, "_discord_managed_thread_orchestration_service", None)
-    if cached is not None:
-        return cached
-
-    descriptors = get_registered_agents(service)
-
-    def _make_harness(agent_id: str, profile: Optional[str] = None) -> Any:
-        resolution = resolve_agent_runtime(agent_id, profile, context=service)
-        descriptor = descriptors.get(resolution.runtime_agent_id)
-        if descriptor is None:
-            raise KeyError(f"Unknown agent definition '{resolution.runtime_agent_id}'")
-        harness = descriptor.make_harness(
-            wrap_requested_agent_context(
-                service,
-                agent_id=resolution.runtime_agent_id,
-                profile=resolution.runtime_profile,
-            )
-        )
-        runtime_kind = str(
-            getattr(descriptor, "runtime_kind", resolution.runtime_agent_id) or ""
-        ).strip()
-        if runtime_kind == "hermes" or resolution.logical_agent_id == "hermes":
-            log_event(
-                service._logger,
-                logging.INFO,
-                "discord.hermes.runtime_resolution",
-                requested_agent_id=agent_id,
-                requested_profile=profile,
-                logical_agent_id=resolution.logical_agent_id,
-                logical_profile=resolution.logical_profile,
-                resolution_kind=resolution.resolution_kind,
-                runtime_agent_id=resolution.runtime_agent_id,
-                runtime_profile=resolution.runtime_profile,
-                launch_command=_runtime_launch_command_from_harness(harness),
-            )
-        return harness
-
-    hub_client = getattr(service, "_hub_client", None)
-    handshake_compat = getattr(service, "_hub_handshake_compatibility", None)
-    handshake_ok = hub_client is not None and getattr(
-        handshake_compat, "compatible", False
-    )
-    if not handshake_ok:
-        log_event(
-            service._logger,
-            logging.WARNING,
-            "discord.orchestration.hub_client_unavailable",
-            message="Hub control-plane client not available; orchestration disabled",
-        )
-        return None
-    thread_store = RemoteThreadExecutionStore(cast(Any, hub_client))
-    binding_store: OrchestrationBindingStore = RemoteSurfaceBindingStore(  # type: ignore[assignment]
-        cast(Any, hub_client)
-    )
-    created = build_harness_backed_orchestration_service(
-        descriptors=cast(Any, descriptors),
-        harness_factory=_make_harness,
-        thread_store=thread_store,
-        binding_store=binding_store,
-    )
-    service._discord_thread_orchestration_service = created
-    service._discord_managed_thread_orchestration_service = created
-    return created
-
-
-def resolve_discord_thread_target(
-    service: Any,
-    *,
-    channel_id: str,
-    managed_thread_surface_key: Optional[str] = None,
-    workspace_root: Path,
-    agent: str,
-    agent_profile: Optional[str] = None,
-    repo_id: Optional[str],
-    resource_kind: Optional[str],
-    resource_id: Optional[str],
-    mode: str,
-    pma_enabled: bool,
-) -> Any:
-    orchestration_service = build_discord_thread_orchestration_service(service)
-    if orchestration_service is None:
-        raise RuntimeError(
-            "Discord orchestration service unavailable: hub control-plane client not connected"
-        )
-    surface_key = managed_thread_surface_key or channel_id
-    existing_binding = None
-    existing_thread = None
-    get_binding = getattr(orchestration_service, "get_binding", None)
-    get_thread_target = getattr(orchestration_service, "get_thread_target", None)
-    if callable(get_binding):
-        with contextlib.suppress(
-            RuntimeError, ValueError, TypeError, KeyError, AttributeError
-        ):
-            existing_binding = get_binding(
-                surface_kind="discord",
-                surface_key=surface_key,
-            )
-    normalized_mode = str(mode or "").strip().lower()
-    existing_thread_target_id = (
-        str(getattr(existing_binding, "thread_target_id", "") or "").strip()
-        if str(getattr(existing_binding, "mode", "") or "").strip().lower()
-        == normalized_mode
-        else ""
-    )
-    if callable(get_thread_target) and existing_thread_target_id:
-        with contextlib.suppress(
-            RuntimeError, ValueError, TypeError, KeyError, AttributeError
-        ):
-            existing_thread = get_thread_target(existing_thread_target_id)
-    runtime_agent = resolve_chat_runtime_agent(
-        agent,
-        agent_profile,
-        default=getattr(service, "DEFAULT_AGENT", "codex"),
-        context=service,
-    )
-    owner_kind, owner_id, normalized_repo_id = service._resource_owner_for_workspace(
-        workspace_root,
-        repo_id=repo_id,
-        resource_kind=resource_kind,
-        resource_id=resource_id,
-    )
-    canonical_workspace = str(workspace_root.resolve())
-    reusable_agent_ids = tuple(dict.fromkeys((agent, runtime_agent)))
-    existing_thread_reusable = (
-        existing_thread is not None
-        and str(getattr(existing_thread, "agent_id", "") or "").strip()
-        in reusable_agent_ids
-        and (getattr(existing_thread, "agent_profile", None) or None)
-        == (agent_profile or None)
-        and str(getattr(existing_thread, "workspace_root", "") or "").strip()
-        == canonical_workspace
-    )
-    current_backend_thread_id = (
-        str(getattr(existing_thread, "backend_thread_id", "") or "").strip() or None
-        if existing_thread_reusable
-        else None
-    )
-    current_runtime_instance_id = (
-        str(getattr(existing_thread, "backend_runtime_instance_id", "") or "").strip()
-        or None
-        if existing_thread_reusable
-        else None
-    )
-    return _shared_resolve_managed_thread_target(
-        orchestration_service,
-        request=ManagedThreadTargetRequest(
-            surface_kind="discord",
-            surface_key=surface_key,
-            mode=mode,
-            agent=agent,
-            agent_profile=agent_profile,
-            workspace_root=workspace_root,
-            display_name=f"discord:{surface_key}",
-            repo_id=normalized_repo_id,
-            resource_kind=owner_kind,
-            resource_id=owner_id,
-            binding_metadata={"channel_id": channel_id, "pma_enabled": pma_enabled},
-            reusable_agent_ids=(runtime_agent,),
-            backend_thread_id=current_backend_thread_id,
-            backend_runtime_instance_id=current_runtime_instance_id,
-            existing_binding=existing_binding,
-            existing_thread=existing_thread,
-        ),
-    )
-
-
-@dataclass(frozen=True)
-class _DiscordManagedThreadStatus:
-    thread_target_id: Optional[str]
-    busy: bool
-
-
-def _resolve_discord_managed_thread_status(
-    dispatch: _DiscordMessageTurnDispatch,
-    *,
-    workspace_root: Path,
-    managed_thread_surface_key: Optional[str],
-    pma_enabled: bool,
-) -> _DiscordManagedThreadStatus:
-    orchestration_service = build_discord_thread_orchestration_service(dispatch.service)
-    surface_key = managed_thread_surface_key or dispatch.channel_id
-    get_binding = getattr(orchestration_service, "get_binding", None)
-    get_thread_target = getattr(orchestration_service, "get_thread_target", None)
-    if not callable(get_binding) or not callable(get_thread_target):
-        return _DiscordManagedThreadStatus(thread_target_id=None, busy=False)
-    try:
-        binding = get_binding(surface_kind="discord", surface_key=surface_key)
-    except (RuntimeError, ValueError, TypeError, KeyError, AttributeError):
-        return _DiscordManagedThreadStatus(thread_target_id=None, busy=False)
-    normalized_mode = "pma" if pma_enabled else "repo"
-    if str(getattr(binding, "mode", "") or "").strip().lower() != normalized_mode:
-        return _DiscordManagedThreadStatus(thread_target_id=None, busy=False)
-    thread_target_id = (
-        str(getattr(binding, "thread_target_id", "") or "").strip() or None
-    )
-    if not thread_target_id:
-        return _DiscordManagedThreadStatus(thread_target_id=None, busy=False)
-    try:
-        thread = get_thread_target(thread_target_id)
-    except (RuntimeError, ValueError, TypeError, KeyError, AttributeError):
-        return _DiscordManagedThreadStatus(thread_target_id=None, busy=False)
-    canonical_workspace = str(canonicalize_path(workspace_root))
-    if str(getattr(thread, "workspace_root", "") or "").strip() != canonical_workspace:
-        return _DiscordManagedThreadStatus(thread_target_id=None, busy=False)
-
-    busy = False
-    get_running_execution = getattr(
-        orchestration_service, "get_running_execution", None
-    )
-    if callable(get_running_execution):
-        with contextlib.suppress(RuntimeError, ValueError, TypeError, AttributeError):
-            busy = get_running_execution(thread_target_id) is not None
-    if not busy:
-        list_queued_executions = getattr(
-            orchestration_service, "list_queued_executions", None
-        )
-        if callable(list_queued_executions):
-            with contextlib.suppress(
-                RuntimeError, ValueError, TypeError, AttributeError
-            ):
-                busy = bool(list_queued_executions(thread_target_id, limit=1))
-    return _DiscordManagedThreadStatus(thread_target_id=thread_target_id, busy=busy)
-
-
-def _build_discord_managed_thread_coordinator(
-    *,
-    service: Any,
-    orchestration_service: Any,
-    channel_id: str,
-    public_execution_error: str,
-    timeout_error: str,
-    interrupted_error: str,
-    pma_enabled: bool,
-) -> ManagedThreadTurnCoordinator:
-    timeout_seconds = (
-        _load_discord_pma_turn_timeout_seconds(service)
-        if pma_enabled
-        else float(_DEFAULT_DISCORD_PMA_TIMEOUT_SECONDS)
-    )
-    return ManagedThreadTurnCoordinator(
-        orchestration_service=orchestration_service,
-        state_root=service._config.root,
-        hub_client=getattr(service, "_hub_client", None),
-        raw_config=(
-            service._config.raw
-            if isinstance(getattr(service._config, "raw", None), dict)
-            else None
-        ),
-        surface=ManagedThreadSurfaceInfo(
-            log_label="Discord",
-            surface_kind="discord",
-            surface_key=channel_id,
-        ),
-        errors=ManagedThreadErrorMessages(
-            public_execution_error=public_execution_error,
-            timeout_error=timeout_error,
-            interrupted_error=interrupted_error,
-            timeout_seconds=timeout_seconds,
-        ),
-        logger=getattr(service, "_logger", _logger),
-        turn_preview="",
-        preview_builder=lambda message_text: truncate_for_discord(
-            message_text,
-            max_len=120,
-        ),
-    )
-
-
-def _load_discord_pma_turn_timeout_seconds(service: Any) -> float:
-    overridden_timeout = globals().get(
-        "DISCORD_PMA_TIMEOUT_SECONDS",
-        _DEFAULT_DISCORD_PMA_TIMEOUT_SECONDS,
-    )
-    if overridden_timeout != _DEFAULT_DISCORD_PMA_TIMEOUT_SECONDS:
-        return float(overridden_timeout)
-    try:
-        hub_config = load_hub_config(Path(service._config.root))
-    except (ConfigError, OSError, RuntimeError, TypeError, ValueError):
-        return float(_DEFAULT_DISCORD_PMA_TIMEOUT_SECONDS)
-    configured_timeout = getattr(
-        getattr(hub_config, "pma", None),
-        "turn_timeout_seconds",
-        None,
-    )
-    if configured_timeout is None:
-        return float(_DEFAULT_DISCORD_PMA_TIMEOUT_SECONDS)
-    return float(configured_timeout)
-
-
-def _get_discord_thread_queue_task_map(service: Any) -> dict[str, asyncio.Task[Any]]:
-    return _discord_orchestration_state(service).thread_queue_tasks
-
-
-def _build_discord_runner_hooks(
-    service: Any,
-    *,
-    channel_id: str,
-    managed_thread_id: str,
-    public_execution_error: str,
-) -> ManagedThreadCoordinatorHooks:
-    async def _run_with_discord_typing_indicator(work: Any) -> None:
-        run_with_typing = getattr(service, "_run_with_typing_indicator", None)
-        if callable(run_with_typing):
-            await run_with_typing(channel_id=channel_id, work=work)
-            return
-        await work()
-
-    async def _on_execution_started(
-        started_execution: RuntimeThreadExecution,
-    ) -> None:
-        service._register_discord_turn_approval_context(
-            started_execution=started_execution,
-            channel_id=channel_id,
-        )
-
-    def _on_execution_finished(started_execution: RuntimeThreadExecution) -> None:
-        service._clear_discord_turn_approval_context(
-            started_execution=started_execution
-        )
-
-    async def _deliver_result(finalized: ManagedThreadFinalizationResult) -> None:
-        if finalized.status == "ok":
-            assistant_text = render_managed_thread_response_text(finalized)
-            formatted = (
-                format_discord_message(assistant_text)
-                if assistant_text
-                else "(No response text returned.)"
-            )
-            chunks = chunk_discord_message(
-                formatted,
-                max_len=DISCORD_MAX_MESSAGE_LENGTH,
-                with_numbering=False,
-            )
-            if not chunks:
-                chunks = [formatted]
-            base_record_id = (
-                f"discord-queued:{managed_thread_id}:{finalized.managed_turn_id}"
-            )
-            for chunk_index, chunk in enumerate(chunks, start=1):
-                record_id = (
-                    f"{base_record_id}:chunk:{chunk_index}"
-                    if len(chunks) > 1
-                    else base_record_id
-                )
-                await service._send_channel_message_safe(
-                    channel_id,
-                    {"content": chunk},
-                    record_id=record_id,
-                )
-            return
-        if finalized.status == "interrupted":
-            return
-        await service._send_channel_message_safe(
-            channel_id,
-            {"content": (f"Turn failed: {finalized.error or public_execution_error}")},
-            record_id=(
-                f"discord-queued-error:{managed_thread_id}:{finalized.managed_turn_id}"
-            ),
-        )
-
-    return ManagedThreadCoordinatorHooks(
-        on_execution_started=_on_execution_started,
-        on_execution_finished=_on_execution_finished,
-        deliver_result=_deliver_result,
-        run_with_indicator=_run_with_discord_typing_indicator,
-    )
-
-
-def _build_discord_queue_worker_hooks(
-    service: Any,
-    *,
-    channel_id: str,
-    managed_thread_id: str,
-    public_execution_error: str,
-) -> Any:
-    return _build_discord_runner_hooks(
-        service,
-        channel_id=channel_id,
-        managed_thread_id=managed_thread_id,
-        public_execution_error=public_execution_error,
-    ).queue_worker_hooks()
-
-
 async def _run_discord_orchestrated_turn_for_message(
     service: Any,
     *,
@@ -2877,7 +1677,9 @@ async def _run_discord_orchestrated_turn_for_message(
         )
 
     async def _delete_progress_lease() -> None:
-        await _delete_discord_progress_lease(service, lease_id=progress_lease_id)
+        from .progress_leases import _delete_discord_progress_lease as _dpl
+
+        await _dpl(service, lease_id=progress_lease_id)
         if supervision is not None:
             supervision.set_lease_id(None)
 
@@ -3446,6 +2248,7 @@ async def run_managed_thread_turn_for_message(
     supervision: Optional[_DiscordTurnExecutionSupervision] = None,
     chat_ux_snapshot: Optional[ChatUxTimingSnapshot] = None,
 ) -> DiscordMessageTurnResult:
+
     execution_prompt = (
         f"{format_pma_discoverability_preamble(hub_root=service._config.root)}"
         "<user_message>\n"
