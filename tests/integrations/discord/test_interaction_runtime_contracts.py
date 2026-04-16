@@ -225,7 +225,7 @@ def test_contract_long_running_component_handlers_show_immediate_progress() -> N
         "src/codex_autorunner/integrations/discord/flow_commands.py": (
             "handle_flow_button",
         ),
-        "src/codex_autorunner/integrations/discord/interaction_registry.py": (
+        "src/codex_autorunner/integrations/discord/interaction_component_handlers.py": (
             "_handle_flow_action_select_component",
         ),
         "src/codex_autorunner/integrations/discord/service.py": (
