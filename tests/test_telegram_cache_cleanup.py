@@ -53,5 +53,11 @@ async def test_cache_cleanup_eviction(tmp_path: Path) -> None:
             "flow_run_options", SELECTION_STATE_TTL_SECONDS
         )
         assert "topic-2" not in service._flow_run_options
+
+        service._cache_timestamps.clear()
+        assert service._has_any_cache_entries() is False
+
+        service._cache_timestamps["test"] = {"key": time.monotonic()}
+        assert service._has_any_cache_entries() is True
     finally:
         await service._bot.close()

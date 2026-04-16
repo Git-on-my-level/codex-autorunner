@@ -500,6 +500,7 @@ THREAD_LIST_PAGE_LIMIT = 100
 APP_SERVER_START_BACKOFF_INITIAL_SECONDS = 1.0
 APP_SERVER_START_BACKOFF_MAX_SECONDS = 30.0
 DISCORD_OPENCODE_PRUNE_FALLBACK_INTERVAL_SECONDS = 300.0
+DISCORD_OPENCODE_PRUNE_EMPTY_INTERVAL_SECONDS = 600.0
 # Kept for test compatibility; queued notice payloads are shaped in
 # service_normalization.py.
 DISCORD_QUEUED_PLACEHOLDER_TEXT = "Queued (waiting for available worker...)"
@@ -3253,8 +3254,11 @@ class DiscordBotService:
                 for entry in self._opencode_supervisors.values()
                 if entry.prune_interval_seconds is not None
             ]
+            has_supervisors = bool(self._opencode_supervisors)
         if intervals:
             return min(intervals)
+        if not has_supervisors:
+            return DISCORD_OPENCODE_PRUNE_EMPTY_INTERVAL_SECONDS
         return DISCORD_OPENCODE_PRUNE_FALLBACK_INTERVAL_SECONDS
 
     async def _run_opencode_prune_loop(self) -> None:

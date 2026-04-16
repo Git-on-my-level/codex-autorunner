@@ -208,25 +208,37 @@ class LifecycleEventProcessor:
 
 
 class HubLifecycleWorker:
-    """Threaded poller for lifecycle event processing."""
+    """Threaded poller for lifecycle event processing with adaptive backoff."""
+
+    _BACKOFF_GROW_FACTOR = 1.5
 
     def __init__(
         self,
         *,
-        process_once: Callable[[], None],
+        process_once: Callable[[], Optional[bool]],
         poll_interval_seconds: float = 5.0,
+        max_poll_interval_seconds: Optional[float] = None,
         join_timeout_seconds: float = 2.0,
         thread_name: str = "lifecycle-event-processor",
         logger: Optional[logging.Logger] = None,
     ) -> None:
         self._process_once = process_once
-        self._poll_interval_seconds = poll_interval_seconds
+        self._base_poll_interval_seconds = max(0.1, float(poll_interval_seconds))
+        self._max_poll_interval_seconds = max(
+            self._base_poll_interval_seconds,
+            float(
+                max_poll_interval_seconds
+                if max_poll_interval_seconds is not None
+                else self._base_poll_interval_seconds * 6
+            ),
+        )
         self._join_timeout_seconds = join_timeout_seconds
         self._thread_name = thread_name
         self._logger = logger or logging.getLogger("codex_autorunner.hub")
         self._stop_event = threading.Event()
         self._thread_lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
+        self._idle_streak = 0
 
     @property
     def running(self) -> bool:
@@ -234,17 +246,38 @@ class HubLifecycleWorker:
             thread = self._thread
         return thread is not None and thread.is_alive()
 
+    def _current_interval(self) -> float:
+        if self._idle_streak <= 0:
+            return self._base_poll_interval_seconds
+        grown = self._base_poll_interval_seconds * (
+            self._BACKOFF_GROW_FACTOR**self._idle_streak
+        )
+        return min(grown, self._max_poll_interval_seconds)
+
+    def wake(self) -> None:
+        self._idle_streak = 0
+        self._stop_event.set()
+        self._stop_event.clear()
+
     def start(self) -> None:
         with self._thread_lock:
             thread = self._thread
             if thread is not None and thread.is_alive():
                 return
             self._stop_event.clear()
+            self._idle_streak = 0
 
             def _process_loop() -> None:
-                while not self._stop_event.wait(self._poll_interval_seconds):
+                current_interval = self._base_poll_interval_seconds
+                while not self._stop_event.wait(current_interval):
                     try:
-                        self._process_once()
+                        result = self._process_once()
+                        if result:
+                            self._idle_streak = 0
+                            current_interval = self._base_poll_interval_seconds
+                        else:
+                            self._idle_streak += 1
+                            current_interval = self._current_interval()
                     except (
                         Exception
                     ) as exc:  # intentional: process_once is a user-provided callback

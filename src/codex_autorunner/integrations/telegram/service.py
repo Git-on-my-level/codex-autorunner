@@ -697,10 +697,21 @@ class TelegramBotService(
         config = self._housekeeping_config
         if config is None or not config.enabled:
             return
-        interval = max(config.interval_seconds, 1)
+        base_interval = max(config.interval_seconds, 1)
+        idle_streak = 0
         while True:
             try:
-                await self._run_housekeeping_cycle(config)
+                roots = await self._housekeeping_roots()
+                if not roots:
+                    idle_streak += 1
+                    extended = min(
+                        base_interval * (1.5 ** min(idle_streak, 8)),
+                        base_interval * 4,
+                    )
+                    await asyncio.sleep(extended)
+                    continue
+                idle_streak = 0
+                await self._run_housekeeping_cycle_with_roots(config, roots)
             except Exception as exc:  # intentional: top-level error handler
                 log_event(
                     self._logger,
@@ -708,10 +719,15 @@ class TelegramBotService(
                     "telegram.housekeeping.failed",
                     exc=exc,
                 )
-            await asyncio.sleep(interval)
+            await asyncio.sleep(base_interval)
 
     async def _run_housekeeping_cycle(self, config: HousekeepingConfig) -> None:
         roots = await self._housekeeping_roots()
+        await self._run_housekeeping_cycle_with_roots(config, roots)
+
+    async def _run_housekeeping_cycle_with_roots(
+        self, config: HousekeepingConfig, roots: list[Path]
+    ) -> None:
         if roots:
             for root in roots:
                 try:
@@ -1205,9 +1221,19 @@ class TelegramBotService(
             elif cache_name == "pending_questions":
                 self._pending_questions.pop(key, None)
 
+    def _has_any_cache_entries(self) -> bool:
+        return bool(self._cache_timestamps)
+
     async def _cache_cleanup_loop(self) -> None:
         interval = max(self._config.cache.cleanup_interval_seconds, 1.0)
+        empty_streak = 0
         while True:
+            if not self._has_any_cache_entries():
+                empty_streak += 1
+                extended = min(interval * (1.5 ** min(empty_streak, 10)), interval * 4)
+                await asyncio.sleep(extended)
+                continue
+            empty_streak = 0
             await asyncio.sleep(interval)
             self._evict_expired_cache_entries(
                 "reasoning_buffers", self._config.cache.reasoning_buffer_ttl_seconds

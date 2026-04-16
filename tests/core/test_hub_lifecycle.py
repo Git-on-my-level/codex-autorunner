@@ -265,3 +265,120 @@ def test_hub_lifecycle_worker_stop_clears_dead_thread_after_self_termination() -
 
     assert worker._thread is None
     assert worker.running is False
+
+
+def test_hub_lifecycle_worker_adaptive_backoff_on_idle() -> None:
+    call_count = 0
+    completed = threading.Event()
+    logger = logging.getLogger("test.hub_lifecycle.worker.backoff")
+
+    def _process_once():
+        nonlocal call_count
+        call_count += 1
+        if call_count >= 3:
+            completed.set()
+        return False
+
+    worker = HubLifecycleWorker(
+        process_once=_process_once,
+        poll_interval_seconds=0.01,
+        max_poll_interval_seconds=10.0,
+        join_timeout_seconds=0.5,
+        logger=logger,
+    )
+
+    worker.start()
+    try:
+        wait_for_thread_event(
+            completed,
+            timeout_seconds=5.0,
+            description="lifecycle worker idle backoff cycles",
+        )
+    finally:
+        worker.stop()
+
+    assert call_count >= 3
+    assert worker._idle_streak > 0
+    assert worker._current_interval() > worker._base_poll_interval_seconds
+
+
+def test_hub_lifecycle_worker_resets_backoff_on_productive() -> None:
+    call_count = 0
+    completed = threading.Event()
+    logger = logging.getLogger("test.hub_lifecycle.worker.reset")
+
+    def _process_once():
+        nonlocal call_count
+        call_count += 1
+        if call_count >= 4:
+            completed.set()
+        return call_count == 3
+
+    worker = HubLifecycleWorker(
+        process_once=_process_once,
+        poll_interval_seconds=0.01,
+        max_poll_interval_seconds=0.5,
+        join_timeout_seconds=0.5,
+        logger=logger,
+    )
+
+    worker.start()
+    try:
+        wait_for_thread_event(
+            completed,
+            timeout_seconds=5.0,
+            description="lifecycle worker backoff reset cycle",
+        )
+    finally:
+        worker.stop()
+
+    assert call_count >= 4
+
+
+def test_hub_lifecycle_worker_wake_resets_idle_streak() -> None:
+    call_count = 0
+    first_call = threading.Event()
+    wake_done = threading.Event()
+    second_call = threading.Event()
+    streak_after_wake = None
+    logger = logging.getLogger("test.hub_lifecycle.worker.wake")
+
+    def _process_once():
+        nonlocal call_count, streak_after_wake
+        call_count += 1
+        if call_count == 1:
+            first_call.set()
+            wake_done.wait(timeout=2.0)
+            streak_after_wake = worker._idle_streak
+        elif call_count == 2:
+            second_call.set()
+        return False
+
+    worker = HubLifecycleWorker(
+        process_once=_process_once,
+        poll_interval_seconds=0.01,
+        max_poll_interval_seconds=5.0,
+        join_timeout_seconds=0.5,
+        logger=logger,
+    )
+
+    worker.start()
+    try:
+        wait_for_thread_event(
+            first_call,
+            timeout_seconds=1.0,
+            description="lifecycle worker first call",
+        )
+        worker._idle_streak = 5
+        worker.wake()
+        wake_done.set()
+        wait_for_thread_event(
+            second_call,
+            timeout_seconds=1.0,
+            description="lifecycle worker second call after wake",
+        )
+    finally:
+        worker.stop()
+
+    assert call_count >= 2
+    assert streak_after_wake == 0
