@@ -30,6 +30,11 @@ from ....core.hub_inbox_resolution import (
     message_resolution_state,
     message_resolvable_actions,
 )
+from ....core.hub_projection_store import (
+    HUB_SNAPSHOT_PROJECTION_NAMESPACE,
+    REPO_CAPABILITY_HINT_PROJECTION_NAMESPACE,
+    path_stat_fingerprint,
+)
 from ....core.pma_context import (
     PMA_MAX_TEXT,
     _gather_inbox,
@@ -54,6 +59,8 @@ _HUB_SNAPSHOT_CACHE_TTL_SECONDS = 2.0
 _hub_snapshot_cache_lock = threading.Lock()
 _REPO_CAPABILITY_HINT_CACHE_TTL_SECONDS = 30.0
 _repo_capability_hint_cache_lock = threading.Lock()
+_HUB_SNAPSHOT_PROJECTION_MAX_AGE_SECONDS = 10.0
+_REPO_CAPABILITY_HINT_PROJECTION_MAX_AGE_SECONDS = 60.0
 
 
 @dataclass(frozen=True)
@@ -137,14 +144,6 @@ def _serialize_latest_dispatch_response(
     return payload
 
 
-def _path_stat_fingerprint(path: Path) -> tuple[bool, Optional[int], Optional[int]]:
-    try:
-        stat = path.stat()
-    except OSError:
-        return (False, None, None)
-    return (True, int(stat.st_mtime_ns), int(stat.st_size))
-
-
 def _hub_snapshot_fingerprint(
     context: HubAppContext,
     *,
@@ -165,9 +164,9 @@ def _hub_snapshot_fingerprint(
         fingerprint.extend(
             [
                 str(root_path),
-                _path_stat_fingerprint(root_path / ".codex-autorunner"),
-                _path_stat_fingerprint(root_path / ".codex-autorunner" / "filebox"),
-                _path_stat_fingerprint(default_pma_threads_db_path(root_path)),
+                path_stat_fingerprint(root_path / ".codex-autorunner"),
+                path_stat_fingerprint(root_path / ".codex-autorunner" / "filebox"),
+                path_stat_fingerprint(default_pma_threads_db_path(root_path)),
             ]
         )
     return tuple(fingerprint)
@@ -184,6 +183,12 @@ def invalidate_hub_message_snapshot_cache(
         stale_keys = [key for key in _hub_snapshot_cache if key[0] == context_id]
         for key in stale_keys:
             _hub_snapshot_cache.pop(key, None)
+    projection_store = getattr(context, "projection_store", None)
+    if projection_store is not None:
+        try:
+            projection_store.delete(namespace=HUB_SNAPSHOT_PROJECTION_NAMESPACE)
+        except Exception:
+            pass
 
 
 def latest_dispatch(repo_root: Path, run_id: str, input_data: dict) -> Optional[dict]:
@@ -430,21 +435,21 @@ def _repo_capability_hint_fingerprint(
         repo_display_name,
         str(repo_root),
         str(hub_config_root) if hub_config_root is not None else "",
-        _path_stat_fingerprint(repo_root / REPO_OVERRIDE_FILENAME),
-        _path_stat_fingerprint(repo_root / ".env"),
-        _path_stat_fingerprint(repo_root / ".codex-autorunner" / ".env"),
-        _path_stat_fingerprint(repo_root / CONFIG_FILENAME),
-        _path_stat_fingerprint(
+        path_stat_fingerprint(repo_root / REPO_OVERRIDE_FILENAME),
+        path_stat_fingerprint(repo_root / ".env"),
+        path_stat_fingerprint(repo_root / ".codex-autorunner" / ".env"),
+        path_stat_fingerprint(repo_root / CONFIG_FILENAME),
+        path_stat_fingerprint(
             hub_config_root / ROOT_CONFIG_FILENAME
             if hub_config_root is not None
             else Path(ROOT_CONFIG_FILENAME)
         ),
-        _path_stat_fingerprint(
+        path_stat_fingerprint(
             hub_config_root / ROOT_OVERRIDE_FILENAME
             if hub_config_root is not None
             else Path(ROOT_OVERRIDE_FILENAME)
         ),
-        _path_stat_fingerprint(
+        path_stat_fingerprint(
             hub_config_root / CONFIG_FILENAME
             if hub_config_root is not None
             else Path(CONFIG_FILENAME)
@@ -481,6 +486,27 @@ def _cached_repo_capability_hints(
             and cached.fingerprint == fingerprint
         ):
             return [dict(item) for item in cached.items]
+    projection_store = getattr(context, "projection_store", None)
+    durable_cache_key = f"repo_hints:{repo_id}"
+    if projection_store is not None:
+        try:
+            durable_cached = projection_store.get_cache(
+                durable_cache_key,
+                fingerprint,
+                max_age_seconds=_REPO_CAPABILITY_HINT_PROJECTION_MAX_AGE_SECONDS,
+                namespace=REPO_CAPABILITY_HINT_PROJECTION_NAMESPACE,
+            )
+        except Exception:
+            durable_cached = None
+        if durable_cached is not None and isinstance(durable_cached, list):
+            promoted_items = [dict(item) for item in durable_cached]
+            with _repo_capability_hint_cache_lock:
+                _repo_capability_hint_cache[cache_key] = _RepoCapabilityHintCacheEntry(
+                    fingerprint=fingerprint,
+                    expires_at=now + _REPO_CAPABILITY_HINT_CACHE_TTL_SECONDS,
+                    items=promoted_items,
+                )
+            return [dict(item) for item in promoted_items]
     try:
         hint_items = build_repo_capability_hints(
             hub_config=context.config,
@@ -497,6 +523,16 @@ def _cached_repo_capability_hints(
             expires_at=now + _REPO_CAPABILITY_HINT_CACHE_TTL_SECONDS,
             items=stored_items,
         )
+    if projection_store is not None:
+        try:
+            projection_store.set_cache(
+                durable_cache_key,
+                fingerprint,
+                stored_items,
+                namespace=REPO_CAPABILITY_HINT_PROJECTION_NAMESPACE,
+            )
+        except Exception:
+            pass
     return [dict(item) for item in stored_items]
 
 
@@ -701,6 +737,28 @@ def gather_hub_message_snapshot(
             and cached.fingerprint == fingerprint
         ):
             return copy.deepcopy(cached.snapshot)
+    durable_cache_key = (
+        f"hub_snapshot:{','.join(sorted(requested))}:{limit}:{scope_key or ''}"
+    )
+    projection_store = getattr(context, "projection_store", None)
+    if projection_store is not None:
+        try:
+            durable_cached = projection_store.get_cache(
+                durable_cache_key,
+                fingerprint,
+                max_age_seconds=_HUB_SNAPSHOT_PROJECTION_MAX_AGE_SECONDS,
+                namespace=HUB_SNAPSHOT_PROJECTION_NAMESPACE,
+            )
+        except Exception:
+            durable_cached = None
+        if durable_cached is not None:
+            with _hub_snapshot_cache_lock:
+                _hub_snapshot_cache[cache_key] = _HubSnapshotCacheEntry(
+                    fingerprint=fingerprint,
+                    expires_at=now + _HUB_SNAPSHOT_CACHE_TTL_SECONDS,
+                    snapshot=copy.deepcopy(durable_cached),
+                )
+            return copy.deepcopy(durable_cached)
     inbox: list[dict[str, Any]] = []
     if (
         settings.include_inbox_queue_metadata
@@ -787,4 +845,14 @@ def gather_hub_message_snapshot(
             expires_at=now + _HUB_SNAPSHOT_CACHE_TTL_SECONDS,
             snapshot=copy.deepcopy(snapshot),
         )
+    if projection_store is not None:
+        try:
+            projection_store.set_cache(
+                durable_cache_key,
+                store_fingerprint,
+                snapshot,
+                namespace=HUB_SNAPSHOT_PROJECTION_NAMESPACE,
+            )
+        except Exception:
+            pass
     return snapshot

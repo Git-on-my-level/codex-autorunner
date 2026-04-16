@@ -1001,3 +1001,98 @@ def test_gather_hub_message_snapshot_refreshes_repo_hint_cache_when_repo_inputs_
     assert first["items"] == []
     assert second["items"] == []
     assert calls["repo_hints"] == 2
+
+
+def test_gather_hub_message_snapshot_reuses_durable_projection_across_contexts(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir(parents=True, exist_ok=True)
+    calls = {"list_repos": 0}
+
+    def list_repos() -> list[object]:
+        calls["list_repos"] += 1
+        return []
+
+    def build_context() -> SimpleNamespace:
+        return SimpleNamespace(
+            supervisor=SimpleNamespace(
+                list_repos=list_repos,
+                state=SimpleNamespace(last_scan_at="2026-04-05T00:00:00Z"),
+            ),
+            config=SimpleNamespace(root=hub_root),
+            projection_store=HubProjectionStore(hub_root, durable=False),
+        )
+
+    monkeypatch.setattr(
+        hub_gather_service, "_gather_inbox", lambda *_args, **_kwargs: []
+    )
+    monkeypatch.setattr(
+        hub_gather_service, "build_hub_capability_hints", lambda **_kwargs: []
+    )
+    monkeypatch.setattr(
+        hub_gather_service, "build_repo_capability_hints", lambda **_kwargs: []
+    )
+    monkeypatch.setattr(
+        hub_gather_service, "load_hub_inbox_dismissals", lambda _root: {}
+    )
+
+    first_ctx = build_context()
+    hub_gather_service.gather_hub_message_snapshot(first_ctx, sections={"inbox"})
+    hub_gather_service._hub_snapshot_cache.clear()
+
+    second_ctx = build_context()
+    result = hub_gather_service.gather_hub_message_snapshot(
+        second_ctx, sections={"inbox"}
+    )
+
+    assert result["items"] == []
+    assert calls["list_repos"] == 1
+
+
+def test_repo_capability_hint_durable_projection_reuses_across_contexts(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    hub_root = tmp_path / "hub"
+    repo_root = hub_root / "demo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    snapshot = _repo_snapshot(repo_root)
+    calls = {"repo_hints": 0}
+
+    def fake_repo_hints(**_kwargs) -> list[dict[str, object]]:
+        calls["repo_hints"] += 1
+        return []
+
+    monkeypatch.setattr(
+        hub_gather_service, "_gather_inbox", lambda *_args, **_kwargs: []
+    )
+    monkeypatch.setattr(
+        hub_gather_service, "build_hub_capability_hints", lambda **_kwargs: []
+    )
+    monkeypatch.setattr(
+        hub_gather_service, "build_repo_capability_hints", fake_repo_hints
+    )
+    monkeypatch.setattr(
+        hub_gather_service, "load_hub_inbox_dismissals", lambda _root: {}
+    )
+
+    def build_context() -> SimpleNamespace:
+        return SimpleNamespace(
+            supervisor=SimpleNamespace(
+                list_repos=lambda: [snapshot],
+                state=SimpleNamespace(last_scan_at="2026-04-05T00:00:00Z"),
+            ),
+            config=SimpleNamespace(root=hub_root),
+            projection_store=HubProjectionStore(hub_root, durable=False),
+        )
+
+    first_ctx = build_context()
+    hub_gather_service.gather_hub_message_snapshot(first_ctx, sections={"inbox"})
+    hub_gather_service._repo_capability_hint_cache.clear()
+
+    second_ctx = build_context()
+    hub_gather_service.gather_hub_message_snapshot(second_ctx, sections={"inbox"})
+
+    assert calls["repo_hints"] == 1
