@@ -1150,6 +1150,11 @@ class TelegramBotService(
             workspace_root, preferred_run_id=preferred_run_id
         )
 
+    async def _auto_resume_ticket_flow_run(
+        self, workspace_root: Path, run_id: str
+    ) -> None:
+        await self._ticket_flow_bridge.auto_resume_run(workspace_root, run_id)
+
     async def _write_user_reply_from_telegram(
         self,
         workspace_root: Path,
