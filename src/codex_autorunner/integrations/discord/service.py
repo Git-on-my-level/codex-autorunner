@@ -485,6 +485,8 @@ def _plan_delivery_recovery_cursor(
 
 DISCORD_EPHEMERAL_FLAG = 64
 CHAT_QUEUE_RESET_POLL_INTERVAL_SECONDS = 2.0
+CHAT_QUEUE_RESET_POLL_MAX_INTERVAL_SECONDS = 30.0
+CHAT_QUEUE_RESET_POLL_BACKOFF_GROW_FACTOR = 1.5
 DISCORD_TURN_PROGRESS_MIN_EDIT_INTERVAL_SECONDS = 1.0
 DISCORD_TURN_PROGRESS_HEARTBEAT_INTERVAL_SECONDS = 2.0
 DISCORD_TURN_PROGRESS_MAX_ACTIONS = 12
@@ -4035,34 +4037,48 @@ class DiscordBotService:
         await _scan_and_enqueue_pause_notifications_impl(self)
 
     async def _run_chat_queue_reset_loop(self) -> None:
+        idle_streak = 0
+        poll_interval = CHAT_QUEUE_RESET_POLL_INTERVAL_SECONDS
         while True:
             with track_loop("discord.chat_queue_reset_poll") as scope:
-                scope.record_disk_read(1)
                 try:
-                    requests = self._chat_queue_control_store.take_reset_requests(
+                    if not self._chat_queue_control_store.has_reset_requests(
                         platform="discord"
-                    )
-                    if requests:
-                        scope.mark_productive()
-                    for request in requests:
-                        conversation_id = str(
-                            request.get("conversation_id") or ""
-                        ).strip()
-                        if not conversation_id:
-                            continue
-                        result = await self._dispatcher.force_reset(conversation_id)
-                        log_event(
-                            self._logger,
-                            logging.WARNING,
-                            "discord.chat_queue.reset_applied",
-                            conversation_id=conversation_id,
-                            chat_id=request.get("chat_id"),
-                            thread_id=request.get("thread_id"),
-                            requested_at=request.get("requested_at"),
-                            requested_by=request.get("requested_by"),
-                            cancelled_pending=result.get("cancelled_pending"),
-                            cancelled_active=result.get("cancelled_active"),
+                    ):
+                        idle_streak += 1
+                        poll_interval = min(
+                            CHAT_QUEUE_RESET_POLL_INTERVAL_SECONDS
+                            * (CHAT_QUEUE_RESET_POLL_BACKOFF_GROW_FACTOR**idle_streak),
+                            CHAT_QUEUE_RESET_POLL_MAX_INTERVAL_SECONDS,
                         )
+                    else:
+                        scope.record_disk_read(1)
+                        requests = self._chat_queue_control_store.take_reset_requests(
+                            platform="discord"
+                        )
+                        if requests:
+                            scope.mark_productive()
+                            idle_streak = 0
+                            poll_interval = CHAT_QUEUE_RESET_POLL_INTERVAL_SECONDS
+                        for request in requests:
+                            conversation_id = str(
+                                request.get("conversation_id") or ""
+                            ).strip()
+                            if not conversation_id:
+                                continue
+                            result = await self._dispatcher.force_reset(conversation_id)
+                            log_event(
+                                self._logger,
+                                logging.WARNING,
+                                "discord.chat_queue.reset_applied",
+                                conversation_id=conversation_id,
+                                chat_id=request.get("chat_id"),
+                                thread_id=request.get("thread_id"),
+                                requested_at=request.get("requested_at"),
+                                requested_by=request.get("requested_by"),
+                                cancelled_pending=result.get("cancelled_pending"),
+                                cancelled_active=result.get("cancelled_active"),
+                            )
                 except (
                     Exception
                 ) as exc:  # intentional: long-running loop must not crash
@@ -4072,7 +4088,7 @@ class DiscordBotService:
                         "discord.chat_queue.reset_scan_failed",
                         exc=exc,
                     )
-            await asyncio.sleep(CHAT_QUEUE_RESET_POLL_INTERVAL_SECONDS)
+            await asyncio.sleep(poll_interval)
 
     async def _watch_ticket_flow_terminals(self) -> None:
         await watch_ticket_flow_terminals(self)

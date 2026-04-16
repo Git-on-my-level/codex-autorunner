@@ -68,7 +68,6 @@ class PmaLaneWorker:
         await self._queue.replay_pending(self.lane_id)
         while not self._cancel_event.is_set():
             with track_loop(f"pma.lane_worker.{self.lane_id}") as scope:
-                scope.record_db_read(1)
                 item = await self._queue.dequeue(self.lane_id)
                 if item is None:
                     await self._queue.wait_for_lane_item(
@@ -78,6 +77,9 @@ class PmaLaneWorker:
                     )
                     continue
 
+                scope.record_db_read(1)
+                scope.mark_productive()
+
                 if self._cancel_event.is_set():
                     await self._queue.fail_item(item, "cancelled by lane stop")
                     await self._notify(
@@ -85,7 +87,6 @@ class PmaLaneWorker:
                     )
                     continue
 
-                scope.mark_productive()
                 self._log.info(
                     "PMA lane item started (lane_id=%s item_id=%s)",
                     self.lane_id,

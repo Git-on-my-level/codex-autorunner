@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Optional
 
@@ -96,12 +97,32 @@ class ChatQueueControlStore:
         self._write_payload(self._commands_path, payload)
         return request
 
+    def has_reset_requests(self, *, platform: Optional[str] = None) -> bool:
+        try:
+            stat_result = os.stat(self._commands_path)
+        except OSError:
+            return False
+        if stat_result.st_size < 3:
+            return False
+        payload = self._read_commands_payload()
+        requests = payload.get("reset_requests")
+        if not isinstance(requests, dict) or not requests:
+            return False
+        normalized_platform = str(platform or "").strip().lower() or None
+        if normalized_platform is None:
+            return True
+        return any(
+            str(v.get("platform") or "").strip().lower() == normalized_platform
+            for v in requests.values()
+            if isinstance(v, dict)
+        )
+
     def take_reset_requests(
         self, *, platform: Optional[str] = None
     ) -> list[dict[str, Any]]:
         payload = self._read_commands_payload()
         requests = payload.get("reset_requests")
-        if not isinstance(requests, dict):
+        if not isinstance(requests, dict) or not requests:
             return []
 
         normalized_platform = str(platform or "").strip().lower() or None
@@ -119,6 +140,9 @@ class ChatQueueControlStore:
                 request.get("conversation_id") or conversation_id
             ).strip()
             taken.append(request)
+
+        if not taken:
+            return []
 
         payload["reset_requests"] = remaining
         self._write_payload(self._commands_path, payload)
