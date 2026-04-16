@@ -86,7 +86,7 @@ class WorkspaceBindingMixin:
             return
         await self._bind_topic_with_arg(key, args, message)
 
-    async def _bind_topic_by_repo_id(
+    async def _selection_bind_topic_by_repo_id(
         self,
         key: str,
         repo_id: str,
@@ -137,6 +137,14 @@ class WorkspaceBindingMixin:
             callback,
             f"Bound to {resolved_repo_id or workspace_path}.",
         )
+
+    async def _bind_topic_by_repo_id(
+        self,
+        key: str,
+        repo_id: str,
+        callback: Optional[TelegramCallbackQuery] = None,
+    ) -> None:
+        await self._selection_bind_topic_by_repo_id(key, repo_id, callback)
 
     async def _bind_topic_with_arg(
         self, key: str, arg: str, message: TelegramMessage

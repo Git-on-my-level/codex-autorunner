@@ -110,7 +110,6 @@ from .handlers.messages import _CoalescedBuffer
 from .handlers.questions import TelegramQuestionHandlers
 from .handlers.selections import TelegramSelectionHandlers
 from .helpers import (
-    ModelOption,
     _lock_payload_summary,
     _read_lock_payload,
     _split_topic_key,
@@ -133,16 +132,11 @@ from .ticket_flow_bridge import (
 )
 from .transport import TelegramMessageTransport
 from .types import (
-    CompactState,
-    ModelPickerState,
     PendingApproval,
-    PendingQuestion,
-    ReviewCommitSelectionState,
-    SelectionState,
     TurnContext,
-    UpdateConfirmState,
 )
 from .typing_manager import TelegramTypingManager
+from .ui_state import TelegramUiState
 from .update_deduper import TelegramUpdateDeduper
 from .voice import TelegramVoiceManager
 
@@ -354,11 +348,12 @@ class TelegramBotService(
             adapter=self._chat_adapter,
             transport=self._chat_transport,
         )
-        self._model_options: dict[str, ModelPickerState] = {}
-        self._model_pending: dict[str, ModelOption] = {}
+        self._ui_state = TelegramUiState()
+        self._model_options = self._ui_state.model_options
+        self._model_pending = self._ui_state.model_pending
         self._model_catalog_cache: dict[str, tuple[Any, float]] = {}
-        self._agent_options: dict[str, SelectionState] = {}
-        self._agent_profile_options: dict[str, SelectionState] = {}
+        self._agent_options = self._ui_state.agent_options
+        self._agent_profile_options = self._ui_state.agent_profile_options
         self._voice_config = voice_config
         self._voice_service = voice_service
         self._housekeeping_config = housekeeping_config
@@ -390,7 +385,7 @@ class TelegramBotService(
         self._turn_progress_locks: dict[TurnKey, asyncio.Lock] = {}
         self._oversize_warnings: set[TurnKey] = set()
         self._pending_approvals: dict[str, PendingApproval] = {}
-        self._pending_questions: dict[str, PendingQuestion] = {}
+        self._pending_questions = self._ui_state.pending_questions
         self._typing_manager = TelegramTypingManager(owner=self, logger=self._logger)
         self._ticket_flow_pause_targets: dict[str, str] = {}
         self._ticket_flow_bridge = TelegramTicketFlowBridge(
@@ -406,15 +401,15 @@ class TelegramBotService(
             config_root=self._config.root,
             runtime_services=self._runtime_services,
         )
-        self._resume_options: dict[str, SelectionState] = {}
-        self._bind_options: dict[str, SelectionState] = {}
-        self._flow_run_options: dict[str, SelectionState] = {}
-        self._update_options: dict[str, SelectionState] = {}
-        self._update_confirm_options: dict[str, UpdateConfirmState] = {}
-        self._review_commit_options: dict[str, ReviewCommitSelectionState] = {}
-        self._review_commit_subjects: dict[str, dict[str, str]] = {}
-        self._pending_review_custom: dict[str, dict[str, Any]] = {}
-        self._compact_pending: dict[str, CompactState] = {}
+        self._resume_options = self._ui_state.resume_options
+        self._bind_options = self._ui_state.bind_options
+        self._flow_run_options = self._ui_state.flow_run_options
+        self._update_options = self._ui_state.update_options
+        self._update_confirm_options = self._ui_state.update_confirm_options
+        self._review_commit_options = self._ui_state.review_commit_options
+        self._review_commit_subjects = self._ui_state.review_commit_subjects
+        self._pending_review_custom = self._ui_state.pending_review_custom
+        self._compact_pending = self._ui_state.compact_pending
         self._coalesced_buffers: dict[str, _CoalescedBuffer] = {}
         self._coalesce_locks: dict[str, asyncio.Lock] = {}
         self._media_batch_buffers: dict[str, _MediaBatchBuffer] = {}

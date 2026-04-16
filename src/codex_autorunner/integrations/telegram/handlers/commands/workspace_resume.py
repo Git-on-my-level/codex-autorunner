@@ -264,12 +264,12 @@ class WorkspaceResumeMixin:
                 choice = int(trimmed)
                 if 0 < choice <= len(page_items):
                     thread_id = page_items[choice - 1][0]
-                    await self._resume_thread_by_id(key, thread_id)
+                    await self._selection_resume_thread_by_id(key, thread_id)
                     return True
         if trimmed and not trimmed.isdigit():
             if args.remaining and args.remaining[0].lower() in ("list", "ls"):
                 return False
-            await self._resume_thread_by_id(key, trimmed)
+            await self._selection_resume_thread_by_id(key, trimmed)
             return True
         return False
 
@@ -788,7 +788,7 @@ class WorkspaceResumeMixin:
                 break
         return entries, found_ids
 
-    async def _resume_thread_by_id(
+    async def _selection_resume_thread_by_id(
         self,
         key: str,
         thread_id: str,
@@ -1068,6 +1068,14 @@ class WorkspaceResumeMixin:
             effort=updated_record.effort,
         )
         await self._finalize_selection(key, callback, message)
+
+    async def _resume_thread_by_id(
+        self,
+        key: str,
+        thread_id: str,
+        callback: Optional[TelegramCallbackQuery] = None,
+    ) -> None:
+        await self._selection_resume_thread_by_id(key, thread_id, callback)
 
     async def _resume_opencode_thread_by_id(
         self,

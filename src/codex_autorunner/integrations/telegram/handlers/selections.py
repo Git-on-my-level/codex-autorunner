@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import inspect
 from typing import Any, Callable, Optional, cast
 
 from ....core.update import _normalize_update_target, _update_target_restarts_surface
@@ -66,28 +65,13 @@ from ..types import (
 
 
 class TelegramSelectionHandlers(ChatSelectionHandlers):
-    def _resolve_selection_delegate(self, method_name: str) -> Callable[..., Any]:
-        for cls in type(self).mro():
-            if cls in (TelegramSelectionHandlers, ChatSelectionHandlers):
-                continue
-            method = cls.__dict__.get(method_name)
-            if method is None:
-                continue
-            return cast(Callable[..., Any], method.__get__(self, type(self)))
-        raise RuntimeError(
-            f"{method_name} handler is unavailable for Telegram selection flow."
-        )
-
     async def _bind_topic_by_repo_id(
         self,
         topic_key: str,
         repo_id: str,
         callback: Optional[TelegramCallbackQuery] = None,
     ) -> None:
-        bind_impl = self._resolve_selection_delegate("_bind_topic_by_repo_id")
-        result = bind_impl(topic_key, repo_id, callback)
-        if inspect.isawaitable(result):
-            await result
+        await self._selection_bind_topic_by_repo_id(topic_key, repo_id, callback)
 
     async def _resume_thread_by_id(
         self,
@@ -95,10 +79,7 @@ class TelegramSelectionHandlers(ChatSelectionHandlers):
         thread_id: str,
         callback: Optional[TelegramCallbackQuery] = None,
     ) -> None:
-        resume_impl = self._resolve_selection_delegate("_resume_thread_by_id")
-        result = resume_impl(topic_key, thread_id, callback)
-        if inspect.isawaitable(result):
-            await result
+        await self._selection_resume_thread_by_id(topic_key, thread_id, callback)
 
     async def _dismiss_review_custom_prompt(
         self,

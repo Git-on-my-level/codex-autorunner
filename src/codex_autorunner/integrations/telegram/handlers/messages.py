@@ -24,6 +24,7 @@ from ..forwarding import (
     is_forwarded_telegram_message,
     message_forward_info,
 )
+from ..ui_state import TelegramUiState
 from .media_ingress import (
     MediaBatchBuffer as _MediaBatchBuffer,
 )
@@ -101,27 +102,26 @@ def _has_pending_custom_question(handlers: Any, message: TelegramMessage) -> boo
     return False
 
 
-def _pending_state_belongs_to_actor(state: Any, actor_id: Optional[str]) -> bool:
-    if state is None:
-        return False
-    if isinstance(state, dict):
-        expected = state.get("requester_user_id")
-    else:
-        expected = getattr(state, "requester_user_id", None)
-    if expected is None:
-        return True
-    return expected == actor_id
-
-
-def _pop_pending_state_if_owned(
-    state_map: dict[str, Any],
-    key: str,
-    actor_id: Optional[str],
-) -> Any:
-    state = state_map.get(key)
-    if not _pending_state_belongs_to_actor(state, actor_id):
-        return None
-    return state_map.pop(key, None)
+def _ui_state(handlers: Any) -> TelegramUiState:
+    state = getattr(handlers, "_ui_state", None)
+    if isinstance(state, TelegramUiState):
+        return state
+    fallback = TelegramUiState()
+    fallback.pending_questions = getattr(handlers, "_pending_questions", {})
+    fallback.resume_options = getattr(handlers, "_resume_options", {})
+    fallback.bind_options = getattr(handlers, "_bind_options", {})
+    fallback.flow_run_options = getattr(handlers, "_flow_run_options", {})
+    fallback.update_options = getattr(handlers, "_update_options", {})
+    fallback.update_confirm_options = getattr(handlers, "_update_confirm_options", {})
+    fallback.review_commit_options = getattr(handlers, "_review_commit_options", {})
+    fallback.review_commit_subjects = getattr(handlers, "_review_commit_subjects", {})
+    fallback.pending_review_custom = getattr(handlers, "_pending_review_custom", {})
+    fallback.compact_pending = getattr(handlers, "_compact_pending", {})
+    fallback.agent_options = getattr(handlers, "_agent_options", {})
+    fallback.agent_profile_options = getattr(handlers, "_agent_profile_options", {})
+    fallback.model_options = getattr(handlers, "_model_options", {})
+    fallback.model_pending = getattr(handlers, "_model_pending", {})
+    return fallback
 
 
 @dataclass
@@ -147,17 +147,7 @@ def _message_text_candidate(message: TelegramMessage) -> tuple[str, str, Any]:
 async def _clear_pending_options(
     handlers: Any, key: str, message: TelegramMessage
 ) -> None:
-    agent_profile_options = getattr(handlers, "_agent_profile_options", None)
-    handlers._resume_options.pop(key, None)
-    handlers._bind_options.pop(key, None)
-    handlers._agent_options.pop(key, None)
-    if isinstance(agent_profile_options, dict):
-        agent_profile_options.pop(key, None)
-    handlers._model_options.pop(key, None)
-    handlers._model_pending.pop(key, None)
-    handlers._review_commit_options.pop(key, None)
-    handlers._review_commit_subjects.pop(key, None)
-    pending_review_custom = handlers._pending_review_custom.pop(key, None)
+    pending_review_custom = _ui_state(handlers).clear_pending_options(key)
     await handlers._dismiss_review_custom_prompt(message, pending_review_custom)
 
 
@@ -428,12 +418,7 @@ async def handle_message_inner(
     )
 
     if text and not command_policy_result.command_allowed:
-        has_pending_state = (
-            bool(handlers._resume_options.get(key))
-            or bool(handlers._bind_options.get(key))
-            or bool(handlers._review_commit_options.get(key))
-            or bool(handlers._pending_review_custom.get(key))
-        )
+        has_pending_state = _ui_state(handlers).has_policy_blocking_state(key)
         if has_pending_state:
             _log_message_policy_result(handlers, message, command_policy_result)
             await _clear_message_placeholder(handlers, message, placeholder_id)
@@ -468,15 +453,7 @@ async def handle_message_inner(
             _log_message_policy_result(handlers, message, command_policy_result)
             await _clear_message_placeholder(handlers, message, placeholder_id)
             return
-        agent_profile_options = getattr(handlers, "_agent_profile_options", None)
-        _pop_pending_state_if_owned(handlers._resume_options, key, actor_id)
-        _pop_pending_state_if_owned(handlers._bind_options, key, actor_id)
-        handlers._flow_run_options.pop(key, None)
-        handlers._agent_options.pop(key, None)
-        if isinstance(agent_profile_options, dict):
-            agent_profile_options.pop(key, None)
-        handlers._model_options.pop(key, None)
-        handlers._model_pending.pop(key, None)
+        _ui_state(handlers).clear_for_bang_command(key, actor_id)
 
         await _enqueue_or_run_topic_call(
             handlers,
@@ -511,53 +488,12 @@ async def handle_message_inner(
         await _clear_message_placeholder(handlers, message, placeholder_id)
         return
     if command:
-        agent_profile_options = getattr(handlers, "_agent_profile_options", None)
-        if command.name != "resume":
-            _pop_pending_state_if_owned(handlers._resume_options, key, actor_id)
-        if command.name != "bind":
-            _pop_pending_state_if_owned(handlers._bind_options, key, actor_id)
-        if command.name != "agent":
-            handlers._agent_options.pop(key, None)
-            if isinstance(agent_profile_options, dict):
-                agent_profile_options.pop(key, None)
-        if command.name != "model":
-            handlers._model_options.pop(key, None)
-            handlers._model_pending.pop(key, None)
-        if command.name != "review":
-            review_state = _pop_pending_state_if_owned(
-                handlers._review_commit_options,
-                key,
-                actor_id,
-            )
-            if review_state is not None:
-                handlers._review_commit_subjects.pop(key, None)
-            pending_review_custom = _pop_pending_state_if_owned(
-                handlers._pending_review_custom,
-                key,
-                actor_id,
-            )
-            await handlers._dismiss_review_custom_prompt(message, pending_review_custom)
+        pending_review_custom = _ui_state(handlers).clear_for_command(
+            key, actor_id, command.name
+        )
+        await handlers._dismiss_review_custom_prompt(message, pending_review_custom)
     else:
-        agent_profile_options = getattr(handlers, "_agent_profile_options", None)
-        _pop_pending_state_if_owned(handlers._resume_options, key, actor_id)
-        _pop_pending_state_if_owned(handlers._bind_options, key, actor_id)
-        handlers._agent_options.pop(key, None)
-        if isinstance(agent_profile_options, dict):
-            agent_profile_options.pop(key, None)
-        handlers._model_options.pop(key, None)
-        handlers._model_pending.pop(key, None)
-        review_state = _pop_pending_state_if_owned(
-            handlers._review_commit_options,
-            key,
-            actor_id,
-        )
-        if review_state is not None:
-            handlers._review_commit_subjects.pop(key, None)
-        pending_review_custom = _pop_pending_state_if_owned(
-            handlers._pending_review_custom,
-            key,
-            actor_id,
-        )
+        pending_review_custom = _ui_state(handlers).clear_for_message(key, actor_id)
         await handlers._dismiss_review_custom_prompt(message, pending_review_custom)
     if command:
         if not command_policy_result.command_allowed:

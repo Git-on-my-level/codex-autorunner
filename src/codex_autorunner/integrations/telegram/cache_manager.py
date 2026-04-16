@@ -37,6 +37,9 @@ class TelegramCacheManager:
             self._evict_one(cache_name, key, state=state)
 
     def _evict_one(self, cache_name: str, key: object, *, state: Any) -> None:
+        ui_state = getattr(state, "_ui_state", None)
+        if ui_state is not None and ui_state.evict_cache_entry(cache_name, key):
+            return
         if cache_name == "reasoning_buffers":
             state._reasoning_buffers.pop(key, None)
         elif cache_name == "turn_preview":
@@ -65,36 +68,8 @@ class TelegramCacheManager:
         elif cache_name == "media_batch_buffers":
             state._media_batch_buffers.pop(key, None)
             state._media_batch_locks.pop(key, None)
-        elif cache_name == "resume_options":
-            state._resume_options.pop(key, None)
-        elif cache_name == "bind_options":
-            state._bind_options.pop(key, None)
-        elif cache_name == "flow_run_options":
-            state._flow_run_options.pop(key, None)
-        elif cache_name == "agent_options":
-            state._agent_options.pop(key, None)
-        elif cache_name == "update_options":
-            state._update_options.pop(key, None)
-        elif cache_name == "update_confirm_options":
-            state._update_confirm_options.pop(key, None)
-        elif cache_name == "review_commit_options":
-            state._review_commit_options.pop(key, None)
-        elif cache_name == "review_commit_subjects":
-            state._review_commit_subjects.pop(key, None)
-        elif cache_name == "pending_review_custom":
-            state._pending_review_custom.pop(key, None)
-        elif cache_name == "compact_pending":
-            state._compact_pending.pop(key, None)
-        elif cache_name == "agent_profile_options":
-            state._agent_profile_options.pop(key, None)
-        elif cache_name == "model_options":
-            state._model_options.pop(key, None)
-        elif cache_name == "model_pending":
-            state._model_pending.pop(key, None)
         elif cache_name == "pending_approvals":
             state._pending_approvals.pop(key, None)
-        elif cache_name == "pending_questions":
-            state._pending_questions.pop(key, None)
 
     async def cleanup_loop(self, *, state: Any) -> None:
         interval = max(self._config.cache.cleanup_interval_seconds, 1.0)

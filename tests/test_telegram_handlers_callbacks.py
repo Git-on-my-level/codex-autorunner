@@ -31,12 +31,12 @@ class _HandlerStub:
     ) -> None:
         self.calls.append(("answer", text))
 
-    async def _resume_thread_by_id(
+    async def _selection_resume_thread_by_id(
         self, key: str, thread_id: str, _callback: TelegramCallbackQuery
     ) -> None:
         self.calls.append(("resume", key, thread_id))
 
-    async def _bind_topic_by_repo_id(
+    async def _selection_bind_topic_by_repo_id(
         self, key: str, repo_id: str, _callback: TelegramCallbackQuery
     ) -> None:
         self.calls.append(("bind", key, repo_id))
