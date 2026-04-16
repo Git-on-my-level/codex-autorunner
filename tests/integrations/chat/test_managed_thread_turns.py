@@ -1667,6 +1667,115 @@ async def test_finalize_managed_thread_execution_batches_live_timeline_persisten
 
 
 @pytest.mark.anyio
+async def test_finalize_managed_thread_execution_flushes_live_timeline_on_delay_without_more_progress(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Buffered events must flush when the delay cap elapses, not only on the next chunk."""
+    started = _started_execution_with_backend_ids(tmp_path)
+    fake_hub_client = _FakeHubPersistenceClient()
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "harness_supports_progress_event_stream",
+        lambda _harness: True,
+    )
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "_LIVE_TIMELINE_BATCH_MAX_EVENTS",
+        100,
+    )
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "_LIVE_TIMELINE_BATCH_MAX_DELAY_SECONDS",
+        0.05,
+    )
+
+    async def _progress_stream(*args: Any, **kwargs: Any):
+        _ = args, kwargs
+        yield {"index": 0, "message": {"method": "session/update"}}
+        await asyncio.sleep(0.15)
+        yield {"index": 1, "message": {"method": "session/update"}}
+
+    async def _normalize(raw_event: Any, _state: Any) -> list[Any]:
+        index = int(raw_event["index"])
+        return [
+            managed_thread_turns_module.RunNotice(
+                timestamp=f"2026-04-15T00:00:{index:02d}Z",
+                kind="progress",
+                message=f"partial-{index}",
+            )
+        ]
+
+    async def _successful_outcome(*args: Any, **kwargs: Any) -> RuntimeThreadOutcome:
+        _ = args, kwargs
+        return RuntimeThreadOutcome(
+            status="ok",
+            assistant_text="fixture reply",
+            error=None,
+            backend_thread_id="session-1",
+            backend_turn_id="turn-1",
+        )
+
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "harness_progress_event_stream",
+        _progress_stream,
+    )
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "_normalize_runtime_progress_event",
+        _normalize,
+    )
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "await_runtime_thread_outcome",
+        _successful_outcome,
+    )
+
+    orchestration_service = SimpleNamespace(
+        get_thread_target=lambda managed_thread_id: SimpleNamespace(
+            backend_thread_id="session-1"
+        ),
+        get_thread_runtime_binding=lambda managed_thread_id: SimpleNamespace(
+            backend_thread_id="session-1"
+        ),
+        record_execution_result=lambda *args, **kwargs: SimpleNamespace(
+            status="ok",
+            error=None,
+        ),
+    )
+
+    result = await managed_thread_turns_module.finalize_managed_thread_execution(
+        orchestration_service=orchestration_service,
+        started=started,
+        state_root=tmp_path,
+        hub_client=fake_hub_client,
+        surface=managed_thread_turns_module.ManagedThreadSurfaceInfo(
+            log_label="Discord",
+            surface_kind="discord",
+            surface_key="discord:chan-1:msg-1",
+        ),
+        errors=managed_thread_turns_module.ManagedThreadErrorMessages(
+            public_execution_error="Discord PMA execution failed",
+            timeout_error="Discord PMA turn timed out",
+            interrupted_error="Discord PMA turn interrupted",
+            timeout_seconds=5,
+        ),
+        logger=logging.getLogger("test.managed_thread.timeline_delay_flush"),
+        turn_preview="preview",
+    )
+
+    assert result.status == "ok"
+    running = [
+        r
+        for r in fake_hub_client.timeline_requests
+        if r.metadata["status"] == "running"
+    ]
+    assert len(running) >= 2
+    assert [len(r.events) for r in running] == [1, 1]
+
+
+@pytest.mark.anyio
 async def test_finalize_managed_thread_execution_continues_when_progress_pump_is_cancelled(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
