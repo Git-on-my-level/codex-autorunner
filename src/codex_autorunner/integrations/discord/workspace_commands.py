@@ -1,16 +1,25 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Optional, Sequence, cast
 
+from ...bootstrap import seed_repo_files
+from ...core.config import (
+    ConfigError,
+    ensure_hub_config_at,
+    find_nearest_hub_config_path,
+)
 from ...core.flows import FlowRunStatus
+from ...core.logging_utils import log_event
 from ...core.utils import canonicalize_path
 from ...integrations.chat.command_diagnostics import (
     ActiveFlowInfo,
     build_status_text,
 )
 from ...integrations.chat.help_catalog import build_discord_help_lines
+from ...integrations.chat.picker_filter import filter_picker_items, resolve_picker_query
 from ...integrations.chat.status_diagnostics import (
     build_process_monitor_lines_for_root,
 )
@@ -19,7 +28,8 @@ from ..chat.approval_modes import (
     normalize_approval_mode,
     resolve_approval_mode_policies,
 )
-from ..chat.picker_filter import resolve_picker_query
+from ..telegram.constants import DEFAULT_SKILLS_LIST_LIMIT
+from ..telegram.helpers import _format_skills_list
 from .car_autocomplete import (
     agent_workspace_autocomplete_value,
     repo_autocomplete_value,
@@ -45,11 +55,16 @@ from .interaction_registry import (
 from .interaction_runtime import (
     defer_and_update_runtime_component_message,
     ensure_component_response_deferred,
+    ensure_ephemeral_response_deferred,
     send_runtime_components_ephemeral,
     send_runtime_ephemeral,
     update_runtime_component_message,
 )
-from .rendering import format_discord_message
+from .rendering import (
+    chunk_discord_message,
+    format_discord_message,
+    truncate_for_discord,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -1076,3 +1091,449 @@ async def _read_status_rate_limits(
         if rate_limits:
             return rate_limits
     return None
+
+
+def _normalize_search_query(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value.strip()
+
+
+def _filter_skill_entries(
+    skill_entries: list[tuple[str, str]],
+    query: str,
+    *,
+    limit: int,
+) -> list[tuple[str, str]]:
+    if limit <= 0:
+        return []
+    if not query.strip():
+        return skill_entries[:limit]
+    search_items = [
+        (name, f"{name} - {description}" if description else name)
+        for name, description in skill_entries
+    ]
+    filtered_items = filter_picker_items(search_items, query, limit=limit)
+    skill_by_name = {name: (name, description) for name, description in skill_entries}
+    return [
+        skill_by_name[name] for name, _label in filtered_items if name in skill_by_name
+    ]
+
+
+def _extract_skill_entries(
+    result: Any,
+    *,
+    workspace_root: Path,
+) -> list[tuple[str, str]]:
+    entries: list[dict[str, Any]] = []
+    if isinstance(result, dict):
+        data = result.get("data")
+        if isinstance(data, list):
+            entries = [entry for entry in data if isinstance(entry, dict)]
+    elif isinstance(result, list):
+        entries = [entry for entry in result if isinstance(entry, dict)]
+
+    skills: list[tuple[str, str]] = []
+    seen_names: set[str] = set()
+    resolved_workspace = workspace_root.expanduser().resolve()
+    for entry in entries:
+        cwd = entry.get("cwd")
+        if isinstance(cwd, str):
+            if Path(cwd).expanduser().resolve() != resolved_workspace:
+                continue
+        items = entry.get("skills")
+        if not isinstance(items, list):
+            continue
+        for skill in items:
+            if not isinstance(skill, dict):
+                continue
+            name = skill.get("name")
+            if not isinstance(name, str):
+                continue
+            normalized_name = name.strip()
+            if not normalized_name or normalized_name in seen_names:
+                continue
+            description = skill.get("shortDescription") or skill.get("description")
+            desc_text = (
+                description.strip()
+                if isinstance(description, str) and description
+                else ""
+            )
+            skills.append((normalized_name, desc_text))
+            seen_names.add(normalized_name)
+    return skills
+
+
+async def _list_skill_entries_for_workspace(
+    service: Any,
+    workspace_root: Path,
+) -> Optional[list[tuple[str, str]]]:
+    from .service import AppServerUnavailableError
+
+    try:
+        client = await service._client_for_workspace(str(workspace_root))
+    except AppServerUnavailableError:
+        return None
+    if client is None:
+        return None
+    try:
+        result = await client.request(
+            "skills/list",
+            {"cwds": [str(workspace_root)], "forceReload": False},
+        )
+    except Exception as exc:
+        log_event(
+            _logger,
+            logging.WARNING,
+            "discord.skills.failed",
+            workspace_path=str(workspace_root),
+            exc=exc,
+        )
+        return None
+    return _extract_skill_entries(result, workspace_root=workspace_root)
+
+
+def _has_nested_git(path: Path) -> bool:
+    try:
+        for child in path.iterdir():
+            if not child.is_dir() or child.is_symlink():
+                continue
+            if (child / ".git").exists():
+                return True
+            if _has_nested_git(child):
+                return True
+    except OSError:
+        return False
+    return False
+
+
+async def handle_diff(
+    service: Any,
+    interaction_id: str,
+    interaction_token: str,
+    *,
+    workspace_root: Path,
+    options: dict[str, Any],
+) -> None:
+    import subprocess
+
+    path_arg = options.get("path")
+    cwd = workspace_root
+    if isinstance(path_arg, str) and path_arg.strip():
+        candidate = Path(path_arg.strip())
+        if not candidate.is_absolute():
+            candidate = workspace_root / candidate
+        try:
+            cwd = canonicalize_path(candidate)
+        except (OSError, ValueError):
+            cwd = workspace_root
+
+    session = service._ensure_interaction_session(
+        interaction_id,
+        interaction_token,
+    )
+    deferred = session.has_initial_response()
+    if not deferred:
+        deferred = await ensure_ephemeral_response_deferred(
+            service,
+            interaction_id,
+            interaction_token,
+        )
+    git_check = ["git", "rev-parse", "--is-inside-work-tree"]
+    try:
+        result = await asyncio.to_thread(
+            subprocess.run,
+            git_check,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            await service.send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text="Not a git repository.",
+            )
+            return
+    except subprocess.TimeoutExpired:
+        await service.send_or_respond_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text="Git check timed out.",
+        )
+        return
+    except subprocess.SubprocessError as exc:
+        await service.send_or_respond_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text=f"Git check failed: {exc}",
+        )
+        return
+
+    diff_cmd = [
+        "bash",
+        "-lc",
+        "git diff --color; git ls-files --others --exclude-standard | "
+        'while read -r f; do git diff --color --no-index -- /dev/null "$f"; done',
+    ]
+    try:
+        result = await asyncio.to_thread(
+            subprocess.run,
+            diff_cmd,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        output = result.stdout
+        if not output.strip():
+            output = "(No diff output.)"
+    except subprocess.TimeoutExpired:
+        output = "Git diff timed out after 30 seconds."
+    except subprocess.SubprocessError as exc:
+        output = f"Failed to run git diff: {exc}"
+
+    output = truncate_for_discord(output, service._config.max_message_length - 100)
+    await service.send_or_respond_ephemeral(
+        interaction_id=interaction_id,
+        interaction_token=interaction_token,
+        deferred=deferred,
+        text=output,
+    )
+
+
+async def handle_skills(
+    service: Any,
+    interaction_id: str,
+    interaction_token: str,
+    *,
+    workspace_root: Path,
+    options: dict[str, Any],
+) -> None:
+    skill_entries = await _list_skill_entries_for_workspace(service, workspace_root)
+    if skill_entries is None:
+        await service.respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            "Workspace unavailable. Re-bind this channel and try again.",
+        )
+        return
+
+    search_query = _normalize_search_query(options.get("search"))
+    if search_query:
+        filtered_entries = _filter_skill_entries(
+            skill_entries,
+            search_query,
+            limit=max(len(skill_entries), DEFAULT_SKILLS_LIST_LIMIT),
+        )
+        if not filtered_entries:
+            await service.respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"No skills found matching `{search_query}`.",
+            )
+            return
+        lines = [f"Skills matching `{search_query}`:"]
+        for name, description in filtered_entries[:DEFAULT_SKILLS_LIST_LIMIT]:
+            if description:
+                lines.append(f"{name} - {description}")
+            else:
+                lines.append(name)
+        if len(filtered_entries) > DEFAULT_SKILLS_LIST_LIMIT:
+            lines.append(
+                f"...and {len(filtered_entries) - DEFAULT_SKILLS_LIST_LIMIT} more matches."
+            )
+        lines.append("Use $<SkillName> in your next message to invoke a skill.")
+        skills_text = "\n".join(lines)
+    else:
+        if not skill_entries:
+            await service.respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "No skills found.",
+            )
+            return
+        skills_text = _format_skills_list(
+            [
+                {
+                    "cwd": str(workspace_root),
+                    "skills": [
+                        {
+                            "name": name,
+                            "shortDescription": description,
+                        }
+                        for name, description in skill_entries
+                    ],
+                }
+            ],
+            str(workspace_root),
+        )
+
+    styled_lines: list[str] = []
+    for line in skills_text.splitlines():
+        if (
+            not line
+            or line == "Skills:"
+            or line.startswith("Skills matching ")
+            or line.startswith("...and ")
+            or line.startswith("Use $")
+        ):
+            styled_lines.append(line)
+            continue
+        if " - " in line:
+            name, description = line.split(" - ", 1)
+            styled_lines.append(f"**{name}** - {description}")
+        else:
+            styled_lines.append(f"**{line}**")
+    rendered = format_discord_message("\n".join(styled_lines))
+    chunks = chunk_discord_message(
+        rendered,
+        max_len=service._config.max_message_length,
+        with_numbering=False,
+    )
+    if not chunks:
+        chunks = ["No skills found."]
+
+    await service.respond_ephemeral(
+        interaction_id,
+        interaction_token,
+        chunks[0],
+    )
+    for chunk in chunks[1:]:
+        sent = await service.send_followup_ephemeral(
+            interaction_token=interaction_token,
+            content=chunk,
+        )
+        if not sent:
+            log_event(
+                _logger,
+                logging.WARNING,
+                "discord.skills.followup_failed",
+                workspace_path=str(workspace_root),
+            )
+            break
+
+
+async def handle_mcp(
+    service: Any,
+    interaction_id: str,
+    interaction_token: str,
+    *,
+    workspace_root: Path,
+) -> None:
+    await service.respond_ephemeral(
+        interaction_id,
+        interaction_token,
+        "MCP server status requires the app server client. "
+        "This command is not yet available in Discord.",
+    )
+
+
+async def handle_init(
+    service: Any,
+    interaction_id: str,
+    interaction_token: str,
+    *,
+    workspace_root: Path,
+) -> None:
+    import asyncio
+
+    target_root = canonicalize_path(workspace_root)
+    ca_dir = target_root / ".codex-autorunner"
+
+    try:
+        hub_initialized = False
+        if (target_root / ".git").exists():
+            await asyncio.to_thread(
+                seed_repo_files,
+                target_root,
+                False,
+                True,
+            )
+            if find_nearest_hub_config_path(target_root) is None:
+                _, hub_initialized = await asyncio.to_thread(
+                    ensure_hub_config_at,
+                    target_root,
+                )
+        elif _has_nested_git(target_root):
+            _, hub_initialized = await asyncio.to_thread(
+                ensure_hub_config_at,
+                target_root,
+            )
+        else:
+            await service.respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "No .git directory found. Run git init or use the CLI `car init --git-init`.",
+            )
+            return
+    except ConfigError as exc:
+        await service.respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            f"Init failed: {exc}",
+        )
+        return
+    except (OSError, RuntimeError, ValueError, TypeError) as exc:
+        await service.respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            f"Init failed: {exc}",
+        )
+        return
+
+    lines = [f"Initialized repo at {ca_dir}"]
+    if hub_initialized:
+        lines.append(f"Initialized hub at {ca_dir}")
+    lines.append("Init complete")
+    await service.respond_ephemeral(
+        interaction_id,
+        interaction_token,
+        "\n".join(lines),
+    )
+
+
+async def handle_repos(
+    service: Any,
+    interaction_id: str,
+    interaction_token: str,
+) -> None:
+    if not service._manifest_path or not service._manifest_path.exists():
+        await service.respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            "Hub manifest not configured.",
+        )
+        return
+
+    try:
+        manifest = load_manifest(service._manifest_path, service._config.root)
+    except (OSError, ValueError) as exc:
+        await service.respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            f"Failed to load manifest: {exc}",
+        )
+        return
+
+    lines = ["Repositories:"]
+    for repo in manifest.repos:
+        if not repo.enabled:
+            continue
+        lines.append(f"- `{repo.id}` ({repo.path})")
+
+    if len(lines) == 1:
+        lines.append("No enabled repositories found.")
+
+    lines.append("\nUse /car bind to select a workspace.")
+
+    content = format_discord_message("\n".join(lines))
+    await service.respond_ephemeral(
+        interaction_id,
+        interaction_token,
+        content,
+    )

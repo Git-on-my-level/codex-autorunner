@@ -652,3 +652,141 @@ async def handle_car_rollout(
             f"No rollout path available.\nWorkspace: {workspace_path}\n\n"
             "The rollout path is set after a conversation turn completes.",
         )
+
+
+def _pending_interaction_scope_key(
+    *,
+    channel_id: str,
+    user_id: Optional[str],
+) -> str:
+    scoped_user = user_id.strip() if isinstance(user_id, str) else ""
+    return f"{channel_id}:{scoped_user or '_'}"
+
+
+async def handle_agent_profile_picker_selection(
+    service: Any,
+    interaction_id: str,
+    interaction_token: str,
+    *,
+    channel_id: str,
+    selected_profile: str,
+) -> None:
+    profile_value = selected_profile.strip()
+    if not profile_value:
+        await service._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            "Please select a Hermes profile and try again.",
+        )
+        return
+    profile_option = "clear" if profile_value in {"clear", "reset"} else profile_value
+    await service._handle_car_agent(
+        interaction_id,
+        interaction_token,
+        channel_id=channel_id,
+        options={"profile": profile_option},
+    )
+
+
+async def handle_model_picker_selection(
+    service: Any,
+    interaction_id: str,
+    interaction_token: str,
+    *,
+    channel_id: str,
+    user_id: Optional[str],
+    selected_model: str,
+) -> None:
+    from ..components import build_model_effort_picker
+    from ..interaction_registry import MODEL_EFFORT_SELECT_ID
+
+    model_value = selected_model.strip()
+    if not model_value:
+        await service._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            "Please select a model and try again.",
+        )
+        return
+    if model_value in {"clear", "reset"}:
+        pending_key = _pending_interaction_scope_key(
+            channel_id=channel_id,
+            user_id=user_id,
+        )
+        service._pending_model_effort.pop(pending_key, None)
+        await service._handle_car_model(
+            interaction_id,
+            interaction_token,
+            channel_id=channel_id,
+            user_id=user_id,
+            options={"name": "clear"},
+        )
+        return
+
+    binding = await service._store.get_binding(channel_id=channel_id)
+    current_agent, _current_profile = service._resolve_agent_state(binding)
+
+    if service._agent_supports_effort(current_agent):
+        pending_key = _pending_interaction_scope_key(
+            channel_id=channel_id,
+            user_id=user_id,
+        )
+        service._pending_model_effort[pending_key] = model_value
+        await service._respond_with_components(
+            interaction_id,
+            interaction_token,
+            (f"Selected model: `{model_value}`\nSelect reasoning effort (or none):"),
+            [build_model_effort_picker(custom_id=MODEL_EFFORT_SELECT_ID)],
+        )
+        return
+
+    await service._handle_car_model(
+        interaction_id,
+        interaction_token,
+        channel_id=channel_id,
+        user_id=user_id,
+        options={"name": model_value},
+    )
+
+
+async def handle_model_effort_selection(
+    service: Any,
+    interaction_id: str,
+    interaction_token: str,
+    *,
+    channel_id: str,
+    user_id: Optional[str],
+    selected_effort: str,
+) -> None:
+    pending_key = _pending_interaction_scope_key(
+        channel_id=channel_id,
+        user_id=user_id,
+    )
+    model_name = service._pending_model_effort.pop(pending_key, None)
+    if not isinstance(model_name, str) or not model_name:
+        await service._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            "Model selection expired. Please re-run `/car model`.",
+        )
+        return
+
+    effort_value = selected_effort.strip().lower()
+    if effort_value not in _VALID_REASONING_EFFORTS and effort_value != "none":
+        await service._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            f"Invalid effort '{selected_effort}'.",
+        )
+        return
+
+    model_options: dict[str, Any] = {"name": model_name}
+    if effort_value != "none":
+        model_options["effort"] = effort_value
+    await service._handle_car_model(
+        interaction_id,
+        interaction_token,
+        channel_id=channel_id,
+        user_id=user_id,
+        options=model_options,
+    )

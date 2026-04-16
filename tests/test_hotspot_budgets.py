@@ -61,8 +61,8 @@ STANDARD_FILE_BUDGETS = (
     ),
     FileBudget(
         path="src/codex_autorunner/integrations/discord/pma_commands.py",
-        max_lines=150,
-        reason="The Discord PMA command slice should stay narrow and readable.",
+        max_lines=250,
+        reason="The Discord PMA command slice owns the PMA routing chain and should stay bounded.",
     ),
     FileBudget(
         path="src/codex_autorunner/integrations/chat/progress_primitives.py",

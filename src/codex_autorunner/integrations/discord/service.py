@@ -6,7 +6,6 @@ import hashlib
 import json
 import logging
 import os
-import subprocess
 import time
 import uuid
 from dataclasses import dataclass, replace
@@ -42,7 +41,6 @@ from ...core.config import (
     resolve_env_for_root,
 )
 from ...core.filebox import (
-    delete_regular_files,
     inbox_dir,
     list_regular_files,
     outbox_dir,
@@ -114,7 +112,7 @@ from ...integrations.agents.opencode_supervisor_factory import (
     build_opencode_supervisor_from_repo_config,
 )
 from ...integrations.app_server.client import ApprovalDecision, CodexAppServerClient
-from ...integrations.app_server.env import app_server_env, build_app_server_env
+from ...integrations.app_server.env import build_app_server_env
 from ...integrations.app_server.event_buffer import AppServerEventBuffer
 from ...integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ...integrations.app_server.threads import (
@@ -176,10 +174,6 @@ from ...integrations.chat.picker_filter import (
 )
 from ...integrations.chat.queue_control import ChatQueueControlStore
 from ...integrations.chat.run_mirror import ChatRunMirror
-from ...integrations.chat.session_messages import (
-    build_fresh_session_started_lines,
-    build_thread_detail_lines,
-)
 from ...integrations.chat.turn_policy import (
     PlainTextTurnContext,
     should_trigger_plain_text_turn,
@@ -200,8 +194,6 @@ from ...tickets.frontmatter import parse_markdown_frontmatter
 from ...voice import VoiceConfig, VoiceService, VoiceServiceError
 from ...voice.provider_catalog import normalize_voice_provider
 from ...voice.service import VoiceTransientError
-from ..telegram.constants import DEFAULT_SKILLS_LIST_LIMIT
-from ..telegram.helpers import _format_skills_list
 from .adapter import DiscordChatAdapter
 from .car_command_dispatch import handle_car_command as dispatch_car_command
 from .channel_messaging import (
@@ -238,7 +230,6 @@ from .command_runner import CommandRunner as _CommandRunner
 from .command_runner import RunnerConfig as _RunnerConfig
 from .components import (
     DISCORD_SELECT_OPTION_MAX_OPTIONS,
-    build_model_effort_picker,
     build_ticket_filter_picker,
     build_ticket_picker,
 )
@@ -296,8 +287,6 @@ from .interaction_dispatch import (
     handle_component_interaction as _dispatch_component_interaction,
 )
 from .interaction_registry import (
-    MODEL_EFFORT_SELECT_ID,
-    TICKETS_MODAL_PREFIX,
     component_admission_ack_policy,
     component_dispatch_ack_policy,
     component_route_for_custom_id,
@@ -309,10 +298,6 @@ from .interaction_registry import (
     normalize_discord_command_path,
     slash_command_route_for_path,
     slash_command_workspace_lock_policy,
-)
-from .interaction_runtime import (
-    defer_and_update_runtime_component_message,
-    ensure_ephemeral_response_deferred,
 )
 from .interaction_session import (
     DiscordInteractionSession,
@@ -349,7 +334,6 @@ from .pma_commands import (
     handle_pma_status,
 )
 from .rendering import (
-    chunk_discord_message,
     format_discord_message,
     truncate_for_discord,
 )
@@ -546,7 +530,6 @@ DISCORD_INTERACTION_COLD_START_WINDOW_SECONDS = 120.0
 DISCORD_BACKGROUND_TASK_SHUTDOWN_GRACE_SECONDS = (
     10.0  # noqa: F401 - re-exported for test monkeypatching
 )
-SHELL_OUTPUT_TRUNCATION_SUFFIX = "\n...[truncated]..."
 DISCORD_ATTACHMENT_MAX_BYTES = 100_000_000
 THREAD_LIST_MAX_PAGES = 5
 THREAD_LIST_PAGE_LIMIT = 100
@@ -3597,72 +3580,6 @@ class DiscordBotService:
             raise RuntimeError("Discord turn finished without a result")
         return turn_result
 
-    @staticmethod
-    def _extract_command_result(
-        result: subprocess.CompletedProcess[str],
-    ) -> tuple[str, str, Optional[int]]:
-        stdout = result.stdout if isinstance(result.stdout, str) else ""
-        stderr = result.stderr if isinstance(result.stderr, str) else ""
-        exit_code = int(result.returncode) if isinstance(result.returncode, int) else 0
-        return stdout, stderr, exit_code
-
-    @staticmethod
-    def _format_shell_body(
-        command: str, stdout: str, stderr: str, exit_code: Optional[int]
-    ) -> str:
-        lines = [f"$ {command}"]
-        if stdout:
-            lines.append(stdout.rstrip("\n"))
-        if stderr:
-            if stdout:
-                lines.append("")
-            lines.append("[stderr]")
-            lines.append(stderr.rstrip("\n"))
-        if not stdout and not stderr:
-            lines.append("(no output)")
-        if exit_code is not None and exit_code != 0:
-            lines.append(f"(exit {exit_code})")
-        return "\n".join(lines)
-
-    @staticmethod
-    def _format_shell_message(body: str, *, note: Optional[str]) -> str:
-        if note:
-            return f"{note}\n```text\n{body}\n```"
-        return f"```text\n{body}\n```"
-
-    def _prepare_shell_response(
-        self,
-        full_body: str,
-        *,
-        filename: str,
-    ) -> tuple[str, Optional[bytes]]:
-        max_output_chars = max(1, int(self._config.shell.max_output_chars))
-        max_message_length = max(64, int(self._config.max_message_length))
-
-        message = self._format_shell_message(full_body, note=None)
-        if len(full_body) <= max_output_chars and len(message) <= max_message_length:
-            return message, None
-
-        note = f"Output too long; attached full output as {filename}. Showing head."
-        head = full_body[:max_output_chars].rstrip()
-        if len(head) < len(full_body):
-            head = f"{head}{SHELL_OUTPUT_TRUNCATION_SUFFIX}"
-        message = self._format_shell_message(head, note=note)
-        if len(message) > max_message_length:
-            overhead = len(self._format_shell_message("", note=note))
-            allowed = max(
-                0,
-                max_message_length - overhead - len(SHELL_OUTPUT_TRUNCATION_SUFFIX),
-            )
-            head = full_body[:allowed].rstrip()
-            if len(head) < len(full_body):
-                head = f"{head}{SHELL_OUTPUT_TRUNCATION_SUFFIX}"
-            message = self._format_shell_message(head, note=note)
-            if len(message) > max_message_length:
-                message = truncate_for_discord(message, max_len=max_message_length)
-
-        return message, full_body.encode("utf-8", errors="replace")
-
     async def _handle_bang_shell(
         self,
         *,
@@ -3671,118 +3588,15 @@ class DiscordBotService:
         text: str,
         workspace_root: Path,
     ) -> None:
-        if not self._config.shell.enabled:
-            await self._send_channel_message_safe(
-                channel_id,
-                {
-                    "content": (
-                        "Shell commands are disabled. Enable `discord_bot.shell.enabled`."
-                    )
-                },
-                record_id=f"shell:{message_id}:disabled",
-            )
-            return
+        from .car_handlers.shell_commands import handle_bang_shell
 
-        command_text = text[1:].strip()
-        if not command_text:
-            await self._send_channel_message_safe(
-                channel_id,
-                {
-                    "content": "Prefix a command with `!` to run it locally. Example: `!ls`"
-                },
-                record_id=f"shell:{message_id}:usage",
-            )
-            return
-
-        timeout_seconds = max(0.1, self._config.shell.timeout_ms / 1000.0)
-        timeout_label = int(timeout_seconds + 0.999)
-        shell_command = ["bash", "-lc", command_text]
-        shell_env = app_server_env(shell_command, workspace_root)
-        try:
-            result = await asyncio.to_thread(
-                subprocess.run,
-                shell_command,
-                cwd=workspace_root,
-                capture_output=True,
-                text=True,
-                timeout=timeout_seconds,
-                env=shell_env,
-            )
-        except subprocess.TimeoutExpired:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.shell.timeout",
-                channel_id=channel_id,
-                command=command_text,
-                timeout_seconds=timeout_seconds,
-            )
-            await self._send_channel_message_safe(
-                channel_id,
-                {
-                    "content": (
-                        f"Shell command timed out after {timeout_label}s: `{command_text}`.\n"
-                        "Interactive commands (top/htop/watch/tail -f) do not exit. "
-                        "Try a one-shot flag like `top -l 1` (macOS) or `top -b -n 1` (Linux)."
-                    )
-                },
-                record_id=f"shell:{message_id}:timeout",
-            )
-            return
-        except subprocess.SubprocessError as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.shell.failed",
-                channel_id=channel_id,
-                command=command_text,
-                workspace_root=str(workspace_root),
-                exc=exc,
-            )
-            await self._send_channel_message_safe(
-                channel_id,
-                {"content": "Shell command failed; check logs for details."},
-                record_id=f"shell:{message_id}:failed",
-            )
-            return
-
-        stdout, stderr, exit_code = self._extract_command_result(result)
-        full_body = self._format_shell_body(command_text, stdout, stderr, exit_code)
-        filename = f"shell-output-{uuid.uuid4().hex[:8]}.txt"
-        response_text, attachment = self._prepare_shell_response(
-            full_body,
-            filename=filename,
+        await handle_bang_shell(
+            self,
+            channel_id=channel_id,
+            message_id=message_id,
+            text=text,
+            workspace_root=workspace_root,
         )
-        await self._send_channel_message_safe(
-            channel_id,
-            {"content": response_text},
-            record_id=f"shell:{message_id}:result",
-        )
-        if attachment is None:
-            return
-        try:
-            await self._rest.create_channel_message_with_attachment(
-                channel_id=channel_id,
-                data=attachment,
-                filename=filename,
-            )
-        except (DiscordAPIError, OSError) as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.shell.attachment_failed",
-                channel_id=channel_id,
-                command=command_text,
-                filename=filename,
-                exc=exc,
-            )
-            await self._send_channel_message_safe(
-                channel_id,
-                {
-                    "content": "Failed to attach full shell output; showing truncated output."
-                },
-                record_id=f"shell:{message_id}:attachment_failed",
-            )
 
     async def _handle_car_command(
         self,
@@ -3816,15 +3630,10 @@ class DiscordBotService:
         command_path: tuple[str, ...],
         options: dict[str, Any],
     ) -> None:
-        subcommand = command_path[1] if len(command_path) > 1 else "status"
-        if subcommand not in ("on", "off", "status"):
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Unknown PMA subcommand. Use on, off, or status.",
-            )
-            return
-        await self._handle_pma_command(
+        from .pma_commands import handle_pma_command_from_normalized
+
+        await handle_pma_command_from_normalized(
+            self,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -4417,43 +4226,14 @@ class DiscordBotService:
         channel_id: str,
         values: Optional[list[str]],
     ) -> None:
-        if not values:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Please select a filter and try again.",
-            )
-            return
-        deferred = await self._defer_component_update(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-        )
-        if not deferred:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Discord interaction acknowledgement failed. Please retry.",
-            )
-            return
-        workspace_root = await self._require_bound_workspace(
-            interaction_id, interaction_token, channel_id=channel_id
-        )
-        if not workspace_root:
-            return
-        status_filter = values[0].strip().lower()
-        if status_filter not in {"all", "open", "done"}:
-            status_filter = "all"
-        search_query = self._pending_ticket_search_queries.get(channel_id, "")
-        self._pending_ticket_filters[channel_id] = status_filter
-        await self._update_component_message(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            text=self._ticket_prompt_text(search_query=search_query),
-            components=self._build_ticket_components(
-                workspace_root,
-                status_filter=status_filter,
-                search_query=search_query,
-            ),
+        from .flow_commands import handle_ticket_filter_component
+
+        await handle_ticket_filter_component(
+            self,
+            interaction_id,
+            interaction_token,
+            channel_id=channel_id,
+            values=values,
         )
 
     async def _handle_ticket_select_component(
@@ -4464,41 +4244,14 @@ class DiscordBotService:
         channel_id: str,
         values: Optional[list[str]],
     ) -> None:
-        if not values:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Please select a ticket and try again.",
-            )
-            return
-        if values[0] == "none":
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "No tickets available for this filter.",
-            )
-            return
-        workspace_root = await self._require_bound_workspace(
-            interaction_id, interaction_token, channel_id=channel_id
-        )
-        if not workspace_root:
-            return
-        ticket_rel = self._resolve_ticket_picker_value(
-            values[0],
-            workspace_root=workspace_root,
-        )
-        if not ticket_rel:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Ticket selection is invalid. Re-open the ticket list and try again.",
-            )
-            return
-        await self._open_ticket_modal(
+        from .flow_commands import handle_ticket_select_component
+
+        await handle_ticket_select_component(
+            self,
             interaction_id,
             interaction_token,
-            workspace_root=workspace_root,
-            ticket_rel=ticket_rel,
+            channel_id=channel_id,
+            values=values,
         )
 
     async def _open_ticket_modal(
@@ -4509,73 +4262,14 @@ class DiscordBotService:
         workspace_root: Path,
         ticket_rel: str,
     ) -> None:
-        ticket_dir = self._ticket_dir(workspace_root).resolve()
-        candidate = (workspace_root / ticket_rel).resolve()
-        try:
-            candidate.relative_to(ticket_dir)
-        except ValueError:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Ticket path is invalid. Re-open the ticket list and try again.",
-            )
-            return
-        if not candidate.exists() or not candidate.is_file():
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Ticket file not found. Re-open the ticket list and try again.",
-            )
-            return
-        try:
-            ticket_text = await asyncio.wait_for(
-                asyncio.to_thread(candidate.read_text, encoding="utf-8"),
-                timeout=1.5,
-            )
-        except asyncio.TimeoutError:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                (
-                    "Ticket load timed out before opening the modal. "
-                    "Try again or edit the file directly."
-                ),
-            )
-            return
-        except Exception as exc:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                f"Failed to read ticket: {exc}",
-            )
-            return
-        max_len = 4000
-        if len(ticket_text) > max_len:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                (
-                    f"`{ticket_rel}` is too large to edit in a Discord modal "
-                    f"({len(ticket_text)} characters; limit {max_len}). "
-                    "Use the web UI or edit the file directly."
-                ),
-            )
-            return
+        from .flow_commands import _open_ticket_modal
 
-        token = uuid.uuid4().hex[:12]
-        self._pending_ticket_context[token] = {
-            "workspace_root": str(workspace_root),
-            "ticket_rel": ticket_rel,
-        }
-
-        title = "Edit ticket"
-        await self._respond_modal(
+        await _open_ticket_modal(
+            self,
             interaction_id,
             interaction_token,
-            custom_id=f"{TICKETS_MODAL_PREFIX}:{token}",
-            title=title,
-            field_label="Ticket",
-            field_value=ticket_text,
+            workspace_root=workspace_root,
+            ticket_rel=ticket_rel,
         )
 
     async def _handle_tickets(
@@ -6045,95 +5739,14 @@ class DiscordBotService:
         workspace_root: Path,
         options: dict[str, Any],
     ) -> None:
-        import subprocess
+        from .workspace_commands import handle_diff
 
-        path_arg = options.get("path")
-        cwd = workspace_root
-        if isinstance(path_arg, str) and path_arg.strip():
-            candidate = Path(path_arg.strip())
-            if not candidate.is_absolute():
-                candidate = workspace_root / candidate
-            try:
-                cwd = canonicalize_path(candidate)
-            except (OSError, ValueError):
-                cwd = workspace_root
-
-        session = self._ensure_interaction_session(
+        await handle_diff(
+            self,
             interaction_id,
             interaction_token,
-        )
-        deferred = session.has_initial_response()
-        if not deferred:
-            deferred = await self._defer_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-            )
-        git_check = ["git", "rev-parse", "--is-inside-work-tree"]
-        try:
-            result = await asyncio.to_thread(
-                subprocess.run,
-                git_check,
-                cwd=cwd,
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if result.returncode != 0:
-                await self._send_or_respond_ephemeral(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    deferred=deferred,
-                    text="Not a git repository.",
-                )
-                return
-        except subprocess.TimeoutExpired:
-            await self._send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text="Git check timed out.",
-            )
-            return
-        except subprocess.SubprocessError as exc:
-            await self._send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=f"Git check failed: {exc}",
-            )
-            return
-
-        diff_cmd = [
-            "bash",
-            "-lc",
-            "git diff --color; git ls-files --others --exclude-standard | "
-            'while read -r f; do git diff --color --no-index -- /dev/null "$f"; done',
-        ]
-        try:
-            result = await asyncio.to_thread(
-                subprocess.run,
-                diff_cmd,
-                cwd=cwd,
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            output = result.stdout
-            if not output.strip():
-                output = "(No diff output.)"
-        except subprocess.TimeoutExpired:
-            output = "Git diff timed out after 30 seconds."
-        except subprocess.SubprocessError as exc:
-            output = f"Failed to run git diff: {exc}"
-
-        from .rendering import truncate_for_discord
-
-        output = truncate_for_discord(output, self._config.max_message_length - 100)
-        await self._send_or_respond_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            deferred=deferred,
-            text=output,
+            workspace_root=workspace_root,
+            options=options,
         )
 
     async def _handle_skills(
@@ -6144,108 +5757,15 @@ class DiscordBotService:
         workspace_root: Path,
         options: dict[str, Any],
     ) -> None:
-        skill_entries = await self._list_skill_entries_for_workspace(workspace_root)
-        if skill_entries is None:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Workspace unavailable. Re-bind this channel and try again.",
-            )
-            return
+        from .workspace_commands import handle_skills
 
-        search_query = self._normalize_search_query(options.get("search"))
-        if search_query:
-            filtered_entries = self._filter_skill_entries(
-                skill_entries,
-                search_query,
-                limit=max(len(skill_entries), DEFAULT_SKILLS_LIST_LIMIT),
-            )
-            if not filtered_entries:
-                await self._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
-                    f"No skills found matching `{search_query}`.",
-                )
-                return
-            lines = [f"Skills matching `{search_query}`:"]
-            for name, description in filtered_entries[:DEFAULT_SKILLS_LIST_LIMIT]:
-                if description:
-                    lines.append(f"{name} - {description}")
-                else:
-                    lines.append(name)
-            if len(filtered_entries) > DEFAULT_SKILLS_LIST_LIMIT:
-                lines.append(
-                    f"...and {len(filtered_entries) - DEFAULT_SKILLS_LIST_LIMIT} more matches."
-                )
-            lines.append("Use $<SkillName> in your next message to invoke a skill.")
-            skills_text = "\n".join(lines)
-        else:
-            if not skill_entries:
-                await self._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
-                    "No skills found.",
-                )
-                return
-            skills_text = _format_skills_list(
-                [
-                    {
-                        "cwd": str(workspace_root),
-                        "skills": [
-                            {
-                                "name": name,
-                                "shortDescription": description,
-                            }
-                            for name, description in skill_entries
-                        ],
-                    }
-                ],
-                str(workspace_root),
-            )
-
-        styled_lines: list[str] = []
-        for line in skills_text.splitlines():
-            if (
-                not line
-                or line == "Skills:"
-                or line.startswith("Skills matching ")
-                or line.startswith("...and ")
-                or line.startswith("Use $")
-            ):
-                styled_lines.append(line)
-                continue
-            if " - " in line:
-                name, description = line.split(" - ", 1)
-                styled_lines.append(f"**{name}** - {description}")
-            else:
-                styled_lines.append(f"**{line}**")
-        rendered = format_discord_message("\n".join(styled_lines))
-        chunks = chunk_discord_message(
-            rendered,
-            max_len=self._config.max_message_length,
-            with_numbering=False,
-        )
-        if not chunks:
-            chunks = ["No skills found."]
-
-        await self._respond_ephemeral(
+        await handle_skills(
+            self,
             interaction_id,
             interaction_token,
-            chunks[0],
+            workspace_root=workspace_root,
+            options=options,
         )
-        for chunk in chunks[1:]:
-            sent = await self._send_followup_ephemeral(
-                interaction_token=interaction_token,
-                content=chunk,
-            )
-            if not sent:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "discord.skills.followup_failed",
-                    workspace_path=str(workspace_root),
-                )
-                break
 
     async def _handle_ticket_modal_submit(
         self,
@@ -6256,111 +5776,15 @@ class DiscordBotService:
         custom_id: str,
         values: dict[str, Any],
     ) -> None:
-        if not custom_id.startswith(f"{TICKETS_MODAL_PREFIX}:"):
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Unknown modal submission.",
-            )
-            return
+        from .flow_commands import handle_ticket_modal_submit
 
-        token = custom_id.split(":", 1)[1].strip()
-        context = self._pending_ticket_context.pop(token, None)
-        if not context:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "This ticket modal has expired. Re-open it and try again.",
-            )
-            return
-
-        ticket_rel = context.get("ticket_rel")
-        if not isinstance(ticket_rel, str) or not ticket_rel or ticket_rel == "none":
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "This ticket selection expired. Re-run `/car tickets` and choose one.",
-            )
-            return
-
-        ticket_body_raw = values.get(TICKETS_BODY_INPUT_ID)
-        ticket_body = ticket_body_raw if isinstance(ticket_body_raw, str) else None
-        if ticket_body is None:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Ticket content is missing. Please try again.",
-            )
-            return
-
-        workspace_root = Path(context.get("workspace_root", "")).expanduser()
-        ticket_dir = self._ticket_dir(workspace_root).resolve()
-        candidate = (workspace_root / ticket_rel).resolve()
-        try:
-            candidate.relative_to(ticket_dir)
-        except ValueError:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Ticket path is invalid. Re-open the ticket and try again.",
-            )
-            return
-
-        try:
-            candidate.write_text(ticket_body, encoding="utf-8")
-        except (OSError, ValueError, TypeError) as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.ticket.write_failed",
-                path=str(candidate),
-                exc=exc,
-            )
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                f"Failed to write ticket: {exc}",
-            )
-            return
-
-        await self._respond_ephemeral(
+        await handle_ticket_modal_submit(
+            self,
             interaction_id,
             interaction_token,
-            f"Saved {safe_relpath(candidate, workspace_root)}.",
-        )
-
-    async def _respond_modal(
-        self,
-        interaction_id: str,
-        interaction_token: str,
-        *,
-        custom_id: str,
-        title: str,
-        field_label: str,
-        field_value: str,
-    ) -> None:
-        await self._apply_discord_effect(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            effect=DiscordModalEffect(
-                kind=InteractionSessionKind.COMPONENT,
-                custom_id=custom_id,
-                title=title,
-                components=[
-                    {
-                        "type": 18,
-                        "label": field_label[:45],
-                        "component": {
-                            "type": 4,
-                            "custom_id": TICKETS_BODY_INPUT_ID,
-                            "style": 2,
-                            "value": field_value[:4000],
-                            "required": True,
-                            "max_length": 4000,
-                        },
-                    },
-                ],
-            ),
+            channel_id=channel_id,
+            custom_id=custom_id,
+            values=values,
         )
 
     async def _handle_mcp(
@@ -6370,11 +5794,13 @@ class DiscordBotService:
         *,
         workspace_root: Path,
     ) -> None:
-        await self._respond_ephemeral(
+        from .workspace_commands import handle_mcp
+
+        await handle_mcp(
+            self,
             interaction_id,
             interaction_token,
-            "MCP server status requires the app server client. "
-            "This command is not yet available in Discord.",
+            workspace_root=workspace_root,
         )
 
     async def _handle_init(
@@ -6457,40 +5883,12 @@ class DiscordBotService:
         interaction_id: str,
         interaction_token: str,
     ) -> None:
-        if not self._manifest_path or not self._manifest_path.exists():
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Hub manifest not configured.",
-            )
-            return
+        from .workspace_commands import handle_repos
 
-        try:
-            manifest = load_manifest(self._manifest_path, self._config.root)
-        except (OSError, ValueError) as exc:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                f"Failed to load manifest: {exc}",
-            )
-            return
-
-        lines = ["Repositories:"]
-        for repo in manifest.repos:
-            if not repo.enabled:
-                continue
-            lines.append(f"- `{repo.id}` ({repo.path})")
-
-        if len(lines) == 1:
-            lines.append("No enabled repositories found.")
-
-        lines.append("\nUse /car bind to select a workspace.")
-
-        content = format_discord_message("\n".join(lines))
-        await self._respond_ephemeral(
+        await handle_repos(
+            self,
             interaction_id,
             interaction_token,
-            content,
         )
 
     async def _handle_car_new(
@@ -6500,128 +5898,13 @@ class DiscordBotService:
         *,
         channel_id: str,
     ) -> None:
-        session = self._ensure_interaction_session(
+        from .car_handlers.session_commands import handle_car_new
+
+        await self._run_effectful_handler(
+            handle_car_new,
             interaction_id,
             interaction_token,
-        )
-        deferred = session.has_initial_response()
-        if not deferred:
-            deferred = await self._defer_public(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-            )
-        binding = await self._store.get_binding(channel_id=channel_id)
-        if binding is None:
-            text = format_discord_message(
-                "This channel is not bound. Run `/car bind path:<...>` first."
-            )
-            await self._send_or_respond_public(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=text,
-            )
-            return
-
-        pma_enabled = bool(binding.get("pma_enabled", False))
-        workspace_raw = binding.get("workspace_path")
-        workspace_root: Optional[Path] = None
-        if isinstance(workspace_raw, str) and workspace_raw.strip():
-            workspace_root = canonicalize_path(Path(workspace_raw))
-            if not workspace_root.exists() or not workspace_root.is_dir():
-                workspace_root = None
-        if workspace_root is None:
-            if pma_enabled:
-                workspace_root = canonicalize_path(Path(self._config.root))
-            else:
-                text = format_discord_message(
-                    "Binding is invalid. Run `/car bind path:<workspace>`."
-                )
-                await self._send_or_respond_public(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    deferred=deferred,
-                    text=text,
-                )
-                return
-
-        agent, agent_profile = self._resolve_agent_state(binding)
-        resource_kind = (
-            str(binding.get("resource_kind")).strip()
-            if isinstance(binding.get("resource_kind"), str)
-            and str(binding.get("resource_kind")).strip()
-            else None
-        )
-        resource_id = (
-            str(binding.get("resource_id")).strip()
-            if isinstance(binding.get("resource_id"), str)
-            and str(binding.get("resource_id")).strip()
-            else None
-        )
-
-        try:
-            had_previous, _new_thread_id = await self._reset_discord_thread_binding(
-                channel_id=channel_id,
-                workspace_root=workspace_root,
-                agent=agent,
-                agent_profile=agent_profile,
-                repo_id=(
-                    str(binding.get("repo_id")).strip()
-                    if isinstance(binding.get("repo_id"), str)
-                    and str(binding.get("repo_id")).strip()
-                    else None
-                ),
-                resource_kind=resource_kind,
-                resource_id=resource_id,
-                pma_enabled=pma_enabled,
-            )
-        except (
-            Exception
-        ) as exc:  # intentional: top-level error handler for thread reset
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.new.reset_failed",
-                channel_id=channel_id,
-                workspace_root=str(workspace_root),
-                agent=agent,
-                exc=exc,
-            )
-            text = format_discord_message("Failed to start a fresh session.")
-            await self._send_or_respond_public(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=text,
-            )
-            return
-        await self._store.clear_pending_compact_seed(channel_id=channel_id)
-        mode_label = "PMA" if pma_enabled else "repo"
-        state_label = "cleared previous thread" if had_previous else "new thread ready"
-        actor_label = self._format_agent_state(agent, agent_profile)
-        text = format_discord_message(
-            "\n".join(
-                [
-                    *build_fresh_session_started_lines(
-                        mode_label=mode_label,
-                        actor_label=actor_label,
-                        state_label=state_label,
-                    ),
-                    *build_thread_detail_lines(
-                        thread_id=_new_thread_id,
-                        workspace_path=str(workspace_root),
-                        actor_label=actor_label,
-                        model=self._status_model_label(binding),
-                        effort=self._status_effort_label(binding, agent),
-                    ),
-                ]
-            )
-        )
-        await self._send_or_respond_public(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            deferred=deferred,
-            text=text,
+            channel_id=channel_id,
         )
 
     async def _handle_car_newt(
@@ -6902,22 +6185,14 @@ class DiscordBotService:
         channel_id: str,
         selected_profile: str,
     ) -> None:
-        profile_value = selected_profile.strip()
-        if not profile_value:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Please select a Hermes profile and try again.",
-            )
-            return
-        profile_option = (
-            "clear" if profile_value in {"clear", "reset"} else profile_value
-        )
-        await self._handle_car_agent(
+        from .car_handlers.agent_commands import handle_agent_profile_picker_selection
+
+        await handle_agent_profile_picker_selection(
+            self,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
-            options={"profile": profile_option},
+            selected_profile=selected_profile,
         )
 
     def _pending_interaction_scope_key(
@@ -6958,55 +6233,15 @@ class DiscordBotService:
         user_id: Optional[str],
         selected_model: str,
     ) -> None:
-        model_value = selected_model.strip()
-        if not model_value:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Please select a model and try again.",
-            )
-            return
-        if model_value in {"clear", "reset"}:
-            pending_key = self._pending_interaction_scope_key(
-                channel_id=channel_id,
-                user_id=user_id,
-            )
-            self._pending_model_effort.pop(pending_key, None)
-            await self._handle_car_model(
-                interaction_id,
-                interaction_token,
-                channel_id=channel_id,
-                user_id=user_id,
-                options={"name": "clear"},
-            )
-            return
+        from .car_handlers.agent_commands import handle_model_picker_selection
 
-        binding = await self._store.get_binding(channel_id=channel_id)
-        current_agent, _current_profile = self._resolve_agent_state(binding)
-
-        if self._agent_supports_effort(current_agent):
-            pending_key = self._pending_interaction_scope_key(
-                channel_id=channel_id,
-                user_id=user_id,
-            )
-            self._pending_model_effort[pending_key] = model_value
-            await self._respond_with_components(
-                interaction_id,
-                interaction_token,
-                (
-                    f"Selected model: `{model_value}`\n"
-                    "Select reasoning effort (or none):"
-                ),
-                [build_model_effort_picker(custom_id=MODEL_EFFORT_SELECT_ID)],
-            )
-            return
-
-        await self._handle_car_model(
+        await handle_model_picker_selection(
+            self,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
             user_id=user_id,
-            options={"name": model_value},
+            selected_model=selected_model,
         )
 
     async def _handle_model_effort_selection(
@@ -7018,37 +6253,15 @@ class DiscordBotService:
         user_id: Optional[str],
         selected_effort: str,
     ) -> None:
-        pending_key = self._pending_interaction_scope_key(
-            channel_id=channel_id,
-            user_id=user_id,
-        )
-        model_name = self._pending_model_effort.pop(pending_key, None)
-        if not isinstance(model_name, str) or not model_name:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Model selection expired. Please re-run `/car model`.",
-            )
-            return
+        from .car_handlers.agent_commands import handle_model_effort_selection
 
-        effort_value = selected_effort.strip().lower()
-        if effort_value not in self.VALID_REASONING_EFFORTS and effort_value != "none":
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                f"Invalid effort '{selected_effort}'.",
-            )
-            return
-
-        model_options: dict[str, Any] = {"name": model_name}
-        if effort_value != "none":
-            model_options["effort"] = effort_value
-        await self._handle_car_model(
+        await handle_model_effort_selection(
+            self,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
             user_id=user_id,
-            options=model_options,
+            selected_effort=selected_effort,
         )
 
     async def _resolve_workspace_for_flow_read(
@@ -7534,33 +6747,8 @@ class DiscordBotService:
     ) -> Path:
         return write_user_reply(self, workspace_root, record, text)
 
-    def _format_file_size(self, size: int) -> str:
-        if size < 1024:
-            return f"{size} B"
-        value = size / 1024
-        for unit in ("KB", "MB", "GB"):
-            if value < 1024:
-                return f"{value:.1f} {unit}"
-            value /= 1024
-        return f"{value:.1f} TB"
-
     def _list_paths_in_dir(self, folder: Path) -> list[Path]:
         return list_regular_files(folder)
-
-    def _list_files_in_dir(self, folder: Path) -> list[tuple[str, int, str]]:
-        files: list[tuple[str, int, str]] = []
-        for path in self._list_paths_in_dir(folder):
-            try:
-                stat = path.stat()
-                from datetime import datetime, timezone
-
-                mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).strftime(
-                    "%Y-%m-%d %H:%M"
-                )
-                files.append((path.name, stat.st_size, mtime))
-            except OSError:
-                continue
-        return files
 
     async def _send_outbox_file(
         self,
@@ -7687,9 +6875,6 @@ class DiscordBotService:
                 channel_id=channel_id,
             )
 
-    def _delete_files_in_dir(self, folder: Path) -> int:
-        return delete_regular_files(folder)
-
     async def _handle_files_inbox(
         self,
         interaction_id: str,
@@ -7697,20 +6882,13 @@ class DiscordBotService:
         *,
         workspace_root: Path,
     ) -> None:
-        inbox = inbox_dir(workspace_root)
-        files = self._list_files_in_dir(inbox)
-        if not files:
-            await self._respond_ephemeral(
-                interaction_id, interaction_token, "Inbox: (empty)"
-            )
-            return
-        lines = [f"Inbox ({len(files)} file(s)):"]
-        for name, size, mtime in files[:20]:
-            lines.append(f"- {name} ({self._format_file_size(size)}, {mtime})")
-        if len(files) > 20:
-            lines.append(f"... and {len(files) - 20} more")
-        await self._respond_ephemeral(
-            interaction_id, interaction_token, "\n".join(lines)
+        from .car_handlers.system_commands import handle_files_inbox
+
+        await handle_files_inbox(
+            self,
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
         )
 
     async def _handle_files_outbox(
@@ -7720,42 +6898,13 @@ class DiscordBotService:
         *,
         workspace_root: Path,
     ) -> None:
-        outbox_root = outbox_dir(workspace_root)
-        pending = outbox_pending_dir(workspace_root)
-        sent = outbox_sent_dir(workspace_root)
-        root_files = self._list_files_in_dir(outbox_root)
-        root_files = [
-            entry for entry in root_files if entry[0] not in {"pending", "sent"}
-        ]
-        pending_files = self._list_files_in_dir(pending)
-        sent_files = self._list_files_in_dir(sent)
-        lines = []
-        if root_files:
-            lines.append(f"Outbox root ({len(root_files)} file(s)):")
-            for name, size, mtime in root_files[:20]:
-                lines.append(f"- {name} ({self._format_file_size(size)}, {mtime})")
-            if len(root_files) > 20:
-                lines.append(f"... and {len(root_files) - 20} more")
-            lines.append("")
-        if pending_files:
-            lines.append(f"Outbox pending ({len(pending_files)} file(s)):")
-            for name, size, mtime in pending_files[:20]:
-                lines.append(f"- {name} ({self._format_file_size(size)}, {mtime})")
-            if len(pending_files) > 20:
-                lines.append(f"... and {len(pending_files) - 20} more")
-        else:
-            lines.append("Outbox pending: (empty)")
-        lines.append("")
-        if sent_files:
-            lines.append(f"Outbox sent ({len(sent_files)} file(s)):")
-            for name, size, mtime in sent_files[:10]:
-                lines.append(f"- {name} ({self._format_file_size(size)}, {mtime})")
-            if len(sent_files) > 10:
-                lines.append(f"... and {len(sent_files) - 10} more")
-        else:
-            lines.append("Outbox sent: (empty)")
-        await self._respond_ephemeral(
-            interaction_id, interaction_token, "\n".join(lines)
+        from .car_handlers.system_commands import handle_files_outbox
+
+        await handle_files_outbox(
+            self,
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
         )
 
     async def _handle_files_clear(
@@ -7766,32 +6915,14 @@ class DiscordBotService:
         workspace_root: Path,
         options: dict[str, Any],
     ) -> None:
-        target = (options.get("target") or "all").lower().strip()
-        inbox = inbox_dir(workspace_root)
-        outbox_root = outbox_dir(workspace_root)
-        pending = outbox_pending_dir(workspace_root)
-        sent = outbox_sent_dir(workspace_root)
-        deleted = 0
-        if target == "inbox":
-            deleted = self._delete_files_in_dir(inbox)
-        elif target == "outbox":
-            deleted = self._delete_files_in_dir(outbox_root)
-            deleted += self._delete_files_in_dir(pending)
-            deleted += self._delete_files_in_dir(sent)
-        elif target == "all":
-            deleted = self._delete_files_in_dir(inbox)
-            deleted += self._delete_files_in_dir(outbox_root)
-            deleted += self._delete_files_in_dir(pending)
-            deleted += self._delete_files_in_dir(sent)
-        else:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Invalid target. Use: inbox, outbox, or all",
-            )
-            return
-        await self._respond_ephemeral(
-            interaction_id, interaction_token, f"Deleted {deleted} file(s)."
+        from .car_handlers.system_commands import handle_files_clear
+
+        await handle_files_clear(
+            self,
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
+            options=options,
         )
 
     async def _handle_pma_command(
@@ -7804,35 +6935,17 @@ class DiscordBotService:
         command_path: tuple[str, ...],
         options: Optional[dict[str, Any]] = None,
     ) -> None:
-        if not self._config.pma_enabled:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "PMA is disabled in hub config. Set pma.enabled: true to enable.",
-            )
-            return
-        subcommand = command_path[1] if len(command_path) > 1 else "status"
-        if subcommand == "on":
-            await self._handle_pma_on(
-                interaction_id,
-                interaction_token,
-                channel_id=channel_id,
-                guild_id=guild_id,
-            )
-        elif subcommand == "off":
-            await self._handle_pma_off(
-                interaction_id, interaction_token, channel_id=channel_id
-            )
-        elif subcommand == "status":
-            await self._handle_pma_status(
-                interaction_id, interaction_token, channel_id=channel_id
-            )
-        else:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Unknown PMA subcommand. Use on, off, or status.",
-            )
+        from .pma_commands import handle_pma_command
+
+        await handle_pma_command(
+            self,
+            interaction_id,
+            interaction_token,
+            channel_id=channel_id,
+            guild_id=guild_id,
+            command_path=command_path,
+            options=options,
+        )
 
     async def _handle_pma_on(
         self,
@@ -8759,16 +7872,15 @@ class DiscordBotService:
         interaction_token: str,
         text: str,
     ) -> None:
-        deferred = await ensure_ephemeral_response_deferred(
+        from .car_handlers.queue_interrupt_handlers import (
+            send_interrupt_component_response,
+        )
+
+        await send_interrupt_component_response(
             self,
             interaction_id,
             interaction_token,
-        )
-        await self.send_or_respond_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            deferred=deferred,
-            text=text,
+            text,
         )
 
     async def _handle_cancel_turn_button(
@@ -8781,42 +7893,16 @@ class DiscordBotService:
         message_id: Optional[str] = None,
         custom_id: str = "cancel_turn",
     ) -> None:
-        from .components import parse_cancel_turn_custom_id
+        from .car_handlers.queue_interrupt_handlers import handle_cancel_turn_button
 
-        thread_target_id, execution_id = parse_cancel_turn_custom_id(custom_id)
-        await defer_and_update_runtime_component_message(
+        await handle_cancel_turn_button(
             self,
             interaction_id,
             interaction_token,
-            "Stopping current turn...",
-            components=[],
-        )
-        from ..chat.chat_ux_telemetry import ChatUxMilestone, ChatUxTimingSnapshot
-
-        cancel_snapshot = ChatUxTimingSnapshot(
-            platform="discord", channel_id=channel_id
-        )
-        cancel_snapshot.record(ChatUxMilestone.RAW_EVENT_RECEIVED)
-        cancel_snapshot.record(ChatUxMilestone.INTERRUPT_REQUESTED_VISIBLE)
-        log_event(
-            self._logger,
-            logging.INFO,
-            "discord.turn.cancel_acknowledged",
             channel_id=channel_id,
-            thread_target_id=thread_target_id,
-            execution_id=execution_id,
-            **cancel_snapshot.to_log_fields(),
-        )
-        await self._handle_car_interrupt(
-            interaction_id,
-            interaction_token,
-            channel_id=channel_id,
-            source="component",
-            thread_target_id=thread_target_id,
-            execution_id=execution_id,
-            source_custom_id=custom_id,
-            source_message_id=message_id,
-            source_user_id=user_id,
+            user_id=user_id,
+            message_id=message_id,
+            custom_id=custom_id,
         )
 
     async def _handle_cancel_queued_turn_button(
@@ -8828,73 +7914,17 @@ class DiscordBotService:
         custom_id: str,
         message_id: Optional[str] = None,
     ) -> None:
-        from .components import parse_cancel_queued_turn_custom_id
-        from .message_turns import clear_discord_turn_progress_leases
+        from .car_handlers.queue_interrupt_handlers import (
+            handle_cancel_queued_turn_button,
+        )
 
-        execution_id = parse_cancel_queued_turn_custom_id(custom_id)
-        if not execution_id:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Queued request is unavailable.",
-            )
-            return
-        binding = await self._store.get_binding(channel_id=channel_id)
-        pma_enabled = bool(binding.get("pma_enabled", False)) if binding else False
-        mode = "pma" if pma_enabled else "repo"
-        orchestration_service, _binding_row, current_thread = (
-            self._get_discord_thread_binding(channel_id=channel_id, mode=mode)
-        )
-        if current_thread is None:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Queued request is unavailable.",
-            )
-            return
-        cancelled = orchestration_service.cancel_queued_execution(
-            current_thread.thread_target_id,
-            execution_id,
-        )
-        if not cancelled:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Queued request is no longer pending.",
-            )
-            return
-        await defer_and_update_runtime_component_message(
+        await handle_cancel_queued_turn_button(
             self,
             interaction_id,
             interaction_token,
-            "Cancelling queued request...",
-            components=[],
-        )
-        await clear_discord_turn_progress_leases(
-            self,
-            managed_thread_id=current_thread.thread_target_id,
-            execution_id=execution_id,
-        )
-        if message_id:
-            with contextlib.suppress(
-                DiscordAPIError,
-                RuntimeError,
-                ConnectionError,
-                OSError,
-                ValueError,
-            ):
-                await self._rest.edit_channel_message(
-                    channel_id=channel_id,
-                    message_id=message_id,
-                    payload={
-                        "content": "Queued request cancelled.",
-                        "components": [],
-                    },
-                )
-        await self._respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            "Queued request cancelled.",
+            channel_id=channel_id,
+            custom_id=custom_id,
+            message_id=message_id,
         )
 
     async def _handle_queued_turn_interrupt_send_button(
@@ -8907,76 +7937,18 @@ class DiscordBotService:
         user_id: Optional[str] = None,
         message_id: Optional[str] = None,
     ) -> None:
-        from .components import parse_queued_turn_interrupt_send_custom_id
+        from .car_handlers.queue_interrupt_handlers import (
+            handle_queued_turn_interrupt_send_button,
+        )
 
-        execution_id, source_message_id = parse_queued_turn_interrupt_send_custom_id(
-            custom_id
-        )
-        if not execution_id or not source_message_id:
-            await self._send_interrupt_component_response(
-                interaction_id,
-                interaction_token,
-                "Queued request is unavailable.",
-            )
-            return
-        binding = await self._store.get_binding(channel_id=channel_id)
-        pma_enabled = bool(binding.get("pma_enabled", False)) if binding else False
-        mode = "pma" if pma_enabled else "repo"
-        orchestration_service, _binding_row, current_thread = (
-            self._get_discord_thread_binding(channel_id=channel_id, mode=mode)
-        )
-        if current_thread is None:
-            await self._send_interrupt_component_response(
-                interaction_id,
-                interaction_token,
-                "Queued request is unavailable.",
-            )
-            return
-        promoted = orchestration_service.promote_queued_execution(
-            current_thread.thread_target_id,
-            execution_id,
-        )
-        if not promoted:
-            await self._send_interrupt_component_response(
-                interaction_id,
-                interaction_token,
-                "Queued request is no longer pending.",
-            )
-            return
-        get_running_execution = getattr(
-            orchestration_service,
-            "get_running_execution",
-            None,
-        )
-        if callable(get_running_execution):
-            running_execution = get_running_execution(current_thread.thread_target_id)
-            if running_execution is None:
-                await self._send_interrupt_component_response(
-                    interaction_id,
-                    interaction_token,
-                    "Queued request moved to the front.",
-                )
-                return
-        await defer_and_update_runtime_component_message(
+        await handle_queued_turn_interrupt_send_button(
             self,
             interaction_id,
             interaction_token,
-            "Message received. Switching to it now...",
-            components=[],
-        )
-        await self._handle_car_interrupt(
-            interaction_id,
-            interaction_token,
             channel_id=channel_id,
-            active_turn_text="Message received. Switching to it now...",
-            cancel_queued=False,
-            allow_promoted_no_active_success=True,
-            progress_reuse_source_message_id=source_message_id,
-            progress_reuse_acknowledgement="Message received. Switching to it now...",
-            source="component",
-            source_custom_id=custom_id,
-            source_message_id=message_id,
-            source_user_id=user_id,
+            custom_id=custom_id,
+            user_id=user_id,
+            message_id=message_id,
         )
 
     async def _handle_queue_cancel_button(
@@ -8989,47 +7961,16 @@ class DiscordBotService:
         guild_id: Optional[str],
         message_id: Optional[str] = None,
     ) -> None:
-        source_message_id = custom_id.split(":", 1)[1].strip()
-        if not source_message_id:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Queued request is unavailable.",
-            )
-            return
-        conversation_id = self._dispatcher_conversation_id(
-            channel_id=channel_id,
-            guild_id=guild_id,
-        )
-        cancelled = await self._dispatcher.cancel_pending_message(
-            conversation_id,
-            source_message_id,
-        )
-        if not cancelled:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Queued request is no longer pending.",
-            )
-            return
-        await defer_and_update_runtime_component_message(
+        from .car_handlers.queue_interrupt_handlers import handle_queue_cancel_button
+
+        await handle_queue_cancel_button(
             self,
             interaction_id,
             interaction_token,
-            "Cancelling queued request...",
-            components=[],
-        )
-        await self._clear_queued_notice(
-            conversation_id=conversation_id,
-            source_message_id=source_message_id,
             channel_id=channel_id,
-        )
-        if message_id:
-            self._queued_notice_messages.pop((conversation_id, source_message_id), None)
-        await self._respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            "Queued request cancelled.",
+            custom_id=custom_id,
+            guild_id=guild_id,
+            message_id=message_id,
         )
 
     async def _handle_queue_interrupt_send_button(
@@ -9043,60 +7984,19 @@ class DiscordBotService:
         user_id: Optional[str] = None,
         message_id: Optional[str] = None,
     ) -> None:
-        source_message_id = custom_id.split(":", 1)[1].strip()
-        if not source_message_id:
-            await self._send_interrupt_component_response(
-                interaction_id,
-                interaction_token,
-                "Queued request is unavailable.",
-            )
-            return
-        conversation_id = self._dispatcher_conversation_id(
-            channel_id=channel_id,
-            guild_id=guild_id,
+        from .car_handlers.queue_interrupt_handlers import (
+            handle_queue_interrupt_send_button,
         )
-        promoted = await self._dispatcher.promote_pending_message(
-            conversation_id,
-            source_message_id,
-        )
-        if not promoted:
-            await self._send_interrupt_component_response(
-                interaction_id,
-                interaction_token,
-                "Queued request is no longer pending.",
-            )
-            return
-        binding = await self._store.get_binding(channel_id=channel_id)
-        pma_enabled = bool(binding.get("pma_enabled", False)) if binding else False
-        mode = "pma" if pma_enabled else "repo"
-        _orchestration_service, _binding_row, current_thread = (
-            self._get_discord_thread_binding(channel_id=channel_id, mode=mode)
-        )
-        if current_thread is None:
-            await self._send_interrupt_component_response(
-                interaction_id,
-                interaction_token,
-                "Queued request moved to the front.",
-            )
-            return
-        await defer_and_update_runtime_component_message(
+
+        await handle_queue_interrupt_send_button(
             self,
             interaction_id,
             interaction_token,
-            "Message received. Switching to it now...",
-            components=[],
-        )
-        await self._handle_car_interrupt(
-            interaction_id,
-            interaction_token,
             channel_id=channel_id,
-            active_turn_text="Message received. Switching to it now...",
-            progress_reuse_source_message_id=source_message_id,
-            progress_reuse_acknowledgement="Message received. Switching to it now...",
-            source="component",
-            source_custom_id=custom_id,
-            source_message_id=message_id,
-            source_user_id=user_id,
+            custom_id=custom_id,
+            guild_id=guild_id,
+            user_id=user_id,
+            message_id=message_id,
         )
 
     async def _handle_continue_turn_button(
@@ -9104,13 +8004,12 @@ class DiscordBotService:
         interaction_id: str,
         interaction_token: str,
     ) -> None:
-        await self._respond_ephemeral(
+        from .car_handlers.queue_interrupt_handlers import handle_continue_turn_button
+
+        await handle_continue_turn_button(
+            self,
             interaction_id,
             interaction_token,
-            (
-                "Compaction complete. Send your next message to continue this "
-                "session, or use `/car new` to start a fresh session."
-            ),
         )
 
 

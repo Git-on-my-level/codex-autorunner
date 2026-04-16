@@ -228,12 +228,12 @@ def test_contract_long_running_component_handlers_show_immediate_progress() -> N
         "src/codex_autorunner/integrations/discord/interaction_component_handlers.py": (
             "_handle_flow_action_select_component",
         ),
-        "src/codex_autorunner/integrations/discord/service.py": (
-            "_handle_cancel_turn_button",
-            "_handle_cancel_queued_turn_button",
-            "_handle_queued_turn_interrupt_send_button",
-            "_handle_queue_cancel_button",
-            "_handle_queue_interrupt_send_button",
+        "src/codex_autorunner/integrations/discord/car_handlers/queue_interrupt_handlers.py": (
+            "handle_cancel_turn_button",
+            "handle_cancel_queued_turn_button",
+            "handle_queued_turn_interrupt_send_button",
+            "handle_queue_cancel_button",
+            "handle_queue_interrupt_send_button",
         ),
     }
 
