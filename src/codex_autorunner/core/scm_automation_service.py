@@ -510,7 +510,9 @@ class ScmAutomationService:
                 self._deferred_drain_timer.cancel()
                 self._deferred_drain_timer = None
 
-    def _schedule_deferred_publish_drain_at(self, next_attempt_at_iso: Optional[str]) -> None:
+    def _schedule_deferred_publish_drain_at(
+        self, next_attempt_at_iso: Optional[str]
+    ) -> None:
         if not self._schedule_deferred_publish_drain:
             return
         if not next_attempt_at_iso:
@@ -518,9 +520,7 @@ class ScmAutomationService:
         parsed = _parse_iso_datetime(next_attempt_at_iso)
         if parsed is None:
             return
-        delay = max(
-            0.0, (parsed - datetime.now(timezone.utc)).total_seconds()
-        )
+        delay = max(0.0, (parsed - datetime.now(timezone.utc)).total_seconds())
         with self._deferred_drain_lock:
             if self._deferred_drain_timer is not None:
                 self._deferred_drain_timer.cancel()
