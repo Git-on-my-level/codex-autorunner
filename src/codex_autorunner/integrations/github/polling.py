@@ -20,6 +20,7 @@ from ...core.scm_reaction_types import ScmReactionConfig
 from ...core.text_utils import _mapping, _normalize_text, lock_path_for
 from ...core.time_utils import now_iso
 from ...core.utils import atomic_write, read_json
+from .broker import looks_like_rate_limit
 from .polling_discovery import (
     binding_from_polling_row,
     collect_candidate_workspace_roots,
@@ -113,7 +114,7 @@ def _is_rate_limit_error(exc: Exception) -> bool:
     status_code = getattr(exc, "status_code", None)
     if status_code == 429:
         return True
-    return "rate limit" in str(exc).lower()
+    return looks_like_rate_limit(str(exc))
 
 
 def _reaction_config_mapping(value: Any) -> dict[str, Any]:

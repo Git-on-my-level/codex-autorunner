@@ -582,3 +582,23 @@ def test_mutation_invalidation_clears_pr_view_cache(
 
     svc.pr_view(number=17)
     assert len(runner_calls) == cache_hits + 2
+
+
+class TestLooksLikeRateLimitIsSharedClassifier:
+    def test_broker_exports_shared_classifier(self) -> None:
+        from codex_autorunner.integrations.github.broker import looks_like_rate_limit
+
+        assert looks_like_rate_limit("API rate limit exceeded")
+        assert looks_like_rate_limit("  Rate Limit hit  ")
+        assert not looks_like_rate_limit("not found")
+        assert not looks_like_rate_limit("")
+
+    def test_service_uses_shared_classifier(self) -> None:
+        from codex_autorunner.integrations.github import broker, service
+
+        assert service.looks_like_rate_limit is broker.looks_like_rate_limit
+
+    def test_polling_uses_shared_classifier(self) -> None:
+        from codex_autorunner.integrations.github import broker, polling
+
+        assert polling.looks_like_rate_limit is broker.looks_like_rate_limit

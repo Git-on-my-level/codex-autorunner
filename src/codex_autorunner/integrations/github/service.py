@@ -21,7 +21,7 @@ from ...core.utils import (
     resolve_executable,
     subprocess_env,
 )
-from .broker import GitHubCliBroker
+from .broker import GitHubCliBroker, looks_like_rate_limit
 from .context_rendering import build_context_file_from_url as _build_context_file
 from .scm_discovery import (
     arm_polling_watch_best_effort,
@@ -49,13 +49,6 @@ class GitHubError(Exception):
     def __init__(self, message: str, *, status_code: int = 400):
         super().__init__(message)
         self.status_code = status_code
-
-
-def _looks_like_rate_limit(detail: str) -> bool:
-    normalized = (detail or "").strip().lower()
-    if not normalized:
-        return False
-    return "rate limit" in normalized
 
 
 def _now_ms() -> int:
@@ -95,7 +88,7 @@ def _run(
         stderr = (proc.stderr or "").strip()
         stdout = (proc.stdout or "").strip()
         detail = stderr or stdout or f"exit {proc.returncode}"
-        status_code = 429 if _looks_like_rate_limit(detail) else 400
+        status_code = 429 if looks_like_rate_limit(detail) else 400
         raise GitHubError(
             f"Command failed: {' '.join(args)}: {detail}", status_code=status_code
         )
