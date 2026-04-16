@@ -1633,6 +1633,392 @@ async def test_recovery_abandoned_when_envelope_is_missing(
 
 
 @pytest.mark.anyio
+async def test_recovery_handles_multiple_pending_interactions_independently(
+    tmp_path: Path,
+) -> None:
+    harness = _ChaosHarness(tmp_path)
+    await harness.initialize()
+    try:
+        service = _build_recovery_service(
+            store=harness.store,
+            rest=harness.rest,
+            operation_store=harness.operation_store,
+        )
+        interactions: list[tuple[str, str, str]] = [
+            ("multi-1", "token-multi-1", "conversation:discord:chan-1:guild-1"),
+            ("multi-2", "token-multi-2", "conversation:discord:chan-2:guild-1"),
+            ("multi-3", "token-multi-3", "conversation:discord:chan-3:guild-1"),
+        ]
+        for iid, token, _conv in interactions:
+            ctx = _make_ctx(interaction_id=iid, interaction_token=token)
+            payload = _slash_payload(interaction_id=iid, interaction_token=token)
+            await harness.store.register_interaction(
+                interaction_id=ctx.interaction_id,
+                interaction_token=ctx.interaction_token,
+                interaction_kind=ctx.kind.value,
+                channel_id=ctx.channel_id,
+                guild_id=ctx.guild_id,
+                user_id=ctx.user_id,
+                metadata_json=service._interaction_ledger_metadata(ctx),
+            )
+            envelope = RuntimeInteractionEnvelope(
+                context=ctx,
+                conversation_id=_conv,
+                resource_keys=(_conv,),
+                dispatch_ack_policy="defer_ephemeral",
+            )
+            await service._persist_runtime_interaction(
+                envelope,
+                payload,
+                scheduler_state="delivery_pending",
+            )
+            await harness.store.mark_interaction_acknowledged(
+                ctx.interaction_id,
+                ack_mode="defer_ephemeral",
+            )
+            await harness.store.mark_interaction_execution(
+                ctx.interaction_id,
+                execution_status="completed",
+            )
+            await harness.store.update_interaction_delivery_cursor(
+                ctx.interaction_id,
+                delivery_cursor_json={
+                    "state": "pending",
+                    "operation": "send_followup",
+                    "payload": {
+                        "content": f"Recovered {iid}.",
+                        "ephemeral": True,
+                    },
+                },
+                scheduler_state="delivery_pending",
+            )
+
+        await service._resume_interaction_recovery()
+        await service._command_runner.shutdown(grace_seconds=2.0)
+
+        service._handle_car_command.assert_not_awaited()
+        assert len(harness.rest.followup_messages) == 3
+        assert [
+            msg["payload"]["content"] for msg in harness.rest.followup_messages
+        ] == ["Recovered multi-1.", "Recovered multi-2.", "Recovered multi-3."]
+
+        for iid, _, _ in interactions:
+            record = await harness.store.get_interaction(iid)
+            assert record is not None
+            assert record.scheduler_state == "completed"
+            assert record.execution_status == "completed"
+    finally:
+        await harness.close()
+
+
+@pytest.mark.anyio
+async def test_recovery_does_not_block_new_incoming_interaction(
+    tmp_path: Path,
+) -> None:
+    harness = _ChaosHarness(tmp_path)
+    await harness.initialize()
+    try:
+        service = _build_recovery_service(
+            store=harness.store,
+            rest=harness.rest,
+            operation_store=harness.operation_store,
+        )
+
+        async def _recovered_handler(
+            interaction_id: str,
+            interaction_token: str,
+            **_kwargs: Any,
+        ) -> None:
+            await service._responder.send_followup(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                content="Recovered execution.",
+                ephemeral=True,
+            )
+
+        service._handle_car_command.side_effect = _recovered_handler
+        recover_ctx = _make_ctx(
+            interaction_id="recover-old-1",
+            interaction_token="token-recover-old-1",
+        )
+        recover_payload = _slash_payload(
+            interaction_id="recover-old-1",
+            interaction_token="token-recover-old-1",
+        )
+        await harness.store.register_interaction(
+            interaction_id=recover_ctx.interaction_id,
+            interaction_token=recover_ctx.interaction_token,
+            interaction_kind=recover_ctx.kind.value,
+            channel_id=recover_ctx.channel_id,
+            guild_id=recover_ctx.guild_id,
+            user_id=recover_ctx.user_id,
+            metadata_json=service._interaction_ledger_metadata(recover_ctx),
+        )
+        envelope = RuntimeInteractionEnvelope(
+            context=recover_ctx,
+            conversation_id="conversation:discord:chan-1:guild-1",
+            resource_keys=("conversation:discord:chan-1:guild-1",),
+            dispatch_ack_policy="defer_ephemeral",
+        )
+        await service._persist_runtime_interaction(
+            envelope,
+            recover_payload,
+            scheduler_state="acknowledged",
+        )
+        await harness.store.mark_interaction_acknowledged(
+            recover_ctx.interaction_id,
+            ack_mode="defer_ephemeral",
+        )
+        await harness.store.mark_interaction_execution(
+            recover_ctx.interaction_id,
+            execution_status="acknowledged",
+        )
+
+        await service._resume_interaction_recovery()
+
+        new_ctx = _make_ctx(
+            interaction_id="new-fresh-1",
+            interaction_token="token-new-fresh-1",
+        )
+        new_payload = _slash_payload(
+            interaction_id="new-fresh-1",
+            interaction_token="token-new-fresh-1",
+        )
+        await harness.store.register_interaction(
+            interaction_id=new_ctx.interaction_id,
+            interaction_token=new_ctx.interaction_token,
+            interaction_kind=new_ctx.kind.value,
+            channel_id=new_ctx.channel_id,
+            guild_id=new_ctx.guild_id,
+            user_id=new_ctx.user_id,
+            metadata_json=service._interaction_ledger_metadata(new_ctx),
+        )
+
+        ingress = InteractionIngress(service, logger=service._logger)
+        result = await ingress.process_raw_payload(new_payload)
+        assert result.accepted is True
+
+        await service._command_runner.shutdown(grace_seconds=2.0)
+
+        service._handle_car_command.assert_awaited_once()
+        recovered = await harness.store.get_interaction("recover-old-1")
+        assert recovered is not None
+        assert recovered.scheduler_state == "completed"
+    finally:
+        await harness.close()
+
+
+@pytest.mark.anyio
+async def test_recovery_replays_respond_message_delivery_cursor(
+    tmp_path: Path,
+) -> None:
+    harness = _ChaosHarness(tmp_path)
+    await harness.initialize()
+    try:
+        service = _build_recovery_service(
+            store=harness.store,
+            rest=harness.rest,
+            operation_store=harness.operation_store,
+        )
+        ctx = _make_ctx(
+            interaction_id="recover-respond-1",
+            interaction_token="token-recover-respond-1",
+            deferred=False,
+        )
+        payload = _slash_payload(
+            interaction_id="recover-respond-1",
+            interaction_token="token-recover-respond-1",
+        )
+        await harness.store.register_interaction(
+            interaction_id=ctx.interaction_id,
+            interaction_token=ctx.interaction_token,
+            interaction_kind=ctx.kind.value,
+            channel_id=ctx.channel_id,
+            guild_id=ctx.guild_id,
+            user_id=ctx.user_id,
+            metadata_json=service._interaction_ledger_metadata(ctx),
+        )
+        envelope = RuntimeInteractionEnvelope(
+            context=ctx,
+            conversation_id="conversation:discord:chan-1:guild-1",
+            resource_keys=("conversation:discord:chan-1:guild-1",),
+            dispatch_ack_policy="defer_ephemeral",
+        )
+        await service._persist_runtime_interaction(
+            envelope,
+            payload,
+            scheduler_state="delivery_pending",
+        )
+        await harness.store.mark_interaction_acknowledged(
+            ctx.interaction_id,
+            ack_mode="defer_ephemeral",
+        )
+        await harness.store.mark_interaction_execution(
+            ctx.interaction_id,
+            execution_status="completed",
+        )
+        await harness.store.update_interaction_delivery_cursor(
+            ctx.interaction_id,
+            delivery_cursor_json={
+                "state": "pending",
+                "operation": "respond_message",
+                "payload": {
+                    "text": "Recovered via respond_message.",
+                    "ephemeral": True,
+                },
+            },
+            scheduler_state="delivery_pending",
+        )
+
+        await service._resume_interaction_recovery()
+        await service._command_runner.shutdown(grace_seconds=2.0)
+
+        service._handle_car_command.assert_not_awaited()
+        total_deliveries = (
+            len(harness.rest.interaction_responses)
+            + len(harness.rest.followup_messages)
+            + len(harness.rest.edited_original_responses)
+        )
+        assert total_deliveries == 1
+
+        record = await harness.store.get_interaction(ctx.interaction_id)
+        assert record is not None
+        assert record.scheduler_state == "completed"
+    finally:
+        await harness.close()
+
+
+@pytest.mark.anyio
+async def test_scheduler_state_transitions_from_acknowledged_to_completed(
+    tmp_path: Path,
+) -> None:
+    harness = _ChaosHarness(tmp_path)
+    await harness.initialize()
+    try:
+        service = _build_recovery_service(
+            store=harness.store,
+            rest=harness.rest,
+            operation_store=harness.operation_store,
+        )
+
+        async def _completing_handler(
+            interaction_id: str,
+            interaction_token: str,
+            **_kwargs: Any,
+        ) -> None:
+            await service._responder.send_followup(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                content="Handler completed.",
+                ephemeral=True,
+            )
+
+        service._handle_car_command.side_effect = _completing_handler
+        ctx = _make_ctx(
+            interaction_id="transition-1",
+            interaction_token="token-transition-1",
+        )
+        payload = _slash_payload(
+            interaction_id="transition-1",
+            interaction_token="token-transition-1",
+        )
+        await harness.store.register_interaction(
+            interaction_id=ctx.interaction_id,
+            interaction_token=ctx.interaction_token,
+            interaction_kind=ctx.kind.value,
+            channel_id=ctx.channel_id,
+            guild_id=ctx.guild_id,
+            user_id=ctx.user_id,
+            metadata_json=service._interaction_ledger_metadata(ctx),
+        )
+        envelope = RuntimeInteractionEnvelope(
+            context=ctx,
+            conversation_id="conversation:discord:chan-1:guild-1",
+            resource_keys=("conversation:discord:chan-1:guild-1",),
+            dispatch_ack_policy="defer_ephemeral",
+        )
+        await service._persist_runtime_interaction(
+            envelope,
+            payload,
+            scheduler_state="acknowledged",
+        )
+        await harness.store.mark_interaction_acknowledged(
+            ctx.interaction_id,
+            ack_mode="defer_ephemeral",
+        )
+        await harness.store.mark_interaction_execution(
+            ctx.interaction_id,
+            execution_status="acknowledged",
+        )
+
+        record_before = await harness.store.get_interaction(ctx.interaction_id)
+        assert record_before is not None
+        assert record_before.scheduler_state == "acknowledged"
+        assert record_before.execution_status == "acknowledged"
+
+        await service._resume_interaction_recovery()
+        await service._command_runner.shutdown(grace_seconds=2.0)
+
+        service._handle_car_command.assert_awaited_once()
+        record_after = await harness.store.get_interaction(ctx.interaction_id)
+        assert record_after is not None
+        assert record_after.scheduler_state == "completed"
+        assert record_after.execution_status == "completed"
+        assert record_after.final_delivery_status == "followup_sent"
+    finally:
+        await harness.close()
+
+
+@pytest.mark.anyio
+async def test_chaos_concurrent_submit_and_graceful_shutdown_drains_running(
+    tmp_path: Path,
+) -> None:
+    service = _RunnerService()
+    runner = CommandRunner(
+        service,
+        config=RunnerConfig(timeout_seconds=None, stalled_warning_seconds=None),
+        logger=service._logger,
+    )
+
+    handler_started = asyncio.Event()
+    release_handler = asyncio.Event()
+    handler_calls: list[str] = []
+
+    async def _blocking_handler(
+        interaction_id: str,
+        interaction_token: str,
+        **_kwargs: Any,
+    ) -> None:
+        handler_calls.append(interaction_id)
+        handler_started.set()
+        await release_handler.wait()
+
+    service._handle_car_command.side_effect = _blocking_handler
+
+    ctx = _make_ctx(
+        interaction_id="drain-1",
+        interaction_token="token-drain-1",
+    )
+    runner.submit(
+        ctx,
+        _slash_payload(
+            interaction_id="drain-1",
+            interaction_token="token-drain-1",
+        ),
+    )
+
+    await asyncio.wait_for(handler_started.wait(), timeout=1.0)
+
+    shutdown_task = asyncio.create_task(runner.shutdown(grace_seconds=2.0))
+    await asyncio.sleep(0.02)
+
+    release_handler.set()
+    await shutdown_task
+
+    assert handler_calls == ["drain-1"]
+
+
+@pytest.mark.anyio
 async def test_recovery_delivery_expired_when_ack_mode_is_missing_and_no_pending_delivery(
     tmp_path: Path,
 ) -> None:

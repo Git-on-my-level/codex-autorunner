@@ -299,6 +299,49 @@ TEST_FILE_CAPS = (
     ),
 )
 
+DISCORD_EXTRACTED_SEAM_BUDGETS = (
+    FileBudget(
+        path="src/codex_autorunner/integrations/discord/hub_handshake.py",
+        max_lines=120,
+        reason="Hub handshake must stay a thin RPC wrapper; logic belongs in hub_control_plane.",
+    ),
+    FileBudget(
+        path="src/codex_autorunner/integrations/discord/service_lifecycle.py",
+        max_lines=600,
+        reason="Service lifecycle helpers should not re-grow service.py responsibilities.",
+    ),
+    FileBudget(
+        path="src/codex_autorunner/integrations/discord/outbox.py",
+        max_lines=500,
+        reason="Outbox delivery loop must stay focused on retry/delivery, not interaction lifecycle.",
+    ),
+    FileBudget(
+        path="src/codex_autorunner/integrations/discord/progress_leases.py",
+        max_lines=900,
+        reason="Progress lease helpers should stay bounded after extraction from message_turns.",
+    ),
+    FileBudget(
+        path="src/codex_autorunner/integrations/discord/managed_thread_routing.py",
+        max_lines=530,
+        reason="Managed thread routing must delegate to shared helpers, not re-grow Discord-local logic.",
+    ),
+    FileBudget(
+        path="src/codex_autorunner/integrations/discord/interaction_dispatch.py",
+        max_lines=300,
+        reason="Post-admission dispatch must stay a thin routing layer over registry and handlers.",
+    ),
+    FileBudget(
+        path="src/codex_autorunner/integrations/discord/interaction_slash_builders.py",
+        max_lines=580,
+        reason="Slash builders must stay focused on option schema and handler shims.",
+    ),
+    FileBudget(
+        path="src/codex_autorunner/integrations/discord/interaction_component_handlers.py",
+        max_lines=510,
+        reason="Component handler shims must stay thin delegation to service methods.",
+    ),
+)
+
 LEGACY_FILE_CAPS = (
     FileBudget(
         path="src/codex_autorunner/surfaces/web/routes/flows.py",
@@ -556,6 +599,9 @@ def test_hotspot_file_budgets() -> None:
     failures.extend(_check_file_budgets(STANDARD_FILE_BUDGETS, label="Budget"))
     failures.extend(_check_file_budgets(TEST_FILE_CAPS, label="Test cap"))
     failures.extend(_check_file_budgets(LEGACY_FILE_CAPS, label="Legacy cap"))
+    failures.extend(
+        _check_file_budgets(DISCORD_EXTRACTED_SEAM_BUDGETS, label="Discord seam")
+    )
     _fail_if_any(failures)
 
 
