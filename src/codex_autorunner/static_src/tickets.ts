@@ -17,7 +17,6 @@ import { subscribe } from "./bus.js";
 import { isRepoHealthy } from "./health.js";
 import { closeTicketEditor, initTicketEditor, openTicketEditor, TicketData } from "./ticketEditor.js";
 import { parseAppServerEvent, resetOpenCodeEventState, type AgentEvent, type ParsedAgentEvent } from "./agentEvents.js";
-import { summarizeEvents, renderCompactSummary, COMPACT_MAX_TEXT_LENGTH } from "./eventSummarizer.js";
 import { refreshBell, renderMarkdown } from "./messages.js";
 import { preserveScroll } from "./preserve.js";
 import { createSmartRefresh } from "./smartRefresh.js";
@@ -170,7 +169,7 @@ let lastActivityTime: Date | null = null;
 let lastActivityTimerId: ReturnType<typeof setInterval> | null = null;
 let lastKnownEventSeq: number | null = null;
 let lastKnownEventAt: Date | null = null;
-let liveOutputDetailExpanded = false; // Start with summary view, one click for full
+let liveOutputExpanded = false; // Start collapsed; expand on demand for full output
 let liveOutputBuffer: string[] = [];
 const MAX_OUTPUT_LINES = 200;
 const LIVE_EVENT_MAX = 50;
@@ -298,7 +297,7 @@ function scheduleLiveOutputTextUpdate(): void {
       }
       // Auto-scroll to bottom when detail view is showing
       const detailEl = document.getElementById("ticket-live-output-detail");
-      if (detailEl && liveOutputDetailExpanded) {
+      if (detailEl && liveOutputExpanded) {
         detailEl.scrollTop = detailEl.scrollHeight;
       }
     }
@@ -644,7 +643,7 @@ function renderLiveOutputEvents(): void {
     count.textContent = String(liveOutputEvents.length);
   }
   
-  const shouldHide = !hasEvents || !liveOutputDetailExpanded;
+  const shouldHide = !hasEvents || !liveOutputExpanded;
   if (container.classList.contains("hidden") !== shouldHide) {
     container.classList.toggle("hidden", shouldHide);
   }
@@ -741,94 +740,30 @@ function renderLiveOutputEvents(): void {
   list.scrollTop = list.scrollHeight;
 }
 
-function renderLiveOutputCompact(): void {
-  const compactEl = document.getElementById("ticket-live-output-compact");
-  if (!compactEl) return;
-  const text = renderCompactLiveOutputText();
-  const newText = text || "Waiting for agent output...";
-  
-  if (compactEl.textContent !== newText) {
-    compactEl.textContent = newText;
-  }
-}
-
-function renderCompactLiveOutputText(): string {
-  if (liveOutputEvents.length) {
-    const summary = summarizeEvents(liveOutputEvents, {
-      maxActions: 1, // Show only 1 action + thinking to fit in 3-line compact view
-      maxTextLength: COMPACT_MAX_TEXT_LENGTH,
-      startTime: flowStartedAt?.getTime(),
-    });
-    return renderCompactSummary(summary);
-  }
-
-  const fallbackText = compactLiveOutputBufferText();
-  if (!fallbackText) return "";
-
-  const summary = summarizeEvents(
-    [
-      {
-        id: "ticket-live-output-fallback",
-        title: "Output",
-        summary: fallbackText,
-        detail: "",
-        kind: "output",
-        isSignificant: true,
-        time: flowStartedAt?.getTime() || Date.now(),
-        itemId: null,
-        method: "agent_stream_delta",
-      },
-    ],
-    {
-      maxActions: 1,
-      maxTextLength: COMPACT_MAX_TEXT_LENGTH,
-      startTime: flowStartedAt?.getTime(),
-    }
-  );
-  return renderCompactSummary(summary);
-}
-
-function compactLiveOutputBufferText(): string {
-  const recentLines = liveOutputBuffer
-    .map((line) => line.trim())
-    .filter((line) => line && !/^--- Step: .* ---$/.test(line));
-  if (!recentLines.length) return "";
-  return recentLines.slice(-3).join(" ").replace(/\s+/g, " ").trim();
-}
-
-function updateLiveOutputViewToggle(): void {
+function updateLiveOutputToggle(): void {
   const viewToggle = document.getElementById("ticket-live-output-view-toggle");
+  const panel = document.getElementById("ticket-live-output-panel");
+  const chevron = document.getElementById("ticket-live-output-chevron");
   if (!viewToggle) return;
-  
-  if (liveOutputDetailExpanded) {
-    if (!viewToggle.classList.contains("active")) viewToggle.classList.add("active");
-    if (viewToggle.textContent !== "≡") viewToggle.textContent = "≡";
-    if (viewToggle.title !== "Show summary") viewToggle.title = "Show summary";
-  } else {
-    if (viewToggle.classList.contains("active")) viewToggle.classList.remove("active");
-    if (viewToggle.textContent !== "⋯") viewToggle.textContent = "⋯";
-    if (viewToggle.title !== "Show full output") viewToggle.title = "Show full output";
+
+  panel?.classList.toggle("collapsed", !liveOutputExpanded);
+  viewToggle.classList.toggle("active", liveOutputExpanded);
+  viewToggle.setAttribute("aria-expanded", String(liveOutputExpanded));
+  viewToggle.setAttribute("title", liveOutputExpanded ? "Hide agent output" : "Show agent output");
+  if (chevron) {
+    chevron.textContent = liveOutputExpanded ? "▴" : "▾";
   }
 }
 
 function renderLiveOutputView(): void {
-  const compactEl = document.getElementById("ticket-live-output-compact");
   const detailEl = document.getElementById("ticket-live-output-detail");
-  const eventsEl = document.getElementById("ticket-live-output-events");
-  
-  if (compactEl) {
-    compactEl.classList.toggle("hidden", liveOutputDetailExpanded);
-  }
+
   if (detailEl) {
-    detailEl.classList.toggle("hidden", !liveOutputDetailExpanded);
+    detailEl.classList.toggle("hidden", !liveOutputExpanded);
   }
-  if (eventsEl) {
-    eventsEl.classList.toggle("hidden", !liveOutputDetailExpanded);
-  }
-  
-  renderLiveOutputCompact();
+
   renderLiveOutputEvents();
-  updateLiveOutputViewToggle();
+  updateLiveOutputToggle();
 }
 
 function clearLiveOutput(): void {
@@ -980,19 +915,19 @@ function disconnectEventStream(): void {
 
 function initLiveOutputPanel(): void {
   const viewToggleBtn = document.getElementById("ticket-live-output-view-toggle");
-  
-  // Toggle between summary and full view (one click)
+
+  // Toggle between collapsed and full view.
   const toggleView = () => {
-    liveOutputDetailExpanded = !liveOutputDetailExpanded;
+    liveOutputExpanded = !liveOutputExpanded;
     renderLiveOutputView();
   };
-  
+
   if (viewToggleBtn) {
     viewToggleBtn.addEventListener("click", toggleView);
   }
-  
+
   // Initial render
-  updateLiveOutputViewToggle();
+  updateLiveOutputToggle();
   renderLiveOutputView();
 }
 
@@ -1031,7 +966,7 @@ function initReasonModal(): void {
 export const __ticketFlowTest = {
   clearLiveOutput(): void {
     clearLiveOutput();
-    liveOutputDetailExpanded = false;
+    liveOutputExpanded = false;
     flowStartedAt = null;
     renderLiveOutputView();
   },

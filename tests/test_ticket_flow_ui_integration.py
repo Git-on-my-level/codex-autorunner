@@ -9,7 +9,7 @@ import pytest
 pytestmark = pytest.mark.integration
 
 
-def test_ticket_flow_compact_live_output_falls_back_to_stream_deltas() -> None:
+def test_ticket_flow_live_output_expands_from_collapsed_bar() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     tickets_js = (
         repo_root / "src" / "codex_autorunner" / "static" / "generated" / "tickets.js"
@@ -23,9 +23,10 @@ def test_ticket_flow_compact_live_output_falls_back_to_stream_deltas() -> None:
 
         const dom = new JSDOM(
           `<!doctype html><html><body>
+            <div id="ticket-live-output-panel" class="ticket-live-output-panel collapsed"></div>
             <div id="ticket-live-output-status"></div>
-            <button id="ticket-live-output-view-toggle" type="button"></button>
-            <div id="ticket-live-output-compact"></div>
+            <button id="ticket-live-output-view-toggle" type="button" aria-expanded="false"></button>
+            <span id="ticket-live-output-chevron"></span>
             <div id="ticket-live-output-detail" class="hidden"></div>
             <pre id="ticket-live-output-text"></pre>
             <div id="ticket-live-output-events" class="hidden">
@@ -73,14 +74,19 @@ def test_ticket_flow_compact_live_output_falls_back_to_stream_deltas() -> None:
 
         await new Promise((resolve) => setTimeout(resolve, 20));
 
-        const compact = document.getElementById("ticket-live-output-compact")?.textContent || "";
+        const detailWrapper = document.getElementById("ticket-live-output-detail");
         const detail = document.getElementById("ticket-live-output-text")?.textContent || "";
         const status = document.getElementById("ticket-live-output-status")?.textContent || "";
+        const toggle = document.getElementById("ticket-live-output-view-toggle");
 
+        assert.equal(detailWrapper?.classList.contains("hidden"), true);
         assert.match(detail, /This is live codex output/);
-        assert.match(compact, /This is live codex output/);
-        assert.doesNotMatch(compact, /Waiting for agent output/);
         assert.equal(status, "Streaming");
+
+        toggle?.dispatchEvent(new dom.window.MouseEvent("click", {{ bubbles: true }}));
+
+        assert.equal(detailWrapper?.classList.contains("hidden"), false);
+        assert.equal(toggle?.getAttribute("aria-expanded"), "true");
         """
     )
 
