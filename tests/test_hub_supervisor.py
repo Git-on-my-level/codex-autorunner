@@ -3029,6 +3029,54 @@ def test_cleanup_worktree_failure_keeps_bound_pma_threads_active(
     assert worktree.path.exists()
 
 
+def test_cleanup_worktree_archives_pma_threads_before_manifest_removal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg["pma"]["cleanup_require_archive"] = False
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/pma-thread-ordering",
+        start_point="HEAD",
+    )
+    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+    observed_manifest_entry_during_thread_archive = False
+
+    def _record_manifest_state(
+        *, worktree_repo_id: str, worktree_path: Path
+    ) -> list[str]:
+        nonlocal observed_manifest_entry_during_thread_archive
+        manifest = load_manifest(manifest_path, hub_root)
+        observed_manifest_entry_during_thread_archive = (
+            manifest.get(worktree_repo_id) is not None
+        )
+        return []
+
+    monkeypatch.setattr(
+        supervisor._worktree_manager,
+        "_archive_bound_pma_threads",
+        _record_manifest_state,
+    )
+
+    supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=False)
+
+    assert observed_manifest_entry_during_thread_archive is True
+    manifest = load_manifest(manifest_path, hub_root)
+    assert manifest.get(worktree.id) is None
+    assert not worktree.path.exists()
+
+
 def test_archive_worktree_archives_bound_pma_threads(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))

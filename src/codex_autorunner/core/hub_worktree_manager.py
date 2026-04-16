@@ -736,6 +736,14 @@ class WorktreeManager:
         )
         report.add_step("git_remove", "ok")
 
+        archived_thread_ids = self._archive_bound_pma_threads(
+            worktree_repo_id=worktree_repo_id,
+            worktree_path=worktree_path,
+        )
+        report.add_step(
+            "archive_pma_threads", "ok", detail=f"archived={len(archived_thread_ids)}"
+        )
+
         resolved.manifest.repos = [
             r for r in resolved.manifest.repos if r.id != worktree_repo_id
         ]
@@ -745,14 +753,6 @@ class WorktreeManager:
             self._hub_config.root,
         )
         report.add_step("manifest_remove", "ok")
-
-        archived_thread_ids = self._archive_bound_pma_threads(
-            worktree_repo_id=worktree_repo_id,
-            worktree_path=worktree_path,
-        )
-        report.add_step(
-            "archive_pma_threads", "ok", detail=f"archived={len(archived_thread_ids)}"
-        )
 
         return {
             "status": "ok",
