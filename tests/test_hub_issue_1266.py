@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 from codex_autorunner.core.orchestration import (
     legacy_backfill_gate as legacy_backfill_gate_module,
 )
+from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web import app as web_app_module
 from tests.conftest import write_test_config
@@ -290,3 +291,44 @@ def test_pma_automation_load_does_not_retrigger_backfill_after_explicit_prepare(
     PmaAutomationStore(hub_root).load()
 
     assert calls == [], "routine loads must not retrigger legacy backfill after prepare"
+
+
+def test_hub_health_reports_orchestration_database_size(hub_env, monkeypatch) -> None:
+    _stub_opencode_supervisor(monkeypatch)
+    with open_orchestration_sqlite(hub_env.hub_root, durable=False):
+        pass
+
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        response = client.get("/health")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["orchestration"]["database_path"].endswith("orchestration.sqlite3")
+    assert payload["orchestration"]["database_size_bytes"] >= 0
+    assert payload["orchestration"]["database_size_status"] == "ok"
+
+
+def test_hub_health_includes_last_orchestration_housekeeping(
+    hub_env, monkeypatch
+) -> None:
+    _stub_opencode_supervisor(monkeypatch)
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        app.state.orchestration_housekeeping = {
+            "started_at": "2026-04-16T00:00:00Z",
+            "finished_at": "2026-04-16T00:00:01Z",
+            "compaction": {"rows_deleted": 12},
+            "retention": {"hot_rows_deleted": 4},
+        }
+        response = client.get("/health")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert (
+        payload["orchestration"]["last_housekeeping"]["compaction"]["rows_deleted"]
+        == 12
+    )

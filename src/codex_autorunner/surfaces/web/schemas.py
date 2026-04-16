@@ -840,6 +840,7 @@ class SystemHealthResponse(ResponseModel):
     mode: str
     base_path: str
     asset_version: Optional[str] = None
+    orchestration: Optional[Dict[str, Any]] = None
 
 
 class SystemUpdateResponse(ResponseModel):

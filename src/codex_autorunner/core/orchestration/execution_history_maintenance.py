@@ -27,6 +27,8 @@ _COMPACTION_SUMMARY_SUFFIX = ":compaction-summary"
 _DEFAULT_COMPACTION_MAX_HOT_ROWS = 16
 _DEFAULT_HOT_RETENTION_DAYS = 30
 _DEFAULT_COLD_TRACE_RETENTION_DAYS = 90
+_DEFAULT_DB_SIZE_WARNING_BYTES = 1 * 1024 * 1024 * 1024
+_DEFAULT_DB_SIZE_ERROR_BYTES = 3 * 1024 * 1024 * 1024
 _TERMINAL_EXECUTION_STATUSES = frozenset(
     {
         "completed",
@@ -139,6 +141,42 @@ class ExecutionHistoryVacuumSummary:
 
     def to_dict(self) -> dict[str, Any]:
         return dataclasses.asdict(self)
+
+
+@dataclasses.dataclass(frozen=True)
+class ExecutionHistoryDatabaseHealth:
+    database_path: str
+    size_bytes: int
+    status: str
+    warning_threshold_bytes: int
+    error_threshold_bytes: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclasses.dataclass(frozen=True)
+class ExecutionHistoryHousekeepingSummary:
+    started_at: str
+    finished_at: str
+    policy: ExecutionHistoryMaintenancePolicy
+    database_size_before_bytes: int
+    database_size_after_bytes: int
+    compaction: ExecutionHistoryCompactionSummary
+    retention: ExecutionHistoryRetentionSummary
+    vacuum: Optional[ExecutionHistoryVacuumSummary] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "started_at": self.started_at,
+            "finished_at": self.finished_at,
+            "policy": self.policy.to_dict(),
+            "database_size_before_bytes": self.database_size_before_bytes,
+            "database_size_after_bytes": self.database_size_after_bytes,
+            "compaction": self.compaction.to_dict(),
+            "retention": self.retention.to_dict(),
+            "vacuum": self.vacuum.to_dict() if self.vacuum is not None else None,
+        }
 
 
 def resolve_execution_history_maintenance_policy(
@@ -825,6 +863,74 @@ def vacuum_execution_history(hub_root: Path) -> ExecutionHistoryVacuumSummary:
     )
 
 
+def execution_history_database_size_bytes(hub_root: Path) -> int:
+    db_path = resolve_orchestration_sqlite_path(hub_root)
+    try:
+        return int(db_path.stat().st_size)
+    except OSError:
+        return 0
+
+
+def collect_execution_history_database_health(
+    hub_root: Path,
+    *,
+    warning_threshold_bytes: int = _DEFAULT_DB_SIZE_WARNING_BYTES,
+    error_threshold_bytes: int = _DEFAULT_DB_SIZE_ERROR_BYTES,
+) -> ExecutionHistoryDatabaseHealth:
+    warning_threshold = max(0, int(warning_threshold_bytes))
+    error_threshold = max(warning_threshold, int(error_threshold_bytes))
+    size_bytes = execution_history_database_size_bytes(hub_root)
+    if size_bytes >= error_threshold:
+        status = "error"
+    elif size_bytes >= warning_threshold:
+        status = "warning"
+    else:
+        status = "ok"
+    return ExecutionHistoryDatabaseHealth(
+        database_path=str(resolve_orchestration_sqlite_path(hub_root)),
+        size_bytes=size_bytes,
+        status=status,
+        warning_threshold_bytes=warning_threshold,
+        error_threshold_bytes=error_threshold,
+    )
+
+
+def run_execution_history_housekeeping_once(
+    hub_root: Path,
+    *,
+    policy: ExecutionHistoryMaintenancePolicy | None = None,
+) -> ExecutionHistoryHousekeepingSummary:
+    resolved_policy = policy or ExecutionHistoryMaintenancePolicy()
+    started_at = now_iso()
+    db_size_before = execution_history_database_size_bytes(hub_root)
+    compaction = compact_completed_execution_history(
+        hub_root,
+        policy=resolved_policy,
+    )
+    retention = prune_execution_history_retention(
+        hub_root,
+        policy=resolved_policy,
+    )
+    vacuum_summary: Optional[ExecutionHistoryVacuumSummary] = None
+    if compaction.rows_deleted > 0 or retention.hot_rows_deleted > 0:
+        vacuum_summary = vacuum_execution_history(hub_root)
+    db_size_after = (
+        vacuum_summary.size_after
+        if vacuum_summary is not None
+        else execution_history_database_size_bytes(hub_root)
+    )
+    return ExecutionHistoryHousekeepingSummary(
+        started_at=started_at,
+        finished_at=now_iso(),
+        policy=resolved_policy,
+        database_size_before_bytes=db_size_before,
+        database_size_after_bytes=db_size_after,
+        compaction=compaction,
+        retention=retention,
+        vacuum=vacuum_summary,
+    )
+
+
 def _normalized_execution_ids(
     execution_ids: Optional[Sequence[str]],
 ) -> Optional[tuple[str, ...]]:
@@ -1488,16 +1594,21 @@ def _iso_cutoff(retention_days: int) -> Optional[str]:
 __all__ = [
     "ExecutionHistoryAuditSummary",
     "ExecutionHistoryCompactionSummary",
+    "ExecutionHistoryDatabaseHealth",
     "ExecutionHistoryExportSummary",
+    "ExecutionHistoryHousekeepingSummary",
     "ExecutionHistoryMaintenancePolicy",
     "ExecutionHistoryMigrationSummary",
     "ExecutionHistoryRetentionSummary",
     "ExecutionHistoryVacuumSummary",
     "audit_execution_history",
     "backfill_legacy_execution_history",
+    "collect_execution_history_database_health",
     "compact_completed_execution_history",
+    "execution_history_database_size_bytes",
     "export_execution_history_bundle",
     "prune_execution_history_retention",
     "resolve_execution_history_maintenance_policy",
+    "run_execution_history_housekeeping_once",
     "vacuum_execution_history",
 ]

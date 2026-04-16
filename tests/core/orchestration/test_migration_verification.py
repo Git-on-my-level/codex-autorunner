@@ -126,6 +126,63 @@ def test_verify_event_parity_empty_legacy(tmp_path: Path) -> None:
     assert results[0].check_name == "event_projections_count"
 
 
+def test_verify_event_parity_ignores_non_lifecycle_projection_rows(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    lifecycle_log = hub_root / ".codex-autorunner" / "pma" / "lifecycle_events.jsonl"
+    lifecycle_log.parent.mkdir(parents=True, exist_ok=True)
+    lifecycle_log.write_text(
+        '{"event_id": "event-1", "event_type": "test", "timestamp": "2026-03-13T00:00:00Z"}\n',
+        encoding="utf-8",
+    )
+
+    with open_orchestration_sqlite(hub_root, durable=False) as conn:
+        backfill_legacy_pma_lifecycle_events(hub_root, conn)
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO orch_event_projections (
+                    event_id,
+                    event_family,
+                    event_type,
+                    target_kind,
+                    target_id,
+                    execution_id,
+                    repo_id,
+                    resource_kind,
+                    resource_id,
+                    run_id,
+                    timestamp,
+                    status,
+                    payload_json,
+                    processed
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "timeline-1",
+                    "turn.timeline",
+                    "turn_started",
+                    "thread_target",
+                    "thread-1",
+                    "exec-1",
+                    "repo-1",
+                    "repo",
+                    "repo-1",
+                    None,
+                    "2026-03-13T00:00:01Z",
+                    "recorded",
+                    "{}",
+                    1,
+                ),
+            )
+        results = verify_event_parity(hub_root, conn)
+
+    assert results[0].status == "passed"
+    assert results[0].legacy_count == 1
+    assert results[0].new_count == 1
+
+
 def test_verify_audit_parity_empty_legacy(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     with open_orchestration_sqlite(hub_root, durable=False) as conn:
