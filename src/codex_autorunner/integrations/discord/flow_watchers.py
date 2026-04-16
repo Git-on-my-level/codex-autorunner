@@ -10,6 +10,7 @@ from ...core.chat_bindings import (
     preferred_non_pma_chat_notification_sources_by_workspace,
 )
 from ...core.config import ConfigError, load_hub_config, load_repo_config
+from ...core.diagnostics.loop_attribution import track_loop
 from ...core.flows import (
     FlowRunRecord,
     FlowRunStatus,
@@ -374,27 +375,35 @@ async def _scan_and_enqueue_terminal_notifications(service: Any) -> None:
 
 async def watch_ticket_flow_pauses(service: Any) -> None:
     while True:
-        try:
-            await _scan_and_enqueue_pause_notifications(service)
-        except Exception as exc:  # intentional: supervisor loop must never die
-            log_event(
-                service._logger,
-                logging.WARNING,
-                "discord.pause_watch.scan_failed",
-                exc=exc,
-            )
+        with track_loop("discord.flow_watchers.pause_scan") as scope:
+            scope.record_db_read(1)
+            try:
+                await _scan_and_enqueue_pause_notifications(service)
+                if await service._store.list_bindings():
+                    scope.mark_productive()
+            except Exception as exc:  # intentional: supervisor loop must never die
+                log_event(
+                    service._logger,
+                    logging.WARNING,
+                    "discord.pause_watch.scan_failed",
+                    exc=exc,
+                )
         await asyncio.sleep(PAUSE_SCAN_INTERVAL_SECONDS)
 
 
 async def watch_ticket_flow_terminals(service: Any) -> None:
     while True:
-        try:
-            await _scan_and_enqueue_terminal_notifications(service)
-        except Exception as exc:  # intentional: supervisor loop must never die
-            log_event(
-                service._logger,
-                logging.WARNING,
-                "discord.terminal_watch.scan_failed",
-                exc=exc,
-            )
+        with track_loop("discord.flow_watchers.terminal_scan") as scope:
+            scope.record_db_read(1)
+            try:
+                await _scan_and_enqueue_terminal_notifications(service)
+                if await service._store.list_bindings():
+                    scope.mark_productive()
+            except Exception as exc:  # intentional: supervisor loop must never die
+                log_event(
+                    service._logger,
+                    logging.WARNING,
+                    "discord.terminal_watch.scan_failed",
+                    exc=exc,
+                )
         await asyncio.sleep(TERMINAL_SCAN_INTERVAL_SECONDS)

@@ -41,6 +41,7 @@ from ...core.config import (
     load_repo_config,
     resolve_env_for_root,
 )
+from ...core.diagnostics.loop_attribution import track_loop
 from ...core.filebox import (
     delete_regular_files,
     inbox_dir,
@@ -4035,38 +4036,43 @@ class DiscordBotService:
 
     async def _run_chat_queue_reset_loop(self) -> None:
         while True:
-            try:
-                await self._apply_pending_chat_queue_resets()
-            except Exception as exc:  # intentional: long-running loop must not crash
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "discord.chat_queue.reset_scan_failed",
-                    exc=exc,
-                )
+            with track_loop("discord.chat_queue_reset_poll") as scope:
+                scope.record_disk_read(1)
+                try:
+                    requests = self._chat_queue_control_store.take_reset_requests(
+                        platform="discord"
+                    )
+                    if requests:
+                        scope.mark_productive()
+                    for request in requests:
+                        conversation_id = str(
+                            request.get("conversation_id") or ""
+                        ).strip()
+                        if not conversation_id:
+                            continue
+                        result = await self._dispatcher.force_reset(conversation_id)
+                        log_event(
+                            self._logger,
+                            logging.WARNING,
+                            "discord.chat_queue.reset_applied",
+                            conversation_id=conversation_id,
+                            chat_id=request.get("chat_id"),
+                            thread_id=request.get("thread_id"),
+                            requested_at=request.get("requested_at"),
+                            requested_by=request.get("requested_by"),
+                            cancelled_pending=result.get("cancelled_pending"),
+                            cancelled_active=result.get("cancelled_active"),
+                        )
+                except (
+                    Exception
+                ) as exc:  # intentional: long-running loop must not crash
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "discord.chat_queue.reset_scan_failed",
+                        exc=exc,
+                    )
             await asyncio.sleep(CHAT_QUEUE_RESET_POLL_INTERVAL_SECONDS)
-
-    async def _apply_pending_chat_queue_resets(self) -> None:
-        requests = self._chat_queue_control_store.take_reset_requests(
-            platform="discord"
-        )
-        for request in requests:
-            conversation_id = str(request.get("conversation_id") or "").strip()
-            if not conversation_id:
-                continue
-            result = await self._dispatcher.force_reset(conversation_id)
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.chat_queue.reset_applied",
-                conversation_id=conversation_id,
-                chat_id=request.get("chat_id"),
-                thread_id=request.get("thread_id"),
-                requested_at=request.get("requested_at"),
-                requested_by=request.get("requested_by"),
-                cancelled_pending=result.get("cancelled_pending"),
-                cancelled_active=result.get("cancelled_active"),
-            )
 
     async def _watch_ticket_flow_terminals(self) -> None:
         await watch_ticket_flow_terminals(self)

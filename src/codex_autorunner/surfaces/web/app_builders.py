@@ -11,6 +11,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from starlette.types import ASGIApp
 
 from ...core.config import HubConfig
+from ...core.diagnostics.loop_attribution import track_loop
 from ...core.filebox_retention import (
     prune_filebox_root,
     resolve_filebox_retention_policy,
@@ -137,11 +138,15 @@ def _app_lifespan(context: AppContext):
             idle_interval = 5.0
             try:
                 while True:
-                    result = await asyncio.to_thread(
-                        reconcile_flow_runs,
-                        app.state.engine.repo_root,
-                        logger=app.state.logger,
-                    )
+                    with track_loop("web.flow_reconcile") as scope:
+                        scope.record_db_read(1)
+                        result = await asyncio.to_thread(
+                            reconcile_flow_runs,
+                            app.state.engine.repo_root,
+                            logger=app.state.logger,
+                        )
+                        if result.summary.active > 0:
+                            scope.mark_productive()
                     interval = (
                         active_interval if result.summary.active > 0 else idle_interval
                     )

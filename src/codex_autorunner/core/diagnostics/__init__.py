@@ -6,6 +6,14 @@ from .cpu_sampler import (
     evaluate_signoff,
     sample_cpu_for_pids,
 )
+from .loop_attribution import (
+    LoopWakeupCounters,
+    WakeupScope,
+    get_loop_names,
+    reset_loop_attribution,
+    snapshot_loop_attribution,
+    track_loop,
+)
 from .process_monitor import (
     DEFAULT_PROCESS_MONITOR_CADENCE_SECONDS,
     DEFAULT_PROCESS_MONITOR_WINDOW_SECONDS,
@@ -25,10 +33,12 @@ __all__ = [
     "CpuSample",
     "DEFAULT_PROCESS_MONITOR_CADENCE_SECONDS",
     "DEFAULT_PROCESS_MONITOR_WINDOW_SECONDS",
+    "LoopWakeupCounters",
     "ProcessCategory",
     "ProcessMonitorStore",
     "ProcessOwnership",
     "ProcessSnapshot",
+    "WakeupScope",
     "aggregate_samples",
     "build_process_monitor_summary",
     "capture_process_monitor_sample",
@@ -37,5 +47,9 @@ __all__ = [
     "compute_per_process_aggregates",
     "enrich_with_ownership",
     "evaluate_signoff",
+    "get_loop_names",
+    "reset_loop_attribution",
     "sample_cpu_for_pids",
+    "snapshot_loop_attribution",
+    "track_loop",
 ]
