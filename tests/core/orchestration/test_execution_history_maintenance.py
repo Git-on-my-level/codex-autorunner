@@ -12,11 +12,14 @@ from codex_autorunner.core.orchestration.cold_trace_store import ColdTraceStore
 from codex_autorunner.core.orchestration.execution_history import ExecutionCheckpoint
 from codex_autorunner.core.orchestration.execution_history_maintenance import (
     ExecutionHistoryMaintenancePolicy,
+    _is_terminal_execution_row,
+    _normalized_execution_ids,
     audit_execution_history,
     backfill_legacy_execution_history,
     compact_completed_execution_history,
     export_execution_history_bundle,
     prune_execution_history_retention,
+    resolve_execution_history_maintenance_policy,
 )
 from codex_autorunner.core.orchestration.sqlite import (
     initialize_orchestration_sqlite,
@@ -813,3 +816,155 @@ def test_export_execution_history_bundle_copies_traces_and_metadata(
     assert checkpoints[0]["execution_id"] == "exec-export"
     exported_trace = export_root / "traces" / manifests[0]["artifact_relpath"]
     assert exported_trace.exists()
+
+
+def test_resolve_maintenance_policy_returns_defaults_for_none() -> None:
+    policy = resolve_execution_history_maintenance_policy(None)
+    assert policy.max_hot_rows_per_completed_execution == 16
+    assert policy.hot_history_retention_days == 30
+    assert policy.cold_trace_retention_days == 90
+
+
+def test_resolve_maintenance_policy_clamps_zero_max_hot_rows_to_default() -> None:
+    policy = resolve_execution_history_maintenance_policy(
+        {"orchestration_compaction_max_hot_rows": 0}
+    )
+    assert policy.max_hot_rows_per_completed_execution == 16
+
+
+def test_resolve_maintenance_policy_passes_through_typed_policy() -> None:
+    original = ExecutionHistoryMaintenancePolicy(
+        max_hot_rows_per_completed_execution=42,
+        hot_history_retention_days=7,
+        cold_trace_retention_days=60,
+    )
+    resolved = resolve_execution_history_maintenance_policy(original)
+    assert resolved is original
+
+
+def test_resolve_maintenance_policy_uses_attr_fallback() -> None:
+    class _Cfg:
+        orchestration_compaction_max_hot_rows = 8
+        orchestration_hot_history_retention_days = 14
+        orchestration_cold_trace_retention_days = 45
+
+    policy = resolve_execution_history_maintenance_policy(_Cfg())
+    assert policy.max_hot_rows_per_completed_execution == 8
+    assert policy.hot_history_retention_days == 14
+    assert policy.cold_trace_retention_days == 45
+
+
+def test_is_terminal_execution_row_recognizes_all_terminal_statuses() -> None:
+    terminal_statuses = [
+        "completed",
+        "failed",
+        "cancelled",
+        "canceled",
+        "interrupted",
+        "aborted",
+        "stopped",
+        "ok",
+        "error",
+    ]
+    for status in terminal_statuses:
+        row = {"status": status, "finished_at": ""}
+        assert _is_terminal_execution_row(row), f"{status} should be terminal"
+
+
+def test_is_terminal_execution_row_uses_finished_at_as_fallback() -> None:
+    row = {"status": "running", "finished_at": "2026-04-12T00:05:00Z"}
+    assert _is_terminal_execution_row(row) is True
+
+    row_empty = {"status": "running", "finished_at": ""}
+    assert _is_terminal_execution_row(row_empty) is False
+
+
+def test_is_terminal_execution_row_is_case_insensitive() -> None:
+    assert (
+        _is_terminal_execution_row({"status": "Completed", "finished_at": ""}) is True
+    )
+    assert _is_terminal_execution_row({"status": " FAILED ", "finished_at": ""}) is True
+
+
+def test_normalized_execution_ids_deduplicates_and_sorts() -> None:
+    result = _normalized_execution_ids(["  b  ", "a", "b", "a"])
+    assert result == ("a", "b")
+
+
+def test_normalized_execution_ids_returns_none_for_empty() -> None:
+    assert _normalized_execution_ids(None) is None
+    assert _normalized_execution_ids([]) is None
+    assert _normalized_execution_ids(["  "]) is None
+
+
+def test_iso_cutoff_returns_none_for_zero_days() -> None:
+    from codex_autorunner.core.orchestration.execution_history_maintenance import (
+        _iso_cutoff,
+    )
+
+    assert _iso_cutoff(0) is None
+
+
+def test_iso_cutoff_produces_valid_iso_string() -> None:
+    from codex_autorunner.core.orchestration.execution_history_maintenance import (
+        _iso_cutoff,
+    )
+
+    cutoff = _iso_cutoff(30)
+    assert cutoff is not None
+    assert cutoff.endswith("Z")
+    assert "T" in cutoff
+
+
+def test_is_compaction_summary_row_detects_suffix_and_kind() -> None:
+    from codex_autorunner.core.orchestration.execution_history_maintenance import (
+        _COMPACTION_SUMMARY_SUFFIX,
+        _is_compaction_summary_row,
+    )
+
+    suffix_row = {"event_id": f"timeline:exec-1{_COMPACTION_SUMMARY_SUFFIX}"}
+    assert _is_compaction_summary_row(suffix_row) is True
+
+    kind_row = {
+        "event_id": "normal-id",
+        "payload": {"event": {"kind": "compaction_summary"}},
+    }
+    assert _is_compaction_summary_row(kind_row) is True
+
+    normal_row = {"event_id": "normal-id", "payload": {"event": {"kind": "run_notice"}}}
+    assert _is_compaction_summary_row(normal_row) is False
+
+    empty_row = {"event_id": "normal-id"}
+    assert _is_compaction_summary_row(empty_row) is False
+
+
+def test_compaction_and_retention_are_idempotent(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    _seed_execution(hub_root, execution_id="exec-idempotent", output_chunks=20)
+
+    policy = ExecutionHistoryMaintenancePolicy(
+        max_hot_rows_per_completed_execution=8,
+        hot_history_retention_days=30,
+        cold_trace_retention_days=90,
+    )
+
+    first = compact_completed_execution_history(hub_root, policy=policy)
+    second = compact_completed_execution_history(hub_root, policy=policy)
+
+    assert first.compacted_executions == 1
+    assert second.compacted_executions == 0
+    assert second.rows_deleted == 0
+
+
+def test_backfill_is_idempotent(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    _seed_execution(hub_root, execution_id="exec-backfill-idem", output_chunks=3)
+
+    first = backfill_legacy_execution_history(hub_root)
+    second = backfill_legacy_execution_history(hub_root)
+
+    assert first.manifests_created == 1
+    assert second.manifests_created == 0
+    assert second.checkpoints_created == 0

@@ -418,3 +418,86 @@ def test_control_plane_unavailable_is_retryable_incompatible_is_not() -> None:
 
     incompatible = HubControlPlaneError("hub_incompatible", "test")
     assert incompatible.retryable is False
+
+
+def test_control_plane_error_info_round_trip_preserves_fields() -> None:
+    from codex_autorunner.core.hub_control_plane.errors import HubControlPlaneError
+
+    original = HubControlPlaneError(
+        "hub_unavailable",
+        "Hub is offline",
+        retryable=True,
+        details={"host": "hub-1"},
+    )
+    info = original.info
+    restored = HubControlPlaneError.from_info(info)
+
+    assert restored.code == "hub_unavailable"
+    assert str(restored) == "Hub is offline"
+    assert restored.retryable is True
+    assert restored.details == {"host": "hub-1"}
+    assert restored.info.to_dict() == info.to_dict()
+
+
+def test_control_plane_error_info_from_mapping_rejects_unknown_codes() -> None:
+    import pytest as _pytest
+
+    from codex_autorunner.core.hub_control_plane.errors import HubControlPlaneErrorInfo
+
+    with _pytest.raises(ValueError, match="Unknown hub control-plane error code"):
+        HubControlPlaneErrorInfo.from_mapping({"code": "bogus_code", "message": "bad"})
+
+
+def test_control_plane_error_info_from_mapping_rejects_empty_message() -> None:
+    import pytest as _pytest
+
+    from codex_autorunner.core.hub_control_plane.errors import HubControlPlaneErrorInfo
+
+    with _pytest.raises(ValueError, match="require a message"):
+        HubControlPlaneErrorInfo.from_mapping(
+            {"code": "hub_unavailable", "message": ""}
+        )
+
+
+def test_control_plane_default_retryable_covers_transport_failure() -> None:
+    from codex_autorunner.core.hub_control_plane.errors import (
+        HubControlPlaneError,
+        default_retryable,
+    )
+
+    assert default_retryable("hub_unavailable") is True
+    assert default_retryable("transport_failure") is True
+    assert default_retryable("hub_incompatible") is False
+    assert default_retryable("hub_rejected") is False
+    assert default_retryable("protocol_failure") is False
+
+    transport = HubControlPlaneError("transport_failure", "connection reset")
+    assert transport.retryable is True
+
+
+def test_control_plane_error_info_serialization_round_trip() -> None:
+    from codex_autorunner.core.hub_control_plane.errors import HubControlPlaneErrorInfo
+
+    info = HubControlPlaneErrorInfo(
+        code="hub_incompatible",
+        message="API version mismatch",
+        retryable=False,
+        details={"client_version": "0.9", "hub_version": "1.0"},
+    )
+    as_dict = info.to_dict()
+    restored = HubControlPlaneErrorInfo.from_mapping(as_dict)
+    assert restored == info
+
+
+def test_control_plane_error_info_from_mapping_infers_retryable() -> None:
+    from codex_autorunner.core.hub_control_plane.errors import HubControlPlaneErrorInfo
+
+    info = HubControlPlaneErrorInfo.from_mapping(
+        {"code": "hub_unavailable", "message": "retry later"}
+    )
+    assert info.retryable is True
+
+    info2 = HubControlPlaneErrorInfo.from_mapping(
+        {"code": "hub_rejected", "message": "bad payload"}
+    )
+    assert info2.retryable is False

@@ -1096,3 +1096,136 @@ def test_repo_capability_hint_durable_projection_reuses_across_contexts(
     hub_gather_service.gather_hub_message_snapshot(second_ctx, sections={"inbox"})
 
     assert calls["repo_hints"] == 1
+
+
+def test_hub_projection_store_fingerprint_mismatch_returns_none(tmp_path: Path) -> None:
+    store = HubProjectionStore(tmp_path, durable=False)
+    store.set_cache("key-1", {"version": 1}, {"data": "original"}, namespace="test_ns")
+    hit = store.get_cache("key-1", {"version": 1}, namespace="test_ns")
+    assert hit == {"data": "original"}
+
+    miss = store.get_cache("key-1", {"version": 2}, namespace="test_ns")
+    assert miss is None
+
+
+def test_hub_projection_store_ttl_expiry_returns_none(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import codex_autorunner.core.hub_projection_store as store_module
+
+    store = HubProjectionStore(tmp_path, durable=False)
+
+    now_ts = {"value": 1000.0}
+    monkeypatch.setattr(store_module, "_current_utc_ts", lambda: now_ts["value"])
+    monkeypatch.setattr(store_module, "now_iso", lambda: "1970-01-01T00:16:40Z")
+    store.set_cache("key-ttl", {"v": 1}, {"data": "fresh"}, namespace="test_ttl")
+
+    hit = store.get_cache(
+        "key-ttl", {"v": 1}, namespace="test_ttl", max_age_seconds=60.0
+    )
+    assert hit == {"data": "fresh"}
+
+    now_ts["value"] = 1100.0
+    expired = store.get_cache(
+        "key-ttl", {"v": 1}, namespace="test_ttl", max_age_seconds=60.0
+    )
+    assert expired is None
+
+
+def test_hub_projection_store_invalidate_clears_entry(tmp_path: Path) -> None:
+    store = HubProjectionStore(tmp_path, durable=False)
+    store.set_cache("key-inv", {"v": 1}, {"data": "x"}, namespace="test_inv")
+
+    hit = store.get_cache("key-inv", {"v": 1}, namespace="test_inv")
+    assert hit == {"data": "x"}
+
+    store.invalidate_cache("key-inv", namespace="test_inv")
+    miss = store.get_cache("key-inv", {"v": 1}, namespace="test_inv")
+    assert miss is None
+
+
+def test_hub_projection_store_delete_namespace_clears_all_keys(tmp_path: Path) -> None:
+    store = HubProjectionStore(tmp_path, durable=False)
+    store.set_cache("a", {"v": 1}, "data-a", namespace="test_ns_bulk")
+    store.set_cache("b", {"v": 1}, "data-b", namespace="test_ns_bulk")
+
+    assert store.get_cache("a", {"v": 1}, namespace="test_ns_bulk") == "data-a"
+    assert store.get_cache("b", {"v": 1}, namespace="test_ns_bulk") == "data-b"
+
+    store.delete(namespace="test_ns_bulk")
+
+    assert store.get_cache("a", {"v": 1}, namespace="test_ns_bulk") is None
+    assert store.get_cache("b", {"v": 1}, namespace="test_ns_bulk") is None
+
+
+def test_hub_projection_store_get_put_aliases(tmp_path: Path) -> None:
+    store = HubProjectionStore(tmp_path, durable=False)
+    store.put(namespace="alias_ns", key="k", fingerprint={"f": 1}, payload={"v": 42})
+    result = store.get(namespace="alias_ns", key="k", fingerprint={"f": 1})
+    assert result == {"v": 42}
+
+
+def test_hub_projection_store_survives_corrupt_payload(tmp_path: Path) -> None:
+    import sqlite3
+
+    store = HubProjectionStore(tmp_path, durable=False)
+    db_path = store.path
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with sqlite3.connect(str(db_path)) as conn:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS projection_cache "
+            "(namespace TEXT, cache_key TEXT, fingerprint TEXT, payload TEXT, "
+            "updated_at TEXT, PRIMARY KEY(namespace, cache_key))"
+        )
+        conn.execute(
+            "INSERT INTO projection_cache VALUES (?, ?, ?, ?, ?)",
+            (
+                "corrupt_ns",
+                "corrupt_key",
+                '"fp"',
+                "not-valid-json",
+                "2026-01-01T00:00:00Z",
+            ),
+        )
+
+    result = store.get_cache("corrupt_key", "fp", namespace="corrupt_ns")
+    assert result is None
+
+
+def test_path_stat_fingerprint_on_nonexistent_path() -> None:
+    from codex_autorunner.core.hub_projection_store import path_stat_fingerprint
+
+    exists, mtime_ns, size = path_stat_fingerprint(Path("/nonexistent/path/file.txt"))
+    assert exists is False
+    assert mtime_ns is None
+    assert size is None
+
+
+def test_path_stat_fingerprint_on_real_file(tmp_path: Path) -> None:
+    from codex_autorunner.core.hub_projection_store import path_stat_fingerprint
+
+    f = tmp_path / "test.txt"
+    f.write_text("hello", encoding="utf-8")
+    exists, mtime_ns, size = path_stat_fingerprint(f)
+    assert exists is True
+    assert mtime_ns is not None
+    assert size == 5
+
+
+def test_hub_projection_store_namespace_constants_are_stable() -> None:
+    from codex_autorunner.core.hub_projection_store import (
+        CHAT_BINDING_PROJECTION_KEY,
+        CHAT_BINDING_PROJECTION_NAMESPACE,
+        HUB_LISTING_PROJECTION_NAMESPACE,
+        HUB_SNAPSHOT_PROJECTION_NAMESPACE,
+        REPO_CAPABILITY_HINT_PROJECTION_NAMESPACE,
+        REPO_RUNTIME_PROJECTION_NAMESPACE,
+    )
+
+    assert REPO_RUNTIME_PROJECTION_NAMESPACE == "repo_runtime_v1"
+    assert HUB_LISTING_PROJECTION_NAMESPACE == "hub_listing_v1"
+    assert CHAT_BINDING_PROJECTION_NAMESPACE == "chat_binding_counts_v1"
+    assert CHAT_BINDING_PROJECTION_KEY == "active_by_source"
+    assert HUB_SNAPSHOT_PROJECTION_NAMESPACE == "hub_snapshot_v1"
+    assert REPO_CAPABILITY_HINT_PROJECTION_NAMESPACE == "repo_capability_hints_v1"

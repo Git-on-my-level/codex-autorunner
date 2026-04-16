@@ -29,6 +29,10 @@ from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.force_attestation import FORCE_ATTESTATION_REQUIRED_PHRASE
 from codex_autorunner.core.git_utils import run_git
 from codex_autorunner.core.hub import HubSupervisor, RepoStatus
+from codex_autorunner.core.hub_topology import (
+    LockStatus,
+    RepoSnapshot,
+)
 from codex_autorunner.core.hub_worktree_manager import WorktreeManager
 from codex_autorunner.core.orchestration.bindings import OrchestrationBindingStore
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
@@ -4404,3 +4408,179 @@ def test_get_agent_workspace_runtime_readiness_rejects_missing(tmp_path: Path) -
     supervisor = HubSupervisor(load_hub_config(hub_root))
     with pytest.raises(ValueError, match="not found"):
         supervisor.get_agent_workspace_runtime_readiness("nope")
+
+
+def test_derive_repo_status_covers_all_branches() -> None:
+    from codex_autorunner.core.hub_topology import LockStatus, derive_repo_status
+
+    class _Record:
+        def __init__(self, exists=True, initialized=True, init_error=None):
+            self.exists_on_disk = exists
+            self.initialized = initialized
+            self.init_error = init_error
+
+    class _State:
+        def __init__(self, status="idle"):
+            self.status = status
+
+    assert (
+        derive_repo_status(_Record(exists=False), LockStatus.UNLOCKED, None)
+        == RepoStatus.MISSING
+    )
+    assert (
+        derive_repo_status(_Record(init_error="bad"), LockStatus.UNLOCKED, None)
+        == RepoStatus.INIT_ERROR
+    )
+    assert (
+        derive_repo_status(_Record(initialized=False), LockStatus.UNLOCKED, None)
+        == RepoStatus.UNINITIALIZED
+    )
+    assert (
+        derive_repo_status(_Record(), LockStatus.LOCKED_ALIVE, _State("running"))
+        == RepoStatus.RUNNING
+    )
+    assert (
+        derive_repo_status(_Record(), LockStatus.UNLOCKED, _State("running"))
+        == RepoStatus.IDLE
+    )
+    assert (
+        derive_repo_status(_Record(), LockStatus.LOCKED_ALIVE, _State("idle"))
+        == RepoStatus.LOCKED
+    )
+    assert (
+        derive_repo_status(_Record(), LockStatus.LOCKED_STALE, _State("idle"))
+        == RepoStatus.LOCKED
+    )
+    assert (
+        derive_repo_status(_Record(), LockStatus.UNLOCKED, _State("error"))
+        == RepoStatus.ERROR
+    )
+    assert (
+        derive_repo_status(_Record(), LockStatus.UNLOCKED, _State("idle"))
+        == RepoStatus.IDLE
+    )
+
+
+def test_normalize_pinned_parent_repo_ids_deduplicates_and_strips() -> None:
+    from codex_autorunner.core.hub_topology import normalize_pinned_parent_repo_ids
+
+    assert normalize_pinned_parent_repo_ids(["  a  ", "b", "a", 123, ""]) == ["a", "b"]
+    assert normalize_pinned_parent_repo_ids(None) == []
+    assert normalize_pinned_parent_repo_ids("not-a-list") == []
+    assert normalize_pinned_parent_repo_ids([]) == []
+
+
+def test_prune_pinned_parent_repo_ids_keeps_only_base_repos() -> None:
+    from codex_autorunner.core.hub_topology import prune_pinned_parent_repo_ids
+
+    snapshots = [
+        RepoSnapshot(
+            id="base-1",
+            path=Path("/tmp/base-1"),
+            display_name="B1",
+            enabled=True,
+            auto_run=False,
+            worktree_setup_commands=None,
+            kind="base",
+            worktree_of=None,
+            branch=None,
+            exists_on_disk=True,
+            is_clean=None,
+            initialized=False,
+            init_error=None,
+            status=RepoStatus.IDLE,
+            lock_status=LockStatus.UNLOCKED,
+            last_run_id=None,
+            last_run_started_at=None,
+            last_run_finished_at=None,
+            last_exit_code=None,
+            runner_pid=None,
+        ),
+        RepoSnapshot(
+            id="wt-1",
+            path=Path("/tmp/wt-1"),
+            display_name="W1",
+            enabled=True,
+            auto_run=False,
+            worktree_setup_commands=None,
+            kind="worktree",
+            worktree_of="base-1",
+            branch="feat",
+            exists_on_disk=True,
+            is_clean=None,
+            initialized=False,
+            init_error=None,
+            status=RepoStatus.IDLE,
+            lock_status=LockStatus.UNLOCKED,
+            last_run_id=None,
+            last_run_started_at=None,
+            last_run_finished_at=None,
+            last_exit_code=None,
+            runner_pid=None,
+        ),
+    ]
+    result = prune_pinned_parent_repo_ids(["base-1", "wt-1", "missing"], snapshots)
+    assert result == ["base-1"]
+
+
+def test_force_attestation_rejects_none_and_wrong_phrase() -> None:
+    from codex_autorunner.core.force_attestation import (
+        FORCE_ATTESTATION_REQUIRED_ERROR,
+        validate_force_attestation,
+    )
+
+    with pytest.raises(ValueError, match=FORCE_ATTESTATION_REQUIRED_ERROR):
+        validate_force_attestation(None)
+
+    with pytest.raises(ValueError, match=FORCE_ATTESTATION_REQUIRED_ERROR):
+        validate_force_attestation(
+            {"phrase": "wrong", "user_request": "x", "target_scope": "y"}
+        )
+
+
+def test_force_attestation_accepts_valid_phrase() -> None:
+    from codex_autorunner.core.force_attestation import (
+        FORCE_ATTESTATION_REQUIRED_PHRASE,
+        validate_force_attestation,
+    )
+
+    result = validate_force_attestation(
+        {
+            "phrase": FORCE_ATTESTATION_REQUIRED_PHRASE,
+            "user_request": "cleanup repo-1",
+            "target_scope": "repo:repo-1",
+        }
+    )
+    assert result["phrase"] == FORCE_ATTESTATION_REQUIRED_PHRASE
+    assert result["user_request"] == "cleanup repo-1"
+    assert result["target_scope"] == "repo:repo-1"
+
+
+def test_enforce_force_attestation_no_op_when_not_forced() -> None:
+    import logging
+
+    from codex_autorunner.core.force_attestation import enforce_force_attestation
+
+    enforce_force_attestation(
+        force=False,
+        force_attestation=None,
+        logger=logging.getLogger("test"),
+        action="test_action",
+    )
+
+
+def test_enforce_force_attestation_raises_when_forced_without_attestation() -> None:
+    import logging
+
+    from codex_autorunner.core.force_attestation import (
+        FORCE_ATTESTATION_REQUIRED_ERROR,
+        enforce_force_attestation,
+    )
+
+    with pytest.raises(ValueError, match=FORCE_ATTESTATION_REQUIRED_ERROR):
+        enforce_force_attestation(
+            force=True,
+            force_attestation=None,
+            logger=logging.getLogger("test"),
+            action="test_action",
+        )
