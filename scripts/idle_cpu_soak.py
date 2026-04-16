@@ -51,14 +51,8 @@ from codex_autorunner.core.diagnostics.process_snapshot import ProcessCategory
 from codex_autorunner.core.utils import atomic_write
 
 
-def _car_bin() -> str:
-    candidate = Path(sys.executable).with_name("car")
-    if candidate.exists():
-        return str(candidate)
-    resolved = shutil.which("car")
-    if resolved:
-        return resolved
-    return sys.executable
+def _car_bin() -> list[str]:
+    return [sys.executable, "-m", "codex_autorunner.cli"]
 
 
 def _find_free_port() -> int:
@@ -180,20 +174,79 @@ def _wait_for_health(
 
 def _parse_services(profile: dict[str, Any], port: int) -> list[dict[str, Any]]:
     services = []
+    car_bin = _car_bin()
     for svc in profile.get("services", []):
         cmd_str = svc["command"]
         alias = svc.get("alias", "service")
         parts = cmd_str.split()
         if parts[0:2] == ["car", "hub"] and "serve" in parts:
-            cmd = [_car_bin(), "hub", "serve", "--port", str(port)]
+            cmd = car_bin + ["hub", "serve", "--port", str(port)]
         elif parts[0:2] == ["car", "discord"] and "serve" in parts:
-            cmd = [_car_bin(), "discord", "serve"]
+            cmd = car_bin + ["discord", "serve"]
         elif parts[0:2] == ["car", "telegram"] and "serve" in parts:
-            cmd = [_car_bin(), "telegram", "serve"]
+            cmd = car_bin + ["telegram", "serve"]
         else:
-            cmd = [_car_bin()] + parts[1:]
+            cmd = car_bin + parts[1:]
         services.append({"alias": alias, "command": cmd, "original": cmd_str})
     return services
+
+
+def _collect_service_pids(
+    procs: list[subprocess.Popen], logger: logging.Logger
+) -> list[int]:
+    pids: list[int] = []
+    for proc in procs:
+        try:
+            sid = os.getsid(proc.pid)
+            result = subprocess.run(
+                ["ps", "-A", "-o", "pid=", "-o", "sid="],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode == 0:
+                for line in result.stdout.splitlines():
+                    parts = line.strip().split()
+                    if len(parts) == 2 and parts[1].isdigit():
+                        if int(parts[1]) == sid and parts[0].isdigit():
+                            pids.append(int(parts[0]))
+            if not pids:
+                logger.warning(
+                    "no session peers found for pid=%d sid=%d; "
+                    "falling back to descendant scan",
+                    proc.pid,
+                    sid,
+                )
+                result = subprocess.run(
+                    ["ps", "-o", "pid=", "-o", "ppid="],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if result.returncode == 0:
+                    pp_to_pid: dict[int, list[int]] = {}
+                    for line in result.stdout.splitlines():
+                        parts = line.strip().split()
+                        if (
+                            len(parts) == 2
+                            and parts[0].isdigit()
+                            and parts[1].isdigit()
+                        ):
+                            pp_to_pid.setdefault(int(parts[1]), []).append(
+                                int(parts[0])
+                            )
+                    queue = [proc.pid]
+                    visited = set()
+                    while queue:
+                        p = queue.pop(0)
+                        if p in visited:
+                            continue
+                        visited.add(p)
+                        pids.append(p)
+                        queue.extend(pp_to_pid.get(p, []))
+        except ProcessLookupError:
+            pids.append(proc.pid)
+    return list(set(pids))
 
 
 def _start_service(
@@ -201,7 +254,9 @@ def _start_service(
     hub_root: Path,
     logger: logging.Logger,
 ) -> subprocess.Popen:
-    cmd = svc["command"]
+    cmd = list(svc["command"])
+    if "hub" in cmd and "serve" in cmd:
+        cmd.extend(["--path", str(hub_root)])
     env = os.environ.copy()
     env["CAR_HUB_ROOT"] = str(hub_root)
     env["CAR_DEV_INCLUDE_ROOT_REPO"] = "1"
@@ -391,7 +446,7 @@ def run_soak(
                 svc["pid"] = proc.pid
 
             health_ok = _wait_for_health(
-                base_url, probe_config, timeout=30.0, logger=logger
+                base_url, probe_config, timeout=60.0, logger=logger
             )
             if not health_ok:
                 for proc in procs:
@@ -403,6 +458,9 @@ def run_soak(
             logger.info("warming up for %ds ...", warmup)
             time.sleep(warmup)
 
+            service_pids = _collect_service_pids(procs, logger)
+            logger.info("restricting measurement to PIDs: %s", service_pids)
+
             logger.info("sampling for %ds (interval=%ds) ...", duration, interval)
             samples: list[CpuSample] = []
             health_probes: list[dict[str, Any]] = []
@@ -412,6 +470,7 @@ def run_soak(
                 sample = collect_cpu_sample(
                     repo_root=repo_root,
                     owned_categories=cat_enums,
+                    restrict_pids=service_pids,
                 )
                 samples.append(sample)
                 probe_result = _health_probe(base_url, probe_config, logger)

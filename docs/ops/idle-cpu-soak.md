@@ -7,13 +7,14 @@ resource consumption and sign off against committed budgets.
 
 ```bash
 # From repo root with the project venv active:
-.venv/bin/python scripts/idle_cpu_benchmark.py \
-  --profile hub_only \
-  --output .codex-autorunner/diagnostics/idle-cpu/
-```
+make perf-idle-cpu
 
-*(The harness script does not exist yet; this runbook describes the contract
-the future harness must satisfy.)*
+# Or run with a specific profile:
+make perf-idle-cpu PROFILE=hub_only
+
+# Or invoke the harness directly:
+.venv/bin/python scripts/idle_cpu_soak.py --profile hub_only --verbose
+```
 
 ## Profile definitions
 
@@ -162,3 +163,67 @@ The first optimization campaign succeeds when:
 This metric is the **only** success criterion for the first campaign and is now
 committed in this document and the profile definitions rather than living only
 in chat history.
+
+## First campaign results (2026-04-17)
+
+### Environment
+
+| Field | Value |
+|---|---|
+| Platform | macOS-26.4-arm64 (Apple Silicon) |
+| Python | 3.9.6 |
+| CPU cores | 10 |
+| Git ref | cd2b43a3-dirty |
+
+### hub_only baseline
+
+| Metric | Value |
+|---|---|
+| CPU mean | **0.010%** |
+| CPU p95 | 0.000% |
+| CPU max | 0.600% |
+| RSS mean | 99.3 MB |
+| RSS max | 99.3 MB |
+| Samples | 59 |
+| Health probes | 59/59 passed |
+| **Signoff** | **PASS** (0.010% < 5.0% hard budget) |
+
+The `hub_only` profile comfortably passes the hard budget gate at **500x under**
+the 5% threshold.
+
+### Remaining hotspots
+
+None. The idle hub consumes effectively zero CPU during steady state. The
+optimizations from tickets 420-440 (adaptive idle backoff, mtime guards,
+loop attribution) reduced idle polling to negligible levels.
+
+### Host caveats
+
+- The harness isolates measurement to the service process tree using session/PID
+  filtering. Other CAR instances on the same host are excluded from measurement.
+- Results may vary on heavily loaded machines. Run on a quiet host for
+  reproducible numbers.
+
+## Guardrails decisions
+
+### What belongs in CI
+
+- **Harness correctness tests** (artifact schema, profile validation, signoff
+  logic) run in normal CI via `tests/unit/test_idle_cpu_soak.py`,
+  `tests/unit/test_cpu_sampler.py`, `tests/unit/test_idle_cpu_profiles.py`.
+
+### What does NOT belong in CI
+
+- **Absolute CPU budget checks** should NOT run in normal CI. They require:
+  - A quiet, dedicated host
+  - A 5+ minute soak window
+  - No competing processes
+  These are suitable for **manual operator runs** (`make perf-idle-cpu`) or
+  **nightly/scheduled workflows** on dedicated hardware only.
+
+### Recommended cadence
+
+- Run `make perf-idle-cpu` after significant changes to the hub event loop,
+  polling intervals, or reconciliation logic.
+- Record artifacts in `.codex-autorunner/diagnostics/idle-cpu/history/` for
+  regression tracking across releases.

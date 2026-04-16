@@ -76,6 +76,7 @@ def collect_cpu_sample(
     *,
     repo_root: Optional[Path] = None,
     owned_categories: Optional[list[ProcessCategory]] = None,
+    restrict_pids: Optional[list[int]] = None,
     ps_output_getter: Optional[Callable[[], str]] = None,
     pid_cpu_getter: Optional[
         Callable[[list[int]], dict[int, tuple[float, float]]]
@@ -91,14 +92,21 @@ def collect_cpu_sample(
     snapshot = collect_processes(ps_output_getter=ps_output_getter)
     if repo_root is not None:
         snapshot = enrich_with_ownership(snapshot, repo_root)
+    if restrict_pids is not None:
+        pid_set = set(restrict_pids)
+        snapshot = snapshot.filter_by_pids(pid_set)
 
     _sample_cpu = pid_cpu_getter or sample_cpu_for_pids
 
     category_procs: dict[ProcessCategory, list] = {
-        ProcessCategory.CAR_SERVICE: snapshot.car_service_processes,
-        ProcessCategory.OPENCODE: snapshot.opencode_processes,
-        ProcessCategory.APP_SERVER: snapshot.app_server_processes,
+        ProcessCategory.CAR_SERVICE: list(snapshot.car_service_processes),
+        ProcessCategory.OPENCODE: list(snapshot.opencode_processes),
+        ProcessCategory.APP_SERVER: list(snapshot.app_server_processes),
     }
+
+    if restrict_pids is not None:
+        for proc in snapshot.other_processes:
+            category_procs.setdefault(ProcessCategory.CAR_SERVICE, []).append(proc)
 
     all_owned_pids: list[int] = []
     per_category_pids: dict[ProcessCategory, list[int]] = {}
