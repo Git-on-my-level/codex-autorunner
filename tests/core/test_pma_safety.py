@@ -204,7 +204,7 @@ class TestDuplicateDetection:
     def test_duplicate_detection_window_expiry(
         self, hub_root: Path, config: PmaSafetyConfig
     ) -> None:
-        config.dedup_window_seconds = 0.5
+        config.dedup_window_seconds = 10
         config.enable_rate_limit = False
         config.enable_circuit_breaker = False
         config.max_duplicate_actions = 2
@@ -227,7 +227,7 @@ class TestDuplicateDetection:
 
         expired_checker = PmaSafetyChecker(hub_root / "expired", config=config)
         expired_timestamp = (
-            datetime.now(timezone.utc) - timedelta(seconds=1)
+            datetime.now(timezone.utc) - timedelta(seconds=11)
         ).isoformat()
 
         for _i in range(config.max_duplicate_actions):

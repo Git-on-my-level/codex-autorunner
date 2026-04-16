@@ -181,26 +181,36 @@ if [[ "$RUN_CORE" == true ]]; then
   echo "Running tests (pytest)..."
   if [ -z "${CI:-}" ]; then
     FAST_TEST_JUNIT="$(mktemp)"
-    FAST_TEST_SELECTED="$(mktemp)"
     cleanup_fast_test_artifacts() {
-      rm -f "$FAST_TEST_JUNIT" "$FAST_TEST_SELECTED"
+      rm -f "$FAST_TEST_JUNIT" "${FAST_TEST_SELECTED:-}"
     }
     trap cleanup_fast_test_artifacts EXIT
-    "$PYTHON_BIN" -m pytest -m "not integration and not slow" --collect-only -q > "$FAST_TEST_SELECTED"
     "$PYTHON_BIN" -m pytest -m "not integration and not slow" -n auto -o junit_duration_report=call --junitxml "$FAST_TEST_JUNIT"
-    "$PYTHON_BIN" scripts/report_fast_test_budget.py \
-      "$FAST_TEST_JUNIT" \
-      --selected-nodeids "$FAST_TEST_SELECTED" \
-      --repo-root "$REPO_ROOT" \
-      --verify-nodeids \
-      --max-duration "${CODEX_FAST_TEST_MAX_DURATION_SECONDS:-1.0}" \
+    FAST_TEST_REPORT_ARGS=(
+      "$FAST_TEST_JUNIT"
+      --repo-root "$REPO_ROOT"
+      --max-duration "${CODEX_FAST_TEST_MAX_DURATION_SECONDS:-1.0}"
       --max-report "${CODEX_FAST_TEST_REPORT_LIMIT:-20}"
+    )
+    if [[ "${CODEX_FAST_TEST_VERIFY_NODEIDS:-0}" == "1" ]]; then
+      FAST_TEST_SELECTED="$(mktemp)"
+      "$PYTHON_BIN" -m pytest -m "not integration and not slow" --collect-only -q > "$FAST_TEST_SELECTED"
+      FAST_TEST_REPORT_ARGS+=(
+        --selected-nodeids "$FAST_TEST_SELECTED"
+        --verify-nodeids
+      )
+    fi
+    "$PYTHON_BIN" scripts/report_fast_test_budget.py "${FAST_TEST_REPORT_ARGS[@]}"
   else
     "$PYTHON_BIN" -m pytest -m "not integration and not slow" -n auto
   fi
 
-  echo "Dead-code check (heuristic)..."
-  "$PYTHON_BIN" "$REPO_ROOT/scripts/deadcode.py" --check
+  if [ -n "${CI:-}" ] || [[ "${CODEX_LOCAL_CHECK_INCLUDE_DEADCODE:-0}" == "1" ]]; then
+    echo "Dead-code check (heuristic)..."
+    "$PYTHON_BIN" "$REPO_ROOT/scripts/deadcode.py" --check
+  else
+    echo "Skipping dead-code check locally; set CODEX_LOCAL_CHECK_INCLUDE_DEADCODE=1 to enable."
+  fi
 fi
 
 # --- Web-UI lane checks ------------------------------------------------------

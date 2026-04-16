@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import sqlite3
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -30,6 +31,10 @@ from ...core.hub_diagnostics import (
 )
 from ...core.logging_utils import safe_log
 from ...core.managed_processes import reap_managed_processes
+from ...core.orchestration.execution_history_maintenance import (
+    resolve_execution_history_maintenance_policy,
+    run_execution_history_housekeeping_once,
+)
 from ...housekeeping import reap_managed_docker_containers, run_housekeeping_once
 from .app_builders import create_app, create_repo_app
 from .app_factory import CacheStaticFiles, resolve_allowed_hosts, resolve_auth_token
@@ -149,6 +154,7 @@ def create_hub_app(
     app.state.static_files = static_files
     app.state.static_assets_lock = threading.Lock()
     app.state.hub_static_assets = None
+    app.state.orchestration_housekeeping = None
     app.mount("/static", static_files, name="static")
     raw_config = getattr(context.config, "raw", {})
     pma_config = raw_config.get("pma", {}) if isinstance(raw_config, dict) else {}
@@ -416,12 +422,36 @@ def create_hub_app(
                                 app.state.config.root,
                                 logger=app.state.logger,
                             )
+                            try:
+                                summary = await asyncio.to_thread(
+                                    run_execution_history_housekeeping_once,
+                                    app.state.config.root,
+                                    policy=resolve_execution_history_maintenance_policy(
+                                        app.state.config.pma
+                                    ),
+                                )
+                                app.state.orchestration_housekeeping = summary.to_dict()
+                            except (
+                                OSError,
+                                RuntimeError,
+                                ConnectionError,
+                                ValueError,
+                                TypeError,
+                                sqlite3.Error,
+                            ) as exc:
+                                safe_log(
+                                    app.state.logger,
+                                    logging.WARNING,
+                                    "Orchestration execution-history housekeeping failed",
+                                    exc,
+                                )
                         except (
                             RuntimeError,
                             OSError,
                             ConnectionError,
                             ValueError,
                             TypeError,
+                            sqlite3.Error,
                         ) as exc:  # intentional: background loop must not crash
                             safe_log(
                                 app.state.logger,

@@ -156,6 +156,11 @@ class DiscordPmaEnvironment:
         await self.store.close()
 
 
+async def drain_spawned_tasks(service: DiscordBotService) -> None:
+    while service._background_tasks:
+        await asyncio.gather(*list(service._background_tasks), return_exceptions=True)
+
+
 async def build_discord_pma_environment(
     root: Path,
     *,

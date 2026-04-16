@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import sqlite3
 import sys
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -22,6 +24,7 @@ from codex_autorunner.core.hub import (
 from codex_autorunner.core.orchestration import (
     legacy_backfill_gate as legacy_backfill_gate_module,
 )
+from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web import app as web_app_module
 from codex_autorunner.surfaces.web import app_state as web_app_state_module
@@ -501,3 +504,108 @@ def test_control_plane_error_info_from_mapping_infers_retryable() -> None:
         {"code": "hub_rejected", "message": "bad payload"}
     )
     assert info2.retryable is False
+
+
+def test_hub_health_reports_orchestration_database_size(hub_env, monkeypatch) -> None:
+    _stub_opencode_supervisor(monkeypatch)
+    with open_orchestration_sqlite(hub_env.hub_root, durable=False):
+        pass
+
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        response = client.get("/health")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["orchestration"]["database_path"].endswith("orchestration.sqlite3")
+    assert payload["orchestration"]["database_size_bytes"] >= 0
+    assert payload["orchestration"]["database_size_status"] == "ok"
+
+
+def test_hub_health_includes_last_orchestration_housekeeping(
+    hub_env, monkeypatch
+) -> None:
+    _stub_opencode_supervisor(monkeypatch)
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        app.state.orchestration_housekeeping = {
+            "started_at": "2026-04-16T00:00:00Z",
+            "finished_at": "2026-04-16T00:00:01Z",
+            "compaction": {"rows_deleted": 12},
+            "retention": {"hot_rows_deleted": 4},
+        }
+        response = client.get("/health")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert (
+        payload["orchestration"]["last_housekeeping"]["compaction"]["rows_deleted"]
+        == 12
+    )
+
+
+def test_hub_housekeeping_loop_survives_sqlite_errors(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from codex_autorunner.core.config import CONFIG_FILENAME
+
+    _stub_opencode_supervisor(monkeypatch)
+    first_call = threading.Event()
+    second_call = threading.Event()
+
+    class _Summary:
+        def to_dict(self) -> dict[str, object]:
+            return {"status": "ok"}
+
+    def _fake_prune_filebox_root(*args: object, **kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(
+            inbox_pruned=(),
+            outbox_pruned=(),
+            bytes_before=0,
+            bytes_after=0,
+        )
+
+    def _fake_execution_history_housekeeping(
+        *args: object, **kwargs: object
+    ) -> _Summary:
+        if not first_call.is_set():
+            first_call.set()
+            raise sqlite3.OperationalError("database is locked")
+        second_call.set()
+        return _Summary()
+
+    monkeypatch.setattr(
+        web_app_module,
+        "prune_filebox_root",
+        _fake_prune_filebox_root,
+    )
+    monkeypatch.setattr(
+        web_app_module,
+        "run_housekeeping_once",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        web_app_module,
+        "run_execution_history_housekeeping_once",
+        _fake_execution_history_housekeeping,
+    )
+    write_test_config(
+        Path(hub_env.hub_root) / CONFIG_FILENAME,
+        {
+            "mode": "hub",
+            "housekeeping": {"interval_seconds": 1},
+        },
+    )
+
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        assert first_call.wait(timeout=5.0)
+        assert second_call.wait(timeout=5.0)
+        response = client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"

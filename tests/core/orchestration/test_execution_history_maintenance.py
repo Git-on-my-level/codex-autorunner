@@ -16,10 +16,13 @@ from codex_autorunner.core.orchestration.execution_history_maintenance import (
     _normalized_execution_ids,
     audit_execution_history,
     backfill_legacy_execution_history,
+    collect_execution_history_database_health,
     compact_completed_execution_history,
+    execution_history_database_size_bytes,
     export_execution_history_bundle,
     prune_execution_history_retention,
     resolve_execution_history_maintenance_policy,
+    run_execution_history_housekeeping_once,
 )
 from codex_autorunner.core.orchestration.sqlite import (
     initialize_orchestration_sqlite,
@@ -622,6 +625,57 @@ def test_prune_execution_history_retention_clears_checkpoint_trace_manifest_json
     checkpoint = store.load_checkpoint("exec-old-json")
     assert checkpoint is not None
     assert checkpoint.trace_manifest_id is None
+
+
+def test_run_execution_history_housekeeping_once_runs_compaction_and_vacuum(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    _seed_execution(hub_root, execution_id="exec-housekeep", output_chunks=20)
+
+    summary = run_execution_history_housekeeping_once(
+        hub_root,
+        policy=ExecutionHistoryMaintenancePolicy(
+            max_hot_rows_per_completed_execution=8,
+            hot_history_retention_days=30,
+            cold_trace_retention_days=90,
+        ),
+    )
+
+    assert summary.compaction.compacted_executions == 1
+    assert summary.compaction.rows_deleted > 0
+    assert summary.vacuum is not None
+    assert summary.database_size_before_bytes >= 0
+    assert summary.database_size_after_bytes >= 0
+
+    with open_orchestration_sqlite(hub_root, durable=False) as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS cnt
+              FROM orch_event_projections
+             WHERE event_family = 'turn.timeline'
+               AND execution_id = 'exec-housekeep'
+            """
+        ).fetchone()
+    assert int(row["cnt"] or 0) <= 8
+
+
+def test_collect_execution_history_database_health_reports_threshold_status(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    _seed_execution(hub_root, execution_id="exec-db-health", output_chunks=3)
+
+    size_bytes = execution_history_database_size_bytes(hub_root)
+    health = collect_execution_history_database_health(
+        hub_root,
+        warning_threshold_bytes=max(0, size_bytes - 1),
+        error_threshold_bytes=size_bytes + 1,
+    )
+    assert health.size_bytes == size_bytes
+    assert health.status == "warning"
 
 
 def test_compaction_never_keeps_more_than_policy_limit(

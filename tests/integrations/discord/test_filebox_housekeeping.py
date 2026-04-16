@@ -9,6 +9,7 @@ import pytest
 from codex_autorunner.integrations.discord import service as discord_service_module
 from codex_autorunner.integrations.discord.config import (
     DiscordBotConfig,
+    DiscordBotDispatchConfig,
     DiscordCommandRegistration,
 )
 from codex_autorunner.integrations.discord.service import DiscordBotService
@@ -39,7 +40,7 @@ class _FakeOutboxManager:
         return None
 
 
-def _config(root: Path) -> DiscordBotConfig:
+def _config(root: Path, *, ack_budget_ms: int = 10_000) -> DiscordBotConfig:
     return DiscordBotConfig(
         root=root,
         enabled=True,
@@ -60,6 +61,7 @@ def _config(root: Path) -> DiscordBotConfig:
         max_message_length=2000,
         message_overflow="split",
         pma_enabled=False,
+        dispatch=DiscordBotDispatchConfig(ack_budget_ms=ack_budget_ms),
     )
 
 

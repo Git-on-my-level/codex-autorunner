@@ -275,12 +275,16 @@ def verify_fast_test_budget_offenders(
     threshold_seconds: float,
     repo_root: Path,
     duration_collector: DurationCollector = _collect_call_durations_from_pytest,
+    max_nodeids: Optional[int] = None,
 ) -> list[FastTestBudgetOffender]:
     if not offenders:
         return []
 
+    verification_candidates = (
+        offenders[:max_nodeids] if max_nodeids is not None else offenders
+    )
     verified_durations = duration_collector(
-        [offender.nodeid for offender in offenders],
+        [offender.nodeid for offender in verification_candidates],
         repo_root.resolve(),
     )
     verified: list[FastTestBudgetOffender] = []
@@ -325,10 +329,12 @@ def main(argv: list[str] | None = None) -> int:
         repo_root=args.repo_root,
     )
     if args.verify_nodeids and offenders:
+        verification_limit = None if args.fail_on_violation else report_limit
         offenders = verify_fast_test_budget_offenders(
             offenders,
             threshold_seconds=threshold_seconds,
             repo_root=args.repo_root,
+            max_nodeids=verification_limit,
         )
     all_durations: list[float] = []
     tree = ET.parse(args.report_path)

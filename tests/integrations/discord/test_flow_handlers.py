@@ -16,6 +16,7 @@ from codex_autorunner.core.flows import hub_overview as hub_overview_module
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.integrations.discord.config import (
     DiscordBotConfig,
+    DiscordBotDispatchConfig,
     DiscordCommandRegistration,
 )
 from codex_autorunner.integrations.discord.service import DiscordBotService
@@ -138,6 +139,27 @@ def _latest_public_response_payload(rest: _FakeRest) -> dict[str, Any]:
     raise AssertionError("expected a Discord public response payload")
 
 
+async def _invoke_flow_status(
+    service: DiscordBotService,
+    *,
+    workspace_root: Path,
+    options: dict[str, Any] | None = None,
+    channel_id: str = "channel-1",
+    guild_id: str = "guild-1",
+    update_message: bool = False,
+) -> None:
+    interaction_id = str(uuid.uuid4())
+    await service._handle_flow_status(
+        interaction_id,
+        f"token-{interaction_id}",
+        workspace_root=workspace_root,
+        options=options or {},
+        channel_id=channel_id,
+        guild_id=guild_id,
+        update_message=update_message,
+    )
+
+
 class _FlowServiceStub:
     def __init__(self) -> None:
         self.start_calls: list[dict[str, Any]] = []
@@ -186,7 +208,7 @@ class _FlowServiceStub:
         return SimpleNamespace(run_id=run_id, status="running"), True, False
 
 
-def _config(root: Path) -> DiscordBotConfig:
+def _config(root: Path, *, ack_budget_ms: int = 10_000) -> DiscordBotConfig:
     return DiscordBotConfig(
         root=root,
         enabled=True,
@@ -207,6 +229,9 @@ def _config(root: Path) -> DiscordBotConfig:
         max_message_length=2000,
         message_overflow="split",
         pma_enabled=True,
+        # These tests focus on flow handler behavior; reliability tests own the
+        # production Discord callback budget edge cases.
+        dispatch=DiscordBotDispatchConfig(ack_budget_ms=ack_budget_ms),
     )
 
 
@@ -458,7 +483,7 @@ async def test_flow_status_without_run_id_uses_authoritative_run_and_includes_pi
     )
 
     try:
-        await service.run_forever()
+        await _invoke_flow_status(service, workspace_root=workspace)
         assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 5
         payload = _latest_status_message(rest)
@@ -515,7 +540,7 @@ async def test_flow_status_without_run_id_shows_no_current_run_for_history_only(
     )
 
     try:
-        await service.run_forever()
+        await _invoke_flow_status(service, workspace_root=workspace)
         assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 5
         payload = _latest_status_message(rest)
@@ -571,7 +596,7 @@ async def test_flow_status_without_run_uses_ticket_summary_fallback(
     )
 
     try:
-        await service.run_forever()
+        await _invoke_flow_status(service, workspace_root=workspace)
         assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 5
         payload = _latest_status_message(rest)
@@ -658,7 +683,11 @@ async def test_flow_status_shows_elapsed_for_completed_run(tmp_path: Path) -> No
     )
 
     try:
-        await service.run_forever()
+        await _invoke_flow_status(
+            service,
+            workspace_root=workspace,
+            options={"run_id": completed_run_id},
+        )
         assert rest.interaction_responses[0]["payload"]["type"] == 5
         content = _latest_status_message(rest)["content"]
         assert "Status: completed" in content
@@ -704,7 +733,11 @@ async def test_flow_status_with_missing_explicit_run_id_reports_not_found(
     )
 
     try:
-        await service.run_forever()
+        await _invoke_flow_status(
+            service,
+            workspace_root=workspace,
+            options={"run_id": missing_run_id},
+        )
         assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 5
         content = rest.followup_messages[0]["payload"]["content"]
@@ -755,7 +788,11 @@ async def test_flow_status_with_archived_explicit_run_id_renders_archived_state(
     )
 
     try:
-        await service.run_forever()
+        await _invoke_flow_status(
+            service,
+            workspace_root=workspace,
+            options={"run_id": run_id},
+        )
         assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 5
         content = _latest_status_message(rest)["content"]
@@ -804,7 +841,11 @@ async def test_flow_status_with_stray_archive_dir_still_reports_not_found(
     )
 
     try:
-        await service.run_forever()
+        await _invoke_flow_status(
+            service,
+            workspace_root=workspace,
+            options={"run_id": run_id},
+        )
         assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 5
         content = rest.followup_messages[0]["payload"]["content"]
@@ -848,7 +889,11 @@ async def test_flow_status_with_path_traversal_run_id_does_not_render_archived_s
     )
 
     try:
-        await service.run_forever()
+        await _invoke_flow_status(
+            service,
+            workspace_root=workspace,
+            options={"run_id": malicious_run_id},
+        )
         assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 5
         content = rest.followup_messages[0]["payload"]["content"]

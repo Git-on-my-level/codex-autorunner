@@ -4,7 +4,10 @@ import asyncio
 
 import anyio
 import pytest
-from tests.chat_surface_harness.discord import build_discord_pma_environment
+from tests.chat_surface_harness.discord import (
+    build_discord_pma_environment,
+    discord_message_create,
+)
 from tests.chat_surface_harness.hermes import patch_hermes_registry
 from tests.chat_surface_harness.telegram import (
     build_telegram_pma_environment,
@@ -13,6 +16,7 @@ from tests.chat_surface_harness.telegram import (
 )
 
 import codex_autorunner.integrations.discord.message_turns as discord_message_turns_module
+from codex_autorunner.integrations.chat.dispatcher import build_dispatch_context
 from codex_autorunner.integrations.telegram.handlers.commands import (
     execution as telegram_execution_module,
 )
@@ -36,7 +40,14 @@ async def test_discord_pma_turn_completes_for_official_hermes_prompt(
         message_content="echo hello world",
     )
     try:
-        await asyncio.wait_for(env.service.run_forever(), timeout=3)
+        event = env.service._chat_adapter.parse_message_event(
+            discord_message_create("echo hello world")
+        )
+        assert event is not None
+        await asyncio.wait_for(
+            env.service._handle_message_event(event, build_dispatch_context(event)),
+            timeout=3,
+        )
         with anyio.fail_after(2):
             while not any(
                 "fixture reply" in message["payload"].get("content", "")

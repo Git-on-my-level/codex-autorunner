@@ -9,6 +9,9 @@ from fastapi.responses import JSONResponse
 from ....core import update as update_core
 from ....core.config import HubConfig
 from ....core.constants import DEFAULT_UPDATE_REPO_REF, DEFAULT_UPDATE_REPO_URL
+from ....core.orchestration.execution_history_maintenance import (
+    collect_execution_history_database_health,
+)
 from ....core.self_describe import collect_describe_data
 from ....core.text_utils import _pid_is_running
 from ....core.update import (
@@ -79,6 +82,28 @@ def build_system_routes() -> APIRouter:
         mode = "hub" if isinstance(config, HubConfig) else "repo"
         base_path = getattr(request.app.state, "base_path", "")
         asset_version = getattr(request.app.state, "asset_version", None)
+        orchestration_health = None
+        if isinstance(config, HubConfig):
+            database_health = await asyncio.to_thread(
+                collect_execution_history_database_health,
+                config.root,
+            )
+            orchestration_health = {
+                "database_path": database_health.database_path,
+                "database_size_bytes": database_health.size_bytes,
+                "database_size_status": database_health.status,
+                "database_size_warning_bytes": (
+                    database_health.warning_threshold_bytes
+                ),
+                "database_size_error_bytes": database_health.error_threshold_bytes,
+            }
+            last_housekeeping = getattr(
+                getattr(request.app, "state", None),
+                "orchestration_housekeeping",
+                None,
+            )
+            if isinstance(last_housekeeping, dict):
+                orchestration_health["last_housekeeping"] = last_housekeeping
         static_dir = getattr(getattr(request.app, "state", None), "static_dir", None)
         if not isinstance(static_dir, Path):
             return JSONResponse(
@@ -87,6 +112,7 @@ def build_system_routes() -> APIRouter:
                     "detail": "Static UI assets missing; reinstall package",
                     "mode": mode,
                     "base_path": base_path,
+                    "orchestration": orchestration_health,
                 },
                 status_code=500,
             )
@@ -106,6 +132,7 @@ def build_system_routes() -> APIRouter:
                     "mode": mode,
                     "base_path": base_path,
                     "asset_version": asset_version,
+                    "orchestration": orchestration_health,
                 }
                 if mode == "hub":
                     supervisor = getattr(request.app.state, "hub_supervisor", None)
@@ -126,6 +153,7 @@ def build_system_routes() -> APIRouter:
                     "missing": missing,
                     "mode": mode,
                     "base_path": base_path,
+                    "orchestration": orchestration_health,
                 },
                 status_code=500,
             )
@@ -134,6 +162,7 @@ def build_system_routes() -> APIRouter:
             "mode": mode,
             "base_path": base_path,
             "asset_version": asset_version,
+            "orchestration": orchestration_health,
         }
         if mode == "hub":
             supervisor = getattr(request.app.state, "hub_supervisor", None)

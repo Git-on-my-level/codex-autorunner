@@ -655,7 +655,11 @@ def verify_event_parity(hub_root: Path, conn: Any) -> list[ParityCheckResult]:
     results = []
     if _table_exists(conn, "orch_event_projections"):
         new_count_row = conn.execute(
-            "SELECT COUNT(*) as cnt FROM orch_event_projections"
+            """
+            SELECT COUNT(*) as cnt
+              FROM orch_event_projections
+             WHERE event_family = 'pma.lifecycle'
+            """
         ).fetchone()
         new_count = int(new_count_row["cnt"]) if new_count_row else 0
     else:

@@ -419,8 +419,7 @@ class TelegramSelectionHandlers(ChatSelectionHandlers):
         if self._has_active_turns() and _update_target_restarts_surface(
             update_target, surface="telegram"
         ):
-            message = getattr(callback, "message", None)
-            if message is None:
+            if callback.chat_id is None or callback.message_id is None:
                 await self._answer_callback(callback, "Active session detected")
                 await self._finalize_selection(
                     key,
@@ -428,6 +427,16 @@ class TelegramSelectionHandlers(ChatSelectionHandlers):
                     "Update confirmation expired. Run /update again.",
                 )
                 return
+            message = TelegramMessage(
+                update_id=callback.update_id,
+                message_id=callback.message_id,
+                chat_id=callback.chat_id,
+                thread_id=callback.thread_id,
+                from_user_id=callback.from_user_id,
+                text=None,
+                date=None,
+                is_topic_message=bool(callback.thread_id),
+            )
             await self._answer_callback(callback, "Confirm update")
             await self._prompt_update_confirmation(
                 message,
