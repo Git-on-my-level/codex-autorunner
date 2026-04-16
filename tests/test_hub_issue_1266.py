@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import sqlite3
 import sys
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -332,3 +334,67 @@ def test_hub_health_includes_last_orchestration_housekeeping(
         payload["orchestration"]["last_housekeeping"]["compaction"]["rows_deleted"]
         == 12
     )
+
+
+def test_hub_housekeeping_loop_survives_sqlite_errors(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from codex_autorunner.core.config import CONFIG_FILENAME
+
+    _stub_opencode_supervisor(monkeypatch)
+    first_call = threading.Event()
+    second_call = threading.Event()
+
+    class _Summary:
+        def to_dict(self) -> dict[str, object]:
+            return {"status": "ok"}
+
+    def _fake_prune_filebox_root(*args: object, **kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(
+            inbox_pruned=(),
+            outbox_pruned=(),
+            bytes_before=0,
+            bytes_after=0,
+        )
+
+    def _fake_execution_history_housekeeping(
+        *args: object, **kwargs: object
+    ) -> _Summary:
+        if not first_call.is_set():
+            first_call.set()
+            raise sqlite3.OperationalError("database is locked")
+        second_call.set()
+        return _Summary()
+
+    monkeypatch.setattr(
+        web_app_module,
+        "prune_filebox_root",
+        _fake_prune_filebox_root,
+    )
+    monkeypatch.setattr(
+        web_app_module,
+        "run_housekeeping_once",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        web_app_module,
+        "run_execution_history_housekeeping_once",
+        _fake_execution_history_housekeeping,
+    )
+    write_test_config(
+        Path(hub_env.hub_root) / CONFIG_FILENAME,
+        {
+            "mode": "hub",
+            "housekeeping": {"interval_seconds": 1},
+        },
+    )
+
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        assert first_call.wait(timeout=5.0)
+        assert second_call.wait(timeout=5.0)
+        response = client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"

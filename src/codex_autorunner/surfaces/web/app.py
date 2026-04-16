@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import sqlite3
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -434,6 +435,7 @@ def create_hub_app(
                                 ConnectionError,
                                 ValueError,
                                 TypeError,
+                                sqlite3.Error,
                             ) as exc:
                                 safe_log(
                                     app.state.logger,
@@ -447,6 +449,7 @@ def create_hub_app(
                             ConnectionError,
                             ValueError,
                             TypeError,
+                            sqlite3.Error,
                         ) as exc:  # intentional: background loop must not crash
                             safe_log(
                                 app.state.logger,
