@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import enum
 import json
 import logging
 import sqlite3
@@ -18,6 +19,33 @@ DISCORD_STATE_SCHEMA_VERSION = 13
 DISCORD_INTERACTION_LEDGER_RETENTION_DAYS = 14
 _UNSET = object()
 _logger = logging.getLogger(__name__)
+
+
+class InteractionSchedulerState(str, enum.Enum):
+    RECEIVED = "received"
+    DISPATCH_READY = "dispatch_ready"
+    DISPATCH_ACK_PENDING = "dispatch_ack_pending"
+    QUEUE_WAIT_ACK_PENDING = "queue_wait_ack_pending"
+    ACKNOWLEDGED = "acknowledged"
+    SCHEDULED = "scheduled"
+    WAITING_ON_RESOURCES = "waiting_on_resources"
+    EXECUTING = "executing"
+    DELIVERY_PENDING = "delivery_pending"
+    DELIVERY_REPLAYING = "delivery_replaying"
+    DELIVERY_EXPIRED = "delivery_expired"
+    RECOVERY_SCHEDULED = "recovery_scheduled"
+    COMPLETED = "completed"
+    ABANDONED = "abandoned"
+
+
+class InteractionExecutionStatus(str, enum.Enum):
+    RECEIVED = "received"
+    ACKNOWLEDGED = "acknowledged"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    TIMEOUT = "timeout"
+    CANCELLED = "cancelled"
 
 
 @dataclass(frozen=True)
@@ -60,7 +88,7 @@ class InteractionLedgerRecord:
     route_key: Optional[str] = None
     handler_id: Optional[str] = None
     conversation_id: Optional[str] = None
-    scheduler_state: str = "received"
+    scheduler_state: str = InteractionSchedulerState.RECEIVED
     resource_keys: tuple[str, ...] = ()
     payload_json: Optional[dict[str, Any]] = None
     envelope_json: Optional[dict[str, Any]] = None
@@ -68,7 +96,7 @@ class InteractionLedgerRecord:
     attempt_count: int = 0
     ack_mode: Optional[str] = None
     ack_completed_at: Optional[str] = None
-    execution_status: str = "received"
+    execution_status: str = InteractionExecutionStatus.RECEIVED
     execution_started_at: Optional[str] = None
     execution_finished_at: Optional[str] = None
     execution_error: Optional[str] = None

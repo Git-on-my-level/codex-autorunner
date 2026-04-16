@@ -361,7 +361,33 @@ class DiscordEffectServiceProxy:
     def result(self) -> DiscordHandlerResult:
         return self._result
 
+    _PRIVATE_ALIAS_MAP: dict[str, str] = {
+        "_defer_ephemeral": "defer_ephemeral",
+        "_defer_public": "defer_public",
+        "_defer_component_update": "defer_component_update",
+        "_respond_ephemeral": "respond_ephemeral",
+        "_respond_public": "respond_public",
+        "_send_or_respond_ephemeral": "send_or_respond_ephemeral",
+        "_send_or_respond_public": "send_or_respond_public",
+        "_respond_with_components": "respond_ephemeral_with_components",
+        "_respond_with_components_public": "respond_public_with_components",
+        "_send_or_respond_with_components_ephemeral": "send_or_respond_ephemeral_with_components",
+        "_send_or_respond_with_components_public": "send_or_respond_public_with_components",
+        "_send_or_update_component_message": "send_or_update_component_message",
+        "_update_component_message": "update_component_message",
+        "_edit_original_component_message": "edit_original_component_message",
+        "_send_followup_ephemeral": "send_followup_ephemeral",
+        "_send_followup_public": "send_followup_public",
+        "_respond_modal": "respond_modal",
+        "_respond_autocomplete": "respond_autocomplete",
+        "_interaction_has_initial_response": "interaction_has_initial_response",
+        "_interaction_is_deferred": "interaction_is_deferred",
+    }
+
     def __getattr__(self, name: str) -> Any:
+        public_name = self._PRIVATE_ALIAS_MAP.get(name)
+        if public_name is not None:
+            return getattr(self, public_name)
         return getattr(self._service, name)
 
     def _mark_initial_response(self) -> None:
@@ -682,253 +708,3 @@ class DiscordEffectServiceProxy:
     ) -> None:
         self._buffer_effect(DiscordAutocompleteEffect(choices=choices))
         self._mark_initial_response()
-
-    def _interaction_has_initial_response(self, interaction_token: str) -> bool:
-        return self.interaction_has_initial_response(interaction_token)
-
-    def _interaction_is_deferred(self, interaction_token: str) -> bool:
-        return self.interaction_is_deferred(interaction_token)
-
-    async def _defer_ephemeral(
-        self,
-        *,
-        interaction_id: str,
-        interaction_token: str,
-    ) -> bool:
-        return await self.defer_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-        )
-
-    async def _defer_public(
-        self,
-        *,
-        interaction_id: str,
-        interaction_token: str,
-    ) -> bool:
-        return await self.defer_public(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-        )
-
-    async def _defer_component_update(
-        self,
-        *,
-        interaction_id: str,
-        interaction_token: str,
-    ) -> bool:
-        return await self.defer_component_update(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-        )
-
-    async def _respond_ephemeral(
-        self,
-        interaction_id: str,
-        interaction_token: str,
-        text: str,
-    ) -> None:
-        await self.respond_ephemeral(interaction_id, interaction_token, text)
-
-    async def _respond_public(
-        self,
-        interaction_id: str,
-        interaction_token: str,
-        text: str,
-    ) -> None:
-        await self.respond_public(interaction_id, interaction_token, text)
-
-    async def _send_or_respond_ephemeral(
-        self,
-        *,
-        interaction_id: str,
-        interaction_token: str,
-        deferred: bool,
-        text: str,
-    ) -> None:
-        await self.send_or_respond_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            deferred=deferred,
-            text=text,
-        )
-
-    async def _send_or_respond_public(
-        self,
-        *,
-        interaction_id: str,
-        interaction_token: str,
-        deferred: bool,
-        text: str,
-    ) -> None:
-        await self.send_or_respond_public(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            deferred=deferred,
-            text=text,
-        )
-
-    async def _respond_with_components(
-        self,
-        interaction_id: str,
-        interaction_token: str,
-        text: str,
-        components: list[dict[str, Any]],
-    ) -> None:
-        await self.respond_ephemeral_with_components(
-            interaction_id,
-            interaction_token,
-            text,
-            components,
-        )
-
-    async def _respond_with_components_public(
-        self,
-        interaction_id: str,
-        interaction_token: str,
-        text: str,
-        components: list[dict[str, Any]],
-    ) -> None:
-        await self.respond_public_with_components(
-            interaction_id,
-            interaction_token,
-            text,
-            components,
-        )
-
-    async def _send_or_respond_with_components_ephemeral(
-        self,
-        *,
-        interaction_id: str,
-        interaction_token: str,
-        deferred: bool,
-        text: str,
-        components: list[dict[str, Any]],
-    ) -> None:
-        await self.send_or_respond_ephemeral_with_components(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            deferred=deferred,
-            text=text,
-            components=components,
-        )
-
-    async def _send_or_respond_with_components_public(
-        self,
-        *,
-        interaction_id: str,
-        interaction_token: str,
-        deferred: bool,
-        text: str,
-        components: list[dict[str, Any]],
-    ) -> None:
-        await self.send_or_respond_public_with_components(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            deferred=deferred,
-            text=text,
-            components=components,
-        )
-
-    async def _send_or_update_component_message(
-        self,
-        *,
-        interaction_id: str,
-        interaction_token: str,
-        deferred: bool,
-        text: str,
-        components: Optional[list[dict[str, Any]]] = None,
-    ) -> None:
-        await self.send_or_update_component_message(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            deferred=deferred,
-            text=text,
-            components=components,
-        )
-
-    async def _update_component_message(
-        self,
-        *,
-        interaction_id: str,
-        interaction_token: str,
-        text: str,
-        components: list[dict[str, Any]],
-    ) -> None:
-        await self.update_component_message(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            text=text,
-            components=components,
-        )
-
-    async def _edit_original_component_message(
-        self,
-        *,
-        interaction_token: str,
-        text: str,
-        components: Optional[list[dict[str, Any]]] = None,
-    ) -> bool:
-        return await self.edit_original_component_message(
-            interaction_token=interaction_token,
-            text=text,
-            components=components,
-        )
-
-    async def _send_followup_ephemeral(
-        self,
-        *,
-        interaction_token: str,
-        content: str,
-        components: Optional[list[dict[str, Any]]] = None,
-    ) -> bool:
-        return await self.send_followup_ephemeral(
-            interaction_token=interaction_token,
-            content=content,
-            components=components,
-        )
-
-    async def _send_followup_public(
-        self,
-        *,
-        interaction_token: str,
-        content: str,
-        components: Optional[list[dict[str, Any]]] = None,
-    ) -> bool:
-        return await self.send_followup_public(
-            interaction_token=interaction_token,
-            content=content,
-            components=components,
-        )
-
-    async def _respond_modal(
-        self,
-        interaction_id: str,
-        interaction_token: str,
-        *,
-        kind: InteractionSessionKind,
-        custom_id: str,
-        title: str,
-        components: list[dict[str, Any]],
-    ) -> None:
-        await self.respond_modal(
-            interaction_id,
-            interaction_token,
-            kind=kind,
-            custom_id=custom_id,
-            title=title,
-            components=components,
-        )
-
-    async def _respond_autocomplete(
-        self,
-        interaction_id: str,
-        interaction_token: str,
-        *,
-        choices: list[dict[str, str]],
-    ) -> None:
-        await self.respond_autocomplete(
-            interaction_id,
-            interaction_token,
-            choices=choices,
-        )
