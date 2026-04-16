@@ -13,13 +13,6 @@ from ...core.git_utils import (
     git_is_clean,
     run_git,
 )
-from ...core.injected_context import wrap_injected_context
-from ...core.pr_binding_runtime import (
-    binding_summary,
-    find_hub_binding_context,
-    upsert_pr_binding,
-)
-from ...core.pr_bindings import PrBinding, PrBindingStore
 from ...core.prompts import build_github_issue_to_spec_prompt, build_sync_agent_prompt
 from ...core.text_utils import _normalize_optional_text
 from ...core.utils import (
@@ -29,7 +22,22 @@ from ...core.utils import (
     subprocess_env,
 )
 from .broker import GitHubCliBroker
-from .polling import GitHubScmPollingService
+from .context_rendering import build_context_file_from_url as _build_context_file
+from .scm_discovery import (
+    arm_polling_watch_best_effort,
+    normalize_positive_int,
+    persist_pr_binding,
+    pr_binding_store_from_root,
+)
+from .scm_discovery import (
+    discover_pr_binding as _discover_pr_binding_impl,
+)
+from .scm_discovery import (
+    discover_pr_binding_summary as _discover_pr_binding_summary_impl,
+)
+from .scm_discovery import (
+    normalize_pr_binding_summary as _normalize_pr_binding_summary_impl,
+)
 
 logger = logging.getLogger(__name__)
 _ALLOWED_REACTION_CONTENTS = frozenset(
@@ -106,7 +114,6 @@ def _tail_lines(text: str, *, max_lines: int = 60, max_chars: int = 6000) -> str
 
 
 def _sanitize_cmd(args: list[str]) -> str:
-    # Best-effort sanitization: redact obvious tokens if ever present.
     redacted: list[str] = []
     for a in args:
         if any(
@@ -166,8 +173,6 @@ def _run_codex_sync_agent(
     base_args_raw = codex_cfg.get("args")
     base_args = base_args_raw if isinstance(base_args_raw, list) else []
 
-    # Strip any existing --model flags from base args to avoid ambiguity; this flow
-    # deliberately uses the configured "small" model (or no model when unset).
     cleaned_args: list[str] = []
     skip_next = False
     for a in [str(x) for x in base_args]:
@@ -179,7 +184,6 @@ def _run_codex_sync_agent(
             continue
         cleaned_args.append(a)
 
-    # Use the "small" model for this use-case when configured; if unset/null, omit --model.
     models = _get_nested(raw_config, "codex", "models", default=None)
     if isinstance(models, dict) and "small" in models:
         model_small = models.get("small")
@@ -254,13 +258,6 @@ GITHUB_LINK_RE = re.compile(
 
 
 def parse_issue_input(issue: str) -> Tuple[Optional[str], int]:
-    """
-    Returns (repo_slug_or_none, issue_number).
-    Accepts:
-      - "123"
-      - "#123"
-      - "https://github.com/org/repo/issues/123"
-    """
     raw = (issue or "").strip()
     if raw.startswith("#"):
         raw = raw[1:].strip()
@@ -278,13 +275,6 @@ def parse_issue_input(issue: str) -> Tuple[Optional[str], int]:
 
 
 def parse_pr_input(pr: str) -> Tuple[Optional[str], int]:
-    """
-    Returns (repo_slug_or_none, pr_number).
-    Accepts:
-      - "123"
-      - "#123"
-      - "https://github.com/org/repo/pull/123"
-    """
     raw = (pr or "").strip()
     if raw.startswith("#"):
         raw = raw[1:].strip()
@@ -319,19 +309,6 @@ def find_github_links(text: str) -> list[str]:
     return [m.group(0) for m in GITHUB_LINK_RE.finditer(raw)]
 
 
-def _repo_slug_dirname(slug: str) -> str:
-    import hashlib
-
-    normalized = (slug or "").strip().lower()
-    safe_base = re.sub(r"[^a-z0-9._-]+", "-", normalized.replace("/", "--")).strip(".-")
-    if not safe_base:
-        safe_base = "unknown-repo"
-    # Preserve readability while making collisions across different slugs
-    # practically impossible.
-    digest = hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:10]
-    return f"{safe_base[:80]}-{digest}"
-
-
 def _normalize_optional_identifier_text(value: Any) -> Optional[str]:
     if isinstance(value, bool):
         return None
@@ -340,28 +317,7 @@ def _normalize_optional_identifier_text(value: Any) -> Optional[str]:
     return _normalize_optional_text(value)
 
 
-def _normalize_positive_int(value: Any) -> Optional[int]:
-    if isinstance(value, bool):
-        return None
-    try:
-        normalized = int(value)
-    except (TypeError, ValueError):
-        return None
-    return normalized if normalized > 0 else None
-
-
-def _normalize_binding_pr_state(state: Any, *, is_draft: Any = False) -> Optional[str]:
-    normalized = _normalize_optional_text(state)
-    if normalized is None:
-        return None
-    lowered = normalized.lower()
-    if lowered == "open":
-        return "draft" if bool(is_draft) else "open"
-    if lowered == "closed":
-        return "closed"
-    if lowered == "merged":
-        return "merged"
-    return None
+_normalize_positive_int = normalize_positive_int
 
 
 class GitHubService:
@@ -394,39 +350,24 @@ class GitHubService:
         )
 
     def _binding_context(self) -> tuple[Optional[Path], Optional[str]]:
-        return find_hub_binding_context(self.repo_root)
+        from .scm_discovery import binding_context_from_root
 
-    def _pr_binding_store(self) -> Optional[PrBindingStore]:
-        hub_root, _repo_id = self._binding_context()
-        if hub_root is None:
-            return None
-        return PrBindingStore(hub_root)
+        return binding_context_from_root(self.repo_root)
+
+    def _pr_binding_store(self):
+        return pr_binding_store_from_root(self.repo_root)
 
     def _persist_pr_binding(
         self,
         *,
         repo_slug: str,
         summary: dict[str, Any],
-        existing_binding: Optional[PrBinding] = None,
-    ) -> Optional[PrBinding]:
-        normalized_repo_slug = _normalize_optional_text(repo_slug)
-        pr_number = _normalize_positive_int(summary.get("pr_number"))
-        pr_state = _normalize_binding_pr_state(summary.get("pr_state"))
-        if normalized_repo_slug is None or pr_number is None or pr_state is None:
-            return None
-
-        hub_root, repo_id = self._binding_context()
-        if hub_root is None:
-            return None
-        return upsert_pr_binding(
-            hub_root,
-            provider="github",
-            repo_slug=normalized_repo_slug,
-            repo_id=repo_id,
-            pr_number=pr_number,
-            pr_state=pr_state,
-            head_branch=_normalize_optional_text(summary.get("head_branch")),
-            base_branch=_normalize_optional_text(summary.get("base_branch")),
+        existing_binding=None,
+    ):
+        return persist_pr_binding(
+            repo_root=self.repo_root,
+            repo_slug=repo_slug,
+            summary=summary,
             existing_binding=existing_binding,
         )
 
@@ -562,120 +503,24 @@ class GitHubService:
             return None
         return arr[0] if arr else None
 
+    # ── SCM discovery delegates ────────────────────────────────────────────────
+
     def normalize_pr_binding_summary(
         self, *, pr: dict[str, Any], repo_slug: str
     ) -> Optional[dict[str, Any]]:
-        normalized_repo_slug = _normalize_optional_text(repo_slug)
-        if normalized_repo_slug is None:
-            return None
-
-        pr_number = _normalize_positive_int(pr.get("number"))
-        pr_state = _normalize_binding_pr_state(
-            pr.get("state"), is_draft=pr.get("isDraft")
-        )
-        if pr_number is None or pr_state is None:
-            return None
-
-        summary: dict[str, Any] = {
-            "repo_slug": normalized_repo_slug,
-            "pr_number": pr_number,
-            "pr_state": pr_state,
-        }
-        head_branch = _normalize_optional_text(pr.get("headRefName"))
-        if head_branch is not None:
-            summary["head_branch"] = head_branch
-        base_branch = _normalize_optional_text(pr.get("baseRefName"))
-        if base_branch is not None:
-            summary["base_branch"] = base_branch
-        return summary
+        return _normalize_pr_binding_summary_impl(pr=pr, repo_slug=repo_slug)
 
     def discover_pr_binding_summary(
         self, *, branch: Optional[str] = None, cwd: Optional[Path] = None
     ) -> Optional[dict[str, Any]]:
-        resolved_branch = _normalize_optional_text(branch) or self.current_branch(
-            cwd=cwd
-        )
-        if not resolved_branch or resolved_branch == "HEAD":
-            return None
-
-        hub_root, repo_id = self._binding_context()
-        store = PrBindingStore(hub_root) if hub_root is not None else None
-        if store is not None and repo_id is not None:
-            canonical_bindings: list[PrBinding] = []
-            for pr_state in ("open", "draft"):
-                canonical_bindings.extend(
-                    store.list_bindings(
-                        provider="github",
-                        repo_id=repo_id,
-                        pr_state=pr_state,
-                        head_branch=resolved_branch,
-                        limit=1,
-                    )
-                )
-            if canonical_bindings:
-                canonical_bindings.sort(
-                    key=lambda binding: (binding.updated_at, binding.pr_number),
-                    reverse=True,
-                )
-                return binding_summary(canonical_bindings[0])
-
-        pr = self.pr_for_branch(branch=resolved_branch, cwd=cwd)
-        if not isinstance(pr, dict):
-            return None
-
-        try:
-            repo_slug = self.repo_info().name_with_owner
-        except GitHubError:
-            return None
-
-        fallback_binding: Optional[PrBinding] = None
-        if store is not None:
-            fallback_binding = store.find_active_binding_for_branch(
-                provider="github",
-                repo_slug=repo_slug,
-                branch_name=resolved_branch,
-            )
-
-        summary = self.normalize_pr_binding_summary(pr=pr, repo_slug=repo_slug)
-        if summary is None:
-            return (
-                binding_summary(fallback_binding)
-                if fallback_binding is not None
-                else None
-            )
-        return summary
+        return _discover_pr_binding_summary_impl(self, branch=branch, cwd=cwd)
 
     def discover_pr_binding(
         self, *, branch: Optional[str] = None, cwd: Optional[Path] = None
-    ) -> Optional[PrBinding]:
-        summary = self.discover_pr_binding_summary(branch=branch, cwd=cwd)
-        if summary is None:
-            return None
+    ):
+        return _discover_pr_binding_impl(self, branch=branch, cwd=cwd)
 
-        binding_store = self._pr_binding_store()
-        existing_binding: Optional[PrBinding] = None
-        repo_slug = _normalize_optional_text(summary.get("repo_slug"))
-        head_branch = _normalize_optional_text(summary.get("head_branch"))
-        if (
-            binding_store is not None
-            and repo_slug is not None
-            and head_branch is not None
-        ):
-            existing_binding = binding_store.find_active_binding_for_branch(
-                provider="github",
-                repo_slug=repo_slug,
-                branch_name=head_branch,
-            )
-
-        return (
-            self._persist_pr_binding(
-                repo_slug=str(summary["repo_slug"]),
-                summary=summary,
-                existing_binding=existing_binding,
-            )
-            if repo_slug is not None
-            else None
-        )
+    # ── generic read models ────────────────────────────────────────────────────
 
     def list_open_issues(
         self, *, limit: int = 10, cwd: Optional[Path] = None
@@ -1226,59 +1071,12 @@ class GitHubService:
             ) from exc
         return payload if isinstance(payload, dict) else {}
 
+    # ── context file generation (delegates to context_rendering) ───────────────
+
     def build_context_file_from_url(
         self, url: str, *, allow_cross_repo: bool = False
     ) -> Optional[dict]:
-        parsed = parse_github_url(url)
-        if not parsed:
-            return None
-        if not self.gh_available():
-            return None
-        if not self.gh_authenticated():
-            return None
-        slug, kind, number = parsed
-        repo_slug = slug
-        if not allow_cross_repo:
-            repo = self.repo_info()
-            if slug.lower() != repo.name_with_owner.lower():
-                return None
-            repo_slug = repo.name_with_owner
-
-        if kind == "issue":
-            issue_obj = self.issue_view(
-                number=number,
-                repo_slug=repo_slug if allow_cross_repo else None,
-            )
-            lines = _format_issue_context(issue_obj, repo=repo_slug)
-        else:
-            pr_obj = self.pr_view(
-                number=number,
-                repo_slug=repo_slug if allow_cross_repo else None,
-            )
-            owner, repo_name = repo_slug.split("/", 1)
-            review_threads = self.pr_review_threads(
-                owner=owner, repo=repo_name, number=number
-            )
-            lines = _format_pr_context(
-                pr_obj, repo=repo_slug, review_threads=review_threads
-            )
-
-        rel_dir = Path(".codex-autorunner") / "github_context"
-        if allow_cross_repo:
-            rel_dir = rel_dir / _repo_slug_dirname(repo_slug)
-        abs_dir = self.repo_root / rel_dir
-        abs_dir.mkdir(parents=True, exist_ok=True)
-        filename = f"{kind}-{int(number)}.md"
-        rel_path = rel_dir / filename
-        abs_path = self.repo_root / rel_path
-        atomic_write(abs_path, "\n".join(lines).rstrip() + "\n")
-
-        hint = wrap_injected_context(
-            "Context: see "
-            f"{rel_path.as_posix()} "
-            "(gh available: true; use gh CLI for updates if asked)."
-        )
-        return {"path": rel_path.as_posix(), "hint": hint, "kind": kind}
+        return _build_context_file(self, url, allow_cross_repo=allow_cross_repo)
 
     # ── high-level operations ──────────────────────────────────────────────
     def status_payload(self) -> dict:
@@ -1341,12 +1139,6 @@ class GitHubService:
         return self.write_link_state(state), issue_obj
 
     def build_spec_prompt_from_issue(self, issue_ref: str) -> tuple[str, dict]:
-        """
-        Fetch issue details, persist link state, and build the prompt used to
-        create/update SPEC based on the issue.
-
-        Returns (prompt, link_state).
-        """
         link_state, issue_obj = self._fetch_and_link_issue(issue_ref)
         issue_num = ((link_state.get("issue") or {}) or {}).get("number")
         issue_title = ((link_state.get("issue") or {}) or {}).get("title") or ""
@@ -1384,7 +1176,6 @@ class GitHubService:
             )
         cwd = self.repo_root
         meta = {"mode": "current"}
-        # Decide commit behavior
         github_cfg = (
             (self.raw_config.get("github") or {})
             if isinstance(self.raw_config, dict)
@@ -1401,7 +1192,6 @@ class GitHubService:
 
         dirty = not self.is_clean(cwd=cwd)
         if commit_mode in ("always", "auto") and dirty:
-            # Commit/push is handled by the sync agent below.
             pass
         if commit_mode == "none" and dirty:
             raise GitHubError(
@@ -1409,7 +1199,6 @@ class GitHubService:
                 status_code=409,
             )
 
-        # Agentic sync (format/lint/test, commit if needed, push; resolve rebase conflicts if any)
         prompt = build_sync_agent_prompt(
             repo_root=str(self.repo_root), branch=head_branch, issue_num=issue_num
         )
@@ -1417,7 +1206,6 @@ class GitHubService:
             repo_root=self.repo_root, raw_config=self.raw_config, prompt=prompt
         )
 
-        # Find/create PR
         binding_hint = (
             binding_store.find_active_binding_for_branch(
                 provider="github",
@@ -1441,7 +1229,6 @@ class GitHubService:
             else:
                 args.append("--fill")
             proc = self._gh(args, cwd=cwd, check=True, timeout_seconds=60)
-            # gh pr create returns URL on stdout typically
             url = (
                 (proc.stdout or "").strip().splitlines()[-1].strip()
                 if proc.stdout
@@ -1492,30 +1279,14 @@ class GitHubService:
                 summary=binding_summary,
                 existing_binding=binding_hint,
             )
-            hub_root, _repo_id = self._binding_context()
-            if persisted_binding is not None and hub_root is not None:
-                try:
-                    GitHubScmPollingService(
-                        hub_root,
-                        raw_config=(
-                            self.raw_config
-                            if isinstance(self.raw_config, dict)
-                            else None
-                        ),
-                    ).arm_watch(
-                        binding=persisted_binding,
-                        workspace_root=self.repo_root,
-                        reaction_config=self.raw_config,
-                    )
-                except (
-                    Exception
-                ):  # intentional: best-effort SCM polling arm; must not block sync_pr
-                    logger.warning(
-                        "Failed arming SCM polling watch for %s#%s",
-                        persisted_binding.repo_slug,
-                        persisted_binding.pr_number,
-                        exc_info=True,
-                    )
+            if persisted_binding is not None:
+                arm_polling_watch_best_effort(
+                    repo_root=self.repo_root,
+                    raw_config=self.raw_config,
+                    persisted_binding=persisted_binding,
+                    workspace_root=self.repo_root,
+                    reaction_config=self.raw_config,
+                )
 
         state["repo"] = {"nameWithOwner": repo.name_with_owner, "url": repo.url}
         if pr_url:
@@ -1541,174 +1312,3 @@ class GitHubService:
                 "checks": f"{pr_url}/checks",
             }
         return out
-
-
-def _safe_text(value: Any, *, max_chars: int = 8000) -> str:
-    text = str(value or "").strip()
-    if len(text) <= max_chars:
-        return text
-    return text[: max_chars - 3] + "..."
-
-
-def _format_labels(labels: Any) -> str:
-    if not isinstance(labels, list):
-        return "none"
-    names = []
-    for label in labels:
-        if isinstance(label, dict):
-            name = label.get("name")
-        else:
-            name = label
-        if name:
-            names.append(str(name))
-    return ", ".join(names) if names else "none"
-
-
-def _format_author(author: Any) -> str:
-    if isinstance(author, dict):
-        return str(author.get("login") or author.get("name") or "unknown")
-    return str(author or "unknown")
-
-
-def _format_issue_context(issue: dict, *, repo: str) -> list[str]:
-    number = issue.get("number") or ""
-    title = issue.get("title") or ""
-    url = issue.get("url") or ""
-    state = issue.get("state") or ""
-    body = _safe_text(issue.get("body") or "")
-    labels = _format_labels(issue.get("labels"))
-    author = _format_author(issue.get("author"))
-    comments = issue.get("comments")
-    comment_count = 0
-    if isinstance(comments, dict):
-        total = comments.get("totalCount")
-        if isinstance(total, int):
-            comment_count = total
-        else:
-            nodes = comments.get("nodes")
-            edges = comments.get("edges")
-            if isinstance(nodes, list):
-                comment_count = len(nodes)
-            elif isinstance(edges, list):
-                comment_count = len(edges)
-    elif isinstance(comments, list):
-        comment_count = len(comments)
-
-    lines = [
-        "# GitHub Issue Context",
-        f"Repo: {repo}",
-        f"Issue: #{number} {title}".strip(),
-        f"URL: {url}",
-        f"State: {state}",
-        f"Author: {author}",
-        f"Labels: {labels}",
-        f"Comments: {comment_count}",
-        "",
-        "Body:",
-        body or "(no body)",
-    ]
-    return lines
-
-
-def _format_review_location(path: Any, line: Any) -> str:
-    path_val = str(path).strip() if path else ""
-    if path_val and isinstance(line, int):
-        return f"{path_val}:{line}"
-    if path_val:
-        return path_val
-    if isinstance(line, int):
-        return f"(unknown file):{line}"
-    return "(unknown file)"
-
-
-def _format_review_threads(review_threads: list[dict[str, Any]]) -> list[str]:
-    lines: list[str] = []
-    thread_index = 0
-    for thread in review_threads:
-        if not isinstance(thread, dict):
-            continue
-        comments = thread.get("comments")
-        if not isinstance(comments, list) or not comments:
-            continue
-        thread_index += 1
-        status = "resolved" if thread.get("isResolved") else "unresolved"
-        lines.append(f"- Thread {thread_index} ({status})")
-        for comment in comments:
-            if not isinstance(comment, dict):
-                continue
-            author = _format_author(comment.get("author"))
-            created_at = comment.get("createdAt") or ""
-            location = _format_review_location(comment.get("path"), comment.get("line"))
-            header = f"  - {location} {author}".strip()
-            if created_at:
-                header = f"{header} ({created_at})"
-            lines.append(header)
-            body = _safe_text(comment.get("body") or "")
-            if not body:
-                lines.append("    (no body)")
-            else:
-                for line in body.splitlines():
-                    lines.append(f"    {line}")
-    return lines
-
-
-def _format_pr_context(
-    pr: dict, *, repo: str, review_threads: Optional[list[dict[str, Any]]] = None
-) -> list[str]:
-    number = pr.get("number") or ""
-    title = pr.get("title") or ""
-    url = pr.get("url") or ""
-    state = pr.get("state") or ""
-    body = _safe_text(pr.get("body") or "")
-    labels = _format_labels(pr.get("labels"))
-    author = _format_author(pr.get("author"))
-    additions = pr.get("additions") or 0
-    deletions = pr.get("deletions") or 0
-    changed_files = pr.get("changedFiles") or 0
-    files_raw = pr.get("files")
-    files = (
-        [entry for entry in files_raw if isinstance(entry, dict)]
-        if isinstance(files_raw, list)
-        else []
-    )
-    file_lines = []
-    for entry in files[:200]:
-        if not isinstance(entry, dict):
-            continue
-        path = entry.get("path") or entry.get("name") or ""
-        if not path:
-            continue
-        add = entry.get("additions")
-        dele = entry.get("deletions")
-        if isinstance(add, int) and isinstance(dele, int):
-            file_lines.append(f"- {path} (+{add}/-{dele})")
-        else:
-            file_lines.append(f"- {path}")
-    if len(files) > 200:
-        file_lines.append(f"... ({len(files) - 200} more)")
-
-    lines = [
-        "# GitHub PR Context",
-        f"Repo: {repo}",
-        f"PR: #{number} {title}".strip(),
-        f"URL: {url}",
-        f"State: {state}",
-        f"Author: {author}",
-        f"Labels: {labels}",
-        f"Stats: +{additions} -{deletions}; changed files: {changed_files}",
-        "",
-        "Body:",
-        body or "(no body)",
-        "",
-        "Files:",
-    ]
-    lines.extend(file_lines or ["(no files)"])
-    review_lines = (
-        _format_review_threads(review_threads)
-        if isinstance(review_threads, list)
-        else []
-    )
-    if review_lines:
-        lines.extend(["", "Review Threads:"])
-        lines.extend(review_lines)
-    return lines
