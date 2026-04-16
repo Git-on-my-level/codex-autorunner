@@ -28,6 +28,7 @@ _FAILED_CHECK_CONCLUSIONS = frozenset(
 )
 _ACTIVE_PR_STATES = frozenset({"open", "draft"})
 _VALID_PR_STATES = frozenset({"open", "draft", "closed", "merged"})
+_TERMINAL_PR_STATES = frozenset({"closed", "merged"})
 _ACTIVITY_PRIORITY = {"hot": 0, "warm": 1, "cold": 2}
 _VALID_ACTIVITY_TIERS = frozenset(_ACTIVITY_PRIORITY.keys())
 _HOT_THREAD_WINDOW_MINUTES = 60
@@ -1221,8 +1222,16 @@ class GitHubScmPollingService:
                 counts["errors"] += 1
                 continue
 
-            if snapshot.get("pr_state") not in _ACTIVE_PR_STATES:
+            terminal_pr_state = _normalize_lower_text(snapshot.get("pr_state"))
+            if terminal_pr_state not in _ACTIVE_PR_STATES:
                 self._watch_store.close_watch(watch_id=watch.watch_id, state="closed")
+                if terminal_pr_state in _TERMINAL_PR_STATES:
+                    binding_store.close_binding(
+                        provider=binding.provider,
+                        repo_slug=binding.repo_slug,
+                        pr_number=binding.pr_number,
+                        pr_state=terminal_pr_state,
+                    )
                 counts["closed"] += 1
                 continue
 
