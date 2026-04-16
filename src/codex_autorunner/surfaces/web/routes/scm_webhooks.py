@@ -178,6 +178,7 @@ def _default_drain_callback_factory(
     service = ScmAutomationService(
         hub_root,
         reaction_config=_github_automation_config(raw_config),
+        schedule_deferred_publish_drain=True,
     )
 
     def callback(_request: Request, event: ScmEvent) -> None:

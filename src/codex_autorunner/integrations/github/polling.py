@@ -1978,6 +1978,7 @@ class GitHubScmPollingService:
         return ScmAutomationService(
             self._hub_root,
             reaction_config=reaction_config or self._raw_config,
+            schedule_deferred_publish_drain=True,
         )
 
     def _claim_discovery_cycle(self, *, polling_config: GitHubPollingConfig) -> bool:

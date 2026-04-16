@@ -650,7 +650,8 @@ def test_scm_webhook_inline_drain_delegates_to_scm_automation_service(
     calls: list[tuple[str, object]] = []
 
     class _ServiceStub:
-        def __init__(self, hub_root: Path, *, reaction_config=None) -> None:
+        def __init__(self, hub_root: Path, *, reaction_config=None, **kwargs) -> None:
+            _ = kwargs
             calls.append(("init", hub_root))
             calls.append(
                 (

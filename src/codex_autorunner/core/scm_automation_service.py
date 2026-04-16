@@ -7,6 +7,7 @@ import importlib
 import json
 import logging
 import re
+import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -473,6 +474,7 @@ class ScmAutomationService:
         reaction_state_store: Optional[ScmReactionStateTracker] = None,
         journal: Optional[PublishJournalWriter] = None,
         publish_processor: Optional[PublishOperationDrainer] = None,
+        schedule_deferred_publish_drain: bool = False,
     ) -> None:
         self._hub_root = Path(hub_root)
         self._event_store = event_store or ScmEventStore(self._hub_root)
@@ -498,6 +500,82 @@ class ScmAutomationService:
             raise TypeError(
                 "publish_processor is required when journal is not a PublishJournalStore"
             )
+        self._schedule_deferred_publish_drain = schedule_deferred_publish_drain
+        self._deferred_drain_timer: Optional[threading.Timer] = None
+        self._deferred_drain_lock = threading.Lock()
+
+    def _cancel_deferred_publish_drain(self) -> None:
+        with self._deferred_drain_lock:
+            if self._deferred_drain_timer is not None:
+                self._deferred_drain_timer.cancel()
+                self._deferred_drain_timer = None
+
+    def _schedule_deferred_publish_drain_at(self, next_attempt_at_iso: Optional[str]) -> None:
+        if not self._schedule_deferred_publish_drain:
+            return
+        if not next_attempt_at_iso:
+            return
+        parsed = _parse_iso_datetime(next_attempt_at_iso)
+        if parsed is None:
+            return
+        delay = max(
+            0.0, (parsed - datetime.now(timezone.utc)).total_seconds()
+        )
+        with self._deferred_drain_lock:
+            if self._deferred_drain_timer is not None:
+                self._deferred_drain_timer.cancel()
+                self._deferred_drain_timer = None
+            timer = threading.Timer(delay, self._run_deferred_publish_drain)
+            timer.daemon = True
+            self._deferred_drain_timer = timer
+            timer.start()
+
+    def _reschedule_deferred_publish_drain_if_needed(self) -> None:
+        if not self._schedule_deferred_publish_drain:
+            return
+        if not isinstance(self._journal, PublishJournalStore):
+            return
+        now = datetime.now(timezone.utc)
+        pending = self._journal.list_operations(
+            state="pending",
+            operation_kind="enqueue_managed_turn",
+            limit=500,
+        )
+        earliest_future: Optional[datetime] = None
+        for op in pending:
+            if not op.next_attempt_at:
+                continue
+            parsed = _parse_iso_datetime(op.next_attempt_at)
+            if parsed is None:
+                continue
+            if parsed <= now:
+                continue
+            if earliest_future is None or parsed < earliest_future:
+                earliest_future = parsed
+        if earliest_future is None:
+            self._cancel_deferred_publish_drain()
+            return
+        self._schedule_deferred_publish_drain_at(_isoformat_z(earliest_future))
+
+    def _run_deferred_publish_drain(self) -> None:
+        with self._deferred_drain_lock:
+            self._deferred_drain_timer = None
+        try:
+            processed = self._publish_processor.process_now(limit=10)
+            self._record_publish_finished_audit_entries(processed)
+            escalations = self._handle_processed_operations(processed)
+            if escalations:
+                escalation_results = self._publish_processor.process_now(
+                    limit=len(escalations)
+                )
+                self._record_publish_finished_audit_entries(escalation_results)
+        except Exception:
+            _LOGGER.warning(
+                "Deferred publish drain after review-comment batch window failed",
+                exc_info=True,
+            )
+        finally:
+            self._reschedule_deferred_publish_drain_if_needed()
 
     def _resolve_event(self, event_or_id: ScmEvent | str) -> ScmEvent:
         if isinstance(event_or_id, ScmEvent):
@@ -799,6 +877,14 @@ class ScmAutomationService:
                 payload=payload,
                 next_attempt_at=next_attempt_at,
             )
+            if (
+                next_attempt_at is not None
+                and intent.reaction_kind == "review_comment"
+                and intent.operation_kind == "enqueue_managed_turn"
+            ):
+                drain_at = operation.next_attempt_at
+                if drain_at is not None:
+                    self._schedule_deferred_publish_drain_at(drain_at)
             self._audit_recorder.record(
                 action_type=SCM_AUDIT_PUBLISH_CREATED,
                 correlation_id=correlation_id,
@@ -840,6 +926,7 @@ class ScmAutomationService:
             )
             self._record_publish_finished_audit_entries(escalation_results)
             processed.extend(escalation_results)
+        self._reschedule_deferred_publish_drain_if_needed()
         return processed
 
     def _create_escalation_operation(
