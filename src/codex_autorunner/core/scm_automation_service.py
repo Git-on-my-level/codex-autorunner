@@ -566,9 +566,8 @@ class ScmAutomationService:
             _parse_iso_datetime(event.received_at)
             or _parse_iso_datetime(event.occurred_at)
             or _parse_iso_datetime(event.created_at)
+            or datetime.now(timezone.utc)
         )
-        if event_time is None:
-            return None
         bucket_start_seconds = (
             int(event_time.timestamp()) // batch_window_seconds
         ) * batch_window_seconds
