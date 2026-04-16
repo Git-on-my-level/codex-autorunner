@@ -2473,7 +2473,14 @@ class TelegramCommandHandlers(
             return False
 
         state = self._compact_pending.get(key)
-        if not state or callback.message_id != state.message_id:
+        actor_id = (
+            str(callback.from_user_id) if callback.from_user_id is not None else None
+        )
+        if (
+            not state
+            or callback.message_id != state.message_id
+            or not self._selection_belongs_to_user(state, actor_id)
+        ):
             await self._answer_callback(callback, "Selection expired")
             return
         if parsed.action == "cancel":
@@ -2924,7 +2931,12 @@ Summary applied.""",
         update_target: Optional[str] = None,
     ) -> None:
         key = await self._resolve_topic_key(message.chat_id, message.thread_id)
-        self._update_confirm_options[key] = UpdateConfirmState(target=update_target)
+        self._update_confirm_options[key] = UpdateConfirmState(
+            target=update_target,
+            requester_user_id=(
+                str(message.from_user_id) if message.from_user_id is not None else None
+            ),
+        )
         self._touch_cache_timestamp("update_confirm_options", key)
         prompt = (
             _format_update_confirmation_warning(

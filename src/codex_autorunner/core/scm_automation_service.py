@@ -314,58 +314,6 @@ def _reaction_subject(tracking: Mapping[str, Any]) -> str:
     return "SCM binding"
 
 
-def _reaction_label(reaction_kind: str) -> str:
-    return reaction_kind.replace("_", " ")
-
-
-def _failure_escalation_message(
-    tracking: Mapping[str, Any],
-    *,
-    delivery_failure_count: int,
-    last_error_text: Optional[str],
-) -> str:
-    subject = _reaction_subject(tracking)
-    reaction_label = _reaction_label(str(tracking.get("reaction_kind") or "reaction"))
-    details = (
-        f" Last error: {last_error_text}."
-        if _normalize_text(last_error_text) is not None
-        else ""
-    )
-    return (
-        f"SCM automation escalation: {reaction_label} for {subject} failed delivery "
-        f"{delivery_failure_count} times.{details}"
-    )
-
-
-def _duplicate_escalation_message(
-    tracking: Mapping[str, Any],
-    *,
-    attempt_count: int,
-) -> str:
-    subject = _reaction_subject(tracking)
-    reaction_label = _reaction_label(str(tracking.get("reaction_kind") or "reaction"))
-    return (
-        f"SCM automation escalation: {reaction_label} for {subject} remained active "
-        f"across {attempt_count} identical deliveries. Duplicate follow-ups are suppressed."
-    )
-
-
-def _resolve_escalation_payload(
-    tracking: Mapping[str, Any], *, message: str
-) -> dict[str, Any]:
-    thread_target_id = _normalize_text(tracking.get("thread_target_id"))
-    repo_id = _normalize_text(tracking.get("repo_id"))
-    payload = {
-        "message": message,
-        "scm_reaction": dict(tracking),
-    }
-    if thread_target_id is not None:
-        payload["thread_target_id"] = thread_target_id
-        return payload
-    payload["delivery"] = "primary_pma"
-    if repo_id is not None:
-        payload["repo_id"] = repo_id
-    return payload
 def _tracking_from_payload(payload: Mapping[str, Any] | None) -> dict[str, Any]:
     if not isinstance(payload, Mapping):
         return {}
@@ -684,6 +632,7 @@ class ScmAutomationService:
             },
         )
         return operation
+
     def ingest_event(
         self,
         event_or_id: ScmEvent | str,

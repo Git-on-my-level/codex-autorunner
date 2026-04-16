@@ -969,6 +969,72 @@ def test_resolve_managed_thread_target_reuses_backend_matched_thread(
     ]
 
 
+def test_resolve_managed_thread_target_does_not_create_when_rebind_disallowed(
+    tmp_path: Path,
+) -> None:
+    canonical_workspace = str(tmp_path.resolve())
+    binding = SimpleNamespace(thread_target_id="thread-current", mode="repo")
+    current_thread = SimpleNamespace(
+        thread_target_id="thread-current",
+        agent_id="hermes",
+        agent_profile=None,
+        workspace_root=canonical_workspace,
+        lifecycle_status="active",
+        backend_thread_id="backend-current",
+        repo_id="repo-1",
+        resource_kind="repo",
+        resource_id="repo-1",
+    )
+    create_calls: list[dict[str, Any]] = []
+
+    class _Service:
+        def get_binding(self, *, surface_kind: str, surface_key: str) -> Any:
+            _ = surface_kind, surface_key
+            return binding
+
+        def get_thread_target(self, thread_target_id: str) -> Any:
+            assert thread_target_id == "thread-current"
+            return current_thread
+
+        def list_thread_targets(self, **kwargs: Any) -> list[Any]:
+            assert kwargs == {
+                "agent_id": "codex",
+                "repo_id": "repo-1",
+                "resource_kind": "repo",
+                "resource_id": "repo-1",
+                "limit": 500,
+            }
+            return []
+
+        def create_thread_target(self, *args: Any, **kwargs: Any) -> Any:
+            create_calls.append(kwargs)
+            raise AssertionError("create_thread_target should not be called")
+
+        def upsert_binding(self, **kwargs: Any) -> None:
+            raise AssertionError("upsert_binding should not be called")
+
+    _, resolved_thread = managed_thread_turns_module.resolve_managed_thread_target(
+        _Service(),
+        request=managed_thread_turns_module.ManagedThreadTargetRequest(
+            surface_kind="telegram",
+            surface_key="telegram:-1001:101",
+            mode="repo",
+            agent="codex",
+            workspace_root=tmp_path,
+            display_name="telegram:surface",
+            repo_id="repo-1",
+            resource_kind="repo",
+            resource_id="repo-1",
+            backend_thread_id="backend-resume",
+            allow_new_thread=False,
+            binding_metadata={"topic_key": "telegram:-1001:101"},
+        ),
+    )
+
+    assert resolved_thread is None
+    assert create_calls == []
+
+
 def _started_execution_with_backend_ids(tmp_path: Path) -> RuntimeThreadExecution:
     return RuntimeThreadExecution(
         service=SimpleNamespace(),

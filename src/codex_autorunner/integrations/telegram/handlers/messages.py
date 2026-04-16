@@ -147,7 +147,8 @@ def _message_text_candidate(message: TelegramMessage) -> tuple[str, str, Any]:
 async def _clear_pending_options(
     handlers: Any, key: str, message: TelegramMessage
 ) -> None:
-    pending_review_custom = _ui_state(handlers).clear_pending_options(key)
+    actor_id = str(message.from_user_id) if message.from_user_id is not None else None
+    pending_review_custom = _ui_state(handlers).clear_pending_options(key, actor_id)
     await handlers._dismiss_review_custom_prompt(message, pending_review_custom)
 
 

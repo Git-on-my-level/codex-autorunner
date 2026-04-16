@@ -758,7 +758,7 @@ def resolve_managed_thread_target(
             desired_runtime_instance_id=desired_runtime_instance_id,
         )
     elif not reusable_thread:
-        if not request.allow_new_thread and desired_backend_thread_id is None:
+        if not request.allow_new_thread:
             return orchestration_service, None
         thread = _create_managed_thread_target(
             orchestration_service,

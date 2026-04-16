@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from .helpers import ModelOption
 from .types import (
     CompactState,
+    ModelPendingState,
     ModelPickerState,
     PendingQuestion,
     ReviewCommitSelectionState,
@@ -30,7 +30,7 @@ class TelegramUiState:
         self.agent_options: dict[str, SelectionState] = {}
         self.agent_profile_options: dict[str, SelectionState] = {}
         self.model_options: dict[str, ModelPickerState] = {}
-        self.model_pending: dict[str, ModelOption] = {}
+        self.model_pending: dict[str, ModelPendingState] = {}
 
     @staticmethod
     def owner_matches(state: Any, actor_id: Optional[str]) -> bool:
@@ -49,16 +49,23 @@ class TelegramUiState:
             return None
         return state_map.pop(key, None)
 
-    def clear_pending_options(self, key: str) -> dict[str, Any] | None:
-        self.resume_options.pop(key, None)
-        self.bind_options.pop(key, None)
-        self.agent_options.pop(key, None)
-        self.agent_profile_options.pop(key, None)
-        self.model_options.pop(key, None)
-        self.model_pending.pop(key, None)
-        self.review_commit_options.pop(key, None)
-        self.review_commit_subjects.pop(key, None)
-        return self.pending_review_custom.pop(key, None)
+    def clear_pending_options(
+        self, key: str, actor_id: Optional[str]
+    ) -> dict[str, Any] | None:
+        self.pop_if_owned(self.resume_options, key, actor_id)
+        self.pop_if_owned(self.bind_options, key, actor_id)
+        self.pop_if_owned(self.flow_run_options, key, actor_id)
+        self.pop_if_owned(self.agent_options, key, actor_id)
+        self.pop_if_owned(self.agent_profile_options, key, actor_id)
+        self.pop_if_owned(self.update_options, key, actor_id)
+        self.pop_if_owned(self.update_confirm_options, key, actor_id)
+        self.pop_if_owned(self.compact_pending, key, actor_id)
+        self.pop_if_owned(self.model_options, key, actor_id)
+        self.pop_if_owned(self.model_pending, key, actor_id)
+        review_state = self.pop_if_owned(self.review_commit_options, key, actor_id)
+        if review_state is not None:
+            self.review_commit_subjects.pop(key, None)
+        return self.pop_if_owned(self.pending_review_custom, key, actor_id)
 
     def has_policy_blocking_state(self, key: str) -> bool:
         return bool(
@@ -71,11 +78,11 @@ class TelegramUiState:
     def clear_for_bang_command(self, key: str, actor_id: Optional[str]) -> None:
         self.pop_if_owned(self.resume_options, key, actor_id)
         self.pop_if_owned(self.bind_options, key, actor_id)
-        self.flow_run_options.pop(key, None)
-        self.agent_options.pop(key, None)
-        self.agent_profile_options.pop(key, None)
-        self.model_options.pop(key, None)
-        self.model_pending.pop(key, None)
+        self.pop_if_owned(self.flow_run_options, key, actor_id)
+        self.pop_if_owned(self.agent_options, key, actor_id)
+        self.pop_if_owned(self.agent_profile_options, key, actor_id)
+        self.pop_if_owned(self.model_options, key, actor_id)
+        self.pop_if_owned(self.model_pending, key, actor_id)
 
     def clear_for_command(
         self, key: str, actor_id: Optional[str], command_name: str
@@ -84,12 +91,18 @@ class TelegramUiState:
             self.pop_if_owned(self.resume_options, key, actor_id)
         if command_name != "bind":
             self.pop_if_owned(self.bind_options, key, actor_id)
+        if command_name != "flow":
+            self.pop_if_owned(self.flow_run_options, key, actor_id)
         if command_name != "agent":
-            self.agent_options.pop(key, None)
-            self.agent_profile_options.pop(key, None)
+            self.pop_if_owned(self.agent_options, key, actor_id)
+            self.pop_if_owned(self.agent_profile_options, key, actor_id)
         if command_name != "model":
-            self.model_options.pop(key, None)
-            self.model_pending.pop(key, None)
+            self.pop_if_owned(self.model_options, key, actor_id)
+            self.pop_if_owned(self.model_pending, key, actor_id)
+        if command_name != "update":
+            self.pop_if_owned(self.update_options, key, actor_id)
+            self.pop_if_owned(self.update_confirm_options, key, actor_id)
+        self.pop_if_owned(self.compact_pending, key, actor_id)
         if command_name == "review":
             return None
         review_state = self.pop_if_owned(self.review_commit_options, key, actor_id)
@@ -102,10 +115,14 @@ class TelegramUiState:
     ) -> dict[str, Any] | None:
         self.pop_if_owned(self.resume_options, key, actor_id)
         self.pop_if_owned(self.bind_options, key, actor_id)
-        self.agent_options.pop(key, None)
-        self.agent_profile_options.pop(key, None)
-        self.model_options.pop(key, None)
-        self.model_pending.pop(key, None)
+        self.pop_if_owned(self.flow_run_options, key, actor_id)
+        self.pop_if_owned(self.agent_options, key, actor_id)
+        self.pop_if_owned(self.agent_profile_options, key, actor_id)
+        self.pop_if_owned(self.update_options, key, actor_id)
+        self.pop_if_owned(self.update_confirm_options, key, actor_id)
+        self.pop_if_owned(self.compact_pending, key, actor_id)
+        self.pop_if_owned(self.model_options, key, actor_id)
+        self.pop_if_owned(self.model_pending, key, actor_id)
         review_state = self.pop_if_owned(self.review_commit_options, key, actor_id)
         if review_state is not None:
             self.review_commit_subjects.pop(key, None)
