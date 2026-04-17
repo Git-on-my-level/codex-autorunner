@@ -2,6 +2,7 @@
 import { subscribe } from "./bus.js";
 import { downloadArchiveFile, downloadLocalArchiveFile, fetchArchiveSnapshot, listArchiveSnapshots, listArchiveTree, listLocalArchiveTree, listLocalRunArchives, readArchiveFile, readLocalArchiveFile, } from "./archiveApi.js";
 import { escapeHtml, flash, statusPill, setButtonLoading } from "./utils.js";
+import { formatTimestamp, formatBytes } from "./formatUtils.js";
 let initialized = false;
 let snapshots = [];
 let localArchives = [];
@@ -43,25 +44,6 @@ const LOCAL_QUICK_LINKS = [
     { label: "Archived tickets", path: "archived_tickets", kind: "folder" },
     { label: "Archived runs", path: "archived_runs", kind: "folder" },
 ];
-function formatTimestamp(ts) {
-    if (!ts)
-        return "–";
-    const date = new Date(ts);
-    if (Number.isNaN(date.getTime()))
-        return ts;
-    return date.toLocaleString();
-}
-function formatBytes(bytes) {
-    if (bytes === null || bytes === undefined)
-        return "–";
-    if (bytes < 1024)
-        return `${bytes} B`;
-    const kb = bytes / 1024;
-    if (kb < 1024)
-        return `${kb.toFixed(1)} KB`;
-    const mb = kb / 1024;
-    return `${mb.toFixed(1)} MB`;
-}
 function snapshotKey(snapshot) {
     return `${snapshot.snapshot_id}::${snapshot.worktree_repo_id}`;
 }

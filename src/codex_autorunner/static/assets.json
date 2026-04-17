@@ -77,6 +77,9 @@
       "path": "generated/fileChat.js"
     },
     {
+      "path": "generated/formatUtils.js"
+    },
+    {
       "path": "generated/health.js"
     },
     {
@@ -104,6 +107,9 @@
       "path": "generated/loader.js"
     },
     {
+      "path": "generated/markdown.js"
+    },
+    {
       "path": "generated/messages.js"
     },
     {
@@ -123,6 +129,9 @@
     },
     {
       "path": "generated/settings.js"
+    },
+    {
+      "path": "generated/sharedTurnLifecycle.js"
     },
     {
       "path": "generated/smartRefresh.js"
@@ -207,6 +216,9 @@
     },
     {
       "path": "generated/updateTargets.js"
+    },
+    {
+      "path": "generated/usageChart.js"
     },
     {
       "path": "generated/utils.js"

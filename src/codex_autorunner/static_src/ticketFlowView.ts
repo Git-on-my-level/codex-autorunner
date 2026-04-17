@@ -1,5 +1,5 @@
 import { api, flash } from "./utils.js";
-import { renderMarkdown } from "./messages.js";
+import { renderMarkdown } from "./markdown.js";
 import { resolvePath } from "./utils.js";
 import { publish } from "./bus.js";
 import {

@@ -1,6 +1,6 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
 import { api, flash } from "./utils.js";
-import { renderMarkdown } from "./messages.js";
+import { renderMarkdown } from "./markdown.js";
 import { resolvePath } from "./utils.js";
 import { publish } from "./bus.js";
 import { DISPATCH_PANEL_COLLAPSED_KEY, formatDispatchTime, formatNumber, formatElapsedSeconds, truncate, isFlowActiveStatus, } from "./ticketFlowState.js";
