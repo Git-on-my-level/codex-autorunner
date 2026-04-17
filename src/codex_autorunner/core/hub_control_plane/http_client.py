@@ -74,6 +74,7 @@ from .models import (
 _USE_CLIENT_DEFAULT_TIMEOUT = object()
 _SURFACE_BINDING_TIMEOUT_SECONDS = 30.0
 _THREAD_TARGET_CREATE_TIMEOUT_SECONDS = 30.0
+_EXECUTION_BACKEND_ID_TIMEOUT_SECONDS = 30.0
 _EXECUTION_RESULT_TIMEOUT_SECONDS = 30.0
 
 
@@ -578,6 +579,7 @@ class HttpHubControlPlaneClient(HubControlPlaneClient):
                 f"{request.execution_id}/backend-id"
             ),
             json_payload=request.to_dict(),
+            timeout=_EXECUTION_BACKEND_ID_TIMEOUT_SECONDS,
         )
 
     async def claim_next_queued_execution(
