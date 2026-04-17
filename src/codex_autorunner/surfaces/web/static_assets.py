@@ -461,102 +461,106 @@ def materialize_static_assets(
         raise RuntimeError("Static UI assets missing; reinstall package") from exc
     lock_path = cache_root / f".lock-{fingerprint}"
     lock_acquired = _acquire_cache_lock(lock_path, logger)
-    if not lock_acquired:
-        deadline = time.monotonic() + 5.0
-        while time.monotonic() < deadline:
-            if target_dir.exists() and not missing_static_assets(target_dir):
-                if static_context is not None:
-                    static_context.close()
-                _prune_cache_entries(
-                    cache_root,
-                    keep={target_dir},
-                    max_cache_entries=max_cache_entries,
-                    max_cache_age_days=max_cache_age_days,
-                    logger=logger,
-                )
-                return target_dir, None, StaticAssetProvenance.FINGERPRINT_CACHE_HIT
-            time.sleep(0.2)
-    temp_dir = cache_root / f".tmp-{fingerprint}-{uuid4().hex}"
     try:
-        shutil.copytree(static_dir, temp_dir, symlinks=True)
-        missing = missing_static_assets(temp_dir)
-        if missing:
-            safe_log(
-                logger,
-                logging.WARNING,
-                "Static UI assets missing in cache copy %s: %s",
-                temp_dir,
-                ", ".join(missing),
-            )
-            raise RuntimeError("Static UI assets missing; reinstall package")
-        if target_dir.exists():
-            existing_missing = missing_static_assets(target_dir)
-            if not existing_missing:
-                _cleanup_temp_dir(temp_dir, logger)
-                if static_context is not None:
-                    static_context.close()
-                _prune_cache_entries(
-                    cache_root,
-                    keep={target_dir},
-                    max_cache_entries=max_cache_entries,
-                    max_cache_age_days=max_cache_age_days,
-                    logger=logger,
-                )
-                return (
-                    target_dir,
-                    None,
-                    StaticAssetProvenance.FINGERPRINT_CACHE_HIT,
-                )
-            try:
-                shutil.rmtree(target_dir)
-            except OSError as exc:
+        if not lock_acquired:
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                if target_dir.exists() and not missing_static_assets(target_dir):
+                    if static_context is not None:
+                        static_context.close()
+                    _prune_cache_entries(
+                        cache_root,
+                        keep={target_dir},
+                        max_cache_entries=max_cache_entries,
+                        max_cache_age_days=max_cache_age_days,
+                        logger=logger,
+                    )
+                    return target_dir, None, StaticAssetProvenance.FINGERPRINT_CACHE_HIT
+                time.sleep(0.2)
+        temp_dir = cache_root / f".tmp-{fingerprint}-{uuid4().hex}"
+        try:
+            shutil.copytree(static_dir, temp_dir, symlinks=True)
+            missing = missing_static_assets(temp_dir)
+            if missing:
                 safe_log(
                     logger,
                     logging.WARNING,
-                    "Failed to replace stale static cache dir %s",
-                    target_dir,
-                    exc=exc,
+                    "Static UI assets missing in cache copy %s: %s",
+                    temp_dir,
+                    ", ".join(missing),
                 )
-                raise RuntimeError(
-                    "Static UI assets missing; reinstall package"
-                ) from exc
-        temp_dir.replace(target_dir)
-    except (
-        Exception
-    ) as exc:  # intentional: top-level error handler for asset materialization
-        _cleanup_temp_dir(temp_dir, logger)
+                raise RuntimeError("Static UI assets missing; reinstall package")
+            if target_dir.exists():
+                existing_missing = missing_static_assets(target_dir)
+                if not existing_missing:
+                    _cleanup_temp_dir(temp_dir, logger)
+                    if static_context is not None:
+                        static_context.close()
+                    _prune_cache_entries(
+                        cache_root,
+                        keep={target_dir},
+                        max_cache_entries=max_cache_entries,
+                        max_cache_age_days=max_cache_age_days,
+                        logger=logger,
+                    )
+                    return (
+                        target_dir,
+                        None,
+                        StaticAssetProvenance.FINGERPRINT_CACHE_HIT,
+                    )
+                try:
+                    shutil.rmtree(target_dir)
+                except OSError as exc:
+                    safe_log(
+                        logger,
+                        logging.WARNING,
+                        "Failed to replace stale static cache dir %s",
+                        target_dir,
+                        exc=exc,
+                    )
+                    raise RuntimeError(
+                        "Static UI assets missing; reinstall package"
+                    ) from exc
+            temp_dir.replace(target_dir)
+        except (
+            Exception
+        ) as exc:  # intentional: top-level error handler for asset materialization
+            _cleanup_temp_dir(temp_dir, logger)
+            if static_context is not None:
+                static_context.close()
+            if existing_cache is not None:
+                safe_log(
+                    logger,
+                    logging.WARNING,
+                    "static_assets: [%s] serving from existing cache after copy failure",
+                    StaticAssetProvenance.EXISTING_CACHE_FALLBACK.value,
+                )
+                return (
+                    existing_cache,
+                    None,
+                    StaticAssetProvenance.EXISTING_CACHE_FALLBACK,
+                )
+            raise RuntimeError("Static UI assets missing; reinstall package") from exc
         if static_context is not None:
             static_context.close()
-        if existing_cache is not None:
-            safe_log(
-                logger,
-                logging.WARNING,
-                "static_assets: [%s] serving from existing cache after copy failure",
-                StaticAssetProvenance.EXISTING_CACHE_FALLBACK.value,
-            )
-            return (
-                existing_cache,
-                None,
-                StaticAssetProvenance.EXISTING_CACHE_FALLBACK,
-            )
-        raise RuntimeError("Static UI assets missing; reinstall package") from exc
-    if static_context is not None:
-        static_context.close()
-    _prune_cache_entries(
-        cache_root,
-        keep={target_dir},
-        max_cache_entries=max_cache_entries,
-        max_cache_age_days=max_cache_age_days,
-        logger=logger,
-    )
-    safe_log(
-        logger,
-        logging.DEBUG,
-        "static_assets: [%s] materialized fresh cache %s",
-        StaticAssetProvenance.SOURCE_MATERIALIZE.value,
-        fingerprint[:12],
-    )
-    return target_dir, None, StaticAssetProvenance.SOURCE_MATERIALIZE
+        _prune_cache_entries(
+            cache_root,
+            keep={target_dir},
+            max_cache_entries=max_cache_entries,
+            max_cache_age_days=max_cache_age_days,
+            logger=logger,
+        )
+        safe_log(
+            logger,
+            logging.DEBUG,
+            "static_assets: [%s] materialized fresh cache %s",
+            StaticAssetProvenance.SOURCE_MATERIALIZE.value,
+            fingerprint[:12],
+        )
+        return target_dir, None, StaticAssetProvenance.SOURCE_MATERIALIZE
+    finally:
+        if lock_acquired:
+            _release_cache_lock(lock_path, logger)
 
 
 def require_static_assets(static_dir: Path, logger: logging.Logger) -> None:

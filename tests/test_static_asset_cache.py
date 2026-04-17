@@ -71,6 +71,7 @@ def test_materialize_static_assets_survives_source_removal(
     assert provenance == StaticAssetProvenance.SOURCE_MATERIALIZE
     assert cache_dir.exists()
     assert cache_dir.parent == cache_root
+    assert not any(cache_root.glob(".lock-*"))
     shutil.rmtree(source_dir)
     assert static_assets.missing_static_assets(cache_dir) == []
 
@@ -211,6 +212,7 @@ class TestStaticAssetCacheProvenance:
         assert cache_dir.exists()
         assert static_assets.missing_static_assets(cache_dir) == []
         assert provenance == StaticAssetProvenance.SOURCE_MATERIALIZE
+        assert not any(cache_root.glob(".lock-*"))
         version = static_assets.asset_version(cache_dir)
         assert version
         assert version != "0"
@@ -280,6 +282,7 @@ class TestStaticAssetCacheProvenance:
         assert first_dir == second_dir
         assert first_provenance == StaticAssetProvenance.SOURCE_MATERIALIZE
         assert second_provenance == StaticAssetProvenance.FINGERPRINT_CACHE_HIT
+        assert not any(cache_root.glob(".lock-*"))
 
     def test_missing_static_assets_checks_manifest(self, tmp_path: Path) -> None:
 

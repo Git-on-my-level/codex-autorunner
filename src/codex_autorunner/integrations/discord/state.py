@@ -232,10 +232,6 @@ class ChannelBinding:
         return _dc_asdict(self)
 
 
-def _is_binding_like(obj: Any) -> bool:
-    return isinstance(obj, (dict, ChannelBinding))
-
-
 class DiscordStateStore:
     # ------------------------------------------------------------------
     # Lifecycle

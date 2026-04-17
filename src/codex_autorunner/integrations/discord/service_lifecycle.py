@@ -7,7 +7,6 @@ import time
 from pathlib import Path
 from typing import Any, Optional, cast
 
-from ...core.config import ConfigError, load_repo_config
 from ...core.logging_utils import log_event
 from ...core.managed_processes import (
     reap_managed_processes as _reap_managed_processes_core,
@@ -118,36 +117,6 @@ async def sync_application_commands_on_startup(service: Any) -> None:
         )
 
 
-async def run_startup_command_sync_background(service: Any) -> None:
-    started_at = time.monotonic()
-    log_event(
-        service._logger,
-        logging.INFO,
-        "discord.commands.sync.startup_scheduled",
-        service_uptime_ms=service_uptime_ms(service, now=started_at),
-    )
-    try:
-        await sync_application_commands_on_startup(service)
-    except Exception as exc:
-        log_event(
-            service._logger,
-            logging.WARNING,
-            "discord.commands.sync.startup_background_failed",
-            elapsed_ms=round((time.monotonic() - started_at) * 1000, 1),
-            service_uptime_ms=service_uptime_ms(service),
-            exc=exc,
-        )
-        return
-    finished_at = time.monotonic()
-    log_event(
-        service._logger,
-        logging.INFO,
-        "discord.commands.sync.startup_finished",
-        elapsed_ms=round((finished_at - started_at) * 1000, 1),
-        service_uptime_ms=service_uptime_ms(service, now=finished_at),
-    )
-
-
 async def reconcile_progress_leases_on_startup(service: Any) -> None:
     from .message_turns import reconcile_discord_turn_progress_leases
 
@@ -172,24 +141,6 @@ async def reconcile_progress_leases_on_startup(service: Any) -> None:
             "discord.turn.progress_reconcile_startup_finished",
             reconciled=reconciled,
         )
-
-
-def filebox_housekeeping_enabled(service: Any) -> bool:
-    try:
-        repo_config = load_repo_config(
-            service._config.root,
-            hub_path=service._hub_config_path,
-        )
-    except (ConfigError, OSError, ValueError, TypeError) as exc:
-        log_event(
-            service._logger,
-            logging.WARNING,
-            "discord.filebox.config_load_failed",
-            repo_root=str(service._config.root),
-            exc=exc,
-        )
-        return False
-    return bool(repo_config.housekeeping.enabled)
 
 
 async def next_opencode_prune_interval_seconds(service: Any) -> float:

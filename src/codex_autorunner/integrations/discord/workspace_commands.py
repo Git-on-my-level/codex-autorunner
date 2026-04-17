@@ -5,12 +5,6 @@ import logging
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Optional, Sequence, cast
 
-from ...bootstrap import seed_repo_files
-from ...core.config import (
-    ConfigError,
-    ensure_hub_config_at,
-    find_nearest_hub_config_path,
-)
 from ...core.flows import FlowRunStatus
 from ...core.logging_utils import log_event
 from ...core.utils import canonicalize_path
@@ -1431,70 +1425,6 @@ async def handle_mcp(
         interaction_token,
         "MCP server status requires the app server client. "
         "This command is not yet available in Discord.",
-    )
-
-
-async def handle_init(
-    service: Any,
-    interaction_id: str,
-    interaction_token: str,
-    *,
-    workspace_root: Path,
-) -> None:
-    import asyncio
-
-    target_root = canonicalize_path(workspace_root)
-    ca_dir = target_root / ".codex-autorunner"
-
-    try:
-        hub_initialized = False
-        if (target_root / ".git").exists():
-            await asyncio.to_thread(
-                seed_repo_files,
-                target_root,
-                False,
-                True,
-            )
-            if find_nearest_hub_config_path(target_root) is None:
-                _, hub_initialized = await asyncio.to_thread(
-                    ensure_hub_config_at,
-                    target_root,
-                )
-        elif _has_nested_git(target_root):
-            _, hub_initialized = await asyncio.to_thread(
-                ensure_hub_config_at,
-                target_root,
-            )
-        else:
-            await service.respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "No .git directory found. Run git init or use the CLI `car init --git-init`.",
-            )
-            return
-    except ConfigError as exc:
-        await service.respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            f"Init failed: {exc}",
-        )
-        return
-    except (OSError, RuntimeError, ValueError, TypeError) as exc:
-        await service.respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            f"Init failed: {exc}",
-        )
-        return
-
-    lines = [f"Initialized repo at {ca_dir}"]
-    if hub_initialized:
-        lines.append(f"Initialized hub at {ca_dir}")
-    lines.append("Init complete")
-    await service.respond_ephemeral(
-        interaction_id,
-        interaction_token,
-        "\n".join(lines),
     )
 
 
