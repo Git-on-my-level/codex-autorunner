@@ -3,9 +3,11 @@ Centralized Git utilities for consistent git operations across the codebase.
 """
 
 import subprocess
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Iterator, List, Optional
 
+from .locks import file_lock
 from .utils import subprocess_env
 
 
@@ -59,6 +61,33 @@ def run_git(
         raise GitError(f"git {args[0]} failed: {detail}", returncode=proc.returncode)
 
     return proc
+
+
+def git_mutation_lock_path(repo_root: Path) -> Path:
+    git_path = repo_root.resolve() / ".git"
+    if git_path.is_dir():
+        return git_path / "codex-autorunner-git-mutation.lock"
+    try:
+        raw = git_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return git_path / "codex-autorunner-git-mutation.lock"
+    if not raw.lower().startswith("gitdir:"):
+        return git_path / "codex-autorunner-git-mutation.lock"
+    git_dir = Path(raw.split(":", 1)[1].strip())
+    if not git_dir.is_absolute():
+        git_dir = (repo_root.resolve() / git_dir).resolve()
+    common_git_dir = (
+        git_dir.parent.parent.resolve()
+        if git_dir.parent.name == "worktrees"
+        else git_dir.resolve()
+    )
+    return common_git_dir / "codex-autorunner-git-mutation.lock"
+
+
+@contextmanager
+def git_mutation_lock(repo_root: Path) -> Iterator[None]:
+    with file_lock(git_mutation_lock_path(repo_root)):
+        yield
 
 
 def git_failure_detail(proc: Any) -> str:
@@ -122,52 +151,6 @@ def git_is_clean(repo_root: Path) -> bool:
     if proc.returncode != 0:
         return False
     return not bool((proc.stdout or "").strip())
-
-
-def git_ls_files(repo_root: Path) -> List[str]:
-    """
-    List all tracked files in the repository.
-
-    Returns:
-        List of relative file paths
-    """
-    try:
-        proc = subprocess.run(
-            ["git", "ls-files", "-z"],
-            cwd=str(repo_root),
-            capture_output=True,
-            env=subprocess_env(),
-        )
-    except FileNotFoundError:
-        return []
-    if proc.returncode != 0:
-        return []
-    paths = [p for p in proc.stdout.split(b"\x00") if p]
-    decoded: List[str] = []
-    for p in paths:
-        try:
-            decoded.append(p.decode("utf-8"))
-        except UnicodeDecodeError:
-            decoded.append(p.decode("utf-8", errors="replace"))
-    return decoded
-
-
-def git_diff_name_status(
-    repo_root: Path, from_ref: str, to_ref: str = "HEAD"
-) -> Optional[str]:
-    """
-    Get diff --name-status output between two refs.
-
-    Returns:
-        The diff output as a string, or None on error
-    """
-    try:
-        proc = run_git(["diff", "--name-status", f"{from_ref}..{to_ref}"], repo_root)
-    except GitError:
-        return None
-    if proc.returncode != 0:
-        return None
-    return (proc.stdout or "").strip()
 
 
 def git_status_porcelain(repo_root: Path) -> Optional[str]:
@@ -329,27 +312,33 @@ def reset_branch_from_origin_main(repo_root: Path, branch_name: str) -> str:
     if not branch:
         raise GitError("branch name cannot be empty", returncode=2)
 
-    status = run_git(
-        ["status", "--porcelain"], repo_root, timeout_seconds=30, check=True
-    )
-    if (status.stdout or "").strip():
-        raise GitError(
-            "working tree has uncommitted changes; commit or stash before /newt",
-            returncode=1,
+    with git_mutation_lock(repo_root):
+        status = run_git(
+            ["status", "--porcelain"], repo_root, timeout_seconds=30, check=True
+        )
+        if (status.stdout or "").strip():
+            raise GitError(
+                "working tree has uncommitted changes; commit or stash before /newt",
+                returncode=1,
+            )
+
+        run_git(
+            ["fetch", "--prune", "origin"],
+            repo_root,
+            timeout_seconds=120,
+            check=True,
         )
 
-    run_git(["fetch", "--prune", "origin"], repo_root, timeout_seconds=120, check=True)
+        default_branch = git_default_branch(repo_root)
+        if not default_branch:
+            raise GitError("unable to resolve origin default branch", returncode=1)
 
-    default_branch = git_default_branch(repo_root)
-    if not default_branch:
-        raise GitError("unable to resolve origin default branch", returncode=1)
-
-    run_git(
-        ["checkout", "-B", branch, f"origin/{default_branch}"],
-        repo_root,
-        timeout_seconds=60,
-        check=True,
-    )
+        run_git(
+            ["checkout", "-B", branch, f"origin/{default_branch}"],
+            repo_root,
+            timeout_seconds=60,
+            check=True,
+        )
     return default_branch
 
 

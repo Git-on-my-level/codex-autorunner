@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from pathlib import Path
 from typing import Any, Callable, Coroutine, Optional, TypeVar
@@ -16,6 +15,7 @@ from ..orchestration.models import (
     ThreadTarget,
 )
 from ..orchestration.runtime_bindings import RuntimeThreadBinding
+from .background_runner import BackgroundRunnerSaturated, BoundedBackgroundRunner
 from .client import HubControlPlaneClient
 from .errors import HubControlPlaneError
 from .models import (
@@ -42,6 +42,13 @@ from .models import (
 )
 
 ResultT = TypeVar("ResultT")
+_THREAD_TARGET_CREATE_TIMEOUT_SECONDS = 30.0
+_EXECUTION_RESULT_TIMEOUT_SECONDS = 30.0
+_BACKGROUND_RUNNER = BoundedBackgroundRunner(
+    max_workers=8,
+    saturation_wait_seconds=0.05,
+    thread_name_prefix="hub-execution",
+)
 
 
 class RemoteThreadExecutionStore(ThreadExecutionStore):
@@ -52,9 +59,11 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
         client: HubControlPlaneClient,
         *,
         timeout_seconds: float = 10.0,
+        background_runner: Optional[BoundedBackgroundRunner] = None,
     ) -> None:
         self._client = client
         self._timeout_seconds = timeout_seconds
+        self._background_runner = background_runner or _BACKGROUND_RUNNER
 
     def _hub_unavailable(
         self,
@@ -78,6 +87,7 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
         *,
         operation: str,
         action: Callable[[HubControlPlaneClient], Coroutine[Any, Any, ResultT]],
+        timeout_seconds: Optional[float] = None,
     ) -> ResultT:
         def _invoke() -> ResultT:
             background_client = self._client
@@ -99,15 +109,34 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
 
             return asyncio.run(_run_action())
 
+        effective_timeout_seconds = (
+            self._timeout_seconds
+            if timeout_seconds is None
+            else max(0.0, float(timeout_seconds))
+        )
+
         try:
-            with ThreadPoolExecutor(max_workers=1) as pool:
-                future = pool.submit(_invoke)
-                return future.result(timeout=self._timeout_seconds)
-        except FuturesTimeoutError as exc:
+            future = self._background_runner.submit(
+                _invoke,
+                timeout_seconds=effective_timeout_seconds,
+            )
+        except BackgroundRunnerSaturated as exc:
             raise self._hub_unavailable(
                 operation=operation,
-                message=f"request timed out after {self._timeout_seconds:g}s",
-                details={"timeout_seconds": self._timeout_seconds},
+                message="background worker pool saturated",
+                details={
+                    "max_workers": exc.max_workers,
+                    "acquire_timeout_seconds": exc.acquire_timeout_seconds,
+                },
+            ) from exc
+        try:
+            return future.result(timeout=effective_timeout_seconds)
+        except FuturesTimeoutError as exc:
+            future.cancel()
+            raise self._hub_unavailable(
+                operation=operation,
+                message=f"request timed out after {effective_timeout_seconds:g}s",
+                details={"timeout_seconds": effective_timeout_seconds},
             ) from exc
         except HubControlPlaneError as exc:
             if exc.code in {"hub_unavailable", "transport_failure"}:
@@ -172,6 +201,7 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
             metadata_payload["context_profile"] = normalized_context_profile
         response = self._run(
             operation="create_thread_target",
+            timeout_seconds=_THREAD_TARGET_CREATE_TIMEOUT_SECONDS,
             action=lambda client: client.create_thread_target(
                 ThreadTargetCreateRequest(
                     agent_id=agent_id,
@@ -441,6 +471,7 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
     ) -> ExecutionRecord:
         response = self._run(
             operation="record_execution_result",
+            timeout_seconds=_EXECUTION_RESULT_TIMEOUT_SECONDS,
             action=lambda client: client.record_execution_result(
                 ExecutionResultRecordRequest(
                     thread_target_id=thread_target_id,

@@ -3,10 +3,10 @@ from __future__ import annotations
 import asyncio
 import inspect
 import time
-from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from typing import Any, Callable, Coroutine, Optional, TypeVar
 
+from .background_runner import BackgroundRunnerSaturated, BoundedBackgroundRunner
 from .client import HubControlPlaneClient
 from .errors import HubControlPlaneError
 from .models import (
@@ -16,6 +16,11 @@ from .models import (
 )
 
 ResultT = TypeVar("ResultT")
+_BACKGROUND_RUNNER = BoundedBackgroundRunner(
+    max_workers=8,
+    saturation_wait_seconds=0.05,
+    thread_name_prefix="hub-binding",
+)
 
 
 class RemoteSurfaceBindingStore:
@@ -32,12 +37,14 @@ class RemoteSurfaceBindingStore:
         *,
         timeout_seconds: float = 30.0,
         cache_fallback_ttl_seconds: float = 300.0,
+        background_runner: Optional[BoundedBackgroundRunner] = None,
     ) -> None:
         self._client = client
         self._timeout_seconds = timeout_seconds
         self._cache_fallback_ttl_seconds = max(0.0, float(cache_fallback_ttl_seconds))
         self._bindings_by_key: dict[tuple[str, str], Any] = {}
         self._binding_cached_at_by_key: dict[tuple[str, str], float] = {}
+        self._background_runner = background_runner or _BACKGROUND_RUNNER
 
     def _hub_unavailable(
         self,
@@ -83,10 +90,23 @@ class RemoteSurfaceBindingStore:
             return asyncio.run(_run_action())
 
         try:
-            with ThreadPoolExecutor(max_workers=1) as pool:
-                future = pool.submit(_invoke)
-                return future.result(timeout=self._timeout_seconds)
+            future = self._background_runner.submit(
+                _invoke,
+                timeout_seconds=self._timeout_seconds,
+            )
+        except BackgroundRunnerSaturated as exc:
+            raise self._hub_unavailable(
+                operation=operation,
+                message="background worker pool saturated",
+                details={
+                    "max_workers": exc.max_workers,
+                    "acquire_timeout_seconds": exc.acquire_timeout_seconds,
+                },
+            ) from exc
+        try:
+            return future.result(timeout=self._timeout_seconds)
         except FuturesTimeoutError as exc:
+            future.cancel()
             raise self._hub_unavailable(
                 operation=operation,
                 message=f"request timed out after {self._timeout_seconds:g}s",
