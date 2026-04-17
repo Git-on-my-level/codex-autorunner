@@ -153,52 +153,6 @@ def git_is_clean(repo_root: Path) -> bool:
     return not bool((proc.stdout or "").strip())
 
 
-def git_ls_files(repo_root: Path) -> List[str]:
-    """
-    List all tracked files in the repository.
-
-    Returns:
-        List of relative file paths
-    """
-    try:
-        proc = subprocess.run(
-            ["git", "ls-files", "-z"],
-            cwd=str(repo_root),
-            capture_output=True,
-            env=subprocess_env(),
-        )
-    except FileNotFoundError:
-        return []
-    if proc.returncode != 0:
-        return []
-    paths = [p for p in proc.stdout.split(b"\x00") if p]
-    decoded: List[str] = []
-    for p in paths:
-        try:
-            decoded.append(p.decode("utf-8"))
-        except UnicodeDecodeError:
-            decoded.append(p.decode("utf-8", errors="replace"))
-    return decoded
-
-
-def git_diff_name_status(
-    repo_root: Path, from_ref: str, to_ref: str = "HEAD"
-) -> Optional[str]:
-    """
-    Get diff --name-status output between two refs.
-
-    Returns:
-        The diff output as a string, or None on error
-    """
-    try:
-        proc = run_git(["diff", "--name-status", f"{from_ref}..{to_ref}"], repo_root)
-    except GitError:
-        return None
-    if proc.returncode != 0:
-        return None
-    return (proc.stdout or "").strip()
-
-
 def git_status_porcelain(repo_root: Path) -> Optional[str]:
     """
     Get status --porcelain output.
