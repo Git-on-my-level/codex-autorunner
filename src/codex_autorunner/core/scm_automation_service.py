@@ -675,7 +675,9 @@ class ScmAutomationService:
         enqueue_operation: PublishOperation,
         seen_operation_keys: set[str],
     ) -> Optional[PublishOperation]:
-        thread_target_id = _normalize_text(tracking.get("thread_target_id"))
+        thread_target_id = _normalize_text(
+            enqueue_operation.response.get("thread_target_id")
+        ) or _normalize_text(tracking.get("thread_target_id"))
         enqueue_status = _normalize_text(enqueue_operation.response.get("status"))
         if thread_target_id is None or enqueue_status not in {"queued", "running"}:
             return None
@@ -789,6 +791,8 @@ class ScmAutomationService:
                         "reaction_state_kind": reaction_state_kind,
                         "repo_id": binding.repo_id or event.repo_id,
                         "repo_slug": binding.repo_slug or event.repo_slug,
+                        "head_branch": binding.head_branch,
+                        "base_branch": binding.base_branch,
                         "thread_target_id": binding.thread_target_id,
                     }
                 )
