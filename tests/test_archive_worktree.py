@@ -538,6 +538,14 @@ class TestContextspaceSourceHelper:
 
 
 class TestFlowsArchiveHelpersContextspaceSource:
+    def test_uses_canonical_owner(self) -> None:
+        from codex_autorunner.core.archive import _contextspace_source as canonical
+        from codex_autorunner.core.flows.archive_helpers import (
+            _contextspace_source as imported,
+        )
+
+        assert imported is canonical
+
     def test_prefers_contextspace(self, tmp_path: Path) -> None:
         from codex_autorunner.core.flows.archive_helpers import _contextspace_source
 

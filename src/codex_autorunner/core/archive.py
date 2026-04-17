@@ -794,11 +794,25 @@ def _move_entry(
 
 
 def _contextspace_source(source_root: Path) -> Path:
+    """Resolve the contextspace directory, falling back to the legacy workspace path.
+
+    This is the **single owner** of the workspace-to-contextspace migration shim
+    for archive and reset operations.  All callers must use this helper rather
+    than implementing their own fallback logic.
+
+    Compatibility-only: ``contextspace/`` is canonical.  The ``workspace/``
+    fallback exists solely to preserve legacy context docs during archive/reset
+    on repos that have not yet been migrated.
+    """
     contextspace = source_root / "contextspace"
     if contextspace.exists() or contextspace.is_symlink():
         return contextspace
     legacy_workspace = source_root / "workspace"
     if legacy_workspace.exists() or legacy_workspace.is_symlink():
+        logger.debug(
+            "contextspace/ absent; falling back to legacy workspace/ at %s",
+            legacy_workspace,
+        )
         return legacy_workspace
     return contextspace
 

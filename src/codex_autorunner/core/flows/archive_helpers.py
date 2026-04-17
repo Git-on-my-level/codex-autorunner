@@ -11,6 +11,7 @@ from ...tickets.files import list_ticket_paths
 from ...tickets.outbox import resolve_outbox_paths
 from ..archive import (
     ArchiveEntrySpec,
+    _contextspace_source,
     build_common_car_archive_entries,
     execute_archive_entries,
 )
@@ -57,16 +58,6 @@ def _next_archive_dir(base_dir: Path) -> Path:
         return base_dir
     suffix = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     return base_dir.parent / f"{base_dir.name}_{suffix}"
-
-
-def _contextspace_source(car_root: Path) -> Path:
-    contextspace = car_root / "contextspace"
-    if contextspace.exists() or contextspace.is_symlink():
-        return contextspace
-    legacy_workspace = car_root / "workspace"
-    if legacy_workspace.exists() or legacy_workspace.is_symlink():
-        return legacy_workspace
-    return contextspace
 
 
 def _find_hub_root(repo_root: Path) -> Path:

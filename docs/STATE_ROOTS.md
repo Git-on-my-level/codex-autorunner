@@ -26,7 +26,7 @@ All durable artifacts must live under one of these roots:
 - `pma/` - PMA state and queue
 - `archive/` - Worktree snapshots
 - `bin/` - Generated helper scripts
-- `workspace/` - Legacy directory name only; CAR reads durable context from `contextspace/` (see [workspace → contextspace migration](migrations/workspace-to-contextspace.md)). If this directory still exists, `car doctor` may warn until you migrate or remove it.
+- `workspace/` - Legacy directory name only; CAR reads durable context from `contextspace/` (see [workspace → contextspace migration](migrations/workspace-to-contextspace.md)). The workspace fallback for archive/reset operations has one canonical owner (`_contextspace_source` in `core/archive.py`). If this directory still exists, `car doctor` may warn until you migrate or remove it.
 - `app_server_workspaces/` - App-server supervisor/workspace state when the effective destination is `docker`
 - `filebox/` - Shared inbox/outbox attachment root (`filebox/inbox`, `filebox/outbox`)
 
