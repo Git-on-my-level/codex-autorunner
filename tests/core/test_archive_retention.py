@@ -418,3 +418,258 @@ class TestRunArchiveDryRunExecuteParity:
         assert summary.pruned == 3
         paths = summary.pruned_paths
         assert paths == tuple(sorted(paths))
+
+
+class TestWorktreeArchiveLargeFixture:
+    def test_many_repos_each_respects_own_count_budget(self, tmp_path: Path) -> None:
+        archive_root = tmp_path / "archive" / "worktrees"
+        repo_count = 5
+        snapshots_per_repo = 8
+        keep_per_repo = 2
+
+        for r in range(repo_count):
+            repo_id = f"repo-{r}"
+            for s in range(snapshots_per_repo):
+                day = s + 1
+                _write_snapshot(
+                    archive_root,
+                    repo_id,
+                    f"202601{day:02d}T000000Z--{repo_id}--{s:07d}",
+                    created_at=f"2026-01-{day:02d}T00:00:00Z",
+                    payload=f"repo-{r}-snap-{s}",
+                )
+
+        policy = WorktreeArchiveRetentionPolicy(
+            max_snapshots_per_repo=keep_per_repo,
+            max_age_days=365,
+            max_total_bytes=1_000_000_000,
+        )
+
+        dry_summary = prune_worktree_archive_root(
+            archive_root, policy=policy, dry_run=True
+        )
+        exec_summary = prune_worktree_archive_root(
+            archive_root, policy=policy, dry_run=False
+        )
+
+        expected_pruned = repo_count * (snapshots_per_repo - keep_per_repo)
+        expected_kept = repo_count * keep_per_repo
+        assert dry_summary.pruned == exec_summary.pruned == expected_pruned
+        assert dry_summary.kept == exec_summary.kept == expected_kept
+
+        for r in range(repo_count):
+            repo_id = f"repo-{r}"
+            remaining = sorted((archive_root / repo_id).iterdir(), key=lambda p: p.name)
+            assert len(remaining) == keep_per_repo
+
+    def test_byte_budget_applied_across_all_repos(self, tmp_path: Path) -> None:
+        archive_root = tmp_path / "archive" / "worktrees"
+        large_payload = "x" * 200
+
+        for repo_idx in range(3):
+            repo_id = f"repo-{repo_idx}"
+            for snap_idx in range(3):
+                day = snap_idx + 1
+                _write_snapshot(
+                    archive_root,
+                    repo_id,
+                    f"202601{day:02d}T000000Z--{repo_id}--{snap_idx:07d}",
+                    created_at=f"2026-01-{day:02d}T00:00:00Z",
+                    payload=large_payload,
+                )
+
+        policy = WorktreeArchiveRetentionPolicy(
+            max_snapshots_per_repo=10,
+            max_age_days=365,
+            max_total_bytes=100,
+        )
+
+        dry_summary = prune_worktree_archive_root(
+            archive_root, policy=policy, dry_run=True
+        )
+        exec_summary = prune_worktree_archive_root(
+            archive_root, policy=policy, dry_run=False
+        )
+
+        assert dry_summary.pruned == exec_summary.pruned
+        assert dry_summary.kept == exec_summary.kept
+        assert exec_summary.bytes_after <= 100 or exec_summary.kept == 0
+
+    def test_age_based_pruning_across_mixed_ages(self, tmp_path: Path) -> None:
+        archive_root = tmp_path / "archive" / "worktrees"
+        ages_days = [1, 5, 10, 20, 40, 60, 90]
+
+        for i, _age in enumerate(ages_days):
+            _write_snapshot(
+                archive_root,
+                "repo-a",
+                f"2026-01-{i + 1:02d}T00:00:00Z--repo-a--{i:07d}",
+                created_at=f"2026-01-{i + 1:02d}T00:00:00Z",
+                payload=f"snap-{i}",
+            )
+
+        policy = WorktreeArchiveRetentionPolicy(
+            max_snapshots_per_repo=100,
+            max_age_days=30,
+            max_total_bytes=1_000_000_000,
+        )
+
+        summary = prune_worktree_archive_root(
+            archive_root, policy=policy, dry_run=False
+        )
+
+        assert summary.pruned > 0
+        for pruned_path_str in summary.pruned_paths:
+            p = Path(pruned_path_str)
+            assert not p.exists()
+
+    def test_incomplete_snapshots_preserved_regardless_of_policy(
+        self, tmp_path: Path
+    ) -> None:
+        archive_root = tmp_path / "archive" / "worktrees"
+
+        for i in range(3):
+            _write_snapshot(
+                archive_root,
+                "repo-a",
+                f"2026010{i + 1}T000000Z--repo-a--{i:07d}",
+                created_at=f"2026-01-0{i + 1}T00:00:00Z",
+                payload=f"snap-{i}",
+            )
+
+        incomplete_dirs = []
+        for i in range(3):
+            d = archive_root / "repo-a" / f"incomplete-{i}"
+            _write(d / "tickets" / "TICKET-001.md", "partial")
+            incomplete_dirs.append(d)
+
+        policy = WorktreeArchiveRetentionPolicy(
+            max_snapshots_per_repo=1,
+            max_age_days=0,
+            max_total_bytes=0,
+        )
+
+        prune_worktree_archive_root(archive_root, policy=policy, dry_run=False)
+
+        for d in incomplete_dirs:
+            assert d.exists(), f"Incomplete snapshot {d.name} should be preserved"
+
+    def test_dry_run_execute_byte_accounting_parity_many_snapshots(
+        self, tmp_path: Path
+    ) -> None:
+        archive_root_a = tmp_path / "dry" / "archive" / "worktrees"
+        archive_root_b = tmp_path / "exec" / "archive" / "worktrees"
+
+        for root in (archive_root_a, archive_root_b):
+            for r in range(3):
+                repo_id = f"repo-{r}"
+                for s in range(5):
+                    day = s + 1
+                    _write_snapshot(
+                        root,
+                        repo_id,
+                        f"202601{day:02d}T000000Z--{repo_id}--{s:07d}",
+                        created_at=f"2026-01-{day:02d}T00:00:00Z",
+                        payload="x" * (50 + s * 10),
+                    )
+
+        policy = WorktreeArchiveRetentionPolicy(
+            max_snapshots_per_repo=2,
+            max_age_days=365,
+            max_total_bytes=500,
+        )
+
+        dry_summary = prune_worktree_archive_root(
+            archive_root_a, policy=policy, dry_run=True
+        )
+        exec_summary = prune_worktree_archive_root(
+            archive_root_b, policy=policy, dry_run=False
+        )
+
+        assert dry_summary.bytes_before == exec_summary.bytes_before
+        assert dry_summary.pruned == exec_summary.pruned
+        assert dry_summary.kept == exec_summary.kept
+
+
+class TestRunArchiveLargeFixture:
+    def test_many_entries_respects_count_budget(self, tmp_path: Path) -> None:
+        archive_root = tmp_path / "archive" / "runs"
+        now = datetime.now(timezone.utc)
+        entry_count = 50
+        keep_count = 10
+
+        for i in range(entry_count):
+            run_dir = archive_root / f"run-{i:04d}"
+            _write(run_dir / "data.json", f"run-{i}")
+            ts = (now - timedelta(minutes=entry_count - i)).timestamp()
+            os.utime(run_dir, (ts, ts))
+
+        policy = RunArchiveRetentionPolicy(
+            max_entries=keep_count,
+            max_age_days=100000,
+            max_total_bytes=1_000_000_000,
+        )
+
+        dry_summary = prune_run_archive_root(archive_root, policy=policy, dry_run=True)
+        exec_summary = prune_run_archive_root(
+            archive_root, policy=policy, dry_run=False
+        )
+
+        expected_pruned = entry_count - keep_count
+        assert dry_summary.pruned == exec_summary.pruned == expected_pruned
+        assert dry_summary.kept == exec_summary.kept == keep_count
+
+        remaining = sorted(p.name for p in archive_root.iterdir() if p.is_dir())
+        assert len(remaining) == keep_count
+
+    def test_age_based_pruning_removes_old_entries(self, tmp_path: Path) -> None:
+        archive_root = tmp_path / "archive" / "runs"
+        now = datetime.now(timezone.utc)
+
+        for i in range(10):
+            run_dir = archive_root / f"run-{i:04d}"
+            _write(run_dir / "data.json", f"run-{i}")
+            age_days = 60 - i * 5
+            ts = (now - timedelta(days=age_days)).timestamp()
+            os.utime(run_dir, (ts, ts))
+
+        policy = RunArchiveRetentionPolicy(
+            max_entries=100,
+            max_age_days=30,
+            max_total_bytes=1_000_000_000,
+        )
+
+        summary = prune_run_archive_root(archive_root, policy=policy, dry_run=False)
+
+        assert summary.pruned > 0
+        for path_str in summary.pruned_paths:
+            assert not Path(path_str).exists()
+
+    def test_dry_run_execute_parity_with_many_entries(self, tmp_path: Path) -> None:
+        archive_root_a = tmp_path / "dry" / "archive" / "runs"
+        archive_root_b = tmp_path / "exec" / "archive" / "runs"
+        now = datetime.now(timezone.utc)
+
+        for root in (archive_root_a, archive_root_b):
+            for i in range(20):
+                run_dir = root / f"run-{i:04d}"
+                _write(run_dir / "flow_state" / "event.json", "x" * (20 + i))
+                ts = (now - timedelta(minutes=20 - i)).timestamp()
+                os.utime(run_dir, (ts, ts))
+
+        policy = RunArchiveRetentionPolicy(
+            max_entries=5,
+            max_age_days=100000,
+            max_total_bytes=200,
+        )
+
+        dry_summary = prune_run_archive_root(
+            archive_root_a, policy=policy, dry_run=True
+        )
+        exec_summary = prune_run_archive_root(
+            archive_root_b, policy=policy, dry_run=False
+        )
+
+        assert dry_summary.pruned == exec_summary.pruned
+        assert dry_summary.kept == exec_summary.kept
+        assert dry_summary.bytes_before == exec_summary.bytes_before

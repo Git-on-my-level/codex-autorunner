@@ -1487,3 +1487,396 @@ class TestAdapterDryRunExecuteParity:
         for candidate in plan.candidates:
             assert candidate.path == Path("<unknown>")
             assert candidate.size_bytes == 0
+
+
+class TestCrossFamilyAdapterConsistency:
+    def test_all_adapters_produce_consistent_kept_plus_pruned(self) -> None:
+        archive_bucket = RetentionBucket(
+            family="worktree_archives",
+            scope=RetentionScope.REPO,
+            retention_class=RetentionClass.REVIEWABLE,
+        )
+        filebox_bucket = RetentionBucket(
+            family="filebox",
+            scope=RetentionScope.REPO,
+            retention_class=RetentionClass.EPHEMERAL,
+        )
+        report_bucket = RetentionBucket(
+            family="reports",
+            scope=RetentionScope.REPO,
+            retention_class=RetentionClass.REVIEWABLE,
+        )
+        housekeeping_bucket = RetentionBucket(
+            family="logs",
+            scope=RetentionScope.REPO,
+            retention_class=RetentionClass.EPHEMERAL,
+        )
+
+        archive_summary = ArchivePruneSummary(
+            kept=5, pruned=3, bytes_before=1000, bytes_after=400, pruned_paths=()
+        )
+        filebox_summary = FileBoxPruneSummary(
+            inbox_kept=2,
+            inbox_pruned=1,
+            outbox_kept=3,
+            outbox_pruned=2,
+            bytes_before=500,
+            bytes_after=200,
+            pruned_paths=(),
+        )
+        report_summary = PruneSummary(
+            kept=10, pruned=5, bytes_before=2000, bytes_after=1000
+        )
+        hk_summary = HousekeepingRuleResult(
+            name="logs",
+            kind="directory",
+            scanned_count=20,
+            deleted_count=7,
+            deleted_bytes=350,
+        )
+
+        archive_plan = adapt_archive_prune_summary_to_plan(
+            archive_summary, archive_bucket
+        )
+        filebox_plan = adapt_filebox_prune_summary_to_plan(
+            filebox_summary, filebox_bucket
+        )
+        report_plan = adapt_report_prune_summary_to_plan(report_summary, report_bucket)
+        hk_plan = adapt_housekeeping_rule_result_to_plan(
+            hk_summary, housekeeping_bucket, reason=CleanupReason.AGE_LIMIT
+        )
+
+        for plan in (archive_plan, filebox_plan, report_plan, hk_plan):
+            assert plan.kept_count + plan.prune_count >= 0
+            assert plan.blocked_count >= 0
+
+        assert archive_plan.kept_count + archive_plan.prune_count == 8
+        assert filebox_plan.kept_count + filebox_plan.prune_count == 8
+        assert report_plan.kept_count + report_plan.prune_count == 15
+        assert hk_plan.kept_count + hk_plan.prune_count == 20
+
+    def test_all_dry_run_adapters_report_zero_deletions(self) -> None:
+        bucket = RetentionBucket(
+            family="test",
+            scope=RetentionScope.REPO,
+            retention_class=RetentionClass.EPHEMERAL,
+        )
+
+        archive_summary = ArchivePruneSummary(
+            kept=2, pruned=3, bytes_before=500, bytes_after=200, pruned_paths=("/a",)
+        )
+        filebox_summary = FileBoxPruneSummary(
+            inbox_kept=1,
+            inbox_pruned=1,
+            outbox_kept=1,
+            outbox_pruned=1,
+            bytes_before=400,
+            bytes_after=100,
+            pruned_paths=("/b",),
+        )
+        report_summary = PruneSummary(
+            kept=1,
+            pruned=2,
+            bytes_before=300,
+            bytes_after=100,
+            pruned_paths=("/c",),
+        )
+        hk_summary = HousekeepingRuleResult(
+            name="test",
+            kind="directory",
+            scanned_count=5,
+            deleted_count=2,
+            deleted_bytes=100,
+            deleted_paths=["/d"],
+        )
+
+        results = [
+            adapt_archive_prune_summary_to_result(
+                archive_summary, bucket, dry_run=True
+            ),
+            adapt_filebox_prune_summary_to_result(
+                filebox_summary, bucket, dry_run=True
+            ),
+            adapt_report_prune_summary_to_result(report_summary, bucket, dry_run=True),
+            adapt_housekeeping_rule_result_to_result(
+                hk_summary, bucket, dry_run=True, reason=CleanupReason.AGE_LIMIT
+            ),
+        ]
+
+        for result in results:
+            assert result.deleted_count == 0
+            assert result.deleted_bytes == 0
+            assert result.deleted_paths == ()
+
+    def test_all_execute_adapters_report_nonzero_deletions(self) -> None:
+        bucket = RetentionBucket(
+            family="test",
+            scope=RetentionScope.REPO,
+            retention_class=RetentionClass.EPHEMERAL,
+        )
+
+        archive_summary = ArchivePruneSummary(
+            kept=1,
+            pruned=2,
+            bytes_before=300,
+            bytes_after=100,
+            pruned_paths=("/a", "/b"),
+        )
+        filebox_summary = FileBoxPruneSummary(
+            inbox_kept=1,
+            inbox_pruned=1,
+            outbox_kept=0,
+            outbox_pruned=1,
+            bytes_before=200,
+            bytes_after=50,
+            pruned_paths=("/c", "/d"),
+        )
+        report_summary = PruneSummary(
+            kept=1,
+            pruned=2,
+            bytes_before=200,
+            bytes_after=60,
+            pruned_paths=("/e", "/f"),
+        )
+        hk_summary = HousekeepingRuleResult(
+            name="test",
+            kind="directory",
+            scanned_count=5,
+            deleted_count=2,
+            deleted_bytes=80,
+            deleted_paths=["/g", "/h"],
+        )
+
+        results = [
+            adapt_archive_prune_summary_to_result(
+                archive_summary, bucket, dry_run=False
+            ),
+            adapt_filebox_prune_summary_to_result(
+                filebox_summary, bucket, dry_run=False
+            ),
+            adapt_report_prune_summary_to_result(report_summary, bucket, dry_run=False),
+            adapt_housekeeping_rule_result_to_result(
+                hk_summary, bucket, dry_run=False, reason=CleanupReason.AGE_LIMIT
+            ),
+        ]
+
+        for result in results:
+            assert result.deleted_count > 0
+            assert result.deleted_bytes > 0
+
+    def test_plan_reclaimable_equals_bytes_before_minus_bytes_after(self) -> None:
+        bucket = RetentionBucket(
+            family="test",
+            scope=RetentionScope.REPO,
+            retention_class=RetentionClass.REVIEWABLE,
+        )
+
+        archive_summary = ArchivePruneSummary(
+            kept=3,
+            pruned=2,
+            bytes_before=1000,
+            bytes_after=400,
+            pruned_paths=("/a", "/b"),
+        )
+        filebox_summary = FileBoxPruneSummary(
+            inbox_kept=2,
+            inbox_pruned=1,
+            outbox_kept=2,
+            outbox_pruned=1,
+            bytes_before=800,
+            bytes_after=300,
+            pruned_paths=(),
+        )
+        report_summary = PruneSummary(
+            kept=5, pruned=3, bytes_before=600, bytes_after=150
+        )
+
+        for summary, adapter in [
+            (archive_summary, adapt_archive_prune_summary_to_plan),
+            (filebox_summary, adapt_filebox_prune_summary_to_plan),
+            (report_summary, adapt_report_prune_summary_to_plan),
+        ]:
+            plan = adapter(summary, bucket)
+            assert plan.reclaimable_bytes == plan.total_bytes - summary.bytes_after
+
+
+class TestCanonicalBucketNaming:
+    def test_repo_bucket_families_are_stable(self) -> None:
+        from codex_autorunner.core.state_retention import (
+            REPO_FILEBOX_BUCKET,
+            REPO_GITHUB_CONTEXT_BUCKET,
+            REPO_LOGS_BUCKET,
+            REPO_REPORTS_BUCKET,
+            REPO_REVIEW_RUNS_BUCKET,
+            REPO_RUN_ARCHIVE_BUCKET,
+            REPO_UPLOADS_BUCKET,
+            REPO_WORKSPACE_BUCKET,
+            REPO_WORKTREE_ARCHIVE_BUCKET,
+        )
+
+        assert REPO_WORKTREE_ARCHIVE_BUCKET.family == "worktree_archives"
+        assert REPO_RUN_ARCHIVE_BUCKET.family == "run_archives"
+        assert REPO_FILEBOX_BUCKET.family == "filebox"
+        assert REPO_REPORTS_BUCKET.family == "reports"
+        assert REPO_WORKSPACE_BUCKET.family == "workspaces"
+        assert REPO_LOGS_BUCKET.family == "logs"
+        assert REPO_UPLOADS_BUCKET.family == "uploads"
+        assert REPO_GITHUB_CONTEXT_BUCKET.family == "github_context"
+        assert REPO_REVIEW_RUNS_BUCKET.family == "review_runs"
+
+    def test_global_bucket_families_are_stable(self) -> None:
+        from codex_autorunner.core.state_retention import (
+            GLOBAL_LOGS_BUCKET,
+            GLOBAL_UPDATE_CACHE_BUCKET,
+            GLOBAL_WORKSPACE_BUCKET,
+        )
+
+        assert GLOBAL_WORKSPACE_BUCKET.family == "workspaces"
+        assert GLOBAL_WORKSPACE_BUCKET.scope == RetentionScope.GLOBAL
+        assert GLOBAL_UPDATE_CACHE_BUCKET.family == "update_cache"
+        assert GLOBAL_UPDATE_CACHE_BUCKET.scope == RetentionScope.GLOBAL
+        assert GLOBAL_LOGS_BUCKET.family == "logs"
+        assert GLOBAL_LOGS_BUCKET.scope == RetentionScope.GLOBAL
+
+    def test_repo_buckets_have_repo_scope(self) -> None:
+        from codex_autorunner.core.state_retention import (
+            REPO_FILEBOX_BUCKET,
+            REPO_GITHUB_CONTEXT_BUCKET,
+            REPO_LOGS_BUCKET,
+            REPO_REPORTS_BUCKET,
+            REPO_REVIEW_RUNS_BUCKET,
+            REPO_RUN_ARCHIVE_BUCKET,
+            REPO_UPLOADS_BUCKET,
+            REPO_WORKSPACE_BUCKET,
+            REPO_WORKTREE_ARCHIVE_BUCKET,
+        )
+
+        for bucket in [
+            REPO_WORKTREE_ARCHIVE_BUCKET,
+            REPO_RUN_ARCHIVE_BUCKET,
+            REPO_FILEBOX_BUCKET,
+            REPO_REPORTS_BUCKET,
+            REPO_WORKSPACE_BUCKET,
+            REPO_LOGS_BUCKET,
+            REPO_UPLOADS_BUCKET,
+            REPO_GITHUB_CONTEXT_BUCKET,
+            REPO_REVIEW_RUNS_BUCKET,
+        ]:
+            assert bucket.scope == RetentionScope.REPO
+
+    def test_retention_class_assignment(self) -> None:
+        from codex_autorunner.core.state_retention import (
+            GLOBAL_UPDATE_CACHE_BUCKET,
+            REPO_FILEBOX_BUCKET,
+            REPO_GITHUB_CONTEXT_BUCKET,
+            REPO_LOGS_BUCKET,
+            REPO_REPORTS_BUCKET,
+            REPO_REVIEW_RUNS_BUCKET,
+            REPO_RUN_ARCHIVE_BUCKET,
+            REPO_UPLOADS_BUCKET,
+            REPO_WORKSPACE_BUCKET,
+            REPO_WORKTREE_ARCHIVE_BUCKET,
+        )
+
+        assert REPO_WORKTREE_ARCHIVE_BUCKET.retention_class == RetentionClass.REVIEWABLE
+        assert REPO_RUN_ARCHIVE_BUCKET.retention_class == RetentionClass.REVIEWABLE
+        assert REPO_REPORTS_BUCKET.retention_class == RetentionClass.REVIEWABLE
+        assert REPO_GITHUB_CONTEXT_BUCKET.retention_class == RetentionClass.REVIEWABLE
+        assert REPO_REVIEW_RUNS_BUCKET.retention_class == RetentionClass.REVIEWABLE
+        assert REPO_FILEBOX_BUCKET.retention_class == RetentionClass.EPHEMERAL
+        assert REPO_WORKSPACE_BUCKET.retention_class == RetentionClass.EPHEMERAL
+        assert REPO_LOGS_BUCKET.retention_class == RetentionClass.EPHEMERAL
+        assert REPO_UPLOADS_BUCKET.retention_class == RetentionClass.EPHEMERAL
+        assert GLOBAL_UPDATE_CACHE_BUCKET.retention_class == RetentionClass.CACHE_ONLY
+
+
+class TestAggregationAcrossAllFamilies:
+    def test_aggregated_plan_covers_all_repo_families(self) -> None:
+        from codex_autorunner.core.state_retention import (
+            REPO_FILEBOX_BUCKET,
+            REPO_LOGS_BUCKET,
+            REPO_REPORTS_BUCKET,
+            REPO_RUN_ARCHIVE_BUCKET,
+            REPO_WORKSPACE_BUCKET,
+            REPO_WORKTREE_ARCHIVE_BUCKET,
+        )
+
+        families = [
+            REPO_WORKTREE_ARCHIVE_BUCKET,
+            REPO_RUN_ARCHIVE_BUCKET,
+            REPO_FILEBOX_BUCKET,
+            REPO_REPORTS_BUCKET,
+            REPO_WORKSPACE_BUCKET,
+            REPO_LOGS_BUCKET,
+        ]
+
+        plans = []
+        for bucket in families:
+            candidate = CleanupCandidate(
+                path=Path(f"/tmp/{bucket.family}"),
+                size_bytes=100,
+                bucket=bucket,
+                action=CleanupAction.PRUNE,
+                reason=CleanupReason.AGE_LIMIT,
+            )
+            plans.append(make_cleanup_plan(bucket, [candidate]))
+
+        aggregated = AggregatedCleanupPlan(plans=tuple(plans))
+
+        assert aggregated.total_candidates == len(families)
+        assert aggregated.total_prune_count == len(families)
+        assert aggregated.total_reclaimable_bytes == len(families) * 100
+
+        by_scope = aggregated.by_scope()
+        assert RetentionScope.REPO in by_scope
+        repo_plan = by_scope[RetentionScope.REPO]
+        assert repo_plan.total_candidates == len(families)
+
+    def test_aggregated_result_covers_mixed_scopes(self) -> None:
+        from codex_autorunner.core.state_retention import (
+            GLOBAL_UPDATE_CACHE_BUCKET,
+            REPO_WORKTREE_ARCHIVE_BUCKET,
+        )
+
+        repo_plan = make_cleanup_plan(
+            REPO_WORKTREE_ARCHIVE_BUCKET,
+            [
+                CleanupCandidate(
+                    path=Path("/tmp/a"),
+                    size_bytes=100,
+                    bucket=REPO_WORKTREE_ARCHIVE_BUCKET,
+                    action=CleanupAction.PRUNE,
+                    reason=CleanupReason.AGE_LIMIT,
+                )
+            ],
+        )
+        global_plan = make_cleanup_plan(
+            GLOBAL_UPDATE_CACHE_BUCKET,
+            [
+                CleanupCandidate(
+                    path=Path("/tmp/b"),
+                    size_bytes=200,
+                    bucket=GLOBAL_UPDATE_CACHE_BUCKET,
+                    action=CleanupAction.PRUNE,
+                    reason=CleanupReason.CACHE_REBUILDABLE,
+                )
+            ],
+        )
+
+        repo_result = make_cleanup_result(
+            repo_plan, [Path("/tmp/a")], deleted_bytes=100
+        )
+        global_result = make_cleanup_result(
+            global_plan, [Path("/tmp/b")], deleted_bytes=200
+        )
+
+        aggregated = aggregate_cleanup_results([repo_result, global_result])
+
+        assert aggregated.total_deleted_count == 2
+        assert aggregated.total_deleted_bytes == 300
+
+        by_scope = aggregated.by_scope()
+        assert RetentionScope.REPO in by_scope
+        assert RetentionScope.GLOBAL in by_scope
+        assert by_scope[RetentionScope.REPO].total_deleted_bytes == 100
+        assert by_scope[RetentionScope.GLOBAL].total_deleted_bytes == 200
