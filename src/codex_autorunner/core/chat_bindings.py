@@ -629,9 +629,12 @@ def _orchestration_binding_timestamps_by_workspace(
 def _active_pma_thread_counts(
     hub_root: Path, repo_id_by_workspace: Mapping[str, str]
 ) -> dict[str, int]:
-    store = PmaThreadStore(hub_root)
-    raw_counts = store.count_threads_by_repo(status="active")
     counts: Counter[str] = Counter()
+    try:
+        store = PmaThreadStore(hub_root)
+        raw_counts = store.count_threads_by_repo(status="active")
+    except (OSError, RuntimeError, ValueError, sqlite3.OperationalError):
+        raw_counts = {}
     for raw_repo_id, raw_count in raw_counts.items():
         repo_id = _normalize_repo_id(raw_repo_id)
         if repo_id is None:
