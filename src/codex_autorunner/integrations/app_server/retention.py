@@ -11,12 +11,11 @@ from ...core.state_retention import (
     CleanupCandidate,
     CleanupPlan,
     CleanupReason,
-    CleanupResult,
     RetentionBucket,
     RetentionClass,
     RetentionScope,
+    adapt_workspace_summary_to_result,
     make_cleanup_plan,
-    make_cleanup_result,
 )
 from ...core.state_roots import (
     is_within_allowed_root,
@@ -386,70 +385,6 @@ def prune_workspace_root(
     return execute_workspace_retention(
         plan, workspace_root=workspace_root, dry_run=dry_run
     )
-
-
-def adapt_workspace_summary_to_result(
-    summary: WorkspacePruneSummary,
-    bucket: RetentionBucket,
-    dry_run: bool = False,
-) -> CleanupResult:
-    candidates: list[CleanupCandidate] = []
-    for path_str in summary.pruned_paths:
-        candidates.append(
-            CleanupCandidate(
-                path=Path(path_str),
-                size_bytes=0,
-                bucket=bucket,
-                action=CleanupAction.PRUNE,
-                reason=CleanupReason.STALE_WORKSPACE,
-            )
-        )
-    for i, path_str in enumerate(summary.blocked_paths):
-        reason_str = (
-            summary.blocked_reasons[i]
-            if i < len(summary.blocked_reasons)
-            else "unknown"
-        )
-        reason = _map_reason_str_to_cleanup_reason(reason_str)
-        candidates.append(
-            CleanupCandidate(
-                path=Path(path_str),
-                size_bytes=0,
-                bucket=bucket,
-                action=CleanupAction.SKIP_BLOCKED,
-                reason=reason,
-            )
-        )
-
-    plan = CleanupPlan(
-        bucket=bucket,
-        candidates=tuple(candidates),
-        total_bytes=summary.bytes_before,
-        reclaimable_bytes=summary.bytes_before - summary.bytes_after,
-        kept_count=summary.kept,
-        prune_count=summary.pruned,
-        blocked_count=len(summary.blocked_paths),
-    )
-    deleted_paths = tuple(Path(p) for p in summary.pruned_paths) if not dry_run else ()
-    deleted_bytes = 0 if dry_run else (summary.bytes_before - summary.bytes_after)
-
-    return make_cleanup_result(
-        plan,
-        deleted_paths=deleted_paths,
-        deleted_bytes=deleted_bytes,
-    )
-
-
-def _map_reason_str_to_cleanup_reason(reason_str: str) -> CleanupReason:
-    mapping = {
-        "live_workspace_guard": CleanupReason.LIVE_WORKSPACE_GUARD,
-        "lock_guard": CleanupReason.LOCK_GUARD,
-        "active_run_guard": CleanupReason.ACTIVE_RUN_GUARD,
-        "canonical_store_guard": CleanupReason.CANONICAL_STORE_GUARD,
-        "path_outside_root": CleanupReason.CANONICAL_STORE_GUARD,
-        "deletion_failed": CleanupReason.CANONICAL_STORE_GUARD,
-    }
-    return mapping.get(reason_str, CleanupReason.CANONICAL_STORE_GUARD)
 
 
 __all__ = [
