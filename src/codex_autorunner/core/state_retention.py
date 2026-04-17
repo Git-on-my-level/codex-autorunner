@@ -365,16 +365,28 @@ def adapt_housekeeping_rule_result_to_plan(
     if not isinstance(summary, HousekeepingRuleResult):
         raise TypeError("summary must be a HousekeepingRuleResult")
 
-    candidates = tuple(
-        CleanupCandidate(
-            path=Path("<unknown>"),
-            size_bytes=0,
-            bucket=bucket,
-            action=CleanupAction.PRUNE,
-            reason=reason,
+    if summary.deleted_paths:
+        candidates = tuple(
+            CleanupCandidate(
+                path=Path(p),
+                size_bytes=0,
+                bucket=bucket,
+                action=CleanupAction.PRUNE,
+                reason=reason,
+            )
+            for p in summary.deleted_paths
         )
-        for _ in range(summary.deleted_count)
-    )
+    else:
+        candidates = tuple(
+            CleanupCandidate(
+                path=Path("<unknown>"),
+                size_bytes=0,
+                bucket=bucket,
+                action=CleanupAction.PRUNE,
+                reason=reason,
+            )
+            for _ in range(summary.deleted_count)
+        )
     return CleanupPlan(
         bucket=bucket,
         candidates=candidates,
@@ -397,11 +409,16 @@ def adapt_housekeeping_rule_result_to_result(
     deleted_count = 0 if dry_run else summary.deleted_count
     deleted_bytes = 0 if dry_run else summary.deleted_bytes
     kept_bytes = 0 if dry_run else max(plan.total_bytes - deleted_bytes, 0)
+    deleted_paths = (
+        tuple(Path(p) for p in summary.deleted_paths)
+        if not dry_run and summary.deleted_paths
+        else ()
+    )
 
     return CleanupResult(
         bucket=bucket,
         plan=plan,
-        deleted_paths=(),
+        deleted_paths=deleted_paths,
         deleted_count=deleted_count,
         deleted_bytes=deleted_bytes,
         kept_bytes=kept_bytes,
@@ -419,16 +436,28 @@ def adapt_report_prune_summary_to_plan(
         raise TypeError("summary must be a PruneSummary")
 
     candidates: list[CleanupCandidate] = []
-    for _ in range(summary.pruned):
-        candidates.append(
-            CleanupCandidate(
-                path=Path("<unknown>"),
-                size_bytes=0,
-                bucket=bucket,
-                action=CleanupAction.PRUNE,
-                reason=CleanupReason.COUNT_LIMIT,
+    if summary.pruned_paths:
+        for path_str in summary.pruned_paths:
+            candidates.append(
+                CleanupCandidate(
+                    path=Path(path_str),
+                    size_bytes=0,
+                    bucket=bucket,
+                    action=CleanupAction.PRUNE,
+                    reason=CleanupReason.COUNT_LIMIT,
+                )
             )
-        )
+    else:
+        for _ in range(summary.pruned):
+            candidates.append(
+                CleanupCandidate(
+                    path=Path("<unknown>"),
+                    size_bytes=0,
+                    bucket=bucket,
+                    action=CleanupAction.PRUNE,
+                    reason=CleanupReason.COUNT_LIMIT,
+                )
+            )
 
     return CleanupPlan(
         bucket=bucket,
@@ -449,11 +478,16 @@ def adapt_report_prune_summary_to_result(
     plan = adapt_report_prune_summary_to_plan(summary, bucket)
     deleted_count = 0 if dry_run else summary.pruned
     deleted_bytes = 0 if dry_run else (summary.bytes_before - summary.bytes_after)
+    deleted_paths = (
+        tuple(Path(p) for p in summary.pruned_paths)
+        if not dry_run and summary.pruned_paths
+        else ()
+    )
 
     return CleanupResult(
         bucket=bucket,
         plan=plan,
-        deleted_paths=(),
+        deleted_paths=deleted_paths,
         deleted_count=deleted_count,
         deleted_bytes=deleted_bytes,
         kept_bytes=summary.bytes_after,

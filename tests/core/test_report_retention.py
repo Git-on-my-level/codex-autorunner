@@ -150,3 +150,39 @@ class TestReportRetentionDryRunExecuteParity:
             assert "latest-a.md" in remaining
             assert "latest-b.md" in remaining
             assert summary.pruned == 1
+
+    def test_pruned_paths_populated_in_summary(self, tmp_path: Path) -> None:
+        reports_a = tmp_path / "dry" / ".codex-autorunner" / "reports"
+        reports_b = tmp_path / "exec" / ".codex-autorunner" / "reports"
+
+        for reports in (reports_a, reports_b):
+            reports.mkdir(parents=True, exist_ok=True)
+            _write(reports / "latest-summary.md", 200)
+            for i in range(3):
+                _write(reports / f"history-{i:02d}.md", 200)
+
+        dry_summary = prune_report_directory(
+            reports_a, max_history_files=1, max_total_bytes=10_000, dry_run=True
+        )
+        exec_summary = prune_report_directory(
+            reports_b, max_history_files=1, max_total_bytes=10_000, dry_run=False
+        )
+
+        assert dry_summary.pruned == exec_summary.pruned == 2
+        assert len(dry_summary.pruned_paths) == 2
+        assert len(exec_summary.pruned_paths) == 2
+        assert len(exec_summary.kept_paths) == 2
+        assert "latest-summary.md" in "\n".join(exec_summary.kept_paths)
+
+    def test_pruned_paths_empty_when_nothing_pruned(self, tmp_path: Path) -> None:
+        reports = tmp_path / ".codex-autorunner" / "reports"
+        reports.mkdir(parents=True, exist_ok=True)
+        _write(reports / "latest-summary.md", 100)
+
+        summary = prune_report_directory(
+            reports, max_history_files=10, max_total_bytes=10_000, dry_run=False
+        )
+
+        assert summary.pruned == 0
+        assert summary.pruned_paths == ()
+        assert len(summary.kept_paths) == 1

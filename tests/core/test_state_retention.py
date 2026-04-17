@@ -568,6 +568,7 @@ def test_adapt_housekeeping_rule_result_to_plan() -> None:
         scanned_count=5,
         deleted_count=2,
         deleted_bytes=123,
+        deleted_paths=["/tmp/a.txt", "/tmp/b.txt"],
     )
     bucket = RetentionBucket(
         family="update_cache",
@@ -597,6 +598,7 @@ def test_adapt_housekeeping_rule_result_to_result_dry_run() -> None:
         deleted_count=2,
         deleted_bytes=123,
         error_samples=["sample error"],
+        deleted_paths=["/tmp/a.txt", "/tmp/b.txt"],
     )
     bucket = RetentionBucket(
         family="update_cache",
@@ -624,6 +626,7 @@ def test_adapt_housekeeping_rule_result_to_result_executed() -> None:
         scanned_count=5,
         deleted_count=2,
         deleted_bytes=123,
+        deleted_paths=["/tmp/a.txt", "/tmp/b.txt"],
     )
     bucket = RetentionBucket(
         family="update_cache",
@@ -649,6 +652,13 @@ def test_adapt_report_prune_summary_to_plan() -> None:
         pruned=5,
         bytes_before=2000,
         bytes_after=1000,
+        pruned_paths=(
+            "/tmp/history-00.md",
+            "/tmp/history-01.md",
+            "/tmp/history-02.md",
+            "/tmp/history-03.md",
+            "/tmp/history-04.md",
+        ),
     )
     bucket = RetentionBucket(
         family="reports",
@@ -672,6 +682,13 @@ def test_adapt_report_prune_summary_to_result() -> None:
         pruned=5,
         bytes_before=2000,
         bytes_after=1000,
+        pruned_paths=(
+            "/tmp/history-00.md",
+            "/tmp/history-01.md",
+            "/tmp/history-02.md",
+            "/tmp/history-03.md",
+            "/tmp/history-04.md",
+        ),
     )
     bucket = RetentionBucket(
         family="reports",
@@ -1248,6 +1265,12 @@ class TestAdapterDryRunExecuteParity:
             pruned=4,
             bytes_before=2000,
             bytes_after=800,
+            pruned_paths=(
+                "/tmp/h-00.md",
+                "/tmp/h-01.md",
+                "/tmp/h-02.md",
+                "/tmp/h-03.md",
+            ),
         )
         bucket = RetentionBucket(
             family="reports",
@@ -1278,6 +1301,7 @@ class TestAdapterDryRunExecuteParity:
             scanned_count=10,
             deleted_count=3,
             deleted_bytes=300,
+            deleted_paths=["/tmp/log-a.txt", "/tmp/log-b.txt", "/tmp/log-c.txt"],
         )
         bucket = RetentionBucket(
             family="logs",
@@ -1297,8 +1321,11 @@ class TestAdapterDryRunExecuteParity:
 
         assert result_dry.deleted_count == 0
         assert result_dry.deleted_bytes == 0
+        assert result_dry.deleted_paths == ()
         assert result_exec.deleted_count == 3
         assert result_exec.deleted_bytes == 300
+        assert len(result_exec.deleted_paths) == 3
+        assert Path("/tmp/log-a.txt") in result_exec.deleted_paths
 
     def test_archive_adapter_candidates_have_correct_reason(self) -> None:
         summary = ArchivePruneSummary(
@@ -1379,7 +1406,30 @@ class TestAdapterDryRunExecuteParity:
             for candidate in plan.prune_candidates:
                 assert candidate.reason == reason
 
-    def test_housekeeping_adapter_path_is_unknown(self) -> None:
+    def test_housekeeping_adapter_path_uses_real_paths_when_available(self) -> None:
+        summary = HousekeepingRuleResult(
+            name="test",
+            kind="directory",
+            scanned_count=5,
+            deleted_count=2,
+            deleted_bytes=10,
+            deleted_paths=["/tmp/a.txt", "/tmp/b.txt"],
+        )
+        bucket = RetentionBucket(
+            family="test",
+            scope=RetentionScope.REPO,
+            retention_class=RetentionClass.EPHEMERAL,
+        )
+
+        plan = adapt_housekeeping_rule_result_to_plan(
+            summary, bucket, reason=CleanupReason.AGE_LIMIT
+        )
+        assert len(plan.candidates) == 2
+        candidate_paths = {c.path for c in plan.candidates}
+        assert Path("/tmp/a.txt") in candidate_paths
+        assert Path("/tmp/b.txt") in candidate_paths
+
+    def test_housekeeping_adapter_falls_back_to_unknown_when_no_paths(self) -> None:
         summary = HousekeepingRuleResult(
             name="test",
             kind="directory",
@@ -1400,7 +1450,27 @@ class TestAdapterDryRunExecuteParity:
             assert candidate.path == Path("<unknown>")
             assert candidate.size_bytes == 0
 
-    def test_report_adapter_path_is_unknown(self) -> None:
+    def test_report_adapter_path_uses_real_paths_when_available(self) -> None:
+        summary = PruneSummary(
+            kept=1,
+            pruned=2,
+            bytes_before=100,
+            bytes_after=40,
+            pruned_paths=("/tmp/history-a.md", "/tmp/history-b.md"),
+        )
+        bucket = RetentionBucket(
+            family="reports",
+            scope=RetentionScope.REPO,
+            retention_class=RetentionClass.REVIEWABLE,
+        )
+
+        plan = adapt_report_prune_summary_to_plan(summary, bucket)
+        assert len(plan.candidates) == 2
+        candidate_paths = {c.path for c in plan.candidates}
+        assert Path("/tmp/history-a.md") in candidate_paths
+        assert Path("/tmp/history-b.md") in candidate_paths
+
+    def test_report_adapter_falls_back_to_unknown_when_no_paths(self) -> None:
         summary = PruneSummary(
             kept=1,
             pruned=2,

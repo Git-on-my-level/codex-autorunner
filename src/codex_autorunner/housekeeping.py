@@ -54,6 +54,7 @@ class HousekeepingRuleResult:
     truncated_bytes: int = 0
     errors: int = 0
     error_samples: list[str] = dataclasses.field(default_factory=list)
+    deleted_paths: list[str] = dataclasses.field(default_factory=list)
     duration_ms: int = 0
 
 
@@ -299,6 +300,7 @@ def _apply_directory_rule(
     result.deleted_count = len(deleted)
     result.deleted_bytes = deleted_bytes
     result.errors = errors
+    result.deleted_paths = sorted(str(p) for p in deleted)
     if deleted and not config.dry_run:
         _prune_empty_dirs(base)
     result.duration_ms = int((time.monotonic() - start) * 1000)
