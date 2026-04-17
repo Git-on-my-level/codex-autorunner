@@ -49,6 +49,7 @@ def _format_temp_processes(processes: tuple[object, ...]) -> str:
 
 _HERMETIC_ROOTS.prepare_process_environment()
 _HERMETIC_ROOTS.prune_inactive_pytest_temp_runs(min_age_seconds=300.0)
+_HERMETIC_ROOTS.prune_inactive_repo_temp_roots(min_age_seconds=300.0)
 _HERMETIC_ROOTS.prune_old_opencode_state_runs(max_age_seconds=86400)
 
 

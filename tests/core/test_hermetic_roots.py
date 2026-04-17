@@ -116,3 +116,33 @@ def test_prune_inactive_pytest_temp_runs_routes_through_cleanup_module(
     roots.prune_inactive_pytest_temp_runs(min_age_seconds=123.0)
 
     assert calls == [(roots.repo_root, {"run-z"}, 123.0)]
+
+
+def test_prune_inactive_repo_temp_roots_routes_through_cleanup_module(
+    tmp_path: Path, monkeypatch
+) -> None:
+    system_tmp = tmp_path / "system-tmp"
+    monkeypatch.setattr(roots_module, "_system_temp_root", lambda _repo: system_tmp)
+    calls: list[tuple[Path, set[str], float]] = []
+
+    def _cleanup_repo_managed_temp_paths(
+        repo_root: Path, *, keep_run_tokens: set[str], min_age_seconds: float
+    ) -> None:
+        calls.append((repo_root, keep_run_tokens, min_age_seconds))
+
+    monkeypatch.setattr(
+        roots_module,
+        "_load_pytest_temp_cleanup_module",
+        lambda _repo: SimpleNamespace(
+            cleanup_repo_managed_temp_paths=_cleanup_repo_managed_temp_paths
+        ),
+    )
+
+    roots = roots_module.HermeticTestRoots.from_repo_root(
+        tmp_path / "repo",
+        environ={"CAR_PYTEST_RUN_TOKEN": "run-q", "PYTEST_XDIST_WORKER": "gw3"},
+    )
+
+    roots.prune_inactive_repo_temp_roots(min_age_seconds=321.0)
+
+    assert calls == [(roots.repo_root, {"run-q"}, 321.0)]
