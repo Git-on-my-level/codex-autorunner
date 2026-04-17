@@ -42,6 +42,8 @@ from .models import (
 )
 
 ResultT = TypeVar("ResultT")
+_THREAD_TARGET_CREATE_TIMEOUT_SECONDS = 30.0
+_EXECUTION_RESULT_TIMEOUT_SECONDS = 30.0
 
 
 class RemoteThreadExecutionStore(ThreadExecutionStore):
@@ -78,6 +80,7 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
         *,
         operation: str,
         action: Callable[[HubControlPlaneClient], Coroutine[Any, Any, ResultT]],
+        timeout_seconds: Optional[float] = None,
     ) -> ResultT:
         def _invoke() -> ResultT:
             background_client = self._client
@@ -99,15 +102,24 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
 
             return asyncio.run(_run_action())
 
+        effective_timeout_seconds = (
+            self._timeout_seconds
+            if timeout_seconds is None
+            else max(0.0, float(timeout_seconds))
+        )
+
+        pool = ThreadPoolExecutor(max_workers=1)
+        future = pool.submit(_invoke)
+        timed_out = False
         try:
-            with ThreadPoolExecutor(max_workers=1) as pool:
-                future = pool.submit(_invoke)
-                return future.result(timeout=self._timeout_seconds)
+            return future.result(timeout=effective_timeout_seconds)
         except FuturesTimeoutError as exc:
+            timed_out = True
+            future.cancel()
             raise self._hub_unavailable(
                 operation=operation,
-                message=f"request timed out after {self._timeout_seconds:g}s",
-                details={"timeout_seconds": self._timeout_seconds},
+                message=f"request timed out after {effective_timeout_seconds:g}s",
+                details={"timeout_seconds": effective_timeout_seconds},
             ) from exc
         except HubControlPlaneError as exc:
             if exc.code in {"hub_unavailable", "transport_failure"}:
@@ -126,6 +138,8 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
                 message=str(exc) or exc.__class__.__name__,
                 details={"cause_type": exc.__class__.__name__},
             ) from exc
+        finally:
+            pool.shutdown(wait=not timed_out, cancel_futures=timed_out)
 
     @staticmethod
     def _require_thread(
@@ -172,6 +186,7 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
             metadata_payload["context_profile"] = normalized_context_profile
         response = self._run(
             operation="create_thread_target",
+            timeout_seconds=_THREAD_TARGET_CREATE_TIMEOUT_SECONDS,
             action=lambda client: client.create_thread_target(
                 ThreadTargetCreateRequest(
                     agent_id=agent_id,
@@ -441,6 +456,7 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
     ) -> ExecutionRecord:
         response = self._run(
             operation="record_execution_result",
+            timeout_seconds=_EXECUTION_RESULT_TIMEOUT_SECONDS,
             action=lambda client: client.record_execution_result(
                 ExecutionResultRecordRequest(
                     thread_target_id=thread_target_id,

@@ -37,6 +37,7 @@ from .git_utils import (
     git_failure_detail,
     git_head_sha,
     git_is_clean,
+    git_mutation_lock,
     git_upstream_status,
     resolve_ref_sha,
     run_git,
@@ -717,47 +718,48 @@ class HubSupervisor:
         if not git_is_clean(repo_root):
             raise ValueError("Repo has uncommitted changes; commit or stash first")
 
-        try:
-            proc = run_git(
-                ["fetch", "--prune", "origin"],
-                repo_root,
-                check=False,
-                timeout_seconds=_GIT_FETCH_TIMEOUT_SECONDS,
-            )
-        except GitError as exc:
-            raise ValueError(f"git fetch failed: {exc}") from exc
-        if proc.returncode != 0:
-            raise ValueError(f"git fetch failed: {git_failure_detail(proc)}")
-
-        default_branch = git_default_branch(repo_root)
-        if not default_branch:
-            raise ValueError("Unable to resolve origin default branch")
-
-        try:
-            proc = run_git(["checkout", default_branch], repo_root, check=False)
-        except GitError as exc:
-            raise ValueError(f"git checkout failed: {exc}") from exc
-        if proc.returncode != 0:
+        with git_mutation_lock(repo_root):
             try:
                 proc = run_git(
-                    ["checkout", "-B", default_branch, f"origin/{default_branch}"],
+                    ["fetch", "--prune", "origin"],
                     repo_root,
                     check=False,
+                    timeout_seconds=_GIT_FETCH_TIMEOUT_SECONDS,
                 )
+            except GitError as exc:
+                raise ValueError(f"git fetch failed: {exc}") from exc
+            if proc.returncode != 0:
+                raise ValueError(f"git fetch failed: {git_failure_detail(proc)}")
+
+            default_branch = git_default_branch(repo_root)
+            if not default_branch:
+                raise ValueError("Unable to resolve origin default branch")
+
+            try:
+                proc = run_git(["checkout", default_branch], repo_root, check=False)
             except GitError as exc:
                 raise ValueError(f"git checkout failed: {exc}") from exc
             if proc.returncode != 0:
-                raise ValueError(f"git checkout failed: {git_failure_detail(proc)}")
+                try:
+                    proc = run_git(
+                        ["checkout", "-B", default_branch, f"origin/{default_branch}"],
+                        repo_root,
+                        check=False,
+                    )
+                except GitError as exc:
+                    raise ValueError(f"git checkout failed: {exc}") from exc
+                if proc.returncode != 0:
+                    raise ValueError(f"git checkout failed: {git_failure_detail(proc)}")
 
-        try:
-            proc = run_git(
-                ["pull", "--ff-only", "origin", default_branch],
-                repo_root,
-                check=False,
-                timeout_seconds=_GIT_PULL_TIMEOUT_SECONDS,
-            )
-        except GitError as exc:
-            raise ValueError(f"git pull failed: {exc}") from exc
+            try:
+                proc = run_git(
+                    ["pull", "--ff-only", "origin", default_branch],
+                    repo_root,
+                    check=False,
+                    timeout_seconds=_GIT_PULL_TIMEOUT_SECONDS,
+                )
+            except GitError as exc:
+                raise ValueError(f"git pull failed: {exc}") from exc
         if proc.returncode != 0:
             raise ValueError(f"git pull failed: {git_failure_detail(proc)}")
         local_sha = git_head_sha(repo_root)

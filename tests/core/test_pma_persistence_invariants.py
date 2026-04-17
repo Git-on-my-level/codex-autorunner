@@ -13,7 +13,6 @@ These tests are behavior-preserving guards for the block-030 refactoring.
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 import pytest
@@ -667,82 +666,52 @@ class TestReactiveCanonicalInvariants:
 
 
 class TestLegacyThreadMirrorInvariant:
-    def test_legacy_mirror_written_when_enabled(self, tmp_path: Path) -> None:
+    def test_legacy_mirror_is_bootstrap_only_after_live_writes(
+        self, tmp_path: Path
+    ) -> None:
         hub_root = tmp_path / "hub"
-        os.environ["CAR_LEGACY_MIRROR_ENABLED"] = "true"
-        try:
-            store = PmaThreadStore(hub_root)
-            thread = store.create_thread("codex", hub_root)
-            thread_id = str(thread["managed_thread_id"])
-            store.create_turn(thread_id, prompt="hello")
+        store = PmaThreadStore(hub_root)
+        thread = store.create_thread("codex", hub_root)
+        thread_id = str(thread["managed_thread_id"])
+        store.create_turn(thread_id, prompt="hello")
 
-            legacy_path = _legacy_thread_db_path(hub_root)
-            assert legacy_path.exists()
+        legacy_path = _legacy_thread_db_path(hub_root)
+        assert legacy_path.exists()
 
-            from codex_autorunner.core.sqlite_utils import open_sqlite
+        from codex_autorunner.core.sqlite_utils import open_sqlite
 
-            with open_sqlite(legacy_path, durable=False) as conn:
-                threads = conn.execute(
-                    "SELECT managed_thread_id FROM pma_managed_threads"
-                ).fetchall()
-                turns = conn.execute(
-                    "SELECT managed_turn_id FROM pma_managed_turns"
-                ).fetchall()
-            assert len(threads) == 1
-            assert len(turns) == 1
-        finally:
-            os.environ.pop("CAR_LEGACY_MIRROR_ENABLED", None)
-
-    @pytest.mark.xfail(
-        reason="CAR_LEGACY_MIRROR_ENABLED env var not yet wired into PmaThreadStore",
-        strict=True,
-    )
-    def test_legacy_mirror_not_written_when_disabled(self, tmp_path: Path) -> None:
-        hub_root = tmp_path / "hub"
-        os.environ["CAR_LEGACY_MIRROR_ENABLED"] = "false"
-        try:
-            store = PmaThreadStore(hub_root)
-            thread = store.create_thread("codex", hub_root)
-            thread_id = str(thread["managed_thread_id"])
-            store.create_turn(thread_id, prompt="hello")
-
-            legacy_path = _legacy_thread_db_path(hub_root)
-            assert not legacy_path.exists()
-
-            with open_orchestration_sqlite(hub_root, durable=False) as conn:
-                row = conn.execute(
-                    "SELECT thread_target_id FROM orch_thread_targets"
-                ).fetchone()
-            assert row is not None
-        finally:
-            os.environ.pop("CAR_LEGACY_MIRROR_ENABLED", None)
+        with open_sqlite(legacy_path, durable=False) as conn:
+            threads = conn.execute(
+                "SELECT managed_thread_id FROM pma_managed_threads"
+            ).fetchall()
+            turns = conn.execute(
+                "SELECT managed_turn_id FROM pma_managed_turns"
+            ).fetchall()
+        assert threads == []
+        assert turns == []
 
     def test_canonical_state_intact_when_legacy_mirror_disabled(
         self, tmp_path: Path
     ) -> None:
         hub_root = tmp_path / "hub"
-        os.environ["CAR_LEGACY_MIRROR_ENABLED"] = "false"
-        try:
-            store = PmaThreadStore(hub_root)
-            thread = store.create_thread("codex", hub_root)
-            thread_id = str(thread["managed_thread_id"])
-            store.create_turn(thread_id, prompt="hello")
-            turn_id = str(store.list_turns(thread_id)[0]["managed_turn_id"])
-            store.mark_turn_finished(turn_id, status="ok")
+        store = PmaThreadStore(hub_root)
+        thread = store.create_thread("codex", hub_root)
+        thread_id = str(thread["managed_thread_id"])
+        store.create_turn(thread_id, prompt="hello")
+        turn_id = str(store.list_turns(thread_id)[0]["managed_turn_id"])
+        store.mark_turn_finished(turn_id, status="ok")
 
-            with open_orchestration_sqlite(hub_root, durable=False) as conn:
-                t_row = conn.execute(
-                    "SELECT lifecycle_status FROM orch_thread_targets WHERE thread_target_id = ?",
-                    (thread_id,),
-                ).fetchone()
-                e_row = conn.execute(
-                    "SELECT status FROM orch_thread_executions WHERE execution_id = ?",
-                    (turn_id,),
-                ).fetchone()
-            assert t_row["lifecycle_status"] is not None
-            assert e_row["status"] == "ok"
-        finally:
-            os.environ.pop("CAR_LEGACY_MIRROR_ENABLED", None)
+        with open_orchestration_sqlite(hub_root, durable=False) as conn:
+            t_row = conn.execute(
+                "SELECT lifecycle_status FROM orch_thread_targets WHERE thread_target_id = ?",
+                (thread_id,),
+            ).fetchone()
+            e_row = conn.execute(
+                "SELECT status FROM orch_thread_executions WHERE execution_id = ?",
+                (turn_id,),
+            ).fetchone()
+        assert t_row["lifecycle_status"] is not None
+        assert e_row["status"] == "ok"
 
 
 # ---------------------------------------------------------------------------

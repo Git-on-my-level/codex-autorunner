@@ -82,11 +82,14 @@ class RemoteSurfaceBindingStore:
 
             return asyncio.run(_run_action())
 
+        pool = ThreadPoolExecutor(max_workers=1)
+        future = pool.submit(_invoke)
+        timed_out = False
         try:
-            with ThreadPoolExecutor(max_workers=1) as pool:
-                future = pool.submit(_invoke)
-                return future.result(timeout=self._timeout_seconds)
+            return future.result(timeout=self._timeout_seconds)
         except FuturesTimeoutError as exc:
+            timed_out = True
+            future.cancel()
             raise self._hub_unavailable(
                 operation=operation,
                 message=f"request timed out after {self._timeout_seconds:g}s",
@@ -109,6 +112,8 @@ class RemoteSurfaceBindingStore:
                 message=str(exc) or exc.__class__.__name__,
                 details={"cause_type": exc.__class__.__name__},
             ) from exc
+        finally:
+            pool.shutdown(wait=not timed_out, cancel_futures=timed_out)
 
     @staticmethod
     def _normalize_key(surface_kind: str, surface_key: str) -> tuple[str, str]:

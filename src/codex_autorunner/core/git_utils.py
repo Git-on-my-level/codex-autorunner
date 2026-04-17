@@ -3,9 +3,11 @@ Centralized Git utilities for consistent git operations across the codebase.
 """
 
 import subprocess
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Iterator, List, Optional
 
+from .locks import file_lock
 from .utils import subprocess_env
 
 
@@ -59,6 +61,33 @@ def run_git(
         raise GitError(f"git {args[0]} failed: {detail}", returncode=proc.returncode)
 
     return proc
+
+
+def git_mutation_lock_path(repo_root: Path) -> Path:
+    git_path = repo_root.resolve() / ".git"
+    if git_path.is_dir():
+        return git_path / "codex-autorunner-git-mutation.lock"
+    try:
+        raw = git_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return git_path / "codex-autorunner-git-mutation.lock"
+    if not raw.lower().startswith("gitdir:"):
+        return git_path / "codex-autorunner-git-mutation.lock"
+    git_dir = Path(raw.split(":", 1)[1].strip())
+    if not git_dir.is_absolute():
+        git_dir = (repo_root.resolve() / git_dir).resolve()
+    common_git_dir = (
+        git_dir.parent.parent.resolve()
+        if git_dir.parent.name == "worktrees"
+        else git_dir.resolve()
+    )
+    return common_git_dir / "codex-autorunner-git-mutation.lock"
+
+
+@contextmanager
+def git_mutation_lock(repo_root: Path) -> Iterator[None]:
+    with file_lock(git_mutation_lock_path(repo_root)):
+        yield
 
 
 def git_failure_detail(proc: Any) -> str:
@@ -329,27 +358,33 @@ def reset_branch_from_origin_main(repo_root: Path, branch_name: str) -> str:
     if not branch:
         raise GitError("branch name cannot be empty", returncode=2)
 
-    status = run_git(
-        ["status", "--porcelain"], repo_root, timeout_seconds=30, check=True
-    )
-    if (status.stdout or "").strip():
-        raise GitError(
-            "working tree has uncommitted changes; commit or stash before /newt",
-            returncode=1,
+    with git_mutation_lock(repo_root):
+        status = run_git(
+            ["status", "--porcelain"], repo_root, timeout_seconds=30, check=True
+        )
+        if (status.stdout or "").strip():
+            raise GitError(
+                "working tree has uncommitted changes; commit or stash before /newt",
+                returncode=1,
+            )
+
+        run_git(
+            ["fetch", "--prune", "origin"],
+            repo_root,
+            timeout_seconds=120,
+            check=True,
         )
 
-    run_git(["fetch", "--prune", "origin"], repo_root, timeout_seconds=120, check=True)
+        default_branch = git_default_branch(repo_root)
+        if not default_branch:
+            raise GitError("unable to resolve origin default branch", returncode=1)
 
-    default_branch = git_default_branch(repo_root)
-    if not default_branch:
-        raise GitError("unable to resolve origin default branch", returncode=1)
-
-    run_git(
-        ["checkout", "-B", branch, f"origin/{default_branch}"],
-        repo_root,
-        timeout_seconds=60,
-        check=True,
-    )
+        run_git(
+            ["checkout", "-B", branch, f"origin/{default_branch}"],
+            repo_root,
+            timeout_seconds=60,
+            check=True,
+        )
     return default_branch
 
 

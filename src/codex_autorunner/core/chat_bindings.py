@@ -92,10 +92,12 @@ def _resolve_manifest_path(hub_root: Path, raw_config: Mapping[str, Any]) -> Pat
 def _chat_binding_counts_fingerprint(
     *, hub_root: Path, raw_config: Mapping[str, Any]
 ) -> tuple[Any, ...]:
+    orchestration_db_path = resolve_orchestration_sqlite_path(hub_root)
     return (
         path_stat_fingerprint(_resolve_manifest_path(hub_root, raw_config)),
         path_stat_fingerprint(default_pma_threads_db_path(hub_root)),
-        path_stat_fingerprint(resolve_orchestration_sqlite_path(hub_root)),
+        path_stat_fingerprint(orchestration_db_path),
+        path_stat_fingerprint(Path(f"{orchestration_db_path}-wal")),
         _chat_surface_enabled(raw_config, "discord_bot"),
         path_stat_fingerprint(_resolve_discord_state_path(hub_root, raw_config)),
         _chat_surface_enabled(raw_config, "telegram_bot"),
@@ -630,39 +632,19 @@ def _active_pma_thread_counts(
     db_path = default_pma_threads_db_path(hub_root)
     if not db_path.exists():
         return {}
-    store = PmaThreadStore(hub_root)
-    raw_counts = store.count_threads_by_repo(status="active")
     counts: Counter[str] = Counter()
-    for raw_repo_id, raw_count in raw_counts.items():
-        repo_id = _normalize_repo_id(raw_repo_id)
-        if repo_id is None:
-            continue
-        count = _coerce_count(raw_count)
-        if count <= 0:
-            continue
-        counts[repo_id] += count
     try:
-        with open_sqlite(db_path) as conn:
-            rows = conn.execute(
-                """
-                SELECT workspace_root
-                  FROM pma_managed_threads
-                 WHERE status = 'active'
-                   AND (repo_id IS NULL OR TRIM(repo_id) = '')
-                """
-            ).fetchall()
-    except sqlite3.OperationalError as exc:
-        if "no such table" in str(exc).lower():
-            return dict(counts)
+        rows = PmaThreadStore(hub_root).list_threads(status="active", limit=None)
+    except (OSError, RuntimeError, ValueError, sqlite3.OperationalError) as exc:
         raise RuntimeError(
-            f"Failed reading chat bindings from {db_path}: {exc}"
+            f"Failed reading active PMA thread counts from {db_path}: {exc}"
         ) from exc
 
     for row in rows:
         repo_id = _resolve_bound_repo_id(
-            repo_id=None,
+            repo_id=row.get("repo_id"),
             repo_id_by_workspace=repo_id_by_workspace,
-            workspace_values=(row["workspace_root"],),
+            workspace_values=(row.get("workspace_root"),),
         )
         if repo_id is None:
             continue

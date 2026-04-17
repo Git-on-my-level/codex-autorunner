@@ -47,6 +47,7 @@ from .git_utils import (
     git_failure_detail,
     git_head_sha,
     git_is_clean,
+    git_mutation_lock,
     resolve_ref_sha,
     run_git,
 )
@@ -123,77 +124,78 @@ class WorktreeManager:
         )
         effective_start_ref = explicit_start_ref
 
-        if explicit_start_ref is None or explicit_start_ref.startswith("origin/"):
+        with git_mutation_lock(base_path):
+            if explicit_start_ref is None or explicit_start_ref.startswith("origin/"):
+                try:
+                    fetch_proc = run_git(
+                        ["fetch", "--prune", "origin"],
+                        base_path,
+                        check=False,
+                        timeout_seconds=_GIT_FETCH_TIMEOUT_SECONDS,
+                    )
+                except GitError as exc:
+                    raise ValueError(
+                        "Unable to refresh origin before creating worktree: %s" % exc
+                    ) from exc
+                if fetch_proc.returncode != 0:
+                    raise ValueError(
+                        "Unable to refresh origin before creating worktree: %s"
+                        % git_failure_detail(fetch_proc)
+                    )
+
+            if effective_start_ref is None:
+                default_branch = git_default_branch(base_path)
+                if not default_branch:
+                    raise ValueError("Unable to resolve origin default branch")
+                effective_start_ref = f"origin/{default_branch}"
+
+            assert effective_start_ref is not None
+            start_sha = resolve_ref_sha(base_path, effective_start_ref)
             try:
-                fetch_proc = run_git(
-                    ["fetch", "--prune", "origin"],
+                exists = run_git(
+                    ["show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
                     base_path,
                     check=False,
-                    timeout_seconds=_GIT_FETCH_TIMEOUT_SECONDS,
                 )
             except GitError as exc:
-                raise ValueError(
-                    "Unable to refresh origin before creating worktree: %s" % exc
-                ) from exc
-            if fetch_proc.returncode != 0:
-                raise ValueError(
-                    "Unable to refresh origin before creating worktree: %s"
-                    % git_failure_detail(fetch_proc)
-                )
-
-        if effective_start_ref is None:
-            default_branch = git_default_branch(base_path)
-            if not default_branch:
-                raise ValueError("Unable to resolve origin default branch")
-            effective_start_ref = f"origin/{default_branch}"
-
-        assert effective_start_ref is not None
-        start_sha = resolve_ref_sha(base_path, effective_start_ref)
-        try:
-            exists = run_git(
-                ["show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
-                base_path,
-                check=False,
-            )
-        except GitError as exc:
-            raise ValueError(f"git worktree add failed: {exc}") from exc
-        try:
-            if exists.returncode == 0:
-                branch_sha = resolve_ref_sha(base_path, f"refs/heads/{branch}")
-                if branch_sha != start_sha:
-                    raise ValueError(
-                        "Branch %r already exists and points to %s, but %s resolves to %s. "
-                        "Use a different branch name or realign the existing branch first."
-                        % (
-                            branch,
-                            branch_sha[:12],
-                            effective_start_ref,
-                            start_sha[:12],
+                raise ValueError(f"git worktree add failed: {exc}") from exc
+            try:
+                if exists.returncode == 0:
+                    branch_sha = resolve_ref_sha(base_path, f"refs/heads/{branch}")
+                    if branch_sha != start_sha:
+                        raise ValueError(
+                            "Branch %r already exists and points to %s, but %s resolves to %s. "
+                            "Use a different branch name or realign the existing branch first."
+                            % (
+                                branch,
+                                branch_sha[:12],
+                                effective_start_ref,
+                                start_sha[:12],
+                            )
                         )
+                    proc = run_git(
+                        ["worktree", "add", str(worktree_path), branch],
+                        base_path,
+                        check=False,
+                        timeout_seconds=_GIT_WORKTREE_TIMEOUT_SECONDS,
                     )
-                proc = run_git(
-                    ["worktree", "add", str(worktree_path), branch],
-                    base_path,
-                    check=False,
-                    timeout_seconds=_GIT_WORKTREE_TIMEOUT_SECONDS,
-                )
-            else:
-                cmd = [
-                    "worktree",
-                    "add",
-                    "-b",
-                    branch,
-                    str(worktree_path),
-                    effective_start_ref,
-                ]
-                proc = run_git(
-                    cmd,
-                    base_path,
-                    check=False,
-                    timeout_seconds=_GIT_WORKTREE_TIMEOUT_SECONDS,
-                )
-        except GitError as exc:
-            raise ValueError(f"git worktree add failed: {exc}") from exc
+                else:
+                    cmd = [
+                        "worktree",
+                        "add",
+                        "-b",
+                        branch,
+                        str(worktree_path),
+                        effective_start_ref,
+                    ]
+                    proc = run_git(
+                        cmd,
+                        base_path,
+                        check=False,
+                        timeout_seconds=_GIT_WORKTREE_TIMEOUT_SECONDS,
+                    )
+            except GitError as exc:
+                raise ValueError(f"git worktree add failed: {exc}") from exc
         if proc.returncode != 0:
             raise ValueError(f"git worktree add failed: {git_failure_detail(proc)}")
 

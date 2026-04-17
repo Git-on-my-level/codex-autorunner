@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -432,6 +434,20 @@ class _LoopBoundThreadClient(_FakeHubClient):
         return await super().get_thread_target(request)
 
 
+class _SlowGetThreadTargetClient(_FakeHubClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.finished = threading.Event()
+
+    async def get_thread_target(self, request):
+        self.calls.append(("get_thread_target", request))
+        try:
+            await asyncio.sleep(0.2)
+        finally:
+            self.finished.set()
+        return self.thread_response
+
+
 def test_remote_execution_store_translates_transport_failures_to_hub_unavailable() -> (
     None
 ):
@@ -476,3 +492,19 @@ def test_remote_execution_store_clones_loop_bound_client_for_background_calls() 
 
     assert thread is not None
     assert thread.thread_target_id == "thread-1"
+
+
+def test_remote_execution_store_timeout_does_not_wait_for_background_shutdown() -> None:
+    client = _SlowGetThreadTargetClient()
+    store = RemoteThreadExecutionStore(client, timeout_seconds=0.01)
+
+    started = time.monotonic()
+    with pytest.raises(HubControlPlaneError) as exc_info:
+        store.get_thread_target("thread-1")
+    elapsed = time.monotonic() - started
+
+    assert exc_info.value.code == "hub_unavailable"
+    assert exc_info.value.details["operation"] == "get_thread_target"
+    assert exc_info.value.details["timeout_seconds"] == 0.01
+    assert elapsed < 0.1
+    assert client.finished.wait(timeout=1.0)

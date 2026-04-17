@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from pathlib import Path
 from subprocess import CompletedProcess
 
@@ -97,6 +98,58 @@ def test_reset_branch_from_origin_main_raises_when_worktree_dirty(
         match="working tree has uncommitted changes; commit or stash before /newt",
     ):
         git_utils.reset_branch_from_origin_main(Path("/tmp/repo"), "thread-123")
+
+
+def test_reset_branch_from_origin_main_serializes_git_mutations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entered: list[Path] = []
+
+    @contextmanager
+    def _fake_git_mutation_lock(repo_root: Path):
+        entered.append(repo_root)
+        yield
+
+    def _fake_run_git(
+        args: list[str],
+        _cwd: Path,
+        *,
+        timeout_seconds: int = 30,
+        check: bool = False,
+    ) -> CompletedProcess[str]:
+        _ = timeout_seconds, check
+        if args == ["status", "--porcelain"]:
+            return _ok_proc(stdout="")
+        if args == ["fetch", "--prune", "origin"]:
+            return _ok_proc()
+        if args == ["checkout", "-B", "thread-123", "origin/main"]:
+            return _ok_proc()
+        raise AssertionError(f"unexpected git args: {args}")
+
+    monkeypatch.setattr(git_utils, "git_mutation_lock", _fake_git_mutation_lock)
+    monkeypatch.setattr(git_utils, "git_default_branch", lambda _repo_root: "main")
+    monkeypatch.setattr(git_utils, "run_git", _fake_run_git)
+
+    repo_root = Path("/tmp/repo")
+    assert git_utils.reset_branch_from_origin_main(repo_root, "thread-123") == "main"
+    assert entered == [repo_root]
+
+
+def test_git_mutation_lock_path_uses_common_git_dir_for_worktrees(
+    tmp_path: Path,
+) -> None:
+    common_git_dir = tmp_path / "main-repo" / ".git"
+    common_git_dir.mkdir(parents=True)
+    worktree_root = tmp_path / "worktree"
+    worktree_root.mkdir()
+    (worktree_root / ".git").write_text(
+        f"gitdir: {common_git_dir / 'worktrees' / 'topic'}\n",
+        encoding="utf-8",
+    )
+
+    assert git_utils.git_mutation_lock_path(worktree_root) == (
+        common_git_dir / "codex-autorunner-git-mutation.lock"
+    )
 
 
 def test_describe_newt_reject_reasons_summarizes_git_status(

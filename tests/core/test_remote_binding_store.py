@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import threading
+import time
 
 import pytest
 
@@ -86,6 +88,17 @@ class _LoopBoundListingClient(_ListingClient):
         if threading.get_ident() != self._owner_thread_id:
             raise RuntimeError("Event loop is closed")
         return await super().list_surface_bindings(request)
+
+
+class _SlowLookupClient:
+    def __init__(self) -> None:
+        self.finished = threading.Event()
+
+    async def get_surface_binding(self, request):
+        try:
+            await asyncio.sleep(0.2)
+        finally:
+            self.finished.set()
 
 
 def test_remote_surface_binding_store_lists_bindings_from_hub_authoritatively() -> None:
@@ -248,3 +261,21 @@ def test_remote_surface_binding_store_clones_loop_bound_client_for_background_ca
     listed = store.list_bindings(limit=5)
 
     assert [binding.binding_id for binding in listed] == ["binding-hub"]
+
+
+def test_remote_surface_binding_store_timeout_does_not_wait_for_background_shutdown() -> (
+    None
+):
+    client = _SlowLookupClient()
+    store = RemoteSurfaceBindingStore(client, timeout_seconds=0.01)
+
+    started = time.monotonic()
+    with pytest.raises(HubControlPlaneError) as exc_info:
+        store.get_binding(surface_kind="discord", surface_key="channel:1")
+    elapsed = time.monotonic() - started
+
+    assert exc_info.value.code == "hub_unavailable"
+    assert exc_info.value.details["operation"] == "get_surface_binding"
+    assert exc_info.value.details["timeout_seconds"] == 0.01
+    assert elapsed < 0.1
+    assert client.finished.wait(timeout=1.0)

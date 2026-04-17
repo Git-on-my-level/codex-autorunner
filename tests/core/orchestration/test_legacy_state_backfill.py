@@ -10,7 +10,14 @@ from codex_autorunner.core.orchestration.migrate_legacy_state import (
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.pma_automation_persistence import PmaAutomationPersistence
 from codex_autorunner.core.pma_automation_types import default_pma_automation_state
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
+from codex_autorunner.core.pma_thread_mirror import sync_legacy_mirror
+from codex_autorunner.core.pma_thread_store import (
+    PmaThreadStore,
+    _ensure_schema,
+    _execution_row_to_record,
+    _thread_row_to_record,
+    default_pma_threads_db_path,
+)
 
 
 def test_backfill_legacy_thread_state_imports_threads_turns_and_actions(
@@ -49,6 +56,15 @@ def test_backfill_legacy_thread_state_imports_threads_turns_and_actions(
     )
 
     with open_orchestration_sqlite(hub_root, durable=False) as conn:
+        sync_legacy_mirror(
+            hub_root=hub_root,
+            legacy_db_path=default_pma_threads_db_path(hub_root),
+            durable=False,
+            orchestration_conn=conn,
+            thread_row_to_record=_thread_row_to_record,
+            execution_row_to_record=_execution_row_to_record,
+            ensure_legacy_schema=_ensure_schema,
+        )
         with conn:
             conn.execute("DELETE FROM orch_thread_actions")
             conn.execute("DELETE FROM orch_thread_executions")

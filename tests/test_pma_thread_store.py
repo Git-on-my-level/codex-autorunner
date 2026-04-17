@@ -20,7 +20,6 @@ from codex_autorunner.core.pma_thread_store import (
     pma_threads_db_lock_path,
 )
 from codex_autorunner.core.pma_thread_store_rows import PmaThreadRecord
-from codex_autorunner.core.sqlite_utils import open_sqlite
 
 
 def test_create_list_get_thread(tmp_path: Path) -> None:
@@ -165,18 +164,6 @@ def test_backend_thread_binding_can_be_cleared_across_restart(tmp_path: Path) ->
     assert listed[0]["managed_thread_id"] == managed_thread_id
     assert "backend_thread_id" not in listed[0]
     assert "backend_runtime_instance_id" not in listed[0]
-
-    with open_sqlite(restarted.path) as conn:
-        row = conn.execute(
-            """
-            SELECT backend_thread_id
-              FROM pma_managed_threads
-             WHERE managed_thread_id = ?
-            """,
-            (managed_thread_id,),
-        ).fetchone()
-    assert row is not None
-    assert row["backend_thread_id"] is None
 
 
 def test_connect_readonly_skips_bootstrap_initialize(
