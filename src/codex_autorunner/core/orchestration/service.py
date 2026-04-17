@@ -185,13 +185,12 @@ def _record_thread_activity_best_effort(
             message_preview=message_preview,
         )
     except RuntimeError as exc:
+        from ..hub_control_plane.errors import is_retryable_hub_control_plane_failure
+
+        if not is_retryable_hub_control_plane_failure(exc):
+            raise
         error_code = str(getattr(exc, "code", "") or "").strip()
         retryable = bool(getattr(exc, "retryable", False))
-        if not retryable or error_code not in {
-            "hub_unavailable",
-            "transport_failure",
-        }:
-            raise
         log_event(
             logger,
             logging.WARNING,
@@ -1142,9 +1141,7 @@ class _ThreadExecutionLifecycle:
                 if refreshed is None:
                     raise
             raise
-        except (
-            Exception
-        ) as exc:  # intentional: top-level execution boundary records all harness failures
+        except Exception as exc:  # intentional: top-level execution boundary records all harness failures
             detail = (
                 str(request.metadata.get("execution_error_message") or "").strip()
                 or str(exc).strip()

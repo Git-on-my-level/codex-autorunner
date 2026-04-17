@@ -14,6 +14,7 @@ from .....agents.opencode.runtime import extract_session_id
 from .....core.flows import FlowStore
 from .....core.flows.models import FlowRunStatus
 from .....core.git_utils import GitError, reset_branch_from_origin_main
+from .....core.hub_control_plane.errors import is_retryable_hub_control_plane_failure
 from .....core.logging_utils import log_event
 from .....core.pma_context import clear_pma_prompt_state_sessions
 from .....core.state import now_iso
@@ -128,12 +129,6 @@ class ResumeThreadData:
     threads: list[dict[str, Any]]
     unscoped_entries: list[dict[str, Any]]
     saw_path: bool
-
-
-def _is_retryable_hub_control_plane_failure(exc: BaseException) -> bool:
-    return bool(getattr(exc, "retryable", False)) and str(
-        getattr(exc, "code", "") or ""
-    ).strip() in {"hub_unavailable", "transport_failure"}
 
 
 def _telegram_status_base_lines(
@@ -1248,7 +1243,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                             pma_enabled=True,
                         )
                     except (OSError, RuntimeError, ValueError) as exc:
-                        if _is_retryable_hub_control_plane_failure(exc):
+                        if is_retryable_hub_control_plane_failure(exc):
                             log_event(
                                 self._logger,
                                 logging.WARNING,
@@ -1526,7 +1521,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                             pma_enabled=True,
                         )
                     except (OSError, RuntimeError, ValueError) as exc:
-                        if _is_retryable_hub_control_plane_failure(exc):
+                        if is_retryable_hub_control_plane_failure(exc):
                             log_event(
                                 self._logger,
                                 logging.WARNING,
