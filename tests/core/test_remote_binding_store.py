@@ -12,6 +12,9 @@ from codex_autorunner.core.hub_control_plane import (
     RemoteSurfaceBindingStore,
     SurfaceBindingListResponse,
 )
+from codex_autorunner.core.hub_control_plane.background_runner import (
+    BoundedBackgroundRunner,
+)
 
 
 def _binding_from_mapping(**overrides: object) -> Binding:
@@ -99,6 +102,19 @@ class _SlowLookupClient:
             await asyncio.sleep(0.2)
         finally:
             self.finished.set()
+
+
+class _BlockingLookupClient:
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    async def get_surface_binding(self, request):
+        self.started.set()
+        await asyncio.to_thread(self.release.wait)
+        from codex_autorunner.core.hub_control_plane import SurfaceBindingResponse
+
+        return SurfaceBindingResponse(binding=None)
 
 
 def test_remote_surface_binding_store_lists_bindings_from_hub_authoritatively() -> None:
@@ -279,3 +295,41 @@ def test_remote_surface_binding_store_timeout_does_not_wait_for_background_shutd
     assert exc_info.value.details["timeout_seconds"] == 0.01
     assert elapsed < 0.1
     assert client.finished.wait(timeout=1.0)
+
+
+def test_remote_surface_binding_store_bounds_background_timeout_fallout() -> None:
+    runner = BoundedBackgroundRunner(
+        max_workers=1,
+        saturation_wait_seconds=0.0,
+        thread_name_prefix="test-hub-binding",
+    )
+    client = _BlockingLookupClient()
+    store = RemoteSurfaceBindingStore(
+        client,
+        timeout_seconds=0.5,
+        background_runner=runner,
+    )
+
+    errors: list[BaseException] = []
+
+    def _first_call() -> None:
+        try:
+            store.get_binding(surface_kind="discord", surface_key="channel:1")
+        except BaseException as exc:  # pragma: no cover - test assertion below
+            errors.append(exc)
+
+    worker = threading.Thread(target=_first_call)
+    worker.start()
+    assert client.started.wait(timeout=1.0)
+
+    with pytest.raises(HubControlPlaneError) as exc_info:
+        store.get_binding(surface_kind="discord", surface_key="channel:2")
+
+    client.release.set()
+    worker.join(timeout=1.0)
+    runner.close()
+
+    assert not errors
+    assert exc_info.value.code == "hub_unavailable"
+    assert exc_info.value.details["operation"] == "get_surface_binding"
+    assert exc_info.value.details["max_workers"] == 1

@@ -21,6 +21,9 @@ from codex_autorunner.core.hub_control_plane import (
     ThreadTargetListResponse,
     ThreadTargetResponse,
 )
+from codex_autorunner.core.hub_control_plane.background_runner import (
+    BoundedBackgroundRunner,
+)
 from codex_autorunner.core.orchestration.interfaces import ThreadExecutionStore
 from codex_autorunner.core.orchestration.models import ExecutionRecord, ThreadTarget
 
@@ -448,6 +451,19 @@ class _SlowGetThreadTargetClient(_FakeHubClient):
         return self.thread_response
 
 
+class _BlockingGetThreadTargetClient(_FakeHubClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    async def get_thread_target(self, request):
+        self.calls.append(("get_thread_target", request))
+        self.started.set()
+        await asyncio.to_thread(self.release.wait)
+        return self.thread_response
+
+
 def test_remote_execution_store_translates_transport_failures_to_hub_unavailable() -> (
     None
 ):
@@ -508,3 +524,41 @@ def test_remote_execution_store_timeout_does_not_wait_for_background_shutdown() 
     assert exc_info.value.details["timeout_seconds"] == 0.01
     assert elapsed < 0.1
     assert client.finished.wait(timeout=1.0)
+
+
+def test_remote_execution_store_bounds_background_timeout_fallout() -> None:
+    runner = BoundedBackgroundRunner(
+        max_workers=1,
+        saturation_wait_seconds=0.0,
+        thread_name_prefix="test-hub-execution",
+    )
+    client = _BlockingGetThreadTargetClient()
+    store = RemoteThreadExecutionStore(
+        client,
+        timeout_seconds=0.5,
+        background_runner=runner,
+    )
+
+    errors: list[BaseException] = []
+
+    def _first_call() -> None:
+        try:
+            store.get_thread_target("thread-1")
+        except BaseException as exc:  # pragma: no cover - test assertion below
+            errors.append(exc)
+
+    worker = threading.Thread(target=_first_call)
+    worker.start()
+    assert client.started.wait(timeout=1.0)
+
+    with pytest.raises(HubControlPlaneError) as exc_info:
+        store.get_thread_target("thread-2")
+
+    client.release.set()
+    worker.join(timeout=1.0)
+    runner.close()
+
+    assert not errors
+    assert exc_info.value.code == "hub_unavailable"
+    assert exc_info.value.details["operation"] == "get_thread_target"
+    assert exc_info.value.details["max_workers"] == 1
