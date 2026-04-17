@@ -91,6 +91,7 @@ logger = logging.getLogger("codex_autorunner.hub")
 
 _GIT_FETCH_TIMEOUT_SECONDS = 120
 _GIT_PULL_TIMEOUT_SECONDS = 120
+_LIST_REPOS_CACHE_TTL_SECONDS = 30.0
 
 BackendFactoryBuilder = Callable[[Path, RepoConfig], BackendFactory]
 AppServerSupervisorFactoryBuilder = Callable[[RepoConfig], AppServerSupervisorFactory]
@@ -420,7 +421,10 @@ class HubSupervisor:
     def list_repos(self, *, use_cache: bool = True) -> List[RepoSnapshot]:
         with self._list_lock:
             if use_cache and self._list_cache and self._list_cache_at is not None:
-                if time.monotonic() - self._list_cache_at < 2.0:
+                if (
+                    time.monotonic() - self._list_cache_at
+                    < _LIST_REPOS_CACHE_TTL_SECONDS
+                ):
                     return self._list_cache
             if use_cache and self._startup_repo_state_pending and self.state.repos:
                 self._startup_repo_state_pending = False
