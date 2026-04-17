@@ -986,7 +986,8 @@ _reload_telegram() {
       fi
     fi
     launchctl load -w "${TELEGRAM_PLIST_PATH}" >/dev/null
-    _kickstart_service "${telegram_domain}" "${TELEGRAM_LABEL}" "true"
+    # Kickstart must fail the reload: telegram health checks do not verify launchd running.
+    _kickstart_service "${telegram_domain}" "${TELEGRAM_LABEL}" "false"
     return 0
   fi
 
@@ -1032,7 +1033,7 @@ _reload_telegram() {
     fi
   fi
   launchctl load -w "${TELEGRAM_PLIST_PATH}" >/dev/null
-  _kickstart_service "${telegram_domain}" "${TELEGRAM_LABEL}" "true"
+  _kickstart_service "${telegram_domain}" "${TELEGRAM_LABEL}" "false"
 }
 
 _reload_discord() {
