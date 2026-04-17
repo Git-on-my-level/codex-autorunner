@@ -1,35 +1,13 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { api, flash, buildWsUrl, getAuthToken, isMobileViewport } from "./utils.js";
+import { api, flash, isMobileViewport } from "./utils.js";
 import { getSelectedAgent, getSelectedProfile, getSelectedModel, getSelectedReasoning, initAgentControls, } from "./agentControls.js";
-function base64UrlEncode(value) {
-    if (!value)
-        return null;
-    try {
-        const bytes = new TextEncoder().encode(value);
-        let binary = "";
-        bytes.forEach((b) => {
-            binary += String.fromCharCode(b);
-        });
-        const base64 = btoa(binary);
-        return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
-    }
-    catch (_err) {
-        return null;
-    }
-}
+import { getSavedSessionId as getSessionId, setSavedSessionId as setSessionId, clearSavedSessionId as clearSessionId, markSessionActive as sessionMarkActive, buildConnectQuery, createTerminalSocket, teardownSocket as sessionTeardownSocket, SocketHeartbeat, ReconnectScheduler, } from "./terminalSession.js";
+import { createReplayState, resetReplayState, initReplayForConnect, bufferReplayChunk, handleReplayEnd, consumeLiveReset, } from "./terminalReplay.js";
+const textEncoder = new TextEncoder();
 import { CONSTANTS } from "./constants.js";
 import { initVoiceInput } from "./voice.js";
 import { publish, subscribe } from "./bus.js";
 import { REPO_ID, BASE_PATH } from "./env.js";
-const textEncoder = new TextEncoder();
-const ALT_SCREEN_ENTER = "\x1b[?1049h";
-const ALT_SCREEN_ENTER_BYTES = textEncoder.encode(ALT_SCREEN_ENTER);
-const ALT_SCREEN_ENTER_SEQUENCES = [
-    ALT_SCREEN_ENTER,
-    "\x1b[?47h",
-    "\x1b[?1047h",
-];
-const ALT_SCREEN_ENTER_MAX_LEN = ALT_SCREEN_ENTER_SEQUENCES.reduce((max, seq) => Math.max(max, seq.length), 0);
 const TEXT_INPUT_STORAGE_KEYS = Object.freeze({
     enabled: "codex_terminal_text_input_enabled",
     draft: "codex_terminal_text_input_draft",
@@ -44,10 +22,6 @@ const XTERM_COLOR_MODE_DEFAULT = 0;
 const XTERM_COLOR_MODE_PALETTE_16 = 0x01000000;
 const XTERM_COLOR_MODE_PALETTE_256 = 0x02000000;
 const XTERM_COLOR_MODE_RGB = 0x03000000;
-const RECONNECT_MAX_ATTEMPTS = 3;
-const RECONNECT_STABLE_CONNECTION_MS = 15000;
-const WS_HEARTBEAT_INTERVAL_MS = 20000;
-const WS_HEARTBEAT_STALL_TIMEOUT_MS = 60000;
 const CAR_CONTEXT_HOOK_ID = "car_context";
 const CAR_CONTEXT_HINT = wrapInjectedContext(CONSTANTS.PROMPTS.CAR_CONTEXT_HINT);
 const VOICE_TRANSCRIPT_DISCLAIMER_TEXT = CONSTANTS.PROMPTS?.VOICE_TRANSCRIPT_DISCLAIMER ||
@@ -79,8 +53,6 @@ function looksLikeCommand(text) {
     const lowered = trimmed.toLowerCase();
     return CAR_CONTEXT_COMMAND_RE.some((pattern) => pattern.test(lowered));
 }
-const SESSION_STORAGE_PREFIX = "codex_terminal_session_id:";
-const SESSION_STORAGE_TS_PREFIX = "codex_terminal_session_ts:";
 const TOUCH_OVERRIDE = (() => {
     try {
         const params = new URLSearchParams(window.location.search);
@@ -154,11 +126,8 @@ export class TerminalManager {
         this.touchScrollRemainder = 0;
         // Connection state
         this.intentionalDisconnect = false;
-        this.reconnectTimer = null;
-        this.reconnectAttempts = 0;
-        this.socketOpenedAt = null;
-        this.socketHeartbeatTimer = null;
-        this.socketLastActivityAt = null;
+        this.reconnect = new ReconnectScheduler();
+        this.heartbeat = new SocketHeartbeat(TERMINAL_DEBUG, (msg, details) => this._logTerminalDebug(msg, details));
         this.lastConnectMode = null;
         this.suppressNextNotFoundFlash = false;
         this.currentSessionId = null;
@@ -252,11 +221,7 @@ export class TerminalManager {
         };
         this.transcriptPersistTimer = null;
         this.transcriptDecoder = new TextDecoder();
-        this.awaitingReplayEnd = false;
-        this.replayBuffer = null;
-        this.replayPrelude = null;
-        this.pendingReplayPrelude = null;
-        this.clearTranscriptOnFirstLiveData = false;
+        this.replayState = createReplayState();
         this.transcriptResetForConnect = false;
         // Alt scrollback state
         this.altScrollbackLines = [];
@@ -275,11 +240,6 @@ export class TerminalManager {
         this.touchScrollRemainder = 0;
         // Connection state
         this.intentionalDisconnect = false;
-        this.reconnectTimer = null;
-        this.reconnectAttempts = 0;
-        this.socketOpenedAt = null;
-        this.socketHeartbeatTimer = null;
-        this.socketLastActivityAt = null;
         this.lastConnectMode = null;
         this.suppressNextNotFoundFlash = false;
         this.currentSessionId = null;
@@ -366,11 +326,7 @@ export class TerminalManager {
         };
         this.transcriptPersistTimer = null;
         this.transcriptDecoder = new TextDecoder();
-        this.awaitingReplayEnd = false;
-        this.replayBuffer = null;
-        this.replayPrelude = null;
-        this.pendingReplayPrelude = null;
-        this.clearTranscriptOnFirstLiveData = false;
+        this.replayState = createReplayState();
         this._resetTerminalDebugCounters();
         this.lastAltBufferActive = null;
         this.lastAltScrollbackSize = 0;
@@ -544,9 +500,6 @@ export class TerminalManager {
             return BASE_PATH;
         return "repo";
     }
-    _getRepoStorageKey() {
-        return REPO_ID || BASE_PATH || window.location.pathname || "default";
-    }
     _getTextInputHookKey(hookId) {
         const sessionId = this.currentSessionId || this._getSavedSessionId();
         const scope = sessionId
@@ -674,69 +627,20 @@ export class TerminalManager {
     async _loadTerminalIdleTimeout() {
         // State endpoint removed - terminal idle timeout no longer loaded from /api/state
     }
-    _getSessionStorageKey() {
-        return `${SESSION_STORAGE_PREFIX}${this._getRepoStorageKey()}`;
-    }
-    _getSessionTimestampKey() {
-        return `${SESSION_STORAGE_TS_PREFIX}${this._getRepoStorageKey()}`;
-    }
-    _getSavedSessionTimestamp() {
-        const raw = localStorage.getItem(this._getSessionTimestampKey());
-        if (!raw)
-            return null;
-        const parsed = Number(raw);
-        if (!Number.isFinite(parsed))
-            return null;
-        return parsed;
-    }
-    _setSavedSessionTimestamp(stamp) {
-        if (!stamp)
-            return;
-        localStorage.setItem(this._getSessionTimestampKey(), String(stamp));
-    }
-    _clearSavedSessionTimestamp() {
-        localStorage.removeItem(this._getSessionTimestampKey());
-    }
-    _isSessionStale(lastActiveAt) {
-        if (lastActiveAt === null || lastActiveAt === undefined)
-            return false;
-        if (this.terminalIdleTimeoutSeconds === null ||
-            this.terminalIdleTimeoutSeconds === undefined) {
-            return false;
-        }
-        if (typeof this.terminalIdleTimeoutSeconds !== "number")
-            return false;
-        if (this.terminalIdleTimeoutSeconds <= 0)
-            return false;
-        const maxAgeMs = this.terminalIdleTimeoutSeconds * 1000;
-        return Date.now() - lastActiveAt > maxAgeMs;
+    _getRepoStorageKey() {
+        return REPO_ID || BASE_PATH || window.location.pathname || "default";
     }
     _getSavedSessionId() {
-        const scopedKey = this._getSessionStorageKey();
-        const scoped = localStorage.getItem(scopedKey);
-        if (scoped) {
-            const lastActiveAt = this._getSavedSessionTimestamp();
-            if (this._isSessionStale(lastActiveAt)) {
-                this._clearSavedSessionId();
-                this._clearSavedSessionTimestamp();
-                return null;
-            }
-            return scoped;
-        }
-        return null;
+        return getSessionId(this._getRepoStorageKey(), this.terminalIdleTimeoutSeconds);
     }
     _setSavedSessionId(sessionId) {
-        if (!sessionId)
-            return;
-        localStorage.setItem(this._getSessionStorageKey(), sessionId);
-        this._setSavedSessionTimestamp(Date.now());
+        setSessionId(this._getRepoStorageKey(), sessionId);
     }
     _clearSavedSessionId() {
-        localStorage.removeItem(this._getSessionStorageKey());
-        this._clearSavedSessionTimestamp();
+        clearSessionId(this._getRepoStorageKey());
     }
     _markSessionActive() {
-        this._setSavedSessionTimestamp(Date.now());
+        sessionMarkActive(this._getRepoStorageKey());
     }
     _setCurrentSessionId(sessionId) {
         this.currentSessionId = sessionId || null;
@@ -958,36 +862,6 @@ export class TerminalManager {
             return line.toString();
         }
         return "";
-    }
-    _isAltScreenEnterChunk(chunk) {
-        if (!chunk || chunk.length !== ALT_SCREEN_ENTER_BYTES.length)
-            return false;
-        for (let idx = 0; idx < ALT_SCREEN_ENTER_BYTES.length; idx++) {
-            if (chunk[idx] !== ALT_SCREEN_ENTER_BYTES[idx])
-                return false;
-        }
-        return true;
-    }
-    _replayHasAltScreenEnter(chunks) {
-        if (!Array.isArray(chunks) || chunks.length === 0)
-            return false;
-        const decoder = new TextDecoder();
-        const maxTail = Math.max(ALT_SCREEN_ENTER_MAX_LEN - 1, 0);
-        let tail = "";
-        for (const chunk of chunks) {
-            const text = decoder.decode(chunk, { stream: true });
-            if (!text)
-                continue;
-            const combined = tail + text;
-            for (const seq of ALT_SCREEN_ENTER_SEQUENCES) {
-                if (combined.includes(seq))
-                    return true;
-            }
-            tail = maxTail ? combined.slice(-maxTail) : "";
-        }
-        if (!tail)
-            return false;
-        return ALT_SCREEN_ENTER_SEQUENCES.some((seq) => tail.includes(seq));
     }
     _applyReplayPrelude(chunk) {
         if (!chunk || !this.term)
@@ -1763,8 +1637,7 @@ export class TerminalManager {
         }
     }
     _scheduleMobileViewRender() {
-        if (this.awaitingReplayEnd) {
-            // Capture alt-screen scrollback during replay before renders coalesce.
+        if (this.replayState.awaitingReplayEnd) {
             this._renderMobileView();
             return;
         }
@@ -2058,75 +1931,22 @@ export class TerminalManager {
      * Clean up WebSocket connection
      */
     _teardownSocket() {
-        if (this.reconnectTimer) {
-            clearTimeout(this.reconnectTimer);
-            this.reconnectTimer = null;
-        }
-        if (this.socket) {
-            this.socket.onclose = null;
-            this.socket.onerror = null;
-            this.socket.onmessage = null;
-            this.socket.onopen = null;
-            try {
-                this.socket.close();
-            }
-            catch (err) {
-                // ignore
-            }
-        }
-        this._stopSocketHeartbeat();
+        this.reconnect.cancel();
+        sessionTeardownSocket(this.socket, this.heartbeat);
         this.socket = null;
-        this.socketOpenedAt = null;
-        this.awaitingReplayEnd = false;
-        this.replayBuffer = null;
-        this.replayPrelude = null;
-        this.pendingReplayPrelude = null;
-        this.clearTranscriptOnFirstLiveData = false;
+        resetReplayState(this.replayState);
         this.transcriptResetForConnect = false;
     }
     _noteSocketActivity() {
-        this.socketLastActivityAt = Date.now();
+        this.heartbeat.noteActivity();
     }
     _startSocketHeartbeat() {
-        this._stopSocketHeartbeat();
-        this._noteSocketActivity();
-        this.socketHeartbeatTimer = window.setInterval(() => {
-            const socket = this.socket;
-            if (!socket || socket.readyState !== WebSocket.OPEN)
-                return;
-            const now = Date.now();
-            const lastActivity = this.socketLastActivityAt;
-            if (typeof lastActivity === "number" &&
-                now - lastActivity > WS_HEARTBEAT_STALL_TIMEOUT_MS) {
-                this._logTerminalDebug("heartbeat stalled; closing terminal socket", {
-                    idleMs: now - lastActivity,
-                });
-                try {
-                    socket.close();
-                }
-                catch (_err) {
-                    // ignore close errors and let reconnect logic handle recovery
-                }
-                return;
-            }
-            if (typeof lastActivity === "number" &&
-                now - lastActivity < WS_HEARTBEAT_INTERVAL_MS) {
-                return;
-            }
-            try {
-                socket.send(JSON.stringify({ type: "ping" }));
-            }
-            catch (_err) {
-                // ignore and rely on normal onclose handling
-            }
-        }, WS_HEARTBEAT_INTERVAL_MS);
+        if (this.socket) {
+            this.heartbeat.start(this.socket);
+        }
     }
     _stopSocketHeartbeat() {
-        if (this.socketHeartbeatTimer !== null) {
-            clearInterval(this.socketHeartbeatTimer);
-            this.socketHeartbeatTimer = null;
-        }
-        this.socketLastActivityAt = null;
+        this.heartbeat.stop();
     }
     /**
      * Update button enabled states
@@ -2271,21 +2091,14 @@ export class TerminalManager {
         if (this.socket && this.socket.readyState === WebSocket.OPEN)
             return;
         if (!quiet) {
-            this.reconnectAttempts = 0;
+            this.reconnect.attempts = 0;
         }
-        // Cancel any pending reconnect
-        if (this.reconnectTimer) {
-            clearTimeout(this.reconnectTimer);
-            this.reconnectTimer = null;
-        }
+        this.reconnect.cancel();
         this._teardownSocket();
         this.intentionalDisconnect = false;
         this.lastConnectMode = mode;
-        this.awaitingReplayEnd = shouldAwaitReplay;
-        this.replayBuffer = shouldAwaitReplay ? [] : null;
-        this.replayPrelude = null;
-        this.pendingReplayPrelude = null;
-        this.clearTranscriptOnFirstLiveData = false;
+        this.transcriptResetForConnect = false;
+        initReplayForConnect(this.replayState, shouldAwaitReplay, false);
         this.transcriptResetForConnect = false;
         this._resetTerminalDebugCounters();
         this.lastAltBufferActive = null;
@@ -2293,27 +2106,13 @@ export class TerminalManager {
         if (!isAttach && !isResume) {
             this._resetTranscript();
             this.transcriptResetForConnect = true;
-        }
-        const queryParams = new URLSearchParams();
-        if (mode)
-            queryParams.append("mode", mode);
-        if (this.terminalDebug)
-            queryParams.append("terminal_debug", "1");
-        if (!isAttach) {
-            const selectedAgent = getSelectedAgent();
-            const selectedProfile = getSelectedProfile(selectedAgent);
-            const selectedModel = getSelectedModel(selectedAgent);
-            const selectedReasoning = getSelectedReasoning(selectedAgent);
-            if (selectedAgent)
-                queryParams.append("agent", selectedAgent);
-            if (selectedProfile)
-                queryParams.append("profile", selectedProfile);
-            if (selectedModel)
-                queryParams.append("model", selectedModel);
-            if (selectedReasoning)
-                queryParams.append("reasoning", selectedReasoning);
+            initReplayForConnect(this.replayState, shouldAwaitReplay, true);
         }
         const savedSessionId = this._getSavedSessionId();
+        const selectedAgent = getSelectedAgent();
+        const selectedProfile = getSelectedProfile(selectedAgent);
+        const selectedModel = getSelectedModel(selectedAgent);
+        const selectedReasoning = getSelectedReasoning(selectedAgent);
         this._logTerminalDebug("connect", {
             mode,
             shouldAwaitReplay,
@@ -2322,7 +2121,6 @@ export class TerminalManager {
         if (isAttach) {
             if (savedSessionId) {
                 this._setCurrentSessionId(savedSessionId);
-                queryParams.append("session_id", savedSessionId);
             }
             else {
                 if (!quiet)
@@ -2331,22 +2129,22 @@ export class TerminalManager {
             }
         }
         else {
-            // Starting a new PTY session should not accidentally attach to an old session
-            if (savedSessionId) {
-                queryParams.append("close_session_id", savedSessionId);
-            }
             this._clearSavedSessionId();
             this._setCurrentSessionId(null);
         }
-        const queryString = queryParams.toString();
-        const wsUrl = buildWsUrl(CONSTANTS.API.TERMINAL_ENDPOINT, queryString ? `?${queryString}` : "");
-        const token = getAuthToken();
-        const encodedToken = token ? base64UrlEncode(token) : null;
-        const protocols = encodedToken ? [`car-token-b64.${encodedToken}`] : undefined;
-        this.socket = protocols ? new WebSocket(wsUrl, protocols) : new WebSocket(wsUrl);
-        this.socket.binaryType = "arraybuffer";
+        const queryParams = buildConnectQuery({
+            mode,
+            terminalDebug: this.terminalDebug,
+            isAttach,
+            savedSessionId: isAttach ? savedSessionId : (savedSessionId || null),
+            agent: !isAttach ? selectedAgent : null,
+            profile: !isAttach ? selectedProfile : null,
+            model: !isAttach ? selectedModel : null,
+            reasoning: !isAttach ? selectedReasoning : null,
+        });
+        this.socket = createTerminalSocket(queryParams);
         this.socket.onopen = () => {
-            this.socketOpenedAt = Date.now();
+            this.reconnect.openedAt = Date.now();
             this._noteSocketActivity();
             this._startSocketHeartbeat();
             this.overlayEl?.classList.add("hidden");
@@ -2355,7 +2153,6 @@ export class TerminalManager {
                 mode,
                 sessionId: this.currentSessionId,
             });
-            // On attach/resume, clear the local terminal first.
             if ((isAttach || isResume) && this.term) {
                 this._resetTerminalDisplay();
                 this.transcriptHydrated = false;
@@ -2394,50 +2191,7 @@ export class TerminalManager {
                         });
                     }
                     else if (payload.type === "replay_end") {
-                        if (!this.awaitingReplayEnd) {
-                            return;
-                        }
-                        const buffered = Array.isArray(this.replayBuffer) ? this.replayBuffer : [];
-                        const prelude = this.replayPrelude;
-                        const hasReplay = buffered.length > 0;
-                        const hasAltScreenEnter = hasReplay && this._replayHasAltScreenEnter(buffered);
-                        const shouldApplyPrelude = Boolean(prelude && !hasAltScreenEnter);
-                        this._logTerminalDebug("replay_end", {
-                            chunks: buffered.length,
-                            bytes: this.replayByteCount,
-                            prelude: Boolean(prelude),
-                            hasAltScreenEnter,
-                            shouldApplyPrelude,
-                            clearOnLive: !this.transcriptResetForConnect,
-                            altScrollback: Array.isArray(this.altScrollbackLines)
-                                ? this.altScrollbackLines.length
-                                : 0,
-                        });
-                        this.awaitingReplayEnd = false;
-                        this.replayBuffer = null;
-                        this.replayPrelude = null;
-                        if (hasReplay && this.term) {
-                            this._resetTranscript();
-                            this._resetTerminalDisplay();
-                            if (shouldApplyPrelude) {
-                                this._applyReplayPrelude(prelude);
-                            }
-                            for (const chunk of buffered) {
-                                this._appendTranscriptChunk(chunk);
-                                this._scheduleMobileViewRender();
-                                this.term.write(chunk);
-                            }
-                            if (this.terminalDebug) {
-                                this.term.write("", () => {
-                                    this._logBufferSnapshot("replay_end_post");
-                                });
-                            }
-                        }
-                        else {
-                            this.clearTranscriptOnFirstLiveData = !this.transcriptResetForConnect;
-                            this.pendingReplayPrelude = shouldApplyPrelude ? prelude : null;
-                            this._logBufferSnapshot("replay_end_empty");
-                        }
+                        this._handleReplayEnd();
                     }
                     else if (payload.type === "ack") {
                         this._handleTextInputAck(payload);
@@ -2445,7 +2199,6 @@ export class TerminalManager {
                     else if (payload.type === "exit") {
                         this.term?.write(`\r\n[session ended${payload.code !== null ? ` (code ${payload.code})` : ""}] \r\n`);
                         this._clearSavedSessionId();
-                        this._clearSavedSessionTimestamp();
                         this._setCurrentSessionId(null);
                         this.intentionalDisconnect = true;
                         this.disconnect();
@@ -2454,7 +2207,6 @@ export class TerminalManager {
                         if (payload.message && payload.message.includes("Session not found")) {
                             this.sessionNotFound = true;
                             this._clearSavedSessionId();
-                            this._clearSavedSessionTimestamp();
                             this._setCurrentSessionId(null);
                             if (this.lastConnectMode === "attach") {
                                 if (!this.suppressNextNotFoundFlash) {
@@ -2477,28 +2229,21 @@ export class TerminalManager {
             }
             if (this.term) {
                 const chunk = new Uint8Array(event.data);
-                if (this.awaitingReplayEnd) {
+                if (this.replayState.awaitingReplayEnd) {
                     this.replayChunkCount += 1;
                     this.replayByteCount += chunk.length;
-                    const replayEmpty = Array.isArray(this.replayBuffer) && this.replayBuffer.length === 0;
-                    if (!this.replayPrelude && replayEmpty && this._isAltScreenEnterChunk(chunk)) {
-                        this.replayPrelude = chunk;
-                        return;
-                    }
-                    this.replayBuffer?.push(chunk);
+                    bufferReplayChunk(this.replayState, chunk);
                     return;
                 }
-                if (this.clearTranscriptOnFirstLiveData) {
-                    this.clearTranscriptOnFirstLiveData = false;
+                const liveReset = consumeLiveReset(this.replayState);
+                if (liveReset.shouldReset) {
                     this._resetTranscript();
                     this._resetTerminalDisplay();
-                    const hadPrelude = Boolean(this.pendingReplayPrelude);
-                    if (this.pendingReplayPrelude) {
-                        this._applyReplayPrelude(this.pendingReplayPrelude);
-                        this.pendingReplayPrelude = null;
+                    if (liveReset.prelude) {
+                        this._applyReplayPrelude(liveReset.prelude);
                     }
                     this._logTerminalDebug("first_live_reset", {
-                        pendingPrelude: hadPrelude,
+                        pendingPrelude: liveReset.hadPrelude,
                     });
                 }
                 this.liveChunkCount += 1;
@@ -2512,13 +2257,8 @@ export class TerminalManager {
             this._setStatus("Connection error");
         };
         this.socket.onclose = () => {
-            const openedAt = this.socketOpenedAt;
-            this.socketOpenedAt = null;
             this._stopSocketHeartbeat();
-            if (typeof openedAt === "number" &&
-                Date.now() - openedAt >= RECONNECT_STABLE_CONNECTION_MS) {
-                this.reconnectAttempts = 0;
-            }
+            this.reconnect.resetAttemptsIfStable();
             this._updateButtons(false);
             this._updateTextInputSendUi();
             if (this.intentionalDisconnect) {
@@ -2529,38 +2269,64 @@ export class TerminalManager {
             if (this.textInputPending) {
                 flash("Send not confirmed; your text is preserved and will retry on reconnect", "info");
             }
-            // Auto-reconnect logic
             const savedId = this._getSavedSessionId();
             if (!savedId) {
                 this._setStatus("Disconnected");
                 this.overlayEl?.classList.remove("hidden");
                 return;
             }
-            if (this.reconnectAttempts < RECONNECT_MAX_ATTEMPTS) {
-                const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 8000);
-                this._setStatus(`Reconnecting in ${Math.round(delay / 1000)}s...`);
-                this.reconnectAttempts++;
-                this.reconnectTimer = setTimeout(() => {
-                    this.suppressNextNotFoundFlash = true;
-                    this.connect({ mode: "attach", quiet: true });
-                }, delay);
-            }
-            else {
-                this._setStatus("Disconnected (max retries reached)");
+            const scheduled = this.reconnect.schedule(() => {
+                this.suppressNextNotFoundFlash = true;
+                this.connect({ mode: "attach", quiet: true });
+            }, (status) => this._setStatus(status));
+            if (!scheduled) {
                 this.overlayEl?.classList.remove("hidden");
                 flash("Terminal connection lost", "error");
             }
         };
+    }
+    _handleReplayEnd() {
+        const flush = handleReplayEnd(this.replayState, this.transcriptResetForConnect, Array.isArray(this.altScrollbackLines) ? this.altScrollbackLines.length : 0);
+        if (!flush)
+            return;
+        this._logTerminalDebug("replay_end", {
+            chunks: flush.chunks.length,
+            bytes: this.replayByteCount,
+            prelude: Boolean(flush.prelude),
+            hasAltScreenEnter: flush.hasAltScreenEnter,
+            shouldApplyPrelude: flush.shouldApplyPrelude,
+            clearOnLive: !this.transcriptResetForConnect,
+            altScrollback: Array.isArray(this.altScrollbackLines)
+                ? this.altScrollbackLines.length
+                : 0,
+        });
+        if (flush.hasReplay && this.term) {
+            this._resetTranscript();
+            this._resetTerminalDisplay();
+            if (flush.shouldApplyPrelude) {
+                this._applyReplayPrelude(flush.prelude);
+            }
+            for (const chunk of flush.chunks) {
+                this._appendTranscriptChunk(chunk);
+                this._scheduleMobileViewRender();
+                this.term.write(chunk);
+            }
+            if (this.terminalDebug) {
+                this.term.write("", () => {
+                    this._logBufferSnapshot("replay_end_post");
+                });
+            }
+        }
+        else {
+            this._logBufferSnapshot("replay_end_empty");
+        }
     }
     /**
      * Disconnect from terminal
      */
     disconnect() {
         this.intentionalDisconnect = true;
-        if (this.reconnectTimer) {
-            clearTimeout(this.reconnectTimer);
-            this.reconnectTimer = null;
-        }
+        this.reconnect.cancel();
         this._teardownSocket();
         this._setStatus("Disconnected");
         this.overlayEl?.classList.remove("hidden");
