@@ -5538,6 +5538,15 @@ class DiscordBotService:
             return store
         return None
 
+    async def _chat_operation_get(
+        self, operation_id: str
+    ) -> Optional[ChatOperationSnapshot]:
+        store = self._chat_operation_store_or_none()
+        if store is None:
+            return None
+        # Keep Discord ingress callbacks non-blocking on SQLite lock contention.
+        return await asyncio.to_thread(store.get_operation, operation_id)
+
     def _chat_operation_terminal_duplicate(
         self, snapshot: ChatOperationSnapshot
     ) -> bool:
@@ -5588,25 +5597,34 @@ class DiscordBotService:
         store = self._chat_operation_store_or_none()
         if store is None:
             return None
-        registration = store.register_operation(
-            operation_id=ctx.interaction_id,
-            surface_kind="discord",
-            surface_operation_key=ctx.interaction_id,
-            state=ChatOperationState.RECEIVED,
-            conversation_id=conversation_id,
-            metadata=self._interaction_ledger_metadata(ctx),
-        )
-        store.patch_operation(
-            registration.snapshot.operation_id,
-            ack_requested_at=now_iso(),
-        )
-        if registration.inserted:
-            return registration.snapshot
-        return store.patch_operation(
-            ctx.interaction_id,
-            conversation_id=conversation_id or registration.snapshot.conversation_id,
-            metadata_updates=self._interaction_ledger_metadata(ctx),
-        )
+
+        interaction_id = ctx.interaction_id
+        metadata = self._interaction_ledger_metadata(ctx)
+
+        def _register_sync() -> Optional[ChatOperationSnapshot]:
+            registration = store.register_operation(
+                operation_id=interaction_id,
+                surface_kind="discord",
+                surface_operation_key=interaction_id,
+                state=ChatOperationState.RECEIVED,
+                conversation_id=conversation_id,
+                metadata=metadata,
+            )
+            store.patch_operation(
+                registration.snapshot.operation_id,
+                ack_requested_at=now_iso(),
+            )
+            if registration.inserted:
+                return registration.snapshot
+            return store.patch_operation(
+                interaction_id,
+                conversation_id=(
+                    conversation_id or registration.snapshot.conversation_id
+                ),
+                metadata_updates=metadata,
+            )
+
+        return await asyncio.to_thread(_register_sync)
 
     async def _patch_chat_operation(
         self,
@@ -5621,79 +5639,90 @@ class DiscordBotService:
         if store is None:
             return None
         patch_state = state if state is not None else _PATCH_STATE_UNSET
-        try:
-            return store.patch_operation(
-                interaction_id,
-                state=patch_state,
-                validate_transition=validate_transition,
-                metadata_updates=metadata_updates,
-                **changes,
-            )
-        except ValueError:
-            current = store.get_operation(interaction_id)
-            if current is None:
-                return None
-            if current.first_visible_feedback_at is not None:
-                changes["first_visible_feedback_at"] = current.first_visible_feedback_at
-            fallback_state = state or current.state
-            merged_metadata = dict(current.metadata)
-            if metadata_updates:
-                merged_metadata.update(dict(metadata_updates))
-            return store.upsert_operation(
-                replace(
-                    current,
-                    state=fallback_state,
-                    execution_id=changes.get("execution_id", current.execution_id),
-                    backend_turn_id=changes.get(
-                        "backend_turn_id", current.backend_turn_id
-                    ),
-                    status_message=changes.get(
-                        "status_message", current.status_message
-                    ),
-                    blocking_reason=changes.get(
-                        "blocking_reason", current.blocking_reason
-                    ),
-                    conversation_id=changes.get(
-                        "conversation_id", current.conversation_id
-                    ),
-                    ack_requested_at=changes.get(
-                        "ack_requested_at", current.ack_requested_at
-                    ),
-                    ack_completed_at=changes.get(
-                        "ack_completed_at", current.ack_completed_at
-                    ),
-                    first_visible_feedback_at=changes.get(
-                        "first_visible_feedback_at",
-                        current.first_visible_feedback_at,
-                    ),
-                    anchor_ref=changes.get("anchor_ref", current.anchor_ref),
-                    interrupt_ref=changes.get("interrupt_ref", current.interrupt_ref),
-                    delivery_state=changes.get(
-                        "delivery_state", current.delivery_state
-                    ),
-                    delivery_cursor=changes.get(
-                        "delivery_cursor", current.delivery_cursor
-                    ),
-                    delivery_attempt_count=int(
-                        changes.get(
-                            "delivery_attempt_count",
-                            current.delivery_attempt_count,
-                        )
-                        or 0
-                    ),
-                    delivery_claimed_at=changes.get(
-                        "delivery_claimed_at", current.delivery_claimed_at
-                    ),
-                    terminal_outcome=changes.get(
-                        "terminal_outcome", current.terminal_outcome
-                    ),
-                    terminal_detail=changes.get(
-                        "terminal_detail", current.terminal_detail
-                    ),
-                    updated_at=changes.get("updated_at", now_iso()),
-                    metadata=merged_metadata,
+
+        def _patch_sync() -> Optional[ChatOperationSnapshot]:
+            changes_local = dict(changes)
+            try:
+                return store.patch_operation(
+                    interaction_id,
+                    state=patch_state,
+                    validate_transition=validate_transition,
+                    metadata_updates=metadata_updates,
+                    **changes_local,
                 )
-            )
+            except ValueError:
+                current = store.get_operation(interaction_id)
+                if current is None:
+                    return None
+                if current.first_visible_feedback_at is not None:
+                    changes_local["first_visible_feedback_at"] = (
+                        current.first_visible_feedback_at
+                    )
+                fallback_state = state or current.state
+                merged_metadata = dict(current.metadata)
+                if metadata_updates:
+                    merged_metadata.update(dict(metadata_updates))
+                return store.upsert_operation(
+                    replace(
+                        current,
+                        state=fallback_state,
+                        execution_id=changes_local.get(
+                            "execution_id", current.execution_id
+                        ),
+                        backend_turn_id=changes_local.get(
+                            "backend_turn_id", current.backend_turn_id
+                        ),
+                        status_message=changes_local.get(
+                            "status_message", current.status_message
+                        ),
+                        blocking_reason=changes_local.get(
+                            "blocking_reason", current.blocking_reason
+                        ),
+                        conversation_id=changes_local.get(
+                            "conversation_id", current.conversation_id
+                        ),
+                        ack_requested_at=changes_local.get(
+                            "ack_requested_at", current.ack_requested_at
+                        ),
+                        ack_completed_at=changes_local.get(
+                            "ack_completed_at", current.ack_completed_at
+                        ),
+                        first_visible_feedback_at=changes_local.get(
+                            "first_visible_feedback_at",
+                            current.first_visible_feedback_at,
+                        ),
+                        anchor_ref=changes_local.get("anchor_ref", current.anchor_ref),
+                        interrupt_ref=changes_local.get(
+                            "interrupt_ref", current.interrupt_ref
+                        ),
+                        delivery_state=changes_local.get(
+                            "delivery_state", current.delivery_state
+                        ),
+                        delivery_cursor=changes_local.get(
+                            "delivery_cursor", current.delivery_cursor
+                        ),
+                        delivery_attempt_count=int(
+                            changes_local.get(
+                                "delivery_attempt_count",
+                                current.delivery_attempt_count,
+                            )
+                            or 0
+                        ),
+                        delivery_claimed_at=changes_local.get(
+                            "delivery_claimed_at", current.delivery_claimed_at
+                        ),
+                        terminal_outcome=changes_local.get(
+                            "terminal_outcome", current.terminal_outcome
+                        ),
+                        terminal_detail=changes_local.get(
+                            "terminal_detail", current.terminal_detail
+                        ),
+                        updated_at=changes_local.get("updated_at", now_iso()),
+                        metadata=merged_metadata,
+                    )
+                )
+
+        return await asyncio.to_thread(_patch_sync)
 
     async def _record_interaction_ack(
         self,
@@ -6309,10 +6338,7 @@ class DiscordBotService:
             if ctx.interaction_id in reservations:
                 return True
             reservations.add(ctx.interaction_id)
-        snapshot = None
-        store = self._chat_operation_store_or_none()
-        if store is not None:
-            snapshot = store.get_operation(ctx.interaction_id)
+        snapshot = await self._chat_operation_get(ctx.interaction_id)
         record = await self._store.get_interaction(ctx.interaction_id)
         if snapshot is None and record is None:
             return False
@@ -6376,10 +6402,7 @@ class DiscordBotService:
         if registration.inserted:
             return False
         record = registration.record
-        snapshot = None
-        store = self._chat_operation_store_or_none()
-        if store is not None:
-            snapshot = store.get_operation(ctx.interaction_id)
+        snapshot = await self._chat_operation_get(ctx.interaction_id)
         has_pending_delivery = bool(
             isinstance(record.delivery_cursor_json, dict)
             and str(record.delivery_cursor_json.get("state") or "").strip()
