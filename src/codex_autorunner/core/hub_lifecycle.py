@@ -192,19 +192,23 @@ class LifecycleEventProcessor:
             exc,
         )
 
-    def process_events(self, *, limit: int = 100) -> None:
+    def process_events(self, *, limit: int = 100) -> int:
         events = self._store.get_unprocessed(limit=limit)
         if not events:
-            return
+            return 0
+        processed = 0
         for event in events:
             if not self._should_attempt_now(event, now=self._now_fn()):
                 continue
             try:
                 self._process_event(event)
+                processed += 1
             except (
                 Exception
             ) as exc:  # intentional: process_event is a user-provided callback
                 self._record_failure(event, exc)
+                processed += 1
+        return processed
 
 
 class HubLifecycleWorker:

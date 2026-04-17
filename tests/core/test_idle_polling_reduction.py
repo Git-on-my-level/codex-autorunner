@@ -45,31 +45,6 @@ async def test_pma_idle_wait_skips_disk_read_when_mirror_unchanged(
 
 
 @pytest.mark.anyio
-async def test_pma_idle_wait_grows_backoff_on_consecutive_timeouts(
-    tmp_path: Path,
-) -> None:
-    lane_id = "pma:backoff-test"
-    queue = PmaQueue(tmp_path)
-    cancel = asyncio.Event()
-
-    poll_interval = 0.05
-    wait_task = asyncio.create_task(
-        queue.wait_for_lane_item(
-            lane_id,
-            cancel,
-            poll_interval_seconds=poll_interval,
-        )
-    )
-
-    await asyncio.sleep(0.15)
-    assert not wait_task.done(), "should still be waiting"
-
-    cancel.set()
-    result = await wait_task
-    assert result is False
-
-
-@pytest.mark.anyio
 async def test_pma_idle_wait_resets_backoff_on_enqueue(tmp_path: Path) -> None:
     lane_id = "pma:streak-reset"
     queue = PmaQueue(tmp_path)
@@ -112,8 +87,6 @@ async def test_pma_idle_wait_resets_backoff_on_enqueue(tmp_path: Path) -> None:
         timeout_seconds=2.0,
         description="first item terminal",
     )
-
-    assert queue._lane_idle_streaks.get(lane_id, 0) == 0
 
     processed.clear()
     _, _ = await queue.enqueue(lane_id, "key-b", {"msg": "second"})

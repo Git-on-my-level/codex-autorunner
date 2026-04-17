@@ -168,18 +168,10 @@ async def test_pause_watcher_resets_backoff_on_productive_scan():
     service._logger = logging.getLogger("test")
     service._hub_raw_config_cache = {}
 
-    async def productive_after_two() -> list[dict[str, Any]]:
+    async def fake_scan(svc: Any) -> int:
         nonlocal iteration
         iteration += 1
-        if iteration <= 2:
-            return []
-        return [{"channel_id": "ch-1", "workspace_path": "/tmp/ws"}]
-
-    service._store = MagicMock()
-    service._store.list_bindings = productive_after_two
-
-    async def fake_scan(svc: Any) -> None:
-        pass
+        return 1 if iteration >= 3 else 0
 
     max_sleeps = 6
     sleep_count = 0

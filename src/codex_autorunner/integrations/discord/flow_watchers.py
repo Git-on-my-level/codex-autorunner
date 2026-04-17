@@ -179,7 +179,8 @@ def _preferred_bound_sources_by_workspace(service: Any) -> dict[str, str]:
         return {}
 
 
-async def _scan_and_enqueue_pause_notifications(service: Any) -> None:
+async def _scan_and_enqueue_pause_notifications(service: Any) -> int:
+    notified = 0
     bindings = await service._store.list_bindings()
     preferred_sources = _preferred_bound_sources_by_workspace(service)
     for binding in bindings:
@@ -303,9 +304,12 @@ async def _scan_and_enqueue_pause_notifications(service: Any) -> None:
                 mode=snapshot.mode,
                 chunk_count=len(chunks),
             )
+            notified += 1
+    return notified
 
 
-async def _scan_and_enqueue_terminal_notifications(service: Any) -> None:
+async def _scan_and_enqueue_terminal_notifications(service: Any) -> int:
+    notified = 0
     bindings = await service._store.list_bindings()
     for binding in bindings:
         channel_id = binding.get("channel_id")
@@ -373,6 +377,8 @@ async def _scan_and_enqueue_terminal_notifications(service: Any) -> None:
             run_id=run_id,
             status=status,
         )
+        notified += 1
+    return notified
 
 
 def _next_idle_interval(
@@ -392,9 +398,8 @@ async def watch_ticket_flow_pauses(service: Any) -> None:
         with track_loop("discord.flow_watchers.pause_scan") as scope:
             scope.record_db_read(1)
             try:
-                await _scan_and_enqueue_pause_notifications(service)
-                bindings = await service._store.list_bindings()
-                if bindings:
+                notified = await _scan_and_enqueue_pause_notifications(service) or 0
+                if notified > 0:
                     found_work = True
                     scope.mark_productive()
             except Exception as exc:  # intentional: supervisor loop must never die
@@ -420,9 +425,8 @@ async def watch_ticket_flow_terminals(service: Any) -> None:
         with track_loop("discord.flow_watchers.terminal_scan") as scope:
             scope.record_db_read(1)
             try:
-                await _scan_and_enqueue_terminal_notifications(service)
-                bindings = await service._store.list_bindings()
-                if bindings:
+                notified = await _scan_and_enqueue_terminal_notifications(service) or 0
+                if notified > 0:
                     found_work = True
                     scope.mark_productive()
             except Exception as exc:  # intentional: supervisor loop must never die

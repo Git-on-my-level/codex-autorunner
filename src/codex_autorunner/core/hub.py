@@ -1391,7 +1391,8 @@ class HubSupervisor:
 
     def _process_lifecycle_event_cycle(self) -> bool:
         productive = False
-        self.process_lifecycle_events()
+        if self.process_lifecycle_events() > 0:
+            productive = True
         scm_counts = self.process_scm_automation_polls()
         if scm_counts.get("polled", 0) > 0 or scm_counts.get("events_emitted", 0) > 0:
             productive = True
@@ -1403,12 +1404,13 @@ class HubSupervisor:
             productive = True
         return productive
 
-    def process_lifecycle_events(self) -> None:
-        self._lifecycle_event_processor.process_events(limit=100)
+    def process_lifecycle_events(self) -> int:
+        processed = self._lifecycle_event_processor.process_events(limit=100)
         try:
             self.drain_pma_automation_wakeups()
         except Exception:
             logger.exception("Failed draining PMA automation wake-ups")
+        return processed
 
     def process_scm_automation_polls(self, *, limit: int = 20) -> dict[str, int]:
         processor = self._scm_poll_processor

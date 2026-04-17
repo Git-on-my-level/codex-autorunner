@@ -335,6 +335,29 @@ def test_hub_lifecycle_worker_resets_backoff_on_productive() -> None:
     assert call_count >= 4
 
 
+def test_lifecycle_event_processor_reports_processed_count() -> None:
+    first = LifecycleEvent(
+        event_type=LifecycleEventType.FLOW_FAILED,
+        repo_id="repo-1",
+        run_id="run-1",
+    )
+    second = LifecycleEvent(
+        event_type=LifecycleEventType.FLOW_FAILED,
+        repo_id="repo-2",
+        run_id="run-2",
+    )
+    store = _StoreStub([first, second])
+    processed_ids: list[str] = []
+
+    processor = LifecycleEventProcessor(
+        store=store,
+        process_event=lambda event: processed_ids.append(event.event_id),
+    )
+
+    assert processor.process_events(limit=50) == 2
+    assert processed_ids == [first.event_id, second.event_id]
+
+
 def test_hub_lifecycle_worker_wake_resets_idle_streak() -> None:
     call_count = 0
     first_call = threading.Event()

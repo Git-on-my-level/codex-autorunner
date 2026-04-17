@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import uuid
 from dataclasses import asdict, dataclass
 from enum import Enum
@@ -21,9 +20,6 @@ PMA_QUEUE_DIR = ".codex-autorunner/pma/queue"
 QUEUE_FILE_SUFFIX = ".jsonl"
 DEFAULT_COMPACTION_KEEP_LAST = 200
 COMPACTION_MIN_SIZE_BYTES = 256 * 1024
-WAIT_IDLE_BACKOFF_MAX_SECONDS = 30.0
-WAIT_IDLE_BACKOFF_GROW_FACTOR = 1.5
-
 logger = logging.getLogger(__name__)
 
 
@@ -105,7 +101,6 @@ class PmaQueue:
         self._lock: Optional[asyncio.Lock] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._lane_mirror_mtimes: dict[str, float] = {}
-        self._lane_idle_streaks: dict[str, int] = {}
         self._initialize_canonical_state()
 
     def _initialize_canonical_state(self) -> None:
@@ -189,7 +184,6 @@ class PmaQueue:
             await queue.put(item)
             self._ensure_lane_known_ids(lane_id).add(item.item_id)
             self._ensure_lane_event(lane_id).set()
-            self._lane_idle_streaks.pop(lane_id, None)
             return item, None
 
     def enqueue_sync(
@@ -313,15 +307,9 @@ class PmaQueue:
         event = self._ensure_lane_event(lane_id)
         if event.is_set():
             event.clear()
-            self._lane_idle_streaks.pop(lane_id, None)
             return True
 
-        base_interval = max(0.1, poll_interval_seconds)
-        streak = self._lane_idle_streaks.get(lane_id, 0)
-        poll_interval = min(
-            base_interval * (WAIT_IDLE_BACKOFF_GROW_FACTOR**streak),
-            WAIT_IDLE_BACKOFF_MAX_SECONDS,
-        )
+        poll_interval = max(0.1, poll_interval_seconds)
 
         while True:
             wait_tasks = [asyncio.create_task(event.wait())]
@@ -344,36 +332,23 @@ class PmaQueue:
 
             if event.is_set():
                 event.clear()
-                self._lane_idle_streaks.pop(lane_id, None)
                 return True
 
-            streak = self._lane_idle_streaks.get(lane_id, 0)
             mirror_path = self._lane_queue_path(lane_id)
             try:
-                current_mtime = os.stat(mirror_path).st_mtime
+                current_mtime = mirror_path.stat().st_mtime
             except OSError:
                 current_mtime = 0.0
             prev_mtime = self._lane_mirror_mtimes.get(lane_id, 0.0)
 
-            if current_mtime == prev_mtime and streak > 0:
-                self._lane_idle_streaks[lane_id] = streak + 1
-                poll_interval = min(
-                    base_interval * (WAIT_IDLE_BACKOFF_GROW_FACTOR ** (streak + 1)),
-                    WAIT_IDLE_BACKOFF_MAX_SECONDS,
-                )
+            if current_mtime == prev_mtime:
                 continue
 
             added = await self._refresh_lane_from_disk(lane_id)
             if added:
-                self._lane_idle_streaks.pop(lane_id, None)
                 return True
 
             self._lane_mirror_mtimes[lane_id] = current_mtime
-            self._lane_idle_streaks[lane_id] = streak + 1
-            poll_interval = min(
-                base_interval * (WAIT_IDLE_BACKOFF_GROW_FACTOR ** (streak + 1)),
-                WAIT_IDLE_BACKOFF_MAX_SECONDS,
-            )
 
     async def list_items(self, lane_id: str) -> list[PmaQueueItem]:
         async with self._ensure_lane_lock(lane_id):
@@ -588,12 +563,9 @@ class PmaQueue:
         if loop is None or loop.is_closed() or queue is None or event is None:
             return
 
-        lane_id = item.lane_id
-
         def _enqueue() -> None:
             queue.put_nowait(item)
             event.set()
-            self._lane_idle_streaks.pop(lane_id, None)
 
         try:
             loop.call_soon_threadsafe(_enqueue)
