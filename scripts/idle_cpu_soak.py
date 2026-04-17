@@ -196,6 +196,7 @@ def _collect_service_pids(
 ) -> list[int]:
     pids: list[int] = []
     for proc in procs:
+        service_pids: list[int] = []
         try:
             sid = os.getsid(proc.pid)
             result = subprocess.run(
@@ -209,8 +210,8 @@ def _collect_service_pids(
                     parts = line.strip().split()
                     if len(parts) == 2 and parts[1].isdigit():
                         if int(parts[1]) == sid and parts[0].isdigit():
-                            pids.append(int(parts[0]))
-            if not pids:
+                            service_pids.append(int(parts[0]))
+            if not service_pids:
                 logger.warning(
                     "no session peers found for pid=%d sid=%d; "
                     "falling back to descendant scan",
@@ -242,10 +243,11 @@ def _collect_service_pids(
                         if p in visited:
                             continue
                         visited.add(p)
-                        pids.append(p)
+                        service_pids.append(p)
                         queue.extend(pp_to_pid.get(p, []))
         except ProcessLookupError:
-            pids.append(proc.pid)
+            service_pids.append(proc.pid)
+        pids.extend(service_pids)
     return list(set(pids))
 
 
