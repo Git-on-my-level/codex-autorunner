@@ -7,8 +7,11 @@ import pytest
 
 from codex_autorunner.core.acp_lifecycle import (
     _IDLE_TERMINAL_METHODS,
+    _INTERRUPTED_COMPLETION_STATUSES,
     _SESSION_TURN_ID_FALLBACK_METHODS,
+    _SUCCESSFUL_COMPLETION_STATUSES,
     _TERMINAL_METHODS,
+    _TEXT_PART_TYPES,
     analyze_acp_lifecycle_message,
     extract_identifier,
     extract_message_text,
@@ -1135,4 +1138,120 @@ class TestTextPartTypeAliases:
         assert (
             extract_message_text({"parts": [{"type": "tool_call", "text": "skip"}]})
             == ""
+        )
+
+
+class TestSuccessfulCompletionStatusSet:
+    def test_known_set(self) -> None:
+        assert _SUCCESSFUL_COMPLETION_STATUSES == frozenset(
+            {"completed", "complete", "done", "success", "succeeded", "idle"}
+        )
+
+    def test_set_is_frozen(self) -> None:
+        with pytest.raises(AttributeError):
+            _SUCCESSFUL_COMPLETION_STATUSES.add("speculative")  # type: ignore[misc]
+
+    def test_all_aliases_classified_as_ok(self) -> None:
+        for status in _SUCCESSFUL_COMPLETION_STATUSES:
+            assert status_indicates_successful_completion(
+                status, assume_true_when_missing=False
+            ), f"{status} should be successful"
+
+    def test_no_overlap_with_interrupted_set(self) -> None:
+        assert _SUCCESSFUL_COMPLETION_STATUSES.isdisjoint(
+            _INTERRUPTED_COMPLETION_STATUSES
+        )
+
+
+class TestInterruptedCompletionStatusSet:
+    def test_known_set(self) -> None:
+        assert _INTERRUPTED_COMPLETION_STATUSES == frozenset(
+            {"interrupted", "cancelled", "canceled", "aborted"}
+        )
+
+    def test_set_is_frozen(self) -> None:
+        with pytest.raises(AttributeError):
+            _INTERRUPTED_COMPLETION_STATUSES.add("speculative")  # type: ignore[misc]
+
+    def test_all_aliases_classified_as_interrupted(self) -> None:
+        for status in _INTERRUPTED_COMPLETION_STATUSES:
+            assert status_indicates_interrupted(
+                status
+            ), f"{status} should be interrupted"
+
+    def test_no_overlap_with_successful_set(self) -> None:
+        assert _INTERRUPTED_COMPLETION_STATUSES.isdisjoint(
+            _SUCCESSFUL_COMPLETION_STATUSES
+        )
+
+
+class TestTextPartTypeSet:
+    def test_known_set(self) -> None:
+        assert _TEXT_PART_TYPES == frozenset(
+            {"text", "output_text", "message", "agentMessage"}
+        )
+
+    def test_set_is_frozen(self) -> None:
+        with pytest.raises(AttributeError):
+            _TEXT_PART_TYPES.add("speculative")  # type: ignore[misc]
+
+    def test_text_is_primary(self) -> None:
+        assert "text" in _TEXT_PART_TYPES
+
+    def test_each_type_extracts_text(self) -> None:
+        for part_type in _TEXT_PART_TYPES:
+            result = extract_message_text(
+                {"parts": [{"type": part_type, "text": "value"}]}
+            )
+            assert result == "value", f"part type {part_type} should extract text"
+
+
+class TestTerminalStatusExtractionParity:
+    def test_nested_turn_status(self) -> None:
+        assert (
+            terminal_status_for_method("turn/completed", {"turn": {"status": "done"}})
+            == "done"
+        )
+
+    def test_nested_prompt_status(self) -> None:
+        assert (
+            terminal_status_for_method(
+                "prompt/completed", {"prompt": {"status": "succeeded"}}
+            )
+            == "succeeded"
+        )
+
+    def test_top_level_status_preferred_over_nested(self) -> None:
+        assert (
+            terminal_status_for_method(
+                "turn/completed",
+                {"status": "completed", "turn": {"status": "done"}},
+            )
+            == "completed"
+        )
+
+    def test_prompt_and_turn_completed_both_use_same_aliases(self) -> None:
+        for status in (
+            _SUCCESSFUL_COMPLETION_STATUSES
+            | _INTERRUPTED_COMPLETION_STATUSES
+            | {"failed"}
+        ):
+            for prefix in ("prompt", "turn"):
+                method = f"{prefix}/completed"
+                if status == "failed":
+                    method = f"{prefix}/failed"
+                result = terminal_status_for_method(method, {"status": status})
+                assert (
+                    result is not None
+                ), f"{method} with status={status} should be terminal"
+
+    def test_session_idle_has_no_explicit_status(self) -> None:
+        assert terminal_status_for_method("session.idle", {}) == "completed"
+
+    def test_session_status_non_idle_not_terminal(self) -> None:
+        assert (
+            terminal_status_for_method(
+                "session.status", {"status": {"type": "running"}}
+            )
+            is None
         )
