@@ -78,7 +78,7 @@ def normalize_archive_rel_path(base: Path, rel_path: str) -> tuple[Path, str]:
     if relative.is_absolute() or ".." in relative.parts:
         raise ValueError("invalid archive path")
     base_real = base.resolve(strict=False)
-    candidate = (base / relative).resolve(strict=False)
+    candidate = (base / relative).resolve(strict=False)  # codeql[py/path-injection]
     try:
         rel_posix = candidate.relative_to(base_real).as_posix()
     except ValueError:
@@ -267,9 +267,9 @@ def build_tree_nodes(root: Path, target: Path) -> list[ArchiveTreeNode]:
 
 def list_tree(snapshot_root: Path, rel_path: str) -> ArchiveTreeResponse:
     target, rel_posix = normalize_archive_rel_path(snapshot_root, rel_path)
-    if not target.exists():
+    if not target.exists():  # codeql[py/path-injection]
         raise FileNotFoundError("path not found")
-    if not target.is_dir():
+    if not target.is_dir():  # codeql[py/path-injection]
         raise ValueError("path is not a directory")
 
     nodes = build_tree_nodes(snapshot_root, target)

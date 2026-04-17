@@ -25,6 +25,7 @@ from typing import Any, Optional
 
 import pytest
 
+from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
 from codex_autorunner.integrations.telegram.adapter import (
     TelegramDocument,
     TelegramForwardOrigin,
@@ -831,6 +832,9 @@ class TestPauseNoticeInvariants:
         """
         workspace = tmp_path / "ws-resume"
         workspace.mkdir()
+        seed_hub_files(workspace, force=True)
+        (workspace / ".git").mkdir()
+        seed_repo_files(workspace, git_required=False)
         bridge, _, _ = _make_bridge(tmp_path, topics={})
 
         bridge._load_ticket_flow_pause = lambda path: None  # type: ignore[assignment]

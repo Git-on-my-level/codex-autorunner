@@ -166,7 +166,10 @@ def _hub_snapshot_fingerprint(
         fingerprint.extend(
             [
                 str(root_path),
-                path_stat_fingerprint(root_path / ".codex-autorunner"),
+                # Intentionally omit path_stat_fingerprint(root_path / ".codex-autorunner"):
+                # hub_projection.sqlite3 lives under that directory; including the parent
+                # directory's mtime makes the fingerprint churn whenever we persist the
+                # durable snapshot projection (self-invalidating durable cache hits).
                 path_stat_fingerprint(root_path / ".codex-autorunner" / "filebox"),
                 path_stat_fingerprint(default_pma_threads_db_path(root_path)),
                 path_stat_fingerprint(orchestration_db_path),
