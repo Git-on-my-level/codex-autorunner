@@ -1,3 +1,29 @@
+"""Flow-run archive owner.
+
+Ownership boundaries
+--------------------
+This module owns **per-run flow artifact archiving** under
+``.codex-autorunner/archive/runs/``.  It is the single authoritative planner
+and executor for that archive root.
+
+Worktree snapshot archives (``.codex-autorunner/archive/worktrees/``) are owned
+by ``core.archive`` instead.
+
+This module consumes shared infrastructure from ``core.archive``:
+``ArchiveEntrySpec``, ``execute_archive_entries``, and
+``_contextspace_source``.  The flow-run entry planner
+(``build_flow_archive_entries``) lives here because it serves a fundamentally
+different selection model (move-based, flag-driven) from the intent-driven
+worktree/CAR-state entry planner in ``core.archive``.
+
+Canonical vs compatibility
+--------------------------
+- ``flows.db`` / FlowStore is the canonical live run-history store.
+- ``archive/runs/**`` holds retained review artifacts, not live state.
+- ``contextspace/`` is canonical; ``workspace/`` is a compatibility-only
+  fallback consumed through ``_contextspace_source()``.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -12,7 +38,6 @@ from ...tickets.outbox import resolve_outbox_paths
 from ..archive import (
     ArchiveEntrySpec,
     _contextspace_source,
-    build_common_car_archive_entries,
     execute_archive_entries,
 )
 from ..archive_retention import (
@@ -28,12 +53,16 @@ from .store import FlowStore
 logger = logging.getLogger(__name__)
 
 
+def _run_archive_root(repo_root: Path) -> Path:
+    return repo_root / ".codex-autorunner" / "archive" / "runs"
+
+
 def flow_run_artifacts_root(repo_root: Path, run_id: str) -> Path:
     return repo_root / ".codex-autorunner" / "flows" / run_id
 
 
 def flow_run_archive_root(repo_root: Path, run_id: str) -> Path:
-    return repo_root / ".codex-autorunner" / "archive" / "runs" / run_id
+    return _run_archive_root(repo_root) / run_id
 
 
 def _get_durable_writes(repo_root: Path) -> bool:
@@ -58,6 +87,85 @@ def _next_archive_dir(base_dir: Path) -> Path:
         return base_dir
     suffix = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     return base_dir.parent / f"{base_dir.name}_{suffix}"
+
+
+def build_flow_archive_entries(
+    source_root: Path,
+    dest_root: Path,
+    *,
+    include_contextspace: bool = True,
+    include_flow_store: bool = False,
+    include_config: bool = False,
+    include_runtime_state: bool = False,
+    include_logs: bool = False,
+    include_github_context: bool = False,
+) -> list[ArchiveEntrySpec]:
+    entries: list[ArchiveEntrySpec] = []
+    if include_contextspace:
+        entries.append(
+            ArchiveEntrySpec(
+                label="contextspace",
+                source=_contextspace_source(source_root),
+                dest=dest_root / "contextspace",
+            )
+        )
+    if include_flow_store:
+        entries.append(
+            ArchiveEntrySpec(
+                label="flows.db",
+                source=source_root / "flows.db",
+                dest=dest_root / "flows.db",
+            )
+        )
+    if include_config:
+        entries.append(
+            ArchiveEntrySpec(
+                label="config.yml",
+                source=source_root / "config.yml",
+                dest=dest_root / "config" / "config.yml",
+            )
+        )
+    if include_runtime_state:
+        entries.extend(
+            [
+                ArchiveEntrySpec(
+                    label="state.sqlite3",
+                    source=source_root / "state.sqlite3",
+                    dest=dest_root / "state" / "state.sqlite3",
+                ),
+                ArchiveEntrySpec(
+                    label="app_server_threads.json",
+                    source=source_root / "app_server_threads.json",
+                    dest=dest_root / "state" / "app_server_threads.json",
+                    required=False,
+                ),
+            ]
+        )
+    if include_logs:
+        entries.extend(
+            [
+                ArchiveEntrySpec(
+                    label="codex-autorunner.log",
+                    source=source_root / "codex-autorunner.log",
+                    dest=dest_root / "logs" / "codex-autorunner.log",
+                ),
+                ArchiveEntrySpec(
+                    label="codex-server.log",
+                    source=source_root / "codex-server.log",
+                    dest=dest_root / "logs" / "codex-server.log",
+                ),
+            ]
+        )
+    if include_github_context:
+        entries.append(
+            ArchiveEntrySpec(
+                label="github_context",
+                source=source_root / "github_context",
+                dest=dest_root / "github_context",
+                required=False,
+            )
+        )
+    return entries
 
 
 def _find_hub_root(repo_root: Path) -> Path:
@@ -156,7 +264,7 @@ def _build_flow_archive_entries(
     flow_state_root = flow_run_artifacts_root(repo_root, run_id)
     target_runs_dir = _next_archive_dir(archive_root / "archived_runs")
     ticket_paths = list(list_ticket_paths(repo_root / ".codex-autorunner" / "tickets"))
-    entries = build_common_car_archive_entries(
+    entries = build_flow_archive_entries(
         car_root,
         archive_root,
         include_contextspace=False,
@@ -417,16 +525,17 @@ def archive_flow_run_artifacts(
         summary["missing_paths"] = list(execution.missing_paths)
         retention_policy = _get_run_archive_retention_policy(repo_root)
         if retention_policy is not None:
+            runs_root = _run_archive_root(repo_root)
             try:
                 prune_summary = prune_run_archive_root(
-                    repo_root / ".codex-autorunner" / "archive" / "runs",
+                    runs_root,
                     policy=retention_policy,
                     preserve_paths=(Path(str(archive_plan["archive_root"])),),
                 )
             except Exception:  # intentional: non-critical archive pruning
                 logger.warning(
                     "Failed to prune archived runs under %s",
-                    repo_root / ".codex-autorunner" / "archive" / "runs",
+                    runs_root,
                     exc_info=True,
                 )
             else:
@@ -468,6 +577,7 @@ __all__ = [
     "_build_run_scoped_archive_entries",
     "archive_terminal_flow_runs",
     "archive_flow_run_artifacts",
+    "build_flow_archive_entries",
     "flow_run_archive_root",
     "flow_run_artifacts_root",
 ]
