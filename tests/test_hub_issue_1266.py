@@ -373,6 +373,11 @@ def test_hub_housekeeping_loop_survives_sqlite_errors(
     )
     monkeypatch.setattr(
         web_app_module,
+        "reap_managed_docker_containers",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        web_app_module,
         "run_housekeeping_once",
         lambda *args, **kwargs: None,
     )

@@ -1318,17 +1318,43 @@ class DiscordBotService:
         if not isinstance(token, str) or not token.strip():
             return None
         normalized = token.strip()
-        resolved = self._resolve_workspace_from_token(
-            normalized,
-            self._list_bind_workspace_candidates(),
-        )
-        if resolved is not None:
-            candidate = canonicalize_path(Path(resolved[2]))
-            return candidate if candidate.exists() and candidate.is_dir() else None
         candidate = Path(normalized)
-        if not candidate.is_absolute():
-            candidate = self._config.root / candidate
-        workspace_root = canonicalize_path(candidate)
+        # Keep bind-target resolution pre-ack strictly local and cheap. The full
+        # bind handler can do slower candidate enumeration after Discord has been
+        # acknowledged, but scheduler lock resolution must not spend the ack budget
+        # on live hub calls.
+        if candidate.is_absolute() or "/" in normalized or "\\" in normalized:
+            if not candidate.is_absolute():
+                candidate = self._config.root / candidate
+            workspace_root = canonicalize_path(candidate)
+            return (
+                workspace_root
+                if workspace_root.exists() and workspace_root.is_dir()
+                else None
+            )
+
+        cheap_candidates: list[tuple[Optional[str], Optional[str], str]] = [
+            ("repo", repo_id, str(canonicalize_path(Path(path))))
+            for repo_id, path in self._list_manifest_repos()
+        ]
+        cheap_candidates.extend(
+            (
+                "agent_workspace",
+                workspace_id,
+                workspace_path,
+            )
+            for workspace_id, workspace_path, _display_name in self._list_agent_workspaces_from_cache()
+        )
+        resolved = self._resolve_workspace_from_token(normalized, cheap_candidates)
+        if resolved is not None:
+            resolved_root = canonicalize_path(Path(resolved[2]))
+            return (
+                resolved_root
+                if resolved_root.exists() and resolved_root.is_dir()
+                else None
+            )
+
+        workspace_root = canonicalize_path(self._config.root / candidate)
         return (
             workspace_root
             if workspace_root.exists() and workspace_root.is_dir()
@@ -4705,6 +4731,11 @@ class DiscordBotService:
 
     def _list_agent_workspaces(self) -> list[tuple[str, str, str]]:
         from .workspace_commands import _list_agent_workspaces as _impl
+
+        return _impl(self)
+
+    def _list_agent_workspaces_from_cache(self) -> list[tuple[str, str, str]]:
+        from .workspace_commands import _list_agent_workspaces_from_cache as _impl
 
         return _impl(self)
 
