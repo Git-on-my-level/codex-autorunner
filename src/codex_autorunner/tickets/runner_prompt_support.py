@@ -10,6 +10,7 @@ from .files import safe_relpath
 _logger = logging.getLogger(__name__)
 
 WORKSPACE_DOC_MAX_CHARS = 4000
+PREVIOUS_TICKET_MAX_BYTES = 16384
 TRUNCATION_MARKER = "\n\n[... TRUNCATED ...]\n\n"
 MAIN_SECTION_ORDER = [
     "prev_block",
@@ -264,11 +265,11 @@ def build_workspace_block(workspace_root: Path) -> str:
 def build_previous_ticket_block(previous_ticket_content: str | None) -> str:
     if not previous_ticket_content:
         return ""
+    capped = truncate_text_by_bytes(previous_ticket_content, PREVIOUS_TICKET_MAX_BYTES)
     return (
-        "PREVIOUS TICKET CONTEXT (truncated to 16KB; for reference only; do not edit):\n"
+        "PREVIOUS TICKET CONTEXT (DEPRECATED legacy compatibility; capped at 16KB; for reference only; do not edit):\n"
         "Cross-ticket context should flow through contextspace docs (active_context.md, decisions.md, spec.md) "
-        "rather than implicit previous ticket content. This is included only for legacy compatibility.\n"
-        + previous_ticket_content
+        "rather than implicit previous ticket content.\n" + capped
     )
 
 

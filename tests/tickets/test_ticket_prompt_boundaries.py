@@ -8,8 +8,8 @@ from codex_autorunner.tickets.models import TicketRunConfig
 from codex_autorunner.tickets.runner import (
     CAR_HUD_MAX_CHARS,
     CAR_HUD_MAX_LINES,
-    TicketRunner,
 )
+from codex_autorunner.tickets.runner_prompt import build_prompt
 
 
 def test_ticket_flow_prompt_boundaries(tmp_path: Path) -> None:
@@ -22,16 +22,6 @@ def test_ticket_flow_prompt_boundaries(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    runner = TicketRunner(
-        workspace_root=workspace_root,
-        run_id="run-1",
-        config=TicketRunConfig(
-            ticket_dir=Path(".codex-autorunner/tickets"),
-            auto_commit=False,
-        ),
-        agent_pool=MagicMock(),
-    )
-
     outbox_paths = MagicMock()
     outbox_paths.dispatch_dir = (
         workspace_root / ".codex-autorunner" / "runs" / "run-1" / "dispatch"
@@ -41,12 +31,17 @@ def test_ticket_flow_prompt_boundaries(tmp_path: Path) -> None:
     )
 
     ticket_doc, _ = read_ticket(ticket_path)
-    prompt = runner._build_prompt(
+    prompt = build_prompt(
         ticket_path=ticket_path,
+        workspace_root=workspace_root,
         ticket_doc=ticket_doc,
         last_agent_output=None,
         outbox_paths=outbox_paths,
         lint_errors=None,
+        prompt_max_bytes=TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            auto_commit=False,
+        ).prompt_max_bytes,
     )
 
     assert "<CAR_TICKET_FLOW_PROMPT>" in prompt

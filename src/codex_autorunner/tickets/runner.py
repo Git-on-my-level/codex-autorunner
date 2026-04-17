@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 from typing import Any, Callable, Optional
 
 from ..agents.hermes_identity import canonicalize_hermes_identity
-from ..contextspace.paths import contextspace_doc_path
 from ..core.flows.models import FlowEventType
 from . import runner_commit, runner_post_turn, runner_selection
 from .agent_pool import AgentPool
@@ -28,13 +26,11 @@ from .runner_execution import (
 from .runner_prompt import (
     CAR_HUD_MAX_CHARS,  # noqa: F401  # re-exported for backwards compatibility
     CAR_HUD_MAX_LINES,  # noqa: F401  # re-exported for backwards compatibility
-    _build_car_hud,  # noqa: F401  # used by _build_prompt
     _preserve_ticket_structure,  # noqa: F401  # re-exported for backwards compatibility
-    _shrink_prompt,
+    _shrink_prompt,  # noqa: F401  # re-exported for backwards compatibility
 )
 from .runner_prompt_support import (
     TRUNCATION_MARKER,  # noqa: F401  # re-exported for backwards compatibility
-    WORKSPACE_DOC_MAX_CHARS,  # noqa: F401  # used by _build_prompt
 )
 from .runner_selection import (  # noqa: F401  # re-exported for backwards compatibility
     TICKET_CONTEXT_TOTAL_MAX_BYTES,
@@ -54,8 +50,6 @@ from .runner_thread_bindings import (
 )
 
 _is_network_error = is_network_error
-
-_logger = logging.getLogger(__name__)
 
 
 class TicketRunner:
@@ -475,225 +469,3 @@ class TicketRunner:
     def _repo_fingerprint(self) -> Optional[str]:
         """Return a stable snapshot of HEAD + porcelain status."""
         return runner_post_turn.get_repo_fingerprint(self._workspace_root)
-
-    def _build_prompt(
-        self,
-        *,
-        ticket_path: Path,
-        ticket_doc,
-        last_agent_output: Optional[str],
-        last_checkpoint_error: Optional[str] = None,
-        commit_required: bool = False,
-        commit_attempt: int = 0,
-        commit_max_attempts: int = 2,
-        outbox_paths,
-        lint_errors: Optional[list[str]],
-        reply_context: Optional[str] = None,
-        requested_context: Optional[str] = None,
-        previous_ticket_content: Optional[str] = None,
-        prior_no_change_turns: int = 0,
-    ) -> str:
-        rel_ticket = safe_relpath(ticket_path, self._workspace_root)
-        rel_dispatch_dir = safe_relpath(outbox_paths.dispatch_dir, self._workspace_root)
-        rel_dispatch_path = safe_relpath(
-            outbox_paths.dispatch_path, self._workspace_root
-        )
-
-        checkpoint_block = ""
-        if last_checkpoint_error:
-            checkpoint_block = (
-                "<CAR_CHECKPOINT_WARNING>\n"
-                "WARNING: The previous checkpoint git commit failed (often due to pre-commit hooks).\n"
-                "Resolve this before proceeding, or future turns may fail to checkpoint.\n\n"
-                "Checkpoint error:\n"
-                f"{last_checkpoint_error}\n"
-                "</CAR_CHECKPOINT_WARNING>"
-            )
-
-        commit_block = ""
-        if commit_required:
-            attempts_remaining = max(commit_max_attempts - commit_attempt + 1, 0)
-            commit_block = (
-                "<CAR_COMMIT_REQUIRED>\n"
-                "ACTION REQUIRED: The repo is dirty but the ticket is marked done.\n"
-                "Commit your changes (ensuring any pre-commit hooks pass) so the flow can advance.\n\n"
-                f"Attempts remaining before user intervention: {attempts_remaining}\n"
-                "</CAR_COMMIT_REQUIRED>"
-            )
-
-        if lint_errors:
-            lint_block = (
-                "<CAR_TICKET_FRONTMATTER_LINT_REPAIR>\n"
-                "Ticket frontmatter lint failed. Fix ONLY the ticket YAML frontmatter to satisfy:\n- "
-                + "\n- ".join(lint_errors)
-                + "\n</CAR_TICKET_FRONTMATTER_LINT_REPAIR>"
-            )
-        else:
-            lint_block = ""
-
-        loop_guard_block = ""
-        if prior_no_change_turns > 0:
-            loop_guard_block = (
-                "<CAR_LOOP_GUARD>\n"
-                "Previous turn(s) on this ticket produced no repository diff change.\n"
-                f"Consecutive no-change turns so far: {prior_no_change_turns}\n"
-                "If you are still blocked, write DISPATCH.md with mode: pause instead of retrying unchanged steps.\n"
-                "</CAR_LOOP_GUARD>"
-            )
-
-        reply_block = ""
-        if reply_context:
-            reply_block = reply_context
-        requested_context_block = ""
-        if requested_context:
-            requested_context_block = requested_context
-
-        workspace_block = ""
-        workspace_docs: list[tuple[str, str, str]] = []
-        for key, label in (
-            ("active_context", "Active context"),
-            ("decisions", "Decisions"),
-            ("spec", "Spec"),
-        ):
-            path = contextspace_doc_path(self._workspace_root, key)
-            try:
-                if not path.exists():
-                    continue
-                content = path.read_text(encoding="utf-8")
-            except OSError as exc:
-                _logger.debug("contextspace doc read failed for %s: %s", path, exc)
-                continue
-            snippet = (content or "").strip()
-            if not snippet:
-                continue
-            workspace_docs.append(
-                (
-                    label,
-                    safe_relpath(path, self._workspace_root),
-                    snippet[:WORKSPACE_DOC_MAX_CHARS],
-                )
-            )
-
-        if workspace_docs:
-            blocks = ["Contextspace docs (truncated; skip if not relevant):"]
-            for label, rel, body in workspace_docs:
-                blocks.append(f"{label} [{rel}]:\n{body}")
-            workspace_block = "\n\n".join(blocks)
-
-        prev_ticket_block = ""
-        if previous_ticket_content:
-            prev_ticket_block = (
-                "PREVIOUS TICKET CONTEXT (truncated to 16KB; for reference only; do not edit):\n"
-                "Cross-ticket context should flow through contextspace docs (active_context.md, decisions.md, spec.md) "
-                "rather than implicit previous ticket content. This is included only for legacy compatibility.\n"
-                + previous_ticket_content
-            )
-
-        ticket_raw_content = ticket_path.read_text(encoding="utf-8")
-        ticket_block = (
-            "<CAR_CURRENT_TICKET_FILE>\n"
-            f"PATH: {rel_ticket}\n"
-            "<TICKET_MARKDOWN>\n"
-            f"{ticket_raw_content}\n"
-            "</TICKET_MARKDOWN>\n"
-            "</CAR_CURRENT_TICKET_FILE>"
-        )
-
-        prev_block = ""
-        if last_agent_output:
-            prev_block = last_agent_output
-
-        sections = {
-            "prev_block": prev_block,
-            "prev_ticket_block": prev_ticket_block,
-            "workspace_block": workspace_block,
-            "reply_block": reply_block,
-            "requested_context_block": requested_context_block,
-            "ticket_block": ticket_block,
-        }
-        car_hud = _build_car_hud()
-
-        def render() -> str:
-            return (
-                "<CAR_TICKET_FLOW_PROMPT>\n\n"
-                "<CAR_TICKET_FLOW_INSTRUCTIONS>\n"
-                "You are running inside Codex Autorunner (CAR) in a ticket-based workflow.\n\n"
-                "Your job in this turn:\n"
-                "- Read the current ticket file.\n"
-                "- Make the required repo changes.\n"
-                "- Update the ticket file to reflect progress.\n"
-                "- Set `done: true` in the ticket YAML frontmatter only when the ticket is truly complete.\n\n"
-                "CAR orientation (80/20):\n"
-                "- `.codex-autorunner/tickets/` is the queue that drives the flow (files named `TICKET-###*.md`, processed in numeric order).\n"
-                "- `.codex-autorunner/contextspace/` holds durable context shared across ticket turns (especially `active_context.md` and `spec.md`).\n"
-                "- `.codex-autorunner/ABOUT_CAR.md` is the repo-local briefing (what CAR auto-generates + helper scripts) if you need operational details.\n\n"
-                "Communicating with the user (optional):\n"
-                "- To send a message or request input, write to the dispatch directory:\n"
-                "  1) write any attachments to the dispatch directory\n"
-                "  2) write `DISPATCH.md` last\n"
-                "- `DISPATCH.md` YAML supports `mode: notify|pause`.\n"
-                "  - `pause` waits for user input; `notify` continues without waiting.\n"
-                "  - Example:\n"
-                "    ---\n"
-                "    mode: pause\n"
-                "    ---\n"
-                "    Need clarification on X before proceeding.\n"
-                "- You do not need a “final” dispatch when you finish; the runner will archive your turn output automatically. Dispatch only if you want something to stand out or you need user input.\n\n"
-                "If blocked:\n"
-                "- Dispatch with `mode: pause` rather than guessing.\n\n"
-                "Creating follow-up tickets (optional):\n"
-                "- New tickets live under `.codex-autorunner/tickets/` and follow the `TICKET-###*.md` naming pattern.\n"
-                "- If present, `.codex-autorunner/bin/ticket_tool.py` can create/insert/move tickets; `.codex-autorunner/bin/lint_tickets.py` lints ticket frontmatter (see `.codex-autorunner/ABOUT_CAR.md`).\n"
-                "Using ticket templates (optional):\n"
-                "- If you need a standard ticket pattern, prefer: `car templates fetch <repo_id>:<path>[@<ref>]`\n"
-                "  - Trusted repos skip scanning; untrusted repos are scanned (cached by blob SHA).\n\n"
-                "Workspace docs:\n"
-                "- You may update or add context under `.codex-autorunner/contextspace/` so future ticket turns have durable context.\n"
-                "- Prefer referencing these docs instead of creating duplicate “shadow” docs elsewhere.\n\n"
-                "Repo hygiene:\n"
-                "- Do not add new `.codex-autorunner/` artifacts to git unless they are already tracked.\n"
-                "</CAR_TICKET_FLOW_INSTRUCTIONS>\n\n"
-                "<CAR_RUNTIME_PATHS>\n"
-                f"Current ticket file: {rel_ticket}\n"
-                f"Dispatch directory: {rel_dispatch_dir}\n"
-                f"DISPATCH.md path: {rel_dispatch_path}\n"
-                "</CAR_RUNTIME_PATHS>\n\n"
-                "<CAR_HUD>\n"
-                f"{car_hud}\n"
-                "</CAR_HUD>\n\n"
-                f"{checkpoint_block}\n\n"
-                f"{commit_block}\n\n"
-                f"{lint_block}\n\n"
-                f"{loop_guard_block}\n\n"
-                "<CAR_REQUESTED_CONTEXT>\n"
-                f"{sections['requested_context_block']}\n"
-                "</CAR_REQUESTED_CONTEXT>\n\n"
-                "<CAR_WORKSPACE_DOCS>\n"
-                f"{sections['workspace_block']}\n"
-                "</CAR_WORKSPACE_DOCS>\n\n"
-                "<CAR_HUMAN_REPLIES>\n"
-                f"{sections['reply_block']}\n"
-                "</CAR_HUMAN_REPLIES>\n\n"
-                "<CAR_PREVIOUS_TICKET_REFERENCE>\n"
-                f"{sections['prev_ticket_block']}\n"
-                "</CAR_PREVIOUS_TICKET_REFERENCE>\n\n"
-                f"{sections['ticket_block']}\n\n"
-                "<CAR_PREVIOUS_AGENT_OUTPUT>\n"
-                f"{sections['prev_block']}\n"
-                "</CAR_PREVIOUS_AGENT_OUTPUT>\n\n"
-                "</CAR_TICKET_FLOW_PROMPT>"
-            )
-
-        return _shrink_prompt(
-            max_bytes=self._config.prompt_max_bytes,
-            render=render,
-            sections=sections,
-            order=[
-                "prev_block",
-                "prev_ticket_block",
-                "reply_block",
-                "requested_context_block",
-                "workspace_block",
-                "ticket_block",
-            ],
-        )

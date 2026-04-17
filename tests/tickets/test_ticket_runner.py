@@ -1147,7 +1147,10 @@ async def test_previous_ticket_context_included_when_enabled(tmp_path: Path) -> 
 
     assert result.status == "continue"
     assert len(pool.requests) == 1
-    assert "PREVIOUS TICKET CONTEXT (truncated to 16KB" in pool.requests[0].prompt
+    assert (
+        "PREVIOUS TICKET CONTEXT (DEPRECATED legacy compatibility"
+        in pool.requests[0].prompt
+    )
     assert (
         "Cross-ticket context should flow through contextspace docs"
         in pool.requests[0].prompt
