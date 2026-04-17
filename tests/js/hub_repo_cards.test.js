@@ -488,6 +488,146 @@ test("agent workspace cards render runtime, managed path, and lifecycle actions"
   assert.match(text, /zc-main/);
 });
 
+test("pinned repos sort before unpinned repos in renderRepos source", async () => {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const content = fs.readFileSync(
+    path.join(process.cwd(), "src", "codex_autorunner", "static_src", "hub.ts"),
+    "utf8"
+  );
+
+  const sortStart = content.indexOf("orderedGroups = groups");
+  assert.ok(sortStart !== -1, "expected orderedGroups sort");
+
+  const pinnedSort = content.indexOf("if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;", sortStart);
+  assert.ok(pinnedSort !== -1, "expected pinned-first sort comparison");
+
+  const pinnedSetInBuild = content.indexOf("pinned: pinnedParentRepoIds.has(group.base.id)");
+  assert.ok(pinnedSetInBuild !== -1 && pinnedSetInBuild < sortStart, "expected pinned flag from pinnedParentRepoIds before sort");
+});
+
+test("hub bootstrap cache does not act as authoritative source for repo state", () => {
+  sessionStorage.clear();
+  localStorage.clear();
+
+  const stalePayload = {
+    repos: [
+      {
+        id: "stale-repo",
+        path: "/tmp/stale-repo",
+        display_name: "stale-repo",
+        enabled: true,
+        auto_run: false,
+        worktree_setup_commands: [],
+        kind: "base",
+        worktree_of: null,
+        branch: "main",
+        exists_on_disk: true,
+        is_clean: true,
+        initialized: true,
+        init_error: null,
+        status: "idle",
+        lock_status: "unlocked",
+        last_run_id: null,
+        last_exit_code: null,
+        last_run_started_at: null,
+        last_run_finished_at: null,
+        runner_pid: null,
+        effective_destination: { kind: "local" },
+        mounted: false,
+        mount_error: null,
+        cleanup_blocked_by_chat_binding: false,
+        ticket_flow: null,
+        ticket_flow_display: null,
+      },
+    ],
+    agent_workspaces: [],
+    last_scan_at: "2026-01-01T00:00:00Z",
+    pinned_parent_repo_ids: [],
+  };
+
+  __hubTest.saveHubBootstrapCache(stalePayload);
+
+  const freshPayload = {
+    repos: [
+      {
+        id: "fresh-repo",
+        path: "/tmp/fresh-repo",
+        display_name: "fresh-repo",
+        enabled: true,
+        auto_run: false,
+        worktree_setup_commands: [],
+        kind: "base",
+        worktree_of: null,
+        branch: "main",
+        exists_on_disk: true,
+        is_clean: true,
+        initialized: true,
+        init_error: null,
+        status: "running",
+        lock_status: "unlocked",
+        last_run_id: "run-fresh",
+        last_exit_code: null,
+        last_run_started_at: new Date().toISOString(),
+        last_run_finished_at: null,
+        runner_pid: 12345,
+        effective_destination: { kind: "local" },
+        mounted: false,
+        mount_error: null,
+        cleanup_blocked_by_chat_binding: false,
+        ticket_flow: null,
+        ticket_flow_display: null,
+      },
+    ],
+    agent_workspaces: [],
+    last_scan_at: new Date().toISOString(),
+    pinned_parent_repo_ids: [],
+  };
+
+  __hubTest.renderRepos(freshPayload.repos);
+
+  const text = document.getElementById("hub-repo-list")?.textContent || "";
+  assert.match(text, /fresh-repo/);
+  assert.doesNotMatch(text, /stale-repo/);
+});
+
+test("cleanup-all button reflects aria-disabled when no eligible cleanup targets exist", () => {
+  __hubTest.setHubChannelEntries([]);
+  __hubTest.renderRepos([
+    {
+      id: "active-base",
+      path: "/tmp/active-base",
+      display_name: "active-base",
+      enabled: true,
+      auto_run: false,
+      worktree_setup_commands: [],
+      kind: "base",
+      worktree_of: null,
+      branch: "main",
+      exists_on_disk: true,
+      is_clean: true,
+      initialized: true,
+      init_error: null,
+      status: "running",
+      lock_status: "unlocked",
+      last_run_id: null,
+      last_exit_code: null,
+      last_run_started_at: null,
+      last_run_finished_at: null,
+      runner_pid: null,
+      effective_destination: { kind: "local" },
+      mounted: false,
+      mount_error: null,
+      cleanup_blocked_by_chat_binding: false,
+      ticket_flow: null,
+      ticket_flow_display: null,
+    },
+  ]);
+
+  const btn = document.getElementById("hub-cleanup-all");
+  assert.equal(btn?.getAttribute("aria-disabled"), "true");
+});
+
 test("hub interaction harness expands agents and opens the agent modal", () => {
   const agentPanel = document.getElementById("hub-agent-panel");
   const repoPanel = document.getElementById("hub-repo-panel");
