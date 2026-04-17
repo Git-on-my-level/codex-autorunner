@@ -11,6 +11,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from starlette.types import ASGIApp
 
 from ...core.config import HubConfig
+from ...core.diagnostics.loop_attribution import track_loop
 from ...core.filebox_retention import (
     prune_filebox_root,
     resolve_filebox_retention_policy,
@@ -134,16 +135,28 @@ def _app_lifespan(context: AppContext):
 
         async def _flow_reconcile_loop():
             active_interval = 2.0
-            idle_interval = 5.0
+            idle_base = 5.0
+            idle_step = 5.0
+            idle_max = 30.0
+            consecutive_idle = 0
             try:
                 while True:
-                    result = await asyncio.to_thread(
-                        reconcile_flow_runs,
-                        app.state.engine.repo_root,
-                        logger=app.state.logger,
-                    )
+                    with track_loop("web.flow_reconcile") as scope:
+                        scope.record_db_read(1)
+                        result = await asyncio.to_thread(
+                            reconcile_flow_runs,
+                            app.state.engine.repo_root,
+                            logger=app.state.logger,
+                        )
+                        if result.summary.active > 0:
+                            scope.mark_productive()
+                            consecutive_idle = 0
+                        else:
+                            consecutive_idle += 1
                     interval = (
-                        active_interval if result.summary.active > 0 else idle_interval
+                        active_interval
+                        if result.summary.active > 0
+                        else min(idle_base + consecutive_idle * idle_step, idle_max)
                     )
                     await asyncio.sleep(interval)
             except asyncio.CancelledError:

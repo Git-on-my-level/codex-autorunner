@@ -143,6 +143,14 @@ class HermeticTestRoots:
             min_age_seconds=min_age_seconds,
         )
 
+    def prune_inactive_repo_temp_roots(self, *, min_age_seconds: float = 300.0) -> None:
+        cleanup_module = self.load_pytest_temp_cleanup_module()
+        cleanup_module.cleanup_repo_managed_temp_paths(
+            self.repo_root,
+            keep_run_tokens={self.run_token},
+            min_age_seconds=min_age_seconds,
+        )
+
     def prune_old_opencode_state_runs(self, *, max_age_seconds: int = 86400) -> None:
         if not self.pytest_opencode_state_root.exists():
             return

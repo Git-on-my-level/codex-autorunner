@@ -278,7 +278,7 @@ def test_list_repos_refreshes_after_startup_state_cache_ttl(
     assert first[0].display_name == "persisted-demo"
 
     assert supervisor._list_cache_at is not None
-    supervisor._list_cache_at -= 3.0
+    supervisor._list_cache_at -= hub_module._LIST_REPOS_CACHE_TTL_SECONDS + 1.0
 
     second = supervisor.list_repos()
     assert manifest_call_count == 1

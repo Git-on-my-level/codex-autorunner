@@ -119,6 +119,19 @@ class ProcessSnapshot:
     def total_count(self) -> int:
         return self.car_service_count + self.managed_runtime_count
 
+    def filter_by_pids(self, pids: set[int]) -> ProcessSnapshot:
+        return ProcessSnapshot(
+            car_service_processes=[
+                p for p in self.car_service_processes if p.pid in pids
+            ],
+            opencode_processes=[p for p in self.opencode_processes if p.pid in pids],
+            app_server_processes=[
+                p for p in self.app_server_processes if p.pid in pids
+            ],
+            other_processes=[p for p in self.other_processes if p.pid in pids],
+            collected_at=self.collected_at,
+        )
+
 
 # Match underscore-named binary only as the argv0 segment (not a parent dir like
 # .../codex_autorunner/.venv/bin/codex), which would misclassify app-server/opencode.

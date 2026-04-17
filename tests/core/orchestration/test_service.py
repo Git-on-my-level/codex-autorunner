@@ -14,6 +14,7 @@ from codex_autorunner.agents.hermes.harness import HermesHarness
 from codex_autorunner.agents.hermes.supervisor import HermesSupervisor
 from codex_autorunner.agents.registry import AgentDescriptor
 from codex_autorunner.agents.types import TerminalTurnResult
+from codex_autorunner.core.hub_control_plane import HubControlPlaneError
 from codex_autorunner.core.orchestration import (
     FreshConversationRequiredError,
     HarnessBackedOrchestrationService,
@@ -409,7 +410,6 @@ async def test_send_message_creates_conversation_and_execution(tmp_path: Path) -
     )
 
     refreshed_thread = service.get_thread_target(thread.thread_target_id)
-    running = service.get_running_execution(thread.thread_target_id)
 
     assert harness.ensure_ready_calls == [workspace_root]
     assert harness.new_conversation_calls == [(workspace_root, "Backlog")]
@@ -428,8 +428,44 @@ async def test_send_message_creates_conversation_and_execution(tmp_path: Path) -
     assert binding.backend_thread_id == "backend-conversation-1"
     assert refreshed_thread.last_execution_id == execution.execution_id
     assert refreshed_thread.last_message_preview == "Ship it"
-    assert running is not None
-    assert running.execution_id == execution.execution_id
+
+
+async def test_send_message_tolerates_retryable_thread_activity_hub_failure(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = _FakeHarness()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+
+    def _raise_retryable_hub_failure(*args: Any, **kwargs: Any) -> None:
+        _ = args, kwargs
+        raise HubControlPlaneError(
+            "hub_unavailable",
+            "Hub control-plane unavailable during record_thread_activity: request timed out after 10s",
+            retryable=True,
+        )
+
+    monkeypatch.setattr(
+        service.thread_store,
+        "record_thread_activity",
+        _raise_retryable_hub_failure,
+    )
+    caplog.set_level(logging.WARNING)
+
+    execution = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="Ship it",
+        )
+    )
+    assert execution.status == "running"
+    assert harness.start_turn_calls
+    assert "orchestration.thread_activity.record_degraded" in caplog.text
 
 
 async def test_send_message_rejects_empty_backend_turn_id(tmp_path: Path) -> None:

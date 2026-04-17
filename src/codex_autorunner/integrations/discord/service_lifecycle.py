@@ -17,6 +17,7 @@ CHAT_QUEUE_RESET_POLL_INTERVAL_SECONDS = 2.0
 _DISCORD_BACKGROUND_TASK_SHUTDOWN_GRACE_SECONDS = 10.0
 DISCORD_INTERACTION_COLD_START_WINDOW_SECONDS = 120.0
 DISCORD_OPENCODE_PRUNE_FALLBACK_INTERVAL_SECONDS = 300.0
+DISCORD_OPENCODE_PRUNE_EMPTY_INTERVAL_SECONDS = 600.0
 
 
 def service_uptime_ms(service: Any, *, now: Optional[float] = None) -> Optional[float]:
@@ -150,8 +151,11 @@ async def next_opencode_prune_interval_seconds(service: Any) -> float:
             for entry in service._opencode_supervisors.values()
             if entry.prune_interval_seconds is not None
         ]
+        has_supervisors = bool(service._opencode_supervisors)
     if intervals:
         return cast(float, min(intervals))
+    if not has_supervisors:
+        return DISCORD_OPENCODE_PRUNE_EMPTY_INTERVAL_SECONDS
     return DISCORD_OPENCODE_PRUNE_FALLBACK_INTERVAL_SECONDS
 
 

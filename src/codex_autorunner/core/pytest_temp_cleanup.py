@@ -9,17 +9,24 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable
+from typing import Callable, Hashable, Iterable, TypeVar
 
 _PYTEST_RUNTIME_TEMP_SUBDIR = "t"
 _DEFAULT_LSOF_TIMEOUT_SECONDS = 10.0
 _TEMP_ENV_KEYS = ("TMPDIR", "TMP", "TEMP")
+_CAR_TEMP_DIR_PREFIXES = (
+    "car-cached-",
+    "car-hub-profile-",
+    "car-nocache-",
+    "car-patch-",
+)
 _RMTREE_RETRY_ERRNOS = {
     errno.ENOTEMPTY,
     errno.EBUSY,
 }
 _RMTREE_RETRY_ATTEMPTS = 8
 _RMTREE_RETRY_SLEEP_SECONDS = 0.1
+_T = TypeVar("_T", bound=Hashable)
 
 
 @dataclass(frozen=True)
@@ -71,6 +78,36 @@ def repo_pytest_temp_root(repo_root: Path, *, temp_base: Path | None = None) -> 
     )
 
 
+def candidate_system_temp_roots() -> tuple[Path, ...]:
+    roots: dict[Path, Path] = {}
+    for candidate in (system_temp_root(),):
+        normalized = Path(candidate).expanduser().resolve(strict=False)
+        roots.setdefault(normalized, normalized)
+        for alias in _system_temp_root_aliases(normalized):
+            resolved_alias = alias.expanduser().resolve(strict=False)
+            roots.setdefault(resolved_alias, resolved_alias)
+    return tuple(sorted(roots.values(), key=lambda path: str(path)))
+
+
+def existing_repo_pytest_runtime_roots(
+    repo_root: Path,
+    *,
+    temp_base: Path | None = None,
+) -> tuple[Path, ...]:
+    runtime_root = repo_pytest_runtime_root(repo_root, temp_base=temp_base)
+    if temp_base is not None:
+        return (runtime_root,) if runtime_root.exists() else ()
+
+    roots: dict[Path, Path] = {}
+    for base_root in candidate_system_temp_roots():
+        candidate = repo_pytest_runtime_root(repo_root, temp_base=base_root)
+        if not candidate.exists():
+            continue
+        normalized = candidate.resolve(strict=False)
+        roots.setdefault(normalized, candidate)
+    return tuple(sorted(roots.values(), key=lambda path: str(path)))
+
+
 def cleanup_repo_pytest_temp_runs(
     repo_root: Path,
     *,
@@ -79,9 +116,11 @@ def cleanup_repo_pytest_temp_runs(
     temp_base: Path | None = None,
     min_age_seconds: float = 0.0,
 ) -> TempCleanupSummary:
-    temp_root = repo_pytest_temp_root(repo_root, temp_base=temp_base)
-    keep = {token for token in (keep_run_tokens or set()) if token}
-    if not temp_root.exists():
+    runtime_roots = existing_repo_pytest_runtime_roots(repo_root, temp_base=temp_base)
+    if temp_base is not None and not runtime_roots:
+        temp_root = repo_pytest_temp_root(repo_root, temp_base=temp_base)
+        runtime_roots = (temp_root.parent,) if temp_root.exists() else ()
+    if not runtime_roots:
         return TempCleanupSummary(
             scanned=0,
             deleted=0,
@@ -90,25 +129,124 @@ def cleanup_repo_pytest_temp_runs(
             bytes_before=0,
             bytes_after=0,
         )
+    keep = {token for token in (keep_run_tokens or set()) if token}
     cutoff = time.time() - max(0.0, float(min_age_seconds))
-    paths = []
-    for path in sorted(temp_root.iterdir()):
-        if path.name in keep or not path.is_dir():
+    summaries: list[TempCleanupSummary] = []
+    for runtime_root in runtime_roots:
+        temp_root = runtime_root / _PYTEST_RUNTIME_TEMP_SUBDIR
+        if not temp_root.exists():
             continue
-        if min_age_seconds > 0.0:
+        paths = []
+        for path in sorted(temp_root.iterdir()):
+            if path.name in keep or not path.is_dir():
+                continue
+            if min_age_seconds > 0.0:
+                try:
+                    if path.stat().st_mtime >= cutoff:
+                        continue
+                except OSError:
+                    continue
+            paths.append(path)
+        summary = cleanup_temp_paths(paths, dry_run=dry_run)
+        summaries.append(summary)
+        if not dry_run:
+            _remove_empty_parent_dirs(temp_root, stop_before=runtime_root.parent)
+    return _combine_cleanup_summaries(summaries)
+
+
+def discover_repo_temp_paths(
+    repo_root: Path,
+    *,
+    temp_base: Path | None = None,
+) -> tuple[Path, ...]:
+    candidate_roots: tuple[Path, ...]
+    if temp_base is not None:
+        candidate_roots = (Path(temp_base),)
+    else:
+        candidate_roots = candidate_system_temp_roots()
+    discovered: dict[Path, Path] = {}
+    for base_root in candidate_roots:
+        root = Path(base_root).expanduser().resolve(strict=False)
+        if not root.exists() or not root.is_dir():
+            continue
+        try:
+            children = sorted(root.iterdir(), key=lambda path: path.name)
+        except OSError:
+            continue
+        for child in children:
+            if not child.is_dir():
+                continue
+            if _is_repo_owned_temp_path(child):
+                normalized = child.resolve(strict=False)
+                discovered.setdefault(normalized, child)
+    return tuple(sorted(discovered.values(), key=lambda path: str(path)))
+
+
+def cleanup_repo_temp_paths(
+    repo_root: Path,
+    *,
+    dry_run: bool = False,
+    temp_base: Path | None = None,
+    min_age_seconds: float = 0.0,
+) -> TempCleanupSummary:
+    paths = discover_repo_temp_paths(repo_root, temp_base=temp_base)
+    if not paths:
+        return TempCleanupSummary(
+            scanned=0,
+            deleted=0,
+            active=0,
+            failed=0,
+            bytes_before=0,
+            bytes_after=0,
+        )
+    if min_age_seconds > 0.0:
+        cutoff = time.time() - max(0.0, float(min_age_seconds))
+        filtered: list[Path] = []
+        for path in paths:
             try:
                 if path.stat().st_mtime >= cutoff:
                     continue
             except OSError:
                 continue
-        paths.append(path)
-    summary = cleanup_temp_paths(paths, dry_run=dry_run)
-    if not dry_run:
-        _remove_empty_parent_dirs(
-            temp_root,
-            stop_before=repo_pytest_runtime_root(repo_root, temp_base=temp_base).parent,
+            filtered.append(path)
+        paths = tuple(filtered)
+    if not paths:
+        return TempCleanupSummary(
+            scanned=0,
+            deleted=0,
+            active=0,
+            failed=0,
+            bytes_before=0,
+            bytes_after=0,
         )
-    return summary
+    return cleanup_temp_paths(paths, dry_run=dry_run)
+
+
+def cleanup_repo_managed_temp_paths(
+    repo_root: Path,
+    *,
+    keep_run_tokens: set[str] | None = None,
+    dry_run: bool = False,
+    temp_base: Path | None = None,
+    min_age_seconds: float = 0.0,
+) -> TempCleanupSummary:
+    return _combine_cleanup_summaries(
+        (
+            cleanup_repo_pytest_temp_runs(
+                repo_root,
+                keep_run_tokens=keep_run_tokens,
+                dry_run=dry_run,
+                temp_base=temp_base,
+                min_age_seconds=min_age_seconds,
+            ),
+            cleanup_repo_temp_paths(
+                repo_root,
+                dry_run=dry_run,
+                temp_base=temp_base,
+                min_age_seconds=min_age_seconds,
+            ),
+        )
+    )
 
 
 def cleanup_temp_paths(
@@ -280,6 +418,81 @@ def system_temp_root() -> Path:
                 os.environ[key] = value
 
 
+def _system_temp_root_aliases(root: Path) -> tuple[Path, ...]:
+    aliases: dict[Path, Path] = {}
+    text = str(root)
+    if text == "/tmp":
+        aliases[Path("/private/tmp")] = Path("/private/tmp")
+    elif text == "/private/tmp":
+        aliases[Path("/tmp")] = Path("/tmp")
+    if text.startswith("/var/"):
+        aliases[Path("/private").joinpath(text.lstrip("/"))] = Path(
+            "/private"
+        ).joinpath(text.lstrip("/"))
+    elif text.startswith("/private/var/"):
+        aliases[Path("/" + text.removeprefix("/private/"))] = Path(
+            "/" + text.removeprefix("/private/")
+        )
+    return tuple(sorted(aliases.values(), key=lambda path: str(path)))
+
+
+def _combine_cleanup_summaries(
+    summaries: Iterable[TempCleanupSummary],
+) -> TempCleanupSummary:
+    collected = list(summaries)
+    deleted_paths = _dedupe_ordered(
+        path for summary in collected for path in summary.deleted_paths
+    )
+    active_paths = _dedupe_ordered(
+        path for summary in collected for path in summary.active_paths
+    )
+    failed_paths = _dedupe_ordered(
+        detail for summary in collected for detail in summary.failed_paths
+    )
+    active_processes = _dedupe_processes(
+        process for summary in collected for process in summary.active_processes
+    )
+    return TempCleanupSummary(
+        scanned=sum(summary.scanned for summary in collected),
+        deleted=sum(summary.deleted for summary in collected),
+        active=sum(summary.active for summary in collected),
+        failed=sum(summary.failed for summary in collected),
+        bytes_before=sum(summary.bytes_before for summary in collected),
+        bytes_after=sum(summary.bytes_after for summary in collected),
+        deleted_paths=tuple(deleted_paths),
+        active_paths=tuple(active_paths),
+        failed_paths=tuple(failed_paths),
+        active_processes=tuple(active_processes),
+    )
+
+
+def _is_repo_owned_temp_path(path: Path) -> bool:
+    name = path.name
+    if any(name.startswith(prefix) for prefix in _CAR_TEMP_DIR_PREFIXES):
+        return True
+    if not name.startswith("tmp."):
+        return False
+    return _looks_like_repo_temp_workspace(path)
+
+
+def _looks_like_repo_temp_workspace(path: Path) -> bool:
+    try:
+        names = {child.name for child in path.iterdir()}
+    except OSError:
+        return False
+    has_flows_db = any(
+        name in names for name in ("flows.db", "flows.db-wal", "flows.db-shm")
+    )
+    has_repo_state = ".codex-autorunner" in names
+    repo_dir = path / "repo"
+    has_repo_checkout = repo_dir.is_dir() and (
+        (repo_dir / ".git").exists() or (repo_dir / ".codex-autorunner").exists()
+    )
+    return (has_repo_checkout and has_flows_db) or (
+        has_repo_checkout and has_repo_state
+    )
+
+
 def _tree_size_bytes(root: Path) -> int:
     try:
         if not root.exists():
@@ -336,4 +549,15 @@ def _dedupe_processes(
             continue
         seen.add(key)
         deduped.append(process)
+    return deduped
+
+
+def _dedupe_ordered(items: Iterable[_T]) -> list[_T]:
+    seen: set[_T] = set()
+    deduped: list[_T] = []
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        deduped.append(item)
     return deduped

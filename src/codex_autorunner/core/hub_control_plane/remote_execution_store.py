@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import inspect
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from pathlib import Path
 from typing import Any, Callable, Coroutine, Optional, TypeVar
 
@@ -12,7 +15,7 @@ from ..orchestration.models import (
     ThreadTarget,
 )
 from ..orchestration.runtime_bindings import RuntimeThreadBinding
-from ._remote_helpers import run_sync_via_thread
+from .background_runner import BackgroundRunnerSaturated, BoundedBackgroundRunner
 from .client import HubControlPlaneClient
 from .errors import HubControlPlaneError
 from .models import (
@@ -38,7 +41,14 @@ from .models import (
     ThreadTargetResumeRequest,
 )
 
-_RT = TypeVar("_RT")
+ResultT = TypeVar("ResultT")
+_THREAD_TARGET_CREATE_TIMEOUT_SECONDS = 30.0
+_EXECUTION_RESULT_TIMEOUT_SECONDS = 30.0
+_BACKGROUND_RUNNER = BoundedBackgroundRunner(
+    max_workers=8,
+    saturation_wait_seconds=0.05,
+    thread_name_prefix="hub-execution",
+)
 
 
 class RemoteThreadExecutionStore(ThreadExecutionStore):
@@ -49,22 +59,102 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
         client: HubControlPlaneClient,
         *,
         timeout_seconds: float = 10.0,
+        background_runner: Optional[BoundedBackgroundRunner] = None,
     ) -> None:
         self._client = client
         self._timeout_seconds = timeout_seconds
+        self._background_runner = background_runner or _BACKGROUND_RUNNER
+
+    def _hub_unavailable(
+        self,
+        *,
+        operation: str,
+        message: str,
+        details: dict[str, Any] | None = None,
+    ) -> HubControlPlaneError:
+        payload = {"operation": operation}
+        if isinstance(details, dict):
+            payload.update(details)
+        return HubControlPlaneError(
+            "hub_unavailable",
+            f"Hub control-plane unavailable during {operation}: {message}",
+            retryable=True,
+            details=payload,
+        )
 
     def _run(
         self,
         *,
         operation: str,
-        action: Callable[[HubControlPlaneClient], Coroutine[Any, Any, _RT]],
-    ) -> _RT:
-        return run_sync_via_thread(
-            self._client,
-            operation=operation,
-            timeout_seconds=self._timeout_seconds,
-            action=action,
+        action: Callable[[HubControlPlaneClient], Coroutine[Any, Any, ResultT]],
+        timeout_seconds: Optional[float] = None,
+    ) -> ResultT:
+        def _invoke() -> ResultT:
+            background_client = self._client
+            clone = getattr(type(self._client), "clone_for_background_loop", None)
+            if callable(clone) and not inspect.iscoroutinefunction(clone):
+                cloned_client = clone(self._client)
+                if cloned_client is not None and not inspect.isawaitable(cloned_client):
+                    background_client = cloned_client
+
+            async def _run_action() -> ResultT:
+                try:
+                    return await action(background_client)
+                finally:
+                    close = getattr(background_client, "aclose", None)
+                    if callable(close) and background_client is not self._client:
+                        result = close()
+                        if inspect.isawaitable(result):
+                            await result
+
+            return asyncio.run(_run_action())
+
+        effective_timeout_seconds = (
+            self._timeout_seconds
+            if timeout_seconds is None
+            else max(0.0, float(timeout_seconds))
         )
+
+        try:
+            future = self._background_runner.submit(
+                _invoke,
+                timeout_seconds=effective_timeout_seconds,
+            )
+        except BackgroundRunnerSaturated as exc:
+            raise self._hub_unavailable(
+                operation=operation,
+                message="background worker pool saturated",
+                details={
+                    "max_workers": exc.max_workers,
+                    "acquire_timeout_seconds": exc.acquire_timeout_seconds,
+                },
+            ) from exc
+        try:
+            return future.result(timeout=effective_timeout_seconds)
+        except FuturesTimeoutError as exc:
+            future.cancel()
+            raise self._hub_unavailable(
+                operation=operation,
+                message=f"request timed out after {effective_timeout_seconds:g}s",
+                details={"timeout_seconds": effective_timeout_seconds},
+            ) from exc
+        except HubControlPlaneError as exc:
+            if exc.code in {"hub_unavailable", "transport_failure"}:
+                raise self._hub_unavailable(
+                    operation=operation,
+                    message=str(exc),
+                    details={
+                        "cause_code": exc.code,
+                        **dict(exc.details),
+                    },
+                ) from exc
+            raise
+        except (ConnectionError, OSError) as exc:
+            raise self._hub_unavailable(
+                operation=operation,
+                message=str(exc) or exc.__class__.__name__,
+                details={"cause_type": exc.__class__.__name__},
+            ) from exc
 
     @staticmethod
     def _require_thread(
@@ -111,6 +201,7 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
             metadata_payload["context_profile"] = normalized_context_profile
         response = self._run(
             operation="create_thread_target",
+            timeout_seconds=_THREAD_TARGET_CREATE_TIMEOUT_SECONDS,
             action=lambda client: client.create_thread_target(
                 ThreadTargetCreateRequest(
                     agent_id=agent_id,
@@ -380,6 +471,7 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
     ) -> ExecutionRecord:
         response = self._run(
             operation="record_execution_result",
+            timeout_seconds=_EXECUTION_RESULT_TIMEOUT_SECONDS,
             action=lambda client: client.record_execution_result(
                 ExecutionResultRecordRequest(
                     thread_target_id=thread_target_id,

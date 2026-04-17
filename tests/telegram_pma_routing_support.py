@@ -6288,17 +6288,12 @@ async def test_pma_new_resets_session(tmp_path: Path) -> None:
         date=None,
         is_topic_message=True,
     )
-
     await handler._handle_new(message)
-
     assert registry.get_thread_id(PMA_OPENCODE_KEY) is None
     sessions = json.loads(state_path.read_text(encoding="utf-8")).get("sessions", {})
     assert PMA_OPENCODE_KEY not in sessions
-    assert (
-        handler._sent
-        and handler._sent[-1]
-        == "Started a fresh PMA session for `opencode` (new thread ready)."
-    )
+    expected = "Started a fresh PMA session for `opencode` (new thread ready)."
+    assert handler._sent[-1] == expected
 
 
 @pytest.mark.anyio
@@ -6335,18 +6330,14 @@ async def test_pma_new_resets_managed_binding_when_runtime_threads_enabled(
         date=None,
         is_topic_message=True,
     )
-
     await handler._handle_new(message)
 
     assert calls
     assert calls[-1]["surface_key"] == "-2002:333"
     assert calls[-1]["mode"] == "pma"
     assert calls[-1]["pma_enabled"] is True
-    assert (
-        handler._sent
-        and handler._sent[-1]
-        == "Started a fresh PMA session for `codex` (new thread ready)."
-    )
+    expected = "Started a fresh PMA session for `codex` (new thread ready)."
+    assert handler._sent[-1] == expected
 
 
 @pytest.mark.anyio

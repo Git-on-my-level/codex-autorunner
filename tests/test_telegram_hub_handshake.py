@@ -218,6 +218,60 @@ async def test_telegram_handshake_hub_unavailable(
 
 
 @pytest.mark.anyio
+async def test_telegram_handshake_retries_transient_startup_failures(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    seed_hub_files(tmp_path, force=True)
+    attempts = 0
+
+    class _FlakyHubClient:
+        async def handshake(self, request: Any) -> Any:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise HubControlPlaneError(
+                    "transport_failure",
+                    "Hub control-plane transport request failed: ReadTimeout",
+                    retryable=True,
+                )
+            return SimpleNamespace(
+                api_version="1.0.0",
+                minimum_client_api_version="1.0.0",
+                schema_generation=ORCHESTRATION_SCHEMA_VERSION,
+                capabilities=("compatibility_handshake",),
+                hub_build_version="0.0.0",
+                hub_asset_version=None,
+            )
+
+    logger = logging.getLogger("test.telegram.handshake.retry")
+    service = TelegramBotService(_config(tmp_path), logger=logger, hub_root=tmp_path)
+    service._hub_client = _FlakyHubClient()
+    service._startup_started_at_monotonic = 0.0
+    service._hub_handshake_retry_window_seconds = 1.0
+    service._hub_handshake_retry_delay_seconds = 0.0
+    service._hub_handshake_retry_max_delay_seconds = 0.0
+
+    try:
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "codex_autorunner.integrations.telegram.service.time.monotonic",
+                lambda: 0.0,
+            )
+            with caplog.at_level(logging.INFO, logger=logger.name):
+                handshake_ok = await service._perform_hub_handshake()
+
+        assert handshake_ok is True
+        assert attempts == 2
+        assert any(
+            event["event"] == "telegram.hub_control_plane.handshake_retrying"
+            for event in _logged_events(caplog, logger.name)
+        )
+    finally:
+        await service._app_server_supervisor.close_all()
+        await service._bot.close()
+
+
+@pytest.mark.anyio
 async def test_telegram_handshake_no_client(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:

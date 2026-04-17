@@ -26,7 +26,10 @@ from ....core.force_attestation import FORCE_ATTESTATION_REQUIRED_PHRASE
 from ....core.locks import process_alive, process_command_matches
 from ....core.managed_processes import reap_managed_processes
 from ....core.managed_processes.registry import list_process_records
-from ....core.pytest_temp_cleanup import cleanup_repo_pytest_temp_runs
+from ....core.pytest_temp_cleanup import (
+    cleanup_repo_managed_temp_paths,
+    cleanup_repo_pytest_temp_runs,
+)
 from ....core.report_retention import (
     DEFAULT_REPORT_MAX_HISTORY_FILES,
     DEFAULT_REPORT_MAX_TOTAL_BYTES,
@@ -253,6 +256,39 @@ def register_cleanup_commands(
         typer.echo(
             prefix
             + "pytest tmp cleanup: "
+            + " ".join(
+                [
+                    f"scanned={summary.scanned}",
+                    f"deleted={summary.deleted}",
+                    f"active={summary.active}",
+                    f"failed={summary.failed}",
+                    f"bytes_before={summary.bytes_before}",
+                    f"bytes_after={summary.bytes_after}",
+                ]
+            )
+        )
+        for path in summary.active_paths:
+            typer.echo(f"ACTIVE {path}")
+        for detail in summary.failed_paths:
+            typer.echo(f"FAILED {detail}")
+
+    @cleanup_app.command("temp-roots")
+    def cleanup_temp_roots(
+        repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
+        hub: Optional[Path] = hub_root_path_option(),
+        dry_run: bool = typer.Option(
+            False,
+            "--dry-run",
+            help="Preview CAR temp-root cleanup without deleting inactive roots.",
+        ),
+    ) -> None:
+        """Prune stale CAR-managed temp roots outside repo-local state."""
+        engine = require_repo_config(repo, hub)
+        summary = cleanup_repo_managed_temp_paths(engine.repo_root, dry_run=dry_run)
+        prefix = "Dry run: " if dry_run else ""
+        typer.echo(
+            prefix
+            + "temp root cleanup: "
             + " ".join(
                 [
                     f"scanned={summary.scanned}",

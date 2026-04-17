@@ -74,11 +74,16 @@ from ...core.hub_control_plane import (
     HandshakeCompatibility,
     HttpHubControlPlaneClient,
 )
+from ...core.hub_control_plane.handshake_startup import perform_startup_hub_handshake
+from ...core.hub_control_plane.service import (
+    CONTROL_PLANE_API_VERSION as _CONTROL_PLANE_API_VERSION,
+)
 from ...core.logging_utils import log_event
 from ...core.managed_processes import (
     reap_managed_processes,
 )  # noqa: F401 - re-exported for test monkeypatching
 from ...core.orchestration import (
+    ORCHESTRATION_SCHEMA_VERSION,
     ChatOperationRecoveryAction,
     ChatOperationSnapshot,
     ChatOperationState,
@@ -274,7 +279,6 @@ from .flow_watchers import (
 )
 from .flow_watchers import watch_ticket_flow_pauses, watch_ticket_flow_terminals
 from .gateway import DiscordGatewayClient
-from .hub_handshake import perform_hub_handshake as _perform_hub_handshake_impl
 from .ingress import (
     CommandSpec,
     IngressContext,
@@ -522,6 +526,9 @@ def _plan_delivery_recovery_cursor(
 
 
 DISCORD_EPHEMERAL_FLAG = 64
+CHAT_QUEUE_RESET_POLL_INTERVAL_SECONDS = 2.0
+CHAT_QUEUE_RESET_POLL_MAX_INTERVAL_SECONDS = 30.0
+CHAT_QUEUE_RESET_POLL_BACKOFF_GROW_FACTOR = 1.5
 DISCORD_TURN_PROGRESS_MIN_EDIT_INTERVAL_SECONDS = 1.0
 DISCORD_TURN_PROGRESS_HEARTBEAT_INTERVAL_SECONDS = 2.0
 DISCORD_TURN_PROGRESS_MAX_ACTIONS = 12
@@ -530,12 +537,17 @@ DISCORD_INTERACTION_COLD_START_WINDOW_SECONDS = 120.0
 DISCORD_BACKGROUND_TASK_SHUTDOWN_GRACE_SECONDS = (
     10.0  # noqa: F401 - re-exported for test monkeypatching
 )
+DISCORD_HUB_HANDSHAKE_RETRY_WINDOW_SECONDS = 45.0
+DISCORD_HUB_HANDSHAKE_RETRY_DELAY_SECONDS = 1.0
+DISCORD_HUB_HANDSHAKE_RETRY_MAX_DELAY_SECONDS = 5.0
+SHELL_OUTPUT_TRUNCATION_SUFFIX = "\n...[truncated]..."
 DISCORD_ATTACHMENT_MAX_BYTES = 100_000_000
 THREAD_LIST_MAX_PAGES = 5
 THREAD_LIST_PAGE_LIMIT = 100
 APP_SERVER_START_BACKOFF_INITIAL_SECONDS = 1.0
 APP_SERVER_START_BACKOFF_MAX_SECONDS = 30.0
 DISCORD_OPENCODE_PRUNE_FALLBACK_INTERVAL_SECONDS = 300.0
+DISCORD_OPENCODE_PRUNE_EMPTY_INTERVAL_SECONDS = 600.0
 # Kept for test compatibility; queued notice payloads are shaped in
 # service_normalization.py.
 DISCORD_QUEUED_PLACEHOLDER_TEXT = "Queued (waiting for available worker...)"
@@ -889,6 +901,15 @@ class DiscordBotService:
             on_scheduler_conversation_idle=self._wake_dispatcher_conversation,
         )
         self._service_started_at_monotonic: Optional[float] = None
+        self._hub_handshake_retry_window_seconds = (
+            DISCORD_HUB_HANDSHAKE_RETRY_WINDOW_SECONDS
+        )
+        self._hub_handshake_retry_delay_seconds = (
+            DISCORD_HUB_HANDSHAKE_RETRY_DELAY_SECONDS
+        )
+        self._hub_handshake_retry_max_delay_seconds = (
+            DISCORD_HUB_HANDSHAKE_RETRY_MAX_DELAY_SECONDS
+        )
 
     async def run_forever(self) -> None:
         self._service_started_at_monotonic = time.monotonic()
@@ -974,13 +995,32 @@ class DiscordBotService:
         return _service_uptime_ms_impl(self, now=now)
 
     async def _perform_hub_handshake(self) -> bool:
-        result = await _perform_hub_handshake_impl(
-            self._hub_client,
-            self._logger,
-            str(self._config.root),
+        expected_schema_generation = ORCHESTRATION_SCHEMA_VERSION
+        if self._hub_client is None:
+            log_event(
+                self._logger,
+                logging.ERROR,
+                "discord.hub_control_plane.client_not_configured",
+                hub_root=str(self._config.root),
+                expected_schema_generation=expected_schema_generation,
+            )
+            return False
+
+        ok, compatibility = await perform_startup_hub_handshake(
+            hub_client=self._hub_client,
+            log_event_name_prefix="discord",
+            handshake_client_name="discord",
+            hub_root_str=str(self._config.root),
+            startup_monotonic=self._service_started_at_monotonic,
+            retry_window_seconds=self._hub_handshake_retry_window_seconds,
+            retry_delay_seconds=self._hub_handshake_retry_delay_seconds,
+            retry_max_delay_seconds=self._hub_handshake_retry_max_delay_seconds,
+            client_api_version=_CONTROL_PLANE_API_VERSION,
+            logger=self._logger,
         )
-        self._hub_handshake_compatibility = result.compatibility
-        return result.success
+        if compatibility is not None:
+            self._hub_handshake_compatibility = compatibility
+        return ok
 
     @property
     def hub_client(self) -> Optional[HttpHubControlPlaneClient]:
@@ -1315,17 +1355,66 @@ class DiscordBotService:
         if not isinstance(token, str) or not token.strip():
             return None
         normalized = token.strip()
-        resolved = self._resolve_workspace_from_token(
-            normalized,
-            self._list_bind_workspace_candidates(),
-        )
-        if resolved is not None:
-            candidate = canonicalize_path(Path(resolved[2]))
-            return candidate if candidate.exists() and candidate.is_dir() else None
         candidate = Path(normalized)
-        if not candidate.is_absolute():
-            candidate = self._config.root / candidate
-        workspace_root = canonicalize_path(candidate)
+        # Keep bind-target resolution pre-ack strictly local and cheap. The full
+        # bind handler can do slower candidate enumeration after Discord has been
+        # acknowledged, but scheduler lock resolution must not spend the ack budget
+        # on live hub calls.
+        if candidate.is_absolute() or "/" in normalized or "\\" in normalized:
+            if not candidate.is_absolute():
+                candidate = self._config.root / candidate
+            workspace_root = canonicalize_path(candidate)
+            return (
+                workspace_root
+                if workspace_root.exists() and workspace_root.is_dir()
+                else None
+            )
+
+        cheap_candidates: list[tuple[Optional[str], Optional[str], str]] = [
+            ("repo", repo_id, str(canonicalize_path(Path(path))))
+            for repo_id, path in self._list_manifest_repos()
+        ]
+        seen_paths = {workspace_path for _kind, _id, workspace_path in cheap_candidates}
+        cheap_candidates.extend(
+            (
+                "agent_workspace",
+                workspace_id,
+                workspace_path,
+            )
+            for workspace_id, workspace_path, _display_name in self._list_agent_workspaces_from_cache()
+        )
+        seen_paths.update(
+            workspace_path for _kind, _id, workspace_path in cheap_candidates
+        )
+        try:
+            for child in sorted(
+                self._config.root.iterdir(),
+                key=lambda entry: entry.name.lower(),
+            ):
+                if not child.is_dir():
+                    continue
+                if child.name.startswith("."):
+                    continue
+                normalized_path = str(canonicalize_path(child))
+                if normalized_path in seen_paths:
+                    continue
+                seen_paths.add(normalized_path)
+                cheap_candidates.append((None, None, normalized_path))
+        except OSError:
+            self._logger.debug(
+                "failed to scan root directory for scheduler bind candidates",
+                exc_info=True,
+            )
+        resolved = self._resolve_workspace_from_token(normalized, cheap_candidates)
+        if resolved is not None:
+            resolved_root = canonicalize_path(Path(resolved[2]))
+            return (
+                resolved_root
+                if resolved_root.exists() and resolved_root.is_dir()
+                else None
+            )
+
+        workspace_root = canonicalize_path(self._config.root / candidate)
         return (
             workspace_root
             if workspace_root.exists() and workspace_root.is_dir()
@@ -4002,6 +4091,11 @@ class DiscordBotService:
 
     def _list_agent_workspaces(self) -> list[tuple[str, str, str]]:
         from .workspace_commands import _list_agent_workspaces as _impl
+
+        return _impl(self)
+
+    def _list_agent_workspaces_from_cache(self) -> list[tuple[str, str, str]]:
+        from .workspace_commands import _list_agent_workspaces_from_cache as _impl
 
         return _impl(self)
 

@@ -1,0 +1,134 @@
+# Idle CPU benchmark profiles for the first CAR optimization campaign.
+#
+# Each profile specifies the service topology, measurement parameters, and
+# budget expectations for a reproducible idle-CPU soak.  A later harness
+# script consumes these profiles directly; no ad hoc CLI flags required.
+#
+# Artifact directory contract: .codex-autorunner/diagnostics/idle-cpu/
+
+version: 1
+
+defaults:
+  warmup_seconds: 30
+  duration_seconds: 300
+  sample_interval_seconds: 5
+  health_probe:
+    method: http_get
+    path: /health
+    timeout_seconds: 5
+    retries: 3
+  owned_process_categories:
+    - car_service
+    - opencode
+    - app_server
+
+profiles:
+  hub_only:
+    description: >-
+      CAR hub serving the local UI/API only.  No chat-surface integrations
+      are active.  This is the hard-budget gate for the first campaign.
+    services:
+      - command: car hub serve
+        alias: hub
+    hard_budget:
+      enabled: true
+      max_aggregate_cpu_percent: 5.0
+    comparison_budget: null
+    expected_owned_process_categories:
+      - car_service
+
+  hub_plus_discord:
+    description: >-
+      CAR hub with the Discord bot connected and idle (no active dispatches
+      or user interactions).  Measured for comparison; not a hard gate.
+    services:
+      - command: car hub serve
+        alias: hub
+      - command: car discord serve
+        alias: discord
+    hard_budget:
+      enabled: false
+    comparison_budget:
+      max_aggregate_cpu_percent: 8.0
+    expected_owned_process_categories:
+      - car_service
+
+  hub_plus_telegram:
+    description: >-
+      CAR hub with the Telegram bot polling and idle (no active dispatches
+      or user interactions).  Measured for comparison; not a hard gate.
+    services:
+      - command: car hub serve
+        alias: hub
+      - command: car telegram serve
+        alias: telegram
+    hard_budget:
+      enabled: false
+    comparison_budget:
+      max_aggregate_cpu_percent: 8.0
+    expected_owned_process_categories:
+      - car_service
+
+  hub_with_idle_runtime:
+    description: >-
+      CAR hub with at least one managed OpenCode server spawned and sitting
+      idle (no active sessions or agent turns).  Measures the steady-state
+      cost of an idle managed runtime.  Not a hard gate.
+    services:
+      - command: car hub serve
+        alias: hub
+    preconditions:
+      - type: spawn_idle_opencode
+        description: >-
+          Spawn one managed OpenCode server via the hub API and wait for it
+          to reach idle state before starting measurement.
+    hard_budget:
+      enabled: false
+    comparison_budget:
+      max_aggregate_cpu_percent: 10.0
+    expected_owned_process_categories:
+      - car_service
+      - opencode
+
+artifact_contract:
+  directory: .codex-autorunner/diagnostics/idle-cpu/
+  filename_pattern: "{profile}_{timestamp}.json"
+  schema:
+    version: 1
+    profile: str
+    started_at: "ISO-8601 UTC"
+    finished_at: "ISO-8601 UTC"
+    environment:
+      hostname: str
+      platform: str
+      python_version: str
+      car_version: str
+      car_git_ref: "str or null"
+      cpu_count: int
+      total_memory_gb: float
+    aggregate_metrics:
+      car_owned_cpu_mean_percent: float
+      car_owned_cpu_max_percent: float
+      car_owned_cpu_p95_percent: float
+      car_owned_cpu_samples: int
+      car_owned_memory_mean_mb: float
+      car_owned_memory_max_mb: float
+    per_process_metrics:
+      - alias: str
+        command: str
+        category: str
+        cpu_mean_percent: float
+        cpu_max_percent: float
+        memory_mean_mb: float
+        memory_max_mb: float
+    health_probe_summary:
+      total_probes: int
+      successful_probes: int
+      failed_probes: int
+      last_probe_status: "int or null"
+    signoff:
+      passed: bool
+      budget_type: "hard|comparison|none"
+      budget_threshold_percent: "float or null"
+      actual_aggregate_cpu_percent: float
+      message: str

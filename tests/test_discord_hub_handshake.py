@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from codex_autorunner.bootstrap import seed_hub_files
+from codex_autorunner.core.hub_control_plane.errors import HubControlPlaneError
 from codex_autorunner.core.orchestration import ORCHESTRATION_SCHEMA_VERSION
 from codex_autorunner.integrations.discord.config import (
     DiscordBotConfig,
@@ -299,8 +300,6 @@ async def test_discord_handshake_hub_unavailable(
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
     await store.initialize()
 
-    from codex_autorunner.core.hub_control_plane.errors import HubControlPlaneError
-
     class _FakeUnavailableHubClient:
         async def handshake(self, request: Any) -> Any:
             raise HubControlPlaneError(
@@ -333,6 +332,68 @@ async def test_discord_handshake_hub_unavailable(
     }
 
     await store.close()
+
+
+@pytest.mark.anyio
+async def test_discord_handshake_retries_transient_startup_failures(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    seed_hub_files(tmp_path, force=True)
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    attempts = 0
+
+    class _FlakyHubClient:
+        async def handshake(self, request: Any) -> Any:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise HubControlPlaneError(
+                    "transport_failure",
+                    "Hub control-plane transport request failed: ReadTimeout",
+                    retryable=True,
+                )
+            return SimpleNamespace(
+                api_version="1.0.0",
+                minimum_client_api_version="1.0.0",
+                schema_generation=ORCHESTRATION_SCHEMA_VERSION,
+                capabilities=("compatibility_handshake",),
+                hub_build_version="0.0.0",
+                hub_asset_version=None,
+            )
+
+    logger = logging.getLogger("test.discord.handshake.retry")
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logger,
+        rest_client=_FakeRest(),
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    service._hub_client = _FlakyHubClient()
+    service._service_started_at_monotonic = 0.0
+    service._hub_handshake_retry_window_seconds = 1.0
+    service._hub_handshake_retry_delay_seconds = 0.0
+    service._hub_handshake_retry_max_delay_seconds = 0.0
+
+    try:
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "codex_autorunner.integrations.discord.service.time.monotonic",
+                lambda: 0.0,
+            )
+            with caplog.at_level(logging.INFO, logger=logger.name):
+                handshake_ok = await service._perform_hub_handshake()
+    finally:
+        await store.close()
+
+    assert handshake_ok is True
+    assert attempts == 2
+    assert any(
+        event["event"] == "discord.hub_control_plane.handshake_retrying"
+        for event in _logged_events(caplog, logger.name)
+    )
 
 
 @pytest.mark.anyio

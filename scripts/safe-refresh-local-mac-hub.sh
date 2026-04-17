@@ -33,6 +33,8 @@ set -euo pipefail
 #   HEALTH_CHECK_STATIC    static asset check (auto|true|false; default: auto)
 #   HEALTH_CHECK_TELEGRAM  telegram launchd check (auto|true|false; default: auto)
 #   HEALTH_CHECK_DISCORD   discord launchd check (auto|true|false; default: auto)
+#                          After reload, Telegram/Discord `launchctl kickstart` must succeed;
+#                          health gates do not replace a failed kickstart.
 #   HEALTH_CONNECT_TIMEOUT_SECONDS connection timeout for each health request (default: 2)
 #   HEALTH_REQUEST_TIMEOUT_SECONDS total timeout for each health request (default: 5)
 #   HUB_PRE_CHAT_HEALTH_TIMEOUT_SECONDS seconds to wait for hub /health before chat reload
@@ -930,6 +932,19 @@ _start_service() {
   launchctl kickstart -k "${domain}" >/dev/null
 }
 
+# Kickstart a LaunchAgent after `launchctl load` (Telegram/Discord reload paths).
+# Always fatal on failure so refresh cannot succeed with launchd never started.
+_kickstart_loaded_chat_agent() {
+  local service_domain service_label output
+  service_domain="$1"
+  service_label="$2"
+  output="$(
+    launchctl kickstart -k "${service_domain}" 2>&1 >/dev/null
+  )" && return 0
+  echo "Could not kickstart service \"${service_label}\": ${output}" >&2
+  return 1
+}
+
 _reload() {
   _stop_service
   _start_service
@@ -970,7 +985,7 @@ _reload_telegram() {
       fi
     fi
     launchctl load -w "${TELEGRAM_PLIST_PATH}" >/dev/null
-    launchctl kickstart -k "${telegram_domain}" >/dev/null
+    _kickstart_loaded_chat_agent "${telegram_domain}" "${TELEGRAM_LABEL}"
     return 0
   fi
 
@@ -1016,7 +1031,7 @@ _reload_telegram() {
     fi
   fi
   launchctl load -w "${TELEGRAM_PLIST_PATH}" >/dev/null
-  launchctl kickstart -k "${telegram_domain}" >/dev/null
+  _kickstart_loaded_chat_agent "${telegram_domain}" "${TELEGRAM_LABEL}"
 }
 
 _reload_discord() {
@@ -1054,7 +1069,7 @@ _reload_discord() {
       fi
     fi
     launchctl load -w "${DISCORD_PLIST_PATH}" >/dev/null
-    launchctl kickstart -k "${discord_domain}" >/dev/null
+    _kickstart_loaded_chat_agent "${discord_domain}" "${DISCORD_LABEL}"
     return 0
   fi
 
@@ -1109,7 +1124,7 @@ _reload_discord() {
     fi
   fi
   launchctl load -w "${DISCORD_PLIST_PATH}" >/dev/null
-  launchctl kickstart -k "${discord_domain}" >/dev/null
+  _kickstart_loaded_chat_agent "${discord_domain}" "${DISCORD_LABEL}"
 }
 
 _telegram_state() {

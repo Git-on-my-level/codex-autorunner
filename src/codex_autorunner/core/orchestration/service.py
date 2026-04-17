@@ -62,7 +62,7 @@ _RECOVERABLE_BACKEND_MARKERS = _MISSING_THREAD_MARKERS + ("event loop is closed"
 _REHYDRATION_TRANSCRIPT_LIMIT = 3
 _REHYDRATION_TEXT_LIMIT = 4_000
 _FRESH_BACKEND_SESSION_NOTICE = (
-    "Notice: the previous live session was unavailable, so I started a new " "session."
+    "Notice: the previous live session was unavailable, so I started a new session."
 )
 _FRESH_BACKEND_SESSION_REHYDRATED_NOTICE = (
     "Notice: the previous live session was unavailable, so I started a new "
@@ -169,6 +169,38 @@ def _resolve_thread_runtime_binding(
     if isinstance(hub_root, Path):
         return get_runtime_thread_binding(hub_root, thread_target_id)
     return None
+
+
+def _record_thread_activity_best_effort(
+    thread_store: ThreadExecutionStore,
+    thread_target_id: str,
+    *,
+    execution_id: Optional[str],
+    message_preview: Optional[str],
+) -> None:
+    try:
+        thread_store.record_thread_activity(
+            thread_target_id,
+            execution_id=execution_id,
+            message_preview=message_preview,
+        )
+    except RuntimeError as exc:
+        from ..hub_control_plane.errors import is_retryable_hub_control_plane_failure
+
+        if not is_retryable_hub_control_plane_failure(exc):
+            raise
+        error_code = str(getattr(exc, "code", "") or "").strip()
+        retryable = bool(getattr(exc, "retryable", False))
+        log_event(
+            logger,
+            logging.WARNING,
+            "orchestration.thread_activity.record_degraded",
+            thread_target_id=thread_target_id,
+            execution_id=execution_id,
+            retryable=retryable,
+            error_code=error_code or None,
+            detail=str(exc),
+        )
 
 
 def _execution_record_from_store_row(record: Mapping[str, Any]) -> ExecutionRecord:
@@ -1988,7 +2020,8 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             client_request_id=client_request_id,
             queue_payload=queue_payload,
         )
-        self.thread_store.record_thread_activity(
+        _record_thread_activity_best_effort(
+            self.thread_store,
             thread.thread_target_id,
             execution_id=execution.execution_id,
             message_preview=_truncate_text(request.message_text, MessagePreviewLimit),

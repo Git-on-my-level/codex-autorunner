@@ -20,9 +20,8 @@ PMA_QUEUE_DIR = ".codex-autorunner/pma/queue"
 QUEUE_FILE_SUFFIX = ".jsonl"
 DEFAULT_COMPACTION_KEEP_LAST = 200
 COMPACTION_MIN_TERMINAL_ROWS = 500
-
 PMA_LANE_SOURCE_KIND = "pma_lane"
-
+COMPACTION_MIN_SIZE_BYTES = 256 * 1024
 logger = logging.getLogger(__name__)
 
 
@@ -103,6 +102,7 @@ class PmaQueue:
         self._replayed_lanes: set[str] = set()
         self._lock: Optional[asyncio.Lock] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._lane_mirror_mtimes: dict[str, float] = {}
         self._initialize_canonical_state()
 
     def _initialize_canonical_state(self) -> None:
@@ -312,6 +312,7 @@ class PmaQueue:
             return True
 
         poll_interval = max(0.1, poll_interval_seconds)
+
         while True:
             wait_tasks = [asyncio.create_task(event.wait())]
             if cancel_event is not None:
@@ -335,9 +336,21 @@ class PmaQueue:
                 event.clear()
                 return True
 
+            mirror_path = self._lane_queue_path(lane_id)
+            try:
+                current_mtime = mirror_path.stat().st_mtime
+            except OSError:
+                current_mtime = 0.0
+            prev_mtime = self._lane_mirror_mtimes.get(lane_id, 0.0)
+
+            if current_mtime == prev_mtime:
+                continue
+
             added = await self._refresh_lane_from_disk(lane_id)
             if added:
                 return True
+
+            self._lane_mirror_mtimes[lane_id] = current_mtime
 
     async def list_items(self, lane_id: str) -> list[PmaQueueItem]:
         async with self._ensure_lane_lock(lane_id):

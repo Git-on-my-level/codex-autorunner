@@ -37,6 +37,7 @@ from .git_utils import (
     git_failure_detail,
     git_head_sha,
     git_is_clean,
+    git_mutation_lock,
     git_upstream_status,
     resolve_ref_sha,
     run_git,
@@ -91,6 +92,7 @@ logger = logging.getLogger("codex_autorunner.hub")
 
 _GIT_FETCH_TIMEOUT_SECONDS = 120
 _GIT_PULL_TIMEOUT_SECONDS = 120
+_LIST_REPOS_CACHE_TTL_SECONDS = 30.0
 
 BackendFactoryBuilder = Callable[[Path, RepoConfig], BackendFactory]
 AppServerSupervisorFactoryBuilder = Callable[[RepoConfig], AppServerSupervisorFactory]
@@ -432,7 +434,10 @@ class HubSupervisor:
     def list_repos(self, *, use_cache: bool = True) -> List[RepoSnapshot]:
         with self._list_lock:
             if use_cache and self._list_cache and self._list_cache_at is not None:
-                if time.monotonic() - self._list_cache_at < 2.0:
+                if (
+                    time.monotonic() - self._list_cache_at
+                    < _LIST_REPOS_CACHE_TTL_SECONDS
+                ):
                     return self._list_cache
             if use_cache and self._startup_repo_state_pending and self.state.repos:
                 self._startup_repo_state_pending = False
@@ -728,60 +733,61 @@ class HubSupervisor:
         if not git_is_clean(repo_root):
             raise ValueError("Repo has uncommitted changes; commit or stash first")
 
-        try:
-            proc = run_git(
-                ["fetch", "--prune", "origin"],
-                repo_root,
-                check=False,
-                timeout_seconds=_GIT_FETCH_TIMEOUT_SECONDS,
-            )
-        except GitError as exc:
-            raise ValueError(f"git fetch failed: {exc}") from exc
-        if proc.returncode != 0:
-            raise ValueError(f"git fetch failed: {git_failure_detail(proc)}")
-
-        default_branch = git_default_branch(repo_root)
-        if not default_branch:
-            raise ValueError("Unable to resolve origin default branch")
-
-        try:
-            proc = run_git(["checkout", default_branch], repo_root, check=False)
-        except GitError as exc:
-            raise ValueError(f"git checkout failed: {exc}") from exc
-        if proc.returncode != 0:
+        with git_mutation_lock(repo_root):
             try:
                 proc = run_git(
-                    ["checkout", "-B", default_branch, f"origin/{default_branch}"],
+                    ["fetch", "--prune", "origin"],
                     repo_root,
                     check=False,
+                    timeout_seconds=_GIT_FETCH_TIMEOUT_SECONDS,
                 )
+            except GitError as exc:
+                raise ValueError(f"git fetch failed: {exc}") from exc
+            if proc.returncode != 0:
+                raise ValueError(f"git fetch failed: {git_failure_detail(proc)}")
+
+            default_branch = git_default_branch(repo_root)
+            if not default_branch:
+                raise ValueError("Unable to resolve origin default branch")
+
+            try:
+                proc = run_git(["checkout", default_branch], repo_root, check=False)
             except GitError as exc:
                 raise ValueError(f"git checkout failed: {exc}") from exc
             if proc.returncode != 0:
-                raise ValueError(f"git checkout failed: {git_failure_detail(proc)}")
+                try:
+                    proc = run_git(
+                        ["checkout", "-B", default_branch, f"origin/{default_branch}"],
+                        repo_root,
+                        check=False,
+                    )
+                except GitError as exc:
+                    raise ValueError(f"git checkout failed: {exc}") from exc
+                if proc.returncode != 0:
+                    raise ValueError(f"git checkout failed: {git_failure_detail(proc)}")
 
-        try:
-            proc = run_git(
-                ["pull", "--ff-only", "origin", default_branch],
-                repo_root,
-                check=False,
-                timeout_seconds=_GIT_PULL_TIMEOUT_SECONDS,
-            )
-        except GitError as exc:
-            raise ValueError(f"git pull failed: {exc}") from exc
-        if proc.returncode != 0:
-            raise ValueError(f"git pull failed: {git_failure_detail(proc)}")
-        local_sha = git_head_sha(repo_root)
-        if not local_sha:
-            raise ValueError("Unable to resolve local HEAD after sync")
-        origin_ref = f"refs/remotes/origin/{default_branch}"
-        origin_sha = resolve_ref_sha(repo_root, origin_ref)
-        if local_sha != origin_sha:
-            raise ValueError(
-                "Sync main did not land on origin/%s: local=%s origin=%s. "
-                "Local branch may contain extra commits; resolve divergence first."
-                % (default_branch, local_sha[:12], origin_sha[:12])
-            )
+            try:
+                proc = run_git(
+                    ["pull", "--ff-only", "origin", default_branch],
+                    repo_root,
+                    check=False,
+                    timeout_seconds=_GIT_PULL_TIMEOUT_SECONDS,
+                )
+            except GitError as exc:
+                raise ValueError(f"git pull failed: {exc}") from exc
+            if proc.returncode != 0:
+                raise ValueError(f"git pull failed: {git_failure_detail(proc)}")
+            local_sha = git_head_sha(repo_root)
+            if not local_sha:
+                raise ValueError("Unable to resolve local HEAD after sync")
+            origin_ref = f"refs/remotes/origin/{default_branch}"
+            origin_sha = resolve_ref_sha(repo_root, origin_ref)
+            if local_sha != origin_sha:
+                raise ValueError(
+                    "Sync main did not land on origin/%s: local=%s origin=%s. "
+                    "Local branch may contain extra commits; resolve divergence first."
+                    % (default_branch, local_sha[:12], origin_sha[:12])
+                )
         return self._snapshot_for_repo(repo_id)
 
     def create_repo(
@@ -1408,18 +1414,28 @@ class HubSupervisor:
     def trigger_pma_from_lifecycle_event(self, event: LifecycleEvent) -> None:
         self._process_lifecycle_event(event)
 
-    def _process_lifecycle_event_cycle(self) -> None:
-        self.process_lifecycle_events()
-        self.process_scm_automation_polls()
-        self.process_pma_automation_timers()
-        self.drain_pma_automation_wakeups()
+    def _process_lifecycle_event_cycle(self) -> bool:
+        productive = False
+        if self.process_lifecycle_events() > 0:
+            productive = True
+        scm_counts = self.process_scm_automation_polls()
+        if scm_counts.get("polled", 0) > 0 or scm_counts.get("events_emitted", 0) > 0:
+            productive = True
+        timer_count = self.process_pma_automation_timers()
+        if timer_count > 0:
+            productive = True
+        wakeup_count = self.drain_pma_automation_wakeups()
+        if wakeup_count > 0:
+            productive = True
+        return productive
 
-    def process_lifecycle_events(self) -> None:
-        self._lifecycle_event_processor.process_events(limit=100)
+    def process_lifecycle_events(self) -> int:
+        processed = self._lifecycle_event_processor.process_events(limit=100)
         try:
             self.drain_pma_automation_wakeups()
         except Exception:
             logger.exception("Failed draining PMA automation wake-ups")
+        return processed
 
     def process_scm_automation_polls(self, *, limit: int = 20) -> dict[str, int]:
         processor = self._scm_poll_processor
@@ -1493,6 +1509,7 @@ class HubSupervisor:
                 self._lifecycle_emitter.emit_dispatch_created(
                     repo_id, run_id, data=data, origin=origin
                 )
+                self._lifecycle_worker.wake()
 
         set_lifecycle_emitter(_emit_outbox_event)
 

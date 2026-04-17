@@ -92,10 +92,12 @@ def _resolve_manifest_path(hub_root: Path, raw_config: Mapping[str, Any]) -> Pat
 def _chat_binding_counts_fingerprint(
     *, hub_root: Path, raw_config: Mapping[str, Any]
 ) -> tuple[Any, ...]:
+    orchestration_db_path = resolve_orchestration_sqlite_path(hub_root)
     return (
         path_stat_fingerprint(_resolve_manifest_path(hub_root, raw_config)),
         path_stat_fingerprint(default_pma_threads_db_path(hub_root)),
-        path_stat_fingerprint(resolve_orchestration_sqlite_path(hub_root)),
+        path_stat_fingerprint(orchestration_db_path),
+        path_stat_fingerprint(Path(f"{orchestration_db_path}-wal")),
         _chat_surface_enabled(raw_config, "discord_bot"),
         path_stat_fingerprint(_resolve_discord_state_path(hub_root, raw_config)),
         _chat_surface_enabled(raw_config, "telegram_bot"),

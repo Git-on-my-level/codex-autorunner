@@ -35,6 +35,7 @@ from ....core.hub_projection_store import (
     REPO_CAPABILITY_HINT_PROJECTION_NAMESPACE,
     path_stat_fingerprint,
 )
+from ....core.orchestration.sqlite import resolve_orchestration_sqlite_path
 from ....core.pma_context import (
     PMA_MAX_TEXT,
     _gather_inbox,
@@ -161,12 +162,15 @@ def _hub_snapshot_fingerprint(
         getattr(supervisor_state, "last_scan_at", None),
     ]
     if root_path is not None:
+        orchestration_db_path = resolve_orchestration_sqlite_path(root_path)
         fingerprint.extend(
             [
                 str(root_path),
                 path_stat_fingerprint(root_path / ".codex-autorunner"),
                 path_stat_fingerprint(root_path / ".codex-autorunner" / "filebox"),
                 path_stat_fingerprint(default_pma_threads_db_path(root_path)),
+                path_stat_fingerprint(orchestration_db_path),
+                path_stat_fingerprint(Path(f"{orchestration_db_path}-wal")),
             ]
         )
     return tuple(fingerprint)

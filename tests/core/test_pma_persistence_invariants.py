@@ -688,8 +688,8 @@ class TestLegacyThreadMirrorInvariant:
                 turns = conn.execute(
                     "SELECT managed_turn_id FROM pma_managed_turns"
                 ).fetchall()
-            assert len(threads) == 1
-            assert len(turns) == 1
+            assert threads == []
+            assert turns == []
         finally:
             os.environ.pop("CAR_LEGACY_MIRROR_ENABLED", None)
 

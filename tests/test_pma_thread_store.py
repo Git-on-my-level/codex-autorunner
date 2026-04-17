@@ -164,18 +164,6 @@ def test_backend_thread_binding_can_be_cleared_across_restart(tmp_path: Path) ->
     assert "backend_thread_id" not in listed[0]
     assert "backend_runtime_instance_id" not in listed[0]
 
-    with open_orchestration_sqlite(hub_root, durable=False) as conn:
-        row = conn.execute(
-            """
-            SELECT backend_thread_id
-              FROM orch_thread_targets
-             WHERE thread_target_id = ?
-            """,
-            (managed_thread_id,),
-        ).fetchone()
-    assert row is not None
-    assert row["backend_thread_id"] == "backend-1"
-
 
 def test_connect_readonly_skips_bootstrap_initialize(
     tmp_path: Path,

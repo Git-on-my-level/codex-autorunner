@@ -1,15 +1,25 @@
 from __future__ import annotations
 
+import asyncio
+import inspect
 import time
-from typing import Any, Optional
+from concurrent.futures import TimeoutError as FuturesTimeoutError
+from typing import Any, Callable, Coroutine, Optional, TypeVar
 
-from ._remote_helpers import run_sync_via_thread
+from .background_runner import BackgroundRunnerSaturated, BoundedBackgroundRunner
 from .client import HubControlPlaneClient
 from .errors import HubControlPlaneError
 from .models import (
     SurfaceBindingListRequest,
     SurfaceBindingLookupRequest,
     SurfaceBindingUpsertRequest,
+)
+
+ResultT = TypeVar("ResultT")
+_BACKGROUND_RUNNER = BoundedBackgroundRunner(
+    max_workers=8,
+    saturation_wait_seconds=0.05,
+    thread_name_prefix="hub-binding",
 )
 
 
@@ -27,25 +37,98 @@ class RemoteSurfaceBindingStore:
         *,
         timeout_seconds: float = 30.0,
         cache_fallback_ttl_seconds: float = 300.0,
+        background_runner: Optional[BoundedBackgroundRunner] = None,
     ) -> None:
         self._client = client
         self._timeout_seconds = timeout_seconds
         self._cache_fallback_ttl_seconds = max(0.0, float(cache_fallback_ttl_seconds))
         self._bindings_by_key: dict[tuple[str, str], Any] = {}
         self._binding_cached_at_by_key: dict[tuple[str, str], float] = {}
+        self._background_runner = background_runner or _BACKGROUND_RUNNER
+
+    def _hub_unavailable(
+        self,
+        *,
+        operation: str,
+        message: str,
+        details: dict[str, Any] | None = None,
+    ) -> HubControlPlaneError:
+        payload = {"operation": operation}
+        if isinstance(details, dict):
+            payload.update(details)
+        return HubControlPlaneError(
+            "hub_unavailable",
+            f"Hub control-plane unavailable during {operation}: {message}",
+            retryable=True,
+            details=payload,
+        )
 
     def _run(
         self,
         *,
         operation: str,
-        action,
-    ) -> Any:
-        return run_sync_via_thread(
-            self._client,
-            operation=operation,
-            timeout_seconds=self._timeout_seconds,
-            action=action,
-        )
+        action: Callable[[HubControlPlaneClient], Coroutine[Any, Any, ResultT]],
+    ) -> ResultT:
+        def _invoke() -> ResultT:
+            background_client = self._client
+            clone = getattr(type(self._client), "clone_for_background_loop", None)
+            if callable(clone) and not inspect.iscoroutinefunction(clone):
+                cloned_client = clone(self._client)
+                if cloned_client is not None and not inspect.isawaitable(cloned_client):
+                    background_client = cloned_client
+
+            async def _run_action() -> ResultT:
+                try:
+                    return await action(background_client)
+                finally:
+                    close = getattr(background_client, "aclose", None)
+                    if callable(close) and background_client is not self._client:
+                        result = close()
+                        if inspect.isawaitable(result):
+                            await result
+
+            return asyncio.run(_run_action())
+
+        try:
+            future = self._background_runner.submit(
+                _invoke,
+                timeout_seconds=self._timeout_seconds,
+            )
+        except BackgroundRunnerSaturated as exc:
+            raise self._hub_unavailable(
+                operation=operation,
+                message="background worker pool saturated",
+                details={
+                    "max_workers": exc.max_workers,
+                    "acquire_timeout_seconds": exc.acquire_timeout_seconds,
+                },
+            ) from exc
+        try:
+            return future.result(timeout=self._timeout_seconds)
+        except FuturesTimeoutError as exc:
+            future.cancel()
+            raise self._hub_unavailable(
+                operation=operation,
+                message=f"request timed out after {self._timeout_seconds:g}s",
+                details={"timeout_seconds": self._timeout_seconds},
+            ) from exc
+        except HubControlPlaneError as exc:
+            if exc.code in {"hub_unavailable", "transport_failure"}:
+                raise self._hub_unavailable(
+                    operation=operation,
+                    message=str(exc),
+                    details={
+                        "cause_code": exc.code,
+                        **dict(exc.details),
+                    },
+                ) from exc
+            raise
+        except (ConnectionError, OSError) as exc:
+            raise self._hub_unavailable(
+                operation=operation,
+                message=str(exc) or exc.__class__.__name__,
+                details={"cause_type": exc.__class__.__name__},
+            ) from exc
 
     @staticmethod
     def _normalize_key(surface_kind: str, surface_key: str) -> tuple[str, str]:

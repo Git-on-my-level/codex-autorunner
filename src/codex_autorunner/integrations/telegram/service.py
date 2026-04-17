@@ -8,8 +8,9 @@ import logging
 import os
 import socket
 import time
+from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Coroutine, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional, Sequence
 
 if TYPE_CHECKING:
     from .progress_stream import TurnProgressTracker
@@ -23,15 +24,13 @@ from ...core.filebox_retention import (
     resolve_filebox_retention_policy,
 )
 from ...core.flows.models import FlowRunRecord
+from ...core.flows.pause_dispatch import format_pause_reason, latest_dispatch_seq
 from ...core.hub_control_plane import (
     HandshakeCompatibility,
     HttpHubControlPlaneClient,
     HubControlPlaneError,
-    evaluate_handshake_compatibility,
 )
-from ...core.hub_control_plane.models import (
-    HandshakeRequest as _HandshakeRequest,
-)
+from ...core.hub_control_plane.handshake_startup import perform_startup_hub_handshake
 from ...core.hub_control_plane.service import (
     CONTROL_PLANE_API_VERSION as _CONTROL_PLANE_API_VERSION,
 )
@@ -141,6 +140,10 @@ from .update_deduper import TelegramUpdateDeduper
 from .voice import TelegramVoiceManager
 
 TICKET_FLOW_WATCH_INTERVAL_SECONDS = 20
+TYPING_HEARTBEAT_INTERVAL_SECONDS = 4.0
+TELEGRAM_HUB_HANDSHAKE_RETRY_WINDOW_SECONDS = 45.0
+TELEGRAM_HUB_HANDSHAKE_RETRY_DELAY_SECONDS = 1.0
+TELEGRAM_HUB_HANDSHAKE_RETRY_MAX_DELAY_SECONDS = 5.0
 _CURRENT_TELEGRAM_OPERATION_ID: contextvars.ContextVar[Optional[str]] = (
     contextvars.ContextVar("telegram_chat_operation_id", default=None)
 )
@@ -357,6 +360,16 @@ class TelegramBotService(
         self._voice_config = voice_config
         self._voice_service = voice_service
         self._housekeeping_config = housekeeping_config
+        self._startup_started_at_monotonic: Optional[float] = None
+        self._hub_handshake_retry_window_seconds = (
+            TELEGRAM_HUB_HANDSHAKE_RETRY_WINDOW_SECONDS
+        )
+        self._hub_handshake_retry_delay_seconds = (
+            TELEGRAM_HUB_HANDSHAKE_RETRY_DELAY_SECONDS
+        )
+        self._hub_handshake_retry_max_delay_seconds = (
+            TELEGRAM_HUB_HANDSHAKE_RETRY_MAX_DELAY_SECONDS
+        )
         if self._voice_service is None and voice_config is not None:
             try:
                 self._voice_service = VoiceService(voice_config, logger=self._logger)
@@ -693,10 +706,21 @@ class TelegramBotService(
         config = self._housekeeping_config
         if config is None or not config.enabled:
             return
-        interval = max(config.interval_seconds, 1)
+        base_interval = max(config.interval_seconds, 1)
+        idle_streak = 0
         while True:
             try:
-                await self._run_housekeeping_cycle(config)
+                roots = await self._housekeeping_roots()
+                if not roots:
+                    idle_streak += 1
+                    extended = min(
+                        base_interval * (1.5 ** min(idle_streak, 8)),
+                        base_interval * 4,
+                    )
+                    await asyncio.sleep(extended)
+                    continue
+                idle_streak = 0
+                await self._run_housekeeping_cycle_with_roots(config, roots)
             except Exception as exc:  # intentional: top-level error handler
                 log_event(
                     self._logger,
@@ -704,10 +728,15 @@ class TelegramBotService(
                     "telegram.housekeeping.failed",
                     exc=exc,
                 )
-            await asyncio.sleep(interval)
+            await asyncio.sleep(base_interval)
 
     async def _run_housekeeping_cycle(self, config: HousekeepingConfig) -> None:
         roots = await self._housekeeping_roots()
+        await self._run_housekeeping_cycle_with_roots(config, roots)
+
+    async def _run_housekeeping_cycle_with_roots(
+        self, config: HousekeepingConfig, roots: list[Path]
+    ) -> None:
         if roots:
             for root in roots:
                 try:
@@ -893,6 +922,7 @@ class TelegramBotService(
         return self._turn_semaphore
 
     async def run_polling(self) -> None:
+        self._startup_started_at_monotonic = time.monotonic()
         handshake_ok = await self._perform_hub_handshake()
         if not handshake_ok:
             raise SystemExit(1)
@@ -914,66 +944,22 @@ class TelegramBotService(
             )
             return False
 
-        try:
-            response = await self._hub_client.handshake(
-                _HandshakeRequest(
-                    client_name="telegram",
-                    client_api_version=_CONTROL_PLANE_API_VERSION,
-                    expected_schema_generation=expected_schema_generation,
-                )
-            )
-            compatibility = evaluate_handshake_compatibility(
-                response,
-                client_api_version=_CONTROL_PLANE_API_VERSION,
-                expected_schema_generation=expected_schema_generation,
-            )
+        hub_root_str = str(self._hub_root or self._config.root)
+        ok, compatibility = await perform_startup_hub_handshake(
+            hub_client=self._hub_client,
+            log_event_name_prefix="telegram",
+            handshake_client_name="telegram",
+            hub_root_str=hub_root_str,
+            startup_monotonic=self._startup_started_at_monotonic,
+            retry_window_seconds=self._hub_handshake_retry_window_seconds,
+            retry_delay_seconds=self._hub_handshake_retry_delay_seconds,
+            retry_max_delay_seconds=self._hub_handshake_retry_max_delay_seconds,
+            client_api_version=_CONTROL_PLANE_API_VERSION,
+            logger=self._logger,
+        )
+        if compatibility is not None:
             self._hub_handshake_compatibility = compatibility
-            if compatibility.compatible:
-                log_event(
-                    self._logger,
-                    logging.INFO,
-                    "telegram.hub_control_plane.handshake_ok",
-                    hub_root=str(self._hub_root or self._config.root),
-                    api_version=response.api_version,
-                    schema_generation=response.schema_generation,
-                    expected_schema_generation=expected_schema_generation,
-                )
-                return True
-            else:
-                log_event(
-                    self._logger,
-                    logging.ERROR,
-                    "telegram.hub_control_plane.handshake_incompatible",
-                    hub_root=str(self._hub_root or self._config.root),
-                    reason=compatibility.reason,
-                    server_api_version=compatibility.server_api_version,
-                    client_api_version=compatibility.client_api_version,
-                    server_schema_generation=compatibility.server_schema_generation,
-                    expected_schema_generation=compatibility.expected_schema_generation,
-                )
-                return False
-        except HubControlPlaneError as exc:
-            log_event(
-                self._logger,
-                logging.ERROR,
-                "telegram.hub_control_plane.handshake_failed",
-                hub_root=str(self._hub_root or self._config.root),
-                error_code=exc.code,
-                retryable=exc.retryable,
-                message=str(exc),
-                expected_schema_generation=expected_schema_generation,
-            )
-            return False
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.ERROR,
-                "telegram.hub_control_plane.handshake_unexpected_error",
-                hub_root=str(self._hub_root or self._config.root),
-                exc=exc,
-                expected_schema_generation=expected_schema_generation,
-            )
-            return False
+        return ok
 
     async def _dispatch_update(self, update: TelegramUpdate) -> None:
         await dispatch_update(self, update)
@@ -1135,8 +1121,63 @@ class TelegramBotService(
     def _cache_timestamps(self) -> dict[str, dict[object, float]]:
         return self._cache_manager._cache_timestamps
 
+    def _has_any_cache_entries(self) -> bool:
+        return bool(self._cache_timestamps)
+
     async def _cache_cleanup_loop(self) -> None:
         await self._cache_manager.cleanup_loop(state=self)
+
+    @staticmethod
+    def _parse_last_active(record: "TelegramTopicRecord") -> float:
+        raw = getattr(record, "last_active_at", None)
+        if isinstance(raw, str):
+            try:
+                return datetime.strptime(raw, "%Y-%m-%dT%H:%M:%SZ").timestamp()
+            except ValueError:
+                return float("-inf")
+        return float("-inf")
+
+    def _select_ticket_flow_topic(
+        self, entries: list[tuple[str, "TelegramTopicRecord"]]
+    ) -> Optional[tuple[str, "TelegramTopicRecord"]]:
+        return self._ticket_flow_bridge._select_ticket_flow_topic(entries)
+
+    @staticmethod
+    def _set_ticket_dispatch_marker(
+        value: Optional[str],
+    ) -> "Callable[[TelegramTopicRecord], None]":
+        def apply(topic: "TelegramTopicRecord") -> None:
+            topic.last_ticket_dispatch_seq = value
+
+        return apply
+
+    async def _ticket_flow_watch_loop(self) -> None:
+        await self._ticket_flow_bridge.watch_ticket_flow_pauses(
+            TICKET_FLOW_WATCH_INTERVAL_SECONDS
+        )
+
+    async def _watch_ticket_flow_pauses(self) -> None:
+        await self._ticket_flow_bridge._scan_and_notify_pauses()
+
+    async def _notify_ticket_flow_pause(
+        self,
+        workspace_root: Path,
+        entries: list[tuple[str, "TelegramTopicRecord"]],
+    ) -> None:
+        await self._ticket_flow_bridge._notify_ticket_flow_pause(
+            workspace_root, entries
+        )
+
+    def _load_ticket_flow_pause(
+        self, workspace_root: Path
+    ) -> Optional[tuple[str, str, str, Optional[Path]]]:
+        return self._ticket_flow_bridge._load_ticket_flow_pause(workspace_root)
+
+    def _latest_dispatch_seq(self, history_dir: Path) -> Optional[str]:
+        return latest_dispatch_seq(history_dir)
+
+    def _format_ticket_flow_pause_reason(self, record: "FlowRunRecord") -> str:
+        return format_pause_reason(record)
 
     def _get_paused_ticket_flow(
         self, workspace_root: Path, preferred_run_id: Optional[str] = None
