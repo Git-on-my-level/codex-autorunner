@@ -54,7 +54,7 @@ def refresh_static_assets(app: object) -> bool:
             static_candidates.append(hub_static)
         for static_cfg in static_candidates:
             try:
-                static_dir, static_context = materialize_static_assets(
+                static_dir, static_context, provenance = materialize_static_assets(
                     static_cfg.cache_root,
                     max_cache_entries=static_cfg.max_cache_entries,
                     max_cache_age_days=static_cfg.max_cache_age_days,
@@ -85,6 +85,7 @@ def refresh_static_assets(app: object) -> bool:
                     )
             state.static_dir = static_dir
             state.static_assets_context = static_context
+            state.static_asset_provenance = provenance
             state.asset_version = asset_version(static_dir)
             static_files = getattr(state, "static_files", None)
             if static_files is not None:

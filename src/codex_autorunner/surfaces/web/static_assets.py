@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import enum
 import hashlib
 import json
 import logging
@@ -16,6 +17,12 @@ from ...core.logging_utils import safe_log
 
 _ASSET_VERSION_TOKEN = "__CAR_ASSET_VERSION__"
 _ASSET_MANIFEST = "assets.json"
+
+
+class StaticAssetProvenance(enum.Enum):
+    SOURCE_MATERIALIZE = "source_materialize"
+    FINGERPRINT_CACHE_HIT = "fingerprint_cache_hit"
+    EXISTING_CACHE_FALLBACK = "existing_cache_fallback"
 
 
 def _load_asset_manifest(static_dir: Path) -> Optional[dict[str, Any]]:
@@ -387,7 +394,7 @@ def materialize_static_assets(
     max_cache_entries: int,
     max_cache_age_days: Optional[int],
     logger: logging.Logger,
-) -> tuple[Path, Optional[ExitStack]]:
+) -> tuple[Path, Optional[ExitStack], StaticAssetProvenance]:
     static_dir, static_context = resolve_static_dir()
     existing_cache = _select_latest_valid_cache(cache_root)
     missing_source = missing_static_assets(static_dir)
@@ -398,7 +405,8 @@ def materialize_static_assets(
             safe_log(
                 logger,
                 logging.INFO,
-                "static_assets: serving from existing cache (source missing %s)",
+                "static_assets: [%s] serving from existing cache (source missing %s)",
+                StaticAssetProvenance.EXISTING_CACHE_FALLBACK.value,
                 ", ".join(missing_source[:3]),
             )
             _prune_cache_entries(
@@ -408,7 +416,7 @@ def materialize_static_assets(
                 max_cache_age_days=max_cache_age_days,
                 logger=logger,
             )
-            return existing_cache, None
+            return existing_cache, None, StaticAssetProvenance.EXISTING_CACHE_FALLBACK
         raise RuntimeError("Static UI assets missing; reinstall package")
     fingerprint = asset_version(static_dir)
     target_dir = cache_root / fingerprint
@@ -418,7 +426,8 @@ def materialize_static_assets(
         safe_log(
             logger,
             logging.DEBUG,
-            "static_assets: serving from fingerprint cache %s",
+            "static_assets: [%s] serving from fingerprint cache %s",
+            StaticAssetProvenance.FINGERPRINT_CACHE_HIT.value,
             fingerprint[:12],
         )
         _prune_cache_entries(
@@ -428,7 +437,7 @@ def materialize_static_assets(
             max_cache_age_days=max_cache_age_days,
             logger=logger,
         )
-        return target_dir, None
+        return target_dir, None, StaticAssetProvenance.FINGERPRINT_CACHE_HIT
     try:
         cache_root.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
@@ -445,9 +454,10 @@ def materialize_static_assets(
             safe_log(
                 logger,
                 logging.WARNING,
-                "static_assets: serving from existing cache after mkdir failure",
+                "static_assets: [%s] serving from existing cache after mkdir failure",
+                StaticAssetProvenance.EXISTING_CACHE_FALLBACK.value,
             )
-            return existing_cache, None
+            return existing_cache, None, StaticAssetProvenance.EXISTING_CACHE_FALLBACK
         raise RuntimeError("Static UI assets missing; reinstall package") from exc
     lock_path = cache_root / f".lock-{fingerprint}"
     lock_acquired = _acquire_cache_lock(lock_path, logger)
@@ -464,7 +474,7 @@ def materialize_static_assets(
                     max_cache_age_days=max_cache_age_days,
                     logger=logger,
                 )
-                return target_dir, None
+                return target_dir, None, StaticAssetProvenance.FINGERPRINT_CACHE_HIT
             time.sleep(0.2)
     temp_dir = cache_root / f".tmp-{fingerprint}-{uuid4().hex}"
     try:
@@ -492,7 +502,11 @@ def materialize_static_assets(
                     max_cache_age_days=max_cache_age_days,
                     logger=logger,
                 )
-                return target_dir, None
+                return (
+                    target_dir,
+                    None,
+                    StaticAssetProvenance.FINGERPRINT_CACHE_HIT,
+                )
             try:
                 shutil.rmtree(target_dir)
             except OSError as exc:
@@ -517,9 +531,14 @@ def materialize_static_assets(
             safe_log(
                 logger,
                 logging.WARNING,
-                "static_assets: serving from existing cache after copy failure",
+                "static_assets: [%s] serving from existing cache after copy failure",
+                StaticAssetProvenance.EXISTING_CACHE_FALLBACK.value,
             )
-            return existing_cache, None
+            return (
+                existing_cache,
+                None,
+                StaticAssetProvenance.EXISTING_CACHE_FALLBACK,
+            )
         raise RuntimeError("Static UI assets missing; reinstall package") from exc
     if static_context is not None:
         static_context.close()
@@ -530,7 +549,14 @@ def materialize_static_assets(
         max_cache_age_days=max_cache_age_days,
         logger=logger,
     )
-    return target_dir, None
+    safe_log(
+        logger,
+        logging.DEBUG,
+        "static_assets: [%s] materialized fresh cache %s",
+        StaticAssetProvenance.SOURCE_MATERIALIZE.value,
+        fingerprint[:12],
+    )
+    return target_dir, None, StaticAssetProvenance.SOURCE_MATERIALIZE
 
 
 def require_static_assets(static_dir: Path, logger: logging.Logger) -> None:

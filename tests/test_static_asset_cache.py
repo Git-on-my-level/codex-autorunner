@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from codex_autorunner.core.config import load_hub_config
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web import static_assets
+from codex_autorunner.surfaces.web.static_assets import StaticAssetProvenance
 
 
 def _write_required_assets(static_dir: Path) -> None:
@@ -60,13 +61,14 @@ def test_materialize_static_assets_survives_source_removal(
     monkeypatch.setattr(static_assets, "resolve_static_dir", lambda: (source_dir, None))
     logger = logging.getLogger("test-static-assets")
     cache_root = tmp_path / "repo_root" / ".codex-autorunner" / "static-cache"
-    cache_dir, cache_context = static_assets.materialize_static_assets(
+    cache_dir, cache_context, provenance = static_assets.materialize_static_assets(
         cache_root,
         max_cache_entries=5,
         max_cache_age_days=30,
         logger=logger,
     )
     assert cache_context is None
+    assert provenance == StaticAssetProvenance.SOURCE_MATERIALIZE
     assert cache_dir.exists()
     assert cache_dir.parent == cache_root
     shutil.rmtree(source_dir)
@@ -82,7 +84,7 @@ def test_materialize_static_assets_falls_back_to_existing_cache(
     source_dir = tmp_path / "missing_source"
     monkeypatch.setattr(static_assets, "resolve_static_dir", lambda: (source_dir, None))
     logger = logging.getLogger("test-static-assets")
-    cache_dir, cache_context = static_assets.materialize_static_assets(
+    cache_dir, cache_context, provenance = static_assets.materialize_static_assets(
         cache_root,
         max_cache_entries=5,
         max_cache_age_days=30,
@@ -90,6 +92,7 @@ def test_materialize_static_assets_falls_back_to_existing_cache(
     )
     assert cache_context is None
     assert cache_dir == existing_cache
+    assert provenance == StaticAssetProvenance.EXISTING_CACHE_FALLBACK
 
 
 def test_materialize_static_assets_hard_fails_without_cache(
@@ -120,13 +123,14 @@ def test_materialize_static_assets_prunes_old_entries(
     _write_required_assets(older_cache)
     monkeypatch.setattr(static_assets, "resolve_static_dir", lambda: (source_dir, None))
     logger = logging.getLogger("test-static-assets")
-    cache_dir, cache_context = static_assets.materialize_static_assets(
+    cache_dir, cache_context, provenance = static_assets.materialize_static_assets(
         cache_root,
         max_cache_entries=1,
         max_cache_age_days=None,
         logger=logger,
     )
     assert cache_context is None
+    assert provenance == StaticAssetProvenance.SOURCE_MATERIALIZE
     entries = [
         path
         for path in cache_root.iterdir()
@@ -197,7 +201,7 @@ class TestStaticAssetCacheProvenance:
         cache_root = tmp_path / "repo_root" / ".codex-autorunner" / "static-cache"
         logger = logging.getLogger("test-fresh")
 
-        cache_dir, cache_context = static_assets.materialize_static_assets(
+        cache_dir, cache_context, provenance = static_assets.materialize_static_assets(
             cache_root,
             max_cache_entries=5,
             max_cache_age_days=30,
@@ -206,6 +210,7 @@ class TestStaticAssetCacheProvenance:
         assert cache_context is None
         assert cache_dir.exists()
         assert static_assets.missing_static_assets(cache_dir) == []
+        assert provenance == StaticAssetProvenance.SOURCE_MATERIALIZE
         version = static_assets.asset_version(cache_dir)
         assert version
         assert version != "0"
@@ -220,7 +225,7 @@ class TestStaticAssetCacheProvenance:
         )
         logger = logging.getLogger("test-reuse")
 
-        cache_dir, cache_context = static_assets.materialize_static_assets(
+        cache_dir, cache_context, provenance = static_assets.materialize_static_assets(
             cache_root,
             max_cache_entries=5,
             max_cache_age_days=30,
@@ -228,6 +233,7 @@ class TestStaticAssetCacheProvenance:
         )
         assert cache_dir == existing
         assert cache_context is None
+        assert provenance == StaticAssetProvenance.EXISTING_CACHE_FALLBACK
 
     def test_hard_fail_when_no_source_and_no_cache(
         self, tmp_path: Path, monkeypatch
@@ -258,13 +264,13 @@ class TestStaticAssetCacheProvenance:
         cache_root = tmp_path / "repo_root" / ".codex-autorunner" / "static-cache"
         logger = logging.getLogger("test-fingerprint")
 
-        first_dir, _ = static_assets.materialize_static_assets(
+        first_dir, _, first_provenance = static_assets.materialize_static_assets(
             cache_root,
             max_cache_entries=5,
             max_cache_age_days=30,
             logger=logger,
         )
-        second_dir, _ = static_assets.materialize_static_assets(
+        second_dir, _, second_provenance = static_assets.materialize_static_assets(
             cache_root,
             max_cache_entries=5,
             max_cache_age_days=30,
@@ -272,6 +278,8 @@ class TestStaticAssetCacheProvenance:
         )
 
         assert first_dir == second_dir
+        assert first_provenance == StaticAssetProvenance.SOURCE_MATERIALIZE
+        assert second_provenance == StaticAssetProvenance.FINGERPRINT_CACHE_HIT
 
     def test_missing_static_assets_checks_manifest(self, tmp_path: Path) -> None:
 

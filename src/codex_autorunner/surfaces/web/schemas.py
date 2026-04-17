@@ -775,6 +775,7 @@ class SystemHealthResponse(ResponseModel):
     mode: str
     base_path: str
     asset_version: Optional[str] = None
+    static_asset_provenance: Optional[str] = None
     hub_startup_phase: Optional[str] = None
     hub_deferred_startup_complete: Optional[bool] = None
     orchestration: Optional[OrchestrationHealthPayload] = None

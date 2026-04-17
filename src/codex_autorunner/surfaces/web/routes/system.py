@@ -101,6 +101,14 @@ def build_system_routes() -> APIRouter:
                 ),
             )
         static_dir = getattr(getattr(request.app, "state", None), "static_dir", None)
+        static_asset_provenance_raw = getattr(
+            getattr(request.app, "state", None), "static_asset_provenance", None
+        )
+        static_asset_provenance = (
+            static_asset_provenance_raw.value
+            if static_asset_provenance_raw is not None
+            else None
+        )
         if not isinstance(static_dir, Path):
             return JSONResponse(
                 {
@@ -128,6 +136,7 @@ def build_system_routes() -> APIRouter:
                     "mode": mode,
                     "base_path": base_path,
                     "asset_version": asset_version,
+                    "static_asset_provenance": static_asset_provenance,
                     "orchestration": orchestration_health,
                 }
                 if mode == "hub":
@@ -158,6 +167,7 @@ def build_system_routes() -> APIRouter:
             "mode": mode,
             "base_path": base_path,
             "asset_version": asset_version,
+            "static_asset_provenance": static_asset_provenance,
             "orchestration": orchestration_health,
         }
         if mode == "hub":
