@@ -1337,6 +1337,7 @@ class DiscordBotService:
             ("repo", repo_id, str(canonicalize_path(Path(path))))
             for repo_id, path in self._list_manifest_repos()
         ]
+        seen_paths = {workspace_path for _kind, _id, workspace_path in cheap_candidates}
         cheap_candidates.extend(
             (
                 "agent_workspace",
@@ -1345,6 +1346,28 @@ class DiscordBotService:
             )
             for workspace_id, workspace_path, _display_name in self._list_agent_workspaces_from_cache()
         )
+        seen_paths.update(
+            workspace_path for _kind, _id, workspace_path in cheap_candidates
+        )
+        try:
+            for child in sorted(
+                self._config.root.iterdir(),
+                key=lambda entry: entry.name.lower(),
+            ):
+                if not child.is_dir():
+                    continue
+                if child.name.startswith("."):
+                    continue
+                normalized_path = str(canonicalize_path(child))
+                if normalized_path in seen_paths:
+                    continue
+                seen_paths.add(normalized_path)
+                cheap_candidates.append((None, None, normalized_path))
+        except OSError:
+            self._logger.debug(
+                "failed to scan root directory for scheduler bind candidates",
+                exc_info=True,
+            )
         resolved = self._resolve_workspace_from_token(normalized, cheap_candidates)
         if resolved is not None:
             resolved_root = canonicalize_path(Path(resolved[2]))

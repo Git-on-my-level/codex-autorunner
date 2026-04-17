@@ -24,6 +24,9 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from codex_autorunner.integrations.chat.dispatcher import conversation_id_for
+from codex_autorunner.integrations.discord.car_autocomplete import (
+    workspace_autocomplete_value,
+)
 from codex_autorunner.integrations.discord.command_runner import (
     CommandRunner,
     RunnerConfig,
@@ -1268,6 +1271,31 @@ async def test_scheduler_bind_target_workspace_root_uses_local_manifest_repo_onl
     resolved = await service._scheduler_bind_target_workspace_root("repo_1")
 
     assert resolved == repo_root
+    service._list_manifest_repos.assert_called_once()
+    service._list_agent_workspaces_from_cache.assert_called_once()
+
+
+@pytest.mark.anyio
+async def test_scheduler_bind_target_workspace_root_resolves_tokenized_local_path(
+    tmp_path: Path,
+) -> None:
+    service = DiscordBotService.__new__(DiscordBotService)
+    workspace_root = tmp_path / ("workspace-" + ("x" * 120))
+    workspace_root.mkdir()
+    service._config = SimpleNamespace(root=tmp_path)
+    service._list_manifest_repos = Mock(return_value=[])  # type: ignore[assignment]
+    service._list_agent_workspaces_from_cache = Mock(return_value=[])  # type: ignore[assignment]
+    service._list_agent_workspaces = Mock(  # type: ignore[assignment]
+        side_effect=AssertionError(
+            "scheduler resolution must not live-fetch agent workspaces"
+        )
+    )
+
+    resolved = await service._scheduler_bind_target_workspace_root(
+        workspace_autocomplete_value(str(workspace_root))
+    )
+
+    assert resolved == workspace_root
     service._list_manifest_repos.assert_called_once()
     service._list_agent_workspaces_from_cache.assert_called_once()
 
