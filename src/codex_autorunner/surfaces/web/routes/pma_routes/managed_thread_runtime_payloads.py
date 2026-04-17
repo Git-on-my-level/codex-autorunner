@@ -437,11 +437,33 @@ def build_accepted_send_payload(
     return payload
 
 
+def build_execution_result_payload(
+    *,
+    status: str,
+    managed_thread_id: str,
+    managed_turn_id: str,
+    backend_thread_id: str,
+    assistant_text: str,
+    error: Optional[str],
+    response_payload: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "status": status,
+        "managed_thread_id": managed_thread_id,
+        "managed_turn_id": managed_turn_id,
+        "backend_thread_id": backend_thread_id,
+        "assistant_text": assistant_text,
+        "error": error,
+        **response_payload,
+    }
+
+
 __all__ = [
     "MANAGED_THREAD_PUBLIC_EXECUTION_ERROR",
     "ManagedThreadMessageOptions",
     "build_accepted_send_payload",
     "build_archived_thread_payload",
+    "build_execution_result_payload",
     "build_execution_setup_error_payload",
     "build_interrupt_failure_payload",
     "build_not_active_thread_payload",
