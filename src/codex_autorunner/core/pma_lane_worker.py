@@ -67,16 +67,16 @@ class PmaLaneWorker:
     async def _run(self) -> None:
         await self._queue.replay_pending(self.lane_id)
         while not self._cancel_event.is_set():
-            with track_loop(f"pma.lane_worker.{self.lane_id}") as scope:
-                item = await self._queue.dequeue(self.lane_id)
-                if item is None:
-                    await self._queue.wait_for_lane_item(
-                        self.lane_id,
-                        self._cancel_event,
-                        poll_interval_seconds=self._poll_interval_seconds,
-                    )
-                    continue
+            item = await self._queue.dequeue(self.lane_id)
+            if item is None:
+                await self._queue.wait_for_lane_item(
+                    self.lane_id,
+                    self._cancel_event,
+                    poll_interval_seconds=self._poll_interval_seconds,
+                )
+                continue
 
+            with track_loop(f"pma.lane_worker.{self.lane_id}") as scope:
                 scope.record_db_read(1)
                 scope.mark_productive()
 

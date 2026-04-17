@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.flows.reconciler import (
     _mtime_cache,
+    _reconcile_skip_signature,
     _record_reconcile_mtime,
     _should_skip_reconcile,
     reconcile_flow_runs,
@@ -56,27 +58,39 @@ def test_count_active_flow_runs_filters_by_type(tmp_path: Path) -> None:
 def test_mtime_skip_returns_false_when_no_cache(tmp_path: Path) -> None:
     db_path = tmp_path / ".codex-autorunner" / "flows.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    db_path.write_text("test")
+    store = FlowStore(db_path)
+    store.initialize()
+    sig = _reconcile_skip_signature(store)
+    store.close()
     _mtime_cache.clear()
-    assert _should_skip_reconcile(db_path) is False
+    assert _should_skip_reconcile(db_path, sig) is False
 
 
 def test_mtime_skip_returns_false_when_mtime_changes(tmp_path: Path) -> None:
     db_path = tmp_path / ".codex-autorunner" / "flows.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    db_path.write_text("v1")
-    _record_reconcile_mtime(db_path)
+    store = FlowStore(db_path)
+    store.initialize()
+    _record_reconcile_mtime(db_path, _reconcile_skip_signature(store))
+    store.close()
     time.sleep(0.05)
-    db_path.write_text("v2")
-    assert _should_skip_reconcile(db_path) is False
+    os.utime(db_path, None)
+    store2 = FlowStore(db_path)
+    store2.initialize()
+    sig2 = _reconcile_skip_signature(store2)
+    store2.close()
+    assert _should_skip_reconcile(db_path, sig2) is False
 
 
 def test_mtime_skip_returns_true_when_unchanged(tmp_path: Path) -> None:
     db_path = tmp_path / ".codex-autorunner" / "flows.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    db_path.write_text("v1")
-    _record_reconcile_mtime(db_path)
-    assert _should_skip_reconcile(db_path) is True
+    store = FlowStore(db_path)
+    store.initialize()
+    sig = _reconcile_skip_signature(store)
+    _record_reconcile_mtime(db_path, sig)
+    assert _should_skip_reconcile(db_path, _reconcile_skip_signature(store)) is True
+    store.close()
 
 
 def test_reconcile_skips_when_db_unchanged_and_no_active(tmp_path: Path) -> None:
@@ -116,7 +130,10 @@ def test_reconcile_does_not_skip_when_active_runs_exist(tmp_path: Path) -> None:
     assert result.summary.active >= 1
     assert len(result.records) >= 1
 
-    _record_reconcile_mtime(db_path)
+    store3 = FlowStore(db_path)
+    store3.initialize()
+    _record_reconcile_mtime(db_path, _reconcile_skip_signature(store3))
+    store3.close()
     result2 = reconcile_flow_runs(repo_root)
     assert result2.summary.active >= 1
     assert len(result2.records) >= 1

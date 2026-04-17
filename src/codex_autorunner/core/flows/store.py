@@ -462,6 +462,16 @@ class FlowStore:
         row = conn.execute(query, params).fetchone()
         return int(row[0]) if row is not None else 0
 
+    def count_flow_runs_total(self) -> int:
+        conn = self._get_conn()
+        row = conn.execute("SELECT COUNT(*) FROM flow_runs").fetchone()
+        return int(row[0]) if row is not None else 0
+
+    def count_flow_events_total(self) -> int:
+        conn = self._get_conn()
+        row = conn.execute("SELECT COUNT(*) FROM flow_events").fetchone()
+        return int(row[0]) if row is not None else 0
+
     def get_latest_flow_run(
         self, flow_type: Optional[str] = None, status: Optional[FlowRunStatus] = None
     ) -> Optional[FlowRunRecord]:

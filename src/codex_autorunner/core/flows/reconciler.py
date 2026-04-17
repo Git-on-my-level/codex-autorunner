@@ -31,7 +31,7 @@ _ACTIVE_STATUSES = (
     FlowRunStatus.PAUSED,
 )
 
-_mtime_cache: dict[Path, tuple[float, int]] = {}
+_mtime_cache: dict[Path, tuple[float, int, int, int]] = {}
 
 
 def _db_mtime_key(db_path: Path) -> tuple[float, int]:
@@ -42,8 +42,17 @@ def _db_mtime_key(db_path: Path) -> tuple[float, int]:
         return (0.0, 0)
 
 
-def _should_skip_reconcile(db_path: Path) -> bool:
-    current = _db_mtime_key(db_path)
+def _reconcile_skip_signature(store: FlowStore) -> tuple[float, int, int, int]:
+    mtime, size = _db_mtime_key(store.db_path)
+    return (
+        mtime,
+        size,
+        store.count_flow_runs_total(),
+        store.count_flow_events_total(),
+    )
+
+
+def _should_skip_reconcile(db_path: Path, current: tuple[float, int, int, int]) -> bool:
     cached = _mtime_cache.get(db_path)
     if cached is None:
         return False
@@ -52,8 +61,10 @@ def _should_skip_reconcile(db_path: Path) -> bool:
     return True
 
 
-def _record_reconcile_mtime(db_path: Path) -> None:
-    _mtime_cache[db_path] = _db_mtime_key(db_path)
+def _record_reconcile_mtime(
+    db_path: Path, signature: tuple[float, int, int, int]
+) -> None:
+    _mtime_cache[db_path] = signature
 
 
 @dataclass
@@ -494,7 +505,8 @@ def reconcile_flow_runs(
     records: list[FlowRunRecord] = []
     try:
         store.initialize()
-        if _should_skip_reconcile(db_path):
+        skip_sig = _reconcile_skip_signature(store)
+        if _should_skip_reconcile(db_path, skip_sig):
             active_count = store.count_active_flow_runs(flow_type=flow_type)
             if active_count == 0:
                 return FlowReconcileResult(
@@ -512,7 +524,7 @@ def reconcile_flow_runs(
                 if locked:
                     summary.locked += 1
             records.append(record)
-        _record_reconcile_mtime(db_path)
+        _record_reconcile_mtime(db_path, _reconcile_skip_signature(store))
     except (
         sqlite3.Error,
         RuntimeError,

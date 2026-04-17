@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional, Protocol
@@ -240,6 +241,7 @@ class HubLifecycleWorker:
         self._thread_name = thread_name
         self._logger = logger or logging.getLogger("codex_autorunner.hub")
         self._stop_event = threading.Event()
+        self._wake_event = threading.Event()
         self._thread_lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
         self._idle_streak = 0
@@ -260,8 +262,7 @@ class HubLifecycleWorker:
 
     def wake(self) -> None:
         self._idle_streak = 0
-        self._stop_event.set()
-        self._stop_event.clear()
+        self._wake_event.set()
 
     def start(self) -> None:
         with self._thread_lock:
@@ -269,11 +270,25 @@ class HubLifecycleWorker:
             if thread is not None and thread.is_alive():
                 return
             self._stop_event.clear()
+            self._wake_event.clear()
             self._idle_streak = 0
 
             def _process_loop() -> None:
                 current_interval = self._base_poll_interval_seconds
-                while not self._stop_event.wait(current_interval):
+                while not self._stop_event.is_set():
+                    deadline = time.monotonic() + current_interval
+                    while True:
+                        if self._stop_event.is_set():
+                            return
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            break
+                        chunk = min(remaining, 0.5)
+                        if self._wake_event.wait(timeout=chunk):
+                            self._wake_event.clear()
+                            break
+                    if self._stop_event.is_set():
+                        return
                     try:
                         result = self._process_once()
                         if result:
