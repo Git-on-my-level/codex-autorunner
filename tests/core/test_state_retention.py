@@ -1175,3 +1175,245 @@ class TestRetentionClassAndScope:
         assert hash(bucket1) == hash(bucket2)
         assert bucket1 in {bucket2}
         assert bucket3 not in {bucket1}
+
+
+class TestAdapterDryRunExecuteParity:
+    def test_archive_adapter_dry_vs_execute_same_plan_different_deletion(self) -> None:
+        summary = ArchivePruneSummary(
+            kept=3,
+            pruned=2,
+            bytes_before=1000,
+            bytes_after=400,
+            pruned_paths=("/tmp/a", "/tmp/b"),
+        )
+        bucket = RetentionBucket(
+            family="worktree_archives",
+            scope=RetentionScope.REPO,
+            retention_class=RetentionClass.REVIEWABLE,
+        )
+
+        result_dry = adapt_archive_prune_summary_to_result(
+            summary, bucket, dry_run=True
+        )
+        result_exec = adapt_archive_prune_summary_to_result(
+            summary, bucket, dry_run=False
+        )
+
+        assert result_dry.plan.prune_count == result_exec.plan.prune_count == 2
+        assert result_dry.plan.kept_count == result_exec.plan.kept_count == 3
+        assert result_dry.plan.reclaimable_bytes == result_exec.plan.reclaimable_bytes
+        assert result_dry.plan.total_bytes == result_exec.plan.total_bytes
+
+        assert result_dry.deleted_count == 0
+        assert result_dry.deleted_bytes == 0
+        assert result_exec.deleted_count == 2
+        assert result_exec.deleted_bytes == 600
+        assert result_dry.kept_bytes == result_exec.kept_bytes == 400
+
+    def test_filebox_adapter_dry_vs_execute_same_plan_different_deletion(self) -> None:
+        summary = FileBoxPruneSummary(
+            inbox_kept=2,
+            inbox_pruned=1,
+            outbox_kept=1,
+            outbox_pruned=2,
+            bytes_before=800,
+            bytes_after=300,
+            pruned_paths=("/tmp/in1", "/tmp/out1", "/tmp/out2"),
+        )
+        bucket = RetentionBucket(
+            family="filebox",
+            scope=RetentionScope.REPO,
+            retention_class=RetentionClass.EPHEMERAL,
+        )
+
+        result_dry = adapt_filebox_prune_summary_to_result(
+            summary, bucket, dry_run=True
+        )
+        result_exec = adapt_filebox_prune_summary_to_result(
+            summary, bucket, dry_run=False
+        )
+
+        assert result_dry.plan.prune_count == result_exec.plan.prune_count == 3
+        assert result_dry.plan.kept_count == result_exec.plan.kept_count == 3
+        assert result_dry.plan.reclaimable_bytes == result_exec.plan.reclaimable_bytes
+
+        assert result_dry.deleted_count == 0
+        assert result_dry.deleted_bytes == 0
+        assert result_exec.deleted_count == 3
+        assert result_exec.deleted_bytes == 500
+
+    def test_report_adapter_dry_vs_execute_same_plan_different_deletion(self) -> None:
+        summary = PruneSummary(
+            kept=8,
+            pruned=4,
+            bytes_before=2000,
+            bytes_after=800,
+        )
+        bucket = RetentionBucket(
+            family="reports",
+            scope=RetentionScope.REPO,
+            retention_class=RetentionClass.REVIEWABLE,
+        )
+
+        result_dry = adapt_report_prune_summary_to_result(summary, bucket, dry_run=True)
+        result_exec = adapt_report_prune_summary_to_result(
+            summary, bucket, dry_run=False
+        )
+
+        assert result_dry.plan.prune_count == result_exec.plan.prune_count == 4
+        assert result_dry.plan.kept_count == result_exec.plan.kept_count == 8
+        assert result_dry.plan.reclaimable_bytes == result_exec.plan.reclaimable_bytes
+
+        assert result_dry.deleted_count == 0
+        assert result_dry.deleted_bytes == 0
+        assert result_exec.deleted_count == 4
+        assert result_exec.deleted_bytes == 1200
+
+    def test_housekeeping_adapter_dry_vs_execute_same_plan_different_deletion(
+        self,
+    ) -> None:
+        summary = HousekeepingRuleResult(
+            name="run_logs",
+            kind="directory",
+            scanned_count=10,
+            deleted_count=3,
+            deleted_bytes=300,
+        )
+        bucket = RetentionBucket(
+            family="logs",
+            scope=RetentionScope.REPO,
+            retention_class=RetentionClass.EPHEMERAL,
+        )
+
+        result_dry = adapt_housekeeping_rule_result_to_result(
+            summary, bucket, dry_run=True, reason=CleanupReason.AGE_LIMIT
+        )
+        result_exec = adapt_housekeeping_rule_result_to_result(
+            summary, bucket, dry_run=False, reason=CleanupReason.AGE_LIMIT
+        )
+
+        assert result_dry.plan.prune_count == result_exec.plan.prune_count == 3
+        assert result_dry.plan.kept_count == result_exec.plan.kept_count == 7
+
+        assert result_dry.deleted_count == 0
+        assert result_dry.deleted_bytes == 0
+        assert result_exec.deleted_count == 3
+        assert result_exec.deleted_bytes == 300
+
+    def test_archive_adapter_candidates_have_correct_reason(self) -> None:
+        summary = ArchivePruneSummary(
+            kept=1,
+            pruned=2,
+            bytes_before=100,
+            bytes_after=40,
+            pruned_paths=("/tmp/a", "/tmp/b"),
+        )
+        bucket = RetentionBucket(
+            family="run_archives",
+            scope=RetentionScope.REPO,
+            retention_class=RetentionClass.REVIEWABLE,
+        )
+
+        plan = adapt_archive_prune_summary_to_plan(summary, bucket)
+        for candidate in plan.prune_candidates:
+            assert candidate.action == CleanupAction.PRUNE
+            assert candidate.reason == CleanupReason.AGE_LIMIT
+            assert candidate.bucket == bucket
+
+    def test_filebox_adapter_candidates_have_correct_reason(self) -> None:
+        summary = FileBoxPruneSummary(
+            inbox_kept=1,
+            inbox_pruned=1,
+            outbox_kept=0,
+            outbox_pruned=0,
+            bytes_before=100,
+            bytes_after=50,
+            pruned_paths=("/tmp/f.txt",),
+        )
+        bucket = RetentionBucket(
+            family="filebox",
+            scope=RetentionScope.REPO,
+            retention_class=RetentionClass.EPHEMERAL,
+        )
+
+        plan = adapt_filebox_prune_summary_to_plan(summary, bucket)
+        for candidate in plan.prune_candidates:
+            assert candidate.action == CleanupAction.PRUNE
+            assert candidate.reason == CleanupReason.AGE_LIMIT
+
+    def test_report_adapter_candidates_use_count_limit_reason(self) -> None:
+        summary = PruneSummary(
+            kept=1,
+            pruned=2,
+            bytes_before=100,
+            bytes_after=40,
+        )
+        bucket = RetentionBucket(
+            family="reports",
+            scope=RetentionScope.REPO,
+            retention_class=RetentionClass.REVIEWABLE,
+        )
+
+        plan = adapt_report_prune_summary_to_plan(summary, bucket)
+        for candidate in plan.prune_candidates:
+            assert candidate.reason == CleanupReason.COUNT_LIMIT
+
+    def test_housekeeping_adapter_candidates_use_provided_reason(self) -> None:
+        for reason in (CleanupReason.AGE_LIMIT, CleanupReason.CACHE_REBUILDABLE):
+            summary = HousekeepingRuleResult(
+                name="test",
+                kind="directory",
+                scanned_count=5,
+                deleted_count=1,
+                deleted_bytes=10,
+            )
+            bucket = RetentionBucket(
+                family="test",
+                scope=RetentionScope.REPO,
+                retention_class=RetentionClass.EPHEMERAL,
+            )
+
+            plan = adapt_housekeeping_rule_result_to_plan(
+                summary, bucket, reason=reason
+            )
+            for candidate in plan.prune_candidates:
+                assert candidate.reason == reason
+
+    def test_housekeeping_adapter_path_is_unknown(self) -> None:
+        summary = HousekeepingRuleResult(
+            name="test",
+            kind="directory",
+            scanned_count=5,
+            deleted_count=2,
+            deleted_bytes=10,
+        )
+        bucket = RetentionBucket(
+            family="test",
+            scope=RetentionScope.REPO,
+            retention_class=RetentionClass.EPHEMERAL,
+        )
+
+        plan = adapt_housekeeping_rule_result_to_plan(
+            summary, bucket, reason=CleanupReason.AGE_LIMIT
+        )
+        for candidate in plan.candidates:
+            assert candidate.path == Path("<unknown>")
+            assert candidate.size_bytes == 0
+
+    def test_report_adapter_path_is_unknown(self) -> None:
+        summary = PruneSummary(
+            kept=1,
+            pruned=2,
+            bytes_before=100,
+            bytes_after=40,
+        )
+        bucket = RetentionBucket(
+            family="reports",
+            scope=RetentionScope.REPO,
+            retention_class=RetentionClass.REVIEWABLE,
+        )
+
+        plan = adapt_report_prune_summary_to_plan(summary, bucket)
+        for candidate in plan.candidates:
+            assert candidate.path == Path("<unknown>")
+            assert candidate.size_bytes == 0

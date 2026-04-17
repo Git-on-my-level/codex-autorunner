@@ -193,3 +193,228 @@ def test_resolve_run_archive_retention_policy_accepts_mapping_defaults() -> None
         max_age_days=30,
         max_total_bytes=256,
     )
+
+
+class TestWorktreeArchiveDryRunExecuteParity:
+    def test_dry_run_and_execute_same_kept_pruned_counts(self, tmp_path: Path) -> None:
+        archive_root_a = tmp_path / "dry" / "archive" / "worktrees"
+        archive_root_b = tmp_path / "exec" / "archive" / "worktrees"
+
+        for root in (archive_root_a, archive_root_b):
+            _write_snapshot(
+                root,
+                "repo-a",
+                "20260101T000000Z--repo-a--1111111",
+                created_at="2026-01-01T00:00:00Z",
+                payload="old",
+            )
+            _write_snapshot(
+                root,
+                "repo-a",
+                "20260102T000000Z--repo-a--2222222",
+                created_at="2026-01-02T00:00:00Z",
+                payload="newer",
+            )
+            _write_snapshot(
+                root,
+                "repo-a",
+                "20260103T000000Z--repo-a--3333333",
+                created_at="2026-01-03T00:00:00Z",
+                payload="newest",
+            )
+
+        policy = WorktreeArchiveRetentionPolicy(
+            max_snapshots_per_repo=1,
+            max_age_days=365,
+            max_total_bytes=1_000_000,
+        )
+
+        dry_summary = prune_worktree_archive_root(
+            archive_root_a, policy=policy, dry_run=True
+        )
+        exec_summary = prune_worktree_archive_root(
+            archive_root_b, policy=policy, dry_run=False
+        )
+
+        assert dry_summary.kept == exec_summary.kept
+        assert dry_summary.pruned == exec_summary.pruned
+        assert dry_summary.pruned == 2
+        assert dry_summary.kept == 1
+
+    def test_dry_run_preserves_all_files_execute_deletes(self, tmp_path: Path) -> None:
+        archive_root = tmp_path / "archive" / "worktrees"
+        oldest = _write_snapshot(
+            archive_root,
+            "repo-x",
+            "20260101T000000Z--repo-x--1111111",
+            created_at="2026-01-01T00:00:00Z",
+            payload="old",
+        )
+        newest = _write_snapshot(
+            archive_root,
+            "repo-x",
+            "20260102T000000Z--repo-x--2222222",
+            created_at="2026-01-02T00:00:00Z",
+            payload="new",
+        )
+
+        policy = WorktreeArchiveRetentionPolicy(
+            max_snapshots_per_repo=1,
+            max_age_days=365,
+            max_total_bytes=1_000_000,
+        )
+
+        dry_summary = prune_worktree_archive_root(
+            archive_root, policy=policy, dry_run=True
+        )
+        assert dry_summary.pruned == 1
+        assert oldest.exists()
+        assert newest.exists()
+
+    def test_parity_with_byte_budget(self, tmp_path: Path) -> None:
+        archive_root_a = tmp_path / "dry" / "archive" / "worktrees"
+        archive_root_b = tmp_path / "exec" / "archive" / "worktrees"
+
+        for root in (archive_root_a, archive_root_b):
+            _write_snapshot(
+                root,
+                "repo-a",
+                "20260101T000000Z--repo-a--1111111",
+                created_at="2026-01-01T00:00:00Z",
+                payload="a" * 500,
+            )
+
+        policy = WorktreeArchiveRetentionPolicy(
+            max_snapshots_per_repo=10,
+            max_age_days=365,
+            max_total_bytes=10,
+        )
+
+        dry_summary = prune_worktree_archive_root(
+            archive_root_a, policy=policy, dry_run=True
+        )
+        exec_summary = prune_worktree_archive_root(
+            archive_root_b, policy=policy, dry_run=False
+        )
+
+        assert dry_summary.pruned == exec_summary.pruned
+        assert dry_summary.kept == exec_summary.kept
+
+    def test_parity_with_multiple_repos(self, tmp_path: Path) -> None:
+        archive_root_a = tmp_path / "dry" / "archive" / "worktrees"
+        archive_root_b = tmp_path / "exec" / "archive" / "worktrees"
+
+        for root in (archive_root_a, archive_root_b):
+            _write_snapshot(
+                root,
+                "repo-a",
+                "20260101T000000Z--repo-a--1111111",
+                created_at="2026-01-01T00:00:00Z",
+                payload="old-a",
+            )
+            _write_snapshot(
+                root,
+                "repo-a",
+                "20260102T000000Z--repo-a--2222222",
+                created_at="2026-01-02T00:00:00Z",
+                payload="new-a",
+            )
+            _write_snapshot(
+                root,
+                "repo-b",
+                "20260101T000000Z--repo-b--1111111",
+                created_at="2026-01-01T00:00:00Z",
+                payload="old-b",
+            )
+
+        policy = WorktreeArchiveRetentionPolicy(
+            max_snapshots_per_repo=1,
+            max_age_days=365,
+            max_total_bytes=1_000_000,
+        )
+
+        dry_summary = prune_worktree_archive_root(
+            archive_root_a, policy=policy, dry_run=True
+        )
+        exec_summary = prune_worktree_archive_root(
+            archive_root_b, policy=policy, dry_run=False
+        )
+
+        assert dry_summary.pruned == exec_summary.pruned == 1
+        assert dry_summary.kept == exec_summary.kept == 2
+
+
+class TestRunArchiveDryRunExecuteParity:
+    def test_dry_run_and_execute_same_counts(self, tmp_path: Path) -> None:
+        archive_root_a = tmp_path / "dry" / "archive" / "runs"
+        archive_root_b = tmp_path / "exec" / "archive" / "runs"
+
+        now = datetime.now(timezone.utc)
+        for root in (archive_root_a, archive_root_b):
+            old_run = root / "run-old"
+            new_run = root / "run-new"
+            _write(old_run / "flow_state" / "event.json", "a" * 32)
+            _write(new_run / "flow_state" / "event.json", "b" * 8)
+            old_ts = (now - timedelta(minutes=2)).timestamp()
+            new_ts = (now - timedelta(minutes=1)).timestamp()
+            os.utime(old_run, (old_ts, old_ts))
+            os.utime(new_run, (new_ts, new_ts))
+
+        policy = RunArchiveRetentionPolicy(
+            max_entries=1,
+            max_age_days=100000,
+            max_total_bytes=1_000_000,
+        )
+
+        dry_summary = prune_run_archive_root(
+            archive_root_a, policy=policy, dry_run=True
+        )
+        exec_summary = prune_run_archive_root(
+            archive_root_b, policy=policy, dry_run=False
+        )
+
+        assert dry_summary.kept == exec_summary.kept == 1
+        assert dry_summary.pruned == exec_summary.pruned == 1
+
+    def test_dry_run_preserves_files_execute_deletes(self, tmp_path: Path) -> None:
+        archive_root = tmp_path / "archive" / "runs"
+        now = datetime.now(timezone.utc)
+        old_run = archive_root / "run-old"
+        new_run = archive_root / "run-new"
+        _write(old_run / "data.json", "old")
+        _write(new_run / "data.json", "new")
+        old_ts = (now - timedelta(minutes=2)).timestamp()
+        new_ts = (now - timedelta(minutes=1)).timestamp()
+        os.utime(old_run, (old_ts, old_ts))
+        os.utime(new_run, (new_ts, new_ts))
+
+        policy = RunArchiveRetentionPolicy(
+            max_entries=1,
+            max_age_days=100000,
+            max_total_bytes=1_000_000,
+        )
+
+        dry_summary = prune_run_archive_root(archive_root, policy=policy, dry_run=True)
+        assert dry_summary.pruned == 1
+        assert old_run.exists()
+        assert new_run.exists()
+
+    def test_run_archive_prune_paths_sorted(self, tmp_path: Path) -> None:
+        archive_root = tmp_path / "archive" / "runs"
+        now = datetime.now(timezone.utc)
+        for i in range(5):
+            run_dir = archive_root / f"run-{i:03d}"
+            _write(run_dir / "data.json", f"run-{i}")
+            ts = (now - timedelta(minutes=5 - i)).timestamp()
+            os.utime(run_dir, (ts, ts))
+
+        policy = RunArchiveRetentionPolicy(
+            max_entries=2,
+            max_age_days=100000,
+            max_total_bytes=1_000_000,
+        )
+
+        summary = prune_run_archive_root(archive_root, policy=policy, dry_run=True)
+        assert summary.pruned == 3
+        paths = summary.pruned_paths
+        assert paths == tuple(sorted(paths))
