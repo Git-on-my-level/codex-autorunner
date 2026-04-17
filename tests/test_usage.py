@@ -752,3 +752,278 @@ def test_repo_usage_summary_cached_reports_source_confidence(tmp_path):
         repo_root, codex_home=codex_home, since=since
     )
     assert ranged_summary.totals.total_tokens == 10
+
+
+class TestWorktreeHeuristicAttribution:
+    def test_double_dash_worktree_rolled_into_base(self, tmp_path) -> None:
+        base_repo = tmp_path / "my-repo"
+        worktree = tmp_path / "my-repo--feature-branch"
+        base_repo.mkdir()
+        worktree.mkdir()
+        codex_home = tmp_path / "codex"
+
+        _write_session(
+            codex_home,
+            worktree,
+            [
+                {
+                    "timestamp": "2025-12-01T00:01:00Z",
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "total_token_usage": {
+                                "input_tokens": 10,
+                                "cached_input_tokens": 0,
+                                "output_tokens": 5,
+                                "reasoning_output_tokens": 0,
+                                "total_tokens": 15,
+                            },
+                            "last_token_usage": {
+                                "input_tokens": 10,
+                                "cached_input_tokens": 0,
+                                "output_tokens": 5,
+                                "reasoning_output_tokens": 0,
+                                "total_tokens": 15,
+                            },
+                        },
+                    },
+                }
+            ],
+        )
+
+        per_repo, unmatched = summarize_hub_usage(
+            [("my-repo", base_repo)],
+            codex_home=codex_home,
+        )
+
+        assert per_repo["my-repo"].totals.total_tokens == 15
+        assert unmatched.totals.total_tokens == 0
+
+    def test_unrelated_double_dash_stays_unmatched(self, tmp_path) -> None:
+        base_repo = tmp_path / "my-repo"
+        unrelated = tmp_path / "other-project--feature"
+        base_repo.mkdir()
+        unrelated.mkdir()
+        codex_home = tmp_path / "codex"
+
+        _write_session(
+            codex_home,
+            unrelated,
+            [
+                {
+                    "timestamp": "2025-12-01T00:01:00Z",
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "total_token_usage": {
+                                "input_tokens": 10,
+                                "cached_input_tokens": 0,
+                                "output_tokens": 5,
+                                "reasoning_output_tokens": 0,
+                                "total_tokens": 15,
+                            },
+                            "last_token_usage": {
+                                "input_tokens": 10,
+                                "cached_input_tokens": 0,
+                                "output_tokens": 5,
+                                "reasoning_output_tokens": 0,
+                                "total_tokens": 15,
+                            },
+                        },
+                    },
+                }
+            ],
+        )
+
+        per_repo, unmatched = summarize_hub_usage(
+            [("my-repo", base_repo)],
+            codex_home=codex_home,
+        )
+
+        assert per_repo["my-repo"].totals.total_tokens == 0
+        assert unmatched.totals.total_tokens == 15
+
+    def test_exact_match_preferred_over_heuristic(self, tmp_path) -> None:
+        base_repo = tmp_path / "my-repo"
+        worktree = tmp_path / "my-repo--feature"
+        base_repo.mkdir()
+        worktree.mkdir()
+        codex_home = tmp_path / "codex"
+
+        _write_session(
+            codex_home,
+            base_repo,
+            [
+                {
+                    "timestamp": "2025-12-01T00:01:00Z",
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "total_token_usage": {
+                                "input_tokens": 5,
+                                "cached_input_tokens": 0,
+                                "output_tokens": 2,
+                                "reasoning_output_tokens": 0,
+                                "total_tokens": 7,
+                            },
+                            "last_token_usage": {
+                                "input_tokens": 5,
+                                "cached_input_tokens": 0,
+                                "output_tokens": 2,
+                                "reasoning_output_tokens": 0,
+                                "total_tokens": 7,
+                            },
+                        },
+                    },
+                }
+            ],
+        )
+        _write_session(
+            codex_home,
+            worktree,
+            [
+                {
+                    "timestamp": "2025-12-01T00:02:00Z",
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "total_token_usage": {
+                                "input_tokens": 3,
+                                "cached_input_tokens": 0,
+                                "output_tokens": 1,
+                                "reasoning_output_tokens": 0,
+                                "total_tokens": 4,
+                            },
+                            "last_token_usage": {
+                                "input_tokens": 3,
+                                "cached_input_tokens": 0,
+                                "output_tokens": 1,
+                                "reasoning_output_tokens": 0,
+                                "total_tokens": 4,
+                            },
+                        },
+                    },
+                }
+            ],
+        )
+
+        per_repo, unmatched = summarize_hub_usage(
+            [("my-repo", base_repo)],
+            codex_home=codex_home,
+        )
+
+        assert per_repo["my-repo"].totals.total_tokens == 11
+        assert unmatched.totals.total_tokens == 0
+
+    def test_unmatched_usage_stays_visible(self, tmp_path) -> None:
+        hub_repo = tmp_path / "hub-repo"
+        hub_repo.mkdir()
+        codex_home = tmp_path / "codex"
+
+        _write_session(
+            codex_home,
+            tmp_path / "unrelated-location",
+            [
+                {
+                    "timestamp": "2025-12-01T00:01:00Z",
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "total_token_usage": {
+                                "input_tokens": 20,
+                                "cached_input_tokens": 0,
+                                "output_tokens": 10,
+                                "reasoning_output_tokens": 0,
+                                "total_tokens": 30,
+                            },
+                            "last_token_usage": {
+                                "input_tokens": 20,
+                                "cached_input_tokens": 0,
+                                "output_tokens": 10,
+                                "reasoning_output_tokens": 0,
+                                "total_tokens": 30,
+                            },
+                        },
+                    },
+                }
+            ],
+        )
+
+        per_repo, unmatched = summarize_hub_usage(
+            [("hub-repo", hub_repo)],
+            codex_home=codex_home,
+        )
+
+        assert per_repo["hub-repo"].totals.total_tokens == 0
+        assert unmatched.totals.total_tokens == 30
+        assert unmatched.events == 1
+
+
+class TestOpencodeCumulativeFallback:
+    def test_cumulative_semantics_detected(self, tmp_path) -> None:
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+        _write_opencode_session(
+            repo_root,
+            {
+                "messages": [
+                    {
+                        "timestamp": "2025-12-01T00:01:00Z",
+                        "usage": {
+                            "inputTokens": 10,
+                            "outputTokens": 5,
+                            "totalTokens": 15,
+                        },
+                    },
+                    {
+                        "timestamp": "2025-12-01T00:02:00Z",
+                        "usage": {
+                            "inputTokens": 12,
+                            "outputTokens": 7,
+                            "totalTokens": 19,
+                        },
+                    },
+                ]
+            },
+        )
+
+        summary = summarize_opencode_repo_usage(repo_root)
+        assert summary.events == 2
+        assert summary.totals.total_tokens == 19
+        meta = (summary.source_confidence or {}).get("opencode") or {}
+        assert meta.get("source") == "session_estimated"
+
+    def test_persisted_usage_preferred_over_session_estimation(self, tmp_path) -> None:
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+        _write_opencode_session(
+            repo_root,
+            {
+                "messages": [
+                    {
+                        "timestamp": "2025-12-01T00:01:00Z",
+                        "usage": {
+                            "inputTokens": 500,
+                            "outputTokens": 500,
+                            "totalTokens": 1000,
+                        },
+                    }
+                ]
+            },
+        )
+        persist_opencode_usage_snapshot(
+            repo_root,
+            session_id="s1",
+            turn_id="t1",
+            usage={"inputTokens": 3, "outputTokens": 2, "totalTokens": 5},
+        )
+
+        summary = summarize_opencode_repo_usage(repo_root)
+        assert summary.totals.total_tokens == 5
+        meta = (summary.source_confidence or {}).get("opencode") or {}
+        assert meta.get("source") == "persisted_normalized"

@@ -938,3 +938,201 @@ class TestRuntimeTerminalStatusMapping:
             )
             is None
         )
+
+
+class TestSuccessfulCompletionStatusAliases:
+    @pytest.mark.parametrize(
+        "status", ("completed", "complete", "done", "success", "succeeded", "idle")
+    )
+    def test_each_alias_recognized_as_successful(self, status: str) -> None:
+        assert status_indicates_successful_completion(
+            status, assume_true_when_missing=False
+        )
+
+    def test_unknown_status_not_successful(self) -> None:
+        assert not status_indicates_successful_completion(
+            "unknown", assume_true_when_missing=False
+        )
+
+    def test_missing_assumes_true_when_flag_set(self) -> None:
+        assert status_indicates_successful_completion(
+            None, assume_true_when_missing=True
+        )
+
+    def test_missing_assumes_false_when_flag_unset(self) -> None:
+        assert not status_indicates_successful_completion(
+            None, assume_true_when_missing=False
+        )
+
+
+class TestInterruptedStatusAliases:
+    @pytest.mark.parametrize(
+        "status", ("interrupted", "cancelled", "canceled", "aborted")
+    )
+    def test_each_alias_recognized_as_interrupted(self, status: str) -> None:
+        assert status_indicates_interrupted(status)
+
+    def test_successful_statuses_not_interrupted(self) -> None:
+        for status in ("completed", "done", "success"):
+            assert not status_indicates_interrupted(status)
+
+
+class TestSessionStatusSlashDotParity:
+    def test_status_dot_and_slash_both_terminal_when_idle(self) -> None:
+        assert (
+            terminal_status_for_method("session.status", {"status": {"type": "idle"}})
+            is not None
+        )
+        assert (
+            terminal_status_for_method("session/status", {"status": {"type": "idle"}})
+            is not None
+        )
+
+    def test_status_dot_and_slash_both_non_terminal_when_busy(self) -> None:
+        assert (
+            terminal_status_for_method("session.status", {"status": {"type": "busy"}})
+            is None
+        )
+        assert (
+            terminal_status_for_method("session/status", {"status": {"type": "busy"}})
+            is None
+        )
+
+    def test_both_in_terminal_methods_set(self) -> None:
+        assert "session.status" in _TERMINAL_METHODS
+        assert "session/status" in _TERMINAL_METHODS
+
+    def test_both_in_idle_methods_set(self) -> None:
+        assert "session.status" in _IDLE_TERMINAL_METHODS
+        assert "session/status" in _IDLE_TERMINAL_METHODS
+
+
+class TestUsageIdFieldAliases:
+    def test_extract_usage_prefers_usage_over_tokenUsage(self) -> None:
+        assert extract_usage({"usage": {"a": 1}, "tokenUsage": {"a": 2}}) == {"a": 1}
+
+    def test_extract_usage_reads_tokenUsage_fallback(self) -> None:
+        assert extract_usage({"tokenUsage": {"a": 2}}) == {"a": 2}
+
+    def test_extract_usage_returns_empty_when_both_missing(self) -> None:
+        assert extract_usage({}) == {}
+
+
+class TestSessionIdFieldAliases:
+    def test_sessionId_preferred(self) -> None:
+        snap = analyze_acp_lifecycle_message(
+            {
+                "method": "session/created",
+                "params": {"sessionId": "camel", "session_id": "snake"},
+            }
+        )
+        assert snap.session_id == "camel"
+
+    def test_session_id_fallback(self) -> None:
+        snap = analyze_acp_lifecycle_message(
+            {"method": "session/created", "params": {"session_id": "snake"}}
+        )
+        assert snap.session_id == "snake"
+
+    def test_sessionID_fallback(self) -> None:
+        snap = analyze_acp_lifecycle_message(
+            {"method": "session/created", "params": {"sessionID": "upper"}}
+        )
+        assert snap.session_id == "upper"
+
+
+class TestTurnIdFieldAliases:
+    def test_turnId_preferred(self) -> None:
+        snap = analyze_acp_lifecycle_message(
+            {
+                "method": "turn/started",
+                "params": {"turnId": "camel", "turn_id": "snake", "promptId": "p1"},
+            }
+        )
+        assert snap.turn_id == "camel"
+
+    def test_turn_id_fallback(self) -> None:
+        snap = analyze_acp_lifecycle_message(
+            {"method": "turn/started", "params": {"turn_id": "snake", "promptId": "p1"}}
+        )
+        assert snap.turn_id == "snake"
+
+    def test_promptId_fallback(self) -> None:
+        snap = analyze_acp_lifecycle_message(
+            {"method": "turn/started", "params": {"promptId": "p1", "prompt_id": "p2"}}
+        )
+        assert snap.turn_id == "p1"
+
+    def test_prompt_id_fallback(self) -> None:
+        snap = analyze_acp_lifecycle_message(
+            {"method": "turn/started", "params": {"prompt_id": "p2"}}
+        )
+        assert snap.turn_id == "p2"
+
+
+class TestSessionUpdateKindAliases:
+    def test_sessionUpdate_camelCase(self) -> None:
+        snap = analyze_acp_lifecycle_message(
+            {
+                "method": "session/update",
+                "params": {"update": {"sessionUpdate": "usage_update"}},
+            }
+        )
+        assert snap.normalized_kind == "token_usage"
+
+    def test_session_update_snake_case(self) -> None:
+        snap = analyze_acp_lifecycle_message(
+            {
+                "method": "session/update",
+                "params": {"update": {"session_update": "usage_update"}},
+            }
+        )
+        assert snap.normalized_kind == "token_usage"
+
+
+class TestOutputDeltaKeyAliases:
+    def test_delta_key(self) -> None:
+        snap = analyze_acp_lifecycle_message(
+            {"method": "prompt/progress", "params": {"delta": "d"}}
+        )
+        assert snap.output_delta == "d"
+
+    def test_textDelta_key(self) -> None:
+        snap = analyze_acp_lifecycle_message(
+            {"method": "prompt/progress", "params": {"textDelta": "td"}}
+        )
+        assert snap.output_delta == "td"
+
+    def test_text_delta_key(self) -> None:
+        snap = analyze_acp_lifecycle_message(
+            {"method": "prompt/progress", "params": {"text_delta": "td"}}
+        )
+        assert snap.output_delta == "td"
+
+
+class TestTextPartTypeAliases:
+    def test_text_type_accepted(self) -> None:
+        assert extract_message_text({"parts": [{"type": "text", "text": "a"}]}) == "a"
+
+    def test_output_text_type_accepted(self) -> None:
+        assert (
+            extract_message_text({"parts": [{"type": "output_text", "text": "a"}]})
+            == "a"
+        )
+
+    def test_message_type_accepted(self) -> None:
+        assert (
+            extract_message_text({"parts": [{"type": "message", "text": "a"}]}) == "a"
+        )
+
+    def test_agentMessage_type_accepted(self) -> None:
+        assert (
+            extract_message_text({"parts": [{"type": "agentMessage", "text": "a"}]})
+            == "a"
+        )
+
+    def test_unknown_type_skipped(self) -> None:
+        assert (
+            extract_message_text({"parts": [{"type": "tool_call", "text": "skip"}]})
+            == ""
+        )

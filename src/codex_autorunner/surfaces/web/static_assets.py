@@ -395,6 +395,12 @@ def materialize_static_assets(
         if static_context is not None:
             static_context.close()
         if existing_cache is not None:
+            safe_log(
+                logger,
+                logging.INFO,
+                "static_assets: serving from existing cache (source missing %s)",
+                ", ".join(missing_source[:3]),
+            )
             _prune_cache_entries(
                 cache_root,
                 keep={existing_cache},
@@ -409,6 +415,12 @@ def materialize_static_assets(
     if target_dir.exists() and not missing_static_assets(target_dir):
         if static_context is not None:
             static_context.close()
+        safe_log(
+            logger,
+            logging.DEBUG,
+            "static_assets: serving from fingerprint cache %s",
+            fingerprint[:12],
+        )
         _prune_cache_entries(
             cache_root,
             keep={target_dir},
@@ -430,6 +442,11 @@ def materialize_static_assets(
         if static_context is not None:
             static_context.close()
         if existing_cache is not None:
+            safe_log(
+                logger,
+                logging.WARNING,
+                "static_assets: serving from existing cache after mkdir failure",
+            )
             return existing_cache, None
         raise RuntimeError("Static UI assets missing; reinstall package") from exc
     lock_path = cache_root / f".lock-{fingerprint}"
@@ -497,11 +514,13 @@ def materialize_static_assets(
         if static_context is not None:
             static_context.close()
         if existing_cache is not None:
+            safe_log(
+                logger,
+                logging.WARNING,
+                "static_assets: serving from existing cache after copy failure",
+            )
             return existing_cache, None
         raise RuntimeError("Static UI assets missing; reinstall package") from exc
-    finally:
-        if lock_acquired:
-            _release_cache_lock(lock_path, logger)
     if static_context is not None:
         static_context.close()
     _prune_cache_entries(

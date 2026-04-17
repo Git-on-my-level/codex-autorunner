@@ -486,9 +486,7 @@ async def test_ticket_frontmatter_preserved_on_truncation(tmp_path: Path) -> Non
     )
 
     def handler(req: AgentTurnRequest) -> AgentTurnResult:
-        # Verify truncation marker is present in ticket block
         assert "[... TRUNCATED ...]" in req.prompt
-        # Verify prompt doesn't exceed budget
         assert len(req.prompt.encode("utf-8")) <= 5000
         return AgentTurnResult(
             agent_id=req.agent_id,
@@ -506,3 +504,111 @@ async def test_ticket_frontmatter_preserved_on_truncation(tmp_path: Path) -> Non
 
     result = await runner.step({})
     assert result.status == "continue"
+
+
+class TestTicketFirstFallbackPromptContract:
+    def test_fallback_contains_required_control_plane_tags(
+        self, tmp_path: Path
+    ) -> None:
+        from codex_autorunner.tickets.runner_prompt_support import (
+            build_ticket_first_fallback_prompt,
+        )
+
+        ticket_block = (
+            "<CAR_CURRENT_TICKET_FILE>\n"
+            "PATH: tickets/TICKET-001.md\n"
+            "<TICKET_MARKDOWN>\n"
+            "---\n"
+            "agent: codex\n"
+            "done: false\n"
+            "title: Test\n"
+            "---\n\nDo the thing\n"
+            "</TICKET_MARKDOWN>\n"
+            "</CAR_CURRENT_TICKET_FILE>"
+        )
+
+        result = build_ticket_first_fallback_prompt(
+            max_bytes=50000,
+            rel_ticket="tickets/TICKET-001.md",
+            rel_dispatch_path="dispatch/DISPATCH.md",
+            prev_block="",
+            checkpoint_block="",
+            commit_block="",
+            lint_block="",
+            loop_guard_block="",
+            ticket_block=ticket_block,
+        )
+
+        assert "<CAR_TICKET_FLOW_PROMPT>" in result
+        assert "<CAR_TICKET_FLOW_INSTRUCTIONS>" in result
+        assert "<CAR_CURRENT_TICKET_FILE>" in result
+        assert "agent: codex" in result
+        assert "done: false" in result
+
+    def test_fallback_drops_nonessential_blocks_under_budget(
+        self, tmp_path: Path
+    ) -> None:
+        from codex_autorunner.tickets.runner_prompt_support import (
+            build_ticket_first_fallback_prompt,
+        )
+
+        ticket_block = (
+            "<CAR_CURRENT_TICKET_FILE>\n"
+            "PATH: tickets/TICKET-001.md\n"
+            "<TICKET_MARKDOWN>\n"
+            "---\n"
+            "agent: codex\n"
+            "done: false\n"
+            "---\n\nBody\n"
+            "</TICKET_MARKDOWN>\n"
+            "</CAR_CURRENT_TICKET_FILE>"
+        )
+
+        result = build_ticket_first_fallback_prompt(
+            max_bytes=500,
+            rel_ticket="tickets/TICKET-001.md",
+            rel_dispatch_path="dispatch/DISPATCH.md",
+            prev_block="x" * 50000,
+            checkpoint_block="y" * 50000,
+            commit_block="z" * 50000,
+            lint_block="w" * 50000,
+            loop_guard_block="v" * 50000,
+            ticket_block=ticket_block,
+        )
+
+        assert len(result.encode("utf-8")) <= 500
+        assert "agent: codex" in result or "[... TRUNCATED" in result
+
+    def test_fallback_preserves_ticket_under_severe_budget(
+        self, tmp_path: Path
+    ) -> None:
+        from codex_autorunner.tickets.runner_prompt_support import (
+            build_ticket_first_fallback_prompt,
+        )
+
+        ticket_block = (
+            "<CAR_CURRENT_TICKET_FILE>\n"
+            "PATH: tickets/TICKET-001.md\n"
+            "<TICKET_MARKDOWN>\n"
+            "---\n"
+            "agent: codex\n"
+            "done: false\n"
+            "---\n\nBody\n"
+            "</TICKET_MARKDOWN>\n"
+            "</CAR_CURRENT_TICKET_FILE>"
+        )
+
+        result = build_ticket_first_fallback_prompt(
+            max_bytes=1000,
+            rel_ticket="tickets/TICKET-001.md",
+            rel_dispatch_path="dispatch/DISPATCH.md",
+            prev_block="x" * 50000,
+            checkpoint_block="",
+            commit_block="",
+            lint_block="",
+            loop_guard_block="",
+            ticket_block=ticket_block,
+        )
+
+        assert "<CAR_TICKET_FLOW_PROMPT>" in result
+        assert len(result.encode("utf-8")) <= 1000
