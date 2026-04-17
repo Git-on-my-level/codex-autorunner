@@ -11,10 +11,10 @@ import { isRepoHealthy } from "./health.js";
 import { preserveScroll } from "./preserve.js";
 import { createSmartRefresh, type SmartRefreshReason } from "./smartRefresh.js";
 import { createFileBoxWidget } from "./fileboxUi.js";
-import { registerAutoRefresh, type RefreshContext } from "./autoRefresh.js";
-import { CONSTANTS } from "./constants.js";
 import { renderMarkdown } from "./markdown.js";
 import { formatTimestamp, formatBytes } from "./formatUtils.js";
+import { getActiveMessageRunId, refreshBell } from "./messagesBell.js";
+export { initMessageBell, refreshBell } from "./messagesBell.js";
 
 /**
  * Dispatch: Agent-to-human communication.
@@ -27,14 +27,6 @@ interface Dispatch {
   body?: string | null;
   extra?: Record<string, unknown> | null;
   is_handoff?: boolean;  // True when mode === "pause"
-}
-
-interface ActiveMessageResponse {
-  active?: boolean;
-  run_id?: string;
-  seq?: number;
-  dispatch?: Dispatch | null;
-  open_url?: string;
 }
 
 interface ConversationSummary {
@@ -104,11 +96,8 @@ interface TicketState {
   reason?: string | null;
 }
 
-let bellInitialized = false;
 let messagesInitialized = false;
-let activeRunId: string | null = null;
 let selectedRunId: string | null = null;
-let messageBellCleanup: (() => void) | null = null;
 const MESSAGE_REFRESH_REASONS: SmartRefreshReason[] = ["initial", "background", "manual"];
 
 const threadsEl = document.getElementById("messages-thread-list");
@@ -169,69 +158,6 @@ function setThreadDetailRefreshing(active: boolean): void {
   if (!detailEl) return;
   threadDetailRefreshCount = Math.max(0, threadDetailRefreshCount + (active ? 1 : -1));
   detailEl.classList.toggle("refreshing", threadDetailRefreshCount > 0);
-}
-
-function setBadge(count: number): void {
-  const badge = document.getElementById("tab-badge-inbox");
-  if (!badge) return;
-  if (count > 0) {
-    badge.textContent = String(count);
-    badge.classList.remove("hidden");
-  } else {
-    badge.textContent = "";
-    badge.classList.add("hidden");
-  }
-}
-
-export async function refreshBell(): Promise<void> {
-  if (!isRepoHealthy()) {
-    activeRunId = null;
-    setBadge(0);
-    return;
-  }
-  try {
-    const res = (await api("/api/messages/active")) as ActiveMessageResponse;
-    if (res?.active && res.run_id) {
-      activeRunId = res.run_id;
-      setBadge(1);
-    } else {
-      activeRunId = null;
-      setBadge(0);
-    }
-  } catch (_err) {
-    // Best-effort.
-    activeRunId = null;
-    setBadge(0);
-  }
-}
-
-export function initMessageBell(): void {
-  if (bellInitialized) return;
-  bellInitialized = true;
-
-  if (messageBellCleanup) {
-    messageBellCleanup();
-  }
-  messageBellCleanup = registerAutoRefresh("messages:bell", {
-    callback: async (_ctx: RefreshContext) => {
-      if (!isRepoHealthy()) {
-        activeRunId = null;
-        setBadge(0);
-        return;
-      }
-      await refreshBell();
-    },
-    interval: CONSTANTS.UI.POLLING_INTERVAL,
-    refreshOnActivation: true,
-    immediate: true,
-  });
-
-  subscribe("repo:health", (payload: unknown) => {
-    const status = (payload as { status?: string } | null)?.status || "";
-    if (status === "ok" || status === "degraded") {
-      void refreshBell();
-    }
-  });
 }
 
 function formatRelativeTime(ts?: string | null): string {
@@ -957,6 +883,7 @@ export function initMessages(): void {
       return;
     }
     // Fall back to active message if any.
+    const activeRunId = getActiveMessageRunId();
     if (activeRunId) {
       selectedRunId = activeRunId;
       updateUrlParams({ run_id: activeRunId });

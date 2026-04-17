@@ -7,7 +7,7 @@ import { isRepoHealthy } from "./health.js";
 import { closeTicketEditor, initTicketEditor, openTicketEditor } from "./ticketEditor.js";
 import { preserveScroll } from "./preserve.js";
 import { createSmartRefresh } from "./smartRefresh.js";
-import { refreshBell } from "./messages.js";
+import { refreshBell } from "./messagesBell.js";
 import { EVENT_STREAM_RETRY_DELAYS_MS, STALE_THRESHOLD_MS, isFlowActiveStatus, getLastSeenSeq, setLastSeenSeq, parseEventSeq, formatElapsedSeconds, diffStatsSignature, } from "./ticketFlowState.js";
 import { clearLiveOutput, setLiveOutputStatus, renderLiveOutputView, initLiveOutputPanel, initReasonModal, stopElapsedTimer, initElapsedFromStart, stopLastActivityTimer, updateLastActivityFromTimestamp, updateActivityFromEvent, processStreamDelta, processAppServerEvent, processStepStarted, summarizeReason, resetAllStreamState, setFlowStartedAt, getLastKnownEventAt, setLastActivityTime, getCurrentReasonFull, } from "./ticketFlowStream.js";
 import { renderTickets, renderDispatchHistory, updateSelectedTicket, updateScrollFade, initDispatchPanelToggle, } from "./ticketFlowView.js";

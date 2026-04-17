@@ -16,7 +16,7 @@ import { isRepoHealthy } from "./health.js";
 import { closeTicketEditor, initTicketEditor, openTicketEditor, TicketData } from "./ticketEditor.js";
 import { preserveScroll } from "./preserve.js";
 import { createSmartRefresh } from "./smartRefresh.js";
-import { refreshBell } from "./messages.js";
+import { refreshBell } from "./messagesBell.js";
 import {
   type FlowEvent,
   type FlowRun,

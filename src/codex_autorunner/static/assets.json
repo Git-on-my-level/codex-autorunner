@@ -113,6 +113,9 @@
       "path": "generated/messages.js"
     },
     {
+      "path": "generated/messagesBell.js"
+    },
+    {
       "path": "generated/mobileCompact.js"
     },
     {

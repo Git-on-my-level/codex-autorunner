@@ -5,15 +5,12 @@ import { isRepoHealthy } from "./health.js";
 import { preserveScroll } from "./preserve.js";
 import { createSmartRefresh } from "./smartRefresh.js";
 import { createFileBoxWidget } from "./fileboxUi.js";
-import { registerAutoRefresh } from "./autoRefresh.js";
-import { CONSTANTS } from "./constants.js";
 import { renderMarkdown } from "./markdown.js";
 import { formatTimestamp, formatBytes } from "./formatUtils.js";
-let bellInitialized = false;
+import { getActiveMessageRunId, refreshBell } from "./messagesBell.js";
+export { initMessageBell, refreshBell } from "./messagesBell.js";
 let messagesInitialized = false;
-let activeRunId = null;
 let selectedRunId = null;
-let messageBellCleanup = null;
 const MESSAGE_REFRESH_REASONS = ["initial", "background", "manual"];
 const threadsEl = document.getElementById("messages-thread-list");
 const detailEl = document.getElementById("messages-thread-detail");
@@ -70,69 +67,6 @@ function setThreadDetailRefreshing(active) {
         return;
     threadDetailRefreshCount = Math.max(0, threadDetailRefreshCount + (active ? 1 : -1));
     detailEl.classList.toggle("refreshing", threadDetailRefreshCount > 0);
-}
-function setBadge(count) {
-    const badge = document.getElementById("tab-badge-inbox");
-    if (!badge)
-        return;
-    if (count > 0) {
-        badge.textContent = String(count);
-        badge.classList.remove("hidden");
-    }
-    else {
-        badge.textContent = "";
-        badge.classList.add("hidden");
-    }
-}
-export async function refreshBell() {
-    if (!isRepoHealthy()) {
-        activeRunId = null;
-        setBadge(0);
-        return;
-    }
-    try {
-        const res = (await api("/api/messages/active"));
-        if (res?.active && res.run_id) {
-            activeRunId = res.run_id;
-            setBadge(1);
-        }
-        else {
-            activeRunId = null;
-            setBadge(0);
-        }
-    }
-    catch (_err) {
-        // Best-effort.
-        activeRunId = null;
-        setBadge(0);
-    }
-}
-export function initMessageBell() {
-    if (bellInitialized)
-        return;
-    bellInitialized = true;
-    if (messageBellCleanup) {
-        messageBellCleanup();
-    }
-    messageBellCleanup = registerAutoRefresh("messages:bell", {
-        callback: async (_ctx) => {
-            if (!isRepoHealthy()) {
-                activeRunId = null;
-                setBadge(0);
-                return;
-            }
-            await refreshBell();
-        },
-        interval: CONSTANTS.UI.POLLING_INTERVAL,
-        refreshOnActivation: true,
-        immediate: true,
-    });
-    subscribe("repo:health", (payload) => {
-        const status = payload?.status || "";
-        if (status === "ok" || status === "degraded") {
-            void refreshBell();
-        }
-    });
 }
 function formatRelativeTime(ts) {
     if (!ts)
@@ -798,6 +732,7 @@ export function initMessages() {
             return;
         }
         // Fall back to active message if any.
+        const activeRunId = getActiveMessageRunId();
         if (activeRunId) {
             selectedRunId = activeRunId;
             updateUrlParams({ run_id: activeRunId });
