@@ -117,7 +117,7 @@ export const ticketChatState = Object.assign(ticketChat.state, {
     activeAgent: null,
     activeProfile: null,
 });
-let turnEventsCtrl = createTurnEventsController();
+const turnEventsCtrl = createTurnEventsController();
 export function getTicketChatElements() {
     const base = ticketChat.elements;
     return {

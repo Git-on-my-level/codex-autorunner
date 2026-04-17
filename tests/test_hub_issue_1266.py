@@ -528,6 +528,17 @@ def test_hub_health_includes_last_orchestration_housekeeping(
     hub_env, monkeypatch
 ) -> None:
     _stub_opencode_supervisor(monkeypatch)
+
+    def _skip_execution_history_housekeeping(
+        *args: object, **kwargs: object
+    ) -> SimpleNamespace:
+        raise sqlite3.OperationalError("disabled for serializer test")
+
+    monkeypatch.setattr(
+        web_app_module,
+        "run_execution_history_housekeeping_once",
+        _skip_execution_history_housekeeping,
+    )
     app = create_hub_app(hub_env.hub_root)
 
     with TestClient(app) as client:
