@@ -1,0 +1,341 @@
+"""Archive tree/detail serialization and path-normalization helpers.
+
+Deduplicated tree-node building and path-safety logic previously inlined in
+archive.py for both snapshot and local-run tree endpoints.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import re
+from datetime import datetime, timezone
+from pathlib import Path, PurePosixPath
+from typing import Any, Literal, Optional
+
+from ..schemas import (
+    ArchiveSnapshotSummary,
+    ArchiveTreeNode,
+    ArchiveTreeResponse,
+    LocalRunArchiveSummary,
+)
+
+logger = logging.getLogger("codex_autorunner.routes.archive")
+
+_DRIVE_PREFIX_RE = re.compile(r"^[A-Za-z]:")
+
+_LOCAL_ARCHIVE_MARKERS = {
+    "archived_tickets",
+    "archived_runs",
+    "contextspace",
+    "config",
+    "state",
+    "logs",
+    "flows.db",
+    "github_context",
+}
+
+
+def archive_worktrees_root(repo_root: Path) -> Path:
+    return repo_root / ".codex-autorunner" / "archive" / "worktrees"
+
+
+def local_run_archives_root(repo_root: Path) -> Path:
+    return repo_root / ".codex-autorunner" / "archive" / "runs"
+
+
+def legacy_local_flows_root(repo_root: Path) -> Path:
+    return repo_root / ".codex-autorunner" / "flows"
+
+
+def normalize_component(value: str, label: str) -> str:
+    cleaned = (value or "").strip()
+    if not cleaned:
+        raise ValueError(f"missing {label}")
+    if "\\" in cleaned:
+        raise ValueError(f"invalid {label}")
+    if _DRIVE_PREFIX_RE.match(cleaned):
+        raise ValueError(f"invalid {label}")
+    path = PurePosixPath(cleaned)
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"invalid {label}")
+    if len(path.parts) != 1:
+        raise ValueError(f"invalid {label}")
+    if path.name in {".", ".."}:
+        raise ValueError(f"invalid {label}")
+    return path.name
+
+
+def normalize_archive_rel_path(base: Path, rel_path: str) -> tuple[Path, str]:
+    cleaned = (rel_path or "").strip()
+    if not cleaned:
+        return base, ""
+    if "\\" in cleaned:
+        raise ValueError("invalid archive path")
+    if _DRIVE_PREFIX_RE.match(cleaned):
+        raise ValueError("invalid archive path")
+    relative = PurePosixPath(cleaned)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError("invalid archive path")
+    base_real = base.resolve(strict=False)
+    candidate = (base / relative).resolve(strict=False)
+    try:
+        rel_posix = candidate.relative_to(base_real).as_posix()
+    except ValueError:
+        raise ValueError("invalid archive path") from None
+    return candidate, rel_posix
+
+
+def safe_mtime(path: Path) -> Optional[float]:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return None
+
+
+def format_mtime(ts: Optional[float]) -> Optional[str]:
+    if ts is None:
+        return None
+    return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+
+
+def format_created_at(path: Path) -> Optional[str]:
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat()
+    except OSError:
+        return None
+
+
+def load_meta(meta_path: Path) -> Optional[dict[str, Any]]:
+    try:
+        if not meta_path.exists():
+            return None
+        raw = meta_path.read_text(encoding="utf-8")
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            return data
+    except (OSError, ValueError) as exc:
+        logger.debug("Failed to read META.json at %s: %s", meta_path, exc)
+    return None
+
+
+def snapshot_summary(
+    snapshot_root: Path,
+    worktree_repo_id: str,
+    meta: Optional[dict[str, Any]],
+) -> ArchiveSnapshotSummary:
+    snapshot_id = snapshot_root.name
+    created_at: Optional[str] = None
+    status: Optional[str] = None
+    branch: Optional[str] = None
+    head_sha: Optional[str] = None
+    note: Optional[str] = None
+    summary: Optional[dict[str, Any]] = None
+
+    if meta:
+        created_at = str(meta.get("created_at")) if meta.get("created_at") else None
+        status = str(meta.get("status")) if meta.get("status") else None
+        branch = str(meta.get("branch")) if meta.get("branch") else None
+        head_sha = str(meta.get("head_sha")) if meta.get("head_sha") else None
+        note = str(meta.get("note")) if meta.get("note") else None
+        if isinstance(meta.get("summary"), dict):
+            summary = meta.get("summary")
+
+    if not created_at:
+        created_at = format_created_at(snapshot_root)
+    if not status:
+        status = "partial" if meta is None else "unknown"
+
+    return ArchiveSnapshotSummary(
+        snapshot_id=snapshot_id,
+        worktree_repo_id=worktree_repo_id,
+        created_at=created_at,
+        status=status,
+        branch=branch,
+        head_sha=head_sha,
+        note=note,
+        summary=summary,
+    )
+
+
+def iter_snapshots(repo_root: Path) -> list[ArchiveSnapshotSummary]:
+    worktrees_root = archive_worktrees_root(repo_root)
+    if not worktrees_root.exists() or not worktrees_root.is_dir():
+        return []
+    snapshots: list[ArchiveSnapshotSummary] = []
+    for worktree_dir in sorted(worktrees_root.iterdir(), key=lambda p: p.name):
+        if not worktree_dir.is_dir():
+            continue
+        worktree_id = worktree_dir.name
+        for snapshot_dir in sorted(worktree_dir.iterdir(), key=lambda p: p.name):
+            if not snapshot_dir.is_dir():
+                continue
+            meta = load_meta(snapshot_dir / "META.json")
+            if meta is None:
+                continue
+            snapshots.append(snapshot_summary(snapshot_dir, worktree_id, meta))
+    snapshots.sort(
+        key=lambda item: (item.created_at or "", item.snapshot_id), reverse=True
+    )
+    return snapshots
+
+
+def iter_local_run_archives(repo_root: Path) -> list[LocalRunArchiveSummary]:
+    roots = [
+        (local_run_archives_root(repo_root), True),
+        (legacy_local_flows_root(repo_root), False),
+    ]
+    entries: list[tuple[float, LocalRunArchiveSummary]] = []
+    seen_run_ids: set[str] = set()
+    for root, treat_any_child_as_archive in roots:
+        if not root.exists() or not root.is_dir():
+            continue
+        for run_dir in sorted(root.iterdir(), key=lambda p: p.name):
+            if not run_dir.is_dir() or run_dir.name in seen_run_ids:
+                continue
+            tickets_dir = run_dir / "archived_tickets"
+            runs_dir = run_dir / "archived_runs"
+            has_tickets = tickets_dir.exists() and tickets_dir.is_dir()
+            has_runs = runs_dir.exists() and runs_dir.is_dir()
+            if treat_any_child_as_archive:
+                other_children = [
+                    child for child in run_dir.iterdir() if child.name != "META.json"
+                ]
+            else:
+                other_children = [
+                    child
+                    for child in run_dir.iterdir()
+                    if child.name
+                    in (_LOCAL_ARCHIVE_MARKERS - {"archived_tickets", "archived_runs"})
+                ]
+            if not has_tickets and not has_runs and not other_children:
+                continue
+            mtime_candidates = [
+                safe_mtime(tickets_dir) if has_tickets else None,
+                safe_mtime(runs_dir) if has_runs else None,
+                *[safe_mtime(child) for child in other_children],
+            ]
+            mtime = max([ts for ts in mtime_candidates if ts is not None], default=0.0)
+            summary = LocalRunArchiveSummary(
+                run_id=run_dir.name,
+                archived_at=format_mtime(mtime) if mtime else None,
+                has_tickets=has_tickets,
+                has_runs=has_runs,
+            )
+            entries.append((mtime, summary))
+            seen_run_ids.add(run_dir.name)
+    entries.sort(key=lambda item: (item[0], item[1].run_id), reverse=True)
+    return [entry[1] for entry in entries]
+
+
+def build_tree_nodes(root: Path, target: Path) -> list[ArchiveTreeNode]:
+    root_real = root.resolve(strict=False)
+    nodes: list[ArchiveTreeNode] = []
+    for child in sorted(target.iterdir(), key=lambda p: p.name):
+        try:
+            resolved = child.resolve(strict=False)
+            resolved.relative_to(root_real)
+        except ValueError:
+            continue
+
+        if child.is_dir():
+            node_type: Literal["file", "folder"] = "folder"
+            size_bytes: Optional[int] = None
+        else:
+            node_type = "file"
+            try:
+                size_bytes = child.stat().st_size
+            except OSError:
+                size_bytes = None
+
+        try:
+            node_path = resolved.relative_to(root_real).as_posix()
+        except ValueError:
+            continue
+
+        nodes.append(
+            ArchiveTreeNode(
+                path=node_path,
+                name=child.name,
+                type=node_type,
+                size_bytes=size_bytes,
+                mtime=safe_mtime(child),
+            )
+        )
+    return nodes
+
+
+def list_tree(snapshot_root: Path, rel_path: str) -> ArchiveTreeResponse:
+    target, rel_posix = normalize_archive_rel_path(snapshot_root, rel_path)
+    if not target.exists():
+        raise FileNotFoundError("path not found")
+    if not target.is_dir():
+        raise ValueError("path is not a directory")
+
+    nodes = build_tree_nodes(snapshot_root, target)
+    return ArchiveTreeResponse(path=rel_posix, nodes=nodes)
+
+
+def resolve_snapshot_root(
+    repo_root: Path,
+    snapshot_id: str,
+    worktree_repo_id: Optional[str] = None,
+) -> tuple[Path, str]:
+    snapshot_id = normalize_component(snapshot_id, "snapshot_id")
+    worktrees_root = archive_worktrees_root(repo_root)
+    if not worktrees_root.exists():
+        raise FileNotFoundError("archive root missing")
+
+    matches: list[tuple[str, Path]] = []
+    if worktree_repo_id:
+        worktree_repo_id = normalize_component(worktree_repo_id, "worktree_repo_id")
+        candidate = worktrees_root / worktree_repo_id / snapshot_id
+        if candidate.exists() and candidate.is_dir():
+            matches.append((worktree_repo_id, candidate))
+    else:
+        for worktree_dir in sorted(worktrees_root.iterdir(), key=lambda p: p.name):
+            if not worktree_dir.is_dir():
+                continue
+            worktree_id = worktree_dir.name
+            candidate = worktree_dir / snapshot_id
+            if candidate.exists() and candidate.is_dir():
+                matches.append((worktree_id, candidate))
+
+    if not matches:
+        raise FileNotFoundError("snapshot not found")
+    if len(matches) > 1:
+        raise RuntimeError("snapshot id ambiguous")
+
+    worktree_id, snapshot_root = matches[0]
+    resolved_root = snapshot_root.resolve(strict=False)
+    archive_root = worktrees_root.resolve(strict=False)
+    try:
+        resolved_root.relative_to(archive_root)
+    except ValueError:
+        raise ValueError("invalid snapshot path") from None
+    return resolved_root, worktree_id
+
+
+def resolve_local_run_root(repo_root: Path, run_id: str) -> Path:
+    def _resolve_candidate(base_root: Path) -> Optional[Path]:
+        candidate = base_root / run_id
+        if not candidate.exists() or not candidate.is_dir():
+            return None
+        resolved_root = candidate.resolve(strict=False)
+        archive_root = base_root.resolve(strict=False)
+        try:
+            resolved_root.relative_to(archive_root)
+        except ValueError:
+            raise ValueError("invalid run archive path") from None
+        return resolved_root
+
+    run_id = normalize_component(run_id, "run_id")
+    primary_root = local_run_archives_root(repo_root)
+    primary = _resolve_candidate(primary_root)
+    if primary is not None:
+        return primary
+    legacy_root = legacy_local_flows_root(repo_root)
+    legacy = _resolve_candidate(legacy_root)
+    if legacy is not None:
+        return legacy
+    raise FileNotFoundError("run archive not found")

@@ -17,13 +17,9 @@ The UI contract is intentionally filesystem-backed:
 from __future__ import annotations
 
 import logging
-import os
-import re
 import sqlite3
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import quote
 
 import yaml
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
@@ -34,7 +30,7 @@ from ....core.flows.failure_diagnostics import (
     format_failure_summary,
     get_failure_payload,
 )
-from ....core.flows.models import FlowRunRecord, FlowRunStatus
+from ....core.flows.models import FlowRunStatus
 from ....core.flows.store import FlowStore
 from ....core.flows.workspace_root import resolve_ticket_flow_workspace_root
 from ....core.utils import find_repo_root
@@ -46,6 +42,15 @@ from ....tickets.replies import (
     next_reply_seq,
     parse_user_reply,
     resolve_reply_paths,
+)
+from .messages_helpers import (
+    collect_entry_files,
+    iter_seq_dirs,
+    safe_attachment_name,
+    ticket_state_snapshot,
+)
+from .messages_helpers import (
+    timestamp as _timestamp,
 )
 
 _logger = logging.getLogger(__name__)
@@ -62,79 +67,27 @@ def _resolve_workspace_root(record_input: dict[str, Any], repo_root: Path) -> Pa
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
-def _timestamp(path: Path) -> Optional[str]:
+def _get_durable_writes(repo_root: Path) -> bool:
     try:
-        return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat()
-    except OSError:
-        return None
-
-
-def _safe_attachment_name(name: str) -> str:
-    base = os.path.basename(name or "").strip()
-    if not base:
-        raise ValueError("Missing attachment filename")
-    if base.lower() == "user_reply.md":
-        raise ValueError("Attachment filename reserved: USER_REPLY.md")
-    if not re.fullmatch(r"[A-Za-z0-9._-]+", base):
-        raise ValueError(
-            "Invalid attachment filename; use only letters, digits, dot, underscore, dash"
-        )
-    return base
-
-
-def _iter_seq_dirs(history_dir: Path) -> list[tuple[int, Path]]:
-    if not history_dir.exists() or not history_dir.is_dir():
-        return []
-    out: list[tuple[int, Path]] = []
-    try:
-        for child in history_dir.iterdir():
-            try:
-                if not child.is_dir():
-                    continue
-                name = child.name
-                if not (len(name) == 4 and name.isdigit()):
-                    continue
-                out.append((int(name), child))
-            except OSError:
-                continue
-    except OSError:
-        return []
-    out.sort(key=lambda x: x[0])
-    return out
+        return load_repo_config(repo_root).durable_writes
+    except ConfigError:
+        return False
 
 
 def _collect_dispatch_history(
     *, repo_root: Path, run_id: str, record_input: dict[str, Any]
 ) -> list[dict[str, Any]]:
-    """Collect all dispatches from the dispatch history directory."""
     workspace_root = _resolve_workspace_root(record_input, repo_root)
     outbox_paths = resolve_outbox_paths(workspace_root=workspace_root, run_id=run_id)
     history: list[dict[str, Any]] = []
-    for seq, entry_dir in reversed(_iter_seq_dirs(outbox_paths.dispatch_history_dir)):
+    for seq, entry_dir in reversed(iter_seq_dirs(outbox_paths.dispatch_history_dir)):
         dispatch_path = entry_dir / "DISPATCH.md"
         dispatch, errors = parse_dispatch(dispatch_path)
-        files: list[dict[str, Any]] = []
-        try:
-            for child in sorted(entry_dir.iterdir(), key=lambda p: p.name):
-                try:
-                    if child.name.startswith("."):
-                        continue
-                    if child.name == "DISPATCH.md":
-                        continue
-                    if child.is_dir():
-                        continue
-                    rel = child.name
-                    url = f"api/flows/{run_id}/dispatch_history/{seq:04d}/{quote(rel)}"
-                    size: Optional[int] = None
-                    try:
-                        size = child.stat().st_size
-                    except OSError:
-                        size = None
-                    files.append({"name": child.name, "url": url, "size": size})
-                except OSError:
-                    continue
-        except OSError:
-            files = []
+        files = collect_entry_files(
+            entry_dir,
+            skip_name="DISPATCH.md",
+            url_prefix=f"api/flows/{run_id}/dispatch_history/{seq:04d}",
+        )
         created_at = _timestamp(dispatch_path) or _timestamp(entry_dir)
         history.append(
             {
@@ -165,35 +118,18 @@ def _collect_reply_history(
     workspace_root = _resolve_workspace_root(record_input, repo_root)
     reply_paths = resolve_reply_paths(workspace_root=workspace_root, run_id=run_id)
     history: list[dict[str, Any]] = []
-    for seq, entry_dir in reversed(_iter_seq_dirs(reply_paths.reply_history_dir)):
+    for seq, entry_dir in reversed(iter_seq_dirs(reply_paths.reply_history_dir)):
         reply_path = entry_dir / "USER_REPLY.md"
         reply, errors = (
             parse_user_reply(reply_path)
             if reply_path.exists()
             else (None, ["USER_REPLY.md missing"])
         )
-        files: list[dict[str, Any]] = []
-        try:
-            for child in sorted(entry_dir.iterdir(), key=lambda p: p.name):
-                try:
-                    if child.name.startswith("."):
-                        continue
-                    if child.name == "USER_REPLY.md":
-                        continue
-                    if child.is_dir():
-                        continue
-                    rel = child.name
-                    url = f"api/flows/{run_id}/reply_history/{seq:04d}/{quote(rel)}"
-                    size: Optional[int] = None
-                    try:
-                        size = child.stat().st_size
-                    except OSError:
-                        size = None
-                    files.append({"name": child.name, "url": url, "size": size})
-                except OSError:
-                    continue
-        except OSError:
-            files = []
+        files = collect_entry_files(
+            entry_dir,
+            skip_name="USER_REPLY.md",
+            url_prefix=f"api/flows/{run_id}/reply_history/{seq:04d}",
+        )
         created_at = _timestamp(reply_path) or _timestamp(entry_dir)
         history.append(
             {
@@ -212,31 +148,6 @@ def _collect_reply_history(
     return history
 
 
-def _ticket_state_snapshot(record: FlowRunRecord) -> dict[str, Any]:
-    state = record.state if isinstance(record.state, dict) else {}
-    ticket_state = state.get("ticket_engine") if isinstance(state, dict) else {}
-    if not isinstance(ticket_state, dict):
-        ticket_state = {}
-    allowed_keys = {
-        "current_ticket",
-        "total_turns",
-        "ticket_turns",
-        "dispatch_seq",
-        "reply_seq",
-        "reason",
-        "status",
-    }
-    return {k: ticket_state.get(k) for k in allowed_keys if k in ticket_state}
-
-
-def _get_durable_writes(repo_root: Path) -> bool:
-    """Get durable_writes from repo config, defaulting to False if uninitialized."""
-    try:
-        return load_repo_config(repo_root).durable_writes
-    except ConfigError:
-        return False
-
-
 def build_messages_routes() -> APIRouter:
     router = APIRouter()
 
@@ -252,15 +163,10 @@ def build_messages_routes() -> APIRouter:
                     flow_type="ticket_flow", status=FlowRunStatus.PAUSED
                 )
         except (sqlite3.Error, OSError, ValueError, KeyError):
-            # Corrupt flows db should not 500 the UI.
             return {"active": False}
         if not paused:
             return {"active": False}
 
-        # Walk paused runs (newest first as returned by FlowStore) until we find
-        # one with at least one archived dispatch. This avoids hiding
-        # older paused runs that do have history when the newest paused run
-        # hasn't yet written DISPATCH.md.
         for record in paused:
             history = _collect_dispatch_history(
                 repo_root=repo_root,
@@ -327,7 +233,7 @@ def build_messages_routes() -> APIRouter:
                     "latest": latest,
                     "dispatch_count": len(dispatch_history),
                     "reply_count": len(reply_history),
-                    "ticket_state": _ticket_state_snapshot(record),
+                    "ticket_state": ticket_state_snapshot(record.state),
                     "failure": failure_payload,
                     "failure_summary": failure_summary,
                     "open_url": f"?tab=inbox&run_id={record.id}",
@@ -384,7 +290,7 @@ def build_messages_routes() -> APIRouter:
             "reply_history": reply_history,
             "dispatch_count": len(dispatch_history),
             "reply_count": len(reply_history),
-            "ticket_state": _ticket_state_snapshot(record),
+            "ticket_state": ticket_state_snapshot(record.state),
         }
 
     @router.post("/api/messages/{run_id}/reply")
@@ -392,10 +298,6 @@ def build_messages_routes() -> APIRouter:
         run_id: str,
         body: str = Form(""),
         title: Optional[str] = Form(None),
-        # NOTE: FastAPI/starlette will supply either a single UploadFile or a list
-        # depending on how is multipart form is encoded. Declaring this as a
-        # concrete list avoids a common 422 where a single file upload is treated
-        # as a non-list value.
         files: list[UploadFile] = File(default=[]),  # noqa: B006,B008
     ):
         repo_root = find_repo_root()
@@ -440,7 +342,7 @@ def build_messages_routes() -> APIRouter:
 
         for upload in files:
             try:
-                filename = _safe_attachment_name(upload.filename or "")
+                filename = safe_attachment_name(upload.filename or "")
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             dest = reply_paths.reply_dir / filename
