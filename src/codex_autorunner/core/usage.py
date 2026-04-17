@@ -131,9 +131,23 @@ class _OpenCodeAggregationStats:
     aggregation_ms: int = 0
 
 
-def _build_codex_confidence(events: int) -> dict[str, object]:
-    confidence = "high" if events > 0 else "none"
-    return {"source": "codex_cache", "confidence": confidence, "events": events}
+def _build_codex_confidence(
+    events: int, heuristic_events: int = 0
+) -> dict[str, object]:
+    if events == 0:
+        confidence = "none"
+    elif heuristic_events == events:
+        confidence = "low"
+    elif heuristic_events > 0:
+        confidence = "mixed"
+    else:
+        confidence = "high"
+    return {
+        "source": "codex_cache",
+        "confidence": confidence,
+        "events": events,
+        "heuristic_events": heuristic_events,
+    }
 
 
 def _build_opencode_confidence(
@@ -854,12 +868,15 @@ def _summarize_codex_hub_usage(
     per_repo: Dict[str, UsageSummary] = {
         repo_id: UsageSummary(TokenTotals(), 0, None) for repo_id, _ in repo_map
     }
+    heuristic_counts: Dict[str, int] = {repo_id: 0 for repo_id, _ in repo_map}
     unmatched = UsageSummary(TokenTotals(), 0, None)
     _match_repo, _heuristic_match_base = _build_repo_matchers(repo_map)
     for event in iter_token_events(codex_home, since=since, until=until):
         repo_id = _match_repo(event.cwd)
         if repo_id is None:
             repo_id = _heuristic_match_base(event.cwd)
+            if repo_id is not None:
+                heuristic_counts[repo_id] += 1
         if repo_id is None:
             unmatched.totals.add(event.delta)
             unmatched.events += 1
@@ -872,7 +889,9 @@ def _summarize_codex_hub_usage(
         if event.rate_limits:
             summary.latest_rate_limits = event.rate_limits
     for _repo_id, summary in per_repo.items():
-        summary.source_confidence = {"codex": _build_codex_confidence(summary.events)}
+        summary.source_confidence = {
+            "codex": _build_codex_confidence(summary.events, heuristic_counts[_repo_id])
+        }
     unmatched.source_confidence = {"codex": _build_codex_confidence(unmatched.events)}
     return per_repo, unmatched
 
@@ -1138,12 +1157,16 @@ def _is_rate_limits_newer(
 class _SummaryAccumulator:
     totals: TokenTotals = dataclasses.field(default_factory=TokenTotals)
     events: int = 0
+    heuristic_events: int = 0
     latest_rate_limits: Optional[Dict[str, Any]] = None
     latest_rate_limits_pos: Optional[Dict[str, Any]] = None
 
-    def add_entry(self, entry: Dict[str, Any]) -> None:
+    def add_entry(self, entry: Dict[str, Any], *, heuristic: bool = False) -> None:
         self.totals.add(_coerce_totals(entry.get("totals")))
-        self.events += int(entry.get("events", 0) or 0)
+        entry_events = int(entry.get("events", 0) or 0)
+        self.events += entry_events
+        if heuristic:
+            self.heuristic_events += entry_events
         pos = entry.get("latest_rate_limits_pos")
         if pos and _is_rate_limits_newer(pos, self.latest_rate_limits_pos):
             self.latest_rate_limits = entry.get("latest_rate_limits")
@@ -1753,19 +1776,24 @@ class UsageSeriesCache:
                 logger.debug("Failed to create Path from cwd %r: %s", cwd, exc)
                 cwd_path = None
             repo_id = _match_repo(cwd_path)
+            matched_by_heuristic = False
             if repo_id is None:
                 repo_id = _heuristic_match_base(cwd_path)
+                if repo_id is not None:
+                    matched_by_heuristic = True
             if repo_id is None:
                 unmatched.add_entry(entry)
             else:
-                per_repo[repo_id].add_entry(entry)
+                per_repo[repo_id].add_entry(entry, heuristic=matched_by_heuristic)
 
         per_repo_summary = {
             repo_id: UsageSummary(
                 totals=acc.totals,
                 events=acc.events,
                 latest_rate_limits=acc.latest_rate_limits,
-                source_confidence={"codex": _build_codex_confidence(acc.events)},
+                source_confidence={
+                    "codex": _build_codex_confidence(acc.events, acc.heuristic_events)
+                },
             )
             for repo_id, acc in per_repo.items()
         }
@@ -2337,7 +2365,7 @@ def get_repo_usage_summary_cached(
         events=summary.events + opencode_summary.events,
         latest_rate_limits=summary.latest_rate_limits,
         source_confidence=_merge_confidence(
-            {"codex": _build_codex_confidence(summary.events)},
+            summary.source_confidence,
             opencode_summary.source_confidence,
         ),
     )
@@ -2414,7 +2442,7 @@ def get_hub_usage_summary_cached(
                 events=summary.events + extra.events,
                 latest_rate_limits=summary.latest_rate_limits,
                 source_confidence=_merge_confidence(
-                    {"codex": _build_codex_confidence(summary.events)},
+                    summary.source_confidence,
                     extra.source_confidence,
                 ),
             )
@@ -2422,13 +2450,5 @@ def get_hub_usage_summary_cached(
             merged.totals.add(extra.totals)
             merged_per_repo[repo_id] = merged
         else:
-            summary.source_confidence = _merge_confidence(
-                summary.source_confidence,
-                {"codex": _build_codex_confidence(summary.events)},
-            )
             merged_per_repo[repo_id] = summary
-    unmatched.source_confidence = _merge_confidence(
-        unmatched.source_confidence,
-        {"codex": _build_codex_confidence(unmatched.events)},
-    )
     return merged_per_repo, unmatched, status

@@ -35,6 +35,7 @@ All durable artifacts must live under one of these roots:
 - `flows/<run_id>/chat/outbound.jsonl` - Mirrored outbound chat events for a flow run
 - `tickets/ingest_state.json` - Canonical ticket-ingest receipt (`ingested`, `ingested_at`, `source`)
 - `filebox/outbox/` - Agent-produced artifacts, including `car render` screenshot/observe/demo outputs
+- `usage/opencode_turn_usage.jsonl` - Per-turn OpenCode usage snapshots (canonical, high-confidence source for repo usage reports)
 
 **Resolution**: `resolve_repo_state_root(repo_root)` in `core/state_roots.py`
 

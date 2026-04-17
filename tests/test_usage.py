@@ -233,6 +233,11 @@ def test_hub_usage_heuristic_rolls_worktree_into_base(tmp_path):
     assert per_repo["codex-autorunner"].totals.total_tokens == 15
     assert per_repo["codex-autorunner"].events == 1
     assert unmatched.events == 0
+    codex_conf = (per_repo["codex-autorunner"].source_confidence or {}).get(
+        "codex"
+    ) or {}
+    assert codex_conf.get("confidence") == "low"
+    assert codex_conf.get("heuristic_events") == 1
 
 
 def test_hub_usage_heuristic_skips_unrelated_double_dash(tmp_path):
@@ -799,6 +804,9 @@ class TestWorktreeHeuristicAttribution:
 
         assert per_repo["my-repo"].totals.total_tokens == 15
         assert unmatched.totals.total_tokens == 0
+        codex_conf = (per_repo["my-repo"].source_confidence or {}).get("codex") or {}
+        assert codex_conf.get("confidence") == "low"
+        assert codex_conf.get("heuristic_events") == 1
 
     def test_unrelated_double_dash_stays_unmatched(self, tmp_path) -> None:
         base_repo = tmp_path / "my-repo"
@@ -918,6 +926,10 @@ class TestWorktreeHeuristicAttribution:
 
         assert per_repo["my-repo"].totals.total_tokens == 11
         assert unmatched.totals.total_tokens == 0
+        codex_conf = (per_repo["my-repo"].source_confidence or {}).get("codex") or {}
+        assert codex_conf.get("confidence") == "mixed"
+        assert codex_conf.get("heuristic_events") == 1
+        assert codex_conf.get("events") == 2
 
     def test_unmatched_usage_stays_visible(self, tmp_path) -> None:
         hub_repo = tmp_path / "hub-repo"
@@ -962,6 +974,53 @@ class TestWorktreeHeuristicAttribution:
         assert per_repo["hub-repo"].totals.total_tokens == 0
         assert unmatched.totals.total_tokens == 30
         assert unmatched.events == 1
+        codex_conf = (unmatched.source_confidence or {}).get("codex") or {}
+        assert codex_conf.get("heuristic_events") == 0
+
+    def test_exact_match_has_high_confidence(self, tmp_path) -> None:
+        base_repo = tmp_path / "my-repo"
+        base_repo.mkdir()
+        codex_home = tmp_path / "codex"
+
+        _write_session(
+            codex_home,
+            base_repo,
+            [
+                {
+                    "timestamp": "2025-12-01T00:01:00Z",
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "total_token_usage": {
+                                "input_tokens": 10,
+                                "cached_input_tokens": 0,
+                                "output_tokens": 5,
+                                "reasoning_output_tokens": 0,
+                                "total_tokens": 15,
+                            },
+                            "last_token_usage": {
+                                "input_tokens": 10,
+                                "cached_input_tokens": 0,
+                                "output_tokens": 5,
+                                "reasoning_output_tokens": 0,
+                                "total_tokens": 15,
+                            },
+                        },
+                    },
+                }
+            ],
+        )
+
+        per_repo, unmatched = summarize_hub_usage(
+            [("my-repo", base_repo)],
+            codex_home=codex_home,
+        )
+
+        assert per_repo["my-repo"].totals.total_tokens == 15
+        codex_conf = (per_repo["my-repo"].source_confidence or {}).get("codex") or {}
+        assert codex_conf.get("confidence") == "high"
+        assert codex_conf.get("heuristic_events") == 0
 
 
 class TestOpencodeCumulativeFallback:
