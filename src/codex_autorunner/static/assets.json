@@ -83,6 +83,21 @@
       "path": "generated/hub.js"
     },
     {
+      "path": "generated/hubActions.js"
+    },
+    {
+      "path": "generated/hubCache.js"
+    },
+    {
+      "path": "generated/hubFilters.js"
+    },
+    {
+      "path": "generated/hubRepoCards.js"
+    },
+    {
+      "path": "generated/hubTypes.js"
+    },
+    {
       "path": "generated/liveUpdates.js"
     },
     {
@@ -128,10 +143,25 @@
       "path": "generated/terminalManager.js"
     },
     {
+      "path": "generated/terminalMobile.js"
+    },
+    {
       "path": "generated/terminalReplay.js"
     },
     {
       "path": "generated/terminalSession.js"
+    },
+    {
+      "path": "generated/terminalTextInput.js"
+    },
+    {
+      "path": "generated/terminalTranscript.js"
+    },
+    {
+      "path": "generated/terminalTypes.js"
+    },
+    {
+      "path": "generated/terminalVoice.js"
     },
     {
       "path": "generated/ticketChatActions.js"

@@ -491,19 +491,25 @@ test("agent workspace cards render runtime, managed path, and lifecycle actions"
 test("pinned repos sort before unpinned repos in renderRepos source", async () => {
   const fs = await import("node:fs");
   const path = await import("node:path");
-  const content = fs.readFileSync(
-    path.join(process.cwd(), "src", "codex_autorunner", "static_src", "hub.ts"),
+
+  const repoCardsSource = fs.readFileSync(
+    path.join(process.cwd(), "src", "codex_autorunner", "static_src", "hubRepoCards.ts"),
     "utf8"
   );
 
-  const sortStart = content.indexOf("orderedGroups = groups");
-  assert.ok(sortStart !== -1, "expected orderedGroups sort");
+  const sortStart = repoCardsSource.indexOf("orderedGroups = groups");
+  assert.ok(sortStart !== -1, "expected orderedGroups sort in hubRepoCards");
 
-  const pinnedSort = content.indexOf("if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;", sortStart);
-  assert.ok(pinnedSort !== -1, "expected pinned-first sort comparison");
+  const pinnedSort = repoCardsSource.indexOf("if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;", sortStart);
+  assert.ok(pinnedSort !== -1, "expected pinned-first sort comparison in hubRepoCards");
 
-  const pinnedSetInBuild = content.indexOf("pinned: pinnedParentRepoIds.has(group.base.id)");
-  assert.ok(pinnedSetInBuild !== -1 && pinnedSetInBuild < sortStart, "expected pinned flag from pinnedParentRepoIds before sort");
+  const filtersSource = fs.readFileSync(
+    path.join(process.cwd(), "src", "codex_autorunner", "static_src", "hubFilters.ts"),
+    "utf8"
+  );
+
+  const pinnedSetInBuild = filtersSource.indexOf("pinned: pinnedParentRepoIds.has(group.base.id)");
+  assert.ok(pinnedSetInBuild !== -1, "expected pinned flag from pinnedParentRepoIds in hubFilters");
 });
 
 test("hub bootstrap cache does not act as authoritative source for repo state", () => {
