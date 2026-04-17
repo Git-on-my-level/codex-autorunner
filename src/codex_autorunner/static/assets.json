@@ -179,6 +179,18 @@
       "path": "generated/ticketEditor.js"
     },
     {
+      "path": "generated/ticketEditorFrontmatter.js"
+    },
+    {
+      "path": "generated/ticketFlowState.js"
+    },
+    {
+      "path": "generated/ticketFlowStream.js"
+    },
+    {
+      "path": "generated/ticketFlowView.js"
+    },
+    {
       "path": "generated/tickets.js"
     },
     {

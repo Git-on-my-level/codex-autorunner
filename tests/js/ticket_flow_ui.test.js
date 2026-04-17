@@ -311,11 +311,11 @@ test("setLastSeenSeq is monotonically increasing in source code", async () => {
   const fs = await import("node:fs");
   const path = await import("node:path");
   const content = fs.readFileSync(
-    path.join(process.cwd(), "src", "codex_autorunner", "static_src", "tickets.ts"),
+    path.join(process.cwd(), "src", "codex_autorunner", "static_src", "ticketFlowState.ts"),
     "utf8"
   );
 
-  const setLastSeenFn = content.indexOf("function setLastSeenSeq(");
+  const setLastSeenFn = content.indexOf("export function setLastSeenSeq(");
   assert.ok(setLastSeenFn !== -1, "expected setLastSeenSeq function");
 
   const monotonicGuard = content.indexOf("if (current !== undefined && seq <= current) return;", setLastSeenFn);
