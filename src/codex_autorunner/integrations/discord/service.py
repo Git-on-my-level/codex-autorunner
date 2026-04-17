@@ -493,6 +493,9 @@ DISCORD_TURN_PROGRESS_MAX_ACTIONS = 12
 DISCORD_TYPING_HEARTBEAT_INTERVAL_SECONDS = 5.0
 DISCORD_BACKGROUND_TASK_SHUTDOWN_GRACE_SECONDS = 10.0
 DISCORD_INTERACTION_COLD_START_WINDOW_SECONDS = 120.0
+DISCORD_HUB_HANDSHAKE_RETRY_WINDOW_SECONDS = 45.0
+DISCORD_HUB_HANDSHAKE_RETRY_DELAY_SECONDS = 1.0
+DISCORD_HUB_HANDSHAKE_RETRY_MAX_DELAY_SECONDS = 5.0
 SHELL_OUTPUT_TRUNCATION_SUFFIX = "\n...[truncated]..."
 DISCORD_ATTACHMENT_MAX_BYTES = 100_000_000
 THREAD_LIST_MAX_PAGES = 5
@@ -854,6 +857,15 @@ class DiscordBotService:
             on_scheduler_conversation_idle=self._wake_dispatcher_conversation,
         )
         self._service_started_at_monotonic: Optional[float] = None
+        self._hub_handshake_retry_window_seconds = (
+            DISCORD_HUB_HANDSHAKE_RETRY_WINDOW_SECONDS
+        )
+        self._hub_handshake_retry_delay_seconds = (
+            DISCORD_HUB_HANDSHAKE_RETRY_DELAY_SECONDS
+        )
+        self._hub_handshake_retry_max_delay_seconds = (
+            DISCORD_HUB_HANDSHAKE_RETRY_MAX_DELAY_SECONDS
+        )
 
     async def run_forever(self) -> None:
         self._service_started_at_monotonic = time.monotonic()
@@ -953,32 +965,41 @@ class DiscordBotService:
             )
             return False
 
-        try:
-            response = await self._hub_client.handshake(
-                _HandshakeRequest(
-                    client_name="discord",
+        startup_retry_deadline: Optional[float] = None
+        if self._service_started_at_monotonic is not None:
+            startup_retry_deadline = (
+                self._service_started_at_monotonic
+                + self._hub_handshake_retry_window_seconds
+            )
+        delay_seconds = self._hub_handshake_retry_delay_seconds
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                response = await self._hub_client.handshake(
+                    _HandshakeRequest(
+                        client_name="discord",
+                        client_api_version=_CONTROL_PLANE_API_VERSION,
+                        expected_schema_generation=expected_schema_generation,
+                    )
+                )
+                compatibility = evaluate_handshake_compatibility(
+                    response,
                     client_api_version=_CONTROL_PLANE_API_VERSION,
                     expected_schema_generation=expected_schema_generation,
                 )
-            )
-            compatibility = evaluate_handshake_compatibility(
-                response,
-                client_api_version=_CONTROL_PLANE_API_VERSION,
-                expected_schema_generation=expected_schema_generation,
-            )
-            self._hub_handshake_compatibility = compatibility
-            if compatibility.compatible:
-                log_event(
-                    self._logger,
-                    logging.INFO,
-                    "discord.hub_control_plane.handshake_ok",
-                    hub_root=str(self._config.root),
-                    api_version=response.api_version,
-                    schema_generation=response.schema_generation,
-                    expected_schema_generation=expected_schema_generation,
-                )
-                return True
-            else:
+                self._hub_handshake_compatibility = compatibility
+                if compatibility.compatible:
+                    log_event(
+                        self._logger,
+                        logging.INFO,
+                        "discord.hub_control_plane.handshake_ok",
+                        hub_root=str(self._config.root),
+                        api_version=response.api_version,
+                        schema_generation=response.schema_generation,
+                        expected_schema_generation=expected_schema_generation,
+                    )
+                    return True
                 log_event(
                     self._logger,
                     logging.ERROR,
@@ -991,28 +1012,52 @@ class DiscordBotService:
                     expected_schema_generation=compatibility.expected_schema_generation,
                 )
                 return False
-        except HubControlPlaneError as exc:
-            log_event(
-                self._logger,
-                logging.ERROR,
-                "discord.hub_control_plane.handshake_failed",
-                hub_root=str(self._config.root),
-                error_code=exc.code,
-                retryable=exc.retryable,
-                message=str(exc),
-                expected_schema_generation=expected_schema_generation,
-            )
-            return False
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.ERROR,
-                "discord.hub_control_plane.handshake_unexpected_error",
-                hub_root=str(self._config.root),
-                exc=exc,
-                expected_schema_generation=expected_schema_generation,
-            )
-            return False
+            except HubControlPlaneError as exc:
+                should_retry = (
+                    startup_retry_deadline is not None
+                    and exc.retryable
+                    and exc.code in {"transport_failure", "hub_unavailable"}
+                    and time.monotonic() < startup_retry_deadline
+                )
+                if should_retry:
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "discord.hub_control_plane.handshake_retrying",
+                        hub_root=str(self._config.root),
+                        attempt=attempt,
+                        delay_seconds=round(delay_seconds, 2),
+                        error_code=exc.code,
+                        message=str(exc),
+                        expected_schema_generation=expected_schema_generation,
+                    )
+                    await asyncio.sleep(delay_seconds)
+                    delay_seconds = min(
+                        max(delay_seconds, 0.1) * 2.0,
+                        self._hub_handshake_retry_max_delay_seconds,
+                    )
+                    continue
+                log_event(
+                    self._logger,
+                    logging.ERROR,
+                    "discord.hub_control_plane.handshake_failed",
+                    hub_root=str(self._config.root),
+                    error_code=exc.code,
+                    retryable=exc.retryable,
+                    message=str(exc),
+                    expected_schema_generation=expected_schema_generation,
+                )
+                return False
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.ERROR,
+                    "discord.hub_control_plane.handshake_unexpected_error",
+                    hub_root=str(self._config.root),
+                    exc=exc,
+                    expected_schema_generation=expected_schema_generation,
+                )
+                return False
 
     @property
     def hub_client(self) -> Optional[HttpHubControlPlaneClient]:

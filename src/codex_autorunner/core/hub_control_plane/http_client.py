@@ -165,6 +165,13 @@ class HttpHubControlPlaneClient(HubControlPlaneClient):
         with contextlib.suppress(RuntimeError, OSError):
             await client.aclose()
 
+    @staticmethod
+    def _format_transport_error(exc: httpx.RequestError) -> str:
+        message = str(exc).strip()
+        if message:
+            return message
+        return exc.__class__.__name__
+
     async def _request(
         self,
         *,
@@ -189,7 +196,8 @@ class HttpHubControlPlaneClient(HubControlPlaneClient):
         except httpx.RequestError as exc:
             raise HubControlPlaneError(
                 "transport_failure",
-                f"Hub control-plane transport request failed: {exc}",
+                "Hub control-plane transport request failed: "
+                f"{self._format_transport_error(exc)}",
                 details={"path": path, "method": method},
             ) from exc
         try:
@@ -245,7 +253,8 @@ class HttpHubControlPlaneClient(HubControlPlaneClient):
         except httpx.RequestError as exc:
             raise HubControlPlaneError(
                 "transport_failure",
-                f"Hub control-plane transport request failed: {exc}",
+                "Hub control-plane transport request failed: "
+                f"{self._format_transport_error(exc)}",
                 details={"path": path, "method": method},
             ) from exc
         if response.is_success:

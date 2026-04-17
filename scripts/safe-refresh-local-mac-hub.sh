@@ -930,6 +930,22 @@ _start_service() {
   launchctl kickstart -k "${domain}" >/dev/null
 }
 
+_kickstart_service() {
+  local service_domain service_label allow_failure output
+  service_domain="$1"
+  service_label="$2"
+  allow_failure="${3:-false}"
+  output="$(
+    launchctl kickstart -k "${service_domain}" 2>&1 >/dev/null
+  )" && return 0
+  if [[ "${allow_failure}" == "true" ]]; then
+    echo "Warning: could not kickstart service \"${service_label}\"; continuing and deferring to health checks. ${output}" >&2
+    return 0
+  fi
+  echo "Could not kickstart service \"${service_label}\": ${output}" >&2
+  return 1
+}
+
 _reload() {
   _stop_service
   _start_service
@@ -970,7 +986,7 @@ _reload_telegram() {
       fi
     fi
     launchctl load -w "${TELEGRAM_PLIST_PATH}" >/dev/null
-    launchctl kickstart -k "${telegram_domain}" >/dev/null
+    _kickstart_service "${telegram_domain}" "${TELEGRAM_LABEL}" "true"
     return 0
   fi
 
@@ -1016,7 +1032,7 @@ _reload_telegram() {
     fi
   fi
   launchctl load -w "${TELEGRAM_PLIST_PATH}" >/dev/null
-  launchctl kickstart -k "${telegram_domain}" >/dev/null
+  _kickstart_service "${telegram_domain}" "${TELEGRAM_LABEL}" "true"
 }
 
 _reload_discord() {
@@ -1054,7 +1070,7 @@ _reload_discord() {
       fi
     fi
     launchctl load -w "${DISCORD_PLIST_PATH}" >/dev/null
-    launchctl kickstart -k "${discord_domain}" >/dev/null
+    _kickstart_service "${discord_domain}" "${DISCORD_LABEL}" "true"
     return 0
   fi
 
@@ -1109,7 +1125,7 @@ _reload_discord() {
     fi
   fi
   launchctl load -w "${DISCORD_PLIST_PATH}" >/dev/null
-  launchctl kickstart -k "${discord_domain}" >/dev/null
+  _kickstart_service "${discord_domain}" "${DISCORD_LABEL}" "true"
 }
 
 _telegram_state() {

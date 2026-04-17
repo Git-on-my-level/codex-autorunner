@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import httpx
+import pytest
 
 from codex_autorunner.core.hub_control_plane import (
     ControlPlaneVersion,
@@ -459,3 +460,46 @@ async def test_http_client_uses_extended_timeout_for_workspace_setup_commands() 
             "timeout": None,
         }
     ]
+
+
+async def test_http_client_includes_exception_class_for_blank_transport_errors() -> (
+    None
+):
+    from codex_autorunner.core.hub_control_plane.http_client import (
+        HttpHubControlPlaneClient,
+    )
+
+    request = httpx.Request(
+        "POST", "http://localhost:9999/hub/api/control-plane/handshake"
+    )
+
+    class _FakeAsyncClient:
+        async def request(
+            self,
+            method: str,
+            path: str,
+            *,
+            json: dict[str, object] | None = None,
+            params: dict[str, object] | None = None,
+            timeout: float | None = None,
+        ) -> httpx.Response:
+            raise httpx.ReadTimeout("", request=request)
+
+    client = HttpHubControlPlaneClient(
+        base_url="http://localhost:9999",
+        http_client=_FakeAsyncClient(),  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(HubControlPlaneError) as exc_info:
+        await client.handshake(
+            HandshakeRequest(
+                client_name="discord",
+                client_api_version="1.0.0",
+                expected_schema_generation=1,
+            )
+        )
+
+    assert exc_info.value.code == "transport_failure"
+    assert (
+        str(exc_info.value) == "Hub control-plane transport request failed: ReadTimeout"
+    )

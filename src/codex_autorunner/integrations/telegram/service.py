@@ -146,6 +146,9 @@ from .voice import TelegramVoiceManager
 
 TICKET_FLOW_WATCH_INTERVAL_SECONDS = 20
 TYPING_HEARTBEAT_INTERVAL_SECONDS = 4.0
+TELEGRAM_HUB_HANDSHAKE_RETRY_WINDOW_SECONDS = 45.0
+TELEGRAM_HUB_HANDSHAKE_RETRY_DELAY_SECONDS = 1.0
+TELEGRAM_HUB_HANDSHAKE_RETRY_MAX_DELAY_SECONDS = 5.0
 _CURRENT_TELEGRAM_OPERATION_ID: contextvars.ContextVar[Optional[str]] = (
     contextvars.ContextVar("telegram_chat_operation_id", default=None)
 )
@@ -361,6 +364,16 @@ class TelegramBotService(
         self._voice_config = voice_config
         self._voice_service = voice_service
         self._housekeeping_config = housekeeping_config
+        self._startup_started_at_monotonic: Optional[float] = None
+        self._hub_handshake_retry_window_seconds = (
+            TELEGRAM_HUB_HANDSHAKE_RETRY_WINDOW_SECONDS
+        )
+        self._hub_handshake_retry_delay_seconds = (
+            TELEGRAM_HUB_HANDSHAKE_RETRY_DELAY_SECONDS
+        )
+        self._hub_handshake_retry_max_delay_seconds = (
+            TELEGRAM_HUB_HANDSHAKE_RETRY_MAX_DELAY_SECONDS
+        )
         if self._voice_service is None and voice_config is not None:
             try:
                 self._voice_service = VoiceService(voice_config, logger=self._logger)
@@ -913,6 +926,7 @@ class TelegramBotService(
         return self._turn_semaphore
 
     async def run_polling(self) -> None:
+        self._startup_started_at_monotonic = time.monotonic()
         handshake_ok = await self._perform_hub_handshake()
         if not handshake_ok:
             raise SystemExit(1)
@@ -934,32 +948,41 @@ class TelegramBotService(
             )
             return False
 
-        try:
-            response = await self._hub_client.handshake(
-                _HandshakeRequest(
-                    client_name="telegram",
+        startup_retry_deadline: Optional[float] = None
+        if self._startup_started_at_monotonic is not None:
+            startup_retry_deadline = (
+                self._startup_started_at_monotonic
+                + self._hub_handshake_retry_window_seconds
+            )
+        delay_seconds = self._hub_handshake_retry_delay_seconds
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                response = await self._hub_client.handshake(
+                    _HandshakeRequest(
+                        client_name="telegram",
+                        client_api_version=_CONTROL_PLANE_API_VERSION,
+                        expected_schema_generation=expected_schema_generation,
+                    )
+                )
+                compatibility = evaluate_handshake_compatibility(
+                    response,
                     client_api_version=_CONTROL_PLANE_API_VERSION,
                     expected_schema_generation=expected_schema_generation,
                 )
-            )
-            compatibility = evaluate_handshake_compatibility(
-                response,
-                client_api_version=_CONTROL_PLANE_API_VERSION,
-                expected_schema_generation=expected_schema_generation,
-            )
-            self._hub_handshake_compatibility = compatibility
-            if compatibility.compatible:
-                log_event(
-                    self._logger,
-                    logging.INFO,
-                    "telegram.hub_control_plane.handshake_ok",
-                    hub_root=str(self._hub_root or self._config.root),
-                    api_version=response.api_version,
-                    schema_generation=response.schema_generation,
-                    expected_schema_generation=expected_schema_generation,
-                )
-                return True
-            else:
+                self._hub_handshake_compatibility = compatibility
+                if compatibility.compatible:
+                    log_event(
+                        self._logger,
+                        logging.INFO,
+                        "telegram.hub_control_plane.handshake_ok",
+                        hub_root=str(self._hub_root or self._config.root),
+                        api_version=response.api_version,
+                        schema_generation=response.schema_generation,
+                        expected_schema_generation=expected_schema_generation,
+                    )
+                    return True
                 log_event(
                     self._logger,
                     logging.ERROR,
@@ -972,28 +995,52 @@ class TelegramBotService(
                     expected_schema_generation=compatibility.expected_schema_generation,
                 )
                 return False
-        except HubControlPlaneError as exc:
-            log_event(
-                self._logger,
-                logging.ERROR,
-                "telegram.hub_control_plane.handshake_failed",
-                hub_root=str(self._hub_root or self._config.root),
-                error_code=exc.code,
-                retryable=exc.retryable,
-                message=str(exc),
-                expected_schema_generation=expected_schema_generation,
-            )
-            return False
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.ERROR,
-                "telegram.hub_control_plane.handshake_unexpected_error",
-                hub_root=str(self._hub_root or self._config.root),
-                exc=exc,
-                expected_schema_generation=expected_schema_generation,
-            )
-            return False
+            except HubControlPlaneError as exc:
+                should_retry = (
+                    startup_retry_deadline is not None
+                    and exc.retryable
+                    and exc.code in {"transport_failure", "hub_unavailable"}
+                    and time.monotonic() < startup_retry_deadline
+                )
+                if should_retry:
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "telegram.hub_control_plane.handshake_retrying",
+                        hub_root=str(self._hub_root or self._config.root),
+                        attempt=attempt,
+                        delay_seconds=round(delay_seconds, 2),
+                        error_code=exc.code,
+                        message=str(exc),
+                        expected_schema_generation=expected_schema_generation,
+                    )
+                    await asyncio.sleep(delay_seconds)
+                    delay_seconds = min(
+                        max(delay_seconds, 0.1) * 2.0,
+                        self._hub_handshake_retry_max_delay_seconds,
+                    )
+                    continue
+                log_event(
+                    self._logger,
+                    logging.ERROR,
+                    "telegram.hub_control_plane.handshake_failed",
+                    hub_root=str(self._hub_root or self._config.root),
+                    error_code=exc.code,
+                    retryable=exc.retryable,
+                    message=str(exc),
+                    expected_schema_generation=expected_schema_generation,
+                )
+                return False
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.ERROR,
+                    "telegram.hub_control_plane.handshake_unexpected_error",
+                    hub_root=str(self._hub_root or self._config.root),
+                    exc=exc,
+                    expected_schema_generation=expected_schema_generation,
+                )
+                return False
 
     async def _dispatch_update(self, update: TelegramUpdate) -> None:
         await dispatch_update(self, update)
