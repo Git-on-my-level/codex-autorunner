@@ -1,5 +1,6 @@
 """Tests for PMA CLI commands."""
 
+import itertools
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -1589,7 +1590,11 @@ def test_pma_cli_thread_send_timeout_warns_before_retry_when_status_unclear(
         _ = method, url, payload, token_env, timeout
         raise httpx.TimeoutException("timed out")
 
-    status_payloads = iter(
+    # Cycle status payloads: recovery polls until the deadline; Typer/Click may
+    # call time.monotonic() extra times on some Python versions, so a fixed
+    # two-value iterator for monotonic can shift the deadline and exhaust a
+    # finite status iterator (StopIteration).
+    status_payloads = itertools.cycle(
         [
             {
                 "thread": {
@@ -1626,10 +1631,8 @@ def test_pma_cli_thread_send_timeout_warns_before_retry_when_status_unclear(
         pma_cli, "_request_json_with_status", _fake_request_json_with_status
     )
     monkeypatch.setattr(pma_cli, "_request_json", _fake_request_json)
-    monotonic_values = iter([100.0, 103.0])
-    monkeypatch.setattr(
-        pma_cli.time, "monotonic", lambda: next(monotonic_values, 103.0)
-    )
+    monotonic_seq = itertools.count(100.0, 0.01)
+    monkeypatch.setattr(pma_cli.time, "monotonic", lambda: next(monotonic_seq))
     monkeypatch.setattr(pma_cli.time, "sleep", lambda seconds: None)
 
     runner = CliRunner()
