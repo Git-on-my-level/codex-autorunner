@@ -12,6 +12,16 @@ Use `FlowStore` at `.codex-autorunner/flows.db` as the single source of truth fo
 
 Legacy numeric run directories are compatibility-only and must not be used for new run history features.
 
+### Archived Run Artifacts Are Not Live History
+
+Archived run artifacts under `.codex-autorunner/archive/runs/**` are
+**reviewable retained output**, not live source of truth. They exist for
+operator review and audit after a run completes. Do not query archive
+directories to discover which runs exist; always use FlowStore.
+
+Run archives are pruned by age/count/byte retention policies (see
+[STATE_ROOTS.md](STATE_ROOTS.md) and [state-cleanup.md](ops/state-cleanup.md)).
+
 ## What Runs Exist
 
 Use FlowStore run records:

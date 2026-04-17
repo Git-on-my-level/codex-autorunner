@@ -24,9 +24,9 @@ All durable artifacts must live under one of these roots:
 - `flows/` - Flow artifacts
 - `flows.db` - Flow store database
 - `pma/` - PMA state and queue
-- `archive/` - Worktree snapshots
+- `archive/` - Reviewable retained output (worktree snapshots under `archive/worktrees/`, run archives under `archive/runs/`). These are not live source of truth; see [retention classes](#retention-taxonomy) below.
 - `bin/` - Generated helper scripts
-- `workspace/` - Legacy directory name only; CAR reads durable context from `contextspace/` (see [workspace → contextspace migration](migrations/workspace-to-contextspace.md)). The workspace fallback for archive/reset operations has one canonical owner (`_contextspace_source` in `core/archive.py`). If this directory still exists, `car doctor` may warn until you migrate or remove it.
+- `workspace/` - **Compatibility-only input** (not a canonical store). CAR reads durable context from `contextspace/`. The `workspace/` fallback is used during archive/reset operations only, and has a single owner: `_contextspace_source()` in `core/archive.py`. No new runtime code may read from `workspace/` directly. If this directory still exists, `car doctor` may warn until you migrate or remove it. See [workspace → contextspace migration](migrations/workspace-to-contextspace.md).
 - `app_server_workspaces/` - App-server supervisor/workspace state when the effective destination is `docker`
 - `filebox/` - Shared inbox/outbox attachment root (`filebox/inbox`, `filebox/outbox`)
 
@@ -153,9 +153,9 @@ Key durable artifacts (never deleted):
 - Hub `orchestration.sqlite3` — orchestration store
 - Stable reports (`reports/latest-*`, `final_report.md`)
 
-Key reviewable artifacts (bounded pruning):
-- `archive/worktrees/**` — worktree snapshots
-- `archive/runs/**` — run archives
+Key reviewable artifacts (bounded pruning; these are retained output, not live source of truth):
+- `archive/worktrees/**` — worktree snapshots (reviewable retained output)
+- `archive/runs/**` — run archives (reviewable retained output; FlowStore in `flows.db` is the canonical live run-history store)
 - `flows/<run_id>/` — flow artifacts
 - `reports/` history files
 - `github_context/`
@@ -193,6 +193,28 @@ car cleanup state --scope all
 
 For details on the cleanup contract and safety guards, see
 [State Cleanup Operations](ops/state-cleanup.md).
+
+## Compatibility-Only Inputs
+
+These paths exist only as fallback or migration inputs. They must not regain
+runtime ownership, and no new code path may treat them as canonical:
+
+| Path | Canonical owner | Fallback behavior |
+|------|----------------|-------------------|
+| `.codex-autorunner/workspace/` | `contextspace/` | `_contextspace_source()` in `core/archive.py` falls back to `workspace/` during archive/reset only |
+| Legacy numeric run directories under `runs/<int>/` | `flows.db` / FlowStore | Not canonical for new runs; retained only for backwards compatibility |
+| Incomplete staging dirs under `archive/` without `META.json` | Ignored | Intentionally invisible to retention pruning |
+
+## Best-Effort And Skip-On-Partial-Visibility Contracts
+
+Several cleanup and archive operations are intentionally best-effort:
+
+- **Retention pruning after archive**: worktree/CAR-state archive treats post-archive retention pruning as best-effort follow-up that must not fail the archive itself.
+- **Run-archive fallback**: `core/flows/archive_helpers.py` falls back to default run-archive retention policy when repo config cannot be loaded.
+- **Incomplete snapshots ignored**: `prune_worktree_archive_root()` skips snapshot directories that lack `META.json`, keeping incomplete staging work out of retention logic.
+- **Stable report preservation**: `prune_report_directory()` always preserves stable-prefix outputs (`latest-*`, `final_report.md`) even when the history budget is tight.
+- **Global workspace cleanup skip**: global workspace cleanup skips entirely when hub manifest visibility is too weak to prove which shared workspaces are active.
+- **Filebox symlinks ignored**: `prune_filebox_root()` ignores symlinks and non-files.
 
 ## Non-Canonical Locations (Caches Only)
 

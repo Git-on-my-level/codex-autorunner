@@ -115,7 +115,50 @@ Total: deleted=22 bytes=36700160
 - `manifest.yml`
 - Stable reports (`reports/latest-*`, `final_report.md`)
 
-Blocked candidates appear in the report with a `blocked=` count.
+Blocked candidates appear in the report with a `blocked=` count and a
+human-readable reason.
+
+### Workspace Retention Guards
+
+Workspace retention planning (`plan_workspace_retention`) blocks pruning when:
+
+- The workspace root violates a canonical-root boundary
+- The workspace is marked active (running process)
+- The workspace has a live lock file
+- The workspace contains a `run.json` current-run marker
+
+Global workspace cleanup skips entirely when hub manifest visibility is too
+weak to prove which shared workspaces are active.
+
+## Dry-Run And Execute Fidelity
+
+The dry-run and execute paths must classify the **same candidates** with the
+**same keep/prune/block reasons** for the same inputs. The only difference is
+that the execute path mutates the filesystem; dry-run does not.
+
+When a candidate is blocked, kept, or pruned, the reason must be visible in
+tests, summaries, or logs. This attributability contract lets operators compare
+dry-run output against actual cleanup results and trust that the dry-run report
+accurately predicts what will happen.
+
+## Best-Effort And Skip Contracts
+
+Several cleanup behaviors are intentionally best-effort:
+
+- **Post-archive retention pruning**: must not fail the archive operation
+  itself. Pruning errors are logged but do not propagate.
+- **Incomplete archive snapshots**: snapshots without `META.json` are
+  intentionally invisible to retention planning and will not appear in prune
+  candidate lists.
+- **Run-archive policy fallback**: when repo config cannot be loaded, run
+  archive retention falls back to built-in defaults.
+- **Stable report preservation**: `prune_report_directory()` always preserves
+  stable-prefix outputs (`latest-*`, `final_report.md`) regardless of the
+  history budget.
+- **Filebox symlinks**: `prune_filebox_root()` ignores symlinks and non-files.
+- **Global workspace skip**: when hub manifest visibility is insufficient to
+  determine which shared workspaces are active, global workspace cleanup
+  returns zero candidates rather than risking active-workspace deletion.
 
 ## Narrower Cleanup Commands
 
