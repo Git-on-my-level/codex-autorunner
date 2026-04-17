@@ -187,8 +187,29 @@ def cleanup_repo_temp_paths(
     *,
     dry_run: bool = False,
     temp_base: Path | None = None,
+    min_age_seconds: float = 0.0,
 ) -> TempCleanupSummary:
     paths = discover_repo_temp_paths(repo_root, temp_base=temp_base)
+    if not paths:
+        return TempCleanupSummary(
+            scanned=0,
+            deleted=0,
+            active=0,
+            failed=0,
+            bytes_before=0,
+            bytes_after=0,
+        )
+    if min_age_seconds > 0.0:
+        cutoff = time.time() - max(0.0, float(min_age_seconds))
+        filtered: list[Path] = []
+        for path in paths:
+            try:
+                if path.stat().st_mtime >= cutoff:
+                    continue
+            except OSError:
+                continue
+            filtered.append(path)
+        paths = tuple(filtered)
     if not paths:
         return TempCleanupSummary(
             scanned=0,
@@ -222,6 +243,7 @@ def cleanup_repo_managed_temp_paths(
                 repo_root,
                 dry_run=dry_run,
                 temp_base=temp_base,
+                min_age_seconds=min_age_seconds,
             ),
         )
     )

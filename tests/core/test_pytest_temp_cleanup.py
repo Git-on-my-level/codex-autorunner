@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import errno
+import os
+import time
 from pathlib import Path
 
 from codex_autorunner.core import pytest_temp_cleanup as cleanup_module
@@ -127,6 +129,36 @@ def test_cleanup_repo_managed_temp_paths_combines_pytest_and_generic_temp_roots(
     assert summary.deleted == 2
     assert stale_run.exists() is False
     assert generic_root.exists() is False
+
+
+def test_cleanup_repo_managed_temp_paths_skips_recent_generic_car_dirs(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    temp_base = tmp_path / "tmp"
+    stale_run = repo_pytest_temp_root(repo_root, temp_base=temp_base) / "stale"
+    recent_generic = temp_base / "car-hub-profile-20260414"
+    (stale_run / "payload").mkdir(parents=True)
+    (recent_generic / "Profile").mkdir(parents=True)
+    (stale_run / "payload" / "artifact.bin").write_bytes(b"1234")
+    (recent_generic / "Profile" / "prefs.json").write_text(
+        "{}",
+        encoding="utf-8",
+    )
+    old = time.time() - 400.0
+    os.utime(stale_run, (old, old))
+
+    summary = cleanup_repo_managed_temp_paths(
+        repo_root,
+        temp_base=temp_base,
+        min_age_seconds=300.0,
+    )
+
+    assert summary.scanned == 1
+    assert summary.deleted == 1
+    assert stale_run.exists() is False
+    assert recent_generic.exists() is True
 
 
 def test_cleanup_temp_paths_skips_active_roots(tmp_path: Path) -> None:
