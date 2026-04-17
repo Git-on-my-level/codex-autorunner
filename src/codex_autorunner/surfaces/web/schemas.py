@@ -21,6 +21,16 @@ from ...core.car_context import CarContextProfile
 from ...core.text_utils import _normalize_text
 from ...flows.review.models import ReviewStateSnapshot, ReviewStatus
 from ...integrations.chat.approval_modes import normalize_approval_mode
+from ._schema_normalization import (
+    merge_normalized_filter,
+    normalize_filter_payload,
+    validate_supported_payload_keys,
+)
+from .serializers import (
+    OrchestrationHealthPayload,
+    SectionFreshnessSummary,
+    WorkspaceDestinationPayload,
+)
 
 
 class Payload(BaseModel):
@@ -31,85 +41,10 @@ class ResponseModel(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
 
-def _validate_supported_payload_keys(
-    data: dict[str, Any],
-    *,
-    supported_keys: set[str] | frozenset[str],
-    label: str,
-) -> None:
-    unknown_keys = sorted(
-        str(key)
-        for key in data.keys()
-        if isinstance(key, str) and key not in supported_keys
-    )
-    if unknown_keys:
-        raise ValueError(
-            f"Unsupported {label} keys: "
-            + ", ".join(unknown_keys)
-            + ". Valid keys: "
-            + ", ".join(sorted(supported_keys))
-        )
-
-
-def _normalize_filter_payload(
-    *,
-    raw_filter: Any,
-    supported_keys: set[str] | frozenset[str],
-    key_aliases: dict[str, str],
-    label: str,
-) -> dict[str, str]:
-    if raw_filter is None:
-        return {}
-    if not isinstance(raw_filter, dict):
-        raise ValueError(f"{label} must be an object")
-
-    normalized_filter: dict[str, str] = {}
-    unknown_filter_keys: list[str] = []
-    for raw_key, raw_value in raw_filter.items():
-        if not isinstance(raw_key, str):
-            unknown_filter_keys.append(str(raw_key))
-            continue
-        normalized_key = key_aliases.get(raw_key, raw_key)
-        if normalized_key not in supported_keys:
-            unknown_filter_keys.append(raw_key)
-            continue
-        normalized_value = _normalize_text(raw_value)
-        if normalized_value is None:
-            raise ValueError(f"{label}.{normalized_key} must be a non-empty string")
-        existing = normalized_filter.get(normalized_key)
-        if existing is not None and existing != normalized_value:
-            raise ValueError(
-                f"Conflicting {label} values for {normalized_key}: "
-                f"{existing!r} vs {normalized_value!r}"
-            )
-        normalized_filter[normalized_key] = normalized_value
-
-    if unknown_filter_keys:
-        raise ValueError(
-            f"Unsupported {label} keys: "
-            + ", ".join(sorted(unknown_filter_keys))
-            + ". Valid keys: "
-            + ", ".join(sorted(supported_keys))
-        )
-    return normalized_filter
-
-
-def _merge_normalized_filter(
-    data: dict[str, Any],
-    normalized_filter: dict[str, str],
-    *,
-    label: str,
-) -> dict[str, Any]:
-    for key, value in normalized_filter.items():
-        existing = _normalize_text(data.get(key))
-        if existing is not None and existing != value:
-            raise ValueError(
-                f"Conflicting values for {key}: top-level={existing!r}, "
-                f"{label}={value!r}"
-            )
-        if existing is None:
-            data[key] = value
-    return data
+# Backward-compat aliases so existing imports keep working.
+_validate_supported_payload_keys = validate_supported_payload_keys
+_normalize_filter_payload = normalize_filter_payload
+_merge_normalized_filter = merge_normalized_filter
 
 
 class ContextspaceWriteRequest(Payload):
@@ -547,12 +482,12 @@ class HubAgentWorkspaceSummaryResponse(ResponseModel):
     display_name: str
     enabled: bool
     exists_on_disk: bool
-    effective_destination: Dict[str, Any]
+    effective_destination: WorkspaceDestinationPayload
     resource_kind: str
 
 
 class HubAgentWorkspaceResponse(HubAgentWorkspaceSummaryResponse):
-    configured_destination: Optional[Dict[str, Any]] = None
+    configured_destination: Optional[WorkspaceDestinationPayload] = None
     source: Optional[str] = None
     issues: List[str] = Field(default_factory=list)
 
@@ -598,7 +533,7 @@ class HubMessagesFreshnessResponse(ResponseModel):
     schema_version: int
     generated_at: str
     stale_threshold_seconds: int
-    sections: Dict[str, Any]
+    sections: Dict[str, SectionFreshnessSummary]
 
 
 class HubMessagesResponse(ResponseModel):
@@ -842,7 +777,7 @@ class SystemHealthResponse(ResponseModel):
     asset_version: Optional[str] = None
     hub_startup_phase: Optional[str] = None
     hub_deferred_startup_complete: Optional[bool] = None
-    orchestration: Optional[Dict[str, Any]] = None
+    orchestration: Optional[OrchestrationHealthPayload] = None
 
 
 class SystemUpdateResponse(ResponseModel):

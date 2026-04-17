@@ -35,6 +35,7 @@ from ..schemas import (
     SystemUpdateTargetOption,
     SystemUpdateTargetsResponse,
 )
+from ..serializers import build_orchestration_health
 from ..static_assets import missing_static_assets
 from ..static_refresh import refresh_static_assets
 
@@ -88,22 +89,17 @@ def build_system_routes() -> APIRouter:
                 collect_execution_history_database_health,
                 config.root,
             )
-            orchestration_health = {
-                "database_path": database_health.database_path,
-                "database_size_bytes": database_health.size_bytes,
-                "database_size_status": database_health.status,
-                "database_size_warning_bytes": (
-                    database_health.warning_threshold_bytes
-                ),
-                "database_size_error_bytes": database_health.error_threshold_bytes,
-            }
             last_housekeeping = getattr(
                 getattr(request.app, "state", None),
                 "orchestration_housekeeping",
                 None,
             )
-            if isinstance(last_housekeeping, dict):
-                orchestration_health["last_housekeeping"] = last_housekeeping
+            orchestration_health = build_orchestration_health(
+                database_health,
+                last_housekeeping=(
+                    last_housekeeping if isinstance(last_housekeeping, dict) else None
+                ),
+            )
         static_dir = getattr(getattr(request.app, "state", None), "static_dir", None)
         if not isinstance(static_dir, Path):
             return JSONResponse(
