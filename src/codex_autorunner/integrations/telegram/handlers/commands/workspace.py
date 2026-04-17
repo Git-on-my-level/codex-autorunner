@@ -130,6 +130,12 @@ class ResumeThreadData:
     saw_path: bool
 
 
+def _is_retryable_hub_control_plane_failure(exc: BaseException) -> bool:
+    return bool(getattr(exc, "retryable", False)) and str(
+        getattr(exc, "code", "") or ""
+    ).strip() in {"hub_unavailable", "transport_failure"}
+
+
 def _telegram_status_base_lines(
     *,
     message: TelegramMessage,
@@ -1242,6 +1248,23 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                             pma_enabled=True,
                         )
                     except (OSError, RuntimeError, ValueError) as exc:
+                        if _is_retryable_hub_control_plane_failure(exc):
+                            log_event(
+                                self._logger,
+                                logging.WARNING,
+                                "telegram.pma.reset.managed_thread_reset_retryable_failure",
+                                topic_key=key,
+                                chat_id=message.chat_id,
+                                thread_id=message.thread_id,
+                                exc=exc,
+                            )
+                            await self._send_message(
+                                message.chat_id,
+                                "PMA thread reset is temporarily unavailable while the hub control plane recovers. Retry `/reset` in a few seconds.",
+                                thread_id=message.thread_id,
+                                reply_to=message.message_id,
+                            )
+                            return
                         log_event(
                             self._logger,
                             logging.WARNING,
@@ -1503,6 +1526,23 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                             pma_enabled=True,
                         )
                     except (OSError, RuntimeError, ValueError) as exc:
+                        if _is_retryable_hub_control_plane_failure(exc):
+                            log_event(
+                                self._logger,
+                                logging.WARNING,
+                                "telegram.pma.new.managed_thread_reset_retryable_failure",
+                                topic_key=key,
+                                chat_id=message.chat_id,
+                                thread_id=message.thread_id,
+                                exc=exc,
+                            )
+                            await self._send_message(
+                                message.chat_id,
+                                "PMA session reset is temporarily unavailable while the hub control plane recovers. Retry `/new` in a few seconds.",
+                                thread_id=message.thread_id,
+                                reply_to=message.message_id,
+                            )
+                            return
                         log_event(
                             self._logger,
                             logging.WARNING,
@@ -3156,36 +3196,36 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
             try:
                 from .execution import _resolve_telegram_managed_thread
 
-                _orchestration_service, managed_thread = (
-                    await _resolve_telegram_managed_thread(
-                        self,
-                        surface_key=key,
-                        workspace_root=workspace_root,
-                        agent=self._effective_runtime_agent(record),
-                        agent_profile=self._effective_agent_profile(record),
-                        repo_id=(
-                            record.repo_id.strip()
-                            if isinstance(record.repo_id, str)
-                            and record.repo_id.strip()
-                            else None
-                        ),
-                        resource_kind=(
-                            record.resource_kind.strip()
-                            if isinstance(record.resource_kind, str)
-                            and record.resource_kind.strip()
-                            else None
-                        ),
-                        resource_id=(
-                            record.resource_id.strip()
-                            if isinstance(record.resource_id, str)
-                            and record.resource_id.strip()
-                            else None
-                        ),
-                        mode="repo",
-                        pma_enabled=False,
-                        backend_thread_id=thread_id,
-                        allow_new_thread=True,
-                    )
+                (
+                    _orchestration_service,
+                    managed_thread,
+                ) = await _resolve_telegram_managed_thread(
+                    self,
+                    surface_key=key,
+                    workspace_root=workspace_root,
+                    agent=self._effective_runtime_agent(record),
+                    agent_profile=self._effective_agent_profile(record),
+                    repo_id=(
+                        record.repo_id.strip()
+                        if isinstance(record.repo_id, str) and record.repo_id.strip()
+                        else None
+                    ),
+                    resource_kind=(
+                        record.resource_kind.strip()
+                        if isinstance(record.resource_kind, str)
+                        and record.resource_kind.strip()
+                        else None
+                    ),
+                    resource_id=(
+                        record.resource_id.strip()
+                        if isinstance(record.resource_id, str)
+                        and record.resource_id.strip()
+                        else None
+                    ),
+                    mode="repo",
+                    pma_enabled=False,
+                    backend_thread_id=thread_id,
+                    allow_new_thread=True,
                 )
                 if managed_thread is None:
                     raise RuntimeError("managed thread resolution returned no thread")

@@ -2870,17 +2870,18 @@ async def test_resolve_telegram_managed_thread_reuses_archived_thread(
     )
     orchestration_service.archive_thread_target(current_thread.thread_target_id)
 
-    _service, resolved = (
-        await execution_commands_module._resolve_telegram_managed_thread(
-            handler,
-            surface_key="telegram:-1001:101",
-            workspace_root=workspace.resolve(),
-            agent="codex",
-            repo_id="repo-1",
-            mode="pma",
-            pma_enabled=True,
-            allow_new_thread=False,
-        )
+    (
+        _service,
+        resolved,
+    ) = await execution_commands_module._resolve_telegram_managed_thread(
+        handler,
+        surface_key="telegram:-1001:101",
+        workspace_root=workspace.resolve(),
+        agent="codex",
+        repo_id="repo-1",
+        mode="pma",
+        pma_enabled=True,
+        allow_new_thread=False,
     )
     assert resolved is not None
     assert resolved.thread_target_id == current_thread.thread_target_id
@@ -2936,18 +2937,19 @@ async def test_resolve_telegram_managed_thread_ignores_backend_thread_id_binding
         ),
     )
 
-    _service, resolved = (
-        await execution_commands_module._resolve_telegram_managed_thread(
-            SimpleNamespace(_logger=logging.getLogger("test")),
-            surface_key="telegram:-1001:101",
-            workspace_root=workspace.resolve(),
-            agent="codex",
-            repo_id="repo-1",
-            mode="pma",
-            pma_enabled=True,
-            backend_thread_id="stale-backend",
-            allow_new_thread=False,
-        )
+    (
+        _service,
+        resolved,
+    ) = await execution_commands_module._resolve_telegram_managed_thread(
+        SimpleNamespace(_logger=logging.getLogger("test")),
+        surface_key="telegram:-1001:101",
+        workspace_root=workspace.resolve(),
+        agent="codex",
+        repo_id="repo-1",
+        mode="pma",
+        pma_enabled=True,
+        backend_thread_id="stale-backend",
+        allow_new_thread=False,
     )
 
     assert resolved is not None
@@ -5046,20 +5048,21 @@ async def test_sync_telegram_thread_binding_archives_after_lost_backend_recovery
         ),
     )
     try:
-        _service, thread = (
-            await execution_commands_module._sync_telegram_thread_binding(
-                handlers,
-                surface_key="topic-1",
-                workspace_root=workspace,
-                agent="codex",
-                repo_id="repo-1",
-                resource_kind="repo",
-                resource_id="repo-1",
-                backend_thread_id="backend-2",
-                mode="repo",
-                pma_enabled=False,
-                replace_existing=True,
-            )
+        (
+            _service,
+            thread,
+        ) = await execution_commands_module._sync_telegram_thread_binding(
+            handlers,
+            surface_key="topic-1",
+            workspace_root=workspace,
+            agent="codex",
+            repo_id="repo-1",
+            resource_kind="repo",
+            resource_id="repo-1",
+            backend_thread_id="backend-2",
+            mode="repo",
+            pma_enabled=False,
+            replace_existing=True,
         )
     finally:
         monkeypatch.undo()
@@ -5425,20 +5428,21 @@ async def test_resolve_telegram_managed_thread_rejects_rebind_when_runtime_missi
         ),
     )
     try:
-        _service, resolved_thread = (
-            await execution_commands_module._resolve_telegram_managed_thread(
-                handlers,
-                surface_key="topic-1",
-                workspace_root=workspace,
-                agent="opencode",
-                repo_id="repo-1",
-                resource_kind="repo",
-                resource_id="repo-1",
-                mode="repo",
-                pma_enabled=False,
-                backend_thread_id="backend-new",
-                allow_new_thread=True,
-            )
+        (
+            _service,
+            resolved_thread,
+        ) = await execution_commands_module._resolve_telegram_managed_thread(
+            handlers,
+            surface_key="topic-1",
+            workspace_root=workspace,
+            agent="opencode",
+            repo_id="repo-1",
+            resource_kind="repo",
+            resource_id="repo-1",
+            mode="repo",
+            pma_enabled=False,
+            backend_thread_id="backend-new",
+            allow_new_thread=True,
         )
     finally:
         monkeypatch.undo()
@@ -5583,18 +5587,19 @@ async def test_reset_telegram_thread_binding_archives_after_lost_backend_recover
         ),
     )
     try:
-        had_previous, new_thread_id = (
-            await execution_commands_module._reset_telegram_thread_binding(
-                handlers,
-                surface_key="topic-1",
-                workspace_root=workspace,
-                agent="codex",
-                repo_id="repo-1",
-                resource_kind="repo",
-                resource_id="repo-1",
-                mode="pma",
-                pma_enabled=True,
-            )
+        (
+            had_previous,
+            new_thread_id,
+        ) = await execution_commands_module._reset_telegram_thread_binding(
+            handlers,
+            surface_key="topic-1",
+            workspace_root=workspace,
+            agent="codex",
+            repo_id="repo-1",
+            resource_kind="repo",
+            resource_id="repo-1",
+            mode="pma",
+            pma_enabled=True,
         )
     finally:
         monkeypatch.undo()
@@ -6279,17 +6284,12 @@ async def test_pma_new_resets_session(tmp_path: Path) -> None:
         date=None,
         is_topic_message=True,
     )
-
     await handler._handle_new(message)
-
     assert registry.get_thread_id(PMA_OPENCODE_KEY) is None
     sessions = json.loads(state_path.read_text(encoding="utf-8")).get("sessions", {})
     assert PMA_OPENCODE_KEY not in sessions
-    assert (
-        handler._sent
-        and handler._sent[-1]
-        == "Started a fresh PMA session for `opencode` (new thread ready)."
-    )
+    expected = "Started a fresh PMA session for `opencode` (new thread ready)."
+    assert handler._sent[-1] == expected
 
 
 @pytest.mark.anyio
@@ -6326,18 +6326,14 @@ async def test_pma_new_resets_managed_binding_when_runtime_threads_enabled(
         date=None,
         is_topic_message=True,
     )
-
     await handler._handle_new(message)
 
     assert calls
     assert calls[-1]["surface_key"] == "-2002:333"
     assert calls[-1]["mode"] == "pma"
     assert calls[-1]["pma_enabled"] is True
-    assert (
-        handler._sent
-        and handler._sent[-1]
-        == "Started a fresh PMA session for `codex` (new thread ready)."
-    )
+    expected = "Started a fresh PMA session for `codex` (new thread ready)."
+    assert handler._sent[-1] == expected
 
 
 @pytest.mark.anyio
