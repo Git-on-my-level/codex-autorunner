@@ -2,9 +2,13 @@
 import { loadHubBootstrapCache, saveHubBootstrapCache } from "./hubCache.js";
 import { renderRepos as _renderRepos, renderAgentWorkspaces as _renderAgentWorkspaces } from "./hubRepoCards.js";
 import { applyHubPanelState, toggleHubPanel, initInteractionHarness, setHubChannelEntries as setHubChannelEntriesAction, getHubChannelEntries, getPinnedParentRepoIds } from "./hubActions.js";
-export { initHub } from "./hubActions.js";
+import { attachHandlersAndControls, bootstrapHubData } from "./hubActions.js";
 export { loadHubBootstrapCache, saveHubBootstrapCache } from "./hubCache.js";
 export { applyHubPanelState, toggleHubPanel, initInteractionHarness } from "./hubActions.js";
+export function initHub() {
+    attachHandlersAndControls();
+    bootstrapHubData();
+}
 function renderRepos(repos) {
     _renderRepos(repos, getHubChannelEntries(), getPinnedParentRepoIds());
 }

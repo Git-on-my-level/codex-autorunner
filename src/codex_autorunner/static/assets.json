@@ -92,7 +92,16 @@
       "path": "generated/hubCache.js"
     },
     {
+      "path": "generated/hubDomBindings.js"
+    },
+    {
       "path": "generated/hubFilters.js"
+    },
+    {
+      "path": "generated/hubModals.js"
+    },
+    {
+      "path": "generated/hubRefresh.js"
     },
     {
       "path": "generated/hubRepoCards.js"
