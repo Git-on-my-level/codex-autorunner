@@ -250,6 +250,17 @@ class TurnRecoveryCoordinator:
         if attempt.effective_status is not None and status_is_terminal(
             attempt.effective_status
         ):
+            log_event(
+                self._logger,
+                logging.INFO,
+                "app_server.turn_recovery.completed",
+                turn_id=turn_id,
+                thread_id=tid,
+                idle_seconds=round(idle_seconds, 2),
+                effective_status=attempt.effective_status,
+                recovery_source="turn_stall",
+                recovery_attempts=state.recovery_attempts,
+            )
             return
 
         self._turn_state_manager.maybe_fail_stalled_turn(
