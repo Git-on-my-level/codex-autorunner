@@ -69,7 +69,10 @@ async def test_invalidate_caches_clears_hub_snapshot_caches() -> None:
     ) as mock_snapshot_invalidate:
         await coordinator.invalidate_caches()
 
-    mock_snapshot_invalidate.assert_called_once_with(context)
+    mock_snapshot_invalidate.assert_called_once_with(
+        context,
+        include_repo_capability_hints=True,
+    )
 
 
 @pytest.mark.asyncio
@@ -109,7 +112,7 @@ async def test_invalidate_caches_ordering() -> None:
     with patch(
         "codex_autorunner.surfaces.web.services.hub_gather"
         ".invalidate_hub_message_snapshot_cache",
-        side_effect=lambda ctx: call_order.append("snapshot"),
+        side_effect=lambda ctx, **_kwargs: call_order.append("snapshot"),
     ):
         await coordinator.invalidate_caches()
 

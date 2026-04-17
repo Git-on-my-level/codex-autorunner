@@ -174,21 +174,50 @@ def _hub_snapshot_fingerprint(
 
 def invalidate_hub_message_snapshot_cache(
     context: Optional[HubAppContext] = None,
+    *,
+    include_repo_capability_hints: bool = False,
 ) -> None:
     with _hub_snapshot_cache_lock:
         if context is None:
             _hub_snapshot_cache.clear()
-            return
-        context_id = id(context)
-        stale_keys = [key for key in _hub_snapshot_cache if key[0] == context_id]
-        for key in stale_keys:
-            _hub_snapshot_cache.pop(key, None)
+        else:
+            context_id = id(context)
+            stale_keys = [
+                cache_key
+                for cache_key in _hub_snapshot_cache
+                if cache_key[0] == context_id
+            ]
+            for cache_key in stale_keys:
+                _hub_snapshot_cache.pop(cache_key, None)
+    if include_repo_capability_hints:
+        with _repo_capability_hint_cache_lock:
+            if context is None:
+                _repo_capability_hint_cache.clear()
+            else:
+                root = getattr(getattr(context, "config", None), "root", None)
+                root_key = str(root) if isinstance(root, Path) else ""
+                stale_hint_keys: list[tuple[str, str, str, str]] = [
+                    hint_cache_key
+                    for hint_cache_key in _repo_capability_hint_cache
+                    if hint_cache_key[0] == root_key
+                ]
+                for hint_cache_key in stale_hint_keys:
+                    _repo_capability_hint_cache.pop(hint_cache_key, None)
+    if context is None:
+        return
     projection_store = getattr(context, "projection_store", None)
     if projection_store is not None:
         try:
             projection_store.delete(namespace=HUB_SNAPSHOT_PROJECTION_NAMESPACE)
         except Exception:
             pass
+        if include_repo_capability_hints:
+            try:
+                projection_store.delete(
+                    namespace=REPO_CAPABILITY_HINT_PROJECTION_NAMESPACE
+                )
+            except Exception:
+                pass
 
 
 def latest_dispatch(repo_root: Path, run_id: str, input_data: dict) -> Optional[dict]:

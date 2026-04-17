@@ -63,4 +63,7 @@ class HubCacheCoordinator:
     def _invalidate_hub_snapshot_caches(self) -> None:
         from ...services.hub_gather import invalidate_hub_message_snapshot_cache
 
-        invalidate_hub_message_snapshot_cache(self._context)
+        invalidate_hub_message_snapshot_cache(
+            self._context,
+            include_repo_capability_hints=True,
+        )
