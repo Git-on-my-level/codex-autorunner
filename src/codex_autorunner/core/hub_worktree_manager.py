@@ -196,8 +196,8 @@ class WorktreeManager:
                     )
             except GitError as exc:
                 raise ValueError(f"git worktree add failed: {exc}") from exc
-        if proc.returncode != 0:
-            raise ValueError(f"git worktree add failed: {git_failure_detail(proc)}")
+            if proc.returncode != 0:
+                raise ValueError(f"git worktree add failed: {git_failure_detail(proc)}")
 
         seed_repo_files(worktree_path, force=force, git_required=False)
         manifest.ensure_repo(

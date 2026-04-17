@@ -760,19 +760,19 @@ class HubSupervisor:
                 )
             except GitError as exc:
                 raise ValueError(f"git pull failed: {exc}") from exc
-        if proc.returncode != 0:
-            raise ValueError(f"git pull failed: {git_failure_detail(proc)}")
-        local_sha = git_head_sha(repo_root)
-        if not local_sha:
-            raise ValueError("Unable to resolve local HEAD after sync")
-        origin_ref = f"refs/remotes/origin/{default_branch}"
-        origin_sha = resolve_ref_sha(repo_root, origin_ref)
-        if local_sha != origin_sha:
-            raise ValueError(
-                "Sync main did not land on origin/%s: local=%s origin=%s. "
-                "Local branch may contain extra commits; resolve divergence first."
-                % (default_branch, local_sha[:12], origin_sha[:12])
-            )
+            if proc.returncode != 0:
+                raise ValueError(f"git pull failed: {git_failure_detail(proc)}")
+            local_sha = git_head_sha(repo_root)
+            if not local_sha:
+                raise ValueError("Unable to resolve local HEAD after sync")
+            origin_ref = f"refs/remotes/origin/{default_branch}"
+            origin_sha = resolve_ref_sha(repo_root, origin_ref)
+            if local_sha != origin_sha:
+                raise ValueError(
+                    "Sync main did not land on origin/%s: local=%s origin=%s. "
+                    "Local branch may contain extra commits; resolve divergence first."
+                    % (default_branch, local_sha[:12], origin_sha[:12])
+                )
         return self._snapshot_for_repo(repo_id)
 
     def create_repo(
