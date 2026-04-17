@@ -1141,7 +1141,9 @@ class _ThreadExecutionLifecycle:
                 if refreshed is None:
                     raise
             raise
-        except Exception as exc:  # intentional: top-level execution boundary records all harness failures
+        except (
+            Exception
+        ) as exc:  # intentional: top-level execution boundary records all harness failures
             detail = (
                 str(request.metadata.get("execution_error_message") or "").strip()
                 or str(exc).strip()
