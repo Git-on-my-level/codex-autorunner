@@ -512,6 +512,7 @@ def adapt_workspace_summary_to_plan(
     bucket: RetentionBucket,
 ) -> CleanupPlan:
     candidates: list[CleanupCandidate] = []
+    blocked_count = len(summary.blocked_paths)
     for path_str in summary.pruned_paths:
         candidates.append(
             CleanupCandidate(
@@ -544,9 +545,14 @@ def adapt_workspace_summary_to_plan(
         candidates=tuple(candidates),
         total_bytes=summary.bytes_before,
         reclaimable_bytes=summary.bytes_before - summary.bytes_after,
-        kept_count=summary.kept,
+        # Workspace prune summaries report all non-pruned entries as "kept",
+        # which already includes blocked workspaces and failed deletions. The
+        # shared cleanup plan tracks blocked candidates separately, so subtract
+        # them here to avoid double-counting a single workspace as both kept
+        # and blocked.
+        kept_count=max(summary.kept - blocked_count, 0),
         prune_count=summary.pruned,
-        blocked_count=len(summary.blocked_paths),
+        blocked_count=blocked_count,
     )
 
 

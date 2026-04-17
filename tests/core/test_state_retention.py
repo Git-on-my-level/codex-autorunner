@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from codex_autorunner.core.archive_retention import ArchivePruneSummary
@@ -22,6 +23,7 @@ from codex_autorunner.core.state_retention import (
     adapt_housekeeping_rule_result_to_result,
     adapt_report_prune_summary_to_plan,
     adapt_report_prune_summary_to_result,
+    adapt_workspace_summary_to_result,
     aggregate_cleanup_results,
     make_cleanup_plan,
     make_cleanup_result,
@@ -1326,6 +1328,29 @@ class TestAdapterDryRunExecuteParity:
         assert result_exec.deleted_bytes == 300
         assert len(result_exec.deleted_paths) == 3
         assert Path("/tmp/log-a.txt") in result_exec.deleted_paths
+
+    def test_workspace_adapter_does_not_double_count_blocked_entries(self) -> None:
+        summary = SimpleNamespace(
+            kept=2,
+            pruned=1,
+            bytes_before=1000,
+            bytes_after=700,
+            pruned_paths=("/tmp/ws-stale",),
+            blocked_paths=("/tmp/ws-live",),
+            blocked_reasons=("live_workspace_guard",),
+        )
+        bucket = RetentionBucket(
+            family="workspaces",
+            scope=RetentionScope.GLOBAL,
+            retention_class=RetentionClass.EPHEMERAL,
+        )
+
+        result = adapt_workspace_summary_to_result(summary, bucket, dry_run=False)
+
+        assert result.plan.kept_count == 1
+        assert result.plan.prune_count == 1
+        assert result.plan.blocked_count == 1
+        assert len(result.plan.blocked_candidates) == 1
 
     def test_archive_adapter_candidates_have_correct_reason(self) -> None:
         summary = ArchivePruneSummary(

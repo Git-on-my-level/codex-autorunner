@@ -395,6 +395,7 @@ class TestAdaptWorkspaceSummaryToResult:
         assert result.bucket == bucket
         assert result.plan.total_bytes == 1000
         assert result.plan.reclaimable_bytes == 600
+        assert result.plan.kept_count == 1
         assert result.plan.prune_count == 3
         assert result.plan.blocked_count == 1
         assert result.deleted_count == 3
@@ -1077,6 +1078,7 @@ class TestWorkspaceRetentionDryRunExecuteParity:
 
         assert result_dry.plan.prune_count == result_exec.plan.prune_count == 2
         assert result_dry.plan.blocked_count == result_exec.plan.blocked_count == 1
+        assert result_dry.plan.kept_count == result_exec.plan.kept_count == 0
         assert result_dry.plan.reclaimable_bytes == result_exec.plan.reclaimable_bytes
 
         assert result_dry.deleted_count == 0
