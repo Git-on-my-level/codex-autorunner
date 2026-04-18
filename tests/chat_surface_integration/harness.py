@@ -46,7 +46,10 @@ from tests.chat_surface_lab.discord_simulator import (
     DiscordSimulatorFaults,
     DiscordSurfaceSimulator,
 )
-from tests.chat_surface_lab.telegram_simulator import TelegramSurfaceSimulator
+from tests.chat_surface_lab.telegram_simulator import (
+    TelegramSimulatorFaults,
+    TelegramSurfaceSimulator,
+)
 
 DEFAULT_DISCORD_CHANNEL_ID = "channel-1"
 DEFAULT_DISCORD_GUILD_ID = "guild-1"
@@ -522,8 +525,12 @@ class FakeTelegramBot(TelegramSurfaceSimulator):
         self,
         *,
         fail_delete_message_ids: Optional[set[int]] = None,
+        faults: Optional[TelegramSimulatorFaults] = None,
     ) -> None:
-        super().__init__(fail_delete_message_ids=fail_delete_message_ids)
+        super().__init__(
+            fail_delete_message_ids=fail_delete_message_ids,
+            faults=faults,
+        )
 
 
 def make_telegram_config(root: Path) -> TelegramBotConfig:

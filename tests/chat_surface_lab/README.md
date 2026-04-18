@@ -66,6 +66,23 @@ TICKET-160 adds a deterministic latency budget suite runner:
 - `test_latency_budgets.py` validates required budget coverage and
   failure-triage payloads
 
+TICKET-170 adds seeded exploration and incident replay tooling:
+
+- `seeded_exploration.py` executes deterministic seed+perturbation campaigns
+  across the scenario runner and preserves failing seeds with replay bundles
+- `incident_replay.py` converts incident traces into sanitized replay scenario
+  fixtures that load directly through the corpus parser
+- `scenarios/restart_window_duplicate_delivery.json` adds executable
+  restart-window duplicate-delivery coverage in the corpus
+- `scripts/chat_surface_seeded_exploration.py` runs the seeded exploration
+  campaign from CLI (also exposed via `make perf-chat-seeded-exploration`)
+- `scripts/chat_surface_incident_replay.py` converts an incident JSON payload
+  into a sanitized scenario fixture
+- `test_seeded_exploration.py` validates failure-seed preservation and
+  deterministic replay
+- `test_incident_replay.py` validates trace-to-scenario conversion and
+  sanitization
+
 ## Relationship to nearby packages
 
 - `tests.chat_surface_lab`
@@ -98,8 +115,11 @@ high-signal fields:
 - `runtime_fixture`: backend fixture kind + fixture scenario
 - `actions`: declarative inbound flow (`send_message`, `start_message`,
   `wait_for_running_execution`, `submit_active_message`,
-  `interrupt_active_turn`, duplicate-delivery actions, etc.)
+  `interrupt_active_turn`, duplicate-delivery actions, restart-window actions
+  such as `restart_surface_harness`, and status replay actions such as
+  `run_status_interaction` / `run_status_update`)
 - `faults`: deterministic perturbations (for example short timeout overrides)
+  including `retry_after` schedules and delivery cleanup failures
 - `transcript_invariants`: transcript and log assertions
 - `latency_budgets`: budget assertions bound to concrete timing log fields
 - `contract_links`: optional mapping to
@@ -116,9 +136,21 @@ Run focused DSL checks:
 .venv/bin/python -m pytest tests/chat_surface_lab/test_transcript_renderer.py -q
 .venv/bin/python -m pytest tests/chat_surface_lab/test_artifact_manifest.py -q
 .venv/bin/python -m pytest tests/chat_surface_lab/test_latency_budgets.py -q
+.venv/bin/python -m pytest tests/chat_surface_lab/test_seeded_exploration.py -q
+.venv/bin/python -m pytest tests/chat_surface_lab/test_incident_replay.py -q
 
 # Operator run (outside raw pytest)
 make perf-chat-latency-budgets
+make perf-chat-seeded-exploration
+```
+
+Incident replay conversion:
+
+```bash
+.venv/bin/python scripts/chat_surface_incident_replay.py \
+  --incident /path/to/incident.json \
+  --output tests/chat_surface_lab/scenarios/incident_replay_example.json \
+  --scenario-id incident_replay_example
 ```
 
 ## Evidence artifact schema

@@ -5,7 +5,7 @@ import contextlib
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Sequence
 
 from codex_autorunner.browser.runtime import BrowserRuntime
 from codex_autorunner.integrations.chat.ux_regression_contract import (
@@ -26,7 +26,9 @@ from tests.chat_surface_integration.harness import (
     drain_telegram_spawned_tasks,
 )
 from tests.chat_surface_lab.artifact_manifests import ArtifactManifest
+from tests.chat_surface_lab.discord_simulator import DiscordSimulatorFaults
 from tests.chat_surface_lab.scenario_models import RuntimeFixtureKind, SurfaceKind
+from tests.chat_surface_lab.telegram_simulator import TelegramSimulatorFaults
 from tests.chat_surface_lab.transcript_models import (
     TranscriptEvent,
     TranscriptEventKind,
@@ -295,23 +297,19 @@ class ChatSurfaceScenarioRunner:
         )
         self._configure_fault_clients(context=context, scenario=scenario)
         try:
-            if isinstance(context.harness, DiscordSurfaceHarness):
-                await context.harness.setup(
-                    agent="hermes",
-                    approval_mode=scenario.approval_mode,
-                )
-            else:
-                await context.harness.setup(
-                    agent="hermes",
-                    approval_mode=scenario.approval_mode,
-                )
+            await self._setup_harness(context=context, scenario=scenario)
 
             for action in scenario.actions:
                 if action.surfaces and surface not in action.surfaces:
                     continue
                 if action.delay_ms > 0:
                     await asyncio.sleep(max(action.delay_ms, 0) / 1000)
-                await self._execute_action(context=context, action=action)
+                await self._execute_action(
+                    context=context,
+                    scenario=scenario,
+                    output_dir=output_dir,
+                    action=action,
+                )
 
             if context.result is None and context.active_task is not None:
                 context.result = await context.active_task
@@ -373,6 +371,17 @@ class ChatSurfaceScenarioRunner:
             return TelegramSurfaceHarness(harness_root, timeout_seconds=timeout_seconds)
         raise NotImplementedError(f"unsupported surface: {surface.value}")
 
+    async def _setup_harness(
+        self,
+        *,
+        context: _SurfaceRunContext,
+        scenario: ScenarioDefinition,
+    ) -> None:
+        await context.harness.setup(
+            agent="hermes",
+            approval_mode=scenario.approval_mode,
+        )
+
     def _configure_fault_clients(
         self,
         *,
@@ -391,8 +400,14 @@ class ChatSurfaceScenarioRunner:
                     continue
                 message_id = str(fault.parameters.get("message_id") or "msg-1")
                 fail_ids.add(message_id)
-            if fail_ids:
-                context.rest_client = FakeDiscordRest(fail_delete_message_ids=fail_ids)
+            retry_after_schedule = _collect_retry_after_schedule(active_faults)
+            if fail_ids or retry_after_schedule:
+                context.rest_client = FakeDiscordRest(
+                    faults=DiscordSimulatorFaults(
+                        fail_delete_message_ids=fail_ids,
+                        retry_after_schedule=retry_after_schedule,
+                    )
+                )
             return
         fail_ids_int: set[int] = set()
         for fault in active_faults:
@@ -404,13 +419,21 @@ class ChatSurfaceScenarioRunner:
             except (TypeError, ValueError):
                 message_id = 1
             fail_ids_int.add(message_id)
-        if fail_ids_int:
-            context.bot_client = FakeTelegramBot(fail_delete_message_ids=fail_ids_int)
+        retry_after_schedule = _collect_retry_after_schedule(active_faults)
+        if fail_ids_int or retry_after_schedule:
+            context.bot_client = FakeTelegramBot(
+                faults=TelegramSimulatorFaults(
+                    fail_delete_message_ids=fail_ids_int,
+                    retry_after_schedule=retry_after_schedule,
+                )
+            )
 
     async def _execute_action(
         self,
         *,
         context: _SurfaceRunContext,
+        scenario: ScenarioDefinition,
+        output_dir: Path,
         action: ScenarioActionSpec,
     ) -> None:
         if action.kind == "send_message":
@@ -562,6 +585,39 @@ class ChatSurfaceScenarioRunner:
             context.result = await context.active_task
             return
 
+        if action.kind == "restart_surface_harness":
+            if context.active_task is not None and not context.active_task.done():
+                raise AssertionError(
+                    "restart_surface_harness requires no active in-flight task"
+                )
+            await context.harness.close()
+            context.thread_target_id = None
+            context.execution_id = None
+            context.result = None
+            context.rest_client = None
+            context.bot_client = None
+            context.harness = self._build_harness(
+                scenario=scenario,
+                surface=context.surface,
+                output_dir=output_dir,
+            )
+            self._configure_fault_clients(context=context, scenario=scenario)
+            await self._setup_harness(context=context, scenario=scenario)
+            return
+
+        if action.kind == "run_status_interaction":
+            if context.surface != SurfaceKind.DISCORD:
+                return
+            assert isinstance(context.harness, DiscordSurfaceHarness)
+            interaction_id = str(action.payload.get("interaction_id") or "inter-1")
+            rest_client = context.rest_client or FakeDiscordRest()
+            payload = _discord_status_interaction(interaction_id)
+            context.result = await context.harness.run_gateway_events(
+                [("INTERACTION_CREATE", payload)],
+                rest_client=rest_client,
+            )
+            return
+
         if action.kind == "run_duplicate_status_interaction":
             if context.surface != SurfaceKind.DISCORD:
                 return
@@ -578,6 +634,34 @@ class ChatSurfaceScenarioRunner:
                 events,
                 rest_client=rest_client,
             )
+            return
+
+        if action.kind == "run_status_update":
+            if context.surface != SurfaceKind.TELEGRAM:
+                return
+            assert isinstance(context.harness, TelegramSurfaceHarness)
+            if context.harness.service is None or context.harness.bot is None:
+                raise AssertionError("Telegram harness is not initialized")
+            update_id = _optional_int(action.payload.get("update_id"), default=77)
+            thread_id = _optional_int(action.payload.get("thread_id"), default=55)
+            update = TelegramUpdate(
+                update_id=update_id,
+                message=build_telegram_message(
+                    "/status",
+                    thread_id=thread_id,
+                    message_id=update_id,
+                    update_id=update_id,
+                ),
+                callback=None,
+            )
+            await context.harness.service._dispatch_update(update)
+            await drain_telegram_spawned_tasks(context.harness.service)
+            context.harness._apply_telegram_runtime_metadata(
+                context.harness.bot,
+                thread_id=thread_id,
+                message_start_index=0,
+            )
+            context.result = context.harness.bot
             return
 
         if action.kind == "run_duplicate_status_update":
@@ -1123,6 +1207,52 @@ def _required_string(raw: dict[str, Any], key: str, *, path: Path) -> str:
     if not stripped:
         raise ValueError(f"{path}: {key} must be a non-empty string")
     return stripped
+
+
+def _collect_retry_after_schedule(
+    faults: Sequence[ScenarioFaultSpec],
+) -> dict[str, list[int]]:
+    schedule: dict[str, list[int]] = {}
+    for fault in faults:
+        if fault.kind != "retry_after":
+            continue
+        raw_schedule = fault.parameters.get("schedule")
+        if isinstance(raw_schedule, dict):
+            for raw_operation, raw_values in raw_schedule.items():
+                operation = str(raw_operation or "").strip()
+                if not operation:
+                    continue
+                values = _normalize_retry_after_values(raw_values)
+                if values:
+                    schedule.setdefault(operation, []).extend(values)
+            continue
+        operation = str(fault.parameters.get("operation") or "").strip()
+        if not operation:
+            continue
+        raw_values = fault.parameters.get("seconds")
+        if raw_values is None:
+            raw_values = fault.parameters.get("retry_after")
+        values = _normalize_retry_after_values(raw_values)
+        if values:
+            schedule.setdefault(operation, []).extend(values)
+    return schedule
+
+
+def _normalize_retry_after_values(raw: Any) -> list[int]:
+    if isinstance(raw, list):
+        source = raw
+    elif raw is None:
+        source = [1]
+    else:
+        source = [raw]
+
+    normalized: list[int] = []
+    for item in source:
+        seconds = _optional_int(item, default=None)
+        if seconds is None or seconds <= 0:
+            continue
+        normalized.append(seconds)
+    return normalized
 
 
 def _optional_int(value: Any, *, default: Optional[int]) -> Optional[int]:

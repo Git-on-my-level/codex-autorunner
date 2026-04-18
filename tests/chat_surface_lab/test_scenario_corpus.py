@@ -21,6 +21,7 @@ _REQUIRED_CORPUS_SCENARIOS = {
     "timeout_when_terminal_missing",
     "duplicate_delivery",
     "restart_recovery",
+    "restart_window_duplicate_delivery",
 }
 
 

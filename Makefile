@@ -21,7 +21,7 @@ PIPX_ROOT ?= $(HOME)/.local/pipx
 PIPX_VENV ?= $(PIPX_ROOT)/venvs/codex-autorunner
 PIPX_PYTHON ?= $(PIPX_VENV)/bin/python
 
-.PHONY: install dev hooks build test test-chat-platform-contract test-managed-thread-cutover check check-full check-extended preflight-hub-startup format serve serve-dev launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts lint-html dom-check frontend-check _inject-static-banners agent-compatibility-check agent-compatibility-refresh protocol-schemas-check protocol-schemas-refresh typecheck-strict perf-idle-cpu perf-chat-latency-budgets
+.PHONY: install dev hooks build test test-chat-platform-contract test-managed-thread-cutover check check-full check-extended preflight-hub-startup format serve serve-dev launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts lint-html dom-check frontend-check _inject-static-banners agent-compatibility-check agent-compatibility-refresh protocol-schemas-check protocol-schemas-refresh typecheck-strict perf-idle-cpu perf-chat-latency-budgets perf-chat-seeded-exploration
 
 _inject-static-banners:
 	pnpm run postbuild
@@ -196,3 +196,6 @@ perf-idle-cpu:
 
 perf-chat-latency-budgets:
 	$(PYTHON) scripts/chat_surface_latency_budgets.py
+
+perf-chat-seeded-exploration:
+	$(PYTHON) scripts/chat_surface_seeded_exploration.py

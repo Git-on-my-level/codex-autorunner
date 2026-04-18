@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "scenario_id": "restart_window_duplicate_delivery",
+  "description": "Duplicate status deliveries are deduped when the second delivery arrives after a surface restart window.",
+  "surfaces": [
+    "discord",
+    "telegram"
+  ],
+  "runtime_fixture": {
+    "kind": "hermes",
+    "scenario": "official"
+  },
+  "harness_timeouts": {
+    "discord": 8.0,
+    "telegram": 8.0
+  },
+  "actions": [
+    {
+      "kind": "run_status_interaction",
+      "actor": "user",
+      "surfaces": [
+        "discord"
+      ],
+      "payload": {
+        "interaction_id": "inter-restart-1"
+      }
+    },
+    {
+      "kind": "restart_surface_harness",
+      "actor": "system",
+      "surfaces": [
+        "discord"
+      ],
+      "payload": {}
+    },
+    {
+      "kind": "run_status_interaction",
+      "actor": "user",
+      "surfaces": [
+        "discord"
+      ],
+      "payload": {
+        "interaction_id": "inter-restart-1"
+      }
+    },
+    {
+      "kind": "run_status_update",
+      "actor": "user",
+      "surfaces": [
+        "telegram"
+      ],
+      "payload": {
+        "update_id": 91,
+        "thread_id": 55
+      }
+    },
+    {
+      "kind": "restart_surface_harness",
+      "actor": "system",
+      "surfaces": [
+        "telegram"
+      ],
+      "payload": {}
+    },
+    {
+      "kind": "run_status_update",
+      "actor": "user",
+      "surfaces": [
+        "telegram"
+      ],
+      "payload": {
+        "update_id": 91,
+        "thread_id": 55
+      }
+    }
+  ],
+  "transcript_invariants": [
+    {
+      "kind": "log_event_exists",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "event_name": "discord.interaction.rejected",
+        "field": "rejection_reason",
+        "value": "duplicate_interaction"
+      }
+    },
+    {
+      "kind": "log_event_exists",
+      "surfaces": [
+        "telegram"
+      ],
+      "params": {
+        "event_name": "telegram.update.duplicate",
+        "field": "update_id",
+        "value": 91
+      }
+    }
+  ],
+  "contract_links": {
+    "regression_ids": [
+      "restart_recovery",
+      "duplicate_delivery"
+    ],
+    "references": [
+      "tests/test_telegram_update_dedupe.py"
+    ]
+  },
+  "tags": [
+    "restart",
+    "dedupe",
+    "reliability",
+    "telegram",
+    "discord"
+  ]
+}

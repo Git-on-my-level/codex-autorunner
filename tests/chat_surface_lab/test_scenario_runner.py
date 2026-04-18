@@ -74,3 +74,31 @@ async def test_runner_handles_reference_only_scenarios_without_surface_execution
     assert result.skipped is True
     assert result.surface_results == ()
     assert result.summary_path is not None and result.summary_path.exists()
+
+
+@pytest.mark.anyio
+async def test_runner_executes_restart_window_duplicate_delivery(
+    tmp_path: Path,
+) -> None:
+    scenario = load_scenario_by_id("restart_window_duplicate_delivery")
+    runner = ChatSurfaceScenarioRunner(output_root=tmp_path / "scenario-runs")
+
+    result = await runner.run_scenario(scenario)
+    assert result.skipped is False
+    assert len(result.surface_results) == 2
+    for surface in result.surface_results:
+        assert surface.log_records
+    assert any(
+        record.get("event") == "discord.interaction.rejected"
+        for record in result.surface_results[0].log_records
+    ) or any(
+        record.get("event") == "discord.interaction.rejected"
+        for record in result.surface_results[1].log_records
+    )
+    assert any(
+        record.get("event") == "telegram.update.duplicate"
+        for record in result.surface_results[0].log_records
+    ) or any(
+        record.get("event") == "telegram.update.duplicate"
+        for record in result.surface_results[1].log_records
+    )
