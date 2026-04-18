@@ -72,8 +72,8 @@ def resolve_managed_thread_followup_policy(
         enabled = True
     elif (
         getattr(payload, "notify_lane_explicit", False)
-        or getattr(payload, "notify_once_explicit", False)
-    ) and terminal_followup is not False:
+        and terminal_followup is not False
+    ):
         enabled = True
     elif terminal_followup is not False and default_terminal_followup:
         enabled = True
@@ -84,7 +84,6 @@ def resolve_managed_thread_followup_policy(
         and (
             getattr(payload, "notify_on_explicit", False)
             or getattr(payload, "notify_lane_explicit", False)
-            or getattr(payload, "notify_once_explicit", False)
             or terminal_followup is True
         ),
         event_mode="terminal" if enabled else None,
