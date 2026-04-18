@@ -386,6 +386,14 @@ You are an **abstraction layer, not an executor**. Coordinate tickets and flows 
 - `depends_on` frontmatter is not supported; filename order is the only execution contract.
 - If prerequisites are discovered late, split/reorder tickets so prerequisite work appears earlier.
 
+## Ticket templates
+
+- Reuse a ticket template before drafting from scratch when a standard workflow fits.
+- `car templates list`
+- `car templates search <query>`
+- `car templates show <id>`
+- `car templates apply <id> --repo <path>`
+
 ## Ticket agent context (what each turn already gets)
 
 - Current ticket file (`.codex-autorunner/tickets/TICKET-###*.md`).
@@ -422,6 +430,15 @@ def pma_notes_content() -> str:
 - Tickets live per repo at `<repo>/.codex-autorunner/tickets/`.
 - Create or edit `TICKET-###*.md` files directly; keep diffs small and single-purpose.
 - Set `done: true` in the ticket frontmatter only when the ticket is complete.
+
+## Ticket templates
+
+- Prefer a template when the work matches an established ticket pack.
+- `car templates list`
+- `car templates search <query>`
+- `car templates show <id>`
+- `car templates apply <id> --repo <path>`
+- Blessed repo: `https://github.com/Git-on-my-level/car-ticket-templates`
 
 ## Ticket flow (start/resume)
 
@@ -609,7 +626,10 @@ This document is jointly maintained by the user and PMA.
 
 ## Template shortcuts (optional)
 
-- Add references to frequently used ticket templates here (repo/path/ref) and when to apply them.
+- Discover templates with `car templates list` or `car templates search <query>`.
+- Inspect/apply with `car templates show <id>` and `car templates apply <id> --repo <path>`.
+- Blessed repo: `https://github.com/Git-on-my-level/car-ticket-templates`
+- Add durable shortcuts here as `template_id` plus when to apply it.
 
 ## CLI help-first rule
 

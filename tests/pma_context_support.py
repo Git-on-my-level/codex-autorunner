@@ -1706,6 +1706,21 @@ def test_format_pma_prompt_includes_filebox_paths(tmp_path: Path) -> None:
     assert ".codex-autorunner/filebox/inbox/" in result
 
 
+def test_format_pma_prompt_includes_ticket_template_discoverability(
+    tmp_path: Path,
+) -> None:
+    seed_hub_files(tmp_path, force=True)
+
+    result = format_pma_prompt(
+        "Base prompt", {"test": "data"}, "User message", hub_root=tmp_path
+    )
+
+    assert "car templates list" in result
+    assert "car templates search <query>" in result
+    assert "car templates show <id>" in result
+    assert "car templates apply <id> --repo <path>" in result
+
+
 def test_render_hub_snapshot_includes_all_next_action_types(tmp_path: Path) -> None:
     from codex_autorunner.core.pma_context import _render_hub_snapshot
 
