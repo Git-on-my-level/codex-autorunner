@@ -3,7 +3,7 @@ from typing import Mapping, Optional
 
 from fastapi.staticfiles import StaticFiles
 
-from ...core.config import _is_loopback_host
+from ...core.config_validation import is_loopback_host
 
 
 def resolve_auth_token(
@@ -23,7 +23,7 @@ def resolve_allowed_hosts(host: str, allowed_hosts: list[str]) -> list[str]:
     cleaned = [entry.strip() for entry in allowed_hosts if entry and entry.strip()]
     if cleaned:
         return cleaned
-    if _is_loopback_host(host):
+    if is_loopback_host(host):
         return ["localhost", "127.0.0.1", "::1", "testserver"]
     return []
 

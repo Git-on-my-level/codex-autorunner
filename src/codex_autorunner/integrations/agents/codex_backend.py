@@ -6,6 +6,15 @@ from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, Optional, Uni
 
 from ...core.circuit_breaker import CircuitBreaker
 from ...core.logging_utils import log_event
+from ...core.orchestration.codex_item_normalizers import (
+    extract_agent_message_text,
+    extract_codex_output_delta,
+    normalize_tool_name,
+    output_delta_type_for_method,
+)
+from ...core.orchestration.codex_item_normalizers import (
+    reasoning_buffer_key as _shared_reasoning_buffer_key,
+)
 from ...core.ports.agent_backend import AgentBackend, AgentEvent, now_iso
 from ...core.ports.run_event import (
     RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
@@ -31,86 +40,18 @@ NotificationHandler = Callable[[Dict[str, Any]], Awaitable[None]]
 ApprovalHandler = Callable[[Dict[str, Any]], Awaitable[ApprovalDecision]]
 
 
-def _extract_output_delta(params: Dict[str, Any]) -> str:
-    for key in ("delta", "text", "output"):
-        value = params.get(key)
-        if isinstance(value, str):
-            return value
-    return ""
-
-
-def _output_delta_type_for_method(method: object) -> str:
-    if not isinstance(method, str):
-        return "assistant_stream"
-    normalized = method.strip().lower()
-    if normalized in {
-        "item/commandexecution/outputdelta",
-        "item/filechange/outputdelta",
-    }:
-        return "log_line"
-    return "assistant_stream"
-
-
-def _normalize_tool_name(params: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
-    item = params.get("item")
-    item_dict = item if isinstance(item, dict) else {}
-    item_type = item_dict.get("type")
-
-    if item_type == "commandExecution":
-        command = item_dict.get("command")
-        if not command:
-            command = params.get("command")
-        if isinstance(command, list):
-            command = " ".join(str(part) for part in command).strip()
-        if isinstance(command, str) and command:
-            return command, {"command": command}
-        return "commandExecution", {}
-
-    if item_type == "fileChange":
-        files = item_dict.get("files")
-        if isinstance(files, list):
-            paths = [str(entry) for entry in files if isinstance(entry, str)]
-            if paths:
-                return "fileChange", {"files": paths}
-        return "fileChange", {}
-
-    if item_type == "tool":
-        name = item_dict.get("name") or item_dict.get("tool") or item_dict.get("id")
-        if isinstance(name, str) and name:
-            return name, {}
-        return "tool", {}
-
-    name = params.get("name")
-    if isinstance(name, str) and name:
-        input_payload = params.get("input")
-        if isinstance(input_payload, dict):
-            return name, input_payload
-        return name, {}
-    return "", {}
-
-
-def _extract_agent_message_text(item: Dict[str, Any]) -> str:
-    text = item.get("text")
-    if isinstance(text, str) and text.strip():
-        return text
-    content = item.get("content")
-    if isinstance(content, list):
-        parts: list[str] = []
-        for entry in content:
-            if not isinstance(entry, dict):
-                continue
-            entry_type = entry.get("type")
-            if entry_type not in (None, "output_text", "text", "message"):
-                continue
-            candidate = entry.get("text")
-            if isinstance(candidate, str) and candidate.strip():
-                parts.append(candidate)
-        if parts:
-            return "".join(parts)
-    return ""
-
-
 class CodexAppServerBackend(AgentBackend):
+    """Adapts Codex app-server JSON-RPC protocol to the AgentBackend interface.
+
+    Ownership (TICKET-1170):
+    - Owns protocol-specific session/thread state: _session_id, _thread_id,
+      _turn_id, _thread_info.
+    - Delegates process lifecycle and client caching to
+      WorkspaceAppServerSupervisor.
+    - Does NOT participate in active-turn counting (the Codex supervisor has
+      no turn-counting concept; idle eviction uses time only).
+    """
+
     def __init__(
         self,
         *,
@@ -552,7 +493,7 @@ class CodexAppServerBackend(AgentBackend):
                 ):
                     pass
                 else:
-                    latest_text = _extract_agent_message_text(item)
+                    latest_text = extract_agent_message_text(item)
                     if latest_text.strip():
                         self._latest_completed_agent_message = latest_text
         _logger.debug("Received notification: %s", method)
@@ -582,7 +523,7 @@ class CodexAppServerBackend(AgentBackend):
             return None
 
         if method == "item/agentMessage/delta":
-            content = _extract_output_delta(params)
+            content = extract_codex_output_delta(params)
             if decoded is not None:
                 decoded_content = getattr(decoded, "content", None)
                 if isinstance(decoded_content, str):
@@ -596,20 +537,20 @@ class CodexAppServerBackend(AgentBackend):
             )
 
         if method == "turn/streamDelta" or "outputdelta" in method_lower:
-            content = _extract_output_delta(params)
+            content = extract_codex_output_delta(params)
             if decoded is not None:
                 decoded_content = getattr(decoded, "content", None)
                 if isinstance(decoded_content, str):
                     content = decoded_content
             if not content:
                 return None
-            delta_type = _output_delta_type_for_method(method)
+            delta_type = output_delta_type_for_method(method)
             return OutputDelta(
                 timestamp=now_iso(), content=content, delta_type=delta_type
             )
 
         if method == "item/toolCall/start":
-            tool_name, tool_input = _normalize_tool_name(params)
+            tool_name, tool_input = normalize_tool_name(params)
             if decoded is not None:
                 decoded_tool_name = getattr(decoded, "tool_name", None)
                 decoded_tool_input = getattr(decoded, "tool_input", None)
@@ -632,7 +573,7 @@ class CodexAppServerBackend(AgentBackend):
                 self._clear_reasoning_buffers_for_params(params)
                 return None
             if isinstance(item, dict) and item.get("type") == "agentMessage":
-                text = _extract_agent_message_text(item)
+                text = extract_agent_message_text(item)
                 if text.strip():
                     return OutputDelta(
                         timestamp=now_iso(),
@@ -640,7 +581,7 @@ class CodexAppServerBackend(AgentBackend):
                         delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
                     )
                 return None
-            tool_name, tool_input = _normalize_tool_name(params)
+            tool_name, tool_input = normalize_tool_name(params)
             if tool_name:
                 return ToolCall(
                     timestamp=now_iso(),
@@ -670,7 +611,7 @@ class CodexAppServerBackend(AgentBackend):
         method_lower = method.lower() if isinstance(method, str) else ""
 
         if method == "item/agentMessage/delta":
-            content = _extract_output_delta(params)
+            content = extract_codex_output_delta(params)
             if not content:
                 return AgentEvent.stream_delta(content="", delta_type="unknown_event")
             return AgentEvent.stream_delta(
@@ -678,14 +619,14 @@ class CodexAppServerBackend(AgentBackend):
             )
 
         if method == "turn/streamDelta" or "outputdelta" in method_lower:
-            content = _extract_output_delta(params)
+            content = extract_codex_output_delta(params)
             if not content:
                 return AgentEvent.stream_delta(content="", delta_type="unknown_event")
-            delta_type = _output_delta_type_for_method(method)
+            delta_type = output_delta_type_for_method(method)
             return AgentEvent.stream_delta(content=content, delta_type=delta_type)
 
         if method == "item/toolCall/start":
-            tool_name, tool_input = _normalize_tool_name(params)
+            tool_name, tool_input = normalize_tool_name(params)
             return AgentEvent.tool_call(
                 tool_name=tool_name or "toolCall",
                 tool_input=tool_input,
@@ -701,14 +642,14 @@ class CodexAppServerBackend(AgentBackend):
         if method == "item/completed":
             item = params.get("item")
             if isinstance(item, dict) and item.get("type") == "agentMessage":
-                text = _extract_agent_message_text(item)
+                text = extract_agent_message_text(item)
                 if text.strip():
                     return AgentEvent.stream_delta(
                         content=text,
                         delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
                     )
                 return AgentEvent.stream_delta(content="", delta_type="unknown_event")
-            tool_name, tool_input = _normalize_tool_name(params)
+            tool_name, tool_input = normalize_tool_name(params)
             if tool_name:
                 return AgentEvent.tool_call(tool_name=tool_name, tool_input=tool_input)
             return AgentEvent.stream_delta(content="", delta_type="unknown_event")
@@ -720,10 +661,9 @@ class CodexAppServerBackend(AgentBackend):
         return AgentEvent.stream_delta(content="", delta_type="unknown_event")
 
     def _reasoning_buffer_key(self, params: Dict[str, Any]) -> Optional[str]:
-        for key in ("itemId", "item_id", "turnId", "turn_id"):
-            value = params.get(key)
-            if isinstance(value, str) and value:
-                return value
+        shared_key = _shared_reasoning_buffer_key(params)
+        if shared_key:
+            return shared_key
         if isinstance(self._turn_id, str) and self._turn_id:
             return self._turn_id
         return None

@@ -391,3 +391,59 @@ async def test_interaction_ledger_prunes_stale_records_on_initialize(
         assert await reopened.get_interaction("stale-1") is None
     finally:
         await reopened.close()
+
+
+@pytest.mark.anyio
+async def test_interaction_ledger_rejects_unknown_scheduler_state(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    try:
+        await store.initialize()
+        await store.register_interaction(
+            interaction_id="invalid-scheduler-1",
+            interaction_token="token-invalid-scheduler-1",
+            interaction_kind="slash_command",
+            channel_id="chan-1",
+            guild_id="guild-1",
+            user_id="user-1",
+            metadata_json={"command_path": ["car", "status"]},
+        )
+
+        with pytest.raises(
+            ValueError, match="unknown interaction scheduler state: not_a_state"
+        ):
+            await store.mark_interaction_scheduler_state(
+                "invalid-scheduler-1",
+                scheduler_state="not_a_state",
+            )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_interaction_ledger_rejects_unknown_execution_status(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    try:
+        await store.initialize()
+        await store.register_interaction(
+            interaction_id="invalid-execution-1",
+            interaction_token="token-invalid-execution-1",
+            interaction_kind="slash_command",
+            channel_id="chan-1",
+            guild_id="guild-1",
+            user_id="user-1",
+            metadata_json={"command_path": ["car", "status"]},
+        )
+
+        with pytest.raises(
+            ValueError, match="unknown interaction execution status: not_a_status"
+        ):
+            await store.mark_interaction_execution(
+                "invalid-execution-1",
+                execution_status="not_a_status",
+            )
+    finally:
+        await store.close()

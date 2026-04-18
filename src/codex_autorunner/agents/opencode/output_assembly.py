@@ -114,6 +114,8 @@ class OutputAssembler:
             if isinstance(model_payload, dict)
             else None
         )
+        self._prompt_response_text: Optional[str] = None
+        self._prompt_response_error: Optional[str] = None
 
     @property
     def has_pending_text(self) -> bool:
@@ -354,6 +356,15 @@ class OutputAssembler:
             return self._part_types.get(part_id)
         return None
 
+    def on_prompt_response(self, response: Any) -> None:
+        if response is None:
+            return
+        result = parse_message_response(response)
+        if result.text:
+            self._prompt_response_text = result.text
+        if result.error:
+            self._prompt_response_error = result.error
+
     async def build_result(self) -> OutputAssemblyResult:
         """Build the final :class:`OutputAssemblyResult` after the stream loop.
 
@@ -397,6 +408,12 @@ class OutputAssembler:
                     self._text_parts.append(recovered.text)
                 if recovered.error and not self._error:
                     self._error = recovered.error
+
+        if not self._text_parts and self._prompt_response_text is not None:
+            if not prompt_echo_matches(self._prompt_response_text, prompt=self._prompt):
+                self._text_parts.append(self._prompt_response_text)
+        if not self._error and self._prompt_response_error is not None:
+            self._error = self._prompt_response_error
 
         final_text = self._last_completed_assistant_text or "".join(self._text_parts)
         return OutputAssemblyResult(
@@ -548,3 +565,29 @@ class OutputAssembler:
             break
         self._context_window_cache[cache_key] = context_window
         return context_window
+
+
+def apply_prompt_response_fallback(
+    output: Any,
+    response: Any,
+    *,
+    prompt: Optional[str] = None,
+) -> Any:
+    from .runtime import OpenCodeTurnOutput
+
+    if response is None:
+        return output
+    fallback = parse_message_response(response)
+    if not fallback.text and not fallback.error:
+        return output
+    text = output.text
+    error = output.error
+    usage = output.usage
+    if not text and fallback.text:
+        if not prompt_echo_matches(fallback.text, prompt=prompt):
+            text = fallback.text
+    if not error and fallback.error:
+        error = fallback.error
+    if text == output.text and error == output.error:
+        return output
+    return OpenCodeTurnOutput(text=text, error=error, usage=usage)

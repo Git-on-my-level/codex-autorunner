@@ -1,3 +1,25 @@
+"""Worktree snapshot and CAR-state archive owner.
+
+Ownership boundaries
+--------------------
+This module owns **worktree snapshot archives** and **destructive CAR-state
+archives** (reset).  It is the single authoritative planner and executor for
+paths that live under ``.codex-autorunner/archive/worktrees/``.
+
+Flow-run archives (``.codex-autorunner/archive/runs/``) are owned by
+``core.flows.archive_helpers`` instead.  That module consumes shared
+infrastructure exported here (``ArchiveEntrySpec``, ``execute_archive_entries``,
+``_contextspace_source``) but owns its own entry planning and retention policy.
+
+Canonical vs compatibility
+--------------------------
+- ``contextspace/`` is the canonical repo-local docs root.
+- ``workspace/`` is a compatibility-only fallback consumed exclusively through
+  ``_contextspace_source()`` during archive and reset operations.
+- ``flows.db`` / FlowStore is the canonical live run-history store; retained
+  archive trees are review artifacts, not live state.
+"""
+
 from __future__ import annotations
 
 import json
@@ -794,92 +816,37 @@ def _move_entry(
 
 
 def _contextspace_source(source_root: Path) -> Path:
+    """Resolve the contextspace directory, falling back to the legacy workspace path.
+
+    This is the **single owner** of the workspace-to-contextspace migration shim
+    for archive and reset operations.  All callers must use this helper rather
+    than implementing their own fallback logic.
+
+    Compatibility-only: ``contextspace/`` is canonical.  The ``workspace/``
+    fallback exists solely to preserve legacy context docs during archive/reset
+    on repos that have not yet been migrated.
+    """
     contextspace = source_root / "contextspace"
     if contextspace.exists() or contextspace.is_symlink():
         return contextspace
     legacy_workspace = source_root / "workspace"
     if legacy_workspace.exists() or legacy_workspace.is_symlink():
+        logger.debug(
+            "contextspace/ absent; falling back to legacy workspace/ at %s",
+            legacy_workspace,
+        )
         return legacy_workspace
     return contextspace
 
 
-def build_common_car_archive_entries(
-    source_root: Path,
-    dest_root: Path,
-    *,
-    include_contextspace: bool = True,
-    include_flow_store: bool = False,
-    include_config: bool = False,
-    include_runtime_state: bool = False,
-    include_logs: bool = False,
-    include_github_context: bool = False,
-) -> list[ArchiveEntrySpec]:
-    entries: list[ArchiveEntrySpec] = []
-    if include_contextspace:
-        entries.append(
-            ArchiveEntrySpec(
-                label="contextspace",
-                source=_contextspace_source(source_root),
-                dest=dest_root / "contextspace",
-            )
-        )
-    if include_flow_store:
-        entries.append(
-            ArchiveEntrySpec(
-                label="flows.db",
-                source=source_root / "flows.db",
-                dest=dest_root / "flows.db",
-            )
-        )
-    if include_config:
-        entries.append(
-            ArchiveEntrySpec(
-                label="config.yml",
-                source=source_root / "config.yml",
-                dest=dest_root / "config" / "config.yml",
-            )
-        )
-    if include_runtime_state:
-        entries.extend(
-            [
-                ArchiveEntrySpec(
-                    label="state.sqlite3",
-                    source=source_root / "state.sqlite3",
-                    dest=dest_root / "state" / "state.sqlite3",
-                ),
-                ArchiveEntrySpec(
-                    label="app_server_threads.json",
-                    source=source_root / "app_server_threads.json",
-                    dest=dest_root / "state" / "app_server_threads.json",
-                    required=False,
-                ),
-            ]
-        )
-    if include_logs:
-        entries.extend(
-            [
-                ArchiveEntrySpec(
-                    label="codex-autorunner.log",
-                    source=source_root / "codex-autorunner.log",
-                    dest=dest_root / "logs" / "codex-autorunner.log",
-                ),
-                ArchiveEntrySpec(
-                    label="codex-server.log",
-                    source=source_root / "codex-server.log",
-                    dest=dest_root / "logs" / "codex-server.log",
-                ),
-            ]
-        )
-    if include_github_context:
-        entries.append(
-            ArchiveEntrySpec(
-                label="github_context",
-                source=source_root / "github_context",
-                dest=dest_root / "github_context",
-                required=False,
-            )
-        )
-    return entries
+def _worktree_archive_root(base_repo_root: Path) -> Path:
+    return base_repo_root / ".codex-autorunner" / "archive" / "worktrees"
+
+
+def _worktree_snapshot_root(
+    base_repo_root: Path, worktree_repo_id: str, snapshot_id: str
+) -> Path:
+    return _worktree_archive_root(base_repo_root) / worktree_repo_id / snapshot_id
 
 
 def execute_archive_entries(
@@ -1042,13 +1009,8 @@ def archive_worktree_snapshot(
     branch_name = branch or git_branch(worktree_repo_root) or "unknown"
     resolved_head_sha = head_sha or git_head_sha(worktree_repo_root) or "unknown"
     snapshot_id = snapshot_id or build_snapshot_id(branch_name, resolved_head_sha)
-    final_snapshot_root = (
-        base_repo_root
-        / ".codex-autorunner"
-        / "archive"
-        / "worktrees"
-        / worktree_repo_id
-        / snapshot_id
+    final_snapshot_root = _worktree_snapshot_root(
+        base_repo_root, worktree_repo_id, snapshot_id
     )
     resolved_intent = intent or resolve_worktree_archive_intent(profile=profile)
     if resolved_intent not in {
@@ -1103,9 +1065,10 @@ def archive_worktree_snapshot(
         atomic_write(meta_path, json.dumps(meta, indent=2) + "\n")
         _finalize_snapshot_root(staging_root, final_snapshot_root)
         if retention_policy is not None:
+            archive_root = _worktree_archive_root(base_repo_root)
             try:
                 prune_worktree_archive_root(
-                    base_repo_root / ".codex-autorunner" / "archive" / "worktrees",
+                    archive_root,
                     policy=retention_policy,
                     preserve_paths=(final_snapshot_root,),
                 )
@@ -1116,7 +1079,7 @@ def archive_worktree_snapshot(
             ):  # best-effort prune; must not fail the archive
                 logger.warning(
                     "Failed to prune worktree archives under %s",
-                    base_repo_root / ".codex-autorunner" / "archive" / "worktrees",
+                    archive_root,
                     exc_info=True,
                 )
     except (RuntimeError, OSError, ValueError, TypeError) as exc:
@@ -1169,13 +1132,8 @@ def archive_workspace_car_state(
     branch_name = branch or git_branch(worktree_repo_root) or "unknown"
     resolved_head_sha = head_sha or git_head_sha(worktree_repo_root) or "unknown"
     snapshot_id = snapshot_id or build_snapshot_id(branch_name, resolved_head_sha)
-    final_snapshot_root = (
-        base_repo_root
-        / ".codex-autorunner"
-        / "archive"
-        / "worktrees"
-        / worktree_repo_id
-        / snapshot_id
+    final_snapshot_root = _worktree_snapshot_root(
+        base_repo_root, worktree_repo_id, snapshot_id
     )
     _, staging_root = _prepare_snapshot_roots(final_snapshot_root)
 
@@ -1226,9 +1184,10 @@ def archive_workspace_car_state(
         _finalize_snapshot_root(staging_root, final_snapshot_root)
         reset_paths = _reset_car_state(worktree_repo_root)
         if retention_policy is not None:
+            archive_root = _worktree_archive_root(base_repo_root)
             try:
                 prune_worktree_archive_root(
-                    base_repo_root / ".codex-autorunner" / "archive" / "worktrees",
+                    archive_root,
                     policy=retention_policy,
                     preserve_paths=(final_snapshot_root,),
                 )
@@ -1239,7 +1198,7 @@ def archive_workspace_car_state(
             ):
                 logger.warning(
                     "Failed to prune worktree archives under %s",
-                    base_repo_root / ".codex-autorunner" / "archive" / "worktrees",
+                    archive_root,
                     exc_info=True,
                 )
         if reset_paths != planned_reset_paths:

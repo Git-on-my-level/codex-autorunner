@@ -26,6 +26,7 @@ from ..schemas import (
     HubMessageSnapshotResponse,
     HubMessagesResponse,
 )
+from ..serializers import SectionFreshnessSummary
 from ..services import hub_gather as hub_gather_service
 
 HUB_MESSAGE_SECTIONS = frozenset(
@@ -72,15 +73,17 @@ def _build_hub_messages_payload(
                 generated_at=generated_at,
                 stale_threshold_seconds=stale_threshold_seconds,
                 sections={
-                    "inbox": summarize_section_freshness(
-                        items,
-                        generated_at=generated_at,
-                        stale_threshold_seconds=stale_threshold_seconds,
-                        extractor=lambda item: (
-                            (item.get("canonical_state_v1") or {}).get("freshness")
-                            if isinstance(item, dict)
-                            else None
-                        ),
+                    "inbox": SectionFreshnessSummary.model_validate(
+                        summarize_section_freshness(
+                            items,
+                            generated_at=generated_at,
+                            stale_threshold_seconds=stale_threshold_seconds,
+                            extractor=lambda item: (
+                                (item.get("canonical_state_v1") or {}).get("freshness")
+                                if isinstance(item, dict)
+                                else None
+                            ),
+                        )
                     )
                 },
             )

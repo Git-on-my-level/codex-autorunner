@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import inspect
 import logging
-import os
 import sqlite3
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
@@ -20,91 +19,33 @@ from ....core.scm_observability import (
     create_or_preserve_correlation_id,
 )
 from ....core.scm_reaction_state import ScmReactionStateStore
-from ....core.text_utils import _mapping
+from ....core.scm_webhook_config import (
+    drain_inline_enabled,
+    github_automation_config,
+    github_automation_enabled,
+    github_webhook_ingress_enabled,
+    resolve_github_webhook_config,
+    resolve_payload_limits,
+)
 from ....integrations.github import GitHubWebhookConfig, normalize_github_webhook
 
 ScmDrainCallback = Callable[[Request, ScmEvent], object]
 _DEFAULT_INSPECT_LIMIT = 50
 _MAX_INSPECT_LIMIT = 200
-_DEFAULT_MAX_PAYLOAD_BYTES = 262_144
-_DEFAULT_MAX_RAW_PAYLOAD_BYTES = 65_536
 
 
-def _github_automation_config(raw_config: object) -> Mapping[str, Any]:
-    github = _mapping(raw_config).get("github")
-    automation = _mapping(github).get("automation")
-    return _mapping(automation)
-
-
-def _github_webhook_ingress_config(raw_config: object) -> Mapping[str, Any]:
-    ingress = _github_automation_config(raw_config).get("webhook_ingress")
-    return _mapping(ingress)
-
-
-def github_automation_enabled(raw_config: object) -> bool:
-    return bool(_github_automation_config(raw_config).get("enabled"))
-
-
-def github_webhook_ingress_enabled(raw_config: object) -> bool:
-    ingress = _github_webhook_ingress_config(raw_config)
-    return github_automation_enabled(raw_config) and bool(ingress.get("enabled"))
-
-
-def _resolve_int(value: object, *, default: int) -> int:
-    if isinstance(value, int) and value > 0:
-        return value
-    return default
+def _to_webhook_config(resolved) -> GitHubWebhookConfig:
+    return GitHubWebhookConfig(
+        secret=resolved.secret,
+        verify_signatures=resolved.verify_signatures,
+        allow_unsigned=resolved.allow_unsigned,
+    )
 
 
 def _resolve_limit(value: object, *, default: int) -> int:
-    resolved = _resolve_int(value, default=default)
-    return min(resolved, _MAX_INSPECT_LIMIT)
-
-
-def _resolve_bool(value: object, *, default: bool) -> bool:
-    if isinstance(value, bool):
-        return value
-    return default
-
-
-def _resolve_secret(*configs: Mapping[str, Any]) -> Optional[str]:
-    secret: Optional[str] = None
-    secret_env: Optional[str] = None
-    for config in configs:
-        raw_secret = config.get("secret")
-        if isinstance(raw_secret, str) and raw_secret.strip():
-            secret = raw_secret.strip()
-        raw_secret_env = config.get("secret_env")
-        if isinstance(raw_secret_env, str) and raw_secret_env.strip():
-            secret_env = raw_secret_env.strip()
-    if secret_env:
-        env_value = os.getenv(secret_env)
-        if isinstance(env_value, str) and env_value.strip():
-            return env_value.strip()
-    return secret
-
-
-def _resolve_github_webhook_config(raw_config: object) -> GitHubWebhookConfig:
-    automation = _github_automation_config(raw_config)
-    ingress = _github_webhook_ingress_config(raw_config)
-    return GitHubWebhookConfig(
-        secret=_resolve_secret(automation, ingress),
-        verify_signatures=_resolve_bool(
-            ingress.get("verify_signatures", automation.get("verify_signatures")),
-            default=True,
-        ),
-        allow_unsigned=_resolve_bool(
-            ingress.get("allow_unsigned", automation.get("allow_unsigned")),
-            default=False,
-        ),
-    )
-
-
-def _drain_inline_enabled(raw_config: object) -> bool:
-    return _resolve_bool(
-        _github_automation_config(raw_config).get("drain_inline"),
-        default=False,
-    )
+    if not (isinstance(value, int) and value > 0):
+        value = default
+    return min(value, _MAX_INSPECT_LIMIT)
 
 
 def _compact(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -146,6 +87,15 @@ def _serialize_items(items: list[Any]) -> list[dict[str, Any]]:
     return serialized
 
 
+def _inspect_preamble(
+    request: Request, *, limit: int = _DEFAULT_INSPECT_LIMIT
+) -> tuple[Path, int]:
+    _require_scm_automation_enabled(_request_raw_config(request))
+    return _require_hub_root(request), _resolve_limit(
+        limit, default=_DEFAULT_INSPECT_LIMIT
+    )
+
+
 async def _run_drain_callback(
     *,
     request: Request,
@@ -177,7 +127,7 @@ def _default_drain_callback_factory(
 ) -> ScmDrainCallback:
     service = ScmAutomationService(
         hub_root,
-        reaction_config=_github_automation_config(raw_config),
+        reaction_config=github_automation_config(raw_config),
         schedule_deferred_publish_drain=True,
     )
 
@@ -206,10 +156,7 @@ def build_scm_webhook_routes(
         occurred_before: Optional[str] = None,
         limit: int = _DEFAULT_INSPECT_LIMIT,
     ) -> dict[str, Any]:
-        raw_config = _request_raw_config(request)
-        _require_scm_automation_enabled(raw_config)
-        hub_root = _require_hub_root(request)
-        resolved_limit = _resolve_limit(limit, default=_DEFAULT_INSPECT_LIMIT)
+        hub_root, resolved_limit = _inspect_preamble(request, limit=limit)
         try:
             events = ScmEventStore(hub_root).list_events(
                 provider=provider,
@@ -237,10 +184,7 @@ def build_scm_webhook_routes(
         thread_target_id: Optional[str] = None,
         limit: int = _DEFAULT_INSPECT_LIMIT,
     ) -> dict[str, Any]:
-        raw_config = _request_raw_config(request)
-        _require_scm_automation_enabled(raw_config)
-        hub_root = _require_hub_root(request)
-        resolved_limit = _resolve_limit(limit, default=_DEFAULT_INSPECT_LIMIT)
+        hub_root, resolved_limit = _inspect_preamble(request, limit=limit)
         try:
             bindings = PrBindingStore(hub_root).list_bindings(
                 provider=provider,
@@ -264,10 +208,7 @@ def build_scm_webhook_routes(
         last_event_id: Optional[str] = None,
         limit: int = _DEFAULT_INSPECT_LIMIT,
     ) -> dict[str, Any]:
-        raw_config = _request_raw_config(request)
-        _require_scm_automation_enabled(raw_config)
-        hub_root = _require_hub_root(request)
-        resolved_limit = _resolve_limit(limit, default=_DEFAULT_INSPECT_LIMIT)
+        hub_root, resolved_limit = _inspect_preamble(request, limit=limit)
         reactions = ScmReactionStateStore(hub_root).list_reaction_states(
             binding_id=binding_id,
             reaction_kind=reaction_kind,
@@ -284,10 +225,7 @@ def build_scm_webhook_routes(
         operation_kind: Optional[str] = None,
         limit: int = _DEFAULT_INSPECT_LIMIT,
     ) -> dict[str, Any]:
-        raw_config = _request_raw_config(request)
-        _require_scm_automation_enabled(raw_config)
-        hub_root = _require_hub_root(request)
-        resolved_limit = _resolve_limit(limit, default=_DEFAULT_INSPECT_LIMIT)
+        hub_root, resolved_limit = _inspect_preamble(request, limit=limit)
         operations = PublishJournalStore(hub_root).list_operations(
             state=state,
             operation_kind=operation_kind,
@@ -304,19 +242,8 @@ def build_scm_webhook_routes(
                 status_code=404, detail="GitHub webhook ingress disabled"
             )
         hub_root = _require_hub_root(request)
-
-        ingress = _github_webhook_ingress_config(raw_config)
-        max_payload_bytes = _resolve_int(
-            ingress.get("max_payload_bytes"),
-            default=_DEFAULT_MAX_PAYLOAD_BYTES,
-        )
-        max_raw_payload_bytes = _resolve_int(
-            ingress.get("max_raw_payload_bytes"),
-            default=_DEFAULT_MAX_RAW_PAYLOAD_BYTES,
-        )
-        store_raw_payload = _resolve_bool(
-            ingress.get("store_raw_payload"),
-            default=False,
+        max_payload_bytes, max_raw_payload_bytes, store_raw_payload = (
+            resolve_payload_limits(raw_config)
         )
 
         body = await request.body()
@@ -333,7 +260,7 @@ def build_scm_webhook_routes(
         result = normalize_github_webhook(
             headers=request.headers,
             body=body,
-            config=_resolve_github_webhook_config(raw_config),
+            config=_to_webhook_config(resolve_github_webhook_config(raw_config)),
         )
         if result.status == "ignored":
             return _compact(
@@ -445,7 +372,7 @@ def build_scm_webhook_routes(
                     exc_info=True,
                 )
             audit_error = "ingest_audit_failed"
-        if _drain_inline_enabled(raw_config):
+        if drain_inline_enabled(raw_config):
             try:
                 await _run_drain_callback(
                     request=request,

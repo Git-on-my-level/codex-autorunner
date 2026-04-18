@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from codex_autorunner.core.orchestration.migrate_legacy_state import (
@@ -27,94 +28,98 @@ def test_backfill_legacy_thread_state_imports_threads_turns_and_actions(
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir(parents=True)
 
-    store = PmaThreadStore(hub_root)
-    thread = store.create_thread(
-        "codex",
-        workspace_root,
-        repo_id="repo-1",
-        name="Primary",
-        backend_thread_id="backend-thread-1",
-    )
-    turn = store.create_turn(
-        thread["managed_thread_id"],
-        prompt="hello",
-        client_turn_id="client-turn-1",
-        model="gpt-test",
-        reasoning="high",
-    )
-    assert store.mark_turn_finished(
-        turn["managed_turn_id"],
-        status="ok",
-        assistant_text="world",
-        backend_turn_id="backend-turn-1",
-        transcript_turn_id="transcript-turn-1",
-    )
-    action_id = store.append_action(
-        "chat_completed",
-        managed_thread_id=thread["managed_thread_id"],
-        payload_json='{"ok":true}',
-    )
-
-    with open_orchestration_sqlite(hub_root, durable=False) as conn:
-        sync_legacy_mirror(
-            hub_root=hub_root,
-            legacy_db_path=default_pma_threads_db_path(hub_root),
-            durable=False,
-            orchestration_conn=conn,
-            thread_row_to_record=_thread_row_to_record,
-            execution_row_to_record=_execution_row_to_record,
-            ensure_legacy_schema=_ensure_schema,
+    os.environ["CAR_LEGACY_MIRROR_ENABLED"] = "true"
+    try:
+        store = PmaThreadStore(hub_root)
+        thread = store.create_thread(
+            "codex",
+            workspace_root,
+            repo_id="repo-1",
+            name="Primary",
+            backend_thread_id="backend-thread-1",
         )
-        with conn:
-            conn.execute("DELETE FROM orch_thread_actions")
-            conn.execute("DELETE FROM orch_thread_executions")
-            conn.execute("DELETE FROM orch_thread_targets")
-        counts = backfill_legacy_thread_state(hub_root, conn)
-        thread_row = conn.execute(
-            """
-            SELECT *
-              FROM orch_thread_targets
-             WHERE thread_target_id = ?
-            """,
-            (thread["managed_thread_id"],),
-        ).fetchone()
-        turn_row = conn.execute(
-            """
-            SELECT *
-              FROM orch_thread_executions
-             WHERE execution_id = ?
-            """,
-            (turn["managed_turn_id"],),
-        ).fetchone()
-        action_row = conn.execute(
-            """
-            SELECT *
-              FROM orch_thread_actions
-             WHERE action_id = ?
-            """,
-            (str(action_id),),
-        ).fetchone()
+        turn = store.create_turn(
+            thread["managed_thread_id"],
+            prompt="hello",
+            client_turn_id="client-turn-1",
+            model="gpt-test",
+            reasoning="high",
+        )
+        assert store.mark_turn_finished(
+            turn["managed_turn_id"],
+            status="ok",
+            assistant_text="world",
+            backend_turn_id="backend-turn-1",
+            transcript_turn_id="transcript-turn-1",
+        )
+        action_id = store.append_action(
+            "chat_completed",
+            managed_thread_id=thread["managed_thread_id"],
+            payload_json='{"ok":true}',
+        )
 
-    assert counts == {"threads": 1, "turns": 1, "actions": 1}
-    assert thread_row is not None
-    assert thread_row["agent_id"] == "codex"
-    assert thread_row["repo_id"] == "repo-1"
-    assert thread_row["backend_thread_id"] == "backend-thread-1"
-    assert thread_row["runtime_status"] == "completed"
-    assert turn_row is not None
-    assert turn_row["thread_target_id"] == thread["managed_thread_id"]
-    assert turn_row["request_kind"] == "managed_turn"
-    assert turn_row["backend_turn_id"] == "backend-turn-1"
-    assert turn_row["assistant_text"] == "world"
-    assert action_row is not None
-    assert action_row["thread_target_id"] == thread["managed_thread_id"]
-    assert action_row["action_type"] == "chat_completed"
+        with open_orchestration_sqlite(hub_root, durable=False) as conn:
+            sync_legacy_mirror(
+                hub_root=hub_root,
+                legacy_db_path=default_pma_threads_db_path(hub_root),
+                durable=False,
+                orchestration_conn=conn,
+                thread_row_to_record=_thread_row_to_record,
+                execution_row_to_record=_execution_row_to_record,
+                ensure_legacy_schema=_ensure_schema,
+            )
+            with conn:
+                conn.execute("DELETE FROM orch_thread_actions")
+                conn.execute("DELETE FROM orch_thread_executions")
+                conn.execute("DELETE FROM orch_thread_targets")
+            counts = backfill_legacy_thread_state(hub_root, conn)
+            thread_row = conn.execute(
+                """
+                SELECT *
+                  FROM orch_thread_targets
+                 WHERE thread_target_id = ?
+                """,
+                (thread["managed_thread_id"],),
+            ).fetchone()
+            turn_row = conn.execute(
+                """
+                SELECT *
+                  FROM orch_thread_executions
+                 WHERE execution_id = ?
+                """,
+                (turn["managed_turn_id"],),
+            ).fetchone()
+            action_row = conn.execute(
+                """
+                SELECT *
+                  FROM orch_thread_actions
+                 WHERE action_id = ?
+                """,
+                (str(action_id),),
+            ).fetchone()
 
-    normalized_turn = PmaThreadStore(hub_root).get_turn(
-        thread["managed_thread_id"], turn["managed_turn_id"]
-    )
-    assert normalized_turn is not None
-    assert normalized_turn["request_kind"] == "message"
+        assert counts == {"threads": 1, "turns": 1, "actions": 1}
+        assert thread_row is not None
+        assert thread_row["agent_id"] == "codex"
+        assert thread_row["repo_id"] == "repo-1"
+        assert thread_row["backend_thread_id"] == "backend-thread-1"
+        assert thread_row["runtime_status"] == "completed"
+        assert turn_row is not None
+        assert turn_row["thread_target_id"] == thread["managed_thread_id"]
+        assert turn_row["request_kind"] == "managed_turn"
+        assert turn_row["backend_turn_id"] == "backend-turn-1"
+        assert turn_row["assistant_text"] == "world"
+        assert action_row is not None
+        assert action_row["thread_target_id"] == thread["managed_thread_id"]
+        assert action_row["action_type"] == "chat_completed"
+
+        normalized_turn = PmaThreadStore(hub_root).get_turn(
+            thread["managed_thread_id"], turn["managed_turn_id"]
+        )
+        assert normalized_turn is not None
+        assert normalized_turn["request_kind"] == "message"
+    finally:
+        os.environ.pop("CAR_LEGACY_MIRROR_ENABLED", None)
 
 
 def test_backfill_legacy_automation_state_imports_json_store(tmp_path: Path) -> None:

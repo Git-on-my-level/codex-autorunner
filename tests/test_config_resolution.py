@@ -1174,3 +1174,147 @@ def test_ensure_hub_config_at_returns_existing_without_seeding(tmp_path: Path) -
 
     assert did_init is False, "Should not have initialized when config exists"
     assert result_path == config_path
+
+
+class TestHubPrecedenceCharacterization:
+    """Characterize the full hub load precedence: built-ins < root config < root override < config.yml."""
+
+    def test_built_in_defaults_when_no_root_config(self, tmp_path: Path) -> None:
+        hub_root = tmp_path / "hub"
+        hub_root.mkdir()
+        write_test_config(hub_root / CONFIG_FILENAME, {"mode": "hub"})
+
+        config = load_hub_config(hub_root)
+        assert config.server_port == 4173
+        assert config.pma.max_text_chars == 10_000
+
+    def test_root_config_overrides_built_in_defaults(self, tmp_path: Path) -> None:
+        hub_root = tmp_path / "hub"
+        hub_root.mkdir()
+        write_test_config(hub_root / "codex-autorunner.yml", {"server": {"port": 5000}})
+        write_test_config(hub_root / CONFIG_FILENAME, {"mode": "hub"})
+
+        config = load_hub_config(hub_root)
+        assert config.server_port == 5000
+
+    def test_root_override_overrides_root_config(self, tmp_path: Path) -> None:
+        hub_root = tmp_path / "hub"
+        hub_root.mkdir()
+        write_test_config(hub_root / "codex-autorunner.yml", {"server": {"port": 5000}})
+        write_test_config(
+            hub_root / "codex-autorunner.override.yml", {"server": {"port": 6000}}
+        )
+        write_test_config(hub_root / CONFIG_FILENAME, {"mode": "hub"})
+
+        config = load_hub_config(hub_root)
+        assert config.server_port == 6000
+
+    def test_config_yml_highest_precedence_over_root_files(
+        self, tmp_path: Path
+    ) -> None:
+        hub_root = tmp_path / "hub"
+        hub_root.mkdir()
+        write_test_config(hub_root / "codex-autorunner.yml", {"server": {"port": 5000}})
+        write_test_config(
+            hub_root / "codex-autorunner.override.yml", {"server": {"port": 6000}}
+        )
+        write_test_config(
+            hub_root / CONFIG_FILENAME, {"mode": "hub", "server": {"port": 7000}}
+        )
+
+        config = load_hub_config(hub_root)
+        assert config.server_port == 7000
+
+
+class TestRepoDerivationPrecedenceCharacterization:
+    """Characterize repo derivation: built-in repo defaults < hub shared keys < repo_defaults < repo override."""
+
+    def test_repo_gets_built_in_defaults_from_minimal_hub(self, tmp_path: Path) -> None:
+        hub_root = tmp_path / "hub"
+        hub_root.mkdir()
+        write_test_config(hub_root / CONFIG_FILENAME, {"mode": "hub"})
+
+        repo_root = hub_root / "repo"
+        repo_root.mkdir()
+
+        config = load_repo_config(repo_root, hub_path=hub_root)
+        assert config.runner_sleep_seconds == 5
+
+    def test_hub_shared_agents_propagate_to_repo(self, tmp_path: Path) -> None:
+        hub_root = tmp_path / "hub"
+        hub_root.mkdir()
+        write_test_config(
+            hub_root / CONFIG_FILENAME,
+            {
+                "mode": "hub",
+                "agents": {"opencode": {"binary": "/custom/opencode"}},
+            },
+        )
+
+        repo_root = hub_root / "repo"
+        repo_root.mkdir()
+
+        config = load_repo_config(repo_root, hub_path=hub_root)
+        assert config.agent_binary("opencode") == "/custom/opencode"
+
+    def test_hub_repo_defaults_override_shared_keys(self, tmp_path: Path) -> None:
+        hub_root = tmp_path / "hub"
+        hub_root.mkdir()
+        write_test_config(
+            hub_root / CONFIG_FILENAME,
+            {
+                "mode": "hub",
+                "repo_defaults": {"runner": {"sleep_seconds": 99}},
+            },
+        )
+
+        repo_root = hub_root / "repo"
+        repo_root.mkdir()
+
+        config = load_repo_config(repo_root, hub_path=hub_root)
+        assert config.runner_sleep_seconds == 99
+
+    def test_repo_override_highest_precedence(self, tmp_path: Path) -> None:
+        hub_root = tmp_path / "hub"
+        hub_root.mkdir()
+        write_test_config(
+            hub_root / CONFIG_FILENAME,
+            {
+                "mode": "hub",
+                "repo_defaults": {"runner": {"sleep_seconds": 99}},
+            },
+        )
+
+        repo_root = hub_root / "repo"
+        repo_root.mkdir()
+        write_test_config(
+            repo_root / REPO_OVERRIDE_FILENAME,
+            {"runner": {"sleep_seconds": 42}},
+        )
+
+        config = load_repo_config(repo_root, hub_path=hub_root)
+        assert config.runner_sleep_seconds == 42
+
+    def test_repo_override_rejects_mode_key(self, tmp_path: Path) -> None:
+        hub_root = tmp_path / "hub"
+        hub_root.mkdir()
+        write_test_config(hub_root / CONFIG_FILENAME, {"mode": "hub"})
+
+        repo_root = hub_root / "repo"
+        repo_root.mkdir()
+        write_test_config(repo_root / REPO_OVERRIDE_FILENAME, {"mode": "repo"})
+
+        with pytest.raises(ConfigError):
+            load_repo_config(repo_root, hub_path=hub_root)
+
+    def test_repo_override_rejects_version_key(self, tmp_path: Path) -> None:
+        hub_root = tmp_path / "hub"
+        hub_root.mkdir()
+        write_test_config(hub_root / CONFIG_FILENAME, {"mode": "hub"})
+
+        repo_root = hub_root / "repo"
+        repo_root.mkdir()
+        write_test_config(repo_root / REPO_OVERRIDE_FILENAME, {"version": 99})
+
+        with pytest.raises(ConfigError):
+            load_repo_config(repo_root, hub_path=hub_root)

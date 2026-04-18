@@ -24,7 +24,6 @@ from ..acp import (
     ACPPromptHandle,
     ACPSessionCapabilities,
     ACPSubprocessSupervisor,
-    ACPTurnTerminalEvent,
 )
 from ..managed_runtime import RuntimePreflightResult
 from ..types import TerminalTurnResult
@@ -861,9 +860,11 @@ def _build_surface_approval_request(
 
 
 def _should_close_turn_buffer(event: Any) -> bool:
-    if not isinstance(event, ACPTurnTerminalEvent):
+    method = getattr(event, "method", None)
+    payload = getattr(event, "payload", None)
+    if not isinstance(method, str) or not isinstance(payload, Mapping):
         return False
-    return _should_close_acp_turn_buffer(event.method, event.payload)
+    return _should_close_acp_turn_buffer(method, payload)
 
 
 def _workspace_key(workspace_root: Path) -> str:

@@ -22,7 +22,6 @@ from codex_autorunner.core.archive import (
     _snapshot_timestamp,
     _tickets_are_dirty,
     _tree_has_payload,
-    build_common_car_archive_entries,
     build_snapshot_id,
     dirty_car_state_paths,
     execute_archive_entries,
@@ -30,6 +29,7 @@ from codex_autorunner.core.archive import (
     resolve_workspace_archive_target,
     resolve_worktree_archive_intent,
 )
+from codex_autorunner.core.flows.archive_helpers import build_flow_archive_entries
 
 
 def _write(path: Path, content: str) -> None:
@@ -461,7 +461,7 @@ class TestBuildCommonCarArchiveEntries:
         source.mkdir()
         dest = tmp_path / "dest"
 
-        entries = build_common_car_archive_entries(source, dest)
+        entries = build_flow_archive_entries(source, dest)
         assert any(e.label == "contextspace" for e in entries)
 
     def test_all_includes(self, tmp_path: Path) -> None:
@@ -469,7 +469,7 @@ class TestBuildCommonCarArchiveEntries:
         source.mkdir()
         dest = tmp_path / "dest"
 
-        entries = build_common_car_archive_entries(
+        entries = build_flow_archive_entries(
             source,
             dest,
             include_contextspace=True,
@@ -494,7 +494,7 @@ class TestBuildCommonCarArchiveEntries:
         source.mkdir()
         dest = tmp_path / "dest"
 
-        entries = build_common_car_archive_entries(
+        entries = build_flow_archive_entries(
             source,
             dest,
             include_contextspace=False,

@@ -503,3 +503,181 @@ test("renders object-based status values without object coercion noise", () => {
   assert.equal(parsed.event.title, "Status");
   assert.equal(parsed.event.summary, "busy");
 });
+
+test("ignores events with no recognized method", () => {
+  resetOpenCodeEventState();
+  const parsed = parseAppServerEvent({
+    id: "unknown-method",
+    received_at: 3000,
+    message: {
+      method: "custom.unknown.method",
+      params: {},
+    },
+  });
+
+  assert.equal(parsed, null);
+});
+
+test("ignores events without a message property", () => {
+  resetOpenCodeEventState();
+  const parsed = parseAppServerEvent({
+    id: "no-message",
+    received_at: 3001,
+  });
+
+  assert.equal(parsed, null);
+});
+
+test("resets buffered assistant parts across state resets", () => {
+  resetOpenCodeEventState();
+  parseAppServerEvent({
+    id: "pre-reset-part",
+    received_at: 1000,
+    message: {
+      method: "message.part.updated",
+      params: {
+        properties: {
+          part: {
+            id: "part-pre-reset",
+            messageID: "assistant-pre",
+            type: "text",
+            text: "Should be lost",
+          },
+          delta: "Should be lost",
+        },
+      },
+    },
+  });
+
+  resetOpenCodeEventState();
+
+  const afterReset = parseAppServerEvent({
+    id: "role-post-reset",
+    received_at: 1001,
+    message: {
+      method: "message.updated",
+      params: {
+        properties: {
+          info: {
+            id: "assistant-pre",
+            role: "assistant",
+          },
+        },
+      },
+    },
+  });
+
+  assert.equal(afterReset, null, "buffered parts should be cleared after reset");
+});
+
+test("handles multiple assistant message streams independently", () => {
+  resetOpenCodeEventState();
+
+  parseAppServerEvent({
+    id: "role-a",
+    received_at: 1000,
+    message: {
+      method: "message.updated",
+      params: {
+        properties: {
+          info: { id: "assistant-a", role: "assistant" },
+        },
+      },
+    },
+  });
+
+  parseAppServerEvent({
+    id: "role-b",
+    received_at: 1001,
+    message: {
+      method: "message.updated",
+      params: {
+        properties: {
+          info: { id: "assistant-b", role: "assistant" },
+        },
+      },
+    },
+  });
+
+  const partA = parseAppServerEvent({
+    id: "part-a",
+    received_at: 1002,
+    message: {
+      method: "message.part.updated",
+      params: {
+        properties: {
+          part: {
+            id: "text-a-1",
+            messageID: "assistant-a",
+            type: "text",
+            text: "Stream A",
+          },
+        },
+      },
+    },
+  });
+
+  const partB = parseAppServerEvent({
+    id: "part-b",
+    received_at: 1003,
+    message: {
+      method: "message.part.updated",
+      params: {
+        properties: {
+          part: {
+            id: "text-b-1",
+            messageID: "assistant-b",
+            type: "text",
+            text: "Stream B",
+          },
+        },
+      },
+    },
+  });
+
+  assert.ok(partA);
+  assert.ok(partB);
+  assert.equal(partA.event.itemId, "assistant-a");
+  assert.equal(partB.event.itemId, "assistant-b");
+  assert.equal(partA.event.summary, "Stream A");
+  assert.equal(partB.event.summary, "Stream B");
+});
+
+test("session.diff with empty params still produces a file event", () => {
+  resetOpenCodeEventState();
+  const parsed = parseAppServerEvent({
+    id: "diff-no-props",
+    received_at: 4000,
+    message: {
+      method: "session.diff",
+      params: {},
+    },
+  });
+
+  assert.ok(parsed);
+  assert.equal(parsed.event.kind, "file");
+  assert.equal(parsed.event.summary, "File changes");
+  assert.equal(parsed.event.detail, "");
+});
+
+test("session.diff preview string is preferred when params message is absent", () => {
+  resetOpenCodeEventState();
+  const parsed = parseAppServerEvent({
+    id: "diff-preview-only",
+    received_at: 4001,
+    preview: "3 file changes",
+    message: {
+      method: "session.diff",
+      params: {
+        properties: {
+          diff_count: 3,
+        },
+      },
+    },
+  });
+
+  assert.ok(parsed);
+  assert.equal(parsed.event.kind, "file");
+  assert.equal(parsed.event.summary, "3 file changes");
+  assert.equal(parsed.event.detail, "");
+});

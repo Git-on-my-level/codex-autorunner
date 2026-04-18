@@ -48,12 +48,6 @@ from .protocol_helpers import (
     normalize_notification_envelope,
     normalize_response,
 )
-from .protocol_helpers import (
-    _extract_agent_message_phase as _protocol_extract_agent_message_phase,
-)
-from .protocol_helpers import (
-    _extract_agent_message_text as _protocol_extract_agent_message_text,
-)
 from .recovery import RecoveryConfig, TurnRecoveryCoordinator
 from .transport import AppServerReadBuffer, build_message
 from .turn_state import (
@@ -94,14 +88,6 @@ _DEFAULT_OUTPUT_POLICY = "final_only"
 _OUTPUT_POLICIES = {"final_only", "all_agent_messages"}
 
 _CLIENT_INSTANCES: weakref.WeakSet = weakref.WeakSet()
-
-
-def _extract_agent_message_text(item: Any) -> Optional[str]:
-    return _protocol_extract_agent_message_text(item)
-
-
-def _extract_agent_message_phase(item: Any) -> Optional[str]:
-    return _protocol_extract_agent_message_phase(item)
 
 
 class TurnHandle:

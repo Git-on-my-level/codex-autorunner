@@ -15,7 +15,9 @@ from codex_autorunner.core.config import (
     DEFAULT_REPO_CONFIG,
     TicketFlowConfig,
     _parse_app_server_config,
+    _parse_opencode_config,
 )
+from codex_autorunner.core.config_contract import ConfigError
 from codex_autorunner.integrations.agents.agent_pool_impl import DefaultAgentPool
 from codex_autorunner.tickets.agent_pool import AgentTurnRequest
 
@@ -209,10 +211,67 @@ def test_parse_app_server_output_policy_override(tmp_path: Path) -> None:
     assert app_server_cfg.output.policy == "all_agent_messages"
 
 
-def test_parse_app_server_output_policy_invalid_falls_back(tmp_path: Path) -> None:
-    app_server_cfg = _parse_app_server_config(
-        {"output": {"policy": "invalid"}},
-        tmp_path,
-        DEFAULT_REPO_CONFIG["app_server"],
-    )
-    assert app_server_cfg.output.policy == "final_only"
+def test_parse_app_server_output_policy_invalid_raises(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="must be one of"):
+        _parse_app_server_config(
+            {"output": {"policy": "invalid"}},
+            tmp_path,
+            DEFAULT_REPO_CONFIG["app_server"],
+        )
+
+
+class TestOpencodeServerScopeStrictness:
+    def test_valid_workspace(self, tmp_path: Path) -> None:
+        cfg = _parse_opencode_config({"server_scope": "workspace"}, tmp_path, {})
+        assert cfg.server_scope == "workspace"
+
+    def test_valid_global(self, tmp_path: Path) -> None:
+        cfg = _parse_opencode_config({"server_scope": "global"}, tmp_path, {})
+        assert cfg.server_scope == "global"
+
+    def test_invalid_scope_raises(self, tmp_path: Path) -> None:
+        with pytest.raises(ConfigError, match="must be 'workspace' or 'global'"):
+            _parse_opencode_config({"server_scope": "invalid"}, tmp_path, {})
+
+    def test_default_is_workspace(self, tmp_path: Path) -> None:
+        cfg = _parse_opencode_config({}, tmp_path, {})
+        assert cfg.server_scope == "workspace"
+
+
+class TestPmaNumericCompatibilityRepair:
+    def test_max_upload_bytes_non_int_falls_back(self, tmp_path: Path) -> None:
+        from codex_autorunner.core.config_parsers import _parse_pma_config
+
+        cfg = _parse_pma_config({"max_upload_bytes": "not_a_number"}, tmp_path, {})
+        assert cfg.max_upload_bytes == 10_000_000
+
+    def test_max_upload_bytes_zero_falls_back(self, tmp_path: Path) -> None:
+        from codex_autorunner.core.config_parsers import _parse_pma_config
+
+        cfg = _parse_pma_config({"max_upload_bytes": 0}, tmp_path, {})
+        assert cfg.max_upload_bytes == 10_000_000
+
+    def test_max_text_chars_non_int_falls_back(self, tmp_path: Path) -> None:
+        from codex_autorunner.core.config_layering import PMA_DEFAULT_MAX_TEXT_CHARS
+        from codex_autorunner.core.config_parsers import _parse_pma_config
+
+        cfg = _parse_pma_config({"max_text_chars": "bad"}, tmp_path, {})
+        assert cfg.max_text_chars == PMA_DEFAULT_MAX_TEXT_CHARS
+
+    def test_max_repos_negative_falls_back(self, tmp_path: Path) -> None:
+        from codex_autorunner.core.config_parsers import _parse_pma_config
+
+        cfg = _parse_pma_config({"max_repos": -5}, tmp_path, {})
+        assert cfg.max_repos == 25
+
+
+class TestUpdateBackendCompatibilityRepair:
+    def test_missing_defaults_to_auto(self, tmp_path: Path) -> None:
+        from codex_autorunner.core.config_parsers import _parse_update_backend
+
+        assert _parse_update_backend({}) == "auto"
+
+    def test_empty_string_defaults_to_auto(self, tmp_path: Path) -> None:
+        from codex_autorunner.core.config_parsers import _parse_update_backend
+
+        assert _parse_update_backend({"backend": ""}) == "auto"

@@ -3,7 +3,6 @@
 import json
 import logging
 import sys
-import time
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -13,7 +12,6 @@ from typing import Any, Optional
 import httpx
 import typer
 
-from ...agents.registry import get_registered_agents
 from ...bootstrap import ensure_pma_docs, pma_doc_path
 from ...core.car_context import (
     default_managed_thread_context_profile,
@@ -37,15 +35,61 @@ from ...core.pma_hygiene import (
     build_pma_hygiene_report,
     render_pma_hygiene_report,
 )
-from ...core.text_utils import _truncate_text
 from .commands.utils import format_hub_request_error
 from .hub_path_option import hub_root_path_option
+from .pma_control_plane import (
+    CAPABILITY_REQUIREMENTS as _CAPABILITY_REQUIREMENTS,
+)
+from .pma_control_plane import (
+    ManagedThreadSendRequest as _ManagedThreadSendRequest,
+)
+from .pma_control_plane import (
+    ManagedThreadSendResponse as _ManagedThreadSendResponse,
+)
+from .pma_control_plane import (
+    ManagedThreadSendTimeoutProbe as _ManagedThreadSendTimeoutProbe,
+)
+from .pma_control_plane import (
+    auth_headers_from_env as _auth_headers_from_env,
+)
+from .pma_control_plane import (
+    build_pma_url as _build_pma_url,
+)
+from .pma_control_plane import (
+    capture_managed_thread_send_timeout_probe as _capture_managed_thread_send_timeout_probe,
+)
+from .pma_control_plane import (
+    check_capability as _check_capability,
+)
+from .pma_control_plane import (
+    coerce_optional_int as _coerce_optional_int,
+)
+from .pma_control_plane import (
+    fetch_agent_capabilities as _fetch_agent_capabilities,
+)
+from .pma_control_plane import (
+    format_resource_owner_label as _format_resource_owner_label,
+)
+from .pma_control_plane import (
+    normalize_agent_option as _normalize_agent_option,
+)
+from .pma_control_plane import (
+    normalize_notify_on as _normalize_notify_on,
+)
+from .pma_control_plane import (
+    normalize_resource_owner_options as _normalize_resource_owner_options,
+)
+from .pma_control_plane import (
+    recover_managed_thread_send_timeout as _recover_managed_thread_send_timeout,
+)
+from .pma_control_plane import (
+    request_json as _request_json,
+)
+from .pma_control_plane import (
+    request_json_with_status as _request_json_with_status,
+)
 
 logger = logging.getLogger(__name__)
-_MANAGED_THREAD_SEND_PREVIEW_LIMIT = 120
-_MANAGED_THREAD_SEND_TIMEOUT_STATUS_LIMIT = 50
-_MANAGED_THREAD_SEND_TIMEOUT_RECOVERY_WINDOW_SECONDS = 3.0
-_MANAGED_THREAD_SEND_TIMEOUT_RECOVERY_POLL_SECONDS = 0.25
 
 pma_app = typer.Typer(
     add_completion=False,
@@ -91,13 +135,6 @@ pma_app.add_typer(file_app, name="file")
 
 def _pma_docs_path(hub_root: Path, doc_name: str) -> Path:
     return pma_doc_path(hub_root, doc_name)
-
-
-def _build_pma_url(config, path: str) -> str:
-    base_path = config.server_base_path or ""
-    if base_path.endswith("/") and path.startswith("/"):
-        base_path = base_path[:-1]
-    return f"http://{config.server_host}:{config.server_port}{base_path}/hub/pma{path}"
 
 
 def _resolve_hub_path(path: Optional[Path]) -> Path:
@@ -207,44 +244,6 @@ def _echo_delivered_message(message: str) -> None:
     typer.echo(message, nl=False)
     if not message.endswith("\n"):
         typer.echo()
-
-
-def _request_json(
-    method: str,
-    url: str,
-    payload: Optional[dict] = None,
-    token_env: Optional[str] = None,
-    params: Optional[dict[str, Any]] = None,
-) -> dict:
-    import os
-
-    headers = None
-    if token_env:
-        token = os.environ.get(token_env)
-        if token and token.strip():
-            headers = {"Authorization": f"Bearer {token.strip()}"}
-    response = httpx.request(
-        method,
-        url,
-        json=payload,
-        params=params,
-        timeout=30.0,
-        headers=headers,
-    )
-    response.raise_for_status()
-    data = response.json()
-    return data if isinstance(data, dict) else {}
-
-
-def _auth_headers_from_env(token_env: Optional[str]) -> Optional[dict[str, str]]:
-    if not token_env:
-        return None
-    import os
-
-    token = os.environ.get(token_env)
-    if token and token.strip():
-        return {"Authorization": f"Bearer {token.strip()}"}
-    return None
 
 
 def _is_json_response_error(data: dict) -> Optional[str]:
@@ -371,21 +370,6 @@ def _format_received_at_label(value: Any) -> str:
     except ValueError:
         return timestamp
     return dt.strftime("%H:%M:%S")
-
-
-def _coerce_optional_int(value: Any) -> Optional[int]:
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return int(value)
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str) and value.strip():
-        try:
-            return int(value)
-        except ValueError:
-            return None
-    return None
 
 
 @dataclass(frozen=True)
@@ -734,289 +718,6 @@ class _PmaThreadStatusSnapshot:
         return [line for line in lines if line]
 
 
-@dataclass(frozen=True)
-class _ManagedThreadSendRequest:
-    message: str
-    busy_policy: str
-    defer_execution: bool
-    model: Optional[str] = None
-    reasoning: Optional[str] = None
-    notify_on: Optional[str] = None
-    notify_lane: Optional[str] = None
-    notify_once: bool = True
-
-    def to_payload(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "message": self.message,
-            "busy_policy": self.busy_policy,
-            "defer_execution": self.defer_execution,
-        }
-        if self.model:
-            payload["model"] = self.model
-        if self.reasoning:
-            payload["reasoning"] = self.reasoning
-        if self.notify_on:
-            payload["notify_on"] = self.notify_on
-            payload["notify_lane"] = self.notify_lane
-            payload["notify_once"] = self.notify_once
-        return payload
-
-
-@dataclass(frozen=True)
-class _ManagedThreadSendResponse:
-    status_code: int
-    status: str
-    send_state: str
-    execution_state: str
-    managed_turn_id: str
-    active_managed_turn_id: str
-    queue_depth: Optional[int]
-    delivered_message: str
-    assistant_text: str
-    detail: str
-    error: str
-    next_step: str
-    notification_mode: str
-    notification_lane: str
-
-    @classmethod
-    def from_http(
-        cls, status_code: int, data: Any, *, default_message: str
-    ) -> "_ManagedThreadSendResponse":
-        payload = data if isinstance(data, dict) else {}
-        return cls(
-            status_code=status_code,
-            status=str(payload.get("status") or ""),
-            send_state=str(payload.get("send_state") or "").strip().lower(),
-            execution_state=str(payload.get("execution_state") or "").strip().lower(),
-            managed_turn_id=str(payload.get("managed_turn_id") or ""),
-            active_managed_turn_id=str(
-                payload.get("active_managed_turn_id") or ""
-            ).strip(),
-            queue_depth=_coerce_optional_int(payload.get("queue_depth")),
-            delivered_message=str(payload.get("delivered_message") or default_message),
-            assistant_text=str(payload.get("assistant_text") or ""),
-            detail=str(payload.get("detail") or "").strip(),
-            error=str(payload.get("error") or "").strip(),
-            next_step=str(payload.get("next_step") or "").strip(),
-            notification_mode=str(
-                ((payload.get("notification") or {}).get("mode") or "")
-            ).strip(),
-            notification_lane=str(
-                (
-                    ((payload.get("notification") or {}).get("subscription") or {}).get(
-                        "lane_id"
-                    )
-                    or ""
-                )
-            ).strip(),
-        )
-
-    @property
-    def is_ok(self) -> bool:
-        return self.status_code < 400 and self.status == "ok"
-
-    def error_detail(self) -> str:
-        return self.detail or self.error or "Managed thread send failed"
-
-    def accepted_line(self) -> str:
-        line = (
-            f"send_state={self.send_state or 'accepted'} "
-            f"managed_turn_id={self.managed_turn_id}"
-        )
-        if self.active_managed_turn_id:
-            line += f" active_managed_turn_id={self.active_managed_turn_id}"
-        if self.queue_depth is not None:
-            line += f" queue_depth={self.queue_depth}"
-        if self.notification_mode:
-            line += f" wakeup={self.notification_mode}"
-            if self.notification_lane:
-                line += f" lane={self.notification_lane}"
-        return line
-
-    def completion_line(self) -> str:
-        return (
-            f"send_state={self.send_state or 'accepted'} "
-            f"managed_turn_id={self.managed_turn_id} "
-            f"execution_state={self.execution_state or 'completed'}"
-        ).strip()
-
-
-@dataclass(frozen=True)
-class _ManagedThreadSendTimeoutProbe:
-    last_turn_id: str
-    last_message_preview: str
-    active_managed_turn_id: str
-    active_turn_status: str
-    queue_depth: int
-    queued_turn_ids: tuple[str, ...]
-    queued_prompt_previews: tuple[str, ...]
-
-    @classmethod
-    def from_status(cls, data: Any) -> "_ManagedThreadSendTimeoutProbe":
-        payload = data if isinstance(data, dict) else {}
-        raw_thread = payload.get("thread")
-        thread: dict[str, Any] = raw_thread if isinstance(raw_thread, dict) else {}
-        raw_turn = payload.get("turn")
-        turn: dict[str, Any] = raw_turn if isinstance(raw_turn, dict) else {}
-        raw_queued_turns = payload.get("queued_turns")
-        queued_turns = raw_queued_turns if isinstance(raw_queued_turns, list) else []
-        queued_turn_ids = tuple(
-            str(item.get("managed_turn_id") or "").strip()
-            for item in queued_turns
-            if isinstance(item, dict) and str(item.get("managed_turn_id") or "").strip()
-        )
-        queued_prompt_previews = tuple(
-            str(item.get("prompt_preview") or "").strip()
-            for item in queued_turns
-            if isinstance(item, dict) and str(item.get("prompt_preview") or "").strip()
-        )
-        return cls(
-            last_turn_id=str(
-                thread.get("last_turn_id")
-                or thread.get("latest_turn_id")
-                or payload.get("latest_turn_id")
-                or ""
-            ).strip(),
-            last_message_preview=str(thread.get("last_message_preview") or "").strip(),
-            active_managed_turn_id=str(turn.get("managed_turn_id") or "").strip(),
-            active_turn_status=str(turn.get("status") or "").strip(),
-            queue_depth=_coerce_optional_int(payload.get("queue_depth")) or 0,
-            queued_turn_ids=queued_turn_ids,
-            queued_prompt_previews=queued_prompt_previews,
-        )
-
-
-def _fetch_managed_thread_status_payload(
-    config,
-    *,
-    managed_thread_id: str,
-) -> dict[str, Any]:
-    return _request_json(
-        "GET",
-        _build_pma_url(config, f"/threads/{managed_thread_id}/status"),
-        token_env=config.server_auth_token_env,
-        params={"limit": _MANAGED_THREAD_SEND_TIMEOUT_STATUS_LIMIT},
-    )
-
-
-def _capture_managed_thread_send_timeout_probe(
-    config,
-    *,
-    managed_thread_id: str,
-) -> Optional[_ManagedThreadSendTimeoutProbe]:
-    try:
-        return _ManagedThreadSendTimeoutProbe.from_status(
-            _fetch_managed_thread_status_payload(
-                config,
-                managed_thread_id=managed_thread_id,
-            )
-        )
-    except (httpx.HTTPError, ValueError, OSError, TypeError):
-        return None
-
-
-def _recover_managed_thread_send_timeout(
-    config,
-    *,
-    managed_thread_id: str,
-    message_body: str,
-    baseline: Optional[_ManagedThreadSendTimeoutProbe],
-) -> Optional[_ManagedThreadSendResponse]:
-    if baseline is None:
-        return None
-
-    expected_preview = _truncate_text(
-        message_body, _MANAGED_THREAD_SEND_PREVIEW_LIMIT
-    ).strip()
-    if not expected_preview:
-        return None
-
-    deadline = time.monotonic() + _MANAGED_THREAD_SEND_TIMEOUT_RECOVERY_WINDOW_SECONDS
-    baseline_queued_ids = set(baseline.queued_turn_ids)
-    while True:
-        try:
-            current = _ManagedThreadSendTimeoutProbe.from_status(
-                _fetch_managed_thread_status_payload(
-                    config,
-                    managed_thread_id=managed_thread_id,
-                )
-            )
-        except (httpx.HTTPError, ValueError, OSError, TypeError):
-            if time.monotonic() >= deadline:
-                return None
-            time.sleep(_MANAGED_THREAD_SEND_TIMEOUT_RECOVERY_POLL_SECONDS)
-            continue
-
-        recovered_turn_id = ""
-        queued = False
-        if current.last_turn_id != baseline.last_turn_id and current.last_turn_id:
-            recovered_turn_id = current.last_turn_id
-        else:
-            queued_match_id = next(
-                (
-                    managed_turn_id
-                    for managed_turn_id, prompt_preview in zip(
-                        current.queued_turn_ids, current.queued_prompt_previews
-                    )
-                    if prompt_preview == expected_preview
-                    and managed_turn_id not in baseline_queued_ids
-                ),
-                "",
-            )
-            if (
-                not queued_match_id
-                and current.queue_depth > baseline.queue_depth
-                and expected_preview in current.queued_prompt_previews
-                and expected_preview not in baseline.queued_prompt_previews
-            ):
-                queued_match_id = next(
-                    (
-                        managed_turn_id
-                        for managed_turn_id, prompt_preview in zip(
-                            current.queued_turn_ids, current.queued_prompt_previews
-                        )
-                        if prompt_preview == expected_preview
-                    ),
-                    "",
-                )
-            if queued_match_id:
-                recovered_turn_id = queued_match_id
-                queued = True
-
-        if recovered_turn_id:
-            payload: dict[str, Any] = {
-                "status": "ok",
-                "send_state": "queued" if queued else "accepted",
-                "execution_state": (
-                    "queued" if queued else (current.active_turn_status or "running")
-                ),
-                "managed_turn_id": recovered_turn_id,
-                "active_managed_turn_id": (
-                    current.active_managed_turn_id if queued else recovered_turn_id
-                ),
-                "queue_depth": current.queue_depth,
-                "delivered_message": message_body,
-                "assistant_text": "",
-                "detail": (
-                    "Timed out waiting for send confirmation; recovered delivery "
-                    "from thread status."
-                ),
-                "error": "",
-                "next_step": (
-                    "Use `car pma thread status` or `car pma thread tail` if you "
-                    "want to watch execution progress."
-                ),
-            }
-            return _ManagedThreadSendResponse.from_http(
-                200, payload, default_message=message_body
-            )
-
-        if time.monotonic() >= deadline:
-            return None
-        time.sleep(_MANAGED_THREAD_SEND_TIMEOUT_RECOVERY_POLL_SECONDS)
-
-
 def _render_active_turn_diagnostics(data: dict[str, Any]) -> None:
     diagnostics = _PmaActiveTurnDiagnostics.from_dict(data)
     if diagnostics is None:
@@ -1031,195 +732,10 @@ def _render_tail_snapshot(snapshot: dict[str, Any]) -> None:
         typer.echo(line)
 
 
-def _normalize_notify_on(value: Optional[str]) -> Optional[str]:
-    text = (value or "").strip().lower()
-    if not text:
-        return None
-    if text != "terminal":
-        raise typer.BadParameter("notify-on must be 'terminal'")
-    return text
-
-
-_CAPABILITY_REQUIREMENTS = {
-    "models": "model_listing",
-    "interrupt": "interrupt",
-    "thread_interrupt": "interrupt",
-    "thread_send": "message_turns",
-    "thread_turns": "transcript_history",
-    "thread_output": "transcript_history",
-    "thread_tail": "event_streaming",
-    "thread_compact": "message_turns",
-    "thread_resume": "durable_threads",
-    "thread_archive": "durable_threads",
-    "thread_spawn": "durable_threads",
-    "review": "review",
-}
-
-
-def _fetch_agent_capabilities(
-    config, path: Optional[Path] = None
-) -> dict[str, list[str]]:
-    url = _build_pma_url(config, "/agents")
-    try:
-        data = _request_json("GET", url, token_env=config.server_auth_token_env)
-    except Exception:  # best-effort capability fetch
-        return {}
-    agents = data.get("agents", []) if isinstance(data, dict) else []
-    return {
-        agent.get("id", ""): agent.get("capabilities", [])
-        for agent in agents
-        if isinstance(agent, dict)
-    }
-
-
-def _check_capability(
-    agent_id: str,
-    capability: str,
-    capabilities: dict[str, list[str]],
-) -> bool:
-    agent_caps = capabilities.get(agent_id, [])
-    return capability in agent_caps
-
-
-def _request_json_with_status(
-    method: str,
-    url: str,
-    payload: Optional[dict[str, Any]] = None,
-    token_env: Optional[str] = None,
-    params: Optional[dict[str, Any]] = None,
-    timeout: float = 30.0,
-) -> tuple[int, dict[str, Any]]:
-    headers = _auth_headers_from_env(token_env)
-    response = httpx.request(
-        method,
-        url,
-        json=payload,
-        params=params,
-        headers=headers,
-        timeout=timeout,
-    )
-    data: dict[str, Any] = {}
-    try:
-        parsed = response.json()
-        if isinstance(parsed, dict):
-            data = parsed
-    except ValueError:
-        data = {}
-    return response.status_code, data
-
-
-def _normalize_agent_option(agent: Optional[str]) -> Optional[str]:
-    if agent is None:
-        return None
-    normalized = agent.strip().lower()
-    if not normalized:
-        return None
-    registered = get_registered_agents()
-    if normalized not in registered:
-        available = ", ".join(sorted(registered.keys()))
-        typer.echo(
-            f"--agent must be a registered agent. Available: {available}",
-            err=True,
-        )
-        raise typer.Exit(code=1) from None
-    return normalized
-
-
-def _normalize_resource_owner_options(
-    *,
-    repo_id: Optional[str],
-    resource_kind: Optional[str],
-    resource_id: Optional[str],
-    workspace_root: Optional[str] = None,
-) -> tuple[Optional[str], Optional[str], Optional[str]]:
-    normalized_repo_id = (
-        repo_id.strip() if isinstance(repo_id, str) and repo_id.strip() else None
-    )
-    normalized_resource_kind = (
-        resource_kind.strip().lower()
-        if isinstance(resource_kind, str) and resource_kind.strip()
-        else None
-    )
-    normalized_resource_id = (
-        resource_id.strip()
-        if isinstance(resource_id, str) and resource_id.strip()
-        else None
-    )
-    normalized_workspace_root = (
-        workspace_root.strip()
-        if isinstance(workspace_root, str) and workspace_root.strip()
-        else None
-    )
-    repo_present = normalized_repo_id is not None
-    resource_present = (
-        normalized_resource_kind is not None or normalized_resource_id is not None
-    )
-    workspace_present = normalized_workspace_root is not None
-
-    if normalized_resource_id and normalized_resource_kind is None:
-        typer.echo(
-            "--resource-kind is required when --resource-id is provided", err=True
-        )
-        raise typer.Exit(code=1) from None
-    if normalized_resource_kind and normalized_resource_id is None:
-        typer.echo(
-            "--resource-id is required when --resource-kind is provided", err=True
-        )
-        raise typer.Exit(code=1) from None
-    if normalized_resource_kind not in {None, "repo", "agent_workspace"}:
-        typer.echo("--resource-kind must be one of: repo, agent_workspace", err=True)
-        raise typer.Exit(code=1) from None
-    if normalized_repo_id and normalized_resource_kind not in {None, "repo"}:
-        typer.echo(
-            "--repo cannot be combined with a non-repo --resource-kind",
-            err=True,
-        )
-        raise typer.Exit(code=1) from None
-    if (
-        normalized_repo_id
-        and normalized_resource_id
-        and normalized_resource_id != normalized_repo_id
-    ):
-        typer.echo("--repo must match --resource-id for repo-backed requests", err=True)
-        raise typer.Exit(code=1) from None
-    if (
-        sum(
-            1
-            for present in (repo_present, resource_present, workspace_present)
-            if present
-        )
-        > 1
-    ):
-        typer.echo(
-            "Choose exactly one of --repo, --resource-kind/--resource-id, or --workspace-root",
-            err=True,
-        )
-        raise typer.Exit(code=1) from None
-    if normalized_repo_id and normalized_resource_kind is None:
-        normalized_resource_kind = "repo"
-        normalized_resource_id = normalized_repo_id
-
-    return (
-        normalized_resource_kind,
-        normalized_resource_id,
-        normalized_workspace_root,
-    )
-
-
-def _format_resource_owner_label(item: dict[str, Any]) -> str:
-    resource_kind = str(item.get("resource_kind") or "").strip()
-    resource_id = str(item.get("resource_id") or "").strip()
-    repo_id = str(item.get("repo_id") or "").strip()
-    if resource_kind and resource_id:
-        if resource_kind == "repo":
-            return f"repo={resource_id}"
-        return f"owner={resource_kind}:{resource_id}"
-    if repo_id:
-        return f"repo={repo_id}"
-    workspace_root = str(item.get("workspace_root") or "").strip()
-    if workspace_root:
-        return f"workspace={workspace_root}"
-    return "owner=-"
+def _render_thread_status_snapshot(data: dict[str, Any]) -> None:
+    snapshot = _PmaThreadStatusSnapshot.from_dict(data)
+    for line in snapshot.render_lines():
+        typer.echo(line)
 
 
 def _normalize_thread_compact_scope(
@@ -1307,12 +823,6 @@ def _record_thread_compact_audit(
         )
     except (OSError, ValueError) as exc:  # intentional: non-critical audit logging
         logger.warning("Failed to record PMA thread compact audit entry: %s", exc)
-
-
-def _render_thread_status_snapshot(data: dict[str, Any]) -> None:
-    snapshot = _PmaThreadStatusSnapshot.from_dict(data)
-    for line in snapshot.render_lines():
-        typer.echo(line)
 
 
 def _render_compacted_active_context(
@@ -1692,8 +1202,7 @@ def pma_hygiene(
         "--include-needs-confirmation",
         "--force-non-safe",
         help=(
-            "Also apply reviewed needs-confirmation managed-thread cleanup "
-            "candidates."
+            "Also apply reviewed needs-confirmation managed-thread cleanup candidates."
         ),
     ),
     summary: bool = typer.Option(

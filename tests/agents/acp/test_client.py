@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from contextlib import suppress
 from pathlib import Path
 
 import pytest
@@ -18,12 +19,30 @@ from codex_autorunner.agents.acp.errors import (
     ACPProcessCrashedError,
     ACPProtocolError,
 )
+from codex_autorunner.agents.acp.events import normalize_notification
 from codex_autorunner.agents.acp.protocol import (
     ACPSessionForkResult,
     ACPSetModelResult,
     ACPSetModeResult,
     extract_advertised_commands,
     extract_session_capabilities,
+)
+from codex_autorunner.core.acp_lifecycle import (
+    _IDLE_TERMINAL_METHODS,
+    _SESSION_TURN_ID_FALLBACK_METHODS,
+    _TERMINAL_METHODS,
+)
+from codex_autorunner.core.acp_lifecycle import (
+    classify_prompt_response_status as _classify_prompt_response_status,
+)
+from codex_autorunner.core.acp_lifecycle import (
+    extract_prompt_response_error as _extract_prompt_response_error,
+)
+from codex_autorunner.core.acp_lifecycle import (
+    prompt_terminal_method_for_status as _prompt_terminal_method_for_status,
+)
+from codex_autorunner.core.acp_lifecycle import (
+    should_map_missing_turn_id as _shared_should_map_missing_turn_id,
 )
 
 FIXTURE_PATH = Path(__file__).resolve().parents[2] / "fixtures" / "fake_acp_server.py"
@@ -71,6 +90,36 @@ def test_client_maps_shared_lifecycle_fixtures_without_turn_id(
 
     expected_turn_id = "turn-2" if expected["uses_turn_id_fallback"] else None
     assert mapped.get("params", {}).get("turnId") == expected_turn_id
+
+
+@pytest.mark.asyncio
+async def test_client_infers_server_turn_alias_from_inflight_prompt_event() -> None:
+    client = ACPClient(fixture_command("official"))
+    state = client._ensure_prompt_state("session-1", "turn-1")
+    client._session_active_turns["session-1"] = "turn-1"
+    request_task = asyncio.create_task(asyncio.sleep(10))
+    state.request_task = request_task
+    event = normalize_notification(
+        {
+            "method": "prompt/completed",
+            "params": {
+                "sessionId": "session-1",
+                "turnId": "server-turn-1",
+                "status": "completed",
+                "finalOutput": "fixture reply",
+            },
+        }
+    )
+
+    try:
+        resolved = await client._resolve_prompt_state_for_event(event)
+
+        assert resolved is state
+        assert client._prompts["server-turn-1"] is state
+    finally:
+        request_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await request_task
 
 
 @pytest.mark.asyncio
@@ -786,3 +835,143 @@ def test_extract_session_capabilities_from_various_payloads() -> None:
     assert caps.fork is True
     assert caps.set_model is True
     assert caps.set_mode is True
+
+
+class TestClientLifecycleDelegation:
+    def test_client_imports_shared_turn_id_fallback(self) -> None:
+        from codex_autorunner.agents.acp.client import (
+            _should_map_missing_turn_id,
+        )
+
+        for method in _SESSION_TURN_ID_FALLBACK_METHODS:
+            assert _should_map_missing_turn_id(method, {})
+
+    def test_client_fallback_matches_shared_lifecycle(self) -> None:
+        from codex_autorunner.agents.acp.client import (
+            _should_map_missing_turn_id,
+        )
+
+        for method in _TERMINAL_METHODS:
+            assert _should_map_missing_turn_id(
+                method, {}
+            ) == _shared_should_map_missing_turn_id(method, {})
+
+        for method in (
+            "prompt/started",
+            "turn/started",
+            "permission/requested",
+            "token/usage",
+        ):
+            assert _should_map_missing_turn_id(
+                method, {}
+            ) == _shared_should_map_missing_turn_id(method, {})
+
+    def test_client_idle_terminal_not_mapped_without_active_turn(self) -> None:
+        client = ACPClient(fixture_command("official"))
+        for method in _IDLE_TERMINAL_METHODS:
+            mapped = client._message_with_mapped_turn_id(
+                {"method": method, "params": {"sessionId": "session-1"}}
+            )
+            assert mapped.get("params", {}).get("turnId") is None
+
+    @pytest.mark.parametrize(
+        ("case"),
+        load_acp_lifecycle_corpus(),
+        ids=[case["name"] for case in load_acp_lifecycle_corpus()],
+    )
+    def test_client_turn_id_mapping_consistent_with_shared_lifecycle(
+        self,
+        case: dict[str, object],
+    ) -> None:
+        client = ACPClient(fixture_command("official"))
+        client._session_active_turns["session-1"] = "turn-active"
+        raw = dict(case["raw"])
+        expected = dict(case["expected"])
+
+        mapped = client._message_with_mapped_turn_id(raw)
+
+        params = mapped.get("params", {})
+        if expected["uses_turn_id_fallback"]:
+            assert params.get("turnId") == "turn-active"
+        else:
+            assert params.get("turnId") is None
+
+
+class TestPromptResponseLifecycleDelegation:
+    def test_classify_prompt_response_status_completed(self) -> None:
+        assert _classify_prompt_response_status({}) == "completed"
+        assert (
+            _classify_prompt_response_status({"stopReason": "end_turn"}) == "completed"
+        )
+        assert (
+            _classify_prompt_response_status({"stop_reason": "end_turn"}) == "completed"
+        )
+        assert _classify_prompt_response_status({"stopReason": ""}) == "completed"
+
+    def test_classify_prompt_response_status_cancelled(self) -> None:
+        assert (
+            _classify_prompt_response_status({"stopReason": "cancelled"}) == "cancelled"
+        )
+        assert (
+            _classify_prompt_response_status({"stop_reason": "cancelled"})
+            == "cancelled"
+        )
+
+    def test_classify_prompt_response_status_failed(self) -> None:
+        assert _classify_prompt_response_status({"stopReason": "refusal"}) == "failed"
+        assert _classify_prompt_response_status({"stop_reason": "refusal"}) == "failed"
+
+    def test_prompt_terminal_method_for_status(self) -> None:
+        assert _prompt_terminal_method_for_status("completed") == "prompt/completed"
+        assert _prompt_terminal_method_for_status("cancelled") == "prompt/cancelled"
+        assert _prompt_terminal_method_for_status("failed") == "prompt/failed"
+
+    def test_extract_prompt_response_error_returns_none_when_not_failed(self) -> None:
+        assert _extract_prompt_response_error({}) is None
+        assert _extract_prompt_response_error({"stopReason": "cancelled"}) is None
+        assert _extract_prompt_response_error({"stopReason": "end_turn"}) is None
+
+    def test_extract_prompt_response_error_extracts_message(self) -> None:
+        assert (
+            _extract_prompt_response_error(
+                {"stopReason": "refusal", "message": "model refused"}
+            )
+            == "model refused"
+        )
+        assert (
+            _extract_prompt_response_error(
+                {"stopReason": "refusal", "error": "error text"}
+            )
+            == "error text"
+        )
+        assert _extract_prompt_response_error({"stopReason": "refusal"}) == "refusal"
+
+    def test_client_prompt_response_uses_shared_classification(
+        self,
+    ) -> None:
+        payloads: list[dict[str, object]] = [
+            {},
+            {"stopReason": "cancelled"},
+            {"stopReason": "refusal"},
+            {"stopReason": "end_turn"},
+            {"stop_reason": "cancelled"},
+            {"stop_reason": "refusal"},
+        ]
+        expected: list[str] = [
+            "completed",
+            "cancelled",
+            "failed",
+            "completed",
+            "cancelled",
+            "failed",
+        ]
+        for payload, expect in zip(payloads, expected):
+            status = _classify_prompt_response_status(payload)
+            method = _prompt_terminal_method_for_status(status)
+            assert status == expect, f"payload={payload}"
+            if expect == "completed":
+                assert method == "prompt/completed"
+            elif expect == "cancelled":
+                assert method == "prompt/cancelled"
+            elif expect == "failed":
+                assert method == "prompt/failed"

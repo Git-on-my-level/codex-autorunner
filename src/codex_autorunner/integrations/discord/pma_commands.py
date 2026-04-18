@@ -6,6 +6,77 @@ from typing import Any, Optional
 from ..chat.status_diagnostics import build_process_monitor_lines_for_root
 
 
+async def handle_pma_command(
+    service: Any,
+    interaction_id: str,
+    interaction_token: str,
+    *,
+    channel_id: str,
+    guild_id: Optional[str],
+    command_path: tuple[str, ...],
+    options: Optional[dict[str, Any]] = None,
+) -> None:
+    if not service._config.pma_enabled:
+        await service.respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            "PMA is disabled in hub config. Set pma.enabled: true to enable.",
+        )
+        return
+    subcommand = command_path[1] if len(command_path) > 1 else "status"
+    if subcommand == "on":
+        await handle_pma_on(
+            service,
+            interaction_id,
+            interaction_token,
+            channel_id=channel_id,
+            guild_id=guild_id,
+        )
+    elif subcommand == "off":
+        await handle_pma_off(
+            service, interaction_id, interaction_token, channel_id=channel_id
+        )
+    elif subcommand == "status":
+        await handle_pma_status(
+            service, interaction_id, interaction_token, channel_id=channel_id
+        )
+    else:
+        await service.respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            "Unknown PMA subcommand. Use on, off, or status.",
+        )
+
+
+async def handle_pma_command_from_normalized(
+    service: Any,
+    interaction_id: str,
+    interaction_token: str,
+    *,
+    channel_id: str,
+    guild_id: Optional[str],
+    command_path: tuple[str, ...],
+    options: dict[str, Any],
+) -> None:
+    subcommand = command_path[1] if len(command_path) > 1 else "status"
+    if subcommand not in ("on", "off", "status"):
+        await service.respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            "Unknown PMA subcommand. Use on, off, or status.",
+        )
+        return
+    await handle_pma_command(
+        service,
+        interaction_id,
+        interaction_token,
+        channel_id=channel_id,
+        guild_id=guild_id,
+        command_path=command_path,
+        options=options,
+    )
+
+
 def _previous_binding_fields(
     binding: Optional[dict[str, Any]],
 ) -> tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import inspect
 from typing import Any, Callable, Optional, cast
 
 from ....core.update import _normalize_update_target, _update_target_restarts_surface
@@ -58,6 +57,7 @@ from ..helpers import (
     _split_topic_key,
 )
 from ..types import (
+    ModelPendingState,
     ModelPickerState,
     ReviewCommitSelectionState,
     SelectionState,
@@ -66,28 +66,13 @@ from ..types import (
 
 
 class TelegramSelectionHandlers(ChatSelectionHandlers):
-    def _resolve_selection_delegate(self, method_name: str) -> Callable[..., Any]:
-        for cls in type(self).mro():
-            if cls in (TelegramSelectionHandlers, ChatSelectionHandlers):
-                continue
-            method = cls.__dict__.get(method_name)
-            if method is None:
-                continue
-            return cast(Callable[..., Any], method.__get__(self, type(self)))
-        raise RuntimeError(
-            f"{method_name} handler is unavailable for Telegram selection flow."
-        )
-
     async def _bind_topic_by_repo_id(
         self,
         topic_key: str,
         repo_id: str,
         callback: Optional[TelegramCallbackQuery] = None,
     ) -> None:
-        bind_impl = self._resolve_selection_delegate("_bind_topic_by_repo_id")
-        result = bind_impl(topic_key, repo_id, callback)
-        if inspect.isawaitable(result):
-            await result
+        await self._selection_bind_topic_by_repo_id(topic_key, repo_id, callback)
 
     async def _resume_thread_by_id(
         self,
@@ -95,10 +80,7 @@ class TelegramSelectionHandlers(ChatSelectionHandlers):
         thread_id: str,
         callback: Optional[TelegramCallbackQuery] = None,
     ) -> None:
-        resume_impl = self._resolve_selection_delegate("_resume_thread_by_id")
-        result = resume_impl(topic_key, thread_id, callback)
-        if inspect.isawaitable(result):
-            await result
+        await self._selection_resume_thread_by_id(topic_key, thread_id, callback)
 
     async def _dismiss_review_custom_prompt(
         self,
@@ -358,7 +340,10 @@ class TelegramSelectionHandlers(ChatSelectionHandlers):
                 f"Model set to {option.model_id}. Will apply on the next turn.",
             )
             return
-        self._model_pending[key] = option
+        self._model_pending[key] = ModelPendingState(
+            option=option,
+            requester_user_id=actor_id,
+        )
         self._touch_cache_timestamp("model_pending", key)
         if option.default_effort:
             prompt = (
@@ -377,10 +362,14 @@ class TelegramSelectionHandlers(ChatSelectionHandlers):
         callback: TelegramCallbackQuery,
         parsed: EffortCallback,
     ) -> None:
-        option = self._model_pending.get(key)
-        if not option:
+        state = self._model_pending.get(key)
+        actor_id = (
+            str(callback.from_user_id) if callback.from_user_id is not None else None
+        )
+        if not state or not self._selection_belongs_to_user(state, actor_id):
             await self._answer_callback(callback, "Selection expired")
             return
+        option = state.option
         if parsed.effort not in option.efforts:
             await self._answer_callback(callback, "Selection expired")
             return
@@ -469,7 +458,10 @@ class TelegramSelectionHandlers(ChatSelectionHandlers):
         parsed: UpdateConfirmCallback,
     ) -> None:
         state = self._update_confirm_options.get(key)
-        if not state:
+        actor_id = (
+            str(callback.from_user_id) if callback.from_user_id is not None else None
+        )
+        if not state or not self._selection_belongs_to_user(state, actor_id):
             await self._answer_callback(callback, "Selection expired")
             return
         self._update_confirm_options.pop(key, None)
@@ -792,7 +784,9 @@ class TelegramSelectionHandlers(ChatSelectionHandlers):
             self._agent_profile_options.pop(key, None)
             text = "Hermes profile selection cancelled."
         elif parsed.kind == "model":
-            state = self._model_options.get(key)
+            state = self._model_pending.get(key)
+            if state is None:
+                state = self._model_options.get(key)
             if not self._selection_belongs_to_user(state, actor_id):
                 await self._answer_callback(callback, "Selection expired")
                 return
@@ -807,6 +801,10 @@ class TelegramSelectionHandlers(ChatSelectionHandlers):
             self._update_options.pop(key, None)
             text = "Update cancelled."
         elif parsed.kind == "update-confirm":
+            state = self._update_confirm_options.get(key)
+            if not self._selection_belongs_to_user(state, actor_id):
+                await self._answer_callback(callback, "Selection expired")
+                return
             self._update_confirm_options.pop(key, None)
             text = "Update cancelled."
         elif parsed.kind == "review-commit":

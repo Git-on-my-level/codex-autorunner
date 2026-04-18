@@ -7,6 +7,8 @@ from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.core.ticket_flow_summary import (
     build_ticket_flow_display,
     build_ticket_flow_summary,
+    extract_current_step,
+    format_ticket_flow_summary_lines,
 )
 
 
@@ -158,3 +160,100 @@ def test_build_ticket_flow_display_maps_runtime_status() -> None:
     assert display["status_icon"] == "🟢"
     assert display["is_active"] is True
     assert display["run_id"] == "run-123"
+
+
+class TestExtractCurrentStep:
+    def test_string_current_step(self) -> None:
+        from types import SimpleNamespace
+
+        record = SimpleNamespace(current_step="step-3", state={})
+        assert extract_current_step(record) == "step-3"
+
+    def test_int_current_step(self) -> None:
+        from types import SimpleNamespace
+
+        record = SimpleNamespace(current_step=7, state={})
+        assert extract_current_step(record) == "7"
+
+    def test_falls_back_to_ticket_engine_total_turns(self) -> None:
+        from types import SimpleNamespace
+
+        record = SimpleNamespace(
+            current_step=None,
+            state={"ticket_engine": {"total_turns": 5}},
+        )
+        assert extract_current_step(record) == "5"
+
+    def test_falls_back_to_ticket_engine_current_step(self) -> None:
+        from types import SimpleNamespace
+
+        record = SimpleNamespace(
+            current_step=None,
+            state={"ticket_engine": {"current_step": 3}},
+        )
+        assert extract_current_step(record) == "3"
+
+    def test_falls_back_to_ticket_engine_step_key(self) -> None:
+        from types import SimpleNamespace
+
+        record = SimpleNamespace(
+            current_step=None,
+            state={"ticket_engine": {"step": "building"}},
+        )
+        assert extract_current_step(record) == "building"
+
+    def test_returns_none_when_nothing_available(self) -> None:
+        from types import SimpleNamespace
+
+        record = SimpleNamespace(current_step=None, state={})
+        assert extract_current_step(record) is None
+
+    def test_returns_none_for_empty_string(self) -> None:
+        from types import SimpleNamespace
+
+        record = SimpleNamespace(current_step="   ", state={})
+        assert extract_current_step(record) is None
+
+
+class TestFormatTicketFlowSummaryLines:
+    def test_full_summary(self) -> None:
+        lines = format_ticket_flow_summary_lines(
+            {
+                "status_label": "running",
+                "done_count": 2,
+                "total_count": 5,
+                "current_step": 7,
+                "run_id": "run-abc",
+            }
+        )
+        assert lines == [
+            "Status: running",
+            "Tickets: 2/5",
+            "Step: 7",
+            "Run: run-abc",
+        ]
+
+    def test_string_current_step(self) -> None:
+        lines = format_ticket_flow_summary_lines(
+            {
+                "status_label": "paused",
+                "done_count": 0,
+                "total_count": 3,
+                "current_step": "reviewing",
+            }
+        )
+        assert "Step: reviewing" in lines
+
+    def test_minimal_summary(self) -> None:
+        lines = format_ticket_flow_summary_lines({})
+        assert lines == []
+
+    def test_missing_optional_fields(self) -> None:
+        lines = format_ticket_flow_summary_lines(
+            {
+                "status_label": "idle",
+                "done_count": 0,
+                "total_count": 0,
+            }
+        )
+        assert lines == ["Status: idle", "Tickets: 0/0"]

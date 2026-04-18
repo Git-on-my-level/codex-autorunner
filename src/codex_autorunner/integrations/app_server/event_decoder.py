@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from ...core.orchestration.codex_item_normalizers import (
+    normalize_tool_name as _shared_normalize_tool_name,
+)
 from .ids import extract_thread_id_for_turn, extract_turn_id
 from .protocol_types import (
     ApprovalRequest,
@@ -128,18 +131,10 @@ def _decode_tool_call(
 
 
 def _normalize_tool_name(params: dict[str, Any]) -> tuple[Optional[str], Any]:
-    item = params.get("item")
-    if isinstance(item, dict):
-        tool_call = item.get("toolCall") or item.get("tool_call")
-        if isinstance(tool_call, dict):
-            name = tool_call.get("name")
-            if isinstance(name, str):
-                input_val = tool_call.get("input")
-                return name, input_val
-    tool_name = params.get("toolName") or params.get("tool_name")
-    if isinstance(tool_name, str):
-        return tool_name, params.get("toolInput") or params.get("input")
-    return None, None
+    tool_name, tool_input = _shared_normalize_tool_name(params)
+    if not tool_name:
+        return None, None
+    return tool_name, tool_input
 
 
 def _decode_item_completed(

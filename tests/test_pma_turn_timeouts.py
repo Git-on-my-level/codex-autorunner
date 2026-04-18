@@ -98,3 +98,77 @@ def test_web_pma_turn_timeout_reads_request_config() -> None:
 
     assert chat_runtime._pma_turn_timeout_seconds(request) == 345
     assert managed_thread_runtime._pma_turn_timeout_seconds(request) == 345
+
+
+class TestPmaTimeoutIsolationInvariants:
+    def test_discord_pma_surface_uses_hub_config_timeout(self, tmp_path: Path) -> None:
+        _write_hub_config(tmp_path, timeout_seconds=42)
+        service = SimpleNamespace(_config=SimpleNamespace(root=tmp_path))
+        coordinator = discord_message_turns._build_discord_managed_thread_coordinator(
+            service=service,
+            orchestration_service=SimpleNamespace(),
+            channel_id="channel-1",
+            public_execution_error="e",
+            timeout_error="t",
+            interrupted_error="i",
+            pma_enabled=True,
+        )
+        assert coordinator.errors.timeout_seconds == 42.0
+
+    def test_telegram_pma_surface_uses_hub_config_timeout(self, tmp_path: Path) -> None:
+        _write_hub_config(tmp_path, timeout_seconds=55)
+        handlers = SimpleNamespace(
+            _hub_root=tmp_path,
+            _config=SimpleNamespace(root=tmp_path),
+            _hub_supervisor=None,
+        )
+        coordinator = telegram_execution._build_telegram_managed_thread_coordinator(
+            handlers,
+            orchestration_service=SimpleNamespace(),
+            surface_key="telegram:-1:1",
+            chat_id=-1,
+            thread_id=1,
+            public_execution_error="e",
+            timeout_error="t",
+            interrupted_error="i",
+            pma_enabled=True,
+        )
+        assert coordinator.errors.timeout_seconds == 55.0
+
+    def test_discord_repo_surface_always_uses_legacy_7200_regardless_of_config(
+        self, tmp_path: Path
+    ) -> None:
+        _write_hub_config(tmp_path, timeout_seconds=5)
+        service = SimpleNamespace(_config=SimpleNamespace(root=tmp_path))
+        coordinator = discord_message_turns._build_discord_managed_thread_coordinator(
+            service=service,
+            orchestration_service=SimpleNamespace(),
+            channel_id="channel-1",
+            public_execution_error="e",
+            timeout_error="t",
+            interrupted_error="i",
+            pma_enabled=False,
+        )
+        assert coordinator.errors.timeout_seconds == 7200.0
+
+    def test_telegram_repo_surface_always_uses_legacy_7200_regardless_of_config(
+        self, tmp_path: Path
+    ) -> None:
+        _write_hub_config(tmp_path, timeout_seconds=5)
+        handlers = SimpleNamespace(
+            _hub_root=tmp_path,
+            _config=SimpleNamespace(root=tmp_path),
+            _hub_supervisor=None,
+        )
+        coordinator = telegram_execution._build_telegram_managed_thread_coordinator(
+            handlers,
+            orchestration_service=SimpleNamespace(),
+            surface_key="telegram:-1:1",
+            chat_id=-1,
+            thread_id=1,
+            public_execution_error="e",
+            timeout_error="t",
+            interrupted_error="i",
+            pma_enabled=False,
+        )
+        assert coordinator.errors.timeout_seconds == 7200.0

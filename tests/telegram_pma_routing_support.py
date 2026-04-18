@@ -66,7 +66,7 @@ from codex_autorunner.integrations.telegram.handlers.commands_runtime import (
     TelegramCommandHandlers,
     _RuntimeStub,
 )
-from codex_autorunner.integrations.telegram.handlers.messages import (
+from codex_autorunner.integrations.telegram.handlers.media_ingress import (
     handle_media_message,
 )
 from codex_autorunner.integrations.telegram.handlers.selections import SelectionState
@@ -649,10 +649,14 @@ async def test_telegram_text_messages_route_through_orchestration_ingress(
             captured["callbacks"] = set(kwargs)
             return SimpleNamespace(route="thread", thread_result=None)
 
+    import codex_autorunner.integrations.telegram.handlers.media_ingress as _mi_mod
+    import codex_autorunner.integrations.telegram.handlers.surface_ingress as _si_mod
+
     monkeypatch.setattr(
-        telegram_messages_module,
-        "build_surface_orchestration_ingress",
-        lambda **_: _IngressStub(),
+        _si_mod, "build_surface_orchestration_ingress", lambda **_: _IngressStub()
+    )
+    monkeypatch.setattr(
+        _mi_mod, "build_surface_orchestration_ingress", lambda **_: _IngressStub()
     )
 
     message = TelegramMessage(
@@ -902,10 +906,10 @@ async def test_telegram_media_messages_route_through_orchestration_ingress(
             captured["callbacks"] = set(kwargs)
             return SimpleNamespace(route="thread", thread_result=None)
 
+    import codex_autorunner.integrations.telegram.handlers.media_ingress as _mi_mod
+
     monkeypatch.setattr(
-        telegram_messages_module,
-        "build_surface_orchestration_ingress",
-        lambda **_: _IngressStub(),
+        _mi_mod, "build_surface_orchestration_ingress", lambda **_: _IngressStub()
     )
 
     message = TelegramMessage(
@@ -1251,10 +1255,10 @@ async def test_message_routing_submits_thread_work_through_orchestration_ingress
             await submit_thread_message(request)
             return SimpleNamespace(route="thread", thread_result=None)
 
+    import codex_autorunner.integrations.telegram.handlers.surface_ingress as _si_mod
+
     monkeypatch.setattr(
-        telegram_messages_module,
-        "build_surface_orchestration_ingress",
-        lambda **_: _FakeIngress(),
+        _si_mod, "build_surface_orchestration_ingress", lambda **_: _FakeIngress()
     )
 
     handler = _Handler()
@@ -4212,10 +4216,10 @@ async def test_repo_message_ingress_callback_reaches_orchestrated_thread_executi
             await kwargs["submit_thread_message"](request)
             return SimpleNamespace(route="thread", thread_result=None)
 
+    import codex_autorunner.integrations.telegram.handlers.surface_ingress as _si_mod2
+
     monkeypatch.setattr(
-        telegram_messages_module,
-        "build_surface_orchestration_ingress",
-        lambda **_: _IngressStub(),
+        _si_mod2, "build_surface_orchestration_ingress", lambda **_: _IngressStub()
     )
 
     message = TelegramMessage(
@@ -4416,10 +4420,10 @@ async def test_repo_message_ingress_callback_reaches_hermes_orchestrated_thread_
             await kwargs["submit_thread_message"](request)
             return SimpleNamespace(route="thread", thread_result=None)
 
+    import codex_autorunner.integrations.telegram.handlers.surface_ingress as _si_mod3
+
     monkeypatch.setattr(
-        telegram_messages_module,
-        "build_surface_orchestration_ingress",
-        lambda **_: _IngressStub(),
+        _si_mod3, "build_surface_orchestration_ingress", lambda **_: _IngressStub()
     )
 
     message = TelegramMessage(

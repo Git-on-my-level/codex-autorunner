@@ -32,6 +32,14 @@ class RecoveryConfig:
     completion_gap_timeout_seconds: Optional[float] = 15.0
 
 
+@dataclass
+class _ResumeAttempt:
+    applied_status: Optional[str]
+    effective_status: Optional[str]
+    exception: Optional[Exception] = None
+    snapshot_missing: bool = False
+
+
 class TurnRecoveryCoordinator:
     def __init__(
         self,
@@ -99,6 +107,48 @@ class TurnRecoveryCoordinator:
             return None
         return gap_seconds
 
+    async def _resume_and_apply_snapshot(
+        self,
+        state: TurnState,
+        *,
+        turn_id: str,
+        thread_id: str,
+        resume_fn: ResumeFn,
+        recovery_source: str,
+    ) -> _ResumeAttempt:
+        try:
+            resume_result = await resume_fn(thread_id)
+        except _RECOVERY_EXCEPTION_TYPES as exc:
+            return _ResumeAttempt(
+                applied_status=None,
+                effective_status=None,
+                exception=exc,
+            )
+
+        snapshot = extract_resume_snapshot(resume_result, turn_id)
+        if snapshot is None:
+            return _ResumeAttempt(
+                applied_status=None,
+                effective_status=None,
+                snapshot_missing=True,
+            )
+
+        applied_status = self._turn_state_manager.apply_resume_snapshot(state, snapshot)
+        effective_status = applied_status or state.status
+        is_terminal = effective_status is not None and status_is_terminal(
+            effective_status
+        )
+        if is_terminal and not state.future.done():
+            self._emit_recovered_notification(
+                state, thread_id=thread_id, recovery_source=recovery_source
+            )
+            self._turn_state_manager.set_turn_result_if_pending(state)
+
+        return _ResumeAttempt(
+            applied_status=applied_status,
+            effective_status=effective_status,
+        )
+
     async def maybe_recover_stalled_turn(
         self,
         state: TurnState,
@@ -153,9 +203,16 @@ class TurnRecoveryCoordinator:
             recovery_attempts=state.recovery_attempts,
             max_recovery_attempts=self._config.stall_max_recovery_attempts,
         )
-        try:
-            resume_result = await resume_fn(tid)
-        except _RECOVERY_EXCEPTION_TYPES as exc:
+
+        attempt = await self._resume_and_apply_snapshot(
+            state,
+            turn_id=turn_id,
+            thread_id=tid,
+            resume_fn=resume_fn,
+            recovery_source="turn_stall",
+        )
+
+        if attempt.exception is not None:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -163,7 +220,7 @@ class TurnRecoveryCoordinator:
                 turn_id=turn_id,
                 thread_id=tid,
                 idle_seconds=round(idle_seconds, 2),
-                exc=exc,
+                exc=attempt.exception,
             )
             self._turn_state_manager.maybe_fail_stalled_turn(
                 state,
@@ -177,8 +234,7 @@ class TurnRecoveryCoordinator:
             state.last_event_at = now
             return
 
-        snapshot = extract_resume_snapshot(resume_result, turn_id)
-        if snapshot is None:
+        if attempt.snapshot_missing:
             self._turn_state_manager.maybe_fail_stalled_turn(
                 state,
                 turn_id=turn_id,
@@ -191,13 +247,20 @@ class TurnRecoveryCoordinator:
             state.last_event_at = now
             return
 
-        status = self._turn_state_manager.apply_resume_snapshot(state, snapshot)
-
-        if status and status_is_terminal(status) and not state.future.done():
-            self._emit_recovered_notification(
-                state, thread_id=tid, recovery_source="turn_stall"
+        if attempt.effective_status is not None and status_is_terminal(
+            attempt.effective_status
+        ):
+            log_event(
+                self._logger,
+                logging.INFO,
+                "app_server.turn_recovery.completed",
+                turn_id=turn_id,
+                thread_id=tid,
+                idle_seconds=round(idle_seconds, 2),
+                effective_status=attempt.effective_status,
+                recovery_source="turn_stall",
+                recovery_attempts=state.recovery_attempts,
             )
-            self._turn_state_manager.set_turn_result_if_pending(state)
             return
 
         self._turn_state_manager.maybe_fail_stalled_turn(
@@ -241,9 +304,16 @@ class TurnRecoveryCoordinator:
             last_method=state.last_method,
             recovery_attempts=state.completion_gap_recovery_attempts,
         )
-        try:
-            resume_result = await resume_fn(tid)
-        except _RECOVERY_EXCEPTION_TYPES as exc:
+
+        attempt = await self._resume_and_apply_snapshot(
+            state,
+            turn_id=turn_id,
+            thread_id=tid,
+            resume_fn=resume_fn,
+            recovery_source="turn_completion_gap",
+        )
+
+        if attempt.exception is not None:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -252,7 +322,7 @@ class TurnRecoveryCoordinator:
                 thread_id=tid,
                 completion_gap_seconds=round(gap_seconds, 2),
                 item_completed_count=state.item_completed_count,
-                exc=exc,
+                exc=attempt.exception,
             )
             self._turn_state_manager.maybe_fail_completion_gap_turn(
                 state,
@@ -265,8 +335,7 @@ class TurnRecoveryCoordinator:
             )
             return
 
-        snapshot = extract_resume_snapshot(resume_result, turn_id)
-        if snapshot is None:
+        if attempt.snapshot_missing:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -287,16 +356,8 @@ class TurnRecoveryCoordinator:
             )
             return
 
-        status = self._turn_state_manager.apply_resume_snapshot(state, snapshot)
-        effective_status = status or state.status
-        if (
-            effective_status
-            and status_is_terminal(effective_status)
-            and not state.future.done()
-        ):
-            self._emit_recovered_notification(
-                state, thread_id=tid, recovery_source="turn_completion_gap"
-            )
+        effective_status = attempt.effective_status
+        if effective_status is not None and status_is_terminal(effective_status):
             log_event(
                 self._logger,
                 logging.INFO,
@@ -307,7 +368,6 @@ class TurnRecoveryCoordinator:
                 item_completed_count=state.item_completed_count,
                 recovery_attempts=state.completion_gap_recovery_attempts,
             )
-            self._turn_state_manager.set_turn_result_if_pending(state)
             return
         if effective_status and not status_is_terminal(effective_status):
             self._turn_state_manager.reset_completion_gap_recovery(state)

@@ -146,3 +146,91 @@ def test_resolve_filebox_retention_policy_supports_mapping_and_object() -> None:
     assert resolve_filebox_retention_policy(
         SimpleNamespace(filebox_inbox_max_age_days=5, filebox_outbox_max_age_days=6)
     ) == FileBoxRetentionPolicy(inbox_max_age_days=5, outbox_max_age_days=6)
+
+
+class TestFileBoxDryRunExecuteParity:
+    def test_dry_run_and_execute_same_counts(self, tmp_path: Path) -> None:
+        now = datetime(2026, 3, 21, tzinfo=timezone.utc)
+        stale = now - timedelta(days=8)
+        fresh = now - timedelta(days=2)
+
+        repo_a = tmp_path / "dry"
+        repo_b = tmp_path / "exec"
+
+        for repo in (repo_a, repo_b):
+            for name in ("stale-in.txt", "fresh-in.txt"):
+                p = _write(inbox_dir(repo) / name, b"inbox")
+                ts = stale if name.startswith("stale") else fresh
+                _set_mtime(p, ts)
+            for name in ("stale-out.txt", "fresh-out.txt"):
+                p = _write(outbox_sent_dir(repo) / name, b"outbox")
+                ts = stale if name.startswith("stale") else fresh
+                _set_mtime(p, ts)
+
+        policy = FileBoxRetentionPolicy(inbox_max_age_days=7, outbox_max_age_days=7)
+
+        dry_summary = prune_filebox_root(repo_a, policy=policy, dry_run=True, now=now)
+        exec_summary = prune_filebox_root(repo_b, policy=policy, dry_run=False, now=now)
+
+        assert dry_summary.inbox_pruned == exec_summary.inbox_pruned == 1
+        assert dry_summary.inbox_kept == exec_summary.inbox_kept == 1
+        assert dry_summary.outbox_pruned == exec_summary.outbox_pruned == 1
+        assert dry_summary.outbox_kept == exec_summary.outbox_kept == 1
+        assert dry_summary.bytes_before == exec_summary.bytes_before
+
+    def test_dry_run_preserves_all_files(self, tmp_path: Path) -> None:
+        now = datetime(2026, 3, 21, tzinfo=timezone.utc)
+        stale = now - timedelta(days=8)
+
+        stale_file = _write(inbox_dir(tmp_path) / "stale.txt", b"data")
+        _set_mtime(stale_file, stale)
+
+        policy = FileBoxRetentionPolicy(inbox_max_age_days=7, outbox_max_age_days=7)
+        summary = prune_filebox_root(tmp_path, policy=policy, dry_run=True, now=now)
+
+        assert summary.inbox_pruned == 1
+        assert stale_file.exists()
+
+    def test_dry_run_and_execute_parity_with_scoped_inbox_only(
+        self, tmp_path: Path
+    ) -> None:
+        now = datetime(2026, 3, 21, tzinfo=timezone.utc)
+        stale = now - timedelta(days=8)
+
+        repo_a = tmp_path / "dry"
+        repo_b = tmp_path / "exec"
+
+        for repo in (repo_a, repo_b):
+            p = _write(inbox_dir(repo) / "stale.txt", b"inbox")
+            _set_mtime(p, stale)
+            p = _write(outbox_sent_dir(repo) / "stale.txt", b"outbox")
+            _set_mtime(p, stale)
+
+        policy = FileBoxRetentionPolicy(inbox_max_age_days=7, outbox_max_age_days=7)
+
+        dry_summary = prune_filebox_root(
+            repo_a, policy=policy, scope="inbox", dry_run=True, now=now
+        )
+        exec_summary = prune_filebox_root(
+            repo_b, policy=policy, scope="inbox", dry_run=False, now=now
+        )
+
+        assert dry_summary.inbox_pruned == exec_summary.inbox_pruned == 1
+        assert dry_summary.outbox_pruned == exec_summary.outbox_pruned == 0
+
+    def test_pruned_paths_listed_in_summary(self, tmp_path: Path) -> None:
+        now = datetime(2026, 3, 21, tzinfo=timezone.utc)
+        stale = now - timedelta(days=8)
+
+        stale_a = _write(inbox_dir(tmp_path) / "stale-a.txt", b"a")
+        stale_b = _write(inbox_dir(tmp_path) / "stale-b.txt", b"b")
+        _set_mtime(stale_a, stale)
+        _set_mtime(stale_b, stale)
+
+        policy = FileBoxRetentionPolicy(inbox_max_age_days=7, outbox_max_age_days=7)
+        summary = prune_filebox_root(tmp_path, policy=policy, dry_run=False, now=now)
+
+        assert len(summary.pruned_paths) == 2
+        pruned_names = {Path(p).name for p in summary.pruned_paths}
+        assert "stale-a.txt" in pruned_names
+        assert "stale-b.txt" in pruned_names

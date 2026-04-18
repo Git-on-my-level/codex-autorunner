@@ -1,3 +1,18 @@
+"""GitHub-specific publish adapters for PR comments and review-comment reactions.
+
+Ownership boundaries:
+- This module is a thin provider-specific execution adapter.  It converts
+  canonical ``PublishOperation`` payloads into GitHub API calls via
+  ``GitHubCommentPublisher`` and returns structured response dicts.
+- Retry scheduling, deduplication, and mutation-policy enforcement are owned
+  exclusively by ``core/publish_executor.py`` and ``core/publish_journal.py``.
+- This module must **not** carry its own retry counters, backoff state, or
+  deduplication keys.
+- ``GitHubError`` exceptions from the service layer are converted to
+  ``TerminalPublishError`` so the publish executor classifies them as
+  non-retryable.
+"""
+
 from __future__ import annotations
 
 from pathlib import Path

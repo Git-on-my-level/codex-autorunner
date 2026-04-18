@@ -1174,3 +1174,112 @@ def test_process_now_escalates_after_repeated_publish_failures_and_marks_recover
     assert stored.delivery_failure_count == 2
     assert stored.escalated_at is not None
     assert stored.last_error_text is None
+
+
+def test_ingest_event_duplicate_escalation_dedupes_journal_operations(
+    tmp_path: Path,
+) -> None:
+    events = [_event(event_id=f"github:escal-dedup-{i}") for i in range(5)]
+    binding = _binding()
+    journal = _JournalFake()
+    service = ScmAutomationService(
+        tmp_path,
+        event_store=_EventStoreFake(*events),
+        binding_resolver=_BindingResolverFake(binding),
+        reaction_router=route_scm_reactions,
+        reaction_state_store=ScmReactionStateStore(tmp_path),
+        reaction_config={"duplicate_escalation_threshold": 3},
+        journal=journal,
+        publish_processor=_ProcessorFake(processed=[]),
+    )
+
+    for ev in events:
+        service.ingest_event(ev.event_id)
+
+    escalation_ops = [
+        op
+        for op in journal.operations_by_key.values()
+        if op.operation_kind == "notify_chat"
+    ]
+    escalation_keys = {op.operation_key for op in escalation_ops}
+    assert len(escalation_keys) == 1
+
+
+def test_process_now_delivery_failure_escalation_threshold_resets_on_recovery(
+    tmp_path: Path,
+) -> None:
+    event = _event(
+        payload={
+            "action": "submitted",
+            "review_state": "changes_requested",
+            "author_login": "reviewer",
+            "body": "Test delivery failure recovery.",
+        }
+    )
+    binding = _binding()
+    journal = _JournalFake()
+    state_store = ScmReactionStateStore(tmp_path)
+    service = ScmAutomationService(
+        tmp_path,
+        event_store=_EventStoreFake(event),
+        binding_resolver=_BindingResolverFake(binding),
+        reaction_router=route_scm_reactions,
+        reaction_state_store=state_store,
+        reaction_config={"delivery_failure_escalation_threshold": 1},
+        journal=journal,
+        publish_processor=_ProcessorFake(processed=[]),
+    )
+    ingested = service.ingest_event(event)
+    original_op = ingested.publish_operations[0]
+
+    failed_op = PublishOperation(
+        **{
+            **original_op.to_dict(),
+            "state": "failed",
+            "attempt_count": 1,
+            "last_error_text": "timeout",
+        }
+    )
+    service._handle_processed_operations([failed_op])
+
+    tracking = original_op.payload["scm_reaction"]
+    state = state_store.get_reaction_state(
+        binding_id=tracking["binding_id"],
+        reaction_kind=tracking["reaction_kind"],
+        fingerprint=tracking["fingerprint"],
+    )
+    assert state is not None
+    assert state.delivery_failure_count == 1
+    assert state.escalated_at is not None
+
+    escalation_ops = [
+        op
+        for op in journal.operations_by_key.values()
+        if op.operation_kind == "notify_chat"
+        and op.operation_key != original_op.operation_key
+    ]
+    assert len(escalation_ops) == 1
+
+
+def test_ingest_event_no_binding_notify_chat_has_no_binding_id(
+    tmp_path: Path,
+) -> None:
+    event = _event(event_id="github:no-bind-notify")
+    journal = _JournalFake()
+    service = ScmAutomationService(
+        tmp_path,
+        event_store=_EventStoreFake(event),
+        binding_resolver=_BindingResolverFake(None),
+        reaction_router=route_scm_reactions,
+        reaction_state_store=_PermissiveReactionStateFake(),
+        journal=journal,
+        publish_processor=_ProcessorFake(processed=[]),
+    )
+
+    result = service.ingest_event(event)
+
+    assert result.binding is None
+    assert len(result.publish_operations) == 1
+    notify_op = result.publish_operations[0]
+    assert notify_op.operation_kind == "notify_chat"
+    assert notify_op.payload.get("binding_id") is None

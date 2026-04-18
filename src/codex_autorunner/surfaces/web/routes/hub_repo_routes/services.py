@@ -122,10 +122,7 @@ class HubRepoEnricher:
             get_latest_ticket_flow_run_state_with_record,
         )
         from .....core.ticket_flow_projection import build_canonical_state_v1
-        from .....core.ticket_flow_summary import (
-            build_ticket_flow_display,
-            build_ticket_flow_summary,
-        )
+        from .....core.ticket_flow_summary import build_ticket_flow_summary
 
         payload: dict[str, Any] = {
             "has_car_state": (
@@ -158,27 +155,25 @@ class HubRepoEnricher:
             )
             payload["ticket_flow"] = ticket_flow
             if isinstance(ticket_flow, dict):
-                payload["ticket_flow_display"] = build_ticket_flow_display(
-                    status=(
-                        str(ticket_flow.get("status"))
-                        if ticket_flow.get("status") is not None
-                        else None
-                    ),
-                    done_count=int(ticket_flow.get("done_count") or 0),
-                    total_count=int(ticket_flow.get("total_count") or 0),
-                    run_id=(
-                        str(ticket_flow.get("run_id"))
-                        if ticket_flow.get("run_id")
-                        else None
-                    ),
-                )
+                payload["ticket_flow_display"] = {
+                    "status": ticket_flow.get("status"),
+                    "status_label": ticket_flow.get("status_label"),
+                    "status_icon": ticket_flow.get("status_icon"),
+                    "is_active": ticket_flow.get("is_active"),
+                    "done_count": ticket_flow.get("done_count"),
+                    "total_count": ticket_flow.get("total_count"),
+                    "run_id": ticket_flow.get("run_id"),
+                }
             else:
-                payload["ticket_flow_display"] = build_ticket_flow_display(
-                    status=None,
-                    done_count=0,
-                    total_count=0,
-                    run_id=None,
-                )
+                payload["ticket_flow_display"] = {
+                    "status": None,
+                    "status_label": "Idle",
+                    "status_icon": "⚪",
+                    "is_active": False,
+                    "done_count": 0,
+                    "total_count": 0,
+                    "run_id": None,
+                }
             run_state, run_record = get_latest_ticket_flow_run_state_with_record(
                 snapshot.path,
                 snapshot.id,

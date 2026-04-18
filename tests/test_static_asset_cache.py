@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from codex_autorunner.core.config import load_hub_config
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web import static_assets
+from codex_autorunner.surfaces.web.static_assets import StaticAssetProvenance
 
 
 def _write_required_assets(static_dir: Path) -> None:
@@ -60,15 +61,17 @@ def test_materialize_static_assets_survives_source_removal(
     monkeypatch.setattr(static_assets, "resolve_static_dir", lambda: (source_dir, None))
     logger = logging.getLogger("test-static-assets")
     cache_root = tmp_path / "repo_root" / ".codex-autorunner" / "static-cache"
-    cache_dir, cache_context = static_assets.materialize_static_assets(
+    cache_dir, cache_context, provenance = static_assets.materialize_static_assets(
         cache_root,
         max_cache_entries=5,
         max_cache_age_days=30,
         logger=logger,
     )
     assert cache_context is None
+    assert provenance == StaticAssetProvenance.SOURCE_MATERIALIZE
     assert cache_dir.exists()
     assert cache_dir.parent == cache_root
+    assert not any(cache_root.glob(".lock-*"))
     shutil.rmtree(source_dir)
     assert static_assets.missing_static_assets(cache_dir) == []
 
@@ -82,7 +85,7 @@ def test_materialize_static_assets_falls_back_to_existing_cache(
     source_dir = tmp_path / "missing_source"
     monkeypatch.setattr(static_assets, "resolve_static_dir", lambda: (source_dir, None))
     logger = logging.getLogger("test-static-assets")
-    cache_dir, cache_context = static_assets.materialize_static_assets(
+    cache_dir, cache_context, provenance = static_assets.materialize_static_assets(
         cache_root,
         max_cache_entries=5,
         max_cache_age_days=30,
@@ -90,6 +93,7 @@ def test_materialize_static_assets_falls_back_to_existing_cache(
     )
     assert cache_context is None
     assert cache_dir == existing_cache
+    assert provenance == StaticAssetProvenance.EXISTING_CACHE_FALLBACK
 
 
 def test_materialize_static_assets_hard_fails_without_cache(
@@ -120,13 +124,14 @@ def test_materialize_static_assets_prunes_old_entries(
     _write_required_assets(older_cache)
     monkeypatch.setattr(static_assets, "resolve_static_dir", lambda: (source_dir, None))
     logger = logging.getLogger("test-static-assets")
-    cache_dir, cache_context = static_assets.materialize_static_assets(
+    cache_dir, cache_context, provenance = static_assets.materialize_static_assets(
         cache_root,
         max_cache_entries=1,
         max_cache_age_days=None,
         logger=logger,
     )
     assert cache_context is None
+    assert provenance == StaticAssetProvenance.SOURCE_MATERIALIZE
     entries = [
         path
         for path in cache_root.iterdir()
@@ -185,3 +190,135 @@ def test_repo_app_falls_back_to_hub_static_cache(
     client = TestClient(app)
     res = client.get(f"/repos/{hub_env.repo_id}/static/generated/app.js")
     assert res.status_code == 200
+
+
+class TestStaticAssetCacheProvenance:
+    def test_fresh_materialize_from_source(self, tmp_path: Path, monkeypatch) -> None:
+        source_dir = tmp_path / "source_static"
+        _write_required_assets(source_dir)
+        monkeypatch.setattr(
+            static_assets, "resolve_static_dir", lambda: (source_dir, None)
+        )
+        cache_root = tmp_path / "repo_root" / ".codex-autorunner" / "static-cache"
+        logger = logging.getLogger("test-fresh")
+
+        cache_dir, cache_context, provenance = static_assets.materialize_static_assets(
+            cache_root,
+            max_cache_entries=5,
+            max_cache_age_days=30,
+            logger=logger,
+        )
+        assert cache_context is None
+        assert cache_dir.exists()
+        assert static_assets.missing_static_assets(cache_dir) == []
+        assert provenance == StaticAssetProvenance.SOURCE_MATERIALIZE
+        assert not any(cache_root.glob(".lock-*"))
+        version = static_assets.asset_version(cache_dir)
+        assert version
+        assert version != "0"
+
+    def test_cache_reuse_when_source_missing(self, tmp_path: Path, monkeypatch) -> None:
+        cache_root = tmp_path / "repo_root" / ".codex-autorunner" / "static-cache"
+        existing = cache_root / "prior-cache"
+        _write_required_assets(existing)
+        source_dir = tmp_path / "missing_source"
+        monkeypatch.setattr(
+            static_assets, "resolve_static_dir", lambda: (source_dir, None)
+        )
+        logger = logging.getLogger("test-reuse")
+
+        cache_dir, cache_context, provenance = static_assets.materialize_static_assets(
+            cache_root,
+            max_cache_entries=5,
+            max_cache_age_days=30,
+            logger=logger,
+        )
+        assert cache_dir == existing
+        assert cache_context is None
+        assert provenance == StaticAssetProvenance.EXISTING_CACHE_FALLBACK
+
+    def test_hard_fail_when_no_source_and_no_cache(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        source_dir = tmp_path / "missing_source"
+        monkeypatch.setattr(
+            static_assets, "resolve_static_dir", lambda: (source_dir, None)
+        )
+        cache_root = tmp_path / "repo_root" / ".codex-autorunner" / "static-cache"
+        logger = logging.getLogger("test-hard-fail")
+
+        with pytest.raises(RuntimeError, match="Static UI assets missing"):
+            static_assets.materialize_static_assets(
+                cache_root,
+                max_cache_entries=5,
+                max_cache_age_days=30,
+                logger=logger,
+            )
+
+    def test_fingerprint_cache_hit_avoids_recopy(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        source_dir = tmp_path / "source_static"
+        _write_required_assets(source_dir)
+        monkeypatch.setattr(
+            static_assets, "resolve_static_dir", lambda: (source_dir, None)
+        )
+        cache_root = tmp_path / "repo_root" / ".codex-autorunner" / "static-cache"
+        logger = logging.getLogger("test-fingerprint")
+
+        first_dir, _, first_provenance = static_assets.materialize_static_assets(
+            cache_root,
+            max_cache_entries=5,
+            max_cache_age_days=30,
+            logger=logger,
+        )
+        second_dir, _, second_provenance = static_assets.materialize_static_assets(
+            cache_root,
+            max_cache_entries=5,
+            max_cache_age_days=30,
+            logger=logger,
+        )
+
+        assert first_dir == second_dir
+        assert first_provenance == StaticAssetProvenance.SOURCE_MATERIALIZE
+        assert second_provenance == StaticAssetProvenance.FINGERPRINT_CACHE_HIT
+        assert not any(cache_root.glob(".lock-*"))
+
+    def test_missing_static_assets_checks_manifest(self, tmp_path: Path) -> None:
+
+        static_dir = tmp_path / "with_manifest"
+        _write_required_assets(static_dir)
+        assert static_assets.missing_static_assets(static_dir) == []
+
+        (static_dir / "generated" / "app.js").unlink()
+        missing = static_assets.missing_static_assets(static_dir)
+        assert "generated/app.js" in missing
+
+    def test_missing_static_assets_falls_back_to_required_list(
+        self, tmp_path: Path
+    ) -> None:
+        static_dir = tmp_path / "no_manifest"
+        static_dir.mkdir()
+        missing = static_assets.missing_static_assets(static_dir)
+        assert len(missing) > 0
+        assert "index.html" in missing
+
+
+class TestResolveStaticDirFallback:
+    def test_resolve_returns_path_and_optional_context(self, monkeypatch) -> None:
+        static_dir, context = static_assets.resolve_static_dir()
+        assert isinstance(static_dir, Path)
+        assert context is None or hasattr(context, "__enter__")
+
+    def test_fallback_path_points_to_package_adjacent_static(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        source_dir = tmp_path / "nonexistent_source"
+        monkeypatch.setattr(
+            static_assets,
+            "resolve_static_dir",
+            lambda: (source_dir, None),
+        )
+        result_dir, result_ctx = static_assets.resolve_static_dir()
+        assert result_dir == source_dir
+        assert result_ctx is None

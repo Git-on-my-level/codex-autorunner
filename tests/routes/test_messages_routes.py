@@ -130,3 +130,91 @@ def test_reply_archive_rejects_relative_workspace_root(tmp_path, monkeypatch):
         )
         assert resp.status_code == 409
         assert "non-absolute workspace_root" in resp.json()["detail"]
+
+
+def test_messages_active_returns_false_when_no_active_run(tmp_path, monkeypatch):
+    repo_root = Path(tmp_path)
+
+    monkeypatch.setattr(messages_routes, "find_repo_root", lambda: repo_root)
+    monkeypatch.setattr(flows_routes, "find_repo_root", lambda: repo_root)
+
+    app = FastAPI()
+    app.state.repo_id = "repo"
+    app.include_router(messages_routes.build_messages_routes())
+    app.include_router(flows_routes.build_flow_routes())
+
+    with TestClient(app) as client:
+        active = client.get("/api/messages/active")
+        assert active.status_code == 200
+        payload = active.json()
+        assert payload["active"] is False
+
+
+def test_messages_threads_returns_empty_list_when_no_runs(tmp_path, monkeypatch):
+    repo_root = Path(tmp_path)
+
+    monkeypatch.setattr(messages_routes, "find_repo_root", lambda: repo_root)
+    monkeypatch.setattr(flows_routes, "find_repo_root", lambda: repo_root)
+
+    app = FastAPI()
+    app.state.repo_id = "repo"
+    app.include_router(messages_routes.build_messages_routes())
+    app.include_router(flows_routes.build_flow_routes())
+
+    with TestClient(app) as client:
+        threads = client.get("/api/messages/threads")
+        assert threads.status_code == 200
+        assert threads.json()["conversations"] == []
+
+
+def test_reply_archive_preserves_file_url_within_workspace(tmp_path, monkeypatch):
+    repo_root = Path(tmp_path)
+    run_id = "33333333-3333-3333-3333-333333333333"
+
+    _seed_paused_run(repo_root, run_id)
+    _write_dispatch_history(repo_root, run_id, seq=1)
+
+    monkeypatch.setattr(messages_routes, "find_repo_root", lambda: repo_root)
+    monkeypatch.setattr(flows_routes, "find_repo_root", lambda: repo_root)
+
+    app = FastAPI()
+    app.state.repo_id = "repo"
+    app.include_router(messages_routes.build_messages_routes())
+    app.include_router(flows_routes.build_flow_routes())
+
+    with TestClient(app) as client:
+        resp = client.post(
+            f"/api/messages/{run_id}/reply",
+            data={"body": "See attached"},
+            files=[("files", ("report.txt", b"data", "text/plain"))],
+        )
+        assert resp.status_code == 200
+
+        detail = client.get(f"/api/messages/threads/{run_id}").json()
+        assert len(detail["reply_history"]) == 1
+        file_entry = detail["reply_history"][0]["files"][0]
+        assert ".." not in file_entry["url"]
+        assert not file_entry["url"].startswith("/")
+
+        fetched = client.get(f"/{file_entry['url']}")
+        assert fetched.status_code == 200
+        assert fetched.content == b"data"
+
+
+def test_reply_archive_rejects_reply_to_unknown_run(tmp_path, monkeypatch):
+    repo_root = Path(tmp_path)
+
+    monkeypatch.setattr(messages_routes, "find_repo_root", lambda: repo_root)
+    monkeypatch.setattr(flows_routes, "find_repo_root", lambda: repo_root)
+
+    app = FastAPI()
+    app.state.repo_id = "repo"
+    app.include_router(messages_routes.build_messages_routes())
+    app.include_router(flows_routes.build_flow_routes())
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/messages/nonexistent-run-id/reply",
+            data={"body": "test"},
+        )
+        assert resp.status_code in (404, 409, 500)

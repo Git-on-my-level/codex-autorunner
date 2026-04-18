@@ -14,8 +14,14 @@ from .files import (
 from .frontmatter import parse_markdown_frontmatter
 from .lint import lint_ticket_directory
 from .models import TicketContextEntry, TicketDoc, TicketFrontmatter, TicketRunConfig
-from .replies import parse_user_reply
 from .runner_prompt import _truncate_text_by_bytes, build_prompt
+from .runner_step_support import (
+    build_reply_context as render_new_reply_context,
+)
+from .runner_step_support import (
+    build_turn_options,
+    load_previous_ticket_content,
+)
 from .runner_types import (
     PreTurnPlan,
     SelectedTicket,
@@ -376,82 +382,11 @@ def build_reply_context(
     reply_paths,
     last_seq: int,
 ) -> tuple[str, int]:
-    """Render new human replies (reply_history) into a prompt block.
-
-    Returns (rendered_text, max_seq_seen).
-    """
-
-    history_dir = getattr(reply_paths, "reply_history_dir", None)
-    if history_dir is None:
-        return "", last_seq
-    if not history_dir.exists() or not history_dir.is_dir():
-        return "", last_seq
-
-    entries: list[tuple[int, Path]] = []
-    try:
-        for child in history_dir.iterdir():
-            try:
-                if not child.is_dir():
-                    continue
-                name = child.name
-                if not (len(name) == 4 and name.isdigit()):
-                    continue
-                seq = int(name)
-                if seq <= last_seq:
-                    continue
-                entries.append((seq, child))
-            except OSError:
-                continue
-    except OSError:
-        return "", last_seq
-
-    if not entries:
-        return "", last_seq
-
-    entries.sort(key=lambda x: x[0])
-    max_seq = max(seq for seq, _ in entries)
-
-    blocks: list[str] = []
-    for seq, entry_dir in entries:
-        reply_path = entry_dir / "USER_REPLY.md"
-        reply, errors = (
-            parse_user_reply(reply_path)
-            if reply_path.exists()
-            else (None, ["USER_REPLY.md missing"])
-        )
-
-        block_lines: list[str] = [f"[USER_REPLY {seq:04d}]"]
-        if errors:
-            block_lines.append("Errors:\n- " + "\n- ".join(errors))
-        if reply is not None:
-            if reply.title:
-                block_lines.append(f"Title: {reply.title}")
-            if reply.body:
-                block_lines.append(reply.body)
-
-        attachments: list[str] = []
-        try:
-            for child in sorted(entry_dir.iterdir(), key=lambda p: p.name):
-                try:
-                    if child.name.startswith("."):
-                        continue
-                    if child.name == "USER_REPLY.md":
-                        continue
-                    if child.is_dir():
-                        continue
-                    attachments.append(safe_relpath(child, workspace_root))
-                except OSError:
-                    continue
-        except OSError:
-            attachments = []
-
-        if attachments:
-            block_lines.append("Attachments:\n- " + "\n- ".join(attachments))
-
-        blocks.append("\n".join(block_lines).strip())
-
-    rendered = "\n\n".join(blocks).strip()
-    return rendered, max_seq
+    return render_new_reply_context(
+        reply_paths=reply_paths,
+        last_seq=last_seq,
+        workspace_root=workspace_root,
+    )
 
 
 def _prior_no_change_turns(state: dict[str, Any], ticket_id: str) -> int:
@@ -575,18 +510,12 @@ def plan_pre_turn(
             current_ticket_path=current_ticket_path,
         )
 
-    previous_ticket_content: Optional[str] = None
-    if config.include_previous_ticket_context:
-        try:
-            ticket_paths = list_ticket_paths(ticket_dir)
-            if current_path in ticket_paths:
-                curr_idx = ticket_paths.index(current_path)
-                if curr_idx > 0:
-                    prev_path = ticket_paths[curr_idx - 1]
-                    content = prev_path.read_text(encoding="utf-8")
-                    previous_ticket_content = _truncate_text_by_bytes(content, 16384)
-        except OSError:
-            _logger.debug("failed to read previous ticket content", exc_info=True)
+    ticket_paths = list_ticket_paths(ticket_dir)
+    previous_ticket_content = load_previous_ticket_content(
+        current_path=current_path,
+        ticket_paths=ticket_paths,
+        include_previous_ticket_context=config.include_previous_ticket_context,
+    )
 
     prompt = build_prompt(
         ticket_path=current_path,
@@ -614,11 +543,7 @@ def plan_pre_turn(
         prompt_max_bytes=config.prompt_max_bytes,
     )
 
-    turn_options: dict[str, Any] = {}
-    if ticket_doc.frontmatter.model:
-        turn_options["model"] = ticket_doc.frontmatter.model
-    if ticket_doc.frontmatter.reasoning:
-        turn_options["reasoning"] = ticket_doc.frontmatter.reasoning
+    turn_options = build_turn_options(ticket_doc=ticket_doc)
     turn_options["ticket_flow_run_id"] = run_id
 
     return PreTurnPlan(

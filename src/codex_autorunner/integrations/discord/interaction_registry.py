@@ -1,9 +1,15 @@
 """Discord runtime routing registry.
 
 This module remains the single source of truth for slash-command, component,
-modal, and autocomplete routing metadata. As new route families are added, the
-family-specific builders should be split out before this file turns into the
-next brittle dispatcher center.
+modal, and autocomplete routing metadata. Handler shims and option builders
+live in the extracted family modules:
+
+- ``interaction_slash_builders``: slash option factories, handler shims,
+  autocomplete choice builders, and ``_dispatch_service_method``.
+- ``interaction_component_handlers``: component interaction handler shims.
+
+This file owns the route dataclasses, contract resolution, route tables,
+lookup/dispatch functions, and the application command builder.
 """
 
 from __future__ import annotations
@@ -13,7 +19,6 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Literal, Optional
 
 from ...core.flows.catalog import FLOW_ACTION_SPECS, FLOW_ACTIONS_WITH_RUN_PICKER
-from ...core.update_targets import update_target_command_choices
 from ..chat.action_ux_contract import (
     DiscordAckPolicy,
     DiscordAckTiming,
@@ -27,18 +32,138 @@ from ..chat.action_ux_contract import (
     discord_scheduler_ack_strategy_for_entry,
     discord_slash_command_ux_contract_for_id,
 )
-from ..chat.agents import (
-    chat_agent_command_choices,
-    chat_agent_description,
-    chat_hermes_profile_options,
+from .interaction_component_handlers import (
+    AGENT_PROFILE_SELECT_ID as AGENT_PROFILE_SELECT_ID,
 )
-from ..chat.model_selection import (
-    reasoning_effort_command_choices,
-    reasoning_effort_description,
+from .interaction_component_handlers import (
+    AGENT_SELECT_CUSTOM_ID as AGENT_SELECT_CUSTOM_ID,
 )
-from .interaction_runtime import (
-    defer_and_update_runtime_component_message,
-    ensure_ephemeral_response_deferred,
+from .interaction_component_handlers import (
+    BIND_PAGE_CUSTOM_ID_PREFIX as BIND_PAGE_CUSTOM_ID_PREFIX,
+)
+from .interaction_component_handlers import (
+    BIND_SELECT_CUSTOM_ID as BIND_SELECT_CUSTOM_ID,
+)
+from .interaction_component_handlers import (
+    FLOW_ACTION_SELECT_PREFIX as FLOW_ACTION_SELECT_PREFIX,
+)
+from .interaction_component_handlers import (
+    FLOW_RUNS_SELECT_ID as FLOW_RUNS_SELECT_ID,
+)
+from .interaction_component_handlers import (
+    MODEL_EFFORT_SELECT_ID as MODEL_EFFORT_SELECT_ID,
+)
+from .interaction_component_handlers import (
+    MODEL_SELECT_CUSTOM_ID as MODEL_SELECT_CUSTOM_ID,
+)
+from .interaction_component_handlers import (
+    NEWT_CANCEL_CUSTOM_ID as NEWT_CANCEL_CUSTOM_ID,
+)
+from .interaction_component_handlers import (
+    NEWT_HARD_RESET_CUSTOM_ID as NEWT_HARD_RESET_CUSTOM_ID,
+)
+from .interaction_component_handlers import (
+    REVIEW_COMMIT_SELECT_ID as REVIEW_COMMIT_SELECT_ID,
+)
+from .interaction_component_handlers import (
+    SESSION_RESUME_SELECT_ID as SESSION_RESUME_SELECT_ID,
+)
+from .interaction_component_handlers import (
+    TICKETS_FILTER_SELECT_ID as TICKETS_FILTER_SELECT_ID,
+)
+from .interaction_component_handlers import (
+    TICKETS_MODAL_PREFIX as TICKETS_MODAL_PREFIX,
+)
+from .interaction_component_handlers import (
+    TICKETS_SELECT_ID as TICKETS_SELECT_ID,
+)
+from .interaction_component_handlers import (
+    UPDATE_CANCEL_PREFIX as UPDATE_CANCEL_PREFIX,
+)
+from .interaction_component_handlers import (
+    UPDATE_CONFIRM_PREFIX as UPDATE_CONFIRM_PREFIX,
+)
+from .interaction_component_handlers import (
+    UPDATE_TARGET_SELECT_ID as UPDATE_TARGET_SELECT_ID,
+)
+from .interaction_component_handlers import (
+    _handle_agent_profile_select_component,
+    _handle_agent_select_component,
+    _handle_approval_component,
+    _handle_bind_page_component,
+    _handle_bind_select_component,
+    _handle_cancel_queued_turn_component,
+    _handle_cancel_turn_component,
+    _handle_continue_turn_component,
+    _handle_flow_action_select_component,
+    _handle_flow_button_component,
+    _handle_flow_runs_select_component,
+    _handle_model_effort_select_component,
+    _handle_model_select_component,
+    _handle_newt_cancel_component,
+    _handle_newt_hard_reset_component,
+    _handle_queue_cancel_component,
+    _handle_queue_interrupt_send_component,
+    _handle_queued_turn_interrupt_send_component,
+    _handle_review_commit_select_component,
+    _handle_session_resume_select_component,
+    _handle_update_cancel_component,
+    _handle_update_confirm_component,
+    _handle_update_target_select_component,
+)
+from .interaction_slash_builders import (
+    BOOLEAN as BOOLEAN,
+)
+from .interaction_slash_builders import (
+    GROUP_DESCRIPTIONS as GROUP_DESCRIPTIONS,
+)
+from .interaction_slash_builders import (
+    INTEGER as INTEGER,
+)
+from .interaction_slash_builders import (
+    ROOT_COMMANDS as ROOT_COMMANDS,
+)
+from .interaction_slash_builders import (
+    STRING as STRING,
+)
+from .interaction_slash_builders import (
+    SUB_COMMAND as SUB_COMMAND,
+)
+from .interaction_slash_builders import (
+    SUB_COMMAND_GROUP as SUB_COMMAND_GROUP,
+)
+from .interaction_slash_builders import (
+    _agent_options,
+    _approvals_options,
+    _bind_options,
+    _build_bind_autocomplete_choices,
+    _build_flow_run_autocomplete_choices,
+    _build_model_autocomplete_choices,
+    _build_session_resume_autocomplete_choices,
+    _build_skills_autocomplete_choices,
+    _build_ticket_autocomplete_choices,
+    _diff_options,
+    _dispatch_service_method,
+    _experimental_options,
+    _feedback_options,
+    _files_clear_options,
+    _flow_issue_options,
+    _flow_plan_options,
+    _flow_reply_options,
+    _flow_run_picker_options,
+    _flow_runs_options,
+    _flow_start_options,
+    _flow_status_options,
+    _handle_bind_slash,
+    _handle_pma_route,
+    _interrupt_extra_kwargs,
+    _mention_options,
+    _model_options,
+    _review_options,
+    _session_resume_options,
+    _skills_options,
+    _tickets_options,
+    _update_options,
 )
 
 WorkspaceLockPolicy = Literal[
@@ -46,32 +171,6 @@ WorkspaceLockPolicy = Literal[
     "bound_workspace",
     "bind_target_workspace",
 ]
-
-# Discord application command option types.
-SUB_COMMAND = 1
-SUB_COMMAND_GROUP = 2
-STRING = 3
-INTEGER = 4
-BOOLEAN = 5
-
-BIND_SELECT_CUSTOM_ID = "bind_select"
-BIND_PAGE_CUSTOM_ID_PREFIX = "bind_page"
-FLOW_RUNS_SELECT_ID = "flow_runs_select"
-AGENT_SELECT_CUSTOM_ID = "agent_select"
-AGENT_PROFILE_SELECT_ID = "agent_profile_select"
-MODEL_SELECT_CUSTOM_ID = "model_select"
-MODEL_EFFORT_SELECT_ID = "model_effort_select"
-SESSION_RESUME_SELECT_ID = "session_resume_select"
-UPDATE_TARGET_SELECT_ID = "update_target_select"
-UPDATE_CONFIRM_PREFIX = "update_confirm"
-UPDATE_CANCEL_PREFIX = "update_cancel"
-REVIEW_COMMIT_SELECT_ID = "review_commit_select"
-FLOW_ACTION_SELECT_PREFIX = "flow_action_select"
-TICKETS_FILTER_SELECT_ID = "tickets_filter_select"
-TICKETS_SELECT_ID = "tickets_select"
-TICKETS_MODAL_PREFIX = "tickets_modal"
-NEWT_HARD_RESET_CUSTOM_ID = "newt_hard_reset"
-NEWT_CANCEL_CUSTOM_ID = "newt_cancel"
 
 SlashOptionsFactory = Callable[[Any], list[dict[str, Any]]]
 SlashHandler = Callable[..., Awaitable[None]]
@@ -359,500 +458,6 @@ def _autocomplete_route(**kwargs: Any) -> AutocompleteRoute:
         )
     return route
 
-
-def _string_option(
-    name: str,
-    description: str,
-    *,
-    required: bool = False,
-    autocomplete: bool = False,
-    choices: Optional[list[dict[str, str]]] = None,
-) -> dict[str, Any]:
-    option: dict[str, Any] = {
-        "type": STRING,
-        "name": name,
-        "description": description,
-        "required": required,
-    }
-    if autocomplete:
-        option["autocomplete"] = True
-    if choices is not None:
-        option["choices"] = choices
-    return option
-
-
-def _integer_option(
-    name: str,
-    description: str,
-    *,
-    required: bool = False,
-) -> dict[str, Any]:
-    return {
-        "type": INTEGER,
-        "name": name,
-        "description": description,
-        "required": required,
-    }
-
-
-def _boolean_option(
-    name: str,
-    description: str,
-    *,
-    required: bool = False,
-) -> dict[str, Any]:
-    return {
-        "type": BOOLEAN,
-        "name": name,
-        "description": description,
-        "required": required,
-    }
-
-
-async def _dispatch_service_method(
-    service: Any,
-    route: SlashCommandRoute,
-    interaction_id: str,
-    interaction_token: str,
-    *,
-    channel_id: str,
-    guild_id: Optional[str],
-    user_id: Optional[str],
-    options: dict[str, Any],
-    method_name: str,
-    include_channel_id: bool = False,
-    include_guild_id: bool = False,
-    include_user_id: bool = False,
-    include_options: bool = False,
-    workspace_requirement: Literal["none", "bound", "flow_read"] = "none",
-    flow_read_action: Optional[str] = None,
-    extra_kwargs_factory: Optional[
-        Callable[..., Awaitable[dict[str, Any]] | dict[str, Any]]
-    ] = None,
-) -> None:
-    kwargs: dict[str, Any] = {}
-
-    if workspace_requirement == "bound":
-        workspace_root = await service._require_bound_workspace(
-            interaction_id,
-            interaction_token,
-            channel_id=channel_id,
-        )
-        if workspace_root is None:
-            return
-        kwargs["workspace_root"] = workspace_root
-    elif workspace_requirement == "flow_read":
-        action = flow_read_action or route.canonical_path[-1]
-        workspace_root = await service._resolve_workspace_for_flow_read(
-            interaction_id,
-            interaction_token,
-            channel_id=channel_id,
-            action=action,
-        )
-        if workspace_root is None:
-            return
-        kwargs["workspace_root"] = workspace_root
-
-    if include_channel_id:
-        kwargs["channel_id"] = channel_id
-    if include_guild_id:
-        kwargs["guild_id"] = guild_id
-    if include_user_id:
-        kwargs["user_id"] = user_id
-    if include_options:
-        kwargs["options"] = options
-
-    if extra_kwargs_factory is not None:
-        extra = extra_kwargs_factory(
-            service,
-            route,
-            interaction_id,
-            interaction_token,
-            channel_id=channel_id,
-            guild_id=guild_id,
-            user_id=user_id,
-            options=options,
-            kwargs=kwargs,
-        )
-        extra = await extra if inspect.isawaitable(extra) else extra
-        if extra is None:
-            return
-        kwargs.update(extra)
-
-    handler = getattr(service, method_name)
-    await handler(interaction_id, interaction_token, **kwargs)
-
-
-async def _handle_bind_slash(
-    service: Any,
-    route: SlashCommandRoute,
-    interaction_id: str,
-    interaction_token: str,
-    *,
-    channel_id: str,
-    guild_id: Optional[str],
-    user_id: Optional[str],
-    options: dict[str, Any],
-) -> None:
-    await _dispatch_service_method(
-        service,
-        route,
-        interaction_id,
-        interaction_token,
-        channel_id=channel_id,
-        guild_id=guild_id,
-        user_id=user_id,
-        options=options,
-        method_name="_handle_bind",
-        include_channel_id=True,
-        include_guild_id=True,
-        include_options=True,
-    )
-
-
-def _interrupt_extra_kwargs(
-    _service: Any,
-    _route: SlashCommandRoute,
-    _interaction_id: str,
-    _interaction_token: str,
-    *,
-    user_id: Optional[str],
-    **_kwargs: Any,
-) -> dict[str, Any]:
-    return {
-        "source": "slash_command",
-        "source_command": "car session interrupt",
-        "source_user_id": user_id,
-    }
-
-
-async def _handle_pma_route(
-    service: Any,
-    route: SlashCommandRoute,
-    interaction_id: str,
-    interaction_token: str,
-    *,
-    channel_id: str,
-    guild_id: Optional[str],
-    user_id: Optional[str],
-    options: dict[str, Any],
-) -> None:
-    method_name_by_path: dict[tuple[str, ...], str] = {
-        ("pma", "on"): "_handle_pma_on",
-        ("pma", "off"): "_handle_pma_off",
-        ("pma", "status"): "_handle_pma_status",
-    }
-    method_name = method_name_by_path.get(route.canonical_path)
-    if method_name is None:
-        await service.respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            "Unknown PMA subcommand. Use on, off, or status.",
-        )
-        return
-    if not service._config.pma_enabled:
-        await service.respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            "PMA is disabled in hub config. Set pma.enabled: true to enable.",
-        )
-        return
-    await _dispatch_service_method(
-        service,
-        route,
-        interaction_id,
-        interaction_token,
-        channel_id=channel_id,
-        guild_id=guild_id,
-        user_id=user_id,
-        options=options,
-        method_name=method_name,
-        include_channel_id=True,
-        include_guild_id=route.canonical_path == ("pma", "on"),
-    )
-
-
-async def _build_bind_autocomplete_choices(
-    service: Any,
-    *,
-    channel_id: str,
-    command_path: tuple[str, ...],
-    options: dict[str, Any],
-    focused_value: str,
-) -> list[dict[str, str]]:
-    from .car_autocomplete import build_bind_autocomplete_choices
-
-    _ = channel_id, command_path, options
-    return build_bind_autocomplete_choices(service, focused_value)
-
-
-async def _build_model_autocomplete_choices(
-    service: Any,
-    *,
-    channel_id: str,
-    command_path: tuple[str, ...],
-    options: dict[str, Any],
-    focused_value: str,
-) -> list[dict[str, str]]:
-    from .car_autocomplete import build_model_autocomplete_choices
-
-    _ = command_path, options
-    return await build_model_autocomplete_choices(
-        service,
-        channel_id=channel_id,
-        query=focused_value,
-    )
-
-
-async def _build_skills_autocomplete_choices(
-    service: Any,
-    *,
-    channel_id: str,
-    command_path: tuple[str, ...],
-    options: dict[str, Any],
-    focused_value: str,
-) -> list[dict[str, str]]:
-    from .car_autocomplete import build_skills_autocomplete_choices
-
-    _ = command_path, options
-    return await build_skills_autocomplete_choices(
-        service,
-        channel_id=channel_id,
-        query=focused_value,
-    )
-
-
-async def _build_ticket_autocomplete_choices(
-    service: Any,
-    *,
-    channel_id: str,
-    command_path: tuple[str, ...],
-    options: dict[str, Any],
-    focused_value: str,
-) -> list[dict[str, str]]:
-    from .car_autocomplete import build_ticket_autocomplete_choices
-
-    _ = command_path, options
-    return await build_ticket_autocomplete_choices(
-        service,
-        channel_id=channel_id,
-        query=focused_value,
-    )
-
-
-async def _build_session_resume_autocomplete_choices(
-    service: Any,
-    *,
-    channel_id: str,
-    command_path: tuple[str, ...],
-    options: dict[str, Any],
-    focused_value: str,
-) -> list[dict[str, str]]:
-    from .car_autocomplete import build_session_resume_autocomplete_choices
-
-    _ = command_path, options
-    return await build_session_resume_autocomplete_choices(
-        service,
-        channel_id=channel_id,
-        query=focused_value,
-    )
-
-
-async def _build_flow_run_autocomplete_choices(
-    service: Any,
-    *,
-    channel_id: str,
-    command_path: tuple[str, ...],
-    options: dict[str, Any],
-    focused_value: str,
-) -> list[dict[str, str]]:
-    from .car_autocomplete import build_flow_run_autocomplete_choices
-
-    _ = options
-    return await build_flow_run_autocomplete_choices(
-        service,
-        channel_id=channel_id,
-        action=command_path[2],
-        query=focused_value,
-    )
-
-
-def _bind_options(_context: Any) -> list[dict[str, Any]]:
-    return [
-        _string_option(
-            "workspace",
-            "Workspace path or repo id (optional - shows picker if omitted)",
-            autocomplete=True,
-        )
-    ]
-
-
-def _agent_options(context: Any) -> list[dict[str, Any]]:
-    hermes_profile_choices = [
-        {"name": option.profile, "value": option.profile}
-        for option in chat_hermes_profile_options(context)
-    ]
-    return [
-        _string_option(
-            "name",
-            f"Agent name: {chat_agent_description(context)}",
-            choices=list(chat_agent_command_choices(context)),
-        ),
-        _string_option(
-            "profile",
-            "Hermes profile id (optional)",
-            choices=hermes_profile_choices,
-        ),
-    ]
-
-
-def _model_options(_context: Any) -> list[dict[str, Any]]:
-    return [
-        _string_option(
-            "name",
-            "Model name (e.g., gpt-5.4 or provider/model)",
-            autocomplete=True,
-        ),
-        _string_option(
-            "effort",
-            ("Reasoning effort (when supported): " f"{reasoning_effort_description()}"),
-            choices=list(reasoning_effort_command_choices()),
-        ),
-    ]
-
-
-def _update_options(_context: Any) -> list[dict[str, Any]]:
-    return [
-        _string_option(
-            "target",
-            "Target: all, web, chat, telegram, discord, or status",
-            choices=list(update_target_command_choices(include_status=True)),
-        )
-    ]
-
-
-def _diff_options(_context: Any) -> list[dict[str, Any]]:
-    return [_string_option("path", "Optional path to diff")]
-
-
-def _skills_options(_context: Any) -> list[dict[str, Any]]:
-    return [
-        _string_option(
-            "search", "Optional search text to filter skills", autocomplete=True
-        )
-    ]
-
-
-def _tickets_options(_context: Any) -> list[dict[str, Any]]:
-    return [
-        _string_option(
-            "search", "Optional search text to filter tickets", autocomplete=True
-        )
-    ]
-
-
-def _review_options(_context: Any) -> list[dict[str, Any]]:
-    return [
-        _string_option(
-            "target",
-            "Review target: uncommitted, base <branch>, commit <sha>, or custom",
-        )
-    ]
-
-
-def _approvals_options(_context: Any) -> list[dict[str, Any]]:
-    return [
-        _string_option(
-            "mode",
-            "Mode: yolo, safe, read-only, auto, or full-access",
-        )
-    ]
-
-
-def _mention_options(_context: Any) -> list[dict[str, Any]]:
-    return [
-        _string_option("path", "Path to the file to include", required=True),
-        _string_option("request", "Optional request text"),
-    ]
-
-
-def _session_resume_options(_context: Any) -> list[dict[str, Any]]:
-    return [
-        _string_option(
-            "thread_id",
-            "Thread ID to resume (optional - lists recent threads if omitted)",
-            autocomplete=True,
-        )
-    ]
-
-
-def _files_clear_options(_context: Any) -> list[dict[str, Any]]:
-    return [
-        _string_option(
-            "target",
-            "inbox, outbox, or all (default: all)",
-        )
-    ]
-
-
-def _feedback_options(_context: Any) -> list[dict[str, Any]]:
-    return [_string_option("reason", "Feedback reason/description", required=True)]
-
-
-def _experimental_options(_context: Any) -> list[dict[str, Any]]:
-    return [
-        _string_option("action", "Action: list, enable, or disable"),
-        _string_option("feature", "Feature name for enable/disable"),
-    ]
-
-
-def _flow_status_options(_context: Any) -> list[dict[str, Any]]:
-    return [_string_option("run_id", "Flow run id", autocomplete=True)]
-
-
-def _flow_runs_options(_context: Any) -> list[dict[str, Any]]:
-    return [_integer_option("limit", "Max runs (default 5)")]
-
-
-def _flow_issue_options(_context: Any) -> list[dict[str, Any]]:
-    return [_string_option("issue_ref", "Issue number or URL", required=True)]
-
-
-def _flow_plan_options(_context: Any) -> list[dict[str, Any]]:
-    return [_string_option("text", "Plan text", required=True)]
-
-
-def _flow_start_options(_context: Any) -> list[dict[str, Any]]:
-    return [
-        _boolean_option(
-            "force_new",
-            "Start a new run even if one is active/paused",
-        )
-    ]
-
-
-def _flow_run_picker_options(_context: Any) -> list[dict[str, Any]]:
-    return [_string_option("run_id", "Flow run id", autocomplete=True)]
-
-
-def _flow_reply_options(_context: Any) -> list[dict[str, Any]]:
-    return [
-        _string_option("text", "Reply text", required=True),
-        _string_option("run_id", "Flow run id", autocomplete=True),
-    ]
-
-
-ROOT_COMMANDS: dict[str, str] = {
-    "car": "Codex Autorunner commands",
-    "pma": "Proactive Mode Agent commands",
-    "flow": "Ticket flow commands",
-}
-
-GROUP_DESCRIPTIONS: dict[tuple[str, str], str] = {
-    ("car", "session"): "Session management commands",
-    ("car", "files"): "Manage file inbox/outbox",
-    ("car", "admin"): "Admin and operator commands",
-}
 
 _SLASH_ROUTES: tuple[SlashCommandRoute, ...] = (
     SlashCommandRoute(
@@ -1685,427 +1290,6 @@ _SLASH_ROUTES_BY_ID: dict[str, tuple[SlashCommandRoute, ...]] = {}
 for _route in _SLASH_ROUTES:
     _SLASH_ROUTES_BY_ID.setdefault(_route.id, tuple())
     _SLASH_ROUTES_BY_ID[_route.id] = _SLASH_ROUTES_BY_ID[_route.id] + (_route,)
-
-
-async def _handle_bind_page_component(service: Any, ctx: Any) -> None:
-    custom_id = ctx.custom_id or ""
-    page_token = custom_id.split(":", 1)[1].strip()
-    await service._handle_bind_page_component(
-        ctx.interaction_id,
-        ctx.interaction_token,
-        page_token=page_token,
-    )
-
-
-async def _handle_bind_select_component(service: Any, ctx: Any) -> None:
-    if not ctx.values:
-        await service.respond_ephemeral(
-            ctx.interaction_id,
-            ctx.interaction_token,
-            "Please select a repository and try again.",
-        )
-        return
-    await service._handle_bind_selection(
-        ctx.interaction_id,
-        ctx.interaction_token,
-        channel_id=ctx.channel_id,
-        guild_id=ctx.guild_id,
-        selected_workspace_value=ctx.values[0],
-    )
-
-
-async def _handle_flow_runs_select_component(service: Any, ctx: Any) -> None:
-    if not ctx.values:
-        await service.respond_ephemeral(
-            ctx.interaction_id,
-            ctx.interaction_token,
-            "Please select a run and try again.",
-        )
-        return
-    workspace_root = await service._require_bound_workspace(
-        ctx.interaction_id,
-        ctx.interaction_token,
-        channel_id=ctx.channel_id,
-    )
-    if workspace_root is None:
-        return
-    await service._handle_flow_status(
-        ctx.interaction_id,
-        ctx.interaction_token,
-        workspace_root=workspace_root,
-        options={"run_id": ctx.values[0]},
-        channel_id=ctx.channel_id,
-        guild_id=ctx.guild_id,
-    )
-
-
-async def _handle_agent_select_component(service: Any, ctx: Any) -> None:
-    if not ctx.values:
-        await service.respond_ephemeral(
-            ctx.interaction_id,
-            ctx.interaction_token,
-            "Please select an agent and try again.",
-        )
-        return
-    await service._handle_car_agent(
-        ctx.interaction_id,
-        ctx.interaction_token,
-        channel_id=ctx.channel_id,
-        options={"name": ctx.values[0]},
-    )
-
-
-async def _handle_agent_profile_select_component(service: Any, ctx: Any) -> None:
-    if not ctx.values:
-        await service.respond_ephemeral(
-            ctx.interaction_id,
-            ctx.interaction_token,
-            "Please select a Hermes profile and try again.",
-        )
-        return
-    await service._handle_agent_profile_picker_selection(
-        ctx.interaction_id,
-        ctx.interaction_token,
-        channel_id=ctx.channel_id,
-        selected_profile=ctx.values[0],
-    )
-
-
-async def _handle_model_select_component(service: Any, ctx: Any) -> None:
-    if not ctx.values:
-        await service.respond_ephemeral(
-            ctx.interaction_id,
-            ctx.interaction_token,
-            "Please select a model and try again.",
-        )
-        return
-    await service._handle_model_picker_selection(
-        ctx.interaction_id,
-        ctx.interaction_token,
-        channel_id=ctx.channel_id,
-        user_id=ctx.user_id,
-        selected_model=ctx.values[0],
-    )
-
-
-async def _handle_model_effort_select_component(service: Any, ctx: Any) -> None:
-    if not ctx.values:
-        await service.respond_ephemeral(
-            ctx.interaction_id,
-            ctx.interaction_token,
-            "Please select reasoning effort and try again.",
-        )
-        return
-    await service._handle_model_effort_selection(
-        ctx.interaction_id,
-        ctx.interaction_token,
-        channel_id=ctx.channel_id,
-        user_id=ctx.user_id,
-        selected_effort=ctx.values[0],
-    )
-
-
-async def _handle_session_resume_select_component(service: Any, ctx: Any) -> None:
-    if not ctx.values:
-        await service.respond_ephemeral(
-            ctx.interaction_id,
-            ctx.interaction_token,
-            "Please select a thread and try again.",
-        )
-        return
-    await service._handle_car_resume(
-        ctx.interaction_id,
-        ctx.interaction_token,
-        channel_id=ctx.channel_id,
-        options={"thread_id": ctx.values[0]},
-    )
-
-
-async def _handle_update_target_select_component(service: Any, ctx: Any) -> None:
-    if not ctx.values:
-        await service.respond_ephemeral(
-            ctx.interaction_id,
-            ctx.interaction_token,
-            "Please select an update target and try again.",
-        )
-        return
-    await service._handle_car_update(
-        ctx.interaction_id,
-        ctx.interaction_token,
-        channel_id=ctx.channel_id,
-        options={"target": ctx.values[0]},
-        response_mode="component",
-    )
-
-
-async def _handle_update_confirm_component(service: Any, ctx: Any) -> None:
-    custom_id = ctx.custom_id or ""
-    raw_target = custom_id.split(":", 1)[1].strip()
-    if not raw_target:
-        await service.respond_ephemeral(
-            ctx.interaction_id,
-            ctx.interaction_token,
-            "Please select an update target and try again.",
-        )
-        return
-    await service._handle_car_update(
-        ctx.interaction_id,
-        ctx.interaction_token,
-        channel_id=ctx.channel_id,
-        options={"target": raw_target, "confirmed": True},
-        response_mode="component",
-    )
-
-
-async def _handle_update_cancel_component(service: Any, ctx: Any) -> None:
-    await service.update_component_message(
-        interaction_id=ctx.interaction_id,
-        interaction_token=ctx.interaction_token,
-        text="Update cancelled.",
-        components=[],
-    )
-
-
-def _parse_newt_component_custom_id(custom_id: str, prefix: str) -> Optional[str]:
-    if custom_id == prefix:
-        return ""
-    if not custom_id.startswith(f"{prefix}:"):
-        return None
-    token = custom_id.split(":", 1)[1].strip()
-    return token or None
-
-
-async def _handle_newt_hard_reset_component(service: Any, ctx: Any) -> None:
-    custom_id = ctx.custom_id or ""
-    hard_reset_token = _parse_newt_component_custom_id(
-        custom_id, NEWT_HARD_RESET_CUSTOM_ID
-    )
-    if hard_reset_token is None:
-        await service.respond_ephemeral(
-            ctx.interaction_id,
-            ctx.interaction_token,
-            "I could not identify this interaction action. Please retry.",
-        )
-        return
-    await service._handle_car_newt_hard_reset(
-        ctx.interaction_id,
-        ctx.interaction_token,
-        channel_id=ctx.channel_id,
-        expected_workspace_token=hard_reset_token,
-    )
-
-
-async def _handle_newt_cancel_component(service: Any, ctx: Any) -> None:
-    custom_id = ctx.custom_id or ""
-    cancel_token = _parse_newt_component_custom_id(custom_id, NEWT_CANCEL_CUSTOM_ID)
-    if cancel_token is None:
-        await service.respond_ephemeral(
-            ctx.interaction_id,
-            ctx.interaction_token,
-            "I could not identify this interaction action. Please retry.",
-        )
-        return
-    await service._handle_car_newt_cancel(
-        ctx.interaction_id,
-        ctx.interaction_token,
-        expected_workspace_token=cancel_token,
-    )
-
-
-async def _handle_review_commit_select_component(service: Any, ctx: Any) -> None:
-    if not ctx.values:
-        await service.respond_ephemeral(
-            ctx.interaction_id,
-            ctx.interaction_token,
-            "Please select a commit and try again.",
-        )
-        return
-    workspace_root = await service._require_bound_workspace(
-        ctx.interaction_id,
-        ctx.interaction_token,
-        channel_id=ctx.channel_id,
-    )
-    if workspace_root is None:
-        return
-    await service._handle_car_review(
-        ctx.interaction_id,
-        ctx.interaction_token,
-        channel_id=ctx.channel_id,
-        workspace_root=workspace_root,
-        options={"target": f"commit {ctx.values[0]}"},
-    )
-
-
-async def _handle_flow_action_select_component(service: Any, ctx: Any) -> None:
-    custom_id = ctx.custom_id or ""
-    action = custom_id.split(":", 1)[1].strip().lower()
-    if not ctx.values:
-        await service.respond_ephemeral(
-            ctx.interaction_id,
-            ctx.interaction_token,
-            "Please select a run and try again.",
-        )
-        return
-    if action not in FLOW_ACTIONS_WITH_RUN_PICKER:
-        await service.respond_ephemeral(
-            ctx.interaction_id,
-            ctx.interaction_token,
-            f"Unknown flow action picker: {action}",
-        )
-        return
-    workspace_root = await service._require_bound_workspace(
-        ctx.interaction_id,
-        ctx.interaction_token,
-        channel_id=ctx.channel_id,
-    )
-    if workspace_root is None:
-        return
-    run_id = ctx.values[0]
-    handler_name = {
-        "status": "_handle_flow_status",
-        "restart": "_handle_flow_restart",
-        "resume": "_handle_flow_resume",
-        "stop": "_handle_flow_stop",
-        "archive": "_handle_flow_archive",
-        "recover": "_handle_flow_recover",
-        "reply": "_handle_flow_reply",
-    }.get(action)
-    if handler_name is None:
-        await service.respond_ephemeral(
-            ctx.interaction_id,
-            ctx.interaction_token,
-            f"Unknown flow action picker: {action}",
-        )
-        return
-    kwargs: dict[str, Any] = {
-        "workspace_root": workspace_root,
-        "options": {"run_id": run_id},
-    }
-    if action in {"status", "resume", "stop", "archive", "reply"}:
-        kwargs["channel_id"] = ctx.channel_id
-        kwargs["guild_id"] = ctx.guild_id
-    if action == "reply":
-        pending_key = service._pending_interaction_scope_key(
-            channel_id=ctx.channel_id,
-            user_id=ctx.user_id,
-        )
-        pending_text = service._pending_flow_reply_text.pop(pending_key, None)
-        if not isinstance(pending_text, str) or not pending_text.strip():
-            deferred = await ensure_ephemeral_response_deferred(
-                service,
-                ctx.interaction_id,
-                ctx.interaction_token,
-            )
-            await service.send_or_respond_ephemeral(
-                interaction_id=ctx.interaction_id,
-                interaction_token=ctx.interaction_token,
-                deferred=deferred,
-                text="Reply selection expired. Re-run `/flow reply text:<...>`.",
-            )
-            return
-        await defer_and_update_runtime_component_message(
-            service,
-            ctx.interaction_id,
-            ctx.interaction_token,
-            f"Saving reply and resuming run {run_id}...",
-            components=[],
-        )
-        kwargs["options"] = {"run_id": run_id, "text": pending_text}
-        kwargs["user_id"] = ctx.user_id
-        kwargs["component_response"] = True
-    await getattr(service, handler_name)(
-        ctx.interaction_id,
-        ctx.interaction_token,
-        **kwargs,
-    )
-
-
-async def _handle_flow_button_component(service: Any, ctx: Any) -> None:
-    workspace_root = await service._require_bound_workspace(
-        ctx.interaction_id,
-        ctx.interaction_token,
-        channel_id=ctx.channel_id,
-    )
-    if workspace_root is None:
-        return
-    await service._handle_flow_button(
-        ctx.interaction_id,
-        ctx.interaction_token,
-        workspace_root=workspace_root,
-        custom_id=ctx.custom_id or "",
-        channel_id=ctx.channel_id,
-        guild_id=ctx.guild_id,
-    )
-
-
-async def _handle_approval_component(service: Any, ctx: Any) -> None:
-    await service._handle_approval_component(
-        ctx.interaction_id,
-        ctx.interaction_token,
-        custom_id=ctx.custom_id or "",
-    )
-
-
-async def _handle_queue_cancel_component(service: Any, ctx: Any) -> None:
-    await service._handle_queue_cancel_button(
-        ctx.interaction_id,
-        ctx.interaction_token,
-        channel_id=ctx.channel_id,
-        custom_id=ctx.custom_id or "",
-        message_id=ctx.message_id,
-        guild_id=ctx.guild_id,
-    )
-
-
-async def _handle_cancel_queued_turn_component(service: Any, ctx: Any) -> None:
-    await service._handle_cancel_queued_turn_button(
-        ctx.interaction_id,
-        ctx.interaction_token,
-        channel_id=ctx.channel_id,
-        custom_id=ctx.custom_id or "",
-        message_id=ctx.message_id,
-    )
-
-
-async def _handle_queue_interrupt_send_component(service: Any, ctx: Any) -> None:
-    await service._handle_queue_interrupt_send_button(
-        ctx.interaction_id,
-        ctx.interaction_token,
-        channel_id=ctx.channel_id,
-        custom_id=ctx.custom_id or "",
-        message_id=ctx.message_id,
-        guild_id=ctx.guild_id,
-        user_id=ctx.user_id,
-    )
-
-
-async def _handle_queued_turn_interrupt_send_component(service: Any, ctx: Any) -> None:
-    await service._handle_queued_turn_interrupt_send_button(
-        ctx.interaction_id,
-        ctx.interaction_token,
-        channel_id=ctx.channel_id,
-        custom_id=ctx.custom_id or "",
-        user_id=ctx.user_id,
-        message_id=ctx.message_id,
-    )
-
-
-async def _handle_cancel_turn_component(service: Any, ctx: Any) -> None:
-    await service._handle_cancel_turn_button(
-        ctx.interaction_id,
-        ctx.interaction_token,
-        channel_id=ctx.channel_id,
-        user_id=ctx.user_id,
-        message_id=ctx.message_id,
-        custom_id=ctx.custom_id or "",
-    )
-
-
-async def _handle_continue_turn_component(service: Any, ctx: Any) -> None:
-    await service._handle_continue_turn_button(
-        ctx.interaction_id,
-        ctx.interaction_token,
-    )
 
 
 def _interrupt_component_route(

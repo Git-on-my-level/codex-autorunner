@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Protocol
 
 if TYPE_CHECKING:
     from .hub import RepoSnapshot
-    from .manifest import Manifest
+    from .manifest import Manifest, ManifestRepo
 
 
 class WorktreeHubContext(Protocol):
@@ -85,3 +85,12 @@ class WorktreeCleanupReport:
             if s.status == "error":
                 return s.step
         return None
+
+
+@dataclass
+class ResolvedWorktreeEntry:
+    manifest: "Manifest"
+    entry: "ManifestRepo"
+    base: "ManifestRepo"
+    base_path: Path
+    worktree_path: Path

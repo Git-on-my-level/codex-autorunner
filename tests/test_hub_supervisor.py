@@ -29,6 +29,10 @@ from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.force_attestation import FORCE_ATTESTATION_REQUIRED_PHRASE
 from codex_autorunner.core.git_utils import run_git
 from codex_autorunner.core.hub import HubSupervisor, RepoStatus
+from codex_autorunner.core.hub_topology import (
+    LockStatus,
+    RepoSnapshot,
+)
 from codex_autorunner.core.hub_worktree_manager import WorktreeManager
 from codex_autorunner.core.orchestration.bindings import OrchestrationBindingStore
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
@@ -326,7 +330,9 @@ def test_list_repos_does_not_refresh_pma_threads_artifact(
         calls.append(path)
 
     monkeypatch.setattr(
-        hub_topology_module, "_save_pma_threads_artifact", _record_artifact_call
+        hub_topology_module,
+        "refresh_pma_threads_artifact",
+        _record_artifact_call,
     )
     try:
         supervisor.list_repos(use_cache=False)
@@ -1329,19 +1335,21 @@ def test_archive_repo_state_waits_for_runner_exit_before_archiving(
     monkeypatch.setattr(
         hub_module,
         "archive_workspace_for_fresh_start",
-        lambda **_kwargs: archived.append(dict(_kwargs))
-        or types.SimpleNamespace(
-            snapshot_id="snap",
-            snapshot_path=base.path / ".codex-autorunner" / "archive",
-            meta_path=base.path / ".codex-autorunner" / "archive" / "META.json",
-            status="complete",
-            file_count=0,
-            total_bytes=0,
-            flow_run_count=0,
-            latest_flow_run_id=None,
-            archived_paths=(),
-            reset_paths=(),
-            archived_thread_ids=(),
+        lambda **_kwargs: (
+            archived.append(dict(_kwargs))
+            or types.SimpleNamespace(
+                snapshot_id="snap",
+                snapshot_path=base.path / ".codex-autorunner" / "archive",
+                meta_path=base.path / ".codex-autorunner" / "archive" / "META.json",
+                status="complete",
+                file_count=0,
+                total_bytes=0,
+                flow_run_count=0,
+                latest_flow_run_id=None,
+                archived_paths=(),
+                reset_paths=(),
+                archived_thread_ids=(),
+            )
         ),
     )
 
@@ -3021,6 +3029,54 @@ def test_cleanup_worktree_failure_keeps_bound_pma_threads_active(
     assert worktree.path.exists()
 
 
+def test_cleanup_worktree_archives_pma_threads_before_manifest_removal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg["pma"]["cleanup_require_archive"] = False
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/pma-thread-ordering",
+        start_point="HEAD",
+    )
+    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+    observed_manifest_entry_during_thread_archive = False
+
+    def _record_manifest_state(
+        *, worktree_repo_id: str, worktree_path: Path
+    ) -> list[str]:
+        nonlocal observed_manifest_entry_during_thread_archive
+        manifest = load_manifest(manifest_path, hub_root)
+        observed_manifest_entry_during_thread_archive = (
+            manifest.get(worktree_repo_id) is not None
+        )
+        return []
+
+    monkeypatch.setattr(
+        supervisor._worktree_manager,
+        "_archive_bound_pma_threads",
+        _record_manifest_state,
+    )
+
+    supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=False)
+
+    assert observed_manifest_entry_during_thread_archive is True
+    manifest = load_manifest(manifest_path, hub_root)
+    assert manifest.get(worktree.id) is None
+    assert not worktree.path.exists()
+
+
 def test_archive_worktree_archives_bound_pma_threads(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
@@ -4400,3 +4456,179 @@ def test_get_agent_workspace_runtime_readiness_rejects_missing(tmp_path: Path) -
     supervisor = HubSupervisor(load_hub_config(hub_root))
     with pytest.raises(ValueError, match="not found"):
         supervisor.get_agent_workspace_runtime_readiness("nope")
+
+
+def test_derive_repo_status_covers_all_branches() -> None:
+    from codex_autorunner.core.hub_topology import LockStatus, derive_repo_status
+
+    class _Record:
+        def __init__(self, exists=True, initialized=True, init_error=None):
+            self.exists_on_disk = exists
+            self.initialized = initialized
+            self.init_error = init_error
+
+    class _State:
+        def __init__(self, status="idle"):
+            self.status = status
+
+    assert (
+        derive_repo_status(_Record(exists=False), LockStatus.UNLOCKED, None)
+        == RepoStatus.MISSING
+    )
+    assert (
+        derive_repo_status(_Record(init_error="bad"), LockStatus.UNLOCKED, None)
+        == RepoStatus.INIT_ERROR
+    )
+    assert (
+        derive_repo_status(_Record(initialized=False), LockStatus.UNLOCKED, None)
+        == RepoStatus.UNINITIALIZED
+    )
+    assert (
+        derive_repo_status(_Record(), LockStatus.LOCKED_ALIVE, _State("running"))
+        == RepoStatus.RUNNING
+    )
+    assert (
+        derive_repo_status(_Record(), LockStatus.UNLOCKED, _State("running"))
+        == RepoStatus.IDLE
+    )
+    assert (
+        derive_repo_status(_Record(), LockStatus.LOCKED_ALIVE, _State("idle"))
+        == RepoStatus.LOCKED
+    )
+    assert (
+        derive_repo_status(_Record(), LockStatus.LOCKED_STALE, _State("idle"))
+        == RepoStatus.LOCKED
+    )
+    assert (
+        derive_repo_status(_Record(), LockStatus.UNLOCKED, _State("error"))
+        == RepoStatus.ERROR
+    )
+    assert (
+        derive_repo_status(_Record(), LockStatus.UNLOCKED, _State("idle"))
+        == RepoStatus.IDLE
+    )
+
+
+def test_normalize_pinned_parent_repo_ids_deduplicates_and_strips() -> None:
+    from codex_autorunner.core.hub_topology import normalize_pinned_parent_repo_ids
+
+    assert normalize_pinned_parent_repo_ids(["  a  ", "b", "a", 123, ""]) == ["a", "b"]
+    assert normalize_pinned_parent_repo_ids(None) == []
+    assert normalize_pinned_parent_repo_ids("not-a-list") == []
+    assert normalize_pinned_parent_repo_ids([]) == []
+
+
+def test_prune_pinned_parent_repo_ids_keeps_only_base_repos() -> None:
+    from codex_autorunner.core.hub_topology import prune_pinned_parent_repo_ids
+
+    snapshots = [
+        RepoSnapshot(
+            id="base-1",
+            path=Path("/tmp/base-1"),
+            display_name="B1",
+            enabled=True,
+            auto_run=False,
+            worktree_setup_commands=None,
+            kind="base",
+            worktree_of=None,
+            branch=None,
+            exists_on_disk=True,
+            is_clean=None,
+            initialized=False,
+            init_error=None,
+            status=RepoStatus.IDLE,
+            lock_status=LockStatus.UNLOCKED,
+            last_run_id=None,
+            last_run_started_at=None,
+            last_run_finished_at=None,
+            last_exit_code=None,
+            runner_pid=None,
+        ),
+        RepoSnapshot(
+            id="wt-1",
+            path=Path("/tmp/wt-1"),
+            display_name="W1",
+            enabled=True,
+            auto_run=False,
+            worktree_setup_commands=None,
+            kind="worktree",
+            worktree_of="base-1",
+            branch="feat",
+            exists_on_disk=True,
+            is_clean=None,
+            initialized=False,
+            init_error=None,
+            status=RepoStatus.IDLE,
+            lock_status=LockStatus.UNLOCKED,
+            last_run_id=None,
+            last_run_started_at=None,
+            last_run_finished_at=None,
+            last_exit_code=None,
+            runner_pid=None,
+        ),
+    ]
+    result = prune_pinned_parent_repo_ids(["base-1", "wt-1", "missing"], snapshots)
+    assert result == ["base-1"]
+
+
+def test_force_attestation_rejects_none_and_wrong_phrase() -> None:
+    from codex_autorunner.core.force_attestation import (
+        FORCE_ATTESTATION_REQUIRED_ERROR,
+        validate_force_attestation,
+    )
+
+    with pytest.raises(ValueError, match=FORCE_ATTESTATION_REQUIRED_ERROR):
+        validate_force_attestation(None)
+
+    with pytest.raises(ValueError, match=FORCE_ATTESTATION_REQUIRED_ERROR):
+        validate_force_attestation(
+            {"phrase": "wrong", "user_request": "x", "target_scope": "y"}
+        )
+
+
+def test_force_attestation_accepts_valid_phrase() -> None:
+    from codex_autorunner.core.force_attestation import (
+        FORCE_ATTESTATION_REQUIRED_PHRASE,
+        validate_force_attestation,
+    )
+
+    result = validate_force_attestation(
+        {
+            "phrase": FORCE_ATTESTATION_REQUIRED_PHRASE,
+            "user_request": "cleanup repo-1",
+            "target_scope": "repo:repo-1",
+        }
+    )
+    assert result["phrase"] == FORCE_ATTESTATION_REQUIRED_PHRASE
+    assert result["user_request"] == "cleanup repo-1"
+    assert result["target_scope"] == "repo:repo-1"
+
+
+def test_enforce_force_attestation_no_op_when_not_forced() -> None:
+    import logging
+
+    from codex_autorunner.core.force_attestation import enforce_force_attestation
+
+    enforce_force_attestation(
+        force=False,
+        force_attestation=None,
+        logger=logging.getLogger("test"),
+        action="test_action",
+    )
+
+
+def test_enforce_force_attestation_raises_when_forced_without_attestation() -> None:
+    import logging
+
+    from codex_autorunner.core.force_attestation import (
+        FORCE_ATTESTATION_REQUIRED_ERROR,
+        enforce_force_attestation,
+    )
+
+    with pytest.raises(ValueError, match=FORCE_ATTESTATION_REQUIRED_ERROR):
+        enforce_force_attestation(
+            force=True,
+            force_attestation=None,
+            logger=logging.getLogger("test"),
+            action="test_action",
+        )

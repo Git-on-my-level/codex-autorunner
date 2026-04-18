@@ -39,13 +39,16 @@ def _validate_version(cfg: Dict[str, Any]) -> None:
         raise ConfigError(f"Unsupported config version; expected {CONFIG_VERSION}")
 
 
-def _is_loopback_host(host: str) -> bool:
+def is_loopback_host(host: str) -> bool:
     if host == "localhost":
         return True
     try:
         return ipaddress.ip_address(host).is_loopback
     except ValueError:
         return False
+
+
+_is_loopback_host = is_loopback_host
 
 
 def _is_strict_int(value: Any) -> bool:

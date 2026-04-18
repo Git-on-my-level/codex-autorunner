@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -133,13 +134,12 @@ def _path_size_bytes(path: Path) -> int:
         except OSError:
             return 0
     total = 0
-    for child in path.rglob("*"):
-        if not child.is_file():
-            continue
-        try:
-            total += child.stat().st_size
-        except OSError:
-            continue
+    for dirpath, _dirnames, filenames in os.walk(path):
+        for name in filenames:
+            try:
+                total += os.stat(os.path.join(dirpath, name)).st_size
+            except OSError:
+                continue
     return total
 
 
@@ -188,24 +188,16 @@ def _fallback_created_at(path: Path) -> datetime:
         return datetime.fromtimestamp(0, tz=timezone.utc)
 
 
-def _prune_entries(
+def _compute_pruned_entries(
     entries: list[_ArchiveEntry],
     *,
     max_keep: int,
     max_age_days: int,
     max_total_bytes: int,
-    dry_run: bool,
-) -> ArchivePruneSummary:
+) -> tuple[list[_ArchiveEntry], list[_ArchiveEntry]]:
     if not entries:
-        return ArchivePruneSummary(
-            kept=0,
-            pruned=0,
-            bytes_before=0,
-            bytes_after=0,
-            pruned_paths=(),
-        )
+        return [], []
 
-    bytes_before = sum(entry.size_bytes for entry in entries)
     entries_sorted = sorted(
         entries,
         key=lambda entry: (entry.created_at, entry.key),
@@ -213,18 +205,18 @@ def _prune_entries(
     )
     age_kept: list[_ArchiveEntry] = []
     pruned: list[_ArchiveEntry] = []
-    cutoff = datetime.now(timezone.utc) - timedelta(days=max(0, max_age_days))
-
-    for entry in entries_sorted:
-        if not entry.preserve and max_age_days >= 0 and entry.created_at < cutoff:
-            pruned.append(entry)
-            continue
-        age_kept.append(entry)
+    if max_age_days >= 0:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=max(0, max_age_days))
+        for entry in entries_sorted:
+            if not entry.preserve and entry.created_at < cutoff:
+                pruned.append(entry)
+                continue
+            age_kept.append(entry)
+    else:
+        age_kept = list(entries_sorted)
 
     kept: list[_ArchiveEntry] = []
-    if max_keep < 0:
-        kept = list(age_kept)
-    else:
+    if max_keep >= 0:
         for entry in age_kept:
             if len(kept) < max_keep:
                 kept.append(entry)
@@ -240,6 +232,8 @@ def _prune_entries(
             if pruned_candidate is not None:
                 kept.remove(pruned_candidate)
                 pruned.append(pruned_candidate)
+    else:
+        kept = list(age_kept)
 
     if max_total_bytes >= 0:
         kept_bytes = sum(entry.size_bytes for entry in kept)
@@ -252,6 +246,25 @@ def _prune_entries(
             pruned.append(entry)
             kept_bytes -= entry.size_bytes
 
+    return kept, pruned
+
+
+def _prune_entries(
+    entries: list[_ArchiveEntry],
+    *,
+    max_keep: int,
+    max_age_days: int,
+    max_total_bytes: int,
+    dry_run: bool,
+) -> ArchivePruneSummary:
+    bytes_before = sum(entry.size_bytes for entry in entries) if entries else 0
+    kept, pruned = _compute_pruned_entries(
+        entries,
+        max_keep=max_keep,
+        max_age_days=max_age_days,
+        max_total_bytes=max_total_bytes,
+    )
+
     pruned_paths = tuple(
         str(entry.path) for entry in sorted(pruned, key=lambda e: e.key)
     )
@@ -263,7 +276,7 @@ def _prune_entries(
             for root in roots:
                 _prune_empty_dirs(root)
 
-    bytes_after = sum(entry.size_bytes for entry in kept)
+    bytes_after = sum(entry.size_bytes for entry in kept) if kept else 0
     return ArchivePruneSummary(
         kept=len(kept),
         pruned=len(pruned),
@@ -315,46 +328,41 @@ def prune_worktree_archive_root(
                 )
             )
 
+    if not entries:
+        return ArchivePruneSummary(
+            kept=0,
+            pruned=0,
+            bytes_before=0,
+            bytes_after=0,
+            pruned_paths=(),
+        )
+
     grouped: dict[str, list[_ArchiveEntry]] = {}
     for entry in entries:
         worktree_id, _, _snapshot_id = entry.key.partition("/")
         grouped.setdefault(worktree_id, []).append(entry)
 
-    kept_after_group_prune: list[_ArchiveEntry] = []
-    grouped_pruned: list[_ArchiveEntry] = []
+    all_kept: list[_ArchiveEntry] = []
+    all_pruned: list[_ArchiveEntry] = []
     for worktree_id in sorted(grouped):
-        summary = _prune_entries(
+        kept, pruned = _compute_pruned_entries(
             grouped[worktree_id],
             max_keep=policy.max_snapshots_per_repo,
             max_age_days=policy.max_age_days,
             max_total_bytes=-1,
-            dry_run=True,
         )
-        pruned_paths = set(summary.pruned_paths)
-        for entry in grouped[worktree_id]:
-            if str(entry.path) in pruned_paths:
-                grouped_pruned.append(entry)
-            else:
-                kept_after_group_prune.append(entry)
+        all_kept.extend(kept)
+        all_pruned.extend(pruned)
 
-    final_summary = _prune_entries(
-        kept_after_group_prune,
-        max_keep=-1,
-        max_age_days=-1,
-        max_total_bytes=policy.max_total_bytes,
-        dry_run=True,
-    )
-    final_pruned_paths = set(final_summary.pruned_paths)
-    all_pruned = grouped_pruned + [
-        entry
-        for entry in kept_after_group_prune
-        if str(entry.path) in final_pruned_paths
-    ]
-    final_kept = [
-        entry
-        for entry in kept_after_group_prune
-        if str(entry.path) not in final_pruned_paths
-    ]
+    if policy.max_total_bytes >= 0:
+        final_kept, byte_pruned = _compute_pruned_entries(
+            all_kept,
+            max_keep=-1,
+            max_age_days=-1,
+            max_total_bytes=policy.max_total_bytes,
+        )
+        all_kept = final_kept
+        all_pruned.extend(byte_pruned)
 
     if not dry_run:
         for entry in all_pruned:
@@ -362,10 +370,10 @@ def prune_worktree_archive_root(
         _prune_empty_dirs(archive_root)
 
     return ArchivePruneSummary(
-        kept=len(final_kept),
+        kept=len(all_kept),
         pruned=len(all_pruned),
         bytes_before=sum(entry.size_bytes for entry in entries),
-        bytes_after=sum(entry.size_bytes for entry in final_kept),
+        bytes_after=sum(entry.size_bytes for entry in all_kept),
         pruned_paths=tuple(
             str(entry.path) for entry in sorted(all_pruned, key=lambda e: e.key)
         ),
