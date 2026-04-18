@@ -389,9 +389,10 @@ You are an **abstraction layer, not an executor**. Coordinate tickets and flows 
 ## Ticket templates
 
 - Reuse a ticket template before drafting from scratch when a standard workflow fits.
-- `car templates list`
-- `car templates search <query>`
-- `car templates show <id>`
+- Pass `--repo <path>` (a git worktree) for every `car templates` subcommand; add `--path <hub_root>` when the shell cwd is not inside the hub tree.
+- `car templates list --repo <path>`
+- `car templates search <query> --repo <path>`
+- `car templates show <id> --repo <path>`
 - `car templates apply <id> --repo <path>`
 
 ## Ticket agent context (what each turn already gets)
@@ -434,9 +435,10 @@ def pma_notes_content() -> str:
 ## Ticket templates
 
 - Prefer a template when the work matches an established ticket pack.
-- `car templates list`
-- `car templates search <query>`
-- `car templates show <id>`
+- Pass `--repo <path>` (a git worktree) for every `car templates` subcommand; add `--path <hub_root>` when the shell cwd is not inside the hub tree.
+- `car templates list --repo <path>`
+- `car templates search <query> --repo <path>`
+- `car templates show <id> --repo <path>`
 - `car templates apply <id> --repo <path>`
 - Blessed repo: `https://github.com/Git-on-my-level/car-ticket-templates`
 
@@ -626,8 +628,8 @@ This document is jointly maintained by the user and PMA.
 
 ## Template shortcuts (optional)
 
-- Discover templates with `car templates list` or `car templates search <query>`.
-- Inspect/apply with `car templates show <id>` and `car templates apply <id> --repo <path>`.
+- Discover templates with `car templates list --repo <path>` or `car templates search <query> --repo <path>` (add `--path <hub_root>` when not running from the hub directory).
+- Inspect/apply with `car templates show <id> --repo <path>` and `car templates apply <id> --repo <path>` (same `--path` rule).
 - Blessed repo: `https://github.com/Git-on-my-level/car-ticket-templates`
 - Add durable shortcuts here as `template_id` plus when to apply it.
 

@@ -21,10 +21,11 @@ def test_about_car_is_seeded(repo: Path):
     assert ".codex-autorunner/contextspace/spec.md" in text
     assert "lint ticket frontmatter" in text.lower()
     assert ".codex-autorunner/DESTINATION_QUICKSTART.md" in text
-    assert "car templates list" in text
-    assert "car templates search <query>" in text
-    assert "car templates show <id>" in text
+    assert "car templates list --repo <path>" in text
+    assert "car templates search <query> --repo <path>" in text
+    assert "car templates show <id> --repo <path>" in text
     assert "car templates apply <id> --repo <path>" in text
+    assert "--path <hub_root>" in text
 
     destination_quickstart_path = repo / DESTINATION_QUICKSTART_REL_PATH
     assert destination_quickstart_path.exists()

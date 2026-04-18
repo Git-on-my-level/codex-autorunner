@@ -131,9 +131,10 @@ def build_about_car_markdown(
         '- Common workflows: insert gap before N (`python3 .codex-autorunner/bin/ticket_tool.py insert --before N`); move a block (`... move --start A --end B --to T`); create with auto-quoted frontmatter (`... create --title "Fix #123" --agent codex`).\n'
         "- After any ticket edits, lint all tickets: `python3 .codex-autorunner/bin/lint_tickets.py`.\n\n"
         "## Ticket templates\n"
-        "- List available templates: `car templates list`\n"
-        "- Search by name/path/summary: `car templates search <query>`\n"
-        "- Show full template content: `car templates show <id>`\n"
+        "- Pass `--repo <path>` (git checkout) for every subcommand; add `--path <hub_root>` when not running from the hub directory.\n"
+        "- List available templates: `car templates list --repo <path>`\n"
+        "- Search by name/path/summary: `car templates search <query> --repo <path>`\n"
+        "- Show full template content: `car templates show <id> --repo <path>`\n"
         "- Apply a template to a repo/worktree: `car templates apply <id> --repo <path>`\n\n"
         "## How CAR works (short)\n"
         "- The web UI provides ticket editing + unified file chat.\n"

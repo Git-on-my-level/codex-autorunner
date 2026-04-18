@@ -151,7 +151,7 @@ def render_pma_discoverability_preamble(
         "History: `.codex-autorunner/pma/docs/context_log.md`.\n"
         "Automation quickstart: `/hub/pma/subscriptions` (event triggers) and `/hub/pma/timers` (one-shot/watchdog).\n"
         'Automation recipes: `.codex-autorunner/pma/docs/ABOUT_CAR.md` -> "PMA automation wake-ups".\n'
-        "Ticket templates: `car templates list`, `car templates search <query>`, `car templates show <id>`, `car templates apply <id> --repo <path>`.\n"
+        "Ticket templates: pass `--repo <path>` (a git worktree) for every `car templates` subcommand; add `--path <hub_root>` when the shell cwd is not inside the hub tree. Examples: `car templates list --repo <path>`, `car templates search <query> --repo <path>`, `car templates show <id> --repo <path>`, `car templates apply <id> --repo <path>`.\n"
         "To send a file to the user, write it to `.codex-autorunner/filebox/outbox/`.\n"
         "User uploaded files are in `.codex-autorunner/filebox/inbox/`.\n\n"
     )

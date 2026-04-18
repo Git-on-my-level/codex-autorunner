@@ -26,10 +26,11 @@ def test_pma_files_created_on_hub_init(tmp_path: Path) -> None:
     assert "Ticket planning constraints" in prompt_content
     assert "ascending numeric order" in prompt_content
     assert "## Ticket templates" in prompt_content
-    assert "car templates list" in prompt_content
-    assert "car templates search <query>" in prompt_content
-    assert "car templates show <id>" in prompt_content
+    assert "car templates list --repo <path>" in prompt_content
+    assert "car templates search <query> --repo <path>" in prompt_content
+    assert "car templates show <id> --repo <path>" in prompt_content
     assert "car templates apply <id> --repo <path>" in prompt_content
+    assert "--path <hub_root>" in prompt_content
     assert "Destinations (execution runtime)" in prompt_content
     assert "car hub destination show" in prompt_content
     assert "car hub destination set <repo_id> docker --image <image>" in prompt_content
@@ -64,10 +65,11 @@ def test_pma_files_created_on_hub_init(tmp_path: Path) -> None:
     assert "PMA Operations Guide" in about_content
     assert "Ticket flow" in about_content
     assert "## Ticket templates" in about_content
-    assert "car templates list" in about_content
-    assert "car templates search <query>" in about_content
-    assert "car templates show <id>" in about_content
+    assert "car templates list --repo <path>" in about_content
+    assert "car templates search <query> --repo <path>" in about_content
+    assert "car templates show <id> --repo <path>" in about_content
     assert "car templates apply <id> --repo <path>" in about_content
+    assert "--path <hub_root>" in about_content
     assert "https://github.com/Git-on-my-level/car-ticket-templates" in about_content
     assert "Ticket flow mechanics (planning constraints)" in about_content
     assert "Ticket turn prompt context" in about_content
@@ -85,8 +87,9 @@ def test_pma_files_created_on_hub_init(tmp_path: Path) -> None:
     agents_path = docs_dir / "AGENTS.md"
     assert agents_path.exists()
     agents_content = agents_path.read_text(encoding="utf-8")
-    assert "car templates list" in agents_content
-    assert "car templates show <id>" in agents_content
+    assert "car templates list --repo <path>" in agents_content
+    assert "car templates show <id> --repo <path>" in agents_content
+    assert "--path <hub_root>" in agents_content
     assert "https://github.com/Git-on-my-level/car-ticket-templates" in agents_content
     assert (
         "Default to managed threads for straightforward single-session work"
