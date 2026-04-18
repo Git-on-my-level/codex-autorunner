@@ -55,6 +55,10 @@ async def test_discord_pma_turn_completes_for_official_hermes_prompt(
             ):
                 await anyio.sleep(0.05)
 
+        with anyio.fail_after(2):
+            while not env.rest.deleted_channel_messages:
+                await anyio.sleep(0.05)
+
         assert env.rest.channel_messages[0]["payload"]["content"] == (
             "Received. Preparing turn..."
         )

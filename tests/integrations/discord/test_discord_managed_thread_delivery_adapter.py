@@ -497,3 +497,109 @@ async def test_discord_adapter_error_status_transport_failure_is_retryable(
     assert record is not None
     assert record.state is ManagedThreadDeliveryState.RETRY_SCHEDULED
     assert "error message send failed" in (record.last_error or "")
+
+
+@pytest.mark.anyio
+async def test_discord_direct_turn_intent_before_transport_ordering(
+    tmp_path: Path,
+) -> None:
+    events: list[str] = []
+
+    class _OrderedService(_DiscordServiceStub):
+        async def _send_channel_message_safe(
+            self,
+            channel_id: str,
+            payload: dict[str, Any],
+            *,
+            record_id: str,
+        ) -> None:
+            events.append("transport")
+            return await super()._send_channel_message_safe(
+                channel_id, payload, record_id=record_id
+            )
+
+    service = _OrderedService(state_root=tmp_path)
+    hooks = discord_message_turns._build_discord_runner_hooks(
+        service,
+        channel_id="channel-1",
+        managed_thread_id="thread-1",
+        public_execution_error="Turn failed",
+    )
+    assert hooks.durable_delivery is not None
+
+    original_create_intent = hooks.durable_delivery.engine.create_intent
+
+    def _tracked_create_intent(intent: Any) -> Any:
+        events.append("intent_created")
+        return original_create_intent(intent)
+
+    hooks.durable_delivery.engine.create_intent = _tracked_create_intent
+
+    finalized = _finalized_ok()
+
+    record = await handoff_managed_thread_final_delivery(
+        finalized,
+        delivery=hooks.durable_delivery,
+        logger=logging.getLogger("test"),
+    )
+
+    assert record is not None
+    assert record.state is ManagedThreadDeliveryState.DELIVERED
+    assert events.index("intent_created") < events.index("transport")
+
+
+@pytest.mark.anyio
+async def test_discord_direct_turn_error_status_uses_durable_path(
+    tmp_path: Path,
+) -> None:
+    service = _DiscordServiceStub(state_root=tmp_path)
+    hooks = discord_message_turns._build_discord_runner_hooks(
+        service,
+        channel_id="channel-1",
+        managed_thread_id="thread-1",
+        public_execution_error="Turn failed",
+    )
+    assert hooks.durable_delivery is not None
+    finalized = _finalized_error()
+
+    record = await handoff_managed_thread_final_delivery(
+        finalized,
+        delivery=hooks.durable_delivery,
+        logger=logging.getLogger("test"),
+    )
+
+    assert record is not None
+    assert record.state is ManagedThreadDeliveryState.DELIVERED
+    assert len(service.sent_messages) == 1
+    assert "Turn failed" in service.sent_messages[0]["payload"]["content"]
+
+
+@pytest.mark.anyio
+async def test_discord_direct_turn_cancellation_leaves_durable_record(
+    tmp_path: Path,
+) -> None:
+    service = _DiscordServiceStub(
+        state_root=tmp_path,
+        send_side_effect=asyncio.CancelledError(),
+    )
+    hooks = discord_message_turns._build_discord_runner_hooks(
+        service,
+        channel_id="channel-1",
+        managed_thread_id="thread-1",
+        public_execution_error="Turn failed",
+    )
+    assert hooks.durable_delivery is not None
+    finalized = _finalized_ok()
+
+    with pytest.raises(asyncio.CancelledError):
+        await handoff_managed_thread_final_delivery(
+            finalized,
+            delivery=hooks.durable_delivery,
+            logger=logging.getLogger("test"),
+        )
+
+    persisted = hooks.durable_delivery.engine._ledger.get_delivery_by_idempotency_key(
+        hooks.durable_delivery.build_delivery_intent(finalized).idempotency_key,
+    )
+    assert persisted is not None
+    assert persisted.state is ManagedThreadDeliveryState.RETRY_SCHEDULED

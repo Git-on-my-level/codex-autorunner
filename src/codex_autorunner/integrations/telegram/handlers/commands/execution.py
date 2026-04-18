@@ -194,6 +194,7 @@ class _TurnRunResult:
     intermediate_response: str = ""
     interrupt_status_turn_id: Optional[str] = None
     interrupt_status_fallback_text: Optional[str] = None
+    durable_delivery_handled: bool = False
 
 
 @dataclass
@@ -1292,7 +1293,9 @@ async def _run_telegram_managed_thread_turn(
             elif runtime.interrupt_turn_id == backend_turn_id:
                 interrupt_status_fallback_text = "Interrupt requested; turn completed."
             response_sent = False
-            if send_failure_response:
+            if send_failure_response and not getattr(
+                _flow, "durable_delivery_performed", False
+            ):
                 response_sent = await handlers._deliver_turn_response(
                     chat_id=message.chat_id,
                     thread_id=message.thread_id,
@@ -1381,11 +1384,16 @@ async def _run_telegram_managed_thread_turn(
                 thread_id=message.thread_id,
                 status="ok",
             )
+        _delivery_handled = getattr(_flow, "durable_delivery_performed", False)
         return _TurnRunResult(
             record=record,
             thread_id=resolved_backend_thread_id,
             turn_id=backend_turn_id or None,
-            response=render_managed_thread_response_text(finalized),
+            response=(
+                ""
+                if _delivery_handled
+                else render_managed_thread_response_text(finalized)
+            ),
             placeholder_id=prepared_placeholder_id,
             elapsed_seconds=None,
             token_usage=finalized.token_usage,
@@ -1394,6 +1402,7 @@ async def _run_telegram_managed_thread_turn(
             intermediate_response=intermediate_response,
             interrupt_status_turn_id=backend_turn_id or None,
             interrupt_status_fallback_text=interrupt_status_fallback_text,
+            durable_delivery_handled=_delivery_handled,
         )
 
     queue_task_map = getattr(handlers, "_telegram_managed_thread_queue_tasks", None)

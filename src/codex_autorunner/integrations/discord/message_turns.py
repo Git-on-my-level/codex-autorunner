@@ -3445,6 +3445,7 @@ async def _run_discord_orchestrated_turn_for_message(
             intermediate_message=intermediate_message,
             token_usage=finalized.token_usage,
             elapsed_seconds=max(0.0, time.monotonic() - tracker.started_at),
+            send_final_message=not getattr(_flow, "durable_delivery_performed", False),
         )
 
     async def _after_completion(_flow: Any) -> None:

@@ -465,3 +465,119 @@ async def test_telegram_adapter_error_status_transport_failure_is_retryable(
     assert record is not None
     assert record.state is ManagedThreadDeliveryState.RETRY_SCHEDULED
     assert "error message send failed" in (record.last_error or "")
+
+
+@pytest.mark.anyio
+async def test_telegram_direct_turn_intent_before_transport_ordering(
+    tmp_path: Path,
+) -> None:
+    events: list[str] = []
+
+    class _OrderedHandlers(_TelegramHandlersStub):
+        async def _send_message(
+            self,
+            chat_id: int,
+            text: str,
+            *,
+            thread_id: Optional[int] = None,
+            reply_to: Optional[int] = None,
+        ) -> None:
+            events.append("transport")
+            return await super()._send_message(
+                chat_id, text, thread_id=thread_id, reply_to=reply_to
+            )
+
+    hub_root = tmp_path / "hub"
+    initialize_orchestration_sqlite(hub_root, durable=False)
+    handlers = _OrderedHandlers(state_root=tmp_path)
+    hooks = _build_telegram_runner_hooks(
+        handlers,
+        chat_id=12345,
+        thread_id=99,
+        topic_key="test-topic",
+        public_execution_error="Turn failed",
+    )
+    assert hooks.durable_delivery is not None
+
+    original_create_intent = hooks.durable_delivery.engine.create_intent
+
+    def _tracked_create_intent(intent: Any) -> Any:
+        events.append("intent_created")
+        return original_create_intent(intent)
+
+    hooks.durable_delivery.engine.create_intent = _tracked_create_intent
+
+    finalized = _finalized_ok()
+
+    record = await handoff_managed_thread_final_delivery(
+        finalized,
+        delivery=hooks.durable_delivery,
+        logger=logging.getLogger("test"),
+    )
+
+    assert record is not None
+    assert record.state is ManagedThreadDeliveryState.DELIVERED
+    assert events.index("intent_created") < events.index("transport")
+
+
+@pytest.mark.anyio
+async def test_telegram_direct_turn_error_status_uses_durable_path(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    initialize_orchestration_sqlite(hub_root, durable=False)
+    handlers = _TelegramHandlersStub(state_root=tmp_path)
+    hooks = _build_telegram_runner_hooks(
+        handlers,
+        chat_id=12345,
+        thread_id=99,
+        topic_key="test-topic",
+        public_execution_error="Turn failed",
+    )
+    assert hooks.durable_delivery is not None
+    finalized = _finalized_error()
+
+    record = await handoff_managed_thread_final_delivery(
+        finalized,
+        delivery=hooks.durable_delivery,
+        logger=logging.getLogger("test"),
+    )
+
+    assert record is not None
+    assert record.state is ManagedThreadDeliveryState.DELIVERED
+    assert len(handlers.sent_messages) == 1
+    assert "Turn failed" in handlers.sent_messages[0]["text"]
+
+
+@pytest.mark.anyio
+async def test_telegram_direct_turn_cancellation_leaves_durable_record(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    initialize_orchestration_sqlite(hub_root, durable=False)
+    handlers = _TelegramHandlersStub(
+        state_root=tmp_path,
+        send_side_effect=asyncio.CancelledError(),
+    )
+    hooks = _build_telegram_runner_hooks(
+        handlers,
+        chat_id=12345,
+        thread_id=99,
+        topic_key="test-topic",
+        public_execution_error="Turn failed",
+    )
+    assert hooks.durable_delivery is not None
+    finalized = _finalized_ok()
+
+    with pytest.raises(asyncio.CancelledError):
+        await handoff_managed_thread_final_delivery(
+            finalized,
+            delivery=hooks.durable_delivery,
+            logger=logging.getLogger("test"),
+        )
+
+    persisted = hooks.durable_delivery.engine._ledger.get_delivery_by_idempotency_key(
+        hooks.durable_delivery.build_delivery_intent(finalized).idempotency_key,
+    )
+    assert persisted is not None
+    assert persisted.state is ManagedThreadDeliveryState.RETRY_SCHEDULED
