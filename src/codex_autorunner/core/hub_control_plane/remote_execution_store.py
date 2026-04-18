@@ -43,6 +43,7 @@ from .models import (
 
 ResultT = TypeVar("ResultT")
 _THREAD_TARGET_CREATE_TIMEOUT_SECONDS = 30.0
+_EXECUTION_BACKEND_ID_TIMEOUT_SECONDS = 30.0
 _EXECUTION_RESULT_TIMEOUT_SECONDS = 30.0
 _BACKGROUND_RUNNER = BoundedBackgroundRunner(
     max_workers=8,
@@ -450,6 +451,7 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
     ) -> None:
         self._run(
             operation="set_execution_backend_id",
+            timeout_seconds=_EXECUTION_BACKEND_ID_TIMEOUT_SECONDS,
             action=lambda client: client.set_execution_backend_id(
                 ExecutionBackendIdUpdateRequest(
                     execution_id=execution_id,

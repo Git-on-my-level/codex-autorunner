@@ -1000,6 +1000,7 @@ def test_handle_processed_operations_creates_truthful_review_comment_notice_on_s
             },
             "response": {
                 "status": "queued",
+                "thread_target_id": "thread-2",
             },
         }
     )
@@ -1008,7 +1009,7 @@ def test_handle_processed_operations_creates_truthful_review_comment_notice_on_s
 
     assert len(follow_ups) == 1
     assert follow_ups[0].operation_kind == "notify_chat"
-    assert follow_ups[0].payload["thread_target_id"] == "thread-1"
+    assert follow_ups[0].payload["thread_target_id"] == "thread-2"
     assert (
         "Queued the latest PR review batch for acme/widgets#42."
         in follow_ups[0].payload["message"]
