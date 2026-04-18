@@ -841,6 +841,8 @@ class DiscordBotService:
         self._ingress = InteractionIngress(self, logger=self._logger)
         self._ingress_pre_ack_reservations: set[str] = set()
         self._ingress_pre_ack_reservations_lock = asyncio.Lock()
+        self._chat_operation_write_lock_guard = asyncio.Lock()
+        self._chat_operation_write_locks: dict[str, asyncio.Lock] = {}
         self._command_runner = _CommandRunner(
             self,
             config=_RunnerConfig(
@@ -5538,6 +5540,22 @@ class DiscordBotService:
             return store
         return None
 
+    @contextlib.asynccontextmanager
+    async def _chat_operation_write_guard(self, operation_id: str):
+        """Serialize ledger read/write for one interaction across asyncio tasks.
+
+        ``SQLiteChatOperationLedger.patch_operation`` is read-modify-write; concurrent
+        ``asyncio.to_thread`` calls could otherwise apply stale snapshots after offloading.
+        """
+        normalized = str(operation_id or "").strip()
+        async with self._chat_operation_write_lock_guard:
+            lock = self._chat_operation_write_locks.get(normalized)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._chat_operation_write_locks[normalized] = lock
+        async with lock:
+            yield
+
     async def _chat_operation_get(
         self, operation_id: str
     ) -> Optional[ChatOperationSnapshot]:
@@ -5545,7 +5563,8 @@ class DiscordBotService:
         if store is None:
             return None
         # Keep Discord ingress callbacks non-blocking on SQLite lock contention.
-        return await asyncio.to_thread(store.get_operation, operation_id)
+        async with self._chat_operation_write_guard(operation_id):
+            return await asyncio.to_thread(store.get_operation, operation_id)
 
     def _chat_operation_terminal_duplicate(
         self, snapshot: ChatOperationSnapshot
@@ -5624,7 +5643,8 @@ class DiscordBotService:
                 metadata_updates=metadata,
             )
 
-        return await asyncio.to_thread(_register_sync)
+        async with self._chat_operation_write_guard(interaction_id):
+            return await asyncio.to_thread(_register_sync)
 
     async def _patch_chat_operation(
         self,
@@ -5722,7 +5742,8 @@ class DiscordBotService:
                     )
                 )
 
-        return await asyncio.to_thread(_patch_sync)
+        async with self._chat_operation_write_guard(interaction_id):
+            return await asyncio.to_thread(_patch_sync)
 
     async def _record_interaction_ack(
         self,
