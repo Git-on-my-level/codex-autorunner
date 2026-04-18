@@ -38,6 +38,11 @@ from .text_utils import _normalize_pma_delivery_target, lock_path_for
 
 logger = logging.getLogger(__name__)
 
+MANAGED_THREAD_AUTO_SUBSCRIPTION_PREFIXES = (
+    "managed-thread-notify:",
+    "managed-thread-send-notify:",
+)
+
 
 class PmaAutomationThreadNotFoundError(ValueError):
     def __init__(self, thread_id: str) -> None:
@@ -1121,6 +1126,86 @@ class PmaAutomationStore:
         resolved_lane_id = self._resolve_thread_lane_id(thread_id=normalized_thread_id)
         return resolved_lane_id
 
+    @staticmethod
+    def _is_auto_subscription_key(idempotency_key: Optional[str]) -> bool:
+        normalized_key = _normalize_text(idempotency_key)
+        if normalized_key is None:
+            return False
+        return normalized_key.startswith(MANAGED_THREAD_AUTO_SUBSCRIPTION_PREFIXES)
+
+    @staticmethod
+    def _scope_value_is_covered(
+        *, requested: Optional[str], existing: Optional[str]
+    ) -> bool:
+        if existing is None:
+            return True
+        if requested is None:
+            return False
+        return existing == requested
+
+    @staticmethod
+    def _event_types_are_covered(
+        *,
+        requested: list[str],
+        existing: list[str],
+    ) -> bool:
+        if not existing:
+            return True
+        if not requested:
+            return False
+        existing_set = set(existing)
+        return all(event_type in existing_set for event_type in requested)
+
+    def _find_covering_auto_subscription(
+        self,
+        *,
+        event_types: list[str],
+        repo_id: Optional[str],
+        run_id: Optional[str],
+        thread_id: Optional[str],
+        from_state: Optional[str],
+        to_state: Optional[str],
+    ) -> Optional[PmaLifecycleSubscription]:
+        state = self.load()
+        subscriptions = self._normalize_subscriptions(state.get("subscriptions"))
+        for entry in subscriptions:
+            if entry.state != "active":
+                continue
+            if not self._is_auto_subscription_key(entry.idempotency_key):
+                continue
+            if not self._event_types_are_covered(
+                requested=event_types,
+                existing=entry.event_types,
+            ):
+                continue
+            if not self._scope_value_is_covered(
+                requested=repo_id,
+                existing=entry.repo_id,
+            ):
+                continue
+            if not self._scope_value_is_covered(
+                requested=run_id,
+                existing=entry.run_id,
+            ):
+                continue
+            if not self._scope_value_is_covered(
+                requested=thread_id,
+                existing=entry.thread_id,
+            ):
+                continue
+            if not self._scope_value_is_covered(
+                requested=from_state,
+                existing=entry.from_state,
+            ):
+                continue
+            if not self._scope_value_is_covered(
+                requested=to_state,
+                existing=entry.to_state,
+            ):
+                continue
+            return entry
+        return None
+
     def _resolve_subscription_metadata(
         self,
         *,
@@ -1205,20 +1290,61 @@ class PmaAutomationStore:
         self, payload: Optional[dict[str, Any]] = None, **kwargs: Any
     ) -> dict[str, Any]:
         data = self._coerce_payload(payload, kwargs)
-        created, deduped = self.upsert_subscription(
-            event_types=self._normalize_subscription_event_types(
-                data.get("event_types"),
-                singular=data.get("event_type"),
+        normalized_event_types = self._normalize_subscription_event_types(
+            data.get("event_types"),
+            singular=data.get("event_type"),
+        )
+        normalized_repo_id = _normalize_text(data.get("repo_id"))
+        normalized_run_id = _normalize_text(data.get("run_id"))
+        normalized_thread_id = _normalize_text(data.get("thread_id"))
+        normalized_from_state = _normalize_text(data.get("from_state"))
+        normalized_to_state = _normalize_text(data.get("to_state"))
+        normalized_idempotency_key = _normalize_text(data.get("idempotency_key"))
+        confirm_duplicate = _normalize_bool(data.get("confirm"), fallback=False)
+        if not confirm_duplicate and not self._is_auto_subscription_key(
+            normalized_idempotency_key
+        ):
+            existing_auto = self._find_covering_auto_subscription(
+                event_types=normalized_event_types,
+                repo_id=normalized_repo_id,
+                run_id=normalized_run_id,
+                thread_id=normalized_thread_id,
+                from_state=normalized_from_state,
+                to_state=normalized_to_state,
             )
-            or None,
-            repo_id=_normalize_text(data.get("repo_id")),
-            run_id=_normalize_text(data.get("run_id")),
-            thread_id=_normalize_text(data.get("thread_id")),
+            if existing_auto is not None:
+                scope_label = "this scope"
+                if normalized_thread_id is not None:
+                    scope_label = "this thread"
+                elif normalized_run_id is not None:
+                    scope_label = "this run"
+                elif normalized_repo_id is not None:
+                    scope_label = "this repo"
+                event_label = (
+                    normalized_event_types[0]
+                    if len(normalized_event_types) == 1
+                    else "the requested event scope"
+                )
+                return {
+                    "subscription": existing_auto.to_dict(),
+                    "deduped": True,
+                    "warning": (
+                        "An active auto-subscription "
+                        f"({existing_auto.idempotency_key or existing_auto.subscription_id}) "
+                        f"already covers {event_label} for {scope_label}. "
+                        "Pass confirm=true to create a duplicate subscription."
+                    ),
+                }
+        created, deduped = self.upsert_subscription(
+            event_types=normalized_event_types or None,
+            repo_id=normalized_repo_id,
+            run_id=normalized_run_id,
+            thread_id=normalized_thread_id,
             lane_id=_normalize_text(data.get("lane_id")),
-            from_state=_normalize_text(data.get("from_state")),
-            to_state=_normalize_text(data.get("to_state")),
+            from_state=normalized_from_state,
+            to_state=normalized_to_state,
             reason=_normalize_text(data.get("reason")),
-            idempotency_key=_normalize_text(data.get("idempotency_key")),
+            idempotency_key=normalized_idempotency_key,
             notify_once=_normalize_bool(data.get("notify_once"), fallback=None),
             max_matches=_normalize_positive_int(data.get("max_matches"), fallback=None),
             metadata=(

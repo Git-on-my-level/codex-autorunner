@@ -70,6 +70,11 @@ def resolve_managed_thread_followup_policy(
         enabled = True
     elif terminal_followup is True:
         enabled = True
+    elif (
+        getattr(payload, "notify_lane_explicit", False)
+        or getattr(payload, "notify_once_explicit", False)
+    ) and terminal_followup is not False:
+        enabled = True
     elif terminal_followup is not False and default_terminal_followup:
         enabled = True
 

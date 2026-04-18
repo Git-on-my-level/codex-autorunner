@@ -448,7 +448,6 @@ def resolve_managed_thread_create_resolution(
     payload: PmaManagedThreadCreateRequest,
 ) -> ManagedThreadCreateResolution:
     hub_root = request.app.state.config.root
-    pma_config = request.app.state.config.pma
     raw_agent_id = normalize_optional_text(payload.agent)
     raw_profile = normalize_optional_text(payload.profile)
     if raw_agent_id is not None:
@@ -471,7 +470,9 @@ def resolve_managed_thread_create_resolution(
     workspace_root = normalize_optional_text(payload.workspace_root)
     followup_policy = resolve_managed_thread_followup_policy(
         payload,
-        default_terminal_followup=pma_config.managed_thread_terminal_followup_default,
+        # Terminal follow-up defaults now apply when the thread is used, not at
+        # spawn time, so create-thread only honors explicit follow-up intent.
+        default_terminal_followup=False,
     )
 
     owner_present = resource_kind is not None and resource_id is not None

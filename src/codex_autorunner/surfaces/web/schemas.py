@@ -1055,6 +1055,7 @@ class PmaAutomationSubscriptionCreateRequest(Payload):
             "reason",
             "timestamp",
             "idempotency_key",
+            "confirm",
             "filter",
         }
     )
@@ -1104,6 +1105,7 @@ class PmaAutomationSubscriptionCreateRequest(Payload):
         default=None,
         validation_alias=AliasChoices("idempotency_key", "idempotencyKey"),
     )
+    confirm: bool = False
     filter: Optional[Dict[str, Any]] = None
 
     @model_validator(mode="before")
