@@ -961,7 +961,7 @@ def _recover_managed_thread_send_timeout(
             current.last_message_preview == expected_preview
             and baseline.last_message_preview != expected_preview
         ):
-            recovered_turn_id = current.last_turn_id or current.active_managed_turn_id
+            recovered_turn_id = current.active_managed_turn_id or current.last_turn_id
             queued = recovered_turn_id in current.queued_turn_ids or (
                 bool(current.active_managed_turn_id)
                 and current.active_managed_turn_id != recovered_turn_id
