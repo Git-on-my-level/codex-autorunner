@@ -3,13 +3,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from codex_autorunner.agents.hermes.harness import HERMES_CAPABILITIES, HermesHarness
-from codex_autorunner.agents.hermes.supervisor import HermesSupervisor
 from codex_autorunner.agents.registry import AgentDescriptor
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.integrations.chat.models import (
@@ -40,15 +37,18 @@ from codex_autorunner.integrations.telegram.handlers.commands.execution import (
     _build_telegram_thread_orchestration_service,
 )
 from codex_autorunner.integrations.telegram.service import TelegramBotService
+from tests.chat_surface_lab.backend_runtime import (
+    HermesFixtureRuntime,
+    app_server_fixture_command,
+    fake_acp_command,
+)
 
 DEFAULT_DISCORD_CHANNEL_ID = "channel-1"
 DEFAULT_DISCORD_GUILD_ID = "guild-1"
 DEFAULT_TELEGRAM_CHAT_ID = 123
 DEFAULT_TELEGRAM_THREAD_ID = 55
 DEFAULT_TELEGRAM_USER_ID = 456
-FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures"
-FAKE_ACP_FIXTURE_PATH = FIXTURES_DIR / "fake_acp_server.py"
-APP_SERVER_FIXTURE_PATH = FIXTURES_DIR / "app_server_fixture.py"
+hermes_fixture_command = fake_acp_command
 
 
 class StructuredLogCapture(logging.Handler):
@@ -65,56 +65,6 @@ class StructuredLogCapture(logging.Handler):
         if not isinstance(payload, dict):
             payload = {"message": str(payload)}
         self.records.append(payload)
-
-
-def hermes_fixture_command(scenario: str) -> list[str]:
-    return [sys.executable, "-u", str(FAKE_ACP_FIXTURE_PATH), "--scenario", scenario]
-
-
-def app_server_fixture_command(scenario: str = "basic") -> list[str]:
-    return [
-        sys.executable,
-        "-u",
-        str(APP_SERVER_FIXTURE_PATH),
-        "--scenario",
-        scenario,
-    ]
-
-
-@dataclass
-class HermesFixtureRuntime:
-    scenario: str
-    logger_name: str = "test.chat_surface_integration.hermes"
-    _descriptor: Optional[AgentDescriptor] = field(default=None, init=False)
-    _supervisor: Optional[HermesSupervisor] = field(default=None, init=False)
-
-    @property
-    def supervisor(self) -> HermesSupervisor:
-        if self._supervisor is None:
-            self._supervisor = HermesSupervisor(
-                hermes_fixture_command(self.scenario),
-                logger=logging.getLogger(self.logger_name),
-            )
-        return self._supervisor
-
-    def descriptor(self) -> AgentDescriptor:
-        if self._descriptor is None:
-            self._descriptor = AgentDescriptor(
-                id="hermes",
-                name="Hermes",
-                capabilities=HERMES_CAPABILITIES,
-                runtime_kind="hermes",
-                make_harness=lambda _ctx: HermesHarness(self.supervisor),
-            )
-        return self._descriptor
-
-    def registered_agents(self) -> dict[str, AgentDescriptor]:
-        return {"hermes": self.descriptor()}
-
-    async def close(self) -> None:
-        if self._supervisor is not None:
-            await self._supervisor.close_all()
-            self._supervisor = None
 
 
 def patch_hermes_runtime(monkeypatch: Any, runtime: HermesFixtureRuntime) -> None:

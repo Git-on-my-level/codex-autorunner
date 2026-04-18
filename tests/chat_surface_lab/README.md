@@ -15,6 +15,9 @@ TICKET-100 adds the package skeleton only:
 - `scenario_models.py` defines declarative scenario metadata
 - `transcript_models.py` defines normalized transcript and timeline records
 - `artifact_manifests.py` defines artifact bundle metadata
+- `backend_runtime.py` defines the backend-neutral fixture runtime contract used
+  by lab and surface tests to drive Codex app-server, Hermes/ACP, and OpenCode
+  fixtures through one normalized control seam
 
 These modules are intentionally lightweight. They provide importable contracts
 for later tickets without changing existing integration behavior.

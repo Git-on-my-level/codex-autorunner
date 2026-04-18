@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -14,16 +13,9 @@ from codex_autorunner.integrations.telegram.adapter import (
 from codex_autorunner.integrations.telegram.chat_adapter import TelegramChatAdapter
 from codex_autorunner.integrations.telegram.config import TelegramBotConfig
 from codex_autorunner.integrations.telegram.service import TelegramBotService
+from tests.chat_surface_lab.backend_runtime import app_server_fixture_command
 
 from .hermes import logger_for
-
-APP_SERVER_FIXTURE_PATH = (
-    Path(__file__).resolve().parents[1] / "fixtures" / "app_server_fixture.py"
-)
-
-
-def app_server_fixture_command(scenario: str = "basic") -> list[str]:
-    return [sys.executable, "-u", str(APP_SERVER_FIXTURE_PATH), "--scenario", scenario]
 
 
 class FakeTelegramBot:
