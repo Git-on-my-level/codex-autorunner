@@ -937,6 +937,7 @@ def _build_telegram_runner_hooks(
                 chat_id=chat_id,
                 thread_id=thread_id,
                 reply_to=None,
+                topic_key=topic_key,
             )
             return
         await handlers._send_message(

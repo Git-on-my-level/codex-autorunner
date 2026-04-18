@@ -594,6 +594,7 @@ class SQLiteManagedThreadDeliveryEngine:
                     self._retry_backoff,
                     backoff_multiplier=self._backoff_multiplier,
                     max_backoff=self._max_backoff,
+                    now=current_at,
                 )
                 self._ledger.patch_delivery(
                     record.delivery_id,
@@ -684,6 +685,7 @@ class SQLiteManagedThreadDeliveryEngine:
                     self._retry_backoff,
                     backoff_multiplier=self._backoff_multiplier,
                     max_backoff=self._max_backoff,
+                    now=now,
                 )
                 self._ledger.patch_delivery(
                     record.delivery_id,
@@ -700,13 +702,15 @@ def _compute_next_attempt_at(
     *,
     backoff_multiplier: float = _DEFAULT_BACKOFF_MULTIPLIER,
     max_backoff: Optional[timedelta] = _DEFAULT_MAX_BACKOFF,
+    now: Optional[datetime] = None,
 ) -> str:
+    base = now or datetime.now(timezone.utc)
     exponent = max(0, attempt_count - 1)
     delay_seconds = backoff.total_seconds() * (backoff_multiplier**exponent)
     if max_backoff is not None:
         delay_seconds = min(delay_seconds, max_backoff.total_seconds())
     delay = timedelta(seconds=max(0.0, delay_seconds))
-    return (datetime.now(timezone.utc) + delay).isoformat()
+    return (base + delay).isoformat()
 
 
 def _record_to_row_values(record: ManagedThreadDeliveryRecord) -> tuple[Any, ...]:
