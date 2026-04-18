@@ -31,8 +31,6 @@ from ...core.injected_context import wrap_injected_context
 from ...core.logging_utils import log_event
 from ...core.orchestration import (
     FlowTarget,
-    ManagedThreadDeliveryAttemptResult,
-    ManagedThreadDeliveryOutcome,
     MessageRequest,
     PausedFlowTarget,
     SQLiteManagedThreadDeliveryEngine,
@@ -92,7 +90,6 @@ from ..chat.managed_thread_turns import (
     ManagedThreadTurnCoordinator,
     build_managed_thread_delivery_intent,
     complete_managed_thread_execution,
-    render_managed_thread_delivery_record_text,
     render_managed_thread_response_text,
 )
 from ..chat.managed_thread_turns import (
@@ -117,6 +114,7 @@ from .components import (
     build_queued_turn_progress_buttons,
 )
 from .errors import DiscordTransientError
+from .managed_thread_delivery import deliver_discord_managed_thread_record
 from .rendering import (
     DISCORD_MAX_MESSAGE_LENGTH,
     chunk_discord_message,
@@ -2668,80 +2666,14 @@ def _build_discord_runner_hooks(
         async def deliver_managed_thread_record(
             self, record: Any, *, claim: Any
         ) -> Any:
-            _ = claim
-            target_channel_id = str(
-                record.target.transport_target.get("channel_id") or channel_id
-            ).strip()
-            if not target_channel_id:
-                return ManagedThreadDeliveryAttemptResult(
-                    outcome=ManagedThreadDeliveryOutcome.ABANDONED,
-                    error="missing_discord_channel_id",
-                )
-            if record.envelope.final_status == "ok":
-                assistant_text = render_managed_thread_delivery_record_text(record)
-                formatted = (
-                    format_discord_message(assistant_text)
-                    if assistant_text
-                    else "(No response text returned.)"
-                )
-                chunks = chunk_discord_message(
-                    formatted,
-                    max_len=DISCORD_MAX_MESSAGE_LENGTH,
-                    with_numbering=False,
-                )
-                if not chunks:
-                    chunks = [formatted]
-                base_record_id = f"discord-queued:{record.managed_thread_id}:{record.managed_turn_id}"
-                try:
-                    for chunk_index, chunk in enumerate(chunks, start=1):
-                        record_id = (
-                            f"{base_record_id}:chunk:{chunk_index}"
-                            if len(chunks) > 1
-                            else base_record_id
-                        )
-                        await service._send_channel_message_safe(
-                            target_channel_id,
-                            {"content": chunk},
-                            record_id=record_id,
-                        )
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    return ManagedThreadDeliveryAttemptResult(
-                        outcome=ManagedThreadDeliveryOutcome.FAILED,
-                        error=str(exc) or exc.__class__.__name__,
-                    )
-                return ManagedThreadDeliveryAttemptResult(
-                    outcome=ManagedThreadDeliveryOutcome.DELIVERED,
-                    adapter_cursor={"chunk_count": len(chunks)},
-                )
-            if record.envelope.final_status == "interrupted":
-                return ManagedThreadDeliveryAttemptResult(
-                    outcome=ManagedThreadDeliveryOutcome.ABANDONED,
-                    error="interrupted_turn_has_no_terminal_delivery",
-                )
-            try:
-                await service._send_channel_message_safe(
-                    target_channel_id,
-                    {
-                        "content": (
-                            f"Turn failed: {record.envelope.error_text or public_execution_error}"
-                        )
-                    },
-                    record_id=(
-                        "discord-queued-error:"
-                        f"{record.managed_thread_id}:{record.managed_turn_id}"
-                    ),
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                return ManagedThreadDeliveryAttemptResult(
-                    outcome=ManagedThreadDeliveryOutcome.FAILED,
-                    error=str(exc) or exc.__class__.__name__,
-                )
-            return ManagedThreadDeliveryAttemptResult(
-                outcome=ManagedThreadDeliveryOutcome.DELIVERED
+            return await deliver_discord_managed_thread_record(
+                service,
+                record,
+                claim=claim,
+                channel_id_fallback=channel_id,
+                base_record_label="discord-queued",
+                error_record_label="discord-queued-error",
+                default_execution_error=public_execution_error,
             )
 
     durable_delivery = ManagedThreadDurableDeliveryHooks(

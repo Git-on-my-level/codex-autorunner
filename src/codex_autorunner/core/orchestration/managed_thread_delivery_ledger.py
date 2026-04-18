@@ -239,8 +239,10 @@ class SQLiteManagedThreadDeliveryLedger:
         adapter_key: Optional[str] = None,
         limit: int = 500,
     ) -> list[ManagedThreadDeliveryRecord]:
-        params: list[Any] = [s.value for s in MANAGED_THREAD_DELIVERY_TERMINAL_STATES]
-        clauses = ["state NOT IN (?, ?, ?, ?)"]
+        terminal_values = tuple(s.value for s in MANAGED_THREAD_DELIVERY_TERMINAL_STATES)
+        placeholders = ",".join("?" * len(terminal_values))
+        params: list[Any] = list(terminal_values)
+        clauses = [f"state NOT IN ({placeholders})"]
         if adapter_key is not None:
             clauses.append("adapter_key = ?")
             params.append(str(adapter_key or "").strip())
