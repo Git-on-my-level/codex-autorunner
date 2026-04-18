@@ -329,6 +329,280 @@ async def test_managed_thread_turn_coordinator_queue_worker_uses_hooks(
 
 
 @pytest.mark.anyio
+async def test_managed_thread_queue_worker_persists_delivery_before_adapter_io(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = _build_started_execution(tmp_path)
+    events: list[Any] = []
+    begin_calls = 0
+
+    async def _fake_finalize(
+        **kwargs: Any,
+    ) -> managed_thread_turns_module.ManagedThreadFinalizationResult:
+        _ = kwargs
+        return managed_thread_turns_module.ManagedThreadFinalizationResult(
+            status="ok",
+            assistant_text="Final answer",
+            error=None,
+            managed_thread_id=started.thread.thread_target_id,
+            managed_turn_id=started.execution.execution_id,
+            backend_thread_id="backend-1",
+        )
+
+    async def _fake_begin_next(
+        orchestration_service: object,
+        managed_thread_id: str,
+    ) -> Optional[RuntimeThreadExecution]:
+        nonlocal begin_calls
+        _ = orchestration_service, managed_thread_id
+        if begin_calls == 0:
+            begin_calls += 1
+            return started
+        return None
+
+    class _Engine:
+        def __init__(self) -> None:
+            self._record: Any = None
+
+        def create_intent(self, intent: Any) -> Any:
+            events.append(("create", intent.delivery_id))
+            self._record = SimpleNamespace(
+                delivery_id=intent.delivery_id,
+                managed_thread_id=intent.managed_thread_id,
+                managed_turn_id=intent.managed_turn_id,
+                target=intent.target,
+                envelope=intent.envelope,
+            )
+            return SimpleNamespace(record=self._record, inserted=True)
+
+        def claim_delivery(self, delivery_id: str, *, now: Any = None) -> Any:
+            _ = now
+            events.append(("claim", delivery_id))
+            return SimpleNamespace(
+                record=self._record,
+                claim_token="claim-1",
+            )
+
+        def record_attempt_result(
+            self,
+            delivery_id: str,
+            *,
+            claim_token: str,
+            result: Any,
+        ) -> Any:
+            events.append(("result", delivery_id, claim_token, result.outcome))
+            return self._record
+
+    class _Adapter:
+        @property
+        def adapter_key(self) -> str:
+            return "test"
+
+        async def deliver_managed_thread_record(
+            self, record: Any, *, claim: Any
+        ) -> Any:
+            events.append(("deliver", record.delivery_id, claim.claim_token))
+            return managed_thread_turns_module.ManagedThreadDeliveryAttemptResult(
+                outcome=managed_thread_turns_module.ManagedThreadDeliveryOutcome.DELIVERED
+            )
+
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "finalize_managed_thread_execution",
+        _fake_finalize,
+    )
+
+    task_map: dict[str, asyncio.Task[Any]] = {}
+    spawned_tasks: list[asyncio.Task[Any]] = []
+    coordinator = managed_thread_turns_module.ManagedThreadTurnCoordinator(
+        orchestration_service=SimpleNamespace(
+            get_running_execution=lambda managed_thread_id: None,
+        ),
+        state_root=tmp_path,
+        surface=managed_thread_turns_module.ManagedThreadSurfaceInfo(
+            log_label="Test",
+            surface_kind="telegram",
+            surface_key="telegram:-1001:101",
+        ),
+        errors=managed_thread_turns_module.ManagedThreadErrorMessages(
+            public_execution_error="public",
+            timeout_error="timeout",
+            interrupted_error="interrupted",
+            timeout_seconds=30,
+        ),
+        logger=logging.getLogger("test"),
+        turn_preview="preview",
+    )
+
+    coordinator.ensure_queue_worker(
+        task_map=task_map,
+        managed_thread_id="thread-1",
+        spawn_task=lambda coro: spawned_tasks.append(asyncio.create_task(coro))
+        or spawned_tasks[-1],
+        hooks=managed_thread_turns_module.ManagedThreadQueueWorkerHooks(
+            durable_delivery=managed_thread_turns_module.ManagedThreadDurableDeliveryHooks(
+                engine=_Engine(),
+                adapter=_Adapter(),
+                build_delivery_intent=lambda finalized: managed_thread_turns_module.build_managed_thread_delivery_intent(
+                    finalized,
+                    surface=managed_thread_turns_module.ManagedThreadSurfaceInfo(
+                        log_label="Test",
+                        surface_kind="telegram",
+                        surface_key="telegram:-1001:101",
+                    ),
+                    transport_target={"chat_id": -1001, "thread_id": 101},
+                ),
+            )
+        ),
+        begin_next_execution=_fake_begin_next,
+    )
+
+    await asyncio.gather(*spawned_tasks)
+
+    assert [event[0] for event in events] == ["create", "claim", "deliver", "result"]
+    assert task_map == {}
+
+
+@pytest.mark.anyio
+async def test_managed_thread_queue_worker_cancellation_after_finalization_records_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = _build_started_execution(tmp_path)
+    begin_calls = 0
+    recorded_outcomes: list[Any] = []
+
+    async def _fake_finalize(
+        **kwargs: Any,
+    ) -> managed_thread_turns_module.ManagedThreadFinalizationResult:
+        _ = kwargs
+        return managed_thread_turns_module.ManagedThreadFinalizationResult(
+            status="ok",
+            assistant_text="Final answer",
+            error=None,
+            managed_thread_id=started.thread.thread_target_id,
+            managed_turn_id=started.execution.execution_id,
+            backend_thread_id="backend-1",
+        )
+
+    async def _fake_begin_next(
+        orchestration_service: object,
+        managed_thread_id: str,
+    ) -> Optional[RuntimeThreadExecution]:
+        nonlocal begin_calls
+        _ = orchestration_service, managed_thread_id
+        if begin_calls == 0:
+            begin_calls += 1
+            return started
+        return None
+
+    class _Engine:
+        def __init__(self) -> None:
+            self._record: Any = None
+
+        def create_intent(self, intent: Any) -> Any:
+            self._record = SimpleNamespace(
+                delivery_id=intent.delivery_id,
+                managed_thread_id=intent.managed_thread_id,
+                managed_turn_id=intent.managed_turn_id,
+                target=intent.target,
+                envelope=intent.envelope,
+            )
+            return SimpleNamespace(record=self._record, inserted=True)
+
+        def claim_delivery(self, delivery_id: str, *, now: Any = None) -> Any:
+            _ = delivery_id, now
+            return SimpleNamespace(
+                record=self._record,
+                claim_token="claim-1",
+            )
+
+        def record_attempt_result(
+            self,
+            delivery_id: str,
+            *,
+            claim_token: str,
+            result: Any,
+        ) -> Any:
+            recorded_outcomes.append((delivery_id, claim_token, result.outcome))
+            return self._record
+
+    class _Adapter:
+        @property
+        def adapter_key(self) -> str:
+            return "test"
+
+        async def deliver_managed_thread_record(
+            self, record: Any, *, claim: Any
+        ) -> Any:
+            _ = record, claim
+            raise asyncio.CancelledError()
+
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "finalize_managed_thread_execution",
+        _fake_finalize,
+    )
+
+    task_map: dict[str, asyncio.Task[Any]] = {}
+    spawned_tasks: list[asyncio.Task[Any]] = []
+    coordinator = managed_thread_turns_module.ManagedThreadTurnCoordinator(
+        orchestration_service=SimpleNamespace(
+            get_running_execution=lambda managed_thread_id: None,
+            record_execution_result=lambda *args, **kwargs: None,
+        ),
+        state_root=tmp_path,
+        surface=managed_thread_turns_module.ManagedThreadSurfaceInfo(
+            log_label="Test",
+            surface_kind="telegram",
+            surface_key="telegram:-1001:101",
+        ),
+        errors=managed_thread_turns_module.ManagedThreadErrorMessages(
+            public_execution_error="public",
+            timeout_error="timeout",
+            interrupted_error="interrupted",
+            timeout_seconds=30,
+        ),
+        logger=logging.getLogger("test"),
+        turn_preview="preview",
+    )
+
+    coordinator.ensure_queue_worker(
+        task_map=task_map,
+        managed_thread_id="thread-1",
+        spawn_task=lambda coro: spawned_tasks.append(asyncio.create_task(coro))
+        or spawned_tasks[-1],
+        hooks=managed_thread_turns_module.ManagedThreadQueueWorkerHooks(
+            durable_delivery=managed_thread_turns_module.ManagedThreadDurableDeliveryHooks(
+                engine=_Engine(),
+                adapter=_Adapter(),
+                build_delivery_intent=lambda finalized: managed_thread_turns_module.build_managed_thread_delivery_intent(
+                    finalized,
+                    surface=managed_thread_turns_module.ManagedThreadSurfaceInfo(
+                        log_label="Test",
+                        surface_kind="telegram",
+                        surface_key="telegram:-1001:101",
+                    ),
+                    transport_target={"chat_id": -1001, "thread_id": 101},
+                ),
+            )
+        ),
+        begin_next_execution=_fake_begin_next,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.gather(*spawned_tasks)
+
+    assert len(recorded_outcomes) == 1
+    assert recorded_outcomes[0][1] == "claim-1"
+    assert recorded_outcomes[0][2] is (
+        managed_thread_turns_module.ManagedThreadDeliveryOutcome.RETRY
+    )
+    assert task_map == {}
+
+
+@pytest.mark.anyio
 async def test_managed_thread_turn_coordinator_queue_worker_recovers_and_continues(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

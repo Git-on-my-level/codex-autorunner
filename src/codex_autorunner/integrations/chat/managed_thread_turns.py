@@ -24,8 +24,12 @@ from ...core.hub_control_plane.errors import HubControlPlaneError
 from ...core.logging_utils import log_event
 from ...core.orchestration.managed_thread_delivery import (
     ManagedThreadDeliveryAttachment,
+    ManagedThreadDeliveryAttemptResult,
+    ManagedThreadDeliveryEngine,
     ManagedThreadDeliveryEnvelope,
     ManagedThreadDeliveryIntent,
+    ManagedThreadDeliveryOutcome,
+    ManagedThreadDeliveryRecord,
     ManagedThreadDeliveryTarget,
     build_managed_thread_delivery_id,
     build_managed_thread_delivery_idempotency_key,
@@ -60,6 +64,7 @@ from ...core.ports.run_event import (
 )
 from ...core.time_utils import now_iso
 from ..github.managed_thread_pr_binding import self_claim_and_arm_pr_binding
+from .managed_thread_delivery import ManagedThreadDeliveryAdapter
 from .runtime_thread_errors import resolve_runtime_thread_error_detail
 
 ProgressEventHandler = Callable[[Any], Awaitable[None]]
@@ -112,12 +117,24 @@ class ManagedThreadFinalizationResult:
 FinalizeQueuedExecution = Callable[
     [RuntimeThreadExecution], Awaitable[ManagedThreadFinalizationResult]
 ]
-# Legacy bridge: queue workers still call a surface-owned `deliver_result`
-# callback today. The durable architecture for managed-thread final delivery is
-# the control-plane intent defined in `core.orchestration.managed_thread_delivery`.
-# Follow-on tickets should replace this callback seam with engine-owned intent
-# creation plus adapter-driven claim/replay workers.
+ManagedThreadDeliveryIntentBuilder = Callable[
+    [ManagedThreadFinalizationResult], Optional[ManagedThreadDeliveryIntent]
+]
+# Legacy bridge: queue workers used to hand finalized results straight to a
+# surface-owned `deliver_result` callback. Durable intent creation plus engine
+# handoff is now the correctness boundary; this callback remains compatibility-
+# only for tests or non-migrated call sites.
 DeliverQueuedResult = Callable[[ManagedThreadFinalizationResult], Awaitable[None]]
+
+
+@dataclass(frozen=True)
+class ManagedThreadDurableDeliveryHooks:
+    """Shared durable handoff contract from finalization into adapter delivery."""
+
+    engine: ManagedThreadDeliveryEngine
+    adapter: ManagedThreadDeliveryAdapter
+    build_delivery_intent: ManagedThreadDeliveryIntentBuilder
+
 
 _QUEUE_WORKER_FAILURE_ERROR = "Queue worker terminated unexpectedly"
 logger = logging.getLogger(__name__)
@@ -223,14 +240,10 @@ class ManagedThreadExecutionHooks:
 
 @dataclass(frozen=True)
 class ManagedThreadQueueWorkerHooks:
-    """Compatibility hook bundle for the pre-ledger delivery path.
+    """Queue-worker hooks with durable handoff ownership for final delivery."""
 
-    The `deliver_result` callback remains a temporary bridge until future
-    tickets route managed-thread final delivery through durable intent creation
-    and engine-owned replay.
-    """
-
-    deliver_result: DeliverQueuedResult
+    durable_delivery: Optional[ManagedThreadDurableDeliveryHooks] = None
+    deliver_result: Optional[DeliverQueuedResult] = None
     run_with_indicator: Optional[RunWithIndicator] = None
     execution_hooks: ManagedThreadExecutionHooks = field(
         default_factory=ManagedThreadExecutionHooks
@@ -239,11 +252,12 @@ class ManagedThreadQueueWorkerHooks:
 
 @dataclass(frozen=True)
 class ManagedThreadCoordinatorHooks:
-    """Coordinator hook bundle while the queue path still uses legacy delivery."""
+    """Coordinator hook bundle for direct execution and queued handoff."""
 
     on_execution_started: Optional[ManagedThreadLifecycleHook] = None
     on_execution_finished: Optional[ManagedThreadLifecycleHook] = None
     on_progress_event: Optional[ProgressEventHandler] = None
+    durable_delivery: Optional[ManagedThreadDurableDeliveryHooks] = None
     deliver_result: Optional[DeliverQueuedResult] = None
     run_with_indicator: Optional[RunWithIndicator] = None
 
@@ -255,9 +269,12 @@ class ManagedThreadCoordinatorHooks:
         )
 
     def queue_worker_hooks(self) -> ManagedThreadQueueWorkerHooks:
-        if self.deliver_result is None:
-            raise ValueError("Queue-worker hooks require deliver_result")
+        if self.durable_delivery is None and self.deliver_result is None:
+            raise ValueError(
+                "Queue-worker hooks require durable_delivery or deliver_result"
+            )
         return ManagedThreadQueueWorkerHooks(
+            durable_delivery=self.durable_delivery,
             deliver_result=self.deliver_result,
             run_with_indicator=self.run_with_indicator,
             execution_hooks=self.execution_hooks(),
@@ -669,6 +686,31 @@ def render_managed_thread_response_text(
 ) -> str:
     assistant_text = str(finalized.assistant_text or "").strip()
     session_notice = str(finalized.session_notice or "").strip()
+    return _render_managed_thread_delivery_text(
+        assistant_text=assistant_text,
+        session_notice=session_notice,
+        no_response_fallback=no_response_fallback,
+    )
+
+
+def render_managed_thread_delivery_record_text(
+    record: ManagedThreadDeliveryRecord,
+    *,
+    no_response_fallback: str = "(No response text returned.)",
+) -> str:
+    return _render_managed_thread_delivery_text(
+        assistant_text=str(record.envelope.assistant_text or "").strip(),
+        session_notice=str(record.envelope.session_notice or "").strip(),
+        no_response_fallback=no_response_fallback,
+    )
+
+
+def _render_managed_thread_delivery_text(
+    *,
+    assistant_text: str,
+    session_notice: str,
+    no_response_fallback: str,
+) -> str:
     if session_notice and assistant_text:
         return f"{session_notice}\n\n{assistant_text}"
     if session_notice:
@@ -737,6 +779,71 @@ def build_managed_thread_delivery_intent(
         not_before=_normalized_optional_text(not_before),
         metadata=dict(metadata or {}),
     )
+
+
+async def handoff_managed_thread_final_delivery(
+    finalized: ManagedThreadFinalizationResult,
+    *,
+    delivery: ManagedThreadDurableDeliveryHooks,
+    logger: logging.Logger,
+) -> Optional[ManagedThreadDeliveryRecord]:
+    """Persist and hand off one finalized result to the durable delivery engine."""
+
+    intent = delivery.build_delivery_intent(finalized)
+    if intent is None:
+        return None
+    registration = delivery.engine.create_intent(intent)
+    record = registration.record
+    claim = delivery.engine.claim_delivery(record.delivery_id)
+    if claim is None:
+        return record
+    try:
+        result = await delivery.adapter.deliver_managed_thread_record(
+            claim.record,
+            claim=claim,
+        )
+    except asyncio.CancelledError:
+        delivery.engine.record_attempt_result(
+            record.delivery_id,
+            claim_token=claim.claim_token,
+            result=ManagedThreadDeliveryAttemptResult(
+                outcome=ManagedThreadDeliveryOutcome.RETRY,
+                error="delivery_cancelled_after_finalization",
+            ),
+        )
+        logger.warning(
+            "Managed-thread durable delivery cancelled after finalization "
+            "(thread=%s turn=%s delivery_id=%s adapter=%s)",
+            record.managed_thread_id,
+            record.managed_turn_id,
+            record.delivery_id,
+            delivery.adapter.adapter_key,
+        )
+        raise
+    except Exception as exc:
+        updated = delivery.engine.record_attempt_result(
+            record.delivery_id,
+            claim_token=claim.claim_token,
+            result=ManagedThreadDeliveryAttemptResult(
+                outcome=ManagedThreadDeliveryOutcome.FAILED,
+                error=str(exc) or exc.__class__.__name__,
+            ),
+        )
+        logger.exception(
+            "Managed-thread durable delivery failed after intent registration "
+            "(thread=%s turn=%s delivery_id=%s adapter=%s)",
+            record.managed_thread_id,
+            record.managed_turn_id,
+            record.delivery_id,
+            delivery.adapter.adapter_key,
+        )
+        return updated or record
+    updated = delivery.engine.record_attempt_result(
+        record.delivery_id,
+        claim_token=claim.claim_token,
+        result=result,
+    )
+    return updated or record
 
 
 def resolve_managed_thread_target(
@@ -933,6 +1040,7 @@ class ManagedThreadTurnCoordinator:
                 started,
                 hooks=resolved_hooks.execution_hooks,
             ),
+            durable_delivery=resolved_hooks.durable_delivery,
             deliver_result=resolved_hooks.deliver_result,
             run_with_indicator=resolved_hooks.run_with_indicator,
             poll_interval_seconds=poll_interval_seconds,
@@ -1158,11 +1266,14 @@ def ensure_managed_thread_queue_worker(
     orchestration_service: Any,
     spawn_task: SpawnTask,
     finalize_started_execution: FinalizeQueuedExecution,
-    deliver_result: DeliverQueuedResult,
+    durable_delivery: Optional[ManagedThreadDurableDeliveryHooks] = None,
+    deliver_result: Optional[DeliverQueuedResult] = None,
     run_with_indicator: Optional[RunWithIndicator] = None,
     poll_interval_seconds: float = 0.1,
     begin_next_execution: Optional[ManagedThreadQueuedExecutionStarter] = None,
 ) -> None:
+    if durable_delivery is None and deliver_result is None:
+        raise ValueError("Queue worker requires durable_delivery or deliver_result")
     existing = task_map.get(managed_thread_id)
     if isinstance(existing, asyncio.Task) and not existing.done():
         return
@@ -1241,7 +1352,14 @@ def ensure_managed_thread_queue_worker(
                     error=str(exc) or _QUEUE_WORKER_FAILURE_ERROR,
                 )
                 try:
-                    await deliver_result(finalized)
+                    if durable_delivery is not None:
+                        await handoff_managed_thread_final_delivery(
+                            finalized,
+                            delivery=durable_delivery,
+                            logger=logger,
+                        )
+                    elif deliver_result is not None:
+                        await deliver_result(finalized)
                 except (
                     RuntimeError,
                     OSError,
@@ -1262,7 +1380,14 @@ def ensure_managed_thread_queue_worker(
         if finalized is None:
             return
         try:
-            await deliver_result(finalized)
+            if durable_delivery is not None:
+                await handoff_managed_thread_final_delivery(
+                    finalized,
+                    delivery=durable_delivery,
+                    logger=logger,
+                )
+            elif deliver_result is not None:
+                await deliver_result(finalized)
         except (
             RuntimeError,
             OSError,

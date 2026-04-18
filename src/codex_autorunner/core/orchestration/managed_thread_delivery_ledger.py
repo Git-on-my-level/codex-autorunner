@@ -321,19 +321,45 @@ class SQLiteManagedThreadDeliveryEngine:
         claim_expires_at = default_claim_expiry(
             claimed_at=current_at, claim_ttl=self._claim_ttl
         )
-        next_state = ManagedThreadDeliveryState.CLAIMED
-        updated = self._ledger.patch_delivery(
-            record.delivery_id,
-            state=next_state,
+        return self._claim_record(
+            record,
             claim_token=claim_token,
             claimed_at=claimed_at,
             claim_expires_at=claim_expires_at,
-            attempt_count=record.attempt_count + 1,
         )
-        if updated is None:
+
+    def claim_delivery(
+        self,
+        delivery_id: str,
+        *,
+        now: Optional[datetime] = None,
+    ) -> Optional[ManagedThreadDeliveryClaim]:
+        record = self._ledger.get_delivery(delivery_id)
+        if record is None:
             return None
-        return ManagedThreadDeliveryClaim(
-            record=updated,
+        current_at = now or datetime.now(timezone.utc)
+        decision = plan_managed_thread_delivery_recovery(
+            record,
+            now=current_at,
+            claim_ttl=self._claim_ttl,
+            max_attempts=self._max_attempts,
+        )
+        if decision.action.value == "abandon":
+            self._ledger.patch_delivery(
+                record.delivery_id,
+                state=ManagedThreadDeliveryState.ABANDONED,
+                last_error=decision.reason,
+            )
+            return None
+        if decision.action.value not in ("claim", "retry"):
+            return None
+        claim_token = str(uuid.uuid4())
+        claimed_at = current_at.isoformat()
+        claim_expires_at = default_claim_expiry(
+            claimed_at=current_at, claim_ttl=self._claim_ttl
+        )
+        return self._claim_record(
+            record,
             claim_token=claim_token,
             claimed_at=claimed_at,
             claim_expires_at=claim_expires_at,
@@ -421,6 +447,31 @@ class SQLiteManagedThreadDeliveryEngine:
             state=ManagedThreadDeliveryState.ABANDONED,
             last_error=detail or "abandoned_by_policy",
             claim_token=None,
+        )
+
+    def _claim_record(
+        self,
+        record: ManagedThreadDeliveryRecord,
+        *,
+        claim_token: str,
+        claimed_at: str,
+        claim_expires_at: str,
+    ) -> Optional[ManagedThreadDeliveryClaim]:
+        updated = self._ledger.patch_delivery(
+            record.delivery_id,
+            state=ManagedThreadDeliveryState.CLAIMED,
+            claim_token=claim_token,
+            claimed_at=claimed_at,
+            claim_expires_at=claim_expires_at,
+            attempt_count=record.attempt_count + 1,
+        )
+        if updated is None:
+            return None
+        return ManagedThreadDeliveryClaim(
+            record=updated,
+            claim_token=claim_token,
+            claimed_at=claimed_at,
+            claim_expires_at=claim_expires_at,
         )
 
 

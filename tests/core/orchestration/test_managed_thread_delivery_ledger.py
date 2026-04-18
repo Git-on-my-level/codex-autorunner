@@ -341,6 +341,39 @@ class TestEngineClaimNextDelivery:
         assert abandoned.state is ManagedThreadDeliveryState.ABANDONED
 
 
+class TestEngineClaimDelivery:
+    def test_claims_specific_delivery(self, tmp_path: Path) -> None:
+        engine = _engine(tmp_path)
+        engine.create_intent(_intent(adapter_key="telegram"))
+        engine.create_intent(
+            _intent(
+                delivery_id="delivery-2",
+                managed_turn_id="turn-2",
+                surface_key="chat-2",
+                adapter_key="telegram",
+            )
+        )
+
+        claim = engine.claim_delivery(
+            "delivery-2",
+            now=datetime(2026, 4, 18, 1, 0, 0, tzinfo=timezone.utc),
+        )
+
+        assert claim is not None
+        assert claim.record.delivery_id == "delivery-2"
+        assert claim.record.state is ManagedThreadDeliveryState.CLAIMED
+
+    def test_returns_none_for_missing_delivery(self, tmp_path: Path) -> None:
+        engine = _engine(tmp_path)
+
+        claim = engine.claim_delivery(
+            "missing",
+            now=datetime(2026, 4, 18, 1, 0, 0, tzinfo=timezone.utc),
+        )
+
+        assert claim is None
+
+
 class TestEngineRecordAttemptResult:
     def test_success_marks_delivered(self, tmp_path: Path) -> None:
         engine = _engine(tmp_path)

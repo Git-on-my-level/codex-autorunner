@@ -289,6 +289,14 @@ class ManagedThreadDeliveryEngine(Protocol):
     ) -> Optional[ManagedThreadDeliveryClaim]:
         """Claim the next due delivery record for one adapter worker."""
 
+    def claim_delivery(
+        self,
+        delivery_id: str,
+        *,
+        now: Optional[datetime] = None,
+    ) -> Optional[ManagedThreadDeliveryClaim]:
+        """Claim one specific delivery record for immediate adapter handoff."""
+
     def record_attempt_result(
         self,
         delivery_id: str,

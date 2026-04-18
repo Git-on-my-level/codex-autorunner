@@ -31,8 +31,11 @@ from ...core.injected_context import wrap_injected_context
 from ...core.logging_utils import log_event
 from ...core.orchestration import (
     FlowTarget,
+    ManagedThreadDeliveryAttemptResult,
+    ManagedThreadDeliveryOutcome,
     MessageRequest,
     PausedFlowTarget,
+    SQLiteManagedThreadDeliveryEngine,
     SurfaceThreadMessageRequest,
     build_harness_backed_orchestration_service,
     build_surface_orchestration_ingress,
@@ -80,13 +83,16 @@ from ..chat.managed_thread_progress_projector import (
 )
 from ..chat.managed_thread_turns import (
     ManagedThreadCoordinatorHooks,
+    ManagedThreadDurableDeliveryHooks,
     ManagedThreadErrorMessages,
     ManagedThreadFinalizationResult,
     ManagedThreadQueuedExecutionStarter,
     ManagedThreadSurfaceInfo,
     ManagedThreadTargetRequest,
     ManagedThreadTurnCoordinator,
+    build_managed_thread_delivery_intent,
     complete_managed_thread_execution,
+    render_managed_thread_delivery_record_text,
     render_managed_thread_response_text,
 )
 from ..chat.managed_thread_turns import (
@@ -2651,6 +2657,112 @@ def _build_discord_runner_hooks(
             started_execution=started_execution
         )
 
+    state_root = Path(getattr(getattr(service, "_config", None), "root", Path.cwd()))
+    engine = SQLiteManagedThreadDeliveryEngine(state_root)
+
+    class _DiscordManagedThreadDeliveryAdapter:
+        @property
+        def adapter_key(self) -> str:
+            return "discord"
+
+        async def deliver_managed_thread_record(
+            self, record: Any, *, claim: Any
+        ) -> Any:
+            _ = claim
+            target_channel_id = str(
+                record.target.transport_target.get("channel_id") or channel_id
+            ).strip()
+            if not target_channel_id:
+                return ManagedThreadDeliveryAttemptResult(
+                    outcome=ManagedThreadDeliveryOutcome.ABANDONED,
+                    error="missing_discord_channel_id",
+                )
+            if record.envelope.final_status == "ok":
+                assistant_text = render_managed_thread_delivery_record_text(record)
+                formatted = (
+                    format_discord_message(assistant_text)
+                    if assistant_text
+                    else "(No response text returned.)"
+                )
+                chunks = chunk_discord_message(
+                    formatted,
+                    max_len=DISCORD_MAX_MESSAGE_LENGTH,
+                    with_numbering=False,
+                )
+                if not chunks:
+                    chunks = [formatted]
+                base_record_id = f"discord-queued:{record.managed_thread_id}:{record.managed_turn_id}"
+                try:
+                    for chunk_index, chunk in enumerate(chunks, start=1):
+                        record_id = (
+                            f"{base_record_id}:chunk:{chunk_index}"
+                            if len(chunks) > 1
+                            else base_record_id
+                        )
+                        await service._send_channel_message_safe(
+                            target_channel_id,
+                            {"content": chunk},
+                            record_id=record_id,
+                        )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    return ManagedThreadDeliveryAttemptResult(
+                        outcome=ManagedThreadDeliveryOutcome.FAILED,
+                        error=str(exc) or exc.__class__.__name__,
+                    )
+                return ManagedThreadDeliveryAttemptResult(
+                    outcome=ManagedThreadDeliveryOutcome.DELIVERED,
+                    adapter_cursor={"chunk_count": len(chunks)},
+                )
+            if record.envelope.final_status == "interrupted":
+                return ManagedThreadDeliveryAttemptResult(
+                    outcome=ManagedThreadDeliveryOutcome.ABANDONED,
+                    error="interrupted_turn_has_no_terminal_delivery",
+                )
+            try:
+                await service._send_channel_message_safe(
+                    target_channel_id,
+                    {
+                        "content": (
+                            f"Turn failed: {record.envelope.error_text or public_execution_error}"
+                        )
+                    },
+                    record_id=(
+                        "discord-queued-error:"
+                        f"{record.managed_thread_id}:{record.managed_turn_id}"
+                    ),
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                return ManagedThreadDeliveryAttemptResult(
+                    outcome=ManagedThreadDeliveryOutcome.FAILED,
+                    error=str(exc) or exc.__class__.__name__,
+                )
+            return ManagedThreadDeliveryAttemptResult(
+                outcome=ManagedThreadDeliveryOutcome.DELIVERED
+            )
+
+    durable_delivery = ManagedThreadDurableDeliveryHooks(
+        engine=engine,
+        adapter=_DiscordManagedThreadDeliveryAdapter(),
+        build_delivery_intent=lambda finalized: (
+            None
+            if finalized.status == "interrupted"
+            else build_managed_thread_delivery_intent(
+                finalized,
+                surface=ManagedThreadSurfaceInfo(
+                    log_label="Discord",
+                    surface_kind="discord",
+                    surface_key=channel_id,
+                ),
+                transport_target={"channel_id": channel_id},
+                metadata={"managed_thread_id": managed_thread_id},
+            )
+        ),
+    )
+
     async def _deliver_result(finalized: ManagedThreadFinalizationResult) -> None:
         if finalized.status == "ok":
             assistant_text = render_managed_thread_response_text(finalized)
@@ -2694,6 +2806,7 @@ def _build_discord_runner_hooks(
     return ManagedThreadCoordinatorHooks(
         on_execution_started=_on_execution_started,
         on_execution_finished=_on_execution_finished,
+        durable_delivery=durable_delivery,
         deliver_result=_deliver_result,
         run_with_indicator=_run_with_discord_typing_indicator,
     )
@@ -3080,6 +3193,7 @@ async def _run_discord_orchestrated_turn_for_message(
         on_execution_started=runner_hooks.on_execution_started,
         on_execution_finished=runner_hooks.on_execution_finished,
         on_progress_event=_handle_progress_event,
+        durable_delivery=queue_worker_hooks.durable_delivery,
         deliver_result=queue_worker_hooks.deliver_result,
         run_with_indicator=queue_worker_hooks.run_with_indicator,
     )
