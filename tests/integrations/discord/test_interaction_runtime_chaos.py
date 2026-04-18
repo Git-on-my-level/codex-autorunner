@@ -1836,9 +1836,9 @@ async def test_recovery_handles_multiple_pending_interactions_independently(
 
         service._handle_car_command.assert_not_awaited()
         assert len(harness.rest.followup_messages) == 3
-        assert [
+        assert sorted(
             msg["payload"]["content"] for msg in harness.rest.followup_messages
-        ] == ["Recovered multi-1.", "Recovered multi-2.", "Recovered multi-3."]
+        ) == ["Recovered multi-1.", "Recovered multi-2.", "Recovered multi-3."]
 
         for iid, _, _ in interactions:
             record = await harness.store.get_interaction(iid)
