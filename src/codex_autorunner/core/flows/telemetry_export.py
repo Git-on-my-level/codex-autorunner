@@ -218,9 +218,13 @@ def export_run(
     *,
     dry_run: bool = False,
 ) -> ExportRecord:
-    """Export wire telemetry for a single run and optionally prune redundant rows."""
+    """Export wire telemetry for a single non-active run.
+
+    Terminal runs export and prune redundant rows. Non-terminal inactive runs
+    export only, preserving their live database rows.
+    """
     is_terminal = record.status.is_terminal()
-    if not is_terminal:
+    if record.status.is_active():
         return ExportRecord(
             run_id=record.id,
             run_status=record.status.value,
@@ -229,7 +233,7 @@ def export_run(
         )
 
     events, ev_app_seqs, tel_app_seqs, prune_delta_seqs, retained_seqs = (
-        classify_events_for_run(store, record.id, is_terminal=True)
+        classify_events_for_run(store, record.id, is_terminal=is_terminal)
     )
 
     if not events:

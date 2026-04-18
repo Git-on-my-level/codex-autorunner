@@ -1013,6 +1013,11 @@ def register_flow_commands(
             "--delete-run",
             help="Delete flow run record after archive (true|false)",
         ),
+        no_vacuum: bool = typer.Option(
+            False,
+            "--no-vacuum",
+            help="Skip VACUUM after deleting flow rows (WAL checkpoint still runs).",
+        ),
         dry_run: bool = typer.Option(False, "--dry-run", help="Preview only"),
         output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     ):
@@ -1042,6 +1047,7 @@ def register_flow_commands(
                     "record": record,
                     "force": force,
                     "delete_run": parsed_delete_run,
+                    "vacuum": not no_vacuum,
                     "dry_run": dry_run,
                 }
                 force_attestation_payload: Optional[dict[str, str]] = None

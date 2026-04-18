@@ -144,6 +144,7 @@ def _archive_flow_run_artifacts(
     record: FlowRunRecord,
     force: bool,
     delete_run: bool,
+    vacuum: bool = True,
     dry_run: bool,
     force_attestation: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
@@ -157,6 +158,7 @@ def _archive_flow_run_artifacts(
                 run_id=record.id,
                 force=force,
                 delete_run=delete_run,
+                vacuum=vacuum,
                 force_attestation=force_attestation if force else None,
             ),
         )

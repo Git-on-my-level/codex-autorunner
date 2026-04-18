@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner
 
+import codex_autorunner.core.flows.archive_helpers as archive_helpers_module
 from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
 from codex_autorunner.cli import app
 from codex_autorunner.core.flows.archive_helpers import archive_flow_run_artifacts
@@ -66,6 +68,17 @@ def _setup_repo(tmp_path: Path) -> Path:
     seed_hub_files(tmp_path, force=True)
     seed_repo_files(repo_root, git_required=False)
     return repo_root
+
+
+class _RecordingSqliteConnection:
+    def __init__(self, statements: list[str]) -> None:
+        self._statements = statements
+
+    def execute(self, sql: str) -> None:
+        self._statements.append(sql)
+
+    def close(self) -> None:
+        return None
 
 
 def test_ticket_flow_archive_moves_run_artifacts_and_deletes_run(
@@ -502,6 +515,101 @@ def test_ticket_flow_archive_tolerates_sibling_cleanup_failures(
         store.initialize()
         assert store.get_flow_run(archived_run_id) is None
         assert store.get_flow_run(failing_run_id) is not None
+
+
+def test_ticket_flow_archive_vacuums_after_delete(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = _setup_repo(tmp_path)
+    run_id = "5f5f5f5f-5f5f-5f5f-5f5f-5f5f5f5f5f5f"
+    _seed_repo_run(repo_root, run_id, FlowRunStatus.STOPPED)
+    run_dir = repo_root / ".codex-autorunner" / "runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    statements: list[str] = []
+    monkeypatch.setattr(
+        archive_helpers_module,
+        "sqlite3",
+        SimpleNamespace(connect=lambda _path: _RecordingSqliteConnection(statements)),
+    )
+
+    payload = archive_flow_run_artifacts(
+        repo_root,
+        run_id=run_id,
+        force=False,
+        delete_run=True,
+    )
+
+    assert payload["deleted_run"] is True
+    assert statements == ["PRAGMA wal_checkpoint(TRUNCATE)", "VACUUM"]
+
+
+def test_ticket_flow_archive_skips_vacuum_when_no_rows_deleted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = _setup_repo(tmp_path)
+    run_id = "6a6a6a6a-6a6a-6a6a-6a6a-6a6a6a6a6a6a"
+    _seed_repo_run(repo_root, run_id, FlowRunStatus.STOPPED)
+    run_dir = repo_root / ".codex-autorunner" / "runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    connect_calls: list[str] = []
+    monkeypatch.setattr(FlowStore, "delete_flow_run", lambda self, rid: False)
+    monkeypatch.setattr(
+        archive_helpers_module,
+        "sqlite3",
+        SimpleNamespace(
+            connect=lambda path: connect_calls.append(path)
+            or _RecordingSqliteConnection([])
+        ),
+    )
+
+    payload = archive_flow_run_artifacts(
+        repo_root,
+        run_id=run_id,
+        force=False,
+        delete_run=True,
+    )
+
+    assert payload["deleted_run"] is False
+    assert connect_calls == []
+
+
+def test_ticket_flow_archive_no_vacuum_still_checkpoints(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = _setup_repo(tmp_path)
+    run_id = "7b7b7b7b-7b7b-7b7b-7b7b-7b7b7b7b7b7b"
+    _seed_repo_run(repo_root, run_id, FlowRunStatus.STOPPED)
+    run_dir = repo_root / ".codex-autorunner" / "runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    statements: list[str] = []
+    monkeypatch.setattr(
+        archive_helpers_module,
+        "sqlite3",
+        SimpleNamespace(connect=lambda _path: _RecordingSqliteConnection(statements)),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "ticket-flow",
+            "archive",
+            "--repo",
+            str(repo_root),
+            "--run-id",
+            run_id,
+            "--no-vacuum",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert statements == ["PRAGMA wal_checkpoint(TRUNCATE)"]
 
 
 def test_ticket_flow_archive_scans_all_active_threads(
