@@ -1,4 +1,3 @@
-// GENERATED FILE - do not edit directly. Source: static_src/
 const decoder = new TextDecoder();
 export function parseMaybeJson(data) {
     try {

@@ -1,4 +1,3 @@
-// GENERATED FILE - do not edit directly. Source: static_src/
 const listeners = new Map();
 export function subscribe(event, handler) {
     if (!listeners.has(event)) {

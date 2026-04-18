@@ -1,4 +1,3 @@
-// GENERATED FILE - do not edit directly. Source: static_src/
 import { api, resolvePath } from "./utils.js";
 export async function listArchiveSnapshots() {
     const res = (await api("/api/archive/snapshots"));

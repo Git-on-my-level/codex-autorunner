@@ -1,4 +1,3 @@
-// GENERATED FILE - do not edit directly. Source: static_src/
 import { TerminalManager } from "./terminalManager.js";
 import { refreshAgentControls } from "./agentControls.js";
 import { subscribe } from "./bus.js";

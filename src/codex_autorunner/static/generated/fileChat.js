@@ -1,4 +1,3 @@
-// GENERATED FILE - do not edit directly. Source: static_src/
 import { resolvePath, getAuthToken, api } from "./utils.js";
 import { readEventStream, handleStreamEvent, parseMaybeJson, } from "./streamUtils.js";
 export async function sendFileChat(target, message, controller, handlers = {}, options = {}) {

@@ -1,4 +1,3 @@
-// GENERATED FILE - do not edit directly. Source: static_src/
 import { api, flash, statusPill, resolvePath, escapeHtml, confirmModal, inputModal, openModal, } from "./utils.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { HUB_BASE } from "./env.js";

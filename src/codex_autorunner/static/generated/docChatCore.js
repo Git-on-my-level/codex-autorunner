@@ -1,4 +1,3 @@
-// GENERATED FILE - do not edit directly. Source: static_src/
 import { parseAppServerEvent, resetOpenCodeEventState } from "./agentEvents.js";
 import { summarizeEvents, renderCompactSummary, COMPACT_MAX_ACTIONS, COMPACT_MAX_TEXT_LENGTH } from "./eventSummarizer.js";
 import { saveChatHistory, loadChatHistory } from "./docChatStorage.js";

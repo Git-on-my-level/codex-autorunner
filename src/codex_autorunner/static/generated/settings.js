@@ -1,4 +1,3 @@
-// GENERATED FILE - do not edit directly. Source: static_src/
 import { api, confirmModal, flash, resolvePath, openModal } from "./utils.js";
 import { initTemplateReposSettings, loadTemplateRepos } from "./templateReposSettings.js";
 import { describeUpdateTarget, getUpdateTarget, includesWebUpdateTarget, normalizeUpdateTarget, updateRestartNotice, updateTargetOptionsFromResponse, } from "./updateTargets.js";

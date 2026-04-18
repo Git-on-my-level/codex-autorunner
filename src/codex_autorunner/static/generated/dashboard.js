@@ -1,4 +1,3 @@
-// GENERATED FILE - do not edit directly. Source: static_src/
 import { api, flash, statusPill } from "./utils.js";
 import { saveToCache, loadFromCache } from "./cache.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
