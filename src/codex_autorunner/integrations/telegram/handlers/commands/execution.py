@@ -775,6 +775,181 @@ def _sync_pma_registry_thread_id(
     registry.set_thread_id(pma_key, backend_thread_id)
 
 
+def _build_telegram_runner_hooks(
+    handlers: Any,
+    *,
+    chat_id: int,
+    thread_id: Optional[int],
+    topic_key: str,
+    public_execution_error: str,
+    workspace_path: Optional[str] = None,
+    pma_enabled: bool = False,
+) -> ManagedThreadCoordinatorHooks:
+    state_root = _telegram_state_root(handlers)
+    engine = SQLiteManagedThreadDeliveryEngine(state_root)
+
+    class _TelegramManagedThreadDeliveryAdapter:
+        @property
+        def adapter_key(self) -> str:
+            return "telegram"
+
+        async def deliver_managed_thread_record(
+            self, record: Any, *, claim: Any
+        ) -> Any:
+            _ = claim
+            transport_target = dict(record.target.transport_target or {})
+            target_chat_id = int(transport_target.get("chat_id") or chat_id)
+            target_thread_id = transport_target.get("thread_id", thread_id)
+            if record.envelope.final_status == "ok":
+                message_text = render_managed_thread_delivery_record_text(record)
+                try:
+                    await handlers._send_message(
+                        target_chat_id,
+                        message_text,
+                        thread_id=target_thread_id,
+                        reply_to=None,
+                    )
+                    await handlers._flush_outbox_files(
+                        SimpleNamespace(
+                            workspace_path=transport_target.get("workspace_path"),
+                            pma_enabled=bool(transport_target.get("pma_enabled")),
+                        ),
+                        chat_id=target_chat_id,
+                        thread_id=target_thread_id,
+                        reply_to=None,
+                        topic_key=str(transport_target.get("topic_key") or topic_key),
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    return ManagedThreadDeliveryAttemptResult(
+                        outcome=ManagedThreadDeliveryOutcome.FAILED,
+                        error=str(exc) or exc.__class__.__name__,
+                    )
+                return ManagedThreadDeliveryAttemptResult(
+                    outcome=ManagedThreadDeliveryOutcome.DELIVERED
+                )
+            if record.envelope.final_status == "interrupted":
+                return ManagedThreadDeliveryAttemptResult(
+                    outcome=ManagedThreadDeliveryOutcome.ABANDONED,
+                    error="interrupted_turn_has_no_terminal_delivery",
+                )
+            try:
+                await handlers._send_message(
+                    target_chat_id,
+                    (
+                        f"Turn failed: {record.envelope.error_text or public_execution_error}"
+                    ),
+                    thread_id=target_thread_id,
+                    reply_to=None,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                return ManagedThreadDeliveryAttemptResult(
+                    outcome=ManagedThreadDeliveryOutcome.FAILED,
+                    error=str(exc) or exc.__class__.__name__,
+                )
+            return ManagedThreadDeliveryAttemptResult(
+                outcome=ManagedThreadDeliveryOutcome.DELIVERED
+            )
+
+    durable_delivery = ManagedThreadDurableDeliveryHooks(
+        engine=engine,
+        adapter=_TelegramManagedThreadDeliveryAdapter(),
+        build_delivery_intent=lambda finalized: (
+            None
+            if finalized.status == "interrupted"
+            else build_managed_thread_delivery_intent(
+                finalized,
+                surface=ManagedThreadSurfaceInfo(
+                    log_label="Telegram",
+                    surface_kind="telegram",
+                    surface_key=topic_key,
+                    metadata={
+                        "chat_id": chat_id,
+                        "thread_id": thread_id,
+                    },
+                ),
+                transport_target={
+                    "chat_id": chat_id,
+                    "thread_id": thread_id,
+                    "topic_key": topic_key,
+                    "workspace_path": workspace_path,
+                    "pma_enabled": pma_enabled,
+                },
+            )
+        ),
+    )
+
+    async def _run_with_telegram_typing_indicator(work: Any) -> None:
+        begin = getattr(handlers, "_begin_typing_indicator", None)
+        end = getattr(handlers, "_end_typing_indicator", None)
+        began = False
+        if callable(begin):
+            try:
+                await begin(chat_id, thread_id)
+                began = True
+            except (OSError, RuntimeError, ValueError) as exc:
+                log_event(
+                    handlers._logger,
+                    logging.DEBUG,
+                    "telegram.typing.begin.failed",
+                    chat_id=chat_id,
+                    thread_id=thread_id,
+                    exc=exc,
+                )
+        try:
+            await work()
+        finally:
+            if began and callable(end):
+                try:
+                    await end(chat_id, thread_id)
+                except (OSError, RuntimeError, ValueError) as exc:
+                    log_event(
+                        handlers._logger,
+                        logging.DEBUG,
+                        "telegram.typing.end.failed",
+                        chat_id=chat_id,
+                        thread_id=thread_id,
+                        exc=exc,
+                    )
+
+    async def _deliver_queued_result(
+        finalized: ManagedThreadFinalizationResult,
+    ) -> None:
+        if finalized.status == "ok":
+            message_text = render_managed_thread_response_text(finalized)
+            await handlers._send_message(
+                chat_id,
+                message_text,
+                thread_id=thread_id,
+                reply_to=None,
+            )
+            await handlers._flush_outbox_files(
+                SimpleNamespace(
+                    workspace_path=workspace_path,
+                    pma_enabled=pma_enabled,
+                ),
+                chat_id=chat_id,
+                thread_id=thread_id,
+                reply_to=None,
+            )
+            return
+        await handlers._send_message(
+            chat_id,
+            (f"Turn failed: {finalized.error or public_execution_error}"),
+            thread_id=thread_id,
+            reply_to=None,
+        )
+
+    return ManagedThreadCoordinatorHooks(
+        durable_delivery=durable_delivery,
+        deliver_result=_deliver_queued_result,
+        run_with_indicator=_run_with_telegram_typing_indicator,
+    )
+
+
 async def _run_telegram_managed_thread_turn(
     handlers: Any,
     *,
@@ -913,159 +1088,16 @@ async def _run_telegram_managed_thread_turn(
             sandbox_policy=sandbox_policy,
         )
 
-    async def _run_with_telegram_typing_indicator(work: Any) -> None:
-        begin = getattr(handlers, "_begin_typing_indicator", None)
-        end = getattr(handlers, "_end_typing_indicator", None)
-        began = False
-        if callable(begin):
-            try:
-                await begin(message.chat_id, message.thread_id)
-                began = True
-            except (OSError, RuntimeError, ValueError) as exc:
-                log_event(
-                    handlers._logger,
-                    logging.DEBUG,
-                    "telegram.typing.begin.failed",
-                    chat_id=message.chat_id,
-                    thread_id=message.thread_id,
-                    exc=exc,
-                )
-        try:
-            await work()
-        finally:
-            if began and callable(end):
-                try:
-                    await end(message.chat_id, message.thread_id)
-                except (OSError, RuntimeError, ValueError) as exc:
-                    log_event(
-                        handlers._logger,
-                        logging.DEBUG,
-                        "telegram.typing.end.failed",
-                        chat_id=message.chat_id,
-                        thread_id=message.thread_id,
-                        exc=exc,
-                    )
-
-    engine = SQLiteManagedThreadDeliveryEngine(_telegram_state_root(handlers))
-
-    class _TelegramManagedThreadDeliveryAdapter:
-        @property
-        def adapter_key(self) -> str:
-            return "telegram"
-
-        async def deliver_managed_thread_record(
-            self, record: Any, *, claim: Any
-        ) -> Any:
-            _ = claim
-            transport_target = dict(record.target.transport_target or {})
-            chat_id = int(transport_target.get("chat_id") or message.chat_id)
-            thread_id = transport_target.get("thread_id", message.thread_id)
-            if record.envelope.final_status == "ok":
-                message_text = render_managed_thread_delivery_record_text(record)
-                try:
-                    await handlers._send_message(
-                        chat_id,
-                        message_text,
-                        thread_id=thread_id,
-                        reply_to=None,
-                    )
-                    await handlers._flush_outbox_files(
-                        SimpleNamespace(
-                            workspace_path=transport_target.get("workspace_path"),
-                            pma_enabled=bool(transport_target.get("pma_enabled")),
-                        ),
-                        chat_id=chat_id,
-                        thread_id=thread_id,
-                        reply_to=None,
-                        topic_key=str(transport_target.get("topic_key") or topic_key),
-                    )
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    return ManagedThreadDeliveryAttemptResult(
-                        outcome=ManagedThreadDeliveryOutcome.FAILED,
-                        error=str(exc) or exc.__class__.__name__,
-                    )
-                return ManagedThreadDeliveryAttemptResult(
-                    outcome=ManagedThreadDeliveryOutcome.DELIVERED
-                )
-            if record.envelope.final_status == "interrupted":
-                return ManagedThreadDeliveryAttemptResult(
-                    outcome=ManagedThreadDeliveryOutcome.ABANDONED,
-                    error="interrupted_turn_has_no_terminal_delivery",
-                )
-            try:
-                await handlers._send_message(
-                    chat_id,
-                    (
-                        f"Turn failed: {record.envelope.error_text or public_execution_error}"
-                    ),
-                    thread_id=thread_id,
-                    reply_to=None,
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                return ManagedThreadDeliveryAttemptResult(
-                    outcome=ManagedThreadDeliveryOutcome.FAILED,
-                    error=str(exc) or exc.__class__.__name__,
-                )
-            return ManagedThreadDeliveryAttemptResult(
-                outcome=ManagedThreadDeliveryOutcome.DELIVERED
-            )
-
-    durable_delivery = ManagedThreadDurableDeliveryHooks(
-        engine=engine,
-        adapter=_TelegramManagedThreadDeliveryAdapter(),
-        build_delivery_intent=lambda finalized: (
-            None
-            if finalized.status == "interrupted"
-            else build_managed_thread_delivery_intent(
-                finalized,
-                surface=ManagedThreadSurfaceInfo(
-                    log_label="Telegram",
-                    surface_kind="telegram",
-                    surface_key=topic_key,
-                    metadata={
-                        "chat_id": message.chat_id,
-                        "thread_id": message.thread_id,
-                    },
-                ),
-                transport_target={
-                    "chat_id": message.chat_id,
-                    "thread_id": message.thread_id,
-                    "topic_key": topic_key,
-                    "workspace_path": getattr(record, "workspace_path", None),
-                    "pma_enabled": bool(getattr(record, "pma_enabled", False)),
-                },
-            )
-        ),
+    runner_hooks = _build_telegram_runner_hooks(
+        handlers,
+        chat_id=message.chat_id,
+        thread_id=message.thread_id,
+        topic_key=topic_key,
+        public_execution_error=public_execution_error,
+        workspace_path=getattr(record, "workspace_path", None),
+        pma_enabled=bool(getattr(record, "pma_enabled", False)),
     )
-
-    async def _deliver_queued_result(
-        finalized: ManagedThreadFinalizationResult,
-    ) -> None:
-        if finalized.status == "ok":
-            message_text = render_managed_thread_response_text(finalized)
-            await handlers._send_message(
-                message.chat_id,
-                message_text,
-                thread_id=message.thread_id,
-                reply_to=None,
-            )
-            await handlers._flush_outbox_files(
-                record,
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-                reply_to=None,
-            )
-            return
-        await handlers._send_message(
-            message.chat_id,
-            (f"Turn failed: {finalized.error or public_execution_error}"),
-            thread_id=message.thread_id,
-            reply_to=None,
-        )
+    _ = runner_hooks.durable_delivery
 
     async def _begin_next_execution(
         queued_orchestration_service: Any,
@@ -1403,9 +1435,9 @@ async def _run_telegram_managed_thread_turn(
             sandbox_policy=sandbox_policy,
             hooks=ManagedThreadCoordinatorHooks(
                 on_progress_event=_handle_progress_event,
-                durable_delivery=durable_delivery,
-                deliver_result=_deliver_queued_result,
-                run_with_indicator=_run_with_telegram_typing_indicator,
+                durable_delivery=runner_hooks.durable_delivery,
+                deliver_result=runner_hooks.deliver_result,
+                run_with_indicator=runner_hooks.run_with_indicator,
             ),
             queue=ManagedSurfaceQueueConfig(
                 task_map=queue_task_map,
