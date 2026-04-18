@@ -41,6 +41,9 @@ from .pma_control_plane import (
     CAPABILITY_REQUIREMENTS as _CAPABILITY_REQUIREMENTS,
 )
 from .pma_control_plane import (
+    MANAGED_THREAD_SEND_REQUEST_TIMEOUT_SECONDS as _MANAGED_THREAD_SEND_REQUEST_TIMEOUT_SECONDS,
+)
+from .pma_control_plane import (
     ManagedThreadSendRequest as _ManagedThreadSendRequest,
 )
 from .pma_control_plane import (
@@ -1799,7 +1802,7 @@ def pma_thread_send(
             _build_pma_url(config, f"/threads/{managed_thread_id}/messages"),
             request_payload.to_payload(),
             token_env=config.server_auth_token_env,
-            timeout=15.0,
+            timeout=_MANAGED_THREAD_SEND_REQUEST_TIMEOUT_SECONDS,
         )
         response = _ManagedThreadSendResponse.from_http(
             status_code, data, default_message=message_body

@@ -1271,6 +1271,68 @@ def test_pma_cli_thread_send_reads_message_from_stdin(
     )
 
 
+def test_pma_cli_thread_send_uses_extended_post_timeout(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        pma_cli,
+        "load_hub_config",
+        lambda hub_root: SimpleNamespace(
+            server_base_path="",
+            server_host="127.0.0.1",
+            server_port=4321,
+            server_auth_token_env=None,
+        ),
+    )
+    captured: dict[str, object] = {}
+
+    def _fake_request_json_with_status(
+        method: str,
+        url: str,
+        payload=None,
+        token_env=None,
+        timeout=None,
+    ):
+        _ = method, url, payload, token_env
+        captured["timeout"] = timeout
+        return (
+            200,
+            {
+                "status": "ok",
+                "send_state": "accepted",
+                "execution_state": "running",
+                "managed_turn_id": "turn-timeout",
+                "delivered_message": "follow up",
+                "assistant_text": "",
+            },
+        )
+
+    monkeypatch.setattr(
+        pma_cli, "_request_json_with_status", _fake_request_json_with_status
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        pma_app,
+        [
+            "thread",
+            "send",
+            "--id",
+            "thread-1",
+            "--message",
+            "follow up",
+            "--path",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert (
+        captured["timeout"]
+        == pma_control_plane.MANAGED_THREAD_SEND_REQUEST_TIMEOUT_SECONDS
+    )
+
+
 def test_pma_cli_thread_send_recovers_timeout_from_status_probe(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -1461,6 +1523,105 @@ def test_pma_cli_thread_send_recovers_queued_timeout_from_status_probe(
     assert "recovered delivery from thread status" in result.stdout
 
 
+def test_pma_cli_thread_send_recovers_queued_timeout_when_last_turn_advances(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        pma_cli,
+        "load_hub_config",
+        lambda hub_root: SimpleNamespace(
+            server_base_path="",
+            server_host="127.0.0.1",
+            server_port=4321,
+            server_auth_token_env=None,
+        ),
+    )
+
+    def _fake_request_json_with_status(
+        method: str,
+        url: str,
+        payload=None,
+        token_env=None,
+        timeout=None,
+    ):
+        _ = method, url, payload, token_env, timeout
+        raise httpx.TimeoutException("timed out")
+
+    status_payloads = iter(
+        [
+            {
+                "thread": {
+                    "last_turn_id": "turn-1",
+                    "latest_turn_id": "turn-1",
+                    "last_message_preview": "previous prompt",
+                },
+                "turn": {"managed_turn_id": "turn-1", "status": "running"},
+                "queue_depth": 0,
+                "queued_turns": [],
+            },
+            {
+                "thread": {
+                    "last_turn_id": "turn-2",
+                    "latest_turn_id": "turn-1",
+                    "last_message_preview": "follow up",
+                },
+                "turn": {"managed_turn_id": "turn-1", "status": "running"},
+                "queue_depth": 1,
+                "queued_turns": [
+                    {
+                        "managed_turn_id": "turn-2",
+                        "prompt_preview": "follow up",
+                        "state": "queued",
+                    }
+                ],
+            },
+        ]
+    )
+
+    def _fake_request_json(
+        method: str,
+        url: str,
+        payload=None,
+        token_env=None,
+        params=None,
+    ):
+        _ = method, url, payload, token_env, params
+        return next(status_payloads)
+
+    monkeypatch.setattr(
+        pma_cli, "_request_json_with_status", _fake_request_json_with_status
+    )
+    monkeypatch.setattr(pma_cli, "_request_json", _fake_request_json)
+    monkeypatch.setattr(pma_control_plane, "request_json", _fake_request_json)
+    monotonic_values = iter([100.0, 115.0])
+    monkeypatch.setattr(
+        pma_control_plane.time, "monotonic", lambda: next(monotonic_values, 115.0)
+    )
+    monkeypatch.setattr(pma_control_plane.time, "sleep", lambda seconds: None)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        pma_app,
+        [
+            "thread",
+            "send",
+            "--id",
+            "thread-1",
+            "--message",
+            "follow up",
+            "--path",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert (
+        "send_state=queued managed_turn_id=turn-2 active_managed_turn_id=turn-1 "
+        "queue_depth=1" in result.stdout
+    )
+    assert "recovered delivery from thread status" in result.stdout
+
+
 def test_pma_cli_thread_send_timeout_recovery_keeps_queued_turn_rows_aligned(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -1563,6 +1724,105 @@ def test_pma_cli_thread_send_timeout_recovery_keeps_queued_turn_rows_aligned(
         "queue_depth=2" in result.stdout
     )
     assert "turn-missing-preview" not in result.stdout
+
+
+def test_pma_cli_thread_send_timeout_recovery_preview_match_prefers_queued_turn_id(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Stale last_turn_id + matching preview must not hide a new queued turn id."""
+    monkeypatch.setattr(
+        pma_cli,
+        "load_hub_config",
+        lambda hub_root: SimpleNamespace(
+            server_base_path="",
+            server_host="127.0.0.1",
+            server_port=4321,
+            server_auth_token_env=None,
+        ),
+    )
+
+    def _fake_request_json_with_status(
+        method: str,
+        url: str,
+        payload=None,
+        token_env=None,
+        timeout=None,
+    ):
+        _ = method, url, payload, token_env, timeout
+        raise httpx.TimeoutException("timed out")
+
+    status_payloads = iter(
+        [
+            {
+                "thread": {
+                    "last_turn_id": "turn-1",
+                    "latest_turn_id": "turn-1",
+                    "last_message_preview": "previous prompt",
+                },
+                "turn": {"managed_turn_id": "turn-1", "status": "running"},
+                "queue_depth": 0,
+                "queued_turns": [],
+            },
+            {
+                "thread": {
+                    "last_turn_id": "turn-1",
+                    "latest_turn_id": "turn-1",
+                    "last_message_preview": "follow up",
+                },
+                "turn": {"managed_turn_id": "turn-1", "status": "running"},
+                "queue_depth": 1,
+                "queued_turns": [
+                    {
+                        "managed_turn_id": "turn-new",
+                        "prompt_preview": "follow up",
+                        "state": "queued",
+                    }
+                ],
+            },
+        ]
+    )
+
+    def _fake_request_json(
+        method: str,
+        url: str,
+        payload=None,
+        token_env=None,
+        params=None,
+    ):
+        _ = method, url, payload, token_env, params
+        return next(status_payloads)
+
+    monkeypatch.setattr(
+        pma_cli, "_request_json_with_status", _fake_request_json_with_status
+    )
+    monkeypatch.setattr(pma_cli, "_request_json", _fake_request_json)
+    monkeypatch.setattr(pma_control_plane, "request_json", _fake_request_json)
+    monotonic_values = iter([100.0, 103.0])
+    monkeypatch.setattr(
+        pma_control_plane.time, "monotonic", lambda: next(monotonic_values, 103.0)
+    )
+    monkeypatch.setattr(pma_control_plane.time, "sleep", lambda seconds: None)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        pma_app,
+        [
+            "thread",
+            "send",
+            "--id",
+            "thread-1",
+            "--message",
+            "follow up",
+            "--path",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert (
+        "send_state=queued managed_turn_id=turn-new active_managed_turn_id=turn-1 "
+        "queue_depth=1" in result.stdout
+    )
 
 
 def test_pma_cli_thread_send_retries_timeout_recovery_until_status_catches_up(
@@ -1741,6 +2001,8 @@ def test_pma_cli_thread_send_timeout_warns_before_retry_when_status_unclear(
     )
     monkeypatch.setattr(pma_cli, "_request_json", _fake_request_json)
     monkeypatch.setattr(pma_control_plane, "request_json", _fake_request_json)
+    # Recovery polls until the recovery window elapses; use a count so Typer/Click
+    # monotonic() calls cannot pin time before the deadline (infinite poll loop).
     monotonic_seq = itertools.count(100.0, 1.0)
     monkeypatch.setattr(
         pma_control_plane.time, "monotonic", lambda: next(monotonic_seq)

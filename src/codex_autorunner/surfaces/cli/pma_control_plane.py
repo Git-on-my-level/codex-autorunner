@@ -22,8 +22,9 @@ from ...core.text_utils import _truncate_text
 logger = logging.getLogger(__name__)
 
 MANAGED_THREAD_SEND_PREVIEW_LIMIT = 120
+MANAGED_THREAD_SEND_REQUEST_TIMEOUT_SECONDS = 30.0
 MANAGED_THREAD_SEND_TIMEOUT_STATUS_LIMIT = 50
-MANAGED_THREAD_SEND_TIMEOUT_RECOVERY_WINDOW_SECONDS = 3.0
+MANAGED_THREAD_SEND_TIMEOUT_RECOVERY_WINDOW_SECONDS = 15.0
 MANAGED_THREAD_SEND_TIMEOUT_RECOVERY_POLL_SECONDS = 0.25
 
 CAPABILITY_REQUIREMENTS = {
@@ -493,6 +494,36 @@ def recover_managed_thread_send_timeout(
         queued = False
         if current.last_turn_id != baseline.last_turn_id and current.last_turn_id:
             recovered_turn_id = current.last_turn_id
+            queued = recovered_turn_id in current.queued_turn_ids or (
+                bool(current.active_managed_turn_id)
+                and current.active_managed_turn_id != recovered_turn_id
+            )
+        elif (
+            current.last_message_preview == expected_preview
+            and baseline.last_message_preview != expected_preview
+        ):
+            preview_queued_match_id = next(
+                (
+                    managed_turn_id
+                    for managed_turn_id, prompt_preview in zip(
+                        current.queued_turn_ids, current.queued_prompt_previews
+                    )
+                    if prompt_preview == expected_preview
+                    and managed_turn_id not in baseline_queued_ids
+                ),
+                "",
+            )
+            if preview_queued_match_id:
+                recovered_turn_id = preview_queued_match_id
+                queued = True
+            else:
+                recovered_turn_id = (
+                    current.active_managed_turn_id or current.last_turn_id
+                )
+                queued = recovered_turn_id in current.queued_turn_ids or (
+                    bool(current.active_managed_turn_id)
+                    and current.active_managed_turn_id != recovered_turn_id
+                )
         else:
             queued_match_id = next(
                 (
