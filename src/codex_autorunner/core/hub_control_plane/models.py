@@ -51,6 +51,7 @@ from ._surface_bindings import (
     SurfaceBindingUpsertRequest,
 )
 from ._thread_targets import (
+    THREAD_TARGET_LIST_LIFECYCLE_STATUSES,
     ThreadActivityRecordRequest,
     ThreadBackendIdUpdateRequest,
     ThreadCompactSeedUpdateRequest,
@@ -61,6 +62,7 @@ from ._thread_targets import (
     ThreadTargetLookupRequest,
     ThreadTargetResponse,
     ThreadTargetResumeRequest,
+    resolve_thread_target_list_status_fields,
 )
 from ._workspaces import (
     AgentWorkspaceDescriptor,
@@ -114,6 +116,7 @@ __all__ = [
     "QueueDepthResponse",
     "QueuedExecutionListRequest",
     "RunningExecutionLookupRequest",
+    "THREAD_TARGET_LIST_LIFECYCLE_STATUSES",
     "HandshakeCompatibility",
     "HandshakeCompatibilityState",
     "HandshakeRequest",
@@ -149,5 +152,6 @@ __all__ = [
     "WorkspaceSetupCommandResult",
     "deserialize_run_event",
     "evaluate_handshake_compatibility",
+    "resolve_thread_target_list_status_fields",
     "serialize_run_event",
 ]

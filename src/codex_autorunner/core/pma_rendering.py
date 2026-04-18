@@ -140,9 +140,13 @@ def _render_freshness_section(
                 + (" STALE" if is_stale else "")
             )
     if stale_section_names:
-        warning_sections = ", ".join(
-            _truncate(name, max_field_chars) for name in stale_section_names
-        )
+        stale_summary = snapshot_freshness.get("stale_summary")
+        if isinstance(stale_summary, str) and stale_summary.strip():
+            warning_sections = _truncate(stale_summary.strip(), max_field_chars * 4)
+        else:
+            warning_sections = ", ".join(
+                _truncate(name, max_field_chars) for name in stale_section_names
+            )
         lines.append(
             f"WARNING: stale sections may be outdated; refresh before acting on: {warning_sections}"
         )

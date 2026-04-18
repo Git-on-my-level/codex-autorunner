@@ -102,6 +102,66 @@ def test_cli_hub_worktree_list_uses_cached_repo_listing(tmp_path, monkeypatch) -
     assert [item["id"] for item in payload["worktrees"]] == ["base--feature"]
 
 
+def test_cli_hub_repos_lists_repos_in_table(tmp_path, monkeypatch) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    seed_hub_files(hub_root, force=True)
+
+    base = _snapshot(tmp_path, "base", kind="base", branch="main")
+    worktree = _snapshot(
+        tmp_path,
+        "base--feature",
+        kind="worktree",
+        worktree_of="base",
+        branch="feature/1490",
+    )
+    worktree.enabled = False
+    worktree.status = RepoStatus.RUNNING
+
+    def _fake_list(self, *, use_cache: bool = True):
+        return [base, worktree]
+
+    monkeypatch.setattr(HubSupervisor, "list_repos", _fake_list)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["hub", "repos", "--path", str(hub_root)])
+    assert result.exit_code == 0
+    assert "REPO_ID" in result.output
+    assert "base" in result.output
+    assert "base--feature" in result.output
+    assert "feature/1490" in result.output
+    assert "running" in result.output
+    assert "no" in result.output
+
+
+def test_cli_hub_repos_json_emits_machine_readable_rows(tmp_path, monkeypatch) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    seed_hub_files(hub_root, force=True)
+
+    base = _snapshot(tmp_path, "base", kind="base", branch="main")
+
+    def _fake_list(self, *, use_cache: bool = True):
+        return [base]
+
+    monkeypatch.setattr(HubSupervisor, "list_repos", _fake_list)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["hub", "repos", "--path", str(hub_root), "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload == {
+        "repos": [
+            {
+                "repo_id": "base",
+                "branch": "main",
+                "status": "idle",
+                "enabled": True,
+            }
+        ]
+    }
+
+
 def test_cli_hub_worktree_scan_filters_worktrees_json(tmp_path, monkeypatch) -> None:
     hub_root = tmp_path / "hub"
     hub_root.mkdir()

@@ -385,10 +385,32 @@ def register_flow_commands(
         health = snapshot.get("worker_health")
         effective_ticket = snapshot.get("effective_current_ticket")
         state = record.state if isinstance(record.state, dict) else {}
+        raw_ticket_engine = state.get("ticket_engine")
+        ticket_engine: dict[str, Any]
+        if isinstance(raw_ticket_engine, dict):
+            ticket_engine = raw_ticket_engine
+        else:
+            ticket_engine = {}
         reason_summary = state.get("reason_summary")
         normalized_reason_summary = (
             reason_summary.strip()
             if isinstance(reason_summary, str) and reason_summary.strip()
+            else None
+        )
+        reason = ticket_engine.get("reason")
+        normalized_reason = (
+            reason.strip() if isinstance(reason, str) and reason.strip() else None
+        )
+        reason_code = ticket_engine.get("reason_code")
+        normalized_reason_code = (
+            reason_code.strip()
+            if isinstance(reason_code, str) and reason_code.strip()
+            else None
+        )
+        reason_details = ticket_engine.get("reason_details")
+        normalized_reason_details = (
+            reason_details.strip()
+            if isinstance(reason_details, str) and reason_details.strip()
             else None
         )
         error_message = (
@@ -410,6 +432,9 @@ def register_flow_commands(
             "current_ticket": effective_ticket,
             "ticket_progress": snapshot.get("ticket_progress"),
             "reason_summary": normalized_reason_summary,
+            "reason": normalized_reason,
+            "reason_code": normalized_reason_code,
+            "reason_details": normalized_reason_details,
             "error_message": error_message,
             "worker": (
                 {
@@ -452,6 +477,19 @@ def register_flow_commands(
         reason_summary = payload.get("reason_summary")
         if isinstance(reason_summary, str) and reason_summary.strip():
             typer.echo(f"summary: {reason_summary.strip()}")
+        reason_code = payload.get("reason_code")
+        if isinstance(reason_code, str) and reason_code.strip():
+            typer.echo(f"reason_code: {reason_code.strip()}")
+        reason = payload.get("reason")
+        if (
+            isinstance(reason, str)
+            and reason.strip()
+            and reason.strip() != str(reason_summary or "").strip()
+        ):
+            typer.echo(f"reason: {reason.strip()}")
+        reason_details = payload.get("reason_details")
+        if isinstance(reason_details, str) and reason_details.strip():
+            typer.echo(f"reason_details: {reason_details.strip()}")
         error_message = payload.get("error_message")
         if isinstance(error_message, str) and error_message.strip():
             typer.echo(f"error: {error_message.strip()}")

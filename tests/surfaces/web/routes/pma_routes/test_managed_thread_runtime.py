@@ -222,6 +222,37 @@ async def test_recover_orphaned_managed_thread_executions_skips_chat_bound_threa
     assert updated_running["error"] is None
 
 
+def test_managed_thread_list_route_filters_by_status(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    store = PmaThreadStore(hub_env.hub_root)
+
+    active = store.create_thread(
+        "codex",
+        hub_env.repo_root.resolve(),
+        repo_id=hub_env.repo_id,
+    )
+    archived = store.create_thread(
+        "codex",
+        hub_env.repo_root.resolve(),
+        repo_id=hub_env.repo_id,
+    )
+    store.archive_thread(str(archived["managed_thread_id"]))
+
+    with TestClient(app) as client:
+        active_resp = client.get("/hub/pma/threads", params={"status": "active"})
+        archived_resp = client.get("/hub/pma/threads", params={"status": "archived"})
+
+    assert active_resp.status_code == 200
+    assert archived_resp.status_code == 200
+    assert [item["managed_thread_id"] for item in active_resp.json()["threads"]] == [
+        active["managed_thread_id"]
+    ]
+    assert [item["managed_thread_id"] for item in archived_resp.json()["threads"]] == [
+        archived["managed_thread_id"]
+    ]
+
+
 @pytest.mark.anyio
 @pytest.mark.parametrize(
     ("surface_kind", "surface_key"),

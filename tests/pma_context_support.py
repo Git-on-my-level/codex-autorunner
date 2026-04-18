@@ -887,6 +887,7 @@ def test_render_hub_snapshot_marks_stale_sections_with_warning() -> None:
             "freshness": {
                 "generated_at": "2026-03-16T12:00:00Z",
                 "stale_threshold_seconds": 3600,
+                "stale_summary": "1 section stale (repos)",
                 "sections": {
                     "repos": {
                         "entity_count": 1,
@@ -904,9 +905,42 @@ def test_render_hub_snapshot_marks_stale_sections_with_warning() -> None:
     )
 
     assert "WARNING: stale sections may be outdated" in rendered
+    assert "1 section stale (repos)" in rendered
     assert "section=repos count=1 stale=1" in rendered
     assert "STALE" in rendered
     assert "section=pma_threads count=2 stale=0" in rendered
+
+
+def test_build_snapshot_freshness_summary_omits_empty_sections_and_adds_summary() -> (
+    None
+):
+    from codex_autorunner.core.pma_snapshot_builder import (
+        _build_snapshot_freshness_summary,
+    )
+
+    payload = _build_snapshot_freshness_summary(
+        generated_at="2026-03-16T12:00:00Z",
+        stale_threshold_seconds=3600,
+        repos=[
+            {
+                "freshness": {
+                    "basis_at": "2026-03-16T10:00:00Z",
+                    "status": "stale",
+                    "is_stale": True,
+                }
+            }
+        ],
+        agent_workspaces=[],
+        inbox=[],
+        action_queue=[],
+        pma_threads=[],
+        pma_files_detail={"inbox": [], "outbox": [], "consumed": [], "dismissed": []},
+    )
+
+    sections = payload.get("sections") or {}
+    assert list(sections.keys()) == ["repos"]
+    assert payload["stale_sections"] == ["repos"]
+    assert payload["stale_summary"] == "1 section stale (repos)"
 
 
 def test_build_hub_snapshot_includes_effective_destination(hub_env) -> None:
