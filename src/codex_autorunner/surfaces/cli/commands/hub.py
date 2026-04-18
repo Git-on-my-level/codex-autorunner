@@ -109,6 +109,24 @@ def register_hub_commands(
             return text[:width]
         return f"{text[: width - 3]}..."
 
+    def _format_text_table_lines(
+        columns: list[tuple[str, str, int]], rows: list[dict[str, str]]
+    ) -> list[str]:
+        widths: dict[str, int] = {}
+        for header, _key, max_width in columns:
+            cell_lengths = [len(row[header]) for row in rows] if rows else [0]
+            widths[header] = min(max(max(cell_lengths), len(header)), max_width)
+        header_line = "  ".join(
+            header.ljust(widths[header]) for header, _, _ in columns
+        )
+        separator_line = "  ".join("-" * widths[header] for header, _, _ in columns)
+        lines = [header_line, separator_line]
+        for row in rows:
+            lines.append(
+                "  ".join(row[header].ljust(widths[header]) for header, _, _ in columns)
+            )
+        return lines
+
     def _subscription_matches_text(subscription: dict[str, Any]) -> str:
         match_count = subscription.get("match_count")
         max_matches = subscription.get("max_matches")
@@ -151,20 +169,7 @@ def register_hub_commands(
                     ),
                 }
             )
-        widths: dict[str, int] = {}
-        for header, _key, max_width in columns:
-            cell_lengths = [len(row[header]) for row in rows] if rows else [0]
-            widths[header] = min(max(max(cell_lengths), len(header)), max_width)
-        header_line = "  ".join(
-            header.ljust(widths[header]) for header, _, _ in columns
-        )
-        separator_line = "  ".join("-" * widths[header] for header, _, _ in columns)
-        lines = [header_line, separator_line]
-        for row in rows:
-            lines.append(
-                "  ".join(row[header].ljust(widths[header]) for header, _, _ in columns)
-            )
-        return lines
+        return _format_text_table_lines(columns, rows)
 
     def _repo_listing_payload(snapshot: Any) -> dict[str, Any]:
         raw_status = getattr(snapshot, "status", None)
@@ -197,20 +202,7 @@ def register_hub_commands(
                     "ENABLED": "yes" if bool(repo.get("enabled")) else "no",
                 }
             )
-        widths: dict[str, int] = {}
-        for header, _key, max_width in columns:
-            cell_lengths = [len(row[header]) for row in rows] if rows else [0]
-            widths[header] = min(max(max(cell_lengths), len(header)), max_width)
-        header_line = "  ".join(
-            header.ljust(widths[header]) for header, _, _ in columns
-        )
-        separator_line = "  ".join("-" * widths[header] for header, _, _ in columns)
-        lines = [header_line, separator_line]
-        for row in rows:
-            lines.append(
-                "  ".join(row[header].ljust(widths[header]) for header, _, _ in columns)
-            )
-        return lines
+        return _format_text_table_lines(columns, rows)
 
     def _destination_issues(
         manifest: Manifest,

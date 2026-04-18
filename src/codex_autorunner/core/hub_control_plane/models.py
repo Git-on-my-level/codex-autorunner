@@ -63,6 +63,23 @@ def _normalize_required_text(value: Any, *, field_name: str) -> str:
     return normalized
 
 
+THREAD_TARGET_LIST_LIFECYCLE_STATUSES = frozenset({"active", "archived"})
+
+
+def resolve_thread_target_list_status_fields(
+    *,
+    status: Optional[str],
+    lifecycle_status: Optional[str],
+    runtime_status: Optional[str],
+) -> tuple[Optional[str], Optional[str]]:
+    """Map legacy combined ``status`` into lifecycle vs runtime filters."""
+    if status and lifecycle_status is None and runtime_status is None:
+        if status in THREAD_TARGET_LIST_LIFECYCLE_STATUSES:
+            return status, None
+        return None, status
+    return lifecycle_status, runtime_status
+
+
 def _normalize_optional_identifier(value: Any) -> str | None:
     if isinstance(value, str):
         normalized = value.strip()
@@ -771,11 +788,11 @@ class ThreadTargetListRequest:
         status = _normalize_optional_text(data.get("status"))
         lifecycle_status = _normalize_optional_text(data.get("lifecycle_status"))
         runtime_status = _normalize_optional_text(data.get("runtime_status"))
-        if status and lifecycle_status is None and runtime_status is None:
-            if status in {"active", "archived"}:
-                lifecycle_status = status
-            else:
-                runtime_status = status
+        lifecycle_status, runtime_status = resolve_thread_target_list_status_fields(
+            status=status,
+            lifecycle_status=lifecycle_status,
+            runtime_status=runtime_status,
+        )
         return cls(
             agent_id=_normalize_optional_text(data.get("agent_id")),
             status=status,
@@ -1990,6 +2007,7 @@ __all__ = [
     "QueueDepthResponse",
     "QueuedExecutionListRequest",
     "RunningExecutionLookupRequest",
+    "THREAD_TARGET_LIST_LIFECYCLE_STATUSES",
     "HandshakeCompatibility",
     "HandshakeCompatibilityState",
     "HandshakeRequest",
@@ -2025,5 +2043,6 @@ __all__ = [
     "WorkspaceSetupCommandResult",
     "deserialize_run_event",
     "evaluate_handshake_compatibility",
+    "resolve_thread_target_list_status_fields",
     "serialize_run_event",
 ]

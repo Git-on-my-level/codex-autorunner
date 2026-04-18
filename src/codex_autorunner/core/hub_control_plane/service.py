@@ -82,6 +82,7 @@ from .models import (
     WorkspaceSetupCommandRequest,
     WorkspaceSetupCommandResult,
     deserialize_run_event,
+    resolve_thread_target_list_status_fields,
 )
 
 CONTROL_PLANE_API_VERSION = "1.0.0"
@@ -369,13 +370,11 @@ class HubSharedStateService:
     def list_thread_targets(
         self, request: ThreadTargetListRequest
     ) -> ThreadTargetListResponse:
-        lifecycle_status = request.lifecycle_status
-        runtime_status = request.runtime_status
-        if request.status and lifecycle_status is None and runtime_status is None:
-            if request.status in {"active", "archived"}:
-                lifecycle_status = request.status
-            else:
-                runtime_status = request.status
+        lifecycle_status, runtime_status = resolve_thread_target_list_status_fields(
+            status=request.status,
+            lifecycle_status=request.lifecycle_status,
+            runtime_status=request.runtime_status,
+        )
         rows = self._thread_store.list_threads(
             agent=request.agent_id,
             status=lifecycle_status,
