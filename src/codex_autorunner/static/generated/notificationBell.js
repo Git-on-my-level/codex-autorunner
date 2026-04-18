@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 import { api, escapeHtml, flash, openModal, resolvePath } from "./utils.js";
 let bellInitialized = false;
 let modalOpen = false;

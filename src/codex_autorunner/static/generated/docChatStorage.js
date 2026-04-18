@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 const DEFAULT_VERSION = 1;
 function buildKey(config, target) {
     return `${config.keyPrefix}${target}`;

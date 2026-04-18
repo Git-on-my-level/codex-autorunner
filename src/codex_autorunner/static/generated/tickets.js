@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 import { api, confirmModal, flash, getUrlParams, resolvePath, statusPill, getAuthToken, openModal, inputModal, setButtonLoading, } from "./utils.js";
 // Note: activateTab removed - header now used for collapse, not inbox navigation
 import { registerAutoRefresh } from "./autoRefresh.js";

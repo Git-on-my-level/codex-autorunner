@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 export function loadPendingTurn(key) {
     try {
         const raw = localStorage.getItem(key);

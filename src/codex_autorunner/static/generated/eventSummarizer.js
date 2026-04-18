@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 export const COMPACT_MAX_ACTIONS = 10;
 export const COMPACT_MAX_TEXT_LENGTH = 80;
 const STATUS_ICONS = {

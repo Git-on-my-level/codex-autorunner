@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 import { publish } from "./bus.js";
 import { setAutoRefreshEnabled } from "./autoRefresh.js";
 import { getAuthToken, resolvePath } from "./utils.js";

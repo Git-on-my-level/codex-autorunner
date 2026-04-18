@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 const hasWindow = typeof window !== "undefined" && typeof window.location !== "undefined";
 const pathname = hasWindow ? window.location.pathname || "/" : "/";
 function normalizeBase(base) {

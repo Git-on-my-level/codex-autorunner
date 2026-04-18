@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 import { api, flash } from "./utils.js";
 import { createSmartRefresh } from "./smartRefresh.js";
 import { REPO_ID } from "./env.js";

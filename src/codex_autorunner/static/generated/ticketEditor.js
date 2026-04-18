@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 /**
  * Ticket Editor Modal - handles creating, editing, and deleting tickets
  */
