@@ -758,6 +758,7 @@ class ThreadTargetLookupRequest:
 @dataclass(frozen=True)
 class ThreadTargetListRequest:
     agent_id: Optional[str] = None
+    status: Optional[str] = None
     lifecycle_status: Optional[str] = None
     runtime_status: Optional[str] = None
     repo_id: Optional[str] = None
@@ -767,10 +768,19 @@ class ThreadTargetListRequest:
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any]) -> "ThreadTargetListRequest":
+        status = _normalize_optional_text(data.get("status"))
+        lifecycle_status = _normalize_optional_text(data.get("lifecycle_status"))
+        runtime_status = _normalize_optional_text(data.get("runtime_status"))
+        if status and lifecycle_status is None and runtime_status is None:
+            if status in {"active", "archived"}:
+                lifecycle_status = status
+            else:
+                runtime_status = status
         return cls(
             agent_id=_normalize_optional_text(data.get("agent_id")),
-            lifecycle_status=_normalize_optional_text(data.get("lifecycle_status")),
-            runtime_status=_normalize_optional_text(data.get("runtime_status")),
+            status=status,
+            lifecycle_status=lifecycle_status,
+            runtime_status=runtime_status,
             repo_id=_normalize_optional_text(data.get("repo_id")),
             resource_kind=_normalize_optional_text(data.get("resource_kind")),
             resource_id=_normalize_optional_text(data.get("resource_id")),
@@ -780,6 +790,7 @@ class ThreadTargetListRequest:
     def to_dict(self) -> dict[str, Any]:
         return {
             "agent_id": self.agent_id,
+            "status": self.status,
             "lifecycle_status": self.lifecycle_status,
             "runtime_status": self.runtime_status,
             "repo_id": self.repo_id,

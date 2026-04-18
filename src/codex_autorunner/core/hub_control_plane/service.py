@@ -369,10 +369,17 @@ class HubSharedStateService:
     def list_thread_targets(
         self, request: ThreadTargetListRequest
     ) -> ThreadTargetListResponse:
+        lifecycle_status = request.lifecycle_status
+        runtime_status = request.runtime_status
+        if request.status and lifecycle_status is None and runtime_status is None:
+            if request.status in {"active", "archived"}:
+                lifecycle_status = request.status
+            else:
+                runtime_status = request.status
         rows = self._thread_store.list_threads(
             agent=request.agent_id,
-            status=request.lifecycle_status,
-            normalized_status=request.runtime_status,
+            status=lifecycle_status,
+            normalized_status=runtime_status,
             repo_id=request.repo_id,
             resource_kind=request.resource_kind,
             resource_id=request.resource_id,
