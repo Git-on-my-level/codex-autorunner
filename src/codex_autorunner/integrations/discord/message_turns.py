@@ -1903,6 +1903,7 @@ async def _run_discord_orchestrated_turn_for_message(
         on_execution_started=runner_hooks.on_execution_started,
         on_execution_finished=runner_hooks.on_execution_finished,
         on_progress_event=_handle_progress_event,
+        durable_delivery=queue_worker_hooks.durable_delivery,
         deliver_result=queue_worker_hooks.deliver_result,
         run_with_indicator=queue_worker_hooks.run_with_indicator,
     )
@@ -2154,6 +2155,7 @@ async def _run_discord_orchestrated_turn_for_message(
             intermediate_message=intermediate_message,
             token_usage=finalized.token_usage,
             elapsed_seconds=max(0.0, time.monotonic() - tracker.started_at),
+            send_final_message=not getattr(_flow, "durable_delivery_performed", False),
         )
 
     async def _after_completion(_flow: Any) -> None:

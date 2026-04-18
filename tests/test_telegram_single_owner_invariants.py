@@ -1031,8 +1031,12 @@ class TestSessionRecoveryInvariants:
             second_message, runtime=support._RuntimeStub()
         )
 
-        assert handler._sent[-1].startswith(_SESSION_NOTICE)
-        assert "inv-backend-thread-2" in handler._sent[-1]
+        recovery_messages = [
+            sent for sent in handler._sent if sent.startswith(_SESSION_NOTICE)
+        ]
+        assert recovery_messages
+        final_recovery = recovery_messages[-1]
+        assert "inv-backend-thread-2" in final_recovery
         assert record.active_thread_id == "inv-backend-thread-2"
 
     @pytest.mark.anyio

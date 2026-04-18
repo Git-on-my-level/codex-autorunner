@@ -10,6 +10,7 @@ import socket
 import time
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional, Sequence
 
 if TYPE_CHECKING:
@@ -41,6 +42,13 @@ from ...core.orchestration import (
     ChatOperationState,
     SQLiteChatOperationLedger,
 )
+from ...core.orchestration.managed_thread_delivery import (
+    ManagedThreadDeliveryAttemptResult,
+    ManagedThreadDeliveryOutcome,
+)
+from ...core.orchestration.managed_thread_delivery_ledger import (
+    SQLiteManagedThreadDeliveryEngine,
+)
 from ...core.request_context import reset_conversation_id, set_conversation_id
 from ...core.runtime_services import RuntimeServices
 from ...core.state import now_iso
@@ -64,6 +72,12 @@ from ..chat.collaboration_policy import (
     CollaborationEvaluationResult,
     build_telegram_collaboration_policy,
     evaluate_collaboration_policy,
+)
+from ..chat.managed_thread_delivery_worker import (
+    ManagedThreadDeliveryWorker,
+)
+from ..chat.managed_thread_turns import (
+    render_managed_thread_delivery_record_text,
 )
 from ..chat.service import ChatBotServiceCore
 from ..chat.turn_policy import PlainTextTurnContext
@@ -483,6 +497,90 @@ class TelegramBotService(
         self._command_specs = build_command_specs(self)
         self._instance_lock_path: Optional[Path] = None
         self._instance_lock: Optional[FileLock] = None
+        self._delivery_worker: Optional[ManagedThreadDeliveryWorker] = None
+        self._delivery_worker_task: Optional[asyncio.Task[None]] = None
+
+    def _build_delivery_worker(self) -> ManagedThreadDeliveryWorker:
+        service = self
+
+        class _TelegramDeliveryAdapter:
+            @property
+            def adapter_key(self) -> str:
+                return "telegram"
+
+            async def deliver_managed_thread_record(
+                self, record: Any, *, claim: Any
+            ) -> Any:
+                _ = claim
+                transport_target = dict(record.target.transport_target or {})
+                target_chat_id = int(transport_target.get("chat_id", 0))
+                target_thread_id = transport_target.get("thread_id")
+                if not target_chat_id:
+                    return ManagedThreadDeliveryAttemptResult(
+                        outcome=ManagedThreadDeliveryOutcome.ABANDONED,
+                        error="missing_telegram_chat_id",
+                    )
+                if record.envelope.final_status == "ok":
+                    message_text = render_managed_thread_delivery_record_text(record)
+                    try:
+                        await service._send_message(
+                            target_chat_id,
+                            message_text,
+                            thread_id=target_thread_id,
+                            reply_to=None,
+                        )
+                        await service._flush_outbox_files(
+                            SimpleNamespace(
+                                workspace_path=transport_target.get("workspace_path"),
+                                pma_enabled=bool(transport_target.get("pma_enabled")),
+                            ),
+                            chat_id=target_chat_id,
+                            thread_id=target_thread_id,
+                            reply_to=None,
+                            topic_key=str(transport_target.get("topic_key") or ""),
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        return ManagedThreadDeliveryAttemptResult(
+                            outcome=ManagedThreadDeliveryOutcome.FAILED,
+                            error=str(exc) or exc.__class__.__name__,
+                        )
+                    return ManagedThreadDeliveryAttemptResult(
+                        outcome=ManagedThreadDeliveryOutcome.DELIVERED
+                    )
+                if record.envelope.final_status == "interrupted":
+                    return ManagedThreadDeliveryAttemptResult(
+                        outcome=ManagedThreadDeliveryOutcome.ABANDONED,
+                        error="interrupted_turn_has_no_terminal_delivery",
+                    )
+                try:
+                    await service._send_message(
+                        target_chat_id,
+                        (
+                            f"Turn failed: {record.envelope.error_text or 'execution error'}"
+                        ),
+                        thread_id=target_thread_id,
+                        reply_to=None,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    return ManagedThreadDeliveryAttemptResult(
+                        outcome=ManagedThreadDeliveryOutcome.FAILED,
+                        error=str(exc) or exc.__class__.__name__,
+                    )
+                return ManagedThreadDeliveryAttemptResult(
+                    outcome=ManagedThreadDeliveryOutcome.DELIVERED
+                )
+
+        state_root = Path(self._hub_root or self._config.root)
+        engine = SQLiteManagedThreadDeliveryEngine(state_root)
+        return ManagedThreadDeliveryWorker(
+            engine=engine,
+            adapter=_TelegramDeliveryAdapter(),
+            logger=self._logger,
+        )
 
     async def _handle_telegram_outbox_delivery(
         self, record: OutboxRecord, delivered_message_id: Optional[int]

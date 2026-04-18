@@ -382,36 +382,38 @@ class TelegramCommandHandlers(
         metrics_mode = self._metrics_mode()
         overflow_mode_override = None
         resolved_agent = self._effective_agent(outcome.record)
+        _durable_handled = getattr(outcome, "durable_delivery_handled", False)
         response_text = outcome.response
         intermediate_response = outcome.intermediate_response
-        if resolved_agent == "opencode":
-            if (
-                isinstance(response_text, str)
-                and response_text.strip() == "No response."
-            ):
-                response_text = ""
-        if metrics_mode == "append_to_response":
-            response_text = compose_turn_response_with_footer(
-                response_text,
-                summary_text=outcome.intermediate_response,
-                token_usage=outcome.token_usage,
-                elapsed_seconds=outcome.elapsed_seconds,
-                agent=resolved_agent,
-                model=getattr(outcome.record, "model", None),
-            )
-            intermediate_response = None
-            if getattr(self._config, "message_overflow", "document") == "document":
-                overflow_mode_override = "split"
-        elif resolved_agent == "opencode":
-            response_text = compose_turn_response_with_footer(
-                response_text,
-                summary_text=outcome.intermediate_response,
-                token_usage=None,
-                elapsed_seconds=None,
-                agent=resolved_agent,
-                model=getattr(outcome.record, "model", None),
-            )
-            intermediate_response = None
+        if not _durable_handled:
+            if resolved_agent == "opencode":
+                if (
+                    isinstance(response_text, str)
+                    and response_text.strip() == "No response."
+                ):
+                    response_text = ""
+            if metrics_mode == "append_to_response":
+                response_text = compose_turn_response_with_footer(
+                    response_text,
+                    summary_text=outcome.intermediate_response,
+                    token_usage=outcome.token_usage,
+                    elapsed_seconds=outcome.elapsed_seconds,
+                    agent=resolved_agent,
+                    model=getattr(outcome.record, "model", None),
+                )
+                intermediate_response = None
+                if getattr(self._config, "message_overflow", "document") == "document":
+                    overflow_mode_override = "split"
+            elif resolved_agent == "opencode":
+                response_text = compose_turn_response_with_footer(
+                    response_text,
+                    summary_text=outcome.intermediate_response,
+                    token_usage=None,
+                    elapsed_seconds=None,
+                    agent=resolved_agent,
+                    model=getattr(outcome.record, "model", None),
+                )
+                intermediate_response = None
         try:
             response_sent = await self._deliver_turn_response(
                 chat_id=message.chat_id,
@@ -435,6 +437,8 @@ class TelegramCommandHandlers(
                 placeholder_id=outcome.placeholder_id,
                 response=response_text,
             )
+        if _durable_handled:
+            response_sent = True
         if response_sent:
             key = await self._resolve_topic_key(message.chat_id, message.thread_id)
             log_event(

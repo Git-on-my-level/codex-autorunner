@@ -379,6 +379,30 @@ def test_stop_container_returns_false_for_missing_container() -> None:
     assert runtime.stop_container("missing") is False
 
 
+def test_stop_container_never_caps_subprocess_timeout_below_grace_window() -> None:
+    calls: list[tuple[list[str], dict[str, float]]] = []
+
+    def _run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append((list(cmd), dict(kwargs)))
+        if cmd[1] == "inspect":
+            return _proc(cmd, stdout="true\n")
+        return _proc(cmd)
+
+    runtime = DockerRuntime(run_fn=_run)
+    runtime.stop_container(
+        "demo",
+        timeout_seconds=10,
+        command_timeout_seconds=5.0,
+    )
+    stop_entries = [
+        kw["timeout"]
+        for cmd, kw in calls
+        if len(cmd) >= 3 and cmd[1] == "stop" and cmd[2] == "-t"
+    ]
+    assert stop_entries
+    assert all(t >= 15.0 for t in stop_entries)
+
+
 def test_remove_container_returns_false_for_missing_container() -> None:
     def _run(cmd, **kwargs):  # type: ignore[no-untyped-def]
         _ = kwargs

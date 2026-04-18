@@ -128,6 +128,10 @@ class ChatBotServiceCore:
                 )
             )
             owner._spawn_task(owner._prewarm_workspace_clients())
+            if getattr(owner, "_delivery_worker", None) is not None:
+                owner._delivery_worker_task = asyncio.create_task(
+                    owner._delivery_worker.run_loop()
+                )
             log_event(
                 owner._logger,
                 logging.INFO,
@@ -227,6 +231,12 @@ class ChatBotServiceCore:
                     owner._terminal_flow_watch_task.cancel()
                     try:
                         await owner._terminal_flow_watch_task
+                    except asyncio.CancelledError:
+                        pass
+                if getattr(owner, "_delivery_worker_task", None) is not None:
+                    owner._delivery_worker_task.cancel()
+                    try:
+                        await owner._delivery_worker_task
                     except asyncio.CancelledError:
                         pass
                 if owner._spawned_tasks:

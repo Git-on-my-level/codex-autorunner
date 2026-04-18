@@ -103,6 +103,10 @@ from .immediate_feedback import (
     publish_interrupt_notice,
     publish_queued_notice,
 )
+from .managed_thread_delivery import (
+    ManagedThreadDeliveryAdapter,
+    ManagedThreadDeliveryAdapterContext,
+)
 from .media import (
     ChatVoiceInput,
     audio_content_type_for_input,
@@ -200,6 +204,8 @@ __all__ = [
     "ChatInteractionRef",
     "ChatMessageEvent",
     "ChatMessageRef",
+    "ManagedThreadDeliveryAdapter",
+    "ManagedThreadDeliveryAdapterContext",
     "ChatOutboxRecord",
     "ChatPendingApprovalRecord",
     "ChatQuestionHandlers",

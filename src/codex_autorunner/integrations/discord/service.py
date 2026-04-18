@@ -91,6 +91,9 @@ from ...core.orchestration import (
     build_ticket_flow_orchestration_service,
     plan_chat_operation_recovery,
 )
+from ...core.orchestration.managed_thread_delivery_ledger import (
+    SQLiteManagedThreadDeliveryEngine,
+)
 from ...core.state import now_iso
 from ...core.state_roots import resolve_global_state_root
 from ...core.update import (  # noqa: F401 - kept for test monkeypatching
@@ -155,6 +158,9 @@ from ...integrations.chat.dispatcher import (
 from ...integrations.chat.forwarding import compose_forwarded_message_text
 from ...integrations.chat.handlers.approvals import (
     normalize_backend_approval_request,
+)
+from ...integrations.chat.managed_thread_delivery_worker import (
+    ManagedThreadDeliveryWorker,
 )
 from ...integrations.chat.managed_thread_lifecycle import (
     bind_surface_thread,
@@ -308,6 +314,7 @@ from .interaction_session import (
     InteractionSessionKind,
 )
 from .interactions import extract_interaction_id, extract_interaction_token
+from .managed_thread_delivery import deliver_discord_managed_thread_record
 from .message_turns import (
     DiscordMessageTurnResult,
     build_discord_thread_orchestration_service,
@@ -903,6 +910,8 @@ class DiscordBotService:
             on_scheduler_conversation_idle=self._wake_dispatcher_conversation,
         )
         self._service_started_at_monotonic: Optional[float] = None
+        self._delivery_worker: Optional[ManagedThreadDeliveryWorker] = None
+        self._delivery_worker_task: Optional[asyncio.Task[None]] = None
         self._hub_handshake_retry_window_seconds = (
             DISCORD_HUB_HANDSHAKE_RETRY_WINDOW_SECONDS
         )
@@ -911,6 +920,34 @@ class DiscordBotService:
         )
         self._hub_handshake_retry_max_delay_seconds = (
             DISCORD_HUB_HANDSHAKE_RETRY_MAX_DELAY_SECONDS
+        )
+
+    def _build_delivery_worker(self) -> ManagedThreadDeliveryWorker:
+        service = self
+
+        class _DiscordDeliveryAdapter:
+            @property
+            def adapter_key(self) -> str:
+                return "discord"
+
+            async def deliver_managed_thread_record(
+                self, record: Any, *, claim: Any
+            ) -> Any:
+                return await deliver_discord_managed_thread_record(
+                    service,
+                    record,
+                    claim=claim,
+                    channel_id_fallback=None,
+                    base_record_label="discord-delivery",
+                    error_record_label="discord-delivery-error",
+                    default_execution_error="execution error",
+                )
+
+        engine = SQLiteManagedThreadDeliveryEngine(self._config.root)
+        return ManagedThreadDeliveryWorker(
+            engine=engine,
+            adapter=_DiscordDeliveryAdapter(),
+            logger=self._logger,
         )
 
     async def run_forever(self) -> None:
@@ -941,6 +978,10 @@ class DiscordBotService:
         self._spawn_task(
             self._run_startup_command_sync_background(),
             await_on_shutdown=True,
+        )
+        self._delivery_worker = self._build_delivery_worker()
+        self._delivery_worker_task = asyncio.create_task(
+            self._delivery_worker.run_loop()
         )
         try:
             log_event(
@@ -991,6 +1032,11 @@ class DiscordBotService:
             outbox_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await outbox_task
+            if self._delivery_worker_task is not None:
+                self._delivery_worker_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._delivery_worker_task
+                self._delivery_worker_task = None
             await _shutdown_impl(self)
 
     def _service_uptime_ms(self, *, now: Optional[float] = None) -> Optional[float]:
