@@ -407,8 +407,10 @@ def test_error_samples_included_in_log_events(tmp_path: Path, caplog) -> None:
 
 def test_reap_managed_docker_containers_maps_runtime_summary(caplog) -> None:
     class _StubRuntime:
-        def reap_managed_containers(self, *, ttl_seconds, now=None):
-            _ = ttl_seconds, now
+        def reap_managed_containers(
+            self, *, ttl_seconds, now=None, command_timeout_seconds=5.0
+        ):
+            _ = ttl_seconds, now, command_timeout_seconds
             return DockerManagedContainerReapResult(
                 scanned_count=3,
                 eligible_count=2,
@@ -444,8 +446,10 @@ def test_reap_managed_docker_containers_maps_runtime_summary(caplog) -> None:
 
 def test_reap_managed_docker_containers_records_runtime_error() -> None:
     class _StubRuntime:
-        def reap_managed_containers(self, *, ttl_seconds, now=None):
-            _ = ttl_seconds, now
+        def reap_managed_containers(
+            self, *, ttl_seconds, now=None, command_timeout_seconds=5.0
+        ):
+            _ = ttl_seconds, now, command_timeout_seconds
             raise DockerRuntimeError("docker unavailable")
 
     result = reap_managed_docker_containers(

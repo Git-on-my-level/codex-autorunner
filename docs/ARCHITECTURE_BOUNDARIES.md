@@ -94,8 +94,14 @@ orchestration-managed thread targets in hub `orchestration.sqlite3`.
   managed thread.
 - The shared managed-thread coordinator owns submission, queueing,
   interruption, recovery, and execution finalization.
+- Managed-thread finalization must emit a durable delivery intent in the
+  control plane before any user-visible final Discord or Telegram delivery
+  begins.
 - Discord and Telegram keep transport concerns only: parsing, placeholders,
   progress rendering, attachments, callbacks, rate limits, and outbox delivery.
+- Durable managed-thread final delivery records, claims, and replay policy live
+  under `core/orchestration`; adapter code may execute those records but must
+  not create a second source of truth.
 - Transport-local state may mirror routing or delivery context, but it must not
   become authoritative for durable thread identity or execution state.
 

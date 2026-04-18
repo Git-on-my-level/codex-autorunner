@@ -109,6 +109,7 @@ Telegram and Discord do not own:
 - authoritative operation lifecycle state
 - cross-platform state names
 - durable recovery truth for managed-thread execution progress
+- durable managed-thread final-delivery intent creation, claims, or retry state
 
 ## Shared State Machine
 

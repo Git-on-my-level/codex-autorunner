@@ -22,6 +22,14 @@ from ...core.hub_control_plane import (
 )
 from ...core.hub_control_plane.errors import HubControlPlaneError
 from ...core.logging_utils import log_event
+from ...core.orchestration.managed_thread_delivery import (
+    ManagedThreadDeliveryAttachment,
+    ManagedThreadDeliveryEnvelope,
+    ManagedThreadDeliveryIntent,
+    ManagedThreadDeliveryTarget,
+    build_managed_thread_delivery_id,
+    build_managed_thread_delivery_idempotency_key,
+)
 from ...core.orchestration.models import MessageRequest
 from ...core.orchestration.runtime_thread_events import (
     RuntimeThreadRunEventState,
@@ -83,6 +91,13 @@ class ManagedThreadQueuedExecutionStarter(Protocol):
 
 @dataclass(frozen=True)
 class ManagedThreadFinalizationResult:
+    """Durable-finalization payload before adapter delivery translation.
+
+    Future tickets should convert this into a `ManagedThreadDeliveryIntent` and
+    persist that intent in the control-plane ledger before any Discord or
+    Telegram transport API call begins.
+    """
+
     status: ManagedThreadStatus
     assistant_text: str
     error: Optional[str]
@@ -97,6 +112,11 @@ class ManagedThreadFinalizationResult:
 FinalizeQueuedExecution = Callable[
     [RuntimeThreadExecution], Awaitable[ManagedThreadFinalizationResult]
 ]
+# Legacy bridge: queue workers still call a surface-owned `deliver_result`
+# callback today. The durable architecture for managed-thread final delivery is
+# the control-plane intent defined in `core.orchestration.managed_thread_delivery`.
+# Follow-on tickets should replace this callback seam with engine-owned intent
+# creation plus adapter-driven claim/replay workers.
 DeliverQueuedResult = Callable[[ManagedThreadFinalizationResult], Awaitable[None]]
 
 _QUEUE_WORKER_FAILURE_ERROR = "Queue worker terminated unexpectedly"
@@ -203,6 +223,13 @@ class ManagedThreadExecutionHooks:
 
 @dataclass(frozen=True)
 class ManagedThreadQueueWorkerHooks:
+    """Compatibility hook bundle for the pre-ledger delivery path.
+
+    The `deliver_result` callback remains a temporary bridge until future
+    tickets route managed-thread final delivery through durable intent creation
+    and engine-owned replay.
+    """
+
     deliver_result: DeliverQueuedResult
     run_with_indicator: Optional[RunWithIndicator] = None
     execution_hooks: ManagedThreadExecutionHooks = field(
@@ -212,6 +239,8 @@ class ManagedThreadQueueWorkerHooks:
 
 @dataclass(frozen=True)
 class ManagedThreadCoordinatorHooks:
+    """Coordinator hook bundle while the queue path still uses legacy delivery."""
+
     on_execution_started: Optional[ManagedThreadLifecycleHook] = None
     on_execution_finished: Optional[ManagedThreadLifecycleHook] = None
     on_progress_event: Optional[ProgressEventHandler] = None
@@ -647,6 +676,67 @@ def render_managed_thread_response_text(
     if assistant_text:
         return assistant_text
     return no_response_fallback
+
+
+def build_managed_thread_delivery_intent(
+    finalized: ManagedThreadFinalizationResult,
+    *,
+    surface: ManagedThreadSurfaceInfo,
+    transport_target: Optional[Mapping[str, Any]] = None,
+    attachments: tuple[ManagedThreadDeliveryAttachment, ...] = (),
+    not_before: Optional[str] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> ManagedThreadDeliveryIntent:
+    """Build the durable final-delivery intent for one finalized turn.
+
+    This helper makes the intended architecture concrete even before the full
+    engine is wired in: finalization produces a transport-agnostic envelope plus
+    a stable idempotency key, and adapter workers consume the resulting durable
+    record later. Finalization itself must not regain ownership of direct
+    transport delivery.
+    """
+
+    target = ManagedThreadDeliveryTarget(
+        surface_kind=surface.surface_kind,
+        adapter_key=surface.surface_kind,
+        surface_key=surface.surface_key,
+        transport_target=dict(transport_target or {}),
+        metadata=dict(surface.metadata or {}),
+    )
+    envelope = ManagedThreadDeliveryEnvelope(
+        envelope_version="managed_thread_delivery.v1",
+        final_status=finalized.status,
+        assistant_text=str(finalized.assistant_text or ""),
+        session_notice=_normalized_optional_text(finalized.session_notice),
+        error_text=_normalized_optional_text(finalized.error),
+        backend_thread_id=_normalized_optional_text(finalized.backend_thread_id),
+        token_usage=(
+            dict(finalized.token_usage or {}) if finalized.token_usage else None
+        ),
+        attachments=tuple(attachments),
+        transport_hints=dict(surface.metadata or {}),
+        metadata=dict(metadata or {}),
+    )
+    return ManagedThreadDeliveryIntent(
+        delivery_id=build_managed_thread_delivery_id(
+            managed_thread_id=finalized.managed_thread_id,
+            managed_turn_id=finalized.managed_turn_id,
+            surface_kind=surface.surface_kind,
+            surface_key=surface.surface_key,
+        ),
+        managed_thread_id=finalized.managed_thread_id,
+        managed_turn_id=finalized.managed_turn_id,
+        idempotency_key=build_managed_thread_delivery_idempotency_key(
+            managed_thread_id=finalized.managed_thread_id,
+            managed_turn_id=finalized.managed_turn_id,
+            surface_kind=surface.surface_kind,
+            surface_key=surface.surface_key,
+        ),
+        target=target,
+        envelope=envelope,
+        not_before=_normalized_optional_text(not_before),
+        metadata=dict(metadata or {}),
+    )
 
 
 def resolve_managed_thread_target(
