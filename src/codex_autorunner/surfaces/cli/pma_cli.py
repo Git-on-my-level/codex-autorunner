@@ -43,8 +43,9 @@ from .hub_path_option import hub_root_path_option
 
 logger = logging.getLogger(__name__)
 _MANAGED_THREAD_SEND_PREVIEW_LIMIT = 120
+_MANAGED_THREAD_SEND_REQUEST_TIMEOUT_SECONDS = 30.0
 _MANAGED_THREAD_SEND_TIMEOUT_STATUS_LIMIT = 50
-_MANAGED_THREAD_SEND_TIMEOUT_RECOVERY_WINDOW_SECONDS = 3.0
+_MANAGED_THREAD_SEND_TIMEOUT_RECOVERY_WINDOW_SECONDS = 15.0
 _MANAGED_THREAD_SEND_TIMEOUT_RECOVERY_POLL_SECONDS = 0.25
 
 pma_app = typer.Typer(
@@ -952,6 +953,19 @@ def _recover_managed_thread_send_timeout(
         queued = False
         if current.last_turn_id != baseline.last_turn_id and current.last_turn_id:
             recovered_turn_id = current.last_turn_id
+            queued = recovered_turn_id in current.queued_turn_ids or (
+                bool(current.active_managed_turn_id)
+                and current.active_managed_turn_id != recovered_turn_id
+            )
+        elif (
+            current.last_message_preview == expected_preview
+            and baseline.last_message_preview != expected_preview
+        ):
+            recovered_turn_id = current.last_turn_id or current.active_managed_turn_id
+            queued = recovered_turn_id in current.queued_turn_ids or (
+                bool(current.active_managed_turn_id)
+                and current.active_managed_turn_id != recovered_turn_id
+            )
         else:
             queued_match_id = next(
                 (
@@ -2290,7 +2304,7 @@ def pma_thread_send(
             _build_pma_url(config, f"/threads/{managed_thread_id}/messages"),
             request_payload.to_payload(),
             token_env=config.server_auth_token_env,
-            timeout=15.0,
+            timeout=_MANAGED_THREAD_SEND_REQUEST_TIMEOUT_SECONDS,
         )
         response = _ManagedThreadSendResponse.from_http(
             status_code, data, default_message=message_body
