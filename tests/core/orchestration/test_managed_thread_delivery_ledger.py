@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -866,3 +867,38 @@ class TestClaimRecovery:
         reg2 = engine.create_intent(_intent())
         assert reg2.inserted is False
         assert reg2.record.delivery_id == reg1.record.delivery_id
+
+    def test_concurrent_claim_next_delivery_is_compare_and_set(
+        self, tmp_path: Path
+    ) -> None:
+        hub_root = _hub_root(tmp_path)
+        engine = SQLiteManagedThreadDeliveryEngine(
+            hub_root,
+            durable=False,
+            claim_ttl=timedelta(minutes=5),
+            retry_backoff=timedelta(minutes=1),
+            max_attempts=5,
+        )
+        engine.create_intent(_intent(delivery_id="delivery-a", adapter_key="telegram"))
+        engine.create_intent(
+            _intent(
+                delivery_id="delivery-b",
+                managed_turn_id="turn-b",
+                adapter_key="telegram",
+            )
+        )
+        now = datetime(2026, 4, 18, 1, 0, 0, tzinfo=timezone.utc)
+
+        def _claim() -> str | None:
+            claim = engine.claim_next_delivery(adapter_key="telegram", now=now)
+            return claim.record.delivery_id if claim is not None else None
+
+        delivery_ids: set[str] = set()
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            futures = [pool.submit(_claim) for _ in range(16)]
+            for fut in as_completed(futures):
+                got = fut.result()
+                if got is not None:
+                    delivery_ids.add(got)
+
+        assert delivery_ids == {"delivery-a", "delivery-b"}

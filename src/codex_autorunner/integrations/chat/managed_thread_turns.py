@@ -1481,8 +1481,6 @@ def ensure_managed_thread_queue_worker(
                     cancelled=isinstance(exc, asyncio.CancelledError),
                     exc=logged_exc,
                 )
-                if isinstance(exc, asyncio.CancelledError):
-                    raise
             else:
                 log_event(
                     logger,

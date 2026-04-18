@@ -114,10 +114,13 @@ class SQLiteManagedThreadDeliveryLedger:
         state: ManagedThreadDeliveryState | object = _UNSET,
         validate_transition: bool = True,
         metadata_updates: Optional[Mapping[str, Any]] = None,
+        expected_states: Optional[tuple[ManagedThreadDeliveryState, ...]] = None,
         **changes: Any,
     ) -> Optional[ManagedThreadDeliveryRecord]:
         current = self.get_delivery(delivery_id)
         if current is None:
+            return None
+        if expected_states is not None and current.state not in expected_states:
             return None
         next_state = current.state
         has_state_update = isinstance(state, ManagedThreadDeliveryState)
@@ -239,7 +242,9 @@ class SQLiteManagedThreadDeliveryLedger:
         adapter_key: Optional[str] = None,
         limit: int = 500,
     ) -> list[ManagedThreadDeliveryRecord]:
-        terminal_values = tuple(s.value for s in MANAGED_THREAD_DELIVERY_TERMINAL_STATES)
+        terminal_values = tuple(
+            s.value for s in MANAGED_THREAD_DELIVERY_TERMINAL_STATES
+        )
         placeholders = ",".join("?" * len(terminal_values))
         params: list[Any] = list(terminal_values)
         clauses = [f"state NOT IN ({placeholders})"]
@@ -373,45 +378,56 @@ class SQLiteManagedThreadDeliveryEngine:
         now: Optional[datetime] = None,
     ) -> Optional[ManagedThreadDeliveryClaim]:
         current_at = now or datetime.now(timezone.utc)
-        self._recover_expired_claims(
-            adapter_key=adapter_key,
-            now=current_at,
-            limit=25,
+        due_states = (
+            ManagedThreadDeliveryState.PENDING,
+            ManagedThreadDeliveryState.RETRY_SCHEDULED,
         )
-        due = self._ledger.list_due_deliveries(
-            adapter_key=adapter_key,
-            now=current_at.isoformat(),
-            limit=1,
-        )
-        if not due:
-            return None
-        record = due[0]
-        decision = plan_managed_thread_delivery_recovery(
-            record,
-            now=current_at,
-            claim_ttl=self._claim_ttl,
-            max_attempts=self._max_attempts,
-        )
-        if decision.action.value == "abandon":
-            self._ledger.patch_delivery(
-                record.delivery_id,
-                state=ManagedThreadDeliveryState.ABANDONED,
-                last_error=decision.reason,
+        for _ in range(64):
+            self._recover_expired_claims(
+                adapter_key=adapter_key,
+                now=current_at,
+                limit=25,
             )
-            return None
-        if decision.action.value not in ("claim", "retry"):
-            return None
-        claim_token = str(uuid.uuid4())
-        claimed_at = current_at.isoformat()
-        claim_expires_at = default_claim_expiry(
-            claimed_at=current_at, claim_ttl=self._claim_ttl
-        )
-        return self._claim_record(
-            record,
-            claim_token=claim_token,
-            claimed_at=claimed_at,
-            claim_expires_at=claim_expires_at,
-        )
+            due = self._ledger.list_due_deliveries(
+                adapter_key=adapter_key,
+                now=current_at.isoformat(),
+                limit=1,
+            )
+            if not due:
+                return None
+            record = due[0]
+            decision = plan_managed_thread_delivery_recovery(
+                record,
+                now=current_at,
+                claim_ttl=self._claim_ttl,
+                max_attempts=self._max_attempts,
+            )
+            if decision.action.value == "abandon":
+                abandoned = self._ledger.patch_delivery(
+                    record.delivery_id,
+                    state=ManagedThreadDeliveryState.ABANDONED,
+                    last_error=decision.reason,
+                    expected_states=due_states,
+                )
+                if abandoned is None:
+                    continue
+                return None
+            if decision.action.value not in ("claim", "retry"):
+                return None
+            claim_token = str(uuid.uuid4())
+            claimed_at = current_at.isoformat()
+            claim_expires_at = default_claim_expiry(
+                claimed_at=current_at, claim_ttl=self._claim_ttl
+            )
+            claim = self._claim_record(
+                record,
+                claim_token=claim_token,
+                claimed_at=claimed_at,
+                claim_expires_at=claim_expires_at,
+            )
+            if claim is not None:
+                return claim
+        return None
 
     def claim_delivery(
         self,
@@ -622,6 +638,10 @@ class SQLiteManagedThreadDeliveryEngine:
             claimed_at=claimed_at,
             claim_expires_at=claim_expires_at,
             attempt_count=record.attempt_count + 1,
+            expected_states=(
+                ManagedThreadDeliveryState.PENDING,
+                ManagedThreadDeliveryState.RETRY_SCHEDULED,
+            ),
         )
         if updated is None:
             return None

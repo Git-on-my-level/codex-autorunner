@@ -639,9 +639,10 @@ class DockerRuntime:
         running = (inspect_proc.stdout or "").strip().lower() == "true"
         if running:
             stop_budget = max(10, float(timeout_seconds) + 5)
+            stop_timeout = max(stop_budget, float(command_timeout_seconds))
             self._run(
                 ["stop", "-t", str(timeout_seconds), container_name],
-                timeout_seconds=max(stop_budget, float(command_timeout_seconds)),
+                timeout_seconds=stop_timeout,
             )
         if remove:
             self._run(

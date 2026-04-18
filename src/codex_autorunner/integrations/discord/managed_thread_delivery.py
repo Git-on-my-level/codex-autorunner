@@ -28,7 +28,9 @@ async def deliver_discord_managed_thread_record(
 ) -> ManagedThreadDeliveryAttemptResult:
     """Deliver a managed-thread delivery record to Discord (chunks ok-path; errors → message)."""
     _ = claim
-    target_channel_id = _resolve_delivery_channel_id(record, fallback=channel_id_fallback)
+    target_channel_id = _resolve_delivery_channel_id(
+        record, fallback=channel_id_fallback
+    )
     if not target_channel_id:
         return ManagedThreadDeliveryAttemptResult(
             outcome=ManagedThreadDeliveryOutcome.ABANDONED,
@@ -98,7 +100,9 @@ async def deliver_discord_managed_thread_record(
             outcome=ManagedThreadDeliveryOutcome.FAILED,
             error=str(exc) or exc.__class__.__name__,
         )
-    return ManagedThreadDeliveryAttemptResult(outcome=ManagedThreadDeliveryOutcome.DELIVERED)
+    return ManagedThreadDeliveryAttemptResult(
+        outcome=ManagedThreadDeliveryOutcome.DELIVERED
+    )
 
 
 def _resolve_delivery_channel_id(record: Any, *, fallback: Optional[str]) -> str:
