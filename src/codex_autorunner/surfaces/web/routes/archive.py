@@ -119,15 +119,12 @@ def build_archive_routes() -> APIRouter:
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-        # codeql[py/path-injection]
         if not target.exists():
             raise HTTPException(status_code=404, detail="file not found")
-        # codeql[py/path-injection]
         if target.is_dir():
             raise HTTPException(status_code=404, detail="file not found")
 
         try:
-            # codeql[py/path-injection]
             content = target.read_text(encoding="utf-8", errors="replace")
         except OSError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -150,15 +147,12 @@ def build_archive_routes() -> APIRouter:
 
         if not rel_posix:
             raise HTTPException(status_code=404, detail="file not found")
-        # codeql[py/path-injection]
         if not target.exists():
             raise HTTPException(status_code=404, detail="file not found")
-        # codeql[py/path-injection]
         if not target.is_file():
             raise HTTPException(status_code=404, detail="file not found")
 
         try:
-            # codeql[py/path-injection]
             content = target.read_text(encoding="utf-8", errors="replace")
         except OSError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -184,14 +178,11 @@ def build_archive_routes() -> APIRouter:
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-        # codeql[py/path-injection]
         if not target.exists():
             raise HTTPException(status_code=404, detail="file not found")
-        # codeql[py/path-injection]
         if target.is_dir():
             raise HTTPException(status_code=404, detail="file not found")
 
-        # codeql[py/path-injection]
         return FileResponse(
             path=target,
             filename=target.name,
@@ -214,14 +205,11 @@ def build_archive_routes() -> APIRouter:
 
         if not rel_posix:
             raise HTTPException(status_code=404, detail="file not found")
-        # codeql[py/path-injection]
         if not target.exists():
             raise HTTPException(status_code=404, detail="file not found")
-        # codeql[py/path-injection]
         if not target.is_file():
             raise HTTPException(status_code=404, detail="file not found")
 
-        # codeql[py/path-injection]
         return FileResponse(
             path=target,
             filename=target.name,
