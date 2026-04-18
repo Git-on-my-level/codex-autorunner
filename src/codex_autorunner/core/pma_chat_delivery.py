@@ -24,22 +24,12 @@ from .chat_bindings import (
 )
 from .config import load_hub_config
 from .pma_notification_store import PmaNotificationStore
-from .text_utils import _normalize_optional_text
+from .text_utils import _normalize_optional_text, _normalize_pma_delivery_target
 from .time_utils import now_iso
 
 logger = logging.getLogger(__name__)
 
 _DISCORD_MESSAGE_MAX_LEN = 1900
-
-
-def _normalize_delivery_target(value: Any) -> Optional[tuple[str, str]]:
-    if not isinstance(value, dict):
-        return None
-    surface_kind = _normalize_optional_text(value.get("surface_kind"))
-    surface_key = _normalize_optional_text(value.get("surface_key"))
-    if surface_kind not in {"discord", "telegram"} or surface_key is None:
-        return None
-    return surface_kind, surface_key
 
 
 def _notification_context_payload(
@@ -712,7 +702,7 @@ async def deliver_pma_notification(
     )
     if normalized_delivery == "none":
         return {"route": "none", "targets": 0, "published": 0}
-    normalized_target = _normalize_delivery_target(delivery_target)
+    normalized_target = _normalize_pma_delivery_target(delivery_target)
     if normalized_target is not None:
         surface_kind, surface_key = normalized_target
         if _delivery_target_matches_active_thread_binding(

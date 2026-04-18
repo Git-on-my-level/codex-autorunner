@@ -34,7 +34,7 @@ from .pma_automation_types import (
     default_pma_automation_state,
 )
 from .pma_thread_store import PmaThreadStore
-from .text_utils import lock_path_for
+from .text_utils import _normalize_pma_delivery_target, lock_path_for
 
 logger = logging.getLogger(__name__)
 
@@ -46,12 +46,10 @@ class PmaAutomationThreadNotFoundError(ValueError):
 
 
 def _normalize_delivery_target(value: Any) -> Optional[dict[str, str]]:
-    if not isinstance(value, dict):
+    normalized = _normalize_pma_delivery_target(value)
+    if normalized is None:
         return None
-    surface_kind = _normalize_text(value.get("surface_kind"))
-    surface_key = _normalize_text(value.get("surface_key"))
-    if surface_kind not in {"discord", "telegram"} or surface_key is None:
-        return None
+    surface_kind, surface_key = normalized
     return {
         "surface_kind": surface_kind,
         "surface_key": surface_key,
