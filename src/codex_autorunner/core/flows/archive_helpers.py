@@ -27,6 +27,7 @@ Canonical vs compatibility
 from __future__ import annotations
 
 import logging
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Optional
@@ -94,16 +95,29 @@ def _checkpoint_and_vacuum_flow_db(
     *,
     store: FlowStore,
     db_path: Path,
+    repo_root: Path,
     vacuum: bool,
 ) -> None:
+    """Best-effort WAL truncate and optional VACUUM after bulk deletes.
+
+    Deletes are already committed; if another writer holds ``flows.db``, these
+    operations may fail with ``SQLITE_BUSY``. That should not fail the archive
+    command after the destructive work is done.
+    """
     store.close()
-    conn = connect_sqlite(db_path)
     try:
-        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        if vacuum:
-            conn.execute("VACUUM")
-    finally:
-        conn.close()
+        conn = connect_sqlite(db_path, durable=_get_durable_writes(repo_root.resolve()))
+        try:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            if vacuum:
+                conn.execute("VACUUM")
+        finally:
+            conn.close()
+    except sqlite3.OperationalError as exc:
+        logger.warning(
+            "flows.db checkpoint/vacuum skipped after archive (database may be busy): %s",
+            exc,
+        )
 
 
 def build_flow_archive_entries(
@@ -459,6 +473,7 @@ def archive_terminal_flow_runs(
         _checkpoint_and_vacuum_flow_db(
             store=store,
             db_path=repo_root / ".codex-autorunner" / "flows.db",
+            repo_root=repo_root,
             vacuum=vacuum,
         )
     return {
@@ -598,6 +613,7 @@ def archive_flow_run_artifacts(
                 _checkpoint_and_vacuum_flow_db(
                     store=store,
                     db_path=db_path,
+                    repo_root=repo_root,
                     vacuum=vacuum,
                 )
 

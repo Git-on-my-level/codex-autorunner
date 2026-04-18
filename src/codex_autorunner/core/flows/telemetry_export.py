@@ -305,7 +305,11 @@ def export_all_runs(
     dry_run: bool = False,
     run_ids: Optional[Sequence[str]] = None,
 ) -> ExportResult:
-    """Export wire telemetry for all terminal runs (or specific runs if provided)."""
+    """Export wire telemetry for terminal runs (or specific runs if provided).
+
+    When listing all runs (no ``run_ids``), paused runs are skipped so periodic
+    export sweeps do not repeatedly archive in-progress paused work.
+    """
     result = ExportResult()
 
     if run_ids:
@@ -320,6 +324,16 @@ def export_all_runs(
         records = store.list_flow_runs()
 
     for record in records:
+        if run_ids is None and record.status.is_paused():
+            result.records.append(
+                ExportRecord(
+                    run_id=record.id,
+                    run_status=record.status.value,
+                    skipped=True,
+                    skip_reason="run is paused",
+                )
+            )
+            continue
         try:
             export_rec = export_run(repo_root, store, record, dry_run=dry_run)
         except Exception as exc:

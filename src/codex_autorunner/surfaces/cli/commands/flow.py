@@ -1088,14 +1088,19 @@ def register_flow_commands(
             False, "--dry-run", help="Preview what would be exported/pruned"
         ),
         run_id: Optional[str] = typer.Option(
-            None, "--run-id", help="Export a specific run (default: all terminal runs)"
+            None,
+            "--run-id",
+            help="Export a specific run (default: all non-active runs except paused)",
         ),
         output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     ):
-        """Export wire telemetry from flow_events for terminal runs.
+        """Export wire telemetry from flow_events.
 
         Writes per-run JSONL.GZ archives under .codex-autorunner/flows/{run_id}/
-        and prunes redundant rows from the database. Use --dry-run to preview.
+        and prunes redundant rows from the database for eligible runs.
+        Paused runs are omitted when exporting all runs; pass --run-id for a paused run.
+
+        Use --dry-run to preview.
         """
         engine = require_repo_config(repo, hub)
         db_path = engine.repo_root / ".codex-autorunner" / "flows.db"

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner
@@ -530,8 +529,10 @@ def test_ticket_flow_archive_vacuums_after_delete(
     statements: list[str] = []
     monkeypatch.setattr(
         archive_helpers_module,
-        "sqlite3",
-        SimpleNamespace(connect=lambda _path: _RecordingSqliteConnection(statements)),
+        "connect_sqlite",
+        lambda path, durable=False, busy_timeout_ms=None: _RecordingSqliteConnection(
+            statements
+        ),
     )
 
     payload = archive_flow_run_artifacts(
@@ -557,14 +558,14 @@ def test_ticket_flow_archive_skips_vacuum_when_no_rows_deleted(
 
     connect_calls: list[str] = []
     monkeypatch.setattr(FlowStore, "delete_flow_run", lambda self, rid: False)
-    monkeypatch.setattr(
-        archive_helpers_module,
-        "sqlite3",
-        SimpleNamespace(
-            connect=lambda path: connect_calls.append(path)
-            or _RecordingSqliteConnection([])
-        ),
-    )
+
+    def _fake_connect(
+        path: Path, durable: bool = False, busy_timeout_ms: int | None = None
+    ) -> _RecordingSqliteConnection:
+        connect_calls.append(str(path))
+        return _RecordingSqliteConnection([])
+
+    monkeypatch.setattr(archive_helpers_module, "connect_sqlite", _fake_connect)
 
     payload = archive_flow_run_artifacts(
         repo_root,
@@ -590,8 +591,10 @@ def test_ticket_flow_archive_no_vacuum_still_checkpoints(
     statements: list[str] = []
     monkeypatch.setattr(
         archive_helpers_module,
-        "sqlite3",
-        SimpleNamespace(connect=lambda _path: _RecordingSqliteConnection(statements)),
+        "connect_sqlite",
+        lambda path, durable=False, busy_timeout_ms=None: _RecordingSqliteConnection(
+            statements
+        ),
     )
 
     result = runner.invoke(
