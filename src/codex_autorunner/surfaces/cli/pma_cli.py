@@ -41,6 +41,9 @@ from .pma_control_plane import (
     CAPABILITY_REQUIREMENTS as _CAPABILITY_REQUIREMENTS,
 )
 from .pma_control_plane import (
+    MANAGED_THREAD_SEND_REQUEST_TIMEOUT_SECONDS as _MANAGED_THREAD_SEND_REQUEST_TIMEOUT_SECONDS,
+)
+from .pma_control_plane import (
     ManagedThreadSendRequest as _ManagedThreadSendRequest,
 )
 from .pma_control_plane import (
@@ -48,9 +51,6 @@ from .pma_control_plane import (
 )
 from .pma_control_plane import (
     ManagedThreadSendTimeoutProbe as _ManagedThreadSendTimeoutProbe,
-)
-from .pma_control_plane import (
-    MANAGED_THREAD_SEND_REQUEST_TIMEOUT_SECONDS as _MANAGED_THREAD_SEND_REQUEST_TIMEOUT_SECONDS,
 )
 from .pma_control_plane import (
     auth_headers_from_env as _auth_headers_from_env,

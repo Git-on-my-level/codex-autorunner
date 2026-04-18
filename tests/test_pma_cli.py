@@ -1493,9 +1493,9 @@ def test_pma_cli_thread_send_recovers_queued_timeout_from_status_probe(
     )
     monkeypatch.setattr(pma_cli, "_request_json", _fake_request_json)
     monkeypatch.setattr(pma_control_plane, "request_json", _fake_request_json)
-    monotonic_values = iter([100.0, 103.0])
+    monotonic_seq = itertools.count(100.0, 1.0)
     monkeypatch.setattr(
-        pma_control_plane.time, "monotonic", lambda: next(monotonic_values, 103.0)
+        pma_control_plane.time, "monotonic", lambda: next(monotonic_seq)
     )
     monkeypatch.setattr(pma_control_plane.time, "sleep", lambda seconds: None)
 
@@ -1697,9 +1697,9 @@ def test_pma_cli_thread_send_timeout_recovery_keeps_queued_turn_rows_aligned(
     )
     monkeypatch.setattr(pma_cli, "_request_json", _fake_request_json)
     monkeypatch.setattr(pma_control_plane, "request_json", _fake_request_json)
-    monotonic_values = iter([100.0, 103.0])
+    monotonic_seq = itertools.count(100.0, 1.0)
     monkeypatch.setattr(
-        pma_control_plane.time, "monotonic", lambda: next(monotonic_values, 103.0)
+        pma_control_plane.time, "monotonic", lambda: next(monotonic_seq)
     )
     monkeypatch.setattr(pma_control_plane.time, "sleep", lambda seconds: None)
 
@@ -1894,7 +1894,7 @@ def test_pma_cli_thread_send_retries_timeout_recovery_until_status_catches_up(
         _ = method, url, payload, token_env, params
         return next(status_payloads)
 
-    monotonic_values = iter([100.0, 100.0, 100.1])
+    monotonic_seq = itertools.count(100.0, 1.0)
     sleep_calls: list[float] = []
 
     monkeypatch.setattr(
@@ -1903,7 +1903,7 @@ def test_pma_cli_thread_send_retries_timeout_recovery_until_status_catches_up(
     monkeypatch.setattr(pma_cli, "_request_json", _fake_request_json)
     monkeypatch.setattr(pma_control_plane, "request_json", _fake_request_json)
     monkeypatch.setattr(
-        pma_control_plane.time, "monotonic", lambda: next(monotonic_values, 101.0)
+        pma_control_plane.time, "monotonic", lambda: next(monotonic_seq)
     )
     monkeypatch.setattr(
         pma_control_plane.time, "sleep", lambda seconds: sleep_calls.append(seconds)
@@ -1959,10 +1959,10 @@ def test_pma_cli_thread_send_timeout_warns_before_retry_when_status_unclear(
         _ = method, url, payload, token_env, timeout
         raise httpx.TimeoutException("timed out")
 
-    # Cycle status payloads: recovery polls until the deadline; Typer/Click may
-    # call time.monotonic() extra times on some Python versions, so a fixed
-    # two-value iterator for monotonic can shift the deadline and exhaust a
-    # finite status iterator (StopIteration).
+    # Cycle status payloads: recovery polls until the deadline. Typer/Click may
+    # call time.monotonic() before recovery runs; a short finite iterator can
+    # leave recovery stuck never reaching the deadline (infinite loop → CI
+    # timeout). Use an inexhaustible sequence with a fixed step.
     status_payloads = itertools.cycle(
         [
             {
@@ -2001,19 +2001,11 @@ def test_pma_cli_thread_send_timeout_warns_before_retry_when_status_unclear(
     )
     monkeypatch.setattr(pma_cli, "_request_json", _fake_request_json)
     monkeypatch.setattr(pma_control_plane, "request_json", _fake_request_json)
-    # Recovery polls until MANAGED_THREAD_SEND_TIMEOUT_RECOVERY_WINDOW_SECONDS elapses;
-    # advance monotonic across that window so the handler finishes without looping forever.
-    monotonic_values = iter(
-        [
-            100.0,
-            103.0,
-            100.0 + pma_control_plane.MANAGED_THREAD_SEND_TIMEOUT_RECOVERY_WINDOW_SECONDS,
-        ]
-    )
+    # Recovery polls until the recovery window elapses; use a count so Typer/Click
+    # monotonic() calls cannot pin time before the deadline (infinite poll loop).
+    monotonic_seq = itertools.count(100.0, 1.0)
     monkeypatch.setattr(
-        pma_control_plane.time,
-        "monotonic",
-        lambda: next(monotonic_values, 200.0),
+        pma_control_plane.time, "monotonic", lambda: next(monotonic_seq)
     )
     monkeypatch.setattr(pma_control_plane.time, "sleep", lambda seconds: None)
 

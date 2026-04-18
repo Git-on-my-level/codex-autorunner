@@ -11,6 +11,22 @@ from ._normalizers import (
     normalize_required_text,
 )
 
+THREAD_TARGET_LIST_LIFECYCLE_STATUSES = frozenset({"active", "archived"})
+
+
+def resolve_thread_target_list_status_fields(
+    *,
+    status: Optional[str],
+    lifecycle_status: Optional[str],
+    runtime_status: Optional[str],
+) -> tuple[Optional[str], Optional[str]]:
+    """Map legacy combined ``status`` into lifecycle vs runtime filters."""
+    if status and lifecycle_status is None and runtime_status is None:
+        if status in THREAD_TARGET_LIST_LIFECYCLE_STATUSES:
+            return status, None
+        return None, status
+    return lifecycle_status, runtime_status
+
 
 @dataclass(frozen=True)
 class ThreadTargetLookupRequest:
@@ -32,6 +48,7 @@ class ThreadTargetLookupRequest:
 @dataclass(frozen=True)
 class ThreadTargetListRequest:
     agent_id: Optional[str] = None
+    status: Optional[str] = None
     lifecycle_status: Optional[str] = None
     runtime_status: Optional[str] = None
     repo_id: Optional[str] = None
@@ -41,10 +58,19 @@ class ThreadTargetListRequest:
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any]) -> "ThreadTargetListRequest":
+        status = normalize_optional_text(data.get("status"))
+        lifecycle_status = normalize_optional_text(data.get("lifecycle_status"))
+        runtime_status = normalize_optional_text(data.get("runtime_status"))
+        lifecycle_status, runtime_status = resolve_thread_target_list_status_fields(
+            status=status,
+            lifecycle_status=lifecycle_status,
+            runtime_status=runtime_status,
+        )
         return cls(
             agent_id=normalize_optional_text(data.get("agent_id")),
-            lifecycle_status=normalize_optional_text(data.get("lifecycle_status")),
-            runtime_status=normalize_optional_text(data.get("runtime_status")),
+            status=status,
+            lifecycle_status=lifecycle_status,
+            runtime_status=runtime_status,
             repo_id=normalize_optional_text(data.get("repo_id")),
             resource_kind=normalize_optional_text(data.get("resource_kind")),
             resource_id=normalize_optional_text(data.get("resource_id")),
@@ -54,6 +80,7 @@ class ThreadTargetListRequest:
     def to_dict(self) -> dict[str, Any]:
         return {
             "agent_id": self.agent_id,
+            "status": self.status,
             "lifecycle_status": self.lifecycle_status,
             "runtime_status": self.runtime_status,
             "repo_id": self.repo_id,
@@ -267,6 +294,7 @@ class ThreadTargetListResponse:
 
 
 __all__ = [
+    "THREAD_TARGET_LIST_LIFECYCLE_STATUSES",
     "ThreadActivityRecordRequest",
     "ThreadBackendIdUpdateRequest",
     "ThreadCompactSeedUpdateRequest",
@@ -277,4 +305,5 @@ __all__ = [
     "ThreadTargetLookupRequest",
     "ThreadTargetResponse",
     "ThreadTargetResumeRequest",
+    "resolve_thread_target_list_status_fields",
 ]

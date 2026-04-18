@@ -198,50 +198,73 @@ def _build_snapshot_freshness_summary(
     pma_threads: list[dict[str, Any]],
     pma_files_detail: Mapping[str, list[dict[str, Any]]],
 ) -> dict[str, Any]:
+    sections = {
+        "repos": summarize_section_freshness(
+            repos,
+            generated_at=generated_at,
+            stale_threshold_seconds=stale_threshold_seconds,
+            extractor=_extract_entry_freshness,
+        ),
+        "agent_workspaces": summarize_section_freshness(
+            agent_workspaces,
+            generated_at=generated_at,
+            stale_threshold_seconds=stale_threshold_seconds,
+        ),
+        "inbox": summarize_section_freshness(
+            inbox,
+            generated_at=generated_at,
+            stale_threshold_seconds=stale_threshold_seconds,
+            extractor=_extract_entry_freshness,
+        ),
+        "action_queue": summarize_section_freshness(
+            action_queue,
+            generated_at=generated_at,
+            stale_threshold_seconds=stale_threshold_seconds,
+            extractor=_extract_entry_freshness,
+        ),
+        "pma_threads": summarize_section_freshness(
+            pma_threads,
+            generated_at=generated_at,
+            stale_threshold_seconds=stale_threshold_seconds,
+        ),
+        "pma_file_inbox": summarize_section_freshness(
+            pma_files_detail.get("inbox") or [],
+            generated_at=generated_at,
+            stale_threshold_seconds=stale_threshold_seconds,
+        ),
+        "pma_file_outbox": summarize_section_freshness(
+            pma_files_detail.get("outbox") or [],
+            generated_at=generated_at,
+            stale_threshold_seconds=stale_threshold_seconds,
+        ),
+    }
+    included_sections = {
+        section_name: payload
+        for section_name, payload in sections.items()
+        if int(payload.get("entity_count") or 0) > 0
+        or int(payload.get("stale_count") or 0) > 0
+        or int(payload.get("unknown_count") or 0) > 0
+    }
+    stale_sections = [
+        section_name
+        for section_name, payload in included_sections.items()
+        if int(payload.get("entity_count") or 0) > 0
+        and int(payload.get("stale_count") or 0) > 0
+    ]
+    stale_summary = None
+    if stale_sections:
+        section_label = "section" if len(stale_sections) == 1 else "sections"
+        stale_summary = (
+            f"{len(stale_sections)} {section_label} stale "
+            f"({', '.join(stale_sections)})"
+        )
     return {
         "schema_version": 1,
         "generated_at": generated_at,
         "stale_threshold_seconds": stale_threshold_seconds,
-        "sections": {
-            "repos": summarize_section_freshness(
-                repos,
-                generated_at=generated_at,
-                stale_threshold_seconds=stale_threshold_seconds,
-                extractor=_extract_entry_freshness,
-            ),
-            "agent_workspaces": summarize_section_freshness(
-                agent_workspaces,
-                generated_at=generated_at,
-                stale_threshold_seconds=stale_threshold_seconds,
-            ),
-            "inbox": summarize_section_freshness(
-                inbox,
-                generated_at=generated_at,
-                stale_threshold_seconds=stale_threshold_seconds,
-                extractor=_extract_entry_freshness,
-            ),
-            "action_queue": summarize_section_freshness(
-                action_queue,
-                generated_at=generated_at,
-                stale_threshold_seconds=stale_threshold_seconds,
-                extractor=_extract_entry_freshness,
-            ),
-            "pma_threads": summarize_section_freshness(
-                pma_threads,
-                generated_at=generated_at,
-                stale_threshold_seconds=stale_threshold_seconds,
-            ),
-            "pma_file_inbox": summarize_section_freshness(
-                pma_files_detail.get("inbox") or [],
-                generated_at=generated_at,
-                stale_threshold_seconds=stale_threshold_seconds,
-            ),
-            "pma_file_outbox": summarize_section_freshness(
-                pma_files_detail.get("outbox") or [],
-                generated_at=generated_at,
-                stale_threshold_seconds=stale_threshold_seconds,
-            ),
-        },
+        "sections": included_sections,
+        "stale_sections": stale_sections,
+        "stale_summary": stale_summary,
     }
 
 

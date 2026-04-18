@@ -84,11 +84,21 @@ need_cmd make
 if [[ -z "$LANE" ]]; then
   STAGED_FILES="$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null || true)"
   if [[ -n "$STAGED_FILES" ]]; then
-    LANE="$(echo "$STAGED_FILES" | "$PYTHON_BIN" scripts/select_validation_lane.py --format json | "$PYTHON_BIN" -c 'import json,sys; print(json.load(sys.stdin)["lane"])')"
+    SELECTION_TEXT="$(printf '%s\n' "$STAGED_FILES" | "$PYTHON_BIN" scripts/select_validation_lane.py)"
+    LANE="$(
+      printf '%s\n' "$STAGED_FILES" \
+        | "$PYTHON_BIN" scripts/select_validation_lane.py --format json \
+        | "$PYTHON_BIN" -c 'import json,sys; print(json.load(sys.stdin)["lane"])'
+    )"
   else
     LANE="aggregate"
   fi
-  echo "Detected validation lane: $LANE"
+  if [[ -n "${SELECTION_TEXT:-}" ]]; then
+    echo "Detected validation lane:"
+    echo "$SELECTION_TEXT"
+  else
+    echo "Detected validation lane: $LANE"
+  fi
 fi
 
 echo "Validation lane: $LANE"

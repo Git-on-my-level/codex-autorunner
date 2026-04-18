@@ -66,8 +66,11 @@ _LANE_GLOBS: dict[ScopedValidationLane, tuple[str, ...]] = {
         "tests/test_app_server*.py",
         "tests/test_auth_middleware.py",
         "tests/test_base_path*.py",
+        "tests/test_browser_docs.py",
         "tests/test_hub_ui*.py",
         "tests/test_static*.py",
+        "tests/test_ticket_flow_ui*.py",
+        "tests/test_voice_ui.py",
     ),
     "chat-apps": (
         "tests/test_chat*.py",
@@ -85,6 +88,7 @@ class ValidationLaneSelection:
     reason: str
     normalized_paths: tuple[str, ...]
     lanes_touched: tuple[ScopedValidationLane, ...]
+    lane_paths: tuple[tuple[ScopedValidationLane, tuple[str, ...]], ...]
     shared_risk_paths: tuple[str, ...]
     unknown_paths: tuple[str, ...]
 
@@ -110,6 +114,7 @@ def classify_changed_files(paths: Iterable[str]) -> ValidationLaneSelection:
             reason="empty-change-set",
             normalized_paths=(),
             lanes_touched=(),
+            lane_paths=(),
             shared_risk_paths=(),
             unknown_paths=(),
         )
@@ -117,17 +122,31 @@ def classify_changed_files(paths: Iterable[str]) -> ValidationLaneSelection:
     shared_risk_paths: list[str] = []
     unknown_paths: list[str] = []
     touched_lanes: set[ScopedValidationLane] = set()
+    lane_paths: dict[ScopedValidationLane, list[str]] = {
+        lane: [] for lane in _SCOPED_LANES
+    }
 
     for path in normalized_paths:
         if _is_shared_risk_path(path):
             shared_risk_paths.append(path)
             continue
 
-        scoped_lane = _classify_scoped_lane(path)
-        if scoped_lane is None:
+        scoped_lanes = _matching_scoped_lanes(path)
+        if len(scoped_lanes) == 1:
+            scoped_lane = scoped_lanes[0]
+            touched_lanes.add(scoped_lane)
+            lane_paths[scoped_lane].append(path)
+            continue
+
+        if not scoped_lanes and fnmatch(path, "tests/test_*.py"):
+            touched_lanes.add("core")
+            lane_paths["core"].append(path)
+            continue
+
+        if not scoped_lanes:
             unknown_paths.append(path)
             continue
-        touched_lanes.add(scoped_lane)
+        unknown_paths.append(path)
 
     lanes_touched = tuple(lane for lane in _SCOPED_LANES if lane in touched_lanes)
     if shared_risk_paths:
@@ -151,6 +170,11 @@ def classify_changed_files(paths: Iterable[str]) -> ValidationLaneSelection:
         reason=reason,
         normalized_paths=normalized_paths,
         lanes_touched=lanes_touched,
+        lane_paths=tuple(
+            (lane, tuple(paths))
+            for lane, paths in ((lane, lane_paths[lane]) for lane in _SCOPED_LANES)
+            if paths
+        ),
         shared_risk_paths=tuple(shared_risk_paths),
         unknown_paths=tuple(unknown_paths),
     )
@@ -162,6 +186,7 @@ def lane_selection_to_payload(selection: ValidationLaneSelection) -> dict[str, o
         "reason": selection.reason,
         "paths": list(selection.normalized_paths),
         "lanes_touched": list(selection.lanes_touched),
+        "lane_paths": {lane: list(paths) for lane, paths in selection.lane_paths},
         "shared_risk_paths": list(selection.shared_risk_paths),
         "unknown_paths": list(selection.unknown_paths),
     }
@@ -175,6 +200,8 @@ def render_lane_selection(selection: ValidationLaneSelection) -> str:
     ]
     if selection.lanes_touched:
         lines.append(f"lanes_touched: {', '.join(selection.lanes_touched)}")
+    for lane, paths in selection.lane_paths:
+        lines.append(f"{lane}_paths: {', '.join(paths)}")
     if selection.shared_risk_paths:
         lines.append(f"shared_risk_paths: {', '.join(selection.shared_risk_paths)}")
     if selection.unknown_paths:
@@ -188,7 +215,7 @@ def _is_shared_risk_path(path: str) -> bool:
     return any(_matches_prefix(path, prefix) for prefix in _SHARED_RISK_PREFIXES)
 
 
-def _classify_scoped_lane(path: str) -> ScopedValidationLane | None:
+def _matching_scoped_lanes(path: str) -> tuple[ScopedValidationLane, ...]:
     matches: list[ScopedValidationLane] = []
     for lane in _SCOPED_LANES:
         prefixes = _LANE_PREFIXES.get(lane, ())
@@ -197,11 +224,7 @@ def _classify_scoped_lane(path: str) -> ScopedValidationLane | None:
             fnmatch(path, pattern) for pattern in globs
         ):
             matches.append(lane)
-    if len(matches) == 1:
-        return matches[0]
-    if not matches and fnmatch(path, "tests/test_*.py"):
-        return "core"
-    return None
+    return tuple(matches)
 
 
 def _matches_prefix(path: str, prefix: str) -> bool:
