@@ -150,3 +150,24 @@ def test_runtime_turn_terminal_state_machine_ignores_commentary_stream_for_fallb
     )
 
     assert state.last_assistant_text == ""
+
+
+def test_runtime_turn_terminal_state_machine_ignores_prompt_output_commentary_for_fallback() -> (
+    None
+):
+    state = RuntimeTurnTerminalStateMachine(
+        backend_thread_id="thread-1",
+        backend_turn_id="turn-1",
+    )
+
+    state.note_raw_event(
+        {
+            "method": "prompt/output",
+            "params": {
+                "phase": "commentary",
+                "delta": "draft plan",
+            },
+        }
+    )
+
+    assert state.last_assistant_text == ""

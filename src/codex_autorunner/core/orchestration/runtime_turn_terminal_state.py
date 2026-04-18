@@ -6,6 +6,7 @@ from typing import Any, Literal, Optional
 
 from ..acp_lifecycle import (
     analyze_acp_lifecycle_message,
+    extract_message_phase,
 )
 from ..acp_lifecycle import (
     extract_error_message as _extract_error_message,
@@ -506,7 +507,7 @@ def _inspect_raw_event(
             }
             or "outputdelta" in method_lower
         )
-        and lifecycle.message_phase != "commentary"
+        and extract_message_phase(params) != "commentary"
     ):
         assistant_stream_text = _extract_output_delta(params)
     if assistant_stream_text is None and method == "session/update":
