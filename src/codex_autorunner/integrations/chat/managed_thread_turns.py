@@ -20,7 +20,6 @@ from ...core.hub_control_plane import (
     TranscriptWriteRequest,
     serialize_run_event,
 )
-from ...core.hub_control_plane.errors import HubControlPlaneError
 from ...core.logging_utils import log_event
 from ...core.orchestration.managed_thread_delivery import (
     ManagedThreadDeliveryAttachment,
@@ -803,46 +802,104 @@ async def handoff_managed_thread_final_delivery(
             claim=claim,
         )
     except asyncio.CancelledError:
-        delivery.engine.record_attempt_result(
-            record.delivery_id,
-            claim_token=claim.claim_token,
-            result=ManagedThreadDeliveryAttemptResult(
-                outcome=ManagedThreadDeliveryOutcome.RETRY,
-                error="delivery_cancelled_after_finalization",
-            ),
+        attempt_result = ManagedThreadDeliveryAttemptResult(
+            outcome=ManagedThreadDeliveryOutcome.RETRY,
+            error="delivery_cancelled_after_finalization",
         )
-        logger.warning(
-            "Managed-thread durable delivery cancelled after finalization "
-            "(thread=%s turn=%s delivery_id=%s adapter=%s)",
-            record.managed_thread_id,
-            record.managed_turn_id,
-            record.delivery_id,
-            delivery.adapter.adapter_key,
+        try:
+            delivery.engine.record_attempt_result(
+                record.delivery_id,
+                claim_token=claim.claim_token,
+                result=attempt_result,
+            )
+        except Exception as bookkeeping_exc:
+            log_event(
+                logger,
+                logging.ERROR,
+                "chat.managed_thread.delivery_bookkeeping_failed",
+                **_managed_thread_delivery_trace_fields(
+                    record,
+                    claim_token=claim.claim_token,
+                    adapter_key=delivery.adapter.adapter_key,
+                ),
+                outcome=attempt_result.outcome.value,
+                attempted_error=attempt_result.error,
+                exc=bookkeeping_exc,
+            )
+        log_event(
+            logger,
+            logging.WARNING,
+            "chat.managed_thread.delivery_cancelled_after_finalization",
+            **_managed_thread_delivery_trace_fields(
+                record,
+                claim_token=claim.claim_token,
+                adapter_key=delivery.adapter.adapter_key,
+            ),
+            outcome=attempt_result.outcome.value,
+            attempted_error=attempt_result.error,
         )
         raise
     except Exception as exc:
+        attempt_result = ManagedThreadDeliveryAttemptResult(
+            outcome=ManagedThreadDeliveryOutcome.FAILED,
+            error=str(exc) or exc.__class__.__name__,
+        )
+        updated: Optional[ManagedThreadDeliveryRecord] = None
+        try:
+            updated = delivery.engine.record_attempt_result(
+                record.delivery_id,
+                claim_token=claim.claim_token,
+                result=attempt_result,
+            )
+        except Exception as bookkeeping_exc:
+            log_event(
+                logger,
+                logging.ERROR,
+                "chat.managed_thread.delivery_bookkeeping_failed",
+                **_managed_thread_delivery_trace_fields(
+                    record,
+                    claim_token=claim.claim_token,
+                    adapter_key=delivery.adapter.adapter_key,
+                ),
+                outcome=attempt_result.outcome.value,
+                attempted_error=attempt_result.error,
+                exc=bookkeeping_exc,
+            )
+        log_event(
+            logger,
+            logging.ERROR,
+            "chat.managed_thread.delivery_failed_after_intent_registration",
+            **_managed_thread_delivery_trace_fields(
+                record,
+                claim_token=claim.claim_token,
+                adapter_key=delivery.adapter.adapter_key,
+            ),
+            outcome=attempt_result.outcome.value,
+            attempted_error=attempt_result.error,
+            exc=exc,
+        )
+        return updated or record
+    try:
         updated = delivery.engine.record_attempt_result(
             record.delivery_id,
             claim_token=claim.claim_token,
-            result=ManagedThreadDeliveryAttemptResult(
-                outcome=ManagedThreadDeliveryOutcome.FAILED,
-                error=str(exc) or exc.__class__.__name__,
+            result=result,
+        )
+    except Exception as bookkeeping_exc:
+        log_event(
+            logger,
+            logging.ERROR,
+            "chat.managed_thread.delivery_bookkeeping_failed",
+            **_managed_thread_delivery_trace_fields(
+                record,
+                claim_token=claim.claim_token,
+                adapter_key=delivery.adapter.adapter_key,
             ),
+            outcome=result.outcome.value,
+            attempted_error=result.error,
+            exc=bookkeeping_exc,
         )
-        logger.exception(
-            "Managed-thread durable delivery failed after intent registration "
-            "(thread=%s turn=%s delivery_id=%s adapter=%s)",
-            record.managed_thread_id,
-            record.managed_turn_id,
-            record.delivery_id,
-            delivery.adapter.adapter_key,
-        )
-        return updated or record
-    updated = delivery.engine.record_attempt_result(
-        record.delivery_id,
-        claim_token=claim.claim_token,
-        result=result,
-    )
+        raise
     return updated or record
 
 
@@ -1297,8 +1354,23 @@ def ensure_managed_thread_queue_worker(
                 backend_turn_id=None,
                 transcript_turn_id=None,
             )
-        except KeyError:
-            pass
+        except asyncio.CancelledError:
+            log_event(
+                logger,
+                logging.WARNING,
+                "chat.managed_thread.queue_worker_failure_record_cancelled",
+                **_queue_worker_trace_fields(started_execution),
+                detail=detail,
+            )
+        except Exception as exc:
+            log_event(
+                logger,
+                logging.WARNING,
+                "chat.managed_thread.queue_worker_failure_record_failed",
+                **_queue_worker_trace_fields(started_execution),
+                detail=detail,
+                exc=exc,
+            )
         return _build_finalization_result(
             status="error",
             assistant_text="",
@@ -1332,20 +1404,25 @@ def ensure_managed_thread_queue_worker(
 
                 await run_with_indicator(_finalize_work)
         except BaseException as exc:
+            logged_exc = exc if isinstance(exc, Exception) else None
             if finalized is not None:
-                logger.exception(
-                    "Managed-thread queue worker indicator failed after execution finalized "
-                    "(thread=%s execution=%s)",
-                    started_execution.thread.thread_target_id,
-                    started_execution.execution.execution_id,
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    "chat.managed_thread.queue_worker_indicator_failed_post_finalization",
+                    **_queue_worker_trace_fields(started_execution),
+                    finalized_status=finalized.status,
+                    cancelled=isinstance(exc, asyncio.CancelledError),
+                    exc=logged_exc,
                 )
-                if isinstance(exc, asyncio.CancelledError):
-                    raise
             else:
-                logger.exception(
-                    "Managed-thread queued execution failed (thread=%s execution=%s)",
-                    started_execution.thread.thread_target_id,
-                    started_execution.execution.execution_id,
+                log_event(
+                    logger,
+                    logging.ERROR,
+                    "chat.managed_thread.queue_worker_execution_failed",
+                    **_queue_worker_trace_fields(started_execution),
+                    cancelled=isinstance(exc, asyncio.CancelledError),
+                    exc=logged_exc,
                 )
                 finalized = await _record_queue_worker_failure(
                     started_execution,
@@ -1360,18 +1437,14 @@ def ensure_managed_thread_queue_worker(
                         )
                     elif deliver_result is not None:
                         await deliver_result(finalized)
-                except (
-                    RuntimeError,
-                    OSError,
-                    ValueError,
-                    TypeError,
-                    ConnectionError,
-                ):
-                    logger.exception(
-                        "Managed-thread queued execution failure delivery failed "
-                        "(thread=%s execution=%s)",
-                        started_execution.thread.thread_target_id,
-                        started_execution.execution.execution_id,
+                except Exception as delivery_exc:
+                    log_event(
+                        logger,
+                        logging.ERROR,
+                        "chat.managed_thread.queue_worker_failure_delivery_failed",
+                        **_queue_worker_trace_fields(started_execution),
+                        finalized_status=finalized.status,
+                        exc=delivery_exc,
                     )
                 if isinstance(exc, asyncio.CancelledError):
                     raise
@@ -1388,18 +1461,14 @@ def ensure_managed_thread_queue_worker(
                 )
             elif deliver_result is not None:
                 await deliver_result(finalized)
-        except (
-            RuntimeError,
-            OSError,
-            ValueError,
-            TypeError,
-            ConnectionError,
-        ):
-            logger.exception(
-                "Managed-thread queued execution delivery failed "
-                "(thread=%s execution=%s)",
-                started_execution.thread.thread_target_id,
-                started_execution.execution.execution_id,
+        except Exception as delivery_exc:
+            log_event(
+                logger,
+                logging.ERROR,
+                "chat.managed_thread.queue_worker_delivery_failed",
+                **_queue_worker_trace_fields(started_execution),
+                finalized_status=finalized.status,
+                exc=delivery_exc,
             )
 
     async def _queue_worker() -> None:
@@ -1418,10 +1487,15 @@ def ensure_managed_thread_queue_worker(
                 if started is None:
                     break
                 await _process_started_execution(started)
-        except BaseException:
-            logger.exception(
-                "Managed-thread queue worker failed (thread=%s)",
-                managed_thread_id,
+        except BaseException as exc:
+            logged_exc = exc if isinstance(exc, Exception) else None
+            log_event(
+                logger,
+                logging.ERROR,
+                "chat.managed_thread.queue_worker_failed",
+                managed_thread_id=managed_thread_id,
+                cancelled=isinstance(exc, asyncio.CancelledError),
+                exc=logged_exc,
             )
             try:
                 running = orchestration_service.get_running_execution(managed_thread_id)
@@ -1435,18 +1509,20 @@ def ensure_managed_thread_queue_worker(
                         backend_turn_id=None,
                         transcript_turn_id=None,
                     )
-            except (
-                HubControlPlaneError,
-                RuntimeError,
-                OSError,
-                ValueError,
-                TypeError,
-                AttributeError,
-                KeyError,
-            ):
-                logger.exception(
-                    "Managed-thread queue worker cleanup failed (thread=%s)",
-                    managed_thread_id,
+            except asyncio.CancelledError:
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    "chat.managed_thread.queue_worker_cleanup_cancelled",
+                    managed_thread_id=managed_thread_id,
+                )
+            except Exception as cleanup_exc:
+                log_event(
+                    logger,
+                    logging.ERROR,
+                    "chat.managed_thread.queue_worker_cleanup_failed",
+                    managed_thread_id=managed_thread_id,
+                    exc=cleanup_exc,
                 )
             raise
         finally:
@@ -1561,6 +1637,47 @@ def _managed_thread_trace_fields(
     return fields
 
 
+def _managed_thread_delivery_trace_fields(
+    record: ManagedThreadDeliveryRecord,
+    *,
+    claim_token: Optional[str] = None,
+    adapter_key: Optional[str] = None,
+) -> dict[str, Any]:
+    record_state = getattr(record, "state", None)
+    if record_state is not None and hasattr(record_state, "value"):
+        delivery_state = record_state.value
+    else:
+        delivery_state = str(record_state or "").strip() or None
+    fields = {
+        "managed_thread_id": record.managed_thread_id,
+        "managed_turn_id": record.managed_turn_id,
+        "delivery_id": record.delivery_id,
+        "surface_kind": record.target.surface_kind,
+        "surface_key": record.target.surface_key,
+        "adapter_key": adapter_key or record.target.adapter_key,
+        "delivery_state": delivery_state,
+        "attempt_count": int(getattr(record, "attempt_count", 0) or 0),
+    }
+    if claim_token:
+        fields["claim_token"] = claim_token
+    fields.update(dict(record.target.metadata or {}))
+    return fields
+
+
+def _queue_worker_trace_fields(
+    started_execution: RuntimeThreadExecution,
+) -> dict[str, Any]:
+    return {
+        "managed_thread_id": started_execution.thread.thread_target_id,
+        "managed_turn_id": started_execution.execution.execution_id,
+        "backend_thread_id": getattr(
+            started_execution.thread,
+            "backend_thread_id",
+            None,
+        ),
+    }
+
+
 def _managed_thread_completion_source(
     outcome: RuntimeThreadOutcome,
     *,
@@ -1653,11 +1770,17 @@ async def finalize_managed_thread_execution(
             return
         if resolved_hub_client is None:
             live_timeline_error_logged = True
-            logger.error(
-                "%s Skipping live timeline persistence without a hub control-plane client (thread=%s turn=%s)",
-                surface.log_label,
-                managed_thread_id,
-                managed_turn_id,
+            log_event(
+                logger,
+                logging.ERROR,
+                "chat.managed_thread.live_timeline_client_missing",
+                **_managed_thread_trace_fields(
+                    managed_thread_id=managed_thread_id,
+                    managed_turn_id=managed_turn_id,
+                    backend_thread_id=current_backend_thread_id or None,
+                    backend_turn_id=started.execution.backend_id,
+                    surface=surface,
+                ),
             )
             return
         try:
@@ -1689,20 +1812,35 @@ async def finalize_managed_thread_execution(
             )
         except asyncio.CancelledError:
             live_timeline_error_logged = True
-            logger.warning(
-                "Live %s thread timeline persistence cancelled; continuing without live persistence (thread=%s turn=%s)",
-                surface.log_label,
-                managed_thread_id,
-                managed_turn_id,
-                exc_info=True,
+            log_event(
+                logger,
+                logging.WARNING,
+                "chat.managed_thread.live_timeline_persist_cancelled",
+                **_managed_thread_trace_fields(
+                    managed_thread_id=managed_thread_id,
+                    managed_turn_id=managed_turn_id,
+                    backend_thread_id=current_backend_thread_id or None,
+                    backend_turn_id=started.execution.backend_id,
+                    surface=surface,
+                ),
+                persisted_event_count=len(events),
+                start_index=live_timeline_count + 1,
             )
         except Exception:
             live_timeline_error_logged = True
-            logger.exception(
-                "Failed to persist live %s thread timeline via hub control plane (thread=%s turn=%s)",
-                surface.log_label,
-                managed_thread_id,
-                managed_turn_id,
+            log_event(
+                logger,
+                logging.ERROR,
+                "chat.managed_thread.live_timeline_persist_failed",
+                **_managed_thread_trace_fields(
+                    managed_thread_id=managed_thread_id,
+                    managed_turn_id=managed_turn_id,
+                    backend_thread_id=current_backend_thread_id or None,
+                    backend_turn_id=started.execution.backend_id,
+                    surface=surface,
+                ),
+                persisted_event_count=len(events),
+                start_index=live_timeline_count + 1,
             )
         else:
             live_timeline_count += len(events)
@@ -1800,11 +1938,17 @@ async def finalize_managed_thread_execution(
         events: list[Any],
     ) -> Optional[str]:
         if resolved_hub_client is None:
-            logger.error(
-                "%s Skipping final timeline persistence without a hub control-plane client (thread=%s turn=%s)",
-                surface.log_label,
-                managed_thread_id,
-                managed_turn_id,
+            log_event(
+                logger,
+                logging.ERROR,
+                "chat.managed_thread.final_timeline_client_missing",
+                **_managed_thread_trace_fields(
+                    managed_thread_id=managed_thread_id,
+                    managed_turn_id=managed_turn_id,
+                    backend_thread_id=current_backend_thread_id or None,
+                    backend_turn_id=started.execution.backend_id,
+                    surface=surface,
+                ),
             )
             return None
         manifest_id = str(metadata.get("trace_manifest_id") or "").strip() or None
@@ -1820,20 +1964,32 @@ async def finalize_managed_thread_execution(
                     ),
                 )
             except asyncio.CancelledError:
-                logger.warning(
-                    "%s Final cold trace persistence cancelled; continuing without a cold trace manifest (thread=%s turn=%s)",
-                    surface.log_label,
-                    managed_thread_id,
-                    managed_turn_id,
-                    exc_info=True,
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    "chat.managed_thread.final_cold_trace_cancelled",
+                    **_managed_thread_trace_fields(
+                        managed_thread_id=managed_thread_id,
+                        managed_turn_id=managed_turn_id,
+                        backend_thread_id=current_backend_thread_id or None,
+                        backend_turn_id=outcome.backend_turn_id
+                        or started.execution.backend_id,
+                        surface=surface,
+                    ),
                 )
             except Exception:
-                logger.warning(
-                    "%s Failed to persist final cold trace via hub control plane (thread=%s turn=%s)",
-                    surface.log_label,
-                    managed_thread_id,
-                    managed_turn_id,
-                    exc_info=True,
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    "chat.managed_thread.final_cold_trace_failed",
+                    **_managed_thread_trace_fields(
+                        managed_thread_id=managed_thread_id,
+                        managed_turn_id=managed_turn_id,
+                        backend_thread_id=current_backend_thread_id or None,
+                        backend_turn_id=outcome.backend_turn_id
+                        or started.execution.backend_id,
+                        surface=surface,
+                    ),
                 )
 
         try:
@@ -1859,19 +2015,36 @@ async def finalize_managed_thread_execution(
                 start_index=live_timeline_count + 1,
             )
         except asyncio.CancelledError:
-            logger.warning(
-                "Final %s thread timeline persistence cancelled; continuing finalization (thread=%s turn=%s)",
-                surface.log_label,
-                managed_thread_id,
-                managed_turn_id,
-                exc_info=True,
+            log_event(
+                logger,
+                logging.WARNING,
+                "chat.managed_thread.final_timeline_persist_cancelled",
+                **_managed_thread_trace_fields(
+                    managed_thread_id=managed_thread_id,
+                    managed_turn_id=managed_turn_id,
+                    backend_thread_id=current_backend_thread_id or None,
+                    backend_turn_id=outcome.backend_turn_id
+                    or started.execution.backend_id,
+                    surface=surface,
+                ),
+                persisted_event_count=len(events),
+                start_index=live_timeline_count + 1,
             )
         except Exception:
-            logger.exception(
-                "Failed to persist %s thread timeline via hub control plane (thread=%s turn=%s)",
-                surface.log_label,
-                managed_thread_id,
-                managed_turn_id,
+            log_event(
+                logger,
+                logging.ERROR,
+                "chat.managed_thread.final_timeline_persist_failed",
+                **_managed_thread_trace_fields(
+                    managed_thread_id=managed_thread_id,
+                    managed_turn_id=managed_turn_id,
+                    backend_thread_id=current_backend_thread_id or None,
+                    backend_turn_id=outcome.backend_turn_id
+                    or started.execution.backend_id,
+                    surface=surface,
+                ),
+                persisted_event_count=len(events),
+                start_index=live_timeline_count + 1,
             )
         return manifest_id
 
@@ -1986,11 +2159,22 @@ async def finalize_managed_thread_execution(
                                 exc_info=True,
                             )
                             continue
-            except Exception:
-                logger.warning(
-                    "%s progress event pump failed",
-                    surface.log_label,
-                    exc_info=True,
+            except Exception as exc:
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    "chat.managed_thread.progress_pump_failed",
+                    **_managed_thread_trace_fields(
+                        managed_thread_id=managed_thread_id,
+                        managed_turn_id=managed_turn_id,
+                        backend_thread_id=stream_backend_thread_id or None,
+                        backend_turn_id=stream_backend_turn_id or None,
+                        surface=surface,
+                    ),
+                    raw_events_received=raw_events_received,
+                    run_events_dispatched=run_events_dispatched,
+                    **_managed_thread_runtime_trace_fields(event_state),
+                    exc=exc,
                 )
             finally:
                 logger.info(
@@ -2047,6 +2231,22 @@ async def finalize_managed_thread_execution(
                 terminal_state=terminal_state,
                 observe_progress_events=False,
             )
+    except asyncio.CancelledError:
+        log_event(
+            logger,
+            logging.WARNING,
+            "chat.managed_thread.turn_finalize_cancelled",
+            **_managed_thread_trace_fields(
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=managed_turn_id,
+                backend_thread_id=current_backend_thread_id or None,
+                backend_turn_id=started.execution.backend_id,
+                surface=surface,
+            ),
+            phase="await_runtime_thread_outcome",
+            **_managed_thread_runtime_trace_fields(event_state),
+        )
+        raise
     except (
         RuntimeError,
         OSError,
@@ -2086,17 +2286,40 @@ async def finalize_managed_thread_execution(
                 with contextlib.suppress(asyncio.CancelledError):
                     await stream_task
                 if pump_completed_cancelled:
-                    logger.warning(
-                        "%s progress event pump cancelled during finalization; continuing with terminal-state recovery (thread=%s turn=%s)",
-                        surface.log_label,
-                        managed_thread_id,
-                        managed_turn_id,
-                        exc_info=True,
+                    log_event(
+                        logger,
+                        logging.WARNING,
+                        "chat.managed_thread.progress_pump_cancelled",
+                        **_managed_thread_trace_fields(
+                            managed_thread_id=managed_thread_id,
+                            managed_turn_id=managed_turn_id,
+                            backend_thread_id=stream_backend_thread_id or None,
+                            backend_turn_id=stream_backend_turn_id or None,
+                            surface=surface,
+                        ),
+                        **_managed_thread_runtime_trace_fields(event_state),
                     )
                 else:
                     raise exc
 
-    await _flush_live_timeline_buffer(force=True)
+    try:
+        await _flush_live_timeline_buffer(force=True)
+    except asyncio.CancelledError:
+        log_event(
+            logger,
+            logging.WARNING,
+            "chat.managed_thread.turn_finalize_cancelled",
+            **_managed_thread_trace_fields(
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=managed_turn_id,
+                backend_thread_id=current_backend_thread_id or None,
+                backend_turn_id=started.execution.backend_id,
+                surface=surface,
+            ),
+            phase="flush_live_timeline_buffer",
+            **_managed_thread_runtime_trace_fields(event_state),
+        )
+        raise
 
     recovered_outcome = recover_post_completion_outcome(outcome, event_state)
     recovered_after_completion = recovered_outcome is not outcome
@@ -2257,14 +2480,41 @@ async def finalize_managed_thread_execution(
                 metadata=transcript_metadata,
                 assistant_text=resolved_assistant_text,
             )
-        except (HubControlPlaneError, RuntimeError, OSError) as exc:
-            logger.warning(
-                "Failed to persist %s transcript (thread=%s turn=%s): %s",
-                surface.log_label,
-                managed_thread_id,
-                managed_turn_id,
-                exc,
+        except asyncio.CancelledError:
+            log_event(
+                logger,
+                logging.WARNING,
+                "chat.managed_thread.transcript_persist_cancelled",
+                **_managed_thread_trace_fields(
+                    managed_thread_id=managed_thread_id,
+                    managed_turn_id=managed_turn_id,
+                    backend_thread_id=resolved_backend_thread_id,
+                    backend_turn_id=outcome.backend_turn_id
+                    or started.execution.backend_id,
+                    surface=surface,
+                ),
+                assistant_chars=len(resolved_assistant_text),
+                **_managed_thread_runtime_trace_fields(event_state),
             )
+        except Exception as exc:
+            log_event(
+                logger,
+                logging.WARNING,
+                "chat.managed_thread.transcript_persist_failed",
+                **_managed_thread_trace_fields(
+                    managed_thread_id=managed_thread_id,
+                    managed_turn_id=managed_turn_id,
+                    backend_thread_id=resolved_backend_thread_id,
+                    backend_turn_id=outcome.backend_turn_id
+                    or started.execution.backend_id,
+                    surface=surface,
+                ),
+                assistant_chars=len(resolved_assistant_text),
+                **_managed_thread_runtime_trace_fields(event_state),
+                exc=exc,
+            )
+        finalized_execution: Any = None
+        execution_record_failed = False
         try:
             finalized_execution = orchestration_service.record_execution_result(
                 managed_thread_id,
@@ -2276,13 +2526,76 @@ async def finalize_managed_thread_execution(
                 transcript_turn_id=transcript_turn_id,
             )
         except KeyError:
-            finalized_execution = orchestration_service.get_execution(
-                managed_thread_id,
-                managed_turn_id,
+            get_execution = getattr(orchestration_service, "get_execution", None)
+            if callable(get_execution):
+                finalized_execution = get_execution(
+                    managed_thread_id,
+                    managed_turn_id,
+                )
+        except asyncio.CancelledError:
+            execution_record_failed = True
+            log_event(
+                logger,
+                logging.WARNING,
+                "chat.managed_thread.execution_result_record_cancelled",
+                **_managed_thread_trace_fields(
+                    managed_thread_id=managed_thread_id,
+                    managed_turn_id=managed_turn_id,
+                    backend_thread_id=resolved_backend_thread_id,
+                    backend_turn_id=outcome.backend_turn_id
+                    or started.execution.backend_id,
+                    surface=surface,
+                ),
+                status="ok",
+                transcript_turn_id=transcript_turn_id,
+                **_managed_thread_runtime_trace_fields(event_state),
             )
+        except Exception as exc:
+            execution_record_failed = True
+            log_event(
+                logger,
+                logging.ERROR,
+                "chat.managed_thread.execution_result_record_failed",
+                **_managed_thread_trace_fields(
+                    managed_thread_id=managed_thread_id,
+                    managed_turn_id=managed_turn_id,
+                    backend_thread_id=resolved_backend_thread_id,
+                    backend_turn_id=outcome.backend_turn_id
+                    or started.execution.backend_id,
+                    surface=surface,
+                ),
+                status="ok",
+                transcript_turn_id=transcript_turn_id,
+                **_managed_thread_runtime_trace_fields(event_state),
+                exc=exc,
+            )
+            get_execution = getattr(orchestration_service, "get_execution", None)
+            if callable(get_execution):
+                try:
+                    finalized_execution = get_execution(
+                        managed_thread_id,
+                        managed_turn_id,
+                    )
+                except Exception as get_exc:
+                    log_event(
+                        logger,
+                        logging.WARNING,
+                        "chat.managed_thread.execution_result_snapshot_failed",
+                        **_managed_thread_trace_fields(
+                            managed_thread_id=managed_thread_id,
+                            managed_turn_id=managed_turn_id,
+                            backend_thread_id=resolved_backend_thread_id,
+                            backend_turn_id=outcome.backend_turn_id
+                            or started.execution.backend_id,
+                            surface=surface,
+                        ),
+                        exc=get_exc,
+                    )
         finalized_status = str(
             getattr(finalized_execution, "status", "") if finalized_execution else ""
         ).strip()
+        if execution_record_failed and not finalized_status:
+            finalized_status = "ok"
         if finalized_status != "ok":
             detail = errors.public_execution_error
             if finalized_status == "interrupted":
@@ -2358,13 +2671,34 @@ async def finalize_managed_thread_execution(
                 execution_id=managed_turn_id,
                 message_preview=turn_preview,
             )
-        except (HubControlPlaneError, RuntimeError, OSError):
-            logger.warning(
-                "%s Failed to persist thread activity via hub control plane (thread=%s turn=%s)",
-                surface.log_label,
-                managed_thread_id,
-                managed_turn_id,
-                exc_info=True,
+        except asyncio.CancelledError:
+            log_event(
+                logger,
+                logging.WARNING,
+                "chat.managed_thread.thread_activity_persist_cancelled",
+                **_managed_thread_trace_fields(
+                    managed_thread_id=managed_thread_id,
+                    managed_turn_id=managed_turn_id,
+                    backend_thread_id=resolved_backend_thread_id,
+                    backend_turn_id=outcome.backend_turn_id
+                    or started.execution.backend_id,
+                    surface=surface,
+                ),
+            )
+        except Exception as exc:
+            log_event(
+                logger,
+                logging.WARNING,
+                "chat.managed_thread.thread_activity_persist_failed",
+                **_managed_thread_trace_fields(
+                    managed_thread_id=managed_thread_id,
+                    managed_turn_id=managed_turn_id,
+                    backend_thread_id=resolved_backend_thread_id,
+                    backend_turn_id=outcome.backend_turn_id
+                    or started.execution.backend_id,
+                    surface=surface,
+                ),
+                exc=exc,
             )
         return _build_finalization_result(
             status="ok",
@@ -2384,8 +2718,35 @@ async def finalize_managed_thread_execution(
                 managed_thread_id,
                 managed_turn_id,
             )
-        except KeyError:
-            pass
+        except asyncio.CancelledError:
+            log_event(
+                logger,
+                logging.WARNING,
+                "chat.managed_thread.execution_interrupt_record_cancelled",
+                **_managed_thread_trace_fields(
+                    managed_thread_id=managed_thread_id,
+                    managed_turn_id=managed_turn_id,
+                    backend_thread_id=resolved_backend_thread_id,
+                    backend_turn_id=outcome.backend_turn_id
+                    or started.execution.backend_id,
+                    surface=surface,
+                ),
+            )
+        except Exception as exc:
+            log_event(
+                logger,
+                logging.WARNING,
+                "chat.managed_thread.execution_interrupt_record_failed",
+                **_managed_thread_trace_fields(
+                    managed_thread_id=managed_thread_id,
+                    managed_turn_id=managed_turn_id,
+                    backend_thread_id=resolved_backend_thread_id,
+                    backend_turn_id=outcome.backend_turn_id
+                    or started.execution.backend_id,
+                    surface=surface,
+                ),
+                exc=exc,
+            )
         log_event(
             logger,
             logging.INFO,
@@ -2435,8 +2796,37 @@ async def finalize_managed_thread_execution(
             backend_turn_id=outcome.backend_turn_id,
             transcript_turn_id=None,
         )
-    except (HubControlPlaneError, KeyError):
-        pass
+    except asyncio.CancelledError:
+        log_event(
+            logger,
+            logging.WARNING,
+            "chat.managed_thread.execution_result_record_cancelled",
+            **_managed_thread_trace_fields(
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=managed_turn_id,
+                backend_thread_id=resolved_backend_thread_id,
+                backend_turn_id=outcome.backend_turn_id or started.execution.backend_id,
+                surface=surface,
+            ),
+            status="error",
+            detail=detail,
+        )
+    except Exception as exc:
+        log_event(
+            logger,
+            logging.WARNING,
+            "chat.managed_thread.execution_result_record_failed",
+            **_managed_thread_trace_fields(
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=managed_turn_id,
+                backend_thread_id=resolved_backend_thread_id,
+                backend_turn_id=outcome.backend_turn_id or started.execution.backend_id,
+                surface=surface,
+            ),
+            status="error",
+            detail=detail,
+            exc=exc,
+        )
     log_event(
         logger,
         logging.INFO,

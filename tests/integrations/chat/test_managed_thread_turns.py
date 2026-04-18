@@ -603,6 +603,100 @@ async def test_managed_thread_queue_worker_cancellation_after_finalization_recor
 
 
 @pytest.mark.anyio
+async def test_managed_thread_queue_worker_indicator_cancellation_after_finalization_still_delivers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    started = _build_started_execution(tmp_path)
+    begin_calls = 0
+    delivered: list[str] = []
+
+    async def _fake_finalize(
+        **kwargs: Any,
+    ) -> managed_thread_turns_module.ManagedThreadFinalizationResult:
+        _ = kwargs
+        return managed_thread_turns_module.ManagedThreadFinalizationResult(
+            status="ok",
+            assistant_text="Final answer",
+            error=None,
+            managed_thread_id=started.thread.thread_target_id,
+            managed_turn_id=started.execution.execution_id,
+            backend_thread_id="backend-1",
+        )
+
+    async def _fake_begin_next(
+        orchestration_service: object,
+        managed_thread_id: str,
+    ) -> Optional[RuntimeThreadExecution]:
+        nonlocal begin_calls
+        _ = orchestration_service, managed_thread_id
+        if begin_calls == 0:
+            begin_calls += 1
+            return started
+        return None
+
+    async def _deliver_result(
+        finalized: managed_thread_turns_module.ManagedThreadFinalizationResult,
+    ) -> None:
+        delivered.append(finalized.managed_turn_id)
+
+    async def _run_with_indicator(work: Any) -> None:
+        await work()
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "finalize_managed_thread_execution",
+        _fake_finalize,
+    )
+
+    task_map: dict[str, asyncio.Task[Any]] = {}
+    spawned_tasks: list[asyncio.Task[Any]] = []
+    coordinator = managed_thread_turns_module.ManagedThreadTurnCoordinator(
+        orchestration_service=SimpleNamespace(
+            get_running_execution=lambda managed_thread_id: None,
+        ),
+        state_root=tmp_path,
+        surface=managed_thread_turns_module.ManagedThreadSurfaceInfo(
+            log_label="Test",
+            surface_kind="telegram",
+            surface_key="telegram:-1001:101",
+        ),
+        errors=managed_thread_turns_module.ManagedThreadErrorMessages(
+            public_execution_error="public",
+            timeout_error="timeout",
+            interrupted_error="interrupted",
+            timeout_seconds=30,
+        ),
+        logger=logging.getLogger("test"),
+        turn_preview="preview",
+    )
+
+    caplog.set_level(logging.INFO)
+    coordinator.ensure_queue_worker(
+        task_map=task_map,
+        managed_thread_id="thread-1",
+        spawn_task=lambda coro: spawned_tasks.append(asyncio.create_task(coro))
+        or spawned_tasks[-1],
+        hooks=managed_thread_turns_module.ManagedThreadQueueWorkerHooks(
+            deliver_result=_deliver_result,
+            run_with_indicator=_run_with_indicator,
+        ),
+        begin_next_execution=_fake_begin_next,
+    )
+
+    await asyncio.gather(*spawned_tasks)
+
+    assert delivered == ["exec-1"]
+    assert (
+        "chat.managed_thread.queue_worker_indicator_failed_post_finalization"
+        in caplog.text
+    )
+    assert task_map == {}
+
+
+@pytest.mark.anyio
 async def test_managed_thread_turn_coordinator_queue_worker_recovers_and_continues(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1712,6 +1806,238 @@ async def test_finalize_managed_thread_execution_logs_finalization_failure_after
 
 
 @pytest.mark.anyio
+async def test_finalize_managed_thread_execution_continues_when_transcript_persistence_raises_unexpected_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    started = _started_execution_with_backend_ids(tmp_path)
+    fake_hub_client = _FakeHubPersistenceClient()
+    recorded_results: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "harness_supports_progress_event_stream",
+        lambda _harness: False,
+    )
+
+    async def _successful_outcome(*args: Any, **kwargs: Any) -> RuntimeThreadOutcome:
+        _ = args, kwargs
+        return RuntimeThreadOutcome(
+            status="ok",
+            assistant_text="fixture reply",
+            error=None,
+            backend_thread_id="session-1",
+            backend_turn_id="turn-1",
+        )
+
+    async def _broken_transcript_write(*args: Any, **kwargs: Any) -> None:
+        _ = args, kwargs
+        raise ValueError("transcript metadata invalid")
+
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "await_runtime_thread_outcome",
+        _successful_outcome,
+    )
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "_write_transcript_via_hub",
+        _broken_transcript_write,
+    )
+
+    orchestration_service = SimpleNamespace(
+        get_thread_target=lambda managed_thread_id: SimpleNamespace(
+            backend_thread_id="session-1"
+        ),
+        get_thread_runtime_binding=lambda managed_thread_id: SimpleNamespace(
+            backend_thread_id="session-1"
+        ),
+        record_execution_result=lambda *args, **kwargs: recorded_results.append(kwargs)
+        or SimpleNamespace(
+            status="ok",
+            error=None,
+        ),
+    )
+
+    caplog.set_level(logging.INFO)
+    result = await managed_thread_turns_module.finalize_managed_thread_execution(
+        orchestration_service=orchestration_service,
+        started=started,
+        state_root=tmp_path,
+        hub_client=fake_hub_client,
+        surface=managed_thread_turns_module.ManagedThreadSurfaceInfo(
+            log_label="Telegram",
+            surface_kind="telegram",
+            surface_key="telegram:-1001:101",
+        ),
+        errors=managed_thread_turns_module.ManagedThreadErrorMessages(
+            public_execution_error="Telegram PMA execution failed",
+            timeout_error="Telegram PMA turn timed out",
+            interrupted_error="Telegram PMA turn interrupted",
+            timeout_seconds=5,
+        ),
+        logger=logging.getLogger("test.managed_thread.transcript_failure"),
+        turn_preview="preview",
+    )
+
+    assert result.status == "ok"
+    assert recorded_results[0]["transcript_turn_id"] is None
+    assert "chat.managed_thread.transcript_persist_failed" in caplog.text
+    assert len(fake_hub_client.activity_requests) == 1
+
+
+@pytest.mark.anyio
+async def test_finalize_managed_thread_execution_continues_when_execution_result_record_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    started = _started_execution_with_backend_ids(tmp_path)
+    fake_hub_client = _FakeHubPersistenceClient()
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "harness_supports_progress_event_stream",
+        lambda _harness: False,
+    )
+
+    async def _successful_outcome(*args: Any, **kwargs: Any) -> RuntimeThreadOutcome:
+        _ = args, kwargs
+        return RuntimeThreadOutcome(
+            status="ok",
+            assistant_text="fixture reply",
+            error=None,
+            backend_thread_id="session-1",
+            backend_turn_id="turn-1",
+        )
+
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "await_runtime_thread_outcome",
+        _successful_outcome,
+    )
+
+    def _raise_record_failure(*args: Any, **kwargs: Any) -> Any:
+        _ = args, kwargs
+        raise ValueError("sqlite busy")
+
+    orchestration_service = SimpleNamespace(
+        get_thread_target=lambda managed_thread_id: SimpleNamespace(
+            backend_thread_id="session-1"
+        ),
+        get_thread_runtime_binding=lambda managed_thread_id: SimpleNamespace(
+            backend_thread_id="session-1"
+        ),
+        record_execution_result=_raise_record_failure,
+        get_execution=lambda managed_thread_id, managed_turn_id: None,
+    )
+
+    caplog.set_level(logging.INFO)
+    result = await managed_thread_turns_module.finalize_managed_thread_execution(
+        orchestration_service=orchestration_service,
+        started=started,
+        state_root=tmp_path,
+        hub_client=fake_hub_client,
+        surface=managed_thread_turns_module.ManagedThreadSurfaceInfo(
+            log_label="Telegram",
+            surface_kind="telegram",
+            surface_key="telegram:-1001:101",
+        ),
+        errors=managed_thread_turns_module.ManagedThreadErrorMessages(
+            public_execution_error="Telegram PMA execution failed",
+            timeout_error="Telegram PMA turn timed out",
+            interrupted_error="Telegram PMA turn interrupted",
+            timeout_seconds=5,
+        ),
+        logger=logging.getLogger("test.managed_thread.execution_record_failure"),
+        turn_preview="preview",
+    )
+
+    assert result.status == "ok"
+    assert "chat.managed_thread.execution_result_record_failed" in caplog.text
+    assert "chat.managed_thread.turn_finalized" in caplog.text
+    assert len(fake_hub_client.transcript_requests) == 1
+    assert len(fake_hub_client.activity_requests) == 1
+
+
+@pytest.mark.anyio
+async def test_finalize_managed_thread_execution_continues_when_thread_activity_persistence_raises_unexpected_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    started = _started_execution_with_backend_ids(tmp_path)
+    fake_hub_client = _FakeHubPersistenceClient()
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "harness_supports_progress_event_stream",
+        lambda _harness: False,
+    )
+
+    async def _successful_outcome(*args: Any, **kwargs: Any) -> RuntimeThreadOutcome:
+        _ = args, kwargs
+        return RuntimeThreadOutcome(
+            status="ok",
+            assistant_text="fixture reply",
+            error=None,
+            backend_thread_id="session-1",
+            backend_turn_id="turn-1",
+        )
+
+    async def _broken_thread_activity(*args: Any, **kwargs: Any) -> None:
+        _ = args, kwargs
+        raise ValueError("activity store unavailable")
+
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "await_runtime_thread_outcome",
+        _successful_outcome,
+    )
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "_record_thread_activity_via_hub",
+        _broken_thread_activity,
+    )
+
+    orchestration_service = SimpleNamespace(
+        get_thread_target=lambda managed_thread_id: SimpleNamespace(
+            backend_thread_id="session-1"
+        ),
+        get_thread_runtime_binding=lambda managed_thread_id: SimpleNamespace(
+            backend_thread_id="session-1"
+        ),
+        record_execution_result=lambda *args, **kwargs: SimpleNamespace(
+            status="ok",
+            error=None,
+        ),
+    )
+
+    caplog.set_level(logging.INFO)
+    result = await managed_thread_turns_module.finalize_managed_thread_execution(
+        orchestration_service=orchestration_service,
+        started=started,
+        state_root=tmp_path,
+        hub_client=fake_hub_client,
+        surface=managed_thread_turns_module.ManagedThreadSurfaceInfo(
+            log_label="Telegram",
+            surface_kind="telegram",
+            surface_key="telegram:-1001:101",
+        ),
+        errors=managed_thread_turns_module.ManagedThreadErrorMessages(
+            public_execution_error="Telegram PMA execution failed",
+            timeout_error="Telegram PMA turn timed out",
+            interrupted_error="Telegram PMA turn interrupted",
+            timeout_seconds=5,
+        ),
+        logger=logging.getLogger("test.managed_thread.activity_failure"),
+        turn_preview="preview",
+    )
+
+    assert result.status == "ok"
+    assert "chat.managed_thread.thread_activity_persist_failed" in caplog.text
+    assert len(fake_hub_client.transcript_requests) == 1
+
+
+@pytest.mark.anyio
 async def test_finalize_managed_thread_execution_continues_when_timeline_persistence_is_cancelled(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1810,7 +2136,8 @@ async def test_finalize_managed_thread_execution_continues_when_timeline_persist
 
     assert result.status == "ok"
     assert "chat.managed_thread.turn_finalized" in caplog.text
-    assert "thread timeline persistence cancelled" in caplog.text
+    assert "chat.managed_thread.live_timeline_persist_cancelled" in caplog.text
+    assert "chat.managed_thread.final_timeline_persist_cancelled" in caplog.text
     assert len(fake_hub_client.trace_requests) == 1
     assert len(fake_hub_client.transcript_requests) == 1
     assert len(fake_hub_client.activity_requests) == 1
@@ -2126,6 +2453,6 @@ async def test_finalize_managed_thread_execution_continues_when_progress_pump_is
 
     assert result.status == "ok"
     assert "chat.managed_thread.turn_finalized" in caplog.text
-    assert "progress event pump cancelled during finalization" in caplog.text
+    assert "chat.managed_thread.progress_pump_cancelled" in caplog.text
     assert len(fake_hub_client.timeline_requests) == 1
     assert len(fake_hub_client.trace_requests) == 1
