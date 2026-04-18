@@ -5540,6 +5540,13 @@ class DiscordBotService:
             return store
         return None
 
+    def _ensure_chat_operation_write_lock_state(self) -> None:
+        """Tests may construct partial ``DiscordBotService`` fixtures without ``__init__``."""
+        if getattr(self, "_chat_operation_write_lock_guard", None) is None:
+            self._chat_operation_write_lock_guard = asyncio.Lock()
+        if getattr(self, "_chat_operation_write_locks", None) is None:
+            self._chat_operation_write_locks = {}
+
     @contextlib.asynccontextmanager
     async def _chat_operation_write_guard(self, operation_id: str):
         """Serialize ledger read/write for one interaction across asyncio tasks.
@@ -5547,6 +5554,7 @@ class DiscordBotService:
         ``SQLiteChatOperationLedger.patch_operation`` is read-modify-write; concurrent
         ``asyncio.to_thread`` calls could otherwise apply stale snapshots after offloading.
         """
+        self._ensure_chat_operation_write_lock_state()
         normalized = str(operation_id or "").strip()
         async with self._chat_operation_write_lock_guard:
             lock = self._chat_operation_write_locks.get(normalized)
