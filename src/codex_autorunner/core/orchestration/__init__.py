@@ -107,6 +107,10 @@ from .managed_thread_delivery import (
     plan_managed_thread_delivery_recovery,
     record_from_intent,
 )
+from .managed_thread_delivery_ledger import (
+    SQLiteManagedThreadDeliveryEngine,
+    SQLiteManagedThreadDeliveryLedger,
+)
 from .migrations import (
     ORCHESTRATION_SCHEMA_VERSION,
     apply_orchestration_migrations,
@@ -257,6 +261,8 @@ __all__ = [
     "SurfaceOrchestrationIngress",
     "SurfaceThreadMessageRequest",
     "SQLiteChatOperationLedger",
+    "SQLiteManagedThreadDeliveryEngine",
+    "SQLiteManagedThreadDeliveryLedger",
     "TargetCapability",
     "TargetKind",
     "ThreadControlRequest",
