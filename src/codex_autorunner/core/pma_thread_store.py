@@ -1290,6 +1290,40 @@ class PmaThreadStore:
             return None
         return _execution_row_to_record(row)
 
+    def get_turn_by_client_turn_id_any_thread(
+        self, client_turn_id: str
+    ) -> Optional[dict[str, Any]]:
+        """Return the best matching execution for this client id across all threads.
+
+        Publish dedupe keys do not vary when a PR binding is repointed to a new
+        managed thread; without a global lookup, a retried enqueue could miss a
+        turn created on the replacement thread and enqueue a duplicate.
+        """
+        normalized_client_turn_id = _coerce_text(client_turn_id)
+        if normalized_client_turn_id is None:
+            return None
+        with self._read_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                  FROM orch_thread_executions
+                 WHERE client_request_id = ?
+                 ORDER BY
+                       CASE status
+                           WHEN 'running' THEN 0
+                           WHEN 'queued' THEN 1
+                           ELSE 2
+                       END,
+                       COALESCE(started_at, created_at) DESC,
+                       execution_id DESC
+                 LIMIT 1
+                """,
+                (normalized_client_turn_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return _execution_row_to_record(row)
+
     def list_queued_turns(
         self, managed_thread_id: str, *, limit: int = 200
     ) -> list[dict[str, Any]]:

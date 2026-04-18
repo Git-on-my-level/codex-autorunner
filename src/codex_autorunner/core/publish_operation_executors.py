@@ -510,10 +510,10 @@ def build_enqueue_managed_turn_executor(*, hub_root: Path) -> PublishActionExecu
         if thread_target_id is None:
             thread_target_id = requested_thread_target_id
         client_request_id = _operation_digest(operation, prefix="publish-turn")
-        existing = store.get_turn_by_client_turn_id(thread_target_id, client_request_id)
+        existing = store.get_turn_by_client_turn_id_any_thread(client_request_id)
         if existing is not None:
             return _managed_turn_result(
-                thread_target_id=thread_target_id,
+                thread_target_id=existing["managed_thread_id"],
                 client_request_id=client_request_id,
                 turn=existing,
                 existed=True,
