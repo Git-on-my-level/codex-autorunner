@@ -517,6 +517,50 @@ def test_flow_completion_subscription_can_trigger_next_lane(tmp_path: Path) -> N
         supervisor.shutdown()
 
 
+def test_drain_automation_wakeup_copies_delivery_target_from_subscription(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _write_hub_config(
+        hub_root,
+        dispatch_interception=False,
+        extra_lines=["  reactive_enabled: false"],
+    )
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor._stop_lifecycle_event_processor()
+
+    try:
+        store = supervisor.get_pma_automation_store()
+        created = store.create_subscription(
+            {
+                "event_types": ["flow_completed"],
+                "repo_id": "repo-1",
+                "run_id": "run-1",
+                "metadata": {
+                    "delivery_target": {
+                        "surface_kind": "discord",
+                        "surface_key": "discord:channel-1",
+                    }
+                },
+                "idempotency_key": "sub-delivery-target",
+            }
+        )
+        assert created.get("deduped") is False
+
+        supervisor.lifecycle_emitter.emit_flow_completed("repo-1", "run-1")
+        supervisor.process_lifecycle_events()
+
+        items = _read_queue_items(hub_root, "pma:default")
+        assert len(items) == 1
+        wake_up = (items[0].get("payload") or {}).get("wake_up") or {}
+        assert wake_up.get("delivery_target") == {
+            "surface_kind": "discord",
+            "surface_key": "discord:channel-1",
+        }
+    finally:
+        supervisor.shutdown()
+
+
 def test_drain_automation_wakeups_requests_lane_worker_start(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     _write_hub_config(

@@ -78,6 +78,43 @@ def resolve_publish_repo_id(
     return normalize_optional_text(thread.get("repo_id"))
 
 
+def resolve_publish_workspace_root(
+    *,
+    request: Request,
+    lifecycle_event: Optional[dict[str, Any]],
+    wake_up: Optional[dict[str, Any]],
+) -> Optional[Path]:
+    from .....core.pma_thread_store import PmaThreadStore
+
+    if isinstance(wake_up, dict):
+        raw_workspace = normalize_optional_text(wake_up.get("workspace_root"))
+        if raw_workspace:
+            return Path(raw_workspace)
+    if isinstance(lifecycle_event, dict):
+        raw_workspace = normalize_optional_text(lifecycle_event.get("workspace_root"))
+        if raw_workspace:
+            return Path(raw_workspace)
+    thread_id = (
+        normalize_optional_text(wake_up.get("thread_id"))
+        if isinstance(wake_up, dict)
+        else None
+    )
+    if not thread_id:
+        return None
+    try:
+        thread = PmaThreadStore(request.app.state.config.root).get_thread(thread_id)
+    except (OSError, ValueError, RuntimeError):
+        logger.exception(
+            "Failed resolving managed thread workspace for publish thread_id=%s",
+            thread_id,
+        )
+        return None
+    if not isinstance(thread, dict):
+        return None
+    raw_workspace = normalize_optional_text(thread.get("workspace_root"))
+    return Path(raw_workspace) if raw_workspace else None
+
+
 def build_publish_correlation_id(
     *,
     result: dict[str, Any],
@@ -204,19 +241,22 @@ async def publish_automation_result(
         wake_up=wake_up_dict,
         correlation_id=correlation_id,
     )
-    workspace_root: Optional[Path] = None
-    if isinstance(wake_up_dict, dict):
-        workspace_root = (
-            Path(wake_up_dict["workspace_root"])
-            if normalize_optional_text(wake_up_dict.get("workspace_root"))
-            else None
-        )
-    if workspace_root is None and isinstance(lifecycle_event_dict, dict):
-        raw_workspace = normalize_optional_text(
-            lifecycle_event_dict.get("workspace_root")
-        )
-        if raw_workspace:
-            workspace_root = Path(raw_workspace)
+    workspace_root = resolve_publish_workspace_root(
+        request=request,
+        lifecycle_event=lifecycle_event_dict,
+        wake_up=wake_up_dict,
+    )
+    wake_up_payload = wake_up_dict or {}
+    wake_up_metadata = (
+        wake_up_payload.get("metadata")
+        if isinstance(wake_up_payload.get("metadata"), dict)
+        else None
+    )
+    wake_up_delivery_target = (
+        wake_up_payload.get("delivery_target")
+        if isinstance(wake_up_payload.get("delivery_target"), dict)
+        else None
+    )
     outcome: dict[str, Any] = {"route": "auto", "targets": 0, "published": 0}
 
     async def _deliver() -> None:
@@ -248,6 +288,15 @@ async def publish_automation_result(
             ),
             managed_thread_id=normalize_optional_text(
                 (wake_up_dict or {}).get("thread_id")
+            ),
+            delivery_target=(
+                wake_up_delivery_target
+                or (
+                    wake_up_metadata.get("delivery_target")
+                    if wake_up_metadata is not None
+                    and isinstance(wake_up_metadata.get("delivery_target"), dict)
+                    else None
+                )
             ),
             context_payload={
                 "result": dict(result or {}),
