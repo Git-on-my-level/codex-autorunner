@@ -271,6 +271,20 @@ class TestLedgerListDueDeliveries:
         due = ledger.list_due_deliveries()
         assert len(due) == 0
 
+    def test_excludes_active_claimed_records(self, tmp_path: Path) -> None:
+        ledger = _ledger(tmp_path)
+        ledger.register_intent(_intent(delivery_id="d1"))
+        ledger.patch_delivery(
+            "d1",
+            state=ManagedThreadDeliveryState.CLAIMED,
+            claim_token="tok",
+            claimed_at="2026-04-18T01:00:00Z",
+            claim_expires_at="2026-04-18T01:05:00Z",
+        )
+
+        due = ledger.list_due_deliveries()
+        assert due == []
+
     def test_limit_param(self, tmp_path: Path) -> None:
         ledger = _ledger(tmp_path)
         for i in range(5):
@@ -316,6 +330,35 @@ class TestEngineClaimNextDelivery:
             now=datetime(2026, 4, 18, 1, 0, 0, tzinfo=timezone.utc),
         )
         assert claim is None
+
+    def test_skips_active_claim_and_claims_next_due_record(
+        self, tmp_path: Path
+    ) -> None:
+        engine = _engine(tmp_path)
+        engine.create_intent(_intent(delivery_id="delivery-1", adapter_key="telegram"))
+        engine.create_intent(
+            _intent(
+                delivery_id="delivery-2",
+                managed_turn_id="turn-2",
+                surface_key="surface-2",
+                adapter_key="telegram",
+            )
+        )
+        ledger = _ledger(tmp_path)
+        ledger.patch_delivery(
+            "delivery-1",
+            state=ManagedThreadDeliveryState.CLAIMED,
+            claim_token="active-claim",
+            claimed_at="2026-04-18T01:00:00Z",
+            claim_expires_at="2026-04-18T01:10:00Z",
+        )
+
+        claim = engine.claim_next_delivery(
+            adapter_key="telegram",
+            now=datetime(2026, 4, 18, 1, 2, 0, tzinfo=timezone.utc),
+        )
+        assert claim is not None
+        assert claim.record.delivery_id == "delivery-2"
 
     def test_abandons_when_budget_exhausted(self, tmp_path: Path) -> None:
         engine = _engine(tmp_path)

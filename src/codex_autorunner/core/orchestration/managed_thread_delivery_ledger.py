@@ -163,11 +163,15 @@ class SQLiteManagedThreadDeliveryLedger:
     ) -> list[ManagedThreadDeliveryRecord]:
         params: list[Any] = []
         clauses = [
-            "state NOT IN (?, ?, ?, ?)",
+            "state IN (?, ?)",
             "(next_attempt_at IS NULL OR next_attempt_at <= ?)",
         ]
-        terminal_values = [s.value for s in MANAGED_THREAD_DELIVERY_TERMINAL_STATES]
-        params.extend(terminal_values)
+        params.extend(
+            [
+                ManagedThreadDeliveryState.PENDING.value,
+                ManagedThreadDeliveryState.RETRY_SCHEDULED.value,
+            ]
+        )
         now_ts = now or now_iso()
         params.append(now_ts)
         if adapter_key is not None:
@@ -367,6 +371,11 @@ class SQLiteManagedThreadDeliveryEngine:
         now: Optional[datetime] = None,
     ) -> Optional[ManagedThreadDeliveryClaim]:
         current_at = now or datetime.now(timezone.utc)
+        self._recover_expired_claims(
+            adapter_key=adapter_key,
+            now=current_at,
+            limit=25,
+        )
         due = self._ledger.list_due_deliveries(
             adapter_key=adapter_key,
             now=current_at.isoformat(),
@@ -620,6 +629,47 @@ class SQLiteManagedThreadDeliveryEngine:
             claimed_at=claimed_at,
             claim_expires_at=claim_expires_at,
         )
+
+    def _recover_expired_claims(
+        self,
+        *,
+        adapter_key: str,
+        now: datetime,
+        limit: int,
+    ) -> None:
+        expired_claims = self._ledger.list_records_with_expired_claims(
+            adapter_key=adapter_key,
+            now=now.isoformat(),
+            limit=limit,
+        )
+        for record in expired_claims:
+            decision = plan_managed_thread_delivery_recovery(
+                record,
+                now=now,
+                claim_ttl=self._claim_ttl,
+                max_attempts=self._max_attempts,
+            )
+            if decision.action.value == "abandon":
+                self._ledger.patch_delivery(
+                    record.delivery_id,
+                    state=ManagedThreadDeliveryState.ABANDONED,
+                    last_error=decision.reason,
+                    claim_token=None,
+                )
+            elif decision.action.value == "retry":
+                next_attempt_at = _compute_next_attempt_at(
+                    record.attempt_count,
+                    self._retry_backoff,
+                    backoff_multiplier=self._backoff_multiplier,
+                    max_backoff=self._max_backoff,
+                )
+                self._ledger.patch_delivery(
+                    record.delivery_id,
+                    state=ManagedThreadDeliveryState.RETRY_SCHEDULED,
+                    next_attempt_at=next_attempt_at,
+                    last_error=decision.reason,
+                    claim_token=None,
+                )
 
 
 def _compute_next_attempt_at(
