@@ -8,10 +8,12 @@ import pytest
 from codex_autorunner.integrations.chat.ux_regression_contract import (
     CHAT_UX_LATENCY_BUDGETS,
 )
+from codex_autorunner.integrations.discord import message_turns as discord_message_turns
 from codex_autorunner.integrations.telegram.adapter import TelegramUpdate
 
 from .harness import (
     DiscordSurfaceHarness,
+    FakeDiscordRest,
     HermesFixtureRuntime,
     TelegramSurfaceHarness,
     build_telegram_message,
@@ -43,6 +45,20 @@ def _assert_budget(record: dict[str, Any], field: str, budget_id: str) -> None:
     value = record.get(field)
     assert isinstance(value, (int, float)), (field, record)
     assert float(value) <= _BUDGETS[budget_id], (field, value, _BUDGETS[budget_id])
+
+
+def _discord_status_interaction(interaction_id: str) -> dict[str, Any]:
+    return {
+        "id": interaction_id,
+        "token": f"{interaction_id}-token",
+        "channel_id": "channel-1",
+        "guild_id": "guild-1",
+        "member": {"user": {"id": "user-1"}},
+        "data": {
+            "name": "car",
+            "options": [{"type": 1, "name": "status", "options": []}],
+        },
+    }
 
 
 @pytest.mark.anyio
@@ -323,6 +339,79 @@ async def test_telegram_duplicate_updates_are_deduped(
         assert duplicate.get("chat_id") == 123
     finally:
         await harness.close()
+
+
+@pytest.mark.anyio
+async def test_discord_duplicate_interactions_are_deduped(
+    tmp_path,
+) -> None:
+    harness = DiscordSurfaceHarness(tmp_path / "discord-duplicate-interactions")
+    await harness.setup(agent="hermes")
+    try:
+        rest_client = FakeDiscordRest()
+        rest_client.enable_duplicate_interaction("inter-dup-1")
+        payload = _discord_status_interaction("inter-dup-1")
+        events = [
+            ("INTERACTION_CREATE", delivered)
+            for delivered in rest_client.expand_interaction_delivery(payload)
+        ]
+        rest = await harness.run_gateway_events(events, rest_client=rest_client)
+
+        response_texts: list[str] = []
+        response_texts.extend(
+            str(item.get("payload", {}).get("data", {}).get("content", ""))
+            for item in rest.interaction_responses
+        )
+        response_texts.extend(
+            str(item.get("payload", {}).get("content", ""))
+            for item in rest.followup_messages
+        )
+        status_messages = [
+            text for text in response_texts if "workspace:" in text.lower()
+        ]
+        assert len(status_messages) == 1
+        duplicate_resumes = [
+            record
+            for record in rest.log_records
+            if record.get("event") == "discord.interaction.duplicate_resuming"
+            and record.get("interaction_id") == "inter-dup-1"
+        ]
+        assert duplicate_resumes
+        assert any(
+            record.get("event") == "discord.interaction.ack.reused"
+            and record.get("interaction_id") == "inter-dup-1"
+            for record in rest.log_records
+        )
+        assert any(
+            event.get("kind") == "duplicate_interaction_injected"
+            for event in rest.surface_timeline
+        )
+    finally:
+        await harness.close()
+
+
+@pytest.mark.anyio
+async def test_discord_timeout_lifecycle_is_explicit(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = HermesFixtureRuntime("official_prompt_hang")
+    patch_hermes_runtime(monkeypatch, runtime)
+    monkeypatch.setattr(discord_message_turns, "DISCORD_PMA_TIMEOUT_SECONDS", 0.05)
+    harness = DiscordSurfaceHarness(tmp_path / "discord-timeout-lifecycle")
+    await harness.setup(agent="hermes")
+    try:
+        rest = await harness.run_message("echo hello world")
+        assert rest.execution_status == "error"
+        assert rest.preview_deleted is True
+        finalized = _latest_event(
+            rest.log_records, "chat.managed_thread.turn_finalized"
+        )
+        assert finalized.get("status") == "error"
+        assert "timed out" in str(finalized.get("detail") or "").lower()
+    finally:
+        await harness.close()
+        await runtime.close()
 
 
 @pytest.mark.anyio

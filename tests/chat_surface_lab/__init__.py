@@ -12,6 +12,7 @@ from .backend_runtime import (
     fake_acp_command,
     fake_opencode_server_command,
 )
+from .discord_simulator import DiscordSimulatorFaults, DiscordSurfaceSimulator
 from .scenario_models import (
     ArtifactExpectation,
     BudgetExpectation,
@@ -41,6 +42,8 @@ __all__ = [
     "BudgetExpectation",
     "ChatSurfaceScenario",
     "CodexAppServerFixtureRuntime",
+    "DiscordSimulatorFaults",
+    "DiscordSurfaceSimulator",
     "FaultInjection",
     "HermesFixtureRuntime",
     "OpenCodeFixtureRuntime",

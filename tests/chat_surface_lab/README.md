@@ -22,6 +22,13 @@ TICKET-100 adds the package skeleton only:
 These modules are intentionally lightweight. They provide importable contracts
 for later tickets without changing existing integration behavior.
 
+TICKET-130 adds semantic surface simulators:
+
+- `telegram_simulator.py` for deterministic Telegram behavior + transcript
+  normalization
+- `discord_simulator.py` for deterministic Discord interaction/message behavior
+  + transcript normalization
+
 ## Relationship to nearby packages
 
 - `tests.chat_surface_lab`

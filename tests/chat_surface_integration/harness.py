@@ -42,6 +42,10 @@ from tests.chat_surface_lab.backend_runtime import (
     app_server_fixture_command,
     fake_acp_command,
 )
+from tests.chat_surface_lab.discord_simulator import (
+    DiscordSimulatorFaults,
+    DiscordSurfaceSimulator,
+)
 from tests.chat_surface_lab.telegram_simulator import TelegramSurfaceSimulator
 
 DEFAULT_DISCORD_CHANNEL_ID = "channel-1"
@@ -86,159 +90,17 @@ def patch_hermes_runtime(monkeypatch: Any, runtime: HermesFixtureRuntime) -> Non
     )
 
 
-class FakeDiscordRest:
+class FakeDiscordRest(DiscordSurfaceSimulator):
     def __init__(
         self,
         *,
         fail_delete_message_ids: Optional[set[str]] = None,
+        faults: Optional[DiscordSimulatorFaults] = None,
     ) -> None:
-        self.interaction_responses: list[dict[str, Any]] = []
-        self.followup_messages: list[dict[str, Any]] = []
-        self.edited_original_interaction_responses: list[dict[str, Any]] = []
-        self.channel_messages: list[dict[str, Any]] = []
-        self.edited_channel_messages: list[dict[str, Any]] = []
-        self.deleted_channel_messages: list[dict[str, Any]] = []
-        self.typing_calls: list[str] = []
-        self.message_ops: list[dict[str, Any]] = []
-        self.fail_delete_message_ids = set(fail_delete_message_ids or set())
-        self.log_records: list[dict[str, Any]] = []
-        self.surface_key: Optional[str] = None
-        self.thread_target_id: Optional[str] = None
-        self.execution_id: Optional[str] = None
-        self.execution_status: Optional[str] = None
-        self.execution_error: Optional[str] = None
-        self.preview_message_id: Optional[str] = None
-        self.preview_deleted: bool = False
-        self.terminal_progress_label: Optional[str] = None
-        self.background_tasks_drained: bool = False
-
-    async def create_interaction_response(
-        self,
-        *,
-        interaction_id: str,
-        interaction_token: str,
-        payload: dict[str, Any],
-    ) -> None:
-        self.interaction_responses.append(
-            {
-                "interaction_id": interaction_id,
-                "interaction_token": interaction_token,
-                "payload": dict(payload),
-            }
+        super().__init__(
+            fail_delete_message_ids=fail_delete_message_ids,
+            faults=faults,
         )
-
-    async def create_followup_message(
-        self,
-        *,
-        application_id: str,
-        interaction_token: str,
-        payload: dict[str, Any],
-    ) -> dict[str, Any]:
-        self.followup_messages.append(
-            {
-                "application_id": application_id,
-                "interaction_token": interaction_token,
-                "payload": dict(payload),
-            }
-        )
-        return {"id": f"followup-{len(self.followup_messages)}"}
-
-    async def edit_original_interaction_response(
-        self,
-        *,
-        application_id: str,
-        interaction_token: str,
-        payload: dict[str, Any],
-    ) -> dict[str, Any]:
-        self.edited_original_interaction_responses.append(
-            {
-                "application_id": application_id,
-                "interaction_token": interaction_token,
-                "payload": dict(payload),
-            }
-        )
-        return {"id": "@original"}
-
-    async def create_channel_message(
-        self, *, channel_id: str, payload: dict[str, Any]
-    ) -> dict[str, Any]:
-        message = {"id": f"msg-{len(self.channel_messages) + 1}"}
-        self.channel_messages.append(
-            {"channel_id": channel_id, "payload": dict(payload)}
-        )
-        self.message_ops.append(
-            {
-                "op": "send",
-                "channel_id": channel_id,
-                "message_id": message["id"],
-                "payload": dict(payload),
-            }
-        )
-        return message
-
-    async def get_channel_message(
-        self, *, channel_id: str, message_id: str
-    ) -> dict[str, Any]:
-        for op in reversed(self.message_ops):
-            if str(op.get("message_id") or "") != message_id:
-                continue
-            if str(op.get("channel_id") or "") != channel_id:
-                continue
-            payload = op.get("payload")
-            if isinstance(payload, dict):
-                return {
-                    "id": message_id,
-                    "channel_id": channel_id,
-                    **payload,
-                }
-        return {"id": message_id, "channel_id": channel_id}
-
-    async def edit_channel_message(
-        self, *, channel_id: str, message_id: str, payload: dict[str, Any]
-    ) -> dict[str, Any]:
-        self.edited_channel_messages.append(
-            {
-                "channel_id": channel_id,
-                "message_id": message_id,
-                "payload": dict(payload),
-            }
-        )
-        self.message_ops.append(
-            {
-                "op": "edit",
-                "channel_id": channel_id,
-                "message_id": message_id,
-                "payload": dict(payload),
-            }
-        )
-        return {"id": message_id}
-
-    async def delete_channel_message(self, *, channel_id: str, message_id: str) -> None:
-        if message_id in self.fail_delete_message_ids:
-            raise RuntimeError(f"delete failed for {message_id}")
-        self.deleted_channel_messages.append(
-            {"channel_id": channel_id, "message_id": message_id}
-        )
-        self.message_ops.append(
-            {
-                "op": "delete",
-                "channel_id": channel_id,
-                "message_id": message_id,
-            }
-        )
-
-    async def trigger_typing(self, *, channel_id: str) -> None:
-        self.typing_calls.append(channel_id)
-
-    async def bulk_overwrite_application_commands(
-        self,
-        *,
-        application_id: str,
-        commands: list[dict[str, Any]],
-        guild_id: Optional[str] = None,
-    ) -> list[dict[str, Any]]:
-        _ = application_id, guild_id
-        return commands
 
 
 class FakeDiscordGateway:
@@ -415,9 +277,9 @@ class DiscordSurfaceHarness:
             self.submit_active_message(text, message_id=message_id)
         )
 
-    async def _run_message_inner(
+    async def _run_gateway_events_inner(
         self,
-        text: str,
+        events: list[tuple[str, dict[str, Any]]],
         *,
         rest_client: Optional[FakeDiscordRest] = None,
     ) -> FakeDiscordRest:
@@ -434,9 +296,7 @@ class DiscordSurfaceHarness:
             make_discord_config(self.root),
             logger=logger,
             rest_client=self.rest,
-            gateway_client=FakeDiscordGateway(
-                [("MESSAGE_CREATE", build_discord_message_create(text))]
-            ),
+            gateway_client=FakeDiscordGateway(events),
             state_store=self.store,
             outbox_manager=FakeDiscordOutboxManager(),
         )
@@ -446,6 +306,17 @@ class DiscordSurfaceHarness:
         )
         self._apply_discord_runtime_metadata(self.rest)
         return self.rest
+
+    async def _run_message_inner(
+        self,
+        text: str,
+        *,
+        rest_client: Optional[FakeDiscordRest] = None,
+    ) -> FakeDiscordRest:
+        return await self._run_gateway_events_inner(
+            [("MESSAGE_CREATE", build_discord_message_create(text))],
+            rest_client=rest_client,
+        )
 
     def start_message(
         self,
@@ -465,13 +336,21 @@ class DiscordSurfaceHarness:
     ) -> FakeDiscordRest:
         return await self._run_message_inner(text, rest_client=rest_client)
 
+    async def run_gateway_events(
+        self,
+        events: list[tuple[str, dict[str, Any]]],
+        *,
+        rest_client: Optional[FakeDiscordRest] = None,
+    ) -> FakeDiscordRest:
+        return await self._run_gateway_events_inner(events, rest_client=rest_client)
+
     def _apply_discord_runtime_metadata(self, rest: FakeDiscordRest) -> None:
         service = self.service
         if service is None:
             raise RuntimeError("DiscordSurfaceHarness has no active service")
-        self.rest.log_records = list(self._log_capture.records)
-        self.rest.background_tasks_drained = not bool(service._background_tasks)
-        self.rest.surface_key = DEFAULT_DISCORD_CHANNEL_ID
+        rest.log_records = list(self._log_capture.records)
+        rest.background_tasks_drained = not bool(service._background_tasks)
+        rest.surface_key = DEFAULT_DISCORD_CHANNEL_ID
         orchestration_service = build_discord_thread_orchestration_service(service)
         binding = orchestration_service.get_binding(
             surface_kind="discord",

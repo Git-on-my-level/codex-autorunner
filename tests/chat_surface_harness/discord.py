@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.integrations.chat.collaboration_policy import CollaborationPolicy
@@ -15,57 +15,14 @@ from codex_autorunner.integrations.discord.config import (
 )
 from codex_autorunner.integrations.discord.service import DiscordBotService
 from codex_autorunner.integrations.discord.state import DiscordStateStore
+from tests.chat_surface_lab.discord_simulator import DiscordSurfaceSimulator
 
 from .hermes import logger_for
 
 
-class FakeDiscordRest:
+class FakeDiscordRest(DiscordSurfaceSimulator):
     def __init__(self) -> None:
-        self.channel_messages: list[dict[str, Any]] = []
-        self.edited_channel_messages: list[dict[str, Any]] = []
-        self.deleted_channel_messages: list[dict[str, Any]] = []
-        self.typing_calls: list[str] = []
-
-    async def create_channel_message(
-        self, *, channel_id: str, payload: dict[str, Any]
-    ) -> dict[str, Any]:
-        message = {
-            "channel_id": channel_id,
-            "payload": dict(payload),
-            "id": f"msg-{len(self.channel_messages) + 1}",
-        }
-        self.channel_messages.append(message)
-        return {"id": message["id"]}
-
-    async def edit_channel_message(
-        self, *, channel_id: str, message_id: str, payload: dict[str, Any]
-    ) -> dict[str, Any]:
-        self.edited_channel_messages.append(
-            {
-                "channel_id": channel_id,
-                "message_id": message_id,
-                "payload": dict(payload),
-            }
-        )
-        return {"id": message_id}
-
-    async def delete_channel_message(self, *, channel_id: str, message_id: str) -> None:
-        self.deleted_channel_messages.append(
-            {"channel_id": channel_id, "message_id": message_id}
-        )
-
-    async def trigger_typing(self, *, channel_id: str) -> None:
-        self.typing_calls.append(channel_id)
-
-    async def bulk_overwrite_application_commands(
-        self,
-        *,
-        application_id: str,
-        commands: list[dict[str, Any]],
-        guild_id: Optional[str] = None,
-    ) -> list[dict[str, Any]]:
-        _ = application_id, guild_id
-        return commands
+        super().__init__()
 
 
 class FakeDiscordGateway:

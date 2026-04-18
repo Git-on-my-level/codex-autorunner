@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pytest
 
+from tests.chat_surface_lab.transcript_models import TranscriptEventKind
+
 from .harness import (
     DiscordSurfaceHarness,
     FakeDiscordRest,
@@ -31,6 +33,13 @@ async def test_discord_hermes_pma_uses_official_placeholder_lifecycle(
         assert rest.preview_message_id
         assert rest.preview_deleted is True
         assert rest.terminal_progress_label == "done"
+        assert any(event.get("kind") == "send" for event in rest.surface_timeline)
+        transcript = rest.to_normalized_transcript(
+            scenario_id="discord-placeholder-lifecycle"
+        )
+        assert any(
+            event.kind == TranscriptEventKind.SEND for event in transcript.events
+        )
         assert rest.message_ops[0]["op"] == "send"
         assert (
             rest.message_ops[0]["payload"]["content"] == "Received. Preparing turn..."
