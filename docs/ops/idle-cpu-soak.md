@@ -16,6 +16,13 @@ make perf-idle-cpu PROFILE=hub_only
 .venv/bin/python scripts/idle_cpu_soak.py --profile hub_only --verbose
 ```
 
+For the chat-surface UX latency budget suite (separate from idle CPU soak),
+run:
+
+```bash
+make perf-chat-latency-budgets
+```
+
 ## Profile definitions
 
 All profiles live in the committed file **`scripts/idle_cpu_profiles.yml`**.

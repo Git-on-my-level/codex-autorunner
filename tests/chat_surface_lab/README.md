@@ -53,6 +53,19 @@ TICKET-150 adds evidence artifact rendering and indexing:
 - `test_artifact_manifest.py` validates required manifest entries, stable
   filenames, and failed-run artifact preservation
 
+TICKET-160 adds a deterministic latency budget suite runner:
+
+- `latency_budget_runner.py` executes named lab scenarios and enforces the
+  shared UX latency budgets from
+  `src/codex_autorunner/integrations/chat/ux_regression_contract.py`
+- the runner writes machine-readable artifacts under
+  `.codex-autorunner/diagnostics/chat-latency-budgets/` with
+  `latest.json`, `history/*`, and per-run `runs/<run_id>/suite_report.json`
+- `scripts/chat_surface_latency_budgets.py` provides an operator-friendly
+  entrypoint (also exposed via `make perf-chat-latency-budgets`)
+- `test_latency_budgets.py` validates required budget coverage and
+  failure-triage payloads
+
 ## Relationship to nearby packages
 
 - `tests.chat_surface_lab`
@@ -102,6 +115,10 @@ Run focused DSL checks:
 .venv/bin/python -m pytest tests/chat_surface_lab/test_scenario_corpus.py -q
 .venv/bin/python -m pytest tests/chat_surface_lab/test_transcript_renderer.py -q
 .venv/bin/python -m pytest tests/chat_surface_lab/test_artifact_manifest.py -q
+.venv/bin/python -m pytest tests/chat_surface_lab/test_latency_budgets.py -q
+
+# Operator run (outside raw pytest)
+make perf-chat-latency-budgets
 ```
 
 ## Evidence artifact schema
