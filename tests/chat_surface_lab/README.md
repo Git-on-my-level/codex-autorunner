@@ -29,6 +29,16 @@ TICKET-130 adds semantic surface simulators:
 - `discord_simulator.py` for deterministic Discord interaction/message behavior
   + transcript normalization
 
+TICKET-140 adds a declarative scenario corpus and runner:
+
+- `scenarios/*.json` stores reusable regression scenarios
+- `scenario_runner.py` loads/validates scenarios, executes them against shared
+  surface harnesses, asserts transcript invariants + latency budgets, and emits
+  artifact bundles
+- `test_scenario_corpus.py` validates corpus completeness and contract linkage
+- `test_scenario_runner.py` validates real scenario execution and artifact
+  outputs
+
 ## Relationship to nearby packages
 
 - `tests.chat_surface_lab`
@@ -50,3 +60,41 @@ The intended layering is:
 - Keep backend runtime modeling transport-neutral so Hermes, ACP, app-server,
   and later OpenCode fixtures can share the same scenario contract.
 - Prefer deterministic, diffable artifact shapes over ad hoc assertions.
+
+## Scenario DSL quick reference
+
+Scenarios are JSON files under `tests/chat_surface_lab/scenarios/` with these
+high-signal fields:
+
+- `scenario_id`: explicit stable ID used by corpus and tests
+- `surfaces`: one or more of `discord` / `telegram`
+- `runtime_fixture`: backend fixture kind + fixture scenario
+- `actions`: declarative inbound flow (`send_message`, `start_message`,
+  `wait_for_running_execution`, `submit_active_message`,
+  `interrupt_active_turn`, duplicate-delivery actions, etc.)
+- `faults`: deterministic perturbations (for example short timeout overrides)
+- `transcript_invariants`: transcript and log assertions
+- `latency_budgets`: budget assertions bound to concrete timing log fields
+- `contract_links`: optional mapping to
+  `src/codex_autorunner/integrations/chat/ux_regression_contract.py`
+- `execution_mode`: `surface_harness` (default) or `reference_only`
+
+## Running the corpus
+
+Run focused DSL checks:
+
+```bash
+.venv/bin/python -m pytest tests/chat_surface_lab/test_scenario_runner.py -q
+.venv/bin/python -m pytest tests/chat_surface_lab/test_scenario_corpus.py -q
+```
+
+## Adding a scenario
+
+1. Add a new JSON file under `tests/chat_surface_lab/scenarios/`.
+2. Reuse existing action/fault/invariant shapes from nearby scenarios.
+3. Link relevant IDs in `contract_links.regression_ids` and
+   `contract_links.latency_budget_ids` when the scenario maps to the shared UX
+   regression contract.
+4. Extend runner support if a new action kind is required.
+5. Keep assertions at transcript/log level so scenarios stay reusable across
+   surface-specific test files.

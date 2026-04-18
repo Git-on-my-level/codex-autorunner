@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "scenario_id": "restart_recovery",
+  "description": "Recovery after process restart preserves managed-thread continuity.",
+  "execution_mode": "reference_only",
+  "surfaces": [
+    "discord"
+  ],
+  "runtime_fixture": {
+    "kind": "hermes",
+    "scenario": "official"
+  },
+  "actions": [],
+  "contract_links": {
+    "regression_ids": [
+      "restart_recovery"
+    ],
+    "references": [
+      "tests/surfaces/web/routes/pma_routes/test_managed_thread_runtime.py"
+    ]
+  },
+  "tags": [
+    "restart",
+    "recovery",
+    "orchestration"
+  ],
+  "notes": "This scenario is represented declaratively in the corpus while execution remains with orchestration/runtime restart tests."
+}

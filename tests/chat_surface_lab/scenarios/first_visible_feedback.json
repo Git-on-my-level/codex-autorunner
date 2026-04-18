@@ -1,0 +1,129 @@
+{
+  "schema_version": 1,
+  "scenario_id": "first_visible_feedback",
+  "description": "Both surfaces show first visible feedback quickly, then transition to the fixture reply.",
+  "surfaces": [
+    "discord",
+    "telegram"
+  ],
+  "runtime_fixture": {
+    "kind": "hermes",
+    "scenario": "official"
+  },
+  "harness_timeouts": {
+    "discord": 8.0,
+    "telegram": 8.0
+  },
+  "actions": [
+    {
+      "kind": "send_message",
+      "actor": "user",
+      "payload": {
+        "text": "echo hello world"
+      }
+    }
+  ],
+  "expected_terminal": {
+    "status": "ok"
+  },
+  "transcript_invariants": [
+    {
+      "kind": "contains_text",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "text": "Received. Preparing turn..."
+      }
+    },
+    {
+      "kind": "contains_text",
+      "surfaces": [
+        "telegram"
+      ],
+      "params": {
+        "text": "Working..."
+      }
+    },
+    {
+      "kind": "contains_text",
+      "surfaces": [
+        "discord",
+        "telegram"
+      ],
+      "params": {
+        "text": "fixture reply"
+      }
+    },
+    {
+      "kind": "text_order",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "first_text": "Received. Preparing turn...",
+        "second_text": "fixture reply"
+      }
+    },
+    {
+      "kind": "text_order",
+      "surfaces": [
+        "telegram"
+      ],
+      "params": {
+        "first_text": "Working...",
+        "second_text": "fixture reply"
+      }
+    }
+  ],
+  "latency_budgets": [
+    {
+      "budget_id": "first_visible_feedback",
+      "event_name": "chat_ux_timing.discord.turn_delivery",
+      "field": "chat_ux_delta_first_visible_ms",
+      "surfaces": [
+        "discord"
+      ]
+    },
+    {
+      "budget_id": "first_semantic_progress",
+      "event_name": "chat_ux_timing.discord.turn_delivery",
+      "field": "chat_ux_delta_first_progress_ms",
+      "surfaces": [
+        "discord"
+      ]
+    },
+    {
+      "budget_id": "first_visible_feedback",
+      "event_name": "chat_ux_timing.telegram.managed_thread_turn",
+      "field": "chat_ux_delta_first_visible_ms",
+      "surfaces": [
+        "telegram"
+      ]
+    },
+    {
+      "budget_id": "first_semantic_progress",
+      "event_name": "chat_ux_timing.telegram.managed_thread_turn",
+      "field": "chat_ux_delta_first_progress_ms",
+      "surfaces": [
+        "telegram"
+      ]
+    }
+  ],
+  "contract_links": {
+    "regression_ids": [
+      "first_visible_feedback"
+    ],
+    "latency_budget_ids": [
+      "first_visible_feedback",
+      "first_semantic_progress"
+    ]
+  },
+  "tags": [
+    "ux",
+    "latency",
+    "hermes",
+    "pma"
+  ],
+  "notes": "Captures the user-visible first-response gate and first semantic progress gate for both chat surfaces."
+}

@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "scenario_id": "interrupt_optimistic_acceptance",
+  "description": "Interrupt controls acknowledge quickly before backend completion settles.",
+  "surfaces": [
+    "discord",
+    "telegram"
+  ],
+  "runtime_fixture": {
+    "kind": "hermes",
+    "scenario": "official"
+  },
+  "harness_timeouts": {
+    "discord": 8.0,
+    "telegram": 8.0
+  },
+  "approval_mode": "yolo",
+  "actions": [
+    {
+      "kind": "start_message",
+      "actor": "user",
+      "payload": {
+        "text": "cancel me"
+      }
+    },
+    {
+      "kind": "wait_for_running_execution",
+      "actor": "system",
+      "payload": {
+        "timeout_seconds": 2.0
+      }
+    },
+    {
+      "kind": "interrupt_active_turn",
+      "actor": "user",
+      "payload": {}
+    },
+    {
+      "kind": "await_active_message",
+      "actor": "system",
+      "payload": {}
+    }
+  ],
+  "expected_terminal": {
+    "status": "interrupted"
+  },
+  "transcript_invariants": [
+    {
+      "kind": "log_event_exists",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "event_name": "discord.turn.cancel_acknowledged"
+      }
+    },
+    {
+      "kind": "contains_text",
+      "surfaces": [
+        "telegram"
+      ],
+      "params": {
+        "text": "Stopping..."
+      }
+    },
+    {
+      "kind": "log_event_exists",
+      "surfaces": [
+        "discord",
+        "telegram"
+      ],
+      "params": {
+        "event_name": "chat.managed_thread.turn_finalized",
+        "field": "status",
+        "value": "interrupted"
+      }
+    }
+  ],
+  "latency_budgets": [
+    {
+      "budget_id": "interrupt_visible",
+      "event_name": "discord.turn.cancel_acknowledged",
+      "field": "chat_ux_delta_interrupt_visible_ms",
+      "surfaces": [
+        "discord"
+      ]
+    }
+  ],
+  "contract_links": {
+    "regression_ids": [
+      "fast_ack",
+      "interrupt_optimistic_acceptance"
+    ],
+    "latency_budget_ids": [
+      "interrupt_visible"
+    ]
+  },
+  "tags": [
+    "ux",
+    "interrupt",
+    "hermes",
+    "pma"
+  ]
+}
