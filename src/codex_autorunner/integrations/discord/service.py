@@ -95,6 +95,13 @@ from ...core.orchestration import (
     build_ticket_flow_orchestration_service,
     plan_chat_operation_recovery,
 )
+from ...core.orchestration.managed_thread_delivery import (
+    ManagedThreadDeliveryAttemptResult,
+    ManagedThreadDeliveryOutcome,
+)
+from ...core.orchestration.managed_thread_delivery_ledger import (
+    SQLiteManagedThreadDeliveryEngine,
+)
 from ...core.state import now_iso
 from ...core.state_roots import resolve_global_state_root
 from ...core.update import (  # noqa: F401 - kept for test monkeypatching
@@ -160,10 +167,16 @@ from ...integrations.chat.forwarding import compose_forwarded_message_text
 from ...integrations.chat.handlers.approvals import (
     normalize_backend_approval_request,
 )
+from ...integrations.chat.managed_thread_delivery_worker import (
+    ManagedThreadDeliveryWorker,
+)
 from ...integrations.chat.managed_thread_lifecycle import (
     bind_surface_thread,
     replace_surface_thread,
     resolve_surface_thread_binding,
+)
+from ...integrations.chat.managed_thread_turns import (
+    render_managed_thread_delivery_record_text,
 )
 from ...integrations.chat.media import (
     audio_content_type_for_input,
@@ -224,6 +237,7 @@ from .components import (
     build_ticket_picker,
 )
 from .config import DiscordBotConfig
+from .constants import DISCORD_MAX_MESSAGE_LENGTH
 from .effects import (
     DiscordAutocompleteEffect,
     DiscordComponentResponseEffect,
@@ -850,6 +864,105 @@ class DiscordBotService:
             on_scheduler_conversation_idle=self._wake_dispatcher_conversation,
         )
         self._service_started_at_monotonic: Optional[float] = None
+        self._delivery_worker: Optional[ManagedThreadDeliveryWorker] = None
+        self._delivery_worker_task: Optional[asyncio.Task[None]] = None
+
+    def _build_delivery_worker(self) -> ManagedThreadDeliveryWorker:
+        service = self
+
+        class _DiscordDeliveryAdapter:
+            @property
+            def adapter_key(self) -> str:
+                return "discord"
+
+            async def deliver_managed_thread_record(
+                self, record: Any, *, claim: Any
+            ) -> Any:
+                _ = claim
+                target_channel_id = str(
+                    record.target.transport_target.get("channel_id", "")
+                ).strip()
+                if not target_channel_id:
+                    return ManagedThreadDeliveryAttemptResult(
+                        outcome=ManagedThreadDeliveryOutcome.ABANDONED,
+                        error="missing_discord_channel_id",
+                    )
+                if record.envelope.final_status == "ok":
+                    assistant_text = render_managed_thread_delivery_record_text(record)
+                    formatted = (
+                        format_discord_message(assistant_text)
+                        if assistant_text
+                        else "(No response text returned.)"
+                    )
+                    chunks = chunk_discord_message(
+                        formatted,
+                        max_len=DISCORD_MAX_MESSAGE_LENGTH,
+                        with_numbering=False,
+                    )
+                    if not chunks:
+                        chunks = [formatted]
+                    base_record_id = (
+                        f"discord-delivery:{record.managed_thread_id}"
+                        f":{record.managed_turn_id}"
+                    )
+                    try:
+                        for chunk_index, chunk in enumerate(chunks, start=1):
+                            record_id = (
+                                f"{base_record_id}:chunk:{chunk_index}"
+                                if len(chunks) > 1
+                                else base_record_id
+                            )
+                            await service._send_channel_message_safe(
+                                target_channel_id,
+                                {"content": chunk},
+                                record_id=record_id,
+                            )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        return ManagedThreadDeliveryAttemptResult(
+                            outcome=ManagedThreadDeliveryOutcome.FAILED,
+                            error=str(exc) or exc.__class__.__name__,
+                        )
+                    return ManagedThreadDeliveryAttemptResult(
+                        outcome=ManagedThreadDeliveryOutcome.DELIVERED,
+                        adapter_cursor={"chunk_count": len(chunks)},
+                    )
+                if record.envelope.final_status == "interrupted":
+                    return ManagedThreadDeliveryAttemptResult(
+                        outcome=ManagedThreadDeliveryOutcome.ABANDONED,
+                        error="interrupted_turn_has_no_terminal_delivery",
+                    )
+                try:
+                    await service._send_channel_message_safe(
+                        target_channel_id,
+                        {
+                            "content": (
+                                f"Turn failed: {record.envelope.error_text or 'execution error'}"
+                            )
+                        },
+                        record_id=(
+                            "discord-delivery-error:"
+                            f"{record.managed_thread_id}:{record.managed_turn_id}"
+                        ),
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    return ManagedThreadDeliveryAttemptResult(
+                        outcome=ManagedThreadDeliveryOutcome.FAILED,
+                        error=str(exc) or exc.__class__.__name__,
+                    )
+                return ManagedThreadDeliveryAttemptResult(
+                    outcome=ManagedThreadDeliveryOutcome.DELIVERED
+                )
+
+        engine = SQLiteManagedThreadDeliveryEngine(self._config.root)
+        return ManagedThreadDeliveryWorker(
+            engine=engine,
+            adapter=_DiscordDeliveryAdapter(),
+            logger=self._logger,
+        )
 
     async def run_forever(self) -> None:
         self._service_started_at_monotonic = time.monotonic()
@@ -875,6 +988,10 @@ class DiscordBotService:
         self._spawn_task(
             self._run_startup_command_sync_background(),
             await_on_shutdown=True,
+        )
+        self._delivery_worker = self._build_delivery_worker()
+        self._delivery_worker_task = asyncio.create_task(
+            self._delivery_worker.run_loop()
         )
         try:
             log_event(
@@ -925,6 +1042,11 @@ class DiscordBotService:
             outbox_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await outbox_task
+            if self._delivery_worker_task is not None:
+                self._delivery_worker_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._delivery_worker_task
+                self._delivery_worker_task = None
             await self._shutdown()
 
     def _service_uptime_ms(self, *, now: Optional[float] = None) -> Optional[float]:
