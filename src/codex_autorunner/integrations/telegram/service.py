@@ -8,7 +8,6 @@ import logging
 import os
 import socket
 import time
-from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional, Sequence
@@ -82,6 +81,7 @@ from .adapter import (
     build_inline_keyboard,
     encode_cancel_callback,
 )
+from .cache_manager import TelegramCacheManager
 from .chat_adapter import TelegramChatAdapter
 from .chat_state_store import TelegramChatStateStore
 from .chat_transport import TelegramChatTransport
@@ -104,11 +104,11 @@ from .handlers import messages as message_handlers
 from .handlers.approvals import TelegramApprovalHandlers
 from .handlers.commands import build_command_specs
 from .handlers.commands_runtime import TelegramCommandHandlers
+from .handlers.media_ingress import MediaBatchBuffer as _MediaBatchBuffer
 from .handlers.messages import _CoalescedBuffer
 from .handlers.questions import TelegramQuestionHandlers
 from .handlers.selections import TelegramSelectionHandlers
 from .helpers import (
-    ModelOption,
     _lock_payload_summary,
     _read_lock_payload,
     _split_topic_key,
@@ -117,6 +117,7 @@ from .helpers import (
 )
 from .notifications import TelegramNotificationHandlers
 from .outbox import TelegramOutboxManager
+from .queued_placeholder_manager import TelegramQueuedPlaceholderManager
 from .runtime import TelegramWorkspaceAndTurnMixin
 from .state import (
     OutboxRecord,
@@ -130,15 +131,12 @@ from .ticket_flow_bridge import (
 )
 from .transport import TelegramMessageTransport
 from .types import (
-    CompactState,
-    ModelPickerState,
     PendingApproval,
-    PendingQuestion,
-    ReviewCommitSelectionState,
-    SelectionState,
     TurnContext,
-    UpdateConfirmState,
 )
+from .typing_manager import TelegramTypingManager
+from .ui_state import TelegramUiState
+from .update_deduper import TelegramUpdateDeduper
 from .voice import TelegramVoiceManager
 
 TICKET_FLOW_WATCH_INTERVAL_SECONDS = 20
@@ -353,11 +351,12 @@ class TelegramBotService(
             adapter=self._chat_adapter,
             transport=self._chat_transport,
         )
-        self._model_options: dict[str, ModelPickerState] = {}
-        self._model_pending: dict[str, ModelOption] = {}
+        self._ui_state = TelegramUiState()
+        self._model_options = self._ui_state.model_options
+        self._model_pending = self._ui_state.model_pending
         self._model_catalog_cache: dict[str, tuple[Any, float]] = {}
-        self._agent_options: dict[str, SelectionState] = {}
-        self._agent_profile_options: dict[str, SelectionState] = {}
+        self._agent_options = self._ui_state.agent_options
+        self._agent_profile_options = self._ui_state.agent_profile_options
         self._voice_config = voice_config
         self._voice_service = voice_service
         self._housekeeping_config = housekeeping_config
@@ -399,10 +398,8 @@ class TelegramBotService(
         self._turn_progress_locks: dict[TurnKey, asyncio.Lock] = {}
         self._oversize_warnings: set[TurnKey] = set()
         self._pending_approvals: dict[str, PendingApproval] = {}
-        self._pending_questions: dict[str, PendingQuestion] = {}
-        self._typing_sessions: dict[tuple[int, Optional[int]], int] = {}
-        self._typing_tasks: dict[tuple[int, Optional[int]], asyncio.Task[None]] = {}
-        self._typing_lock: Optional[asyncio.Lock] = None
+        self._pending_questions = self._ui_state.pending_questions
+        self._typing_manager = TelegramTypingManager(owner=self, logger=self._logger)
         self._ticket_flow_pause_targets: dict[str, str] = {}
         self._ticket_flow_bridge = TelegramTicketFlowBridge(
             logger=self._logger,
@@ -417,23 +414,22 @@ class TelegramBotService(
             config_root=self._config.root,
             runtime_services=self._runtime_services,
         )
-        self._resume_options: dict[str, SelectionState] = {}
-        self._bind_options: dict[str, SelectionState] = {}
-        self._flow_run_options: dict[str, SelectionState] = {}
-        self._update_options: dict[str, SelectionState] = {}
-        self._update_confirm_options: dict[str, UpdateConfirmState] = {}
-        self._review_commit_options: dict[str, ReviewCommitSelectionState] = {}
-        self._review_commit_subjects: dict[str, dict[str, str]] = {}
-        self._pending_review_custom: dict[str, dict[str, Any]] = {}
-        self._compact_pending: dict[str, CompactState] = {}
+        self._resume_options = self._ui_state.resume_options
+        self._bind_options = self._ui_state.bind_options
+        self._flow_run_options = self._ui_state.flow_run_options
+        self._update_options = self._ui_state.update_options
+        self._update_confirm_options = self._ui_state.update_confirm_options
+        self._review_commit_options = self._ui_state.review_commit_options
+        self._review_commit_subjects = self._ui_state.review_commit_subjects
+        self._pending_review_custom = self._ui_state.pending_review_custom
+        self._compact_pending = self._ui_state.compact_pending
         self._coalesced_buffers: dict[str, _CoalescedBuffer] = {}
         self._coalesce_locks: dict[str, asyncio.Lock] = {}
-        self._media_batch_buffers: dict[str, message_handlers._MediaBatchBuffer] = {}
+        self._media_batch_buffers: dict[str, _MediaBatchBuffer] = {}
         self._media_batch_locks: dict[str, asyncio.Lock] = {}
         self._outbox_inflight: set[str] = set()
         self._outbox_lock: Optional[asyncio.Lock] = None
-        self._queued_placeholder_map: dict[tuple[int, int], int] = {}
-        self._queued_placeholder_timestamps: dict[tuple[int, int], float] = {}
+        self._queued_placeholder_manager = TelegramQueuedPlaceholderManager()
         self._bot_username: Optional[str] = None
         self._token_usage_by_thread: "collections.OrderedDict[str, dict[str, Any]]" = (
             collections.OrderedDict()
@@ -445,9 +441,12 @@ class TelegramBotService(
         self._cache_cleanup_task: Optional[asyncio.Task[None]] = None
         self._ticket_flow_watch_task: Optional[asyncio.Task[None]] = None
         self._terminal_flow_watch_task: Optional[asyncio.Task[None]] = None
-        self._cache_timestamps: dict[str, dict[object, float]] = {}
-        self._last_update_ids: dict[str, int] = {}
-        self._last_update_persisted_at: dict[str, float] = {}
+        self._cache_manager = TelegramCacheManager(
+            logger=self._logger, config=self._config
+        )
+        self._update_deduper = TelegramUpdateDeduper(
+            logger=self._logger, now_func=lambda: time.monotonic()
+        )
         self._spawned_tasks: set[asyncio.Task[Any]] = set()
         self._update_status_notifier = ChatUpdateStatusNotifier(
             platform="telegram",
@@ -1113,172 +1112,20 @@ class TelegramBotService(
             log_event(self._logger, logging.WARNING, "telegram.task.failed", exc=exc)
 
     def _touch_cache_timestamp(self, cache_name: str, key: object) -> None:
-        cache = self._cache_timestamps.setdefault(cache_name, {})
-        cache[key] = time.monotonic()
+        self._cache_manager.touch(cache_name, key)
 
     def _evict_expired_cache_entries(self, cache_name: str, ttl_seconds: float) -> None:
-        cache = self._cache_timestamps.get(cache_name)
-        if not cache:
-            return
-        now = time.monotonic()
-        expired: list[object] = []
-        for key, updated_at in cache.items():
-            if (now - updated_at) > ttl_seconds:
-                expired.append(key)
-        if not expired:
-            return
-        for key in expired:
-            cache.pop(key, None)
-            if cache_name == "reasoning_buffers":
-                self._reasoning_buffers.pop(key, None)
-            elif cache_name == "turn_preview":
-                self._turn_preview_text.pop(key, None)
-                self._turn_preview_updated_at.pop(key, None)
-            elif cache_name == "progress_trackers":
-                self._turn_progress_trackers.pop(key, None)
-                self._turn_progress_rendered.pop(key, None)
-                self._turn_progress_final_rendered.pop(key, None)
-                self._turn_progress_final_summary.pop(key, None)
-                self._turn_progress_updated_at.pop(key, None)
-                self._turn_progress_backoff_until.pop(key, None)
-                self._turn_progress_failure_streaks.pop(key, None)
-                self._turn_progress_suppressed_counts.pop(key, None)
-                task = self._turn_progress_tasks.pop(key, None)
-                if task and not task.done():
-                    task.cancel()
-                heartbeat_task = self._turn_progress_heartbeat_tasks.pop(key, None)
-                if heartbeat_task and not heartbeat_task.done():
-                    heartbeat_task.cancel()
-            elif cache_name == "oversize_warnings":
-                self._oversize_warnings.discard(key)
-            elif cache_name == "coalesced_buffers":
-                self._coalesced_buffers.pop(key, None)
-                self._coalesce_locks.pop(key, None)
-            elif cache_name == "media_batch_buffers":
-                self._media_batch_buffers.pop(key, None)
-                self._media_batch_locks.pop(key, None)
-            elif cache_name == "resume_options":
-                self._resume_options.pop(key, None)
-            elif cache_name == "bind_options":
-                self._bind_options.pop(key, None)
-            elif cache_name == "flow_run_options":
-                self._flow_run_options.pop(key, None)
-            elif cache_name == "agent_options":
-                self._agent_options.pop(key, None)
-            elif cache_name == "update_options":
-                self._update_options.pop(key, None)
-            elif cache_name == "update_confirm_options":
-                self._update_confirm_options.pop(key, None)
-            elif cache_name == "review_commit_options":
-                self._review_commit_options.pop(key, None)
-            elif cache_name == "review_commit_subjects":
-                self._review_commit_subjects.pop(key, None)
-            elif cache_name == "pending_review_custom":
-                self._pending_review_custom.pop(key, None)
-            elif cache_name == "compact_pending":
-                self._compact_pending.pop(key, None)
-            elif cache_name == "agent_profile_options":
-                self._agent_profile_options.pop(key, None)
-            elif cache_name == "model_options":
-                self._model_options.pop(key, None)
-            elif cache_name == "model_pending":
-                self._model_pending.pop(key, None)
-            elif cache_name == "pending_approvals":
-                self._pending_approvals.pop(key, None)
-            elif cache_name == "pending_questions":
-                self._pending_questions.pop(key, None)
+        self._cache_manager.evict_expired(cache_name, ttl_seconds, state=self)
+
+    @property
+    def _cache_timestamps(self) -> dict[str, dict[object, float]]:
+        return self._cache_manager._cache_timestamps
 
     def _has_any_cache_entries(self) -> bool:
         return bool(self._cache_timestamps)
 
     async def _cache_cleanup_loop(self) -> None:
-        interval = max(self._config.cache.cleanup_interval_seconds, 1.0)
-        empty_streak = 0
-        while True:
-            if not self._has_any_cache_entries():
-                empty_streak += 1
-                extended = min(interval * (1.5 ** min(empty_streak, 10)), interval * 4)
-                await asyncio.sleep(extended)
-                continue
-            empty_streak = 0
-            await asyncio.sleep(interval)
-            self._evict_expired_cache_entries(
-                "reasoning_buffers", self._config.cache.reasoning_buffer_ttl_seconds
-            )
-            self._evict_expired_cache_entries(
-                "turn_preview", self._config.cache.turn_preview_ttl_seconds
-            )
-            self._evict_expired_cache_entries(
-                "progress_trackers", self._config.cache.progress_stream_ttl_seconds
-            )
-            self._evict_expired_cache_entries(
-                "oversize_warnings", self._config.cache.oversize_warning_ttl_seconds
-            )
-            self._evict_expired_cache_entries(
-                "coalesced_buffers", self._config.cache.coalesce_buffer_ttl_seconds
-            )
-            self._evict_expired_cache_entries(
-                "media_batch_buffers",
-                self._config.cache.media_batch_buffer_ttl_seconds,
-            )
-            self._evict_expired_cache_entries(
-                "resume_options", self._config.cache.selection_state_ttl_seconds
-            )
-            self._evict_expired_cache_entries(
-                "bind_options", self._config.cache.selection_state_ttl_seconds
-            )
-            self._evict_expired_cache_entries(
-                "flow_run_options", self._config.cache.selection_state_ttl_seconds
-            )
-            self._evict_expired_cache_entries(
-                "agent_options", self._config.cache.selection_state_ttl_seconds
-            )
-            self._evict_expired_cache_entries(
-                "agent_profile_options",
-                self._config.cache.selection_state_ttl_seconds,
-            )
-            self._evict_expired_cache_entries(
-                "update_options", self._config.cache.selection_state_ttl_seconds
-            )
-            self._evict_expired_cache_entries(
-                "update_confirm_options",
-                self._config.cache.selection_state_ttl_seconds,
-            )
-            self._evict_expired_cache_entries(
-                "review_commit_options",
-                self._config.cache.selection_state_ttl_seconds,
-            )
-            self._evict_expired_cache_entries(
-                "review_commit_subjects",
-                self._config.cache.selection_state_ttl_seconds,
-            )
-            self._evict_expired_cache_entries(
-                "pending_review_custom",
-                self._config.cache.selection_state_ttl_seconds,
-            )
-            self._evict_expired_cache_entries(
-                "compact_pending", self._config.cache.selection_state_ttl_seconds
-            )
-            self._evict_expired_cache_entries(
-                "model_options", self._config.cache.selection_state_ttl_seconds
-            )
-            self._evict_expired_cache_entries(
-                "model_pending", self._config.cache.model_pending_ttl_seconds
-            )
-            self._evict_expired_cache_entries(
-                "pending_approvals", self._config.cache.pending_approval_ttl_seconds
-            )
-            self._evict_expired_cache_entries(
-                "pending_questions", self._config.cache.pending_question_ttl_seconds
-            )
-            now = time.monotonic()
-            expired_placeholders = []
-            for key, timestamp in self._queued_placeholder_timestamps.items():
-                if (now - timestamp) > self._config.cache.pending_approval_ttl_seconds:
-                    expired_placeholders.append(key)
-            for key in expired_placeholders:
-                self._queued_placeholder_map.pop(key, None)
-                self._queued_placeholder_timestamps.pop(key, None)
+        await self._cache_manager.cleanup_loop(state=self)
 
     @staticmethod
     def _parse_last_active(record: "TelegramTopicRecord") -> float:
@@ -1338,6 +1185,11 @@ class TelegramBotService(
         return self._ticket_flow_bridge.get_paused_ticket_flow(
             workspace_root, preferred_run_id=preferred_run_id
         )
+
+    async def _auto_resume_ticket_flow_run(
+        self, workspace_root: Path, run_id: str
+    ) -> None:
+        await self._ticket_flow_bridge.auto_resume_run(workspace_root, run_id)
 
     async def _write_user_reply_from_telegram(
         self,
@@ -1830,157 +1682,49 @@ class TelegramBotService(
             )
 
     async def _should_process_update(self, key: str, update_id: int) -> bool:
-        if not isinstance(update_id, int):
-            return True
-        if isinstance(update_id, bool):
-            return True
-        last_id = self._last_update_ids.get(key)
-        if last_id is None:
-            record = None
-            try:
-                record = await self._store.get_topic(key)
-            except (OSError, ValueError) as exc:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "telegram.update_id.load.failed",
-                    exc=exc,
-                    topic_key=key,
-                    update_id=update_id,
-                )
-            last_id = record.last_update_id if record else None
-            if isinstance(last_id, int) and not isinstance(last_id, bool):
-                self._last_update_ids[key] = last_id
-            else:
-                last_id = None
-        if isinstance(last_id, int) and update_id <= last_id:
-            return False
-        self._last_update_ids[key] = update_id
-        try:
-            await self._maybe_persist_update_id(key, update_id)
-        except (OSError, ValueError) as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "telegram.update_id.persist.failed",
-                exc=exc,
-                topic_key=key,
-                update_id=update_id,
-            )
-        return True
+        return await self._update_deduper.should_process(
+            key,
+            update_id,
+            store=self._store,
+            persist_interval=self._config.cache.update_id_persist_interval_seconds,
+        )
 
     async def _maybe_persist_update_id(self, key: str, update_id: int) -> None:
-        now = time.monotonic()
-        last_persisted = self._last_update_persisted_at.get(key, 0.0)
-        if (
-            now - last_persisted
-        ) < self._config.cache.update_id_persist_interval_seconds:
-            return
+        await self._update_deduper._maybe_persist(
+            key,
+            update_id,
+            store=self._store,
+            persist_interval=self._config.cache.update_id_persist_interval_seconds,
+        )
 
-        def apply(record: "TelegramTopicRecord") -> None:
-            record.last_update_id = update_id
+    @property
+    def _last_update_ids(self) -> dict[str, int]:
+        return self._update_deduper._last_update_ids
 
-        await self._store.update_topic(key, apply)
-        self._last_update_persisted_at[key] = now
-
-    def _ensure_typing_lock(self) -> asyncio.Lock:
-        loop = asyncio.get_running_loop()
-        lock = self._typing_lock
-        lock_loop = getattr(lock, "_loop", None) if lock else None
-        if (
-            lock is None
-            or lock_loop is None
-            or lock_loop is not loop
-            or lock_loop.is_closed()
-        ):
-            lock = asyncio.Lock()
-            self._typing_lock = lock
-        return lock
+    @property
+    def _last_update_persisted_at(self) -> dict[str, float]:
+        return self._update_deduper._last_persisted_at
 
     async def _typing_session_active(self, key: tuple[int, Optional[int]]) -> bool:
-        lock = self._ensure_typing_lock()
-        async with lock:
-            return self._typing_sessions.get(key, 0) > 0
-
-    async def _typing_indicator_loop(
-        self, chat_id: int, thread_id: Optional[int]
-    ) -> None:
-        key = (chat_id, thread_id)
-        send_chat_action = getattr(self._bot, "send_chat_action", None)
-        if not callable(send_chat_action):
-            return
-        try:
-            while True:
-                try:
-                    await send_chat_action(
-                        chat_id,
-                        action="typing",
-                        message_thread_id=thread_id,
-                    )
-                except TelegramAPIError as exc:
-                    log_event(
-                        self._logger,
-                        logging.DEBUG,
-                        "telegram.typing.send.failed",
-                        chat_id=chat_id,
-                        thread_id=thread_id,
-                        exc=exc,
-                    )
-                await asyncio.sleep(TYPING_HEARTBEAT_INTERVAL_SECONDS)
-                if not await self._typing_session_active(key):
-                    return
-        finally:
-            lock = self._ensure_typing_lock()
-            async with lock:
-                task = self._typing_tasks.get(key)
-                if task is asyncio.current_task():
-                    self._typing_tasks.pop(key, None)
+        return await self._typing_manager.is_active(key)
 
     async def _begin_typing_indicator(
         self, chat_id: int, thread_id: Optional[int]
     ) -> None:
-        key = (chat_id, thread_id)
-        lock = self._ensure_typing_lock()
-        async with lock:
-            self._typing_sessions[key] = self._typing_sessions.get(key, 0) + 1
-            task = self._typing_tasks.get(key)
-            if task is not None and not task.done():
-                return
-            typing_coro = self._typing_indicator_loop(chat_id, thread_id)
-            try:
-                self._typing_tasks[key] = self._spawn_task(typing_coro)
-            except (
-                OSError,
-                RuntimeError,
-                ValueError,
-            ):  # intentional: cleanup-before-reraise
-                typing_coro.close()
-                count = self._typing_sessions.get(key, 0)
-                if count <= 1:
-                    self._typing_sessions.pop(key, None)
-                else:
-                    self._typing_sessions[key] = count - 1
-                raise
+        await self._typing_manager.begin(chat_id, thread_id)
 
     async def _end_typing_indicator(
         self, chat_id: int, thread_id: Optional[int]
     ) -> None:
-        key = (chat_id, thread_id)
-        task_to_cancel: Optional[asyncio.Task[None]] = None
-        lock = self._ensure_typing_lock()
-        async with lock:
-            count = self._typing_sessions.get(key)
-            if count is None:
-                return
-            if count > 1:
-                self._typing_sessions[key] = count - 1
-                return
-            self._typing_sessions.pop(key, None)
-            task_to_cancel = self._typing_tasks.pop(key, None)
-        if task_to_cancel is not None and not task_to_cancel.done():
-            task_to_cancel.cancel()
-            with suppress(asyncio.CancelledError):
-                await task_to_cancel
+        await self._typing_manager.end(chat_id, thread_id)
+
+    @property
+    def _typing_sessions(self) -> dict[tuple[int, Optional[int]], int]:
+        return self._typing_manager._sessions
+
+    @property
+    def _typing_tasks(self) -> dict[tuple[int, Optional[int]], asyncio.Task[None]]:
+        return self._typing_manager._tasks
 
     async def _handle_callback(self, callback: TelegramCallbackQuery) -> None:
         await callback_handlers.handle_callback(self, callback)
@@ -2074,22 +1818,26 @@ class TelegramBotService(
         return wrapped
 
     def _claim_queued_placeholder(self, chat_id: int, message_id: int) -> Optional[int]:
-        placeholder_id = self._queued_placeholder_map.pop((chat_id, message_id), None)
-        self._queued_placeholder_timestamps.pop((chat_id, message_id), None)
-        return placeholder_id
+        return self._queued_placeholder_manager.claim(chat_id, message_id)
 
     def _get_queued_placeholder(self, chat_id: int, message_id: int) -> Optional[int]:
-        return self._queued_placeholder_map.get((chat_id, message_id))
+        return self._queued_placeholder_manager.get(chat_id, message_id)
 
     def _set_queued_placeholder(
         self, chat_id: int, message_id: int, placeholder_id: int
     ) -> None:
-        self._queued_placeholder_map[(chat_id, message_id)] = placeholder_id
-        self._queued_placeholder_timestamps[(chat_id, message_id)] = time.monotonic()
+        self._queued_placeholder_manager.set(chat_id, message_id, placeholder_id)
 
     def _clear_queued_placeholder(self, chat_id: int, message_id: int) -> None:
-        self._queued_placeholder_map.pop((chat_id, message_id), None)
-        self._queued_placeholder_timestamps.pop((chat_id, message_id), None)
+        self._queued_placeholder_manager.clear(chat_id, message_id)
+
+    @property
+    def _queued_placeholder_map(self) -> dict[tuple[int, int], int]:
+        return self._queued_placeholder_manager.map
+
+    @property
+    def _queued_placeholder_timestamps(self) -> dict[tuple[int, int], float]:
+        return self._queued_placeholder_manager.timestamps
 
     def _wrap_topic_work(self, key: str, work: Any) -> Any:
         conversation_id = None

@@ -650,11 +650,17 @@ def _render_pma_threads_section(
         )
         agent = _field(thread, "agent", max_field_chars)
         raw_status = str(thread.get("status") or "")
-        lifecycle_status = str(thread.get("lifecycle_status") or "-")
-        operator_status = derive_managed_thread_operator_status(
-            normalized_status=raw_status, lifecycle_status=lifecycle_status
-        )
-        status_display = _truncate(operator_status, max_field_chars)
+        precomputed = _field(thread, "operator_status", max_field_chars)
+        if precomputed:
+            status_display = precomputed
+        else:
+            lifecycle_status = str(thread.get("lifecycle_status") or "-")
+            status_display = _truncate(
+                derive_managed_thread_operator_status(
+                    normalized_status=raw_status, lifecycle_status=lifecycle_status
+                ),
+                max_field_chars,
+            )
         last_turn_outcome = _truncate(
             (
                 raw_status

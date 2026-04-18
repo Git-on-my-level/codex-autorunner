@@ -19,11 +19,11 @@ from ....core.config import (
     ConfigError,
     HubConfig,
     RepoConfig,
-    _normalize_base_path,
     find_nearest_hub_config_path,
     load_hub_config,
     load_repo_config,
 )
+from ....core.config_parsers import normalize_base_path as _normalize_base_path_impl
 from ....core.utils import (
     RepoNotFoundError,
     find_repo_root,
@@ -52,7 +52,7 @@ def get_car_version() -> str:
 
 
 def normalize_base_path(base_path: Optional[str]) -> str:
-    return _normalize_base_path(base_path)
+    return _normalize_base_path_impl(base_path)
 
 
 def resolve_auth_token(env_name: str) -> Optional[str]:
@@ -458,7 +458,7 @@ def build_server_url(
     config, path: str, *, base_path_override: Optional[str] = None
 ) -> str:
     base_path = (
-        _normalize_base_path(base_path_override)
+        normalize_base_path(base_path_override)
         if base_path_override is not None
         else (config.server_base_path or "")
     )

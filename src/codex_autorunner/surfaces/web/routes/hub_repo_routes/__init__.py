@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 __all__ = [
+    "HubCacheCoordinator",
     "HubDestinationService",
     "HubMountManager",
     "HubRepoEnricher",
@@ -13,6 +14,7 @@ __all__ = [
 ]
 
 from .agent_workspaces import build_hub_agent_workspace_router
+from .cache_coordinator import HubCacheCoordinator
 from .channels import build_hub_channel_router
 from .crud import build_hub_repo_crud_router
 from .destinations import HubDestinationService

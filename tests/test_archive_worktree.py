@@ -404,3 +404,171 @@ def test_archive_workspace_car_state_preserves_legacy_workspace_context(
     assert (result.snapshot_path / "contextspace" / "active_context.md").read_text(
         encoding="utf-8"
     ) == "legacy context"
+
+
+class TestContextspaceWorkspaceFallback:
+    def test_prefers_contextspace_when_both_exist(self, tmp_path: Path) -> None:
+        base_repo, worktree_repo = _setup_worktree(tmp_path)
+        car_root = worktree_repo / ".codex-autorunner"
+        _write(car_root / "contextspace" / "active_context.md", "new context")
+        _write(car_root / "workspace" / "active_context.md", "old context")
+
+        result = archive_workspace_car_state(
+            base_repo_root=base_repo,
+            base_repo_id="base",
+            worktree_repo_root=worktree_repo,
+            worktree_repo_id="worktree",
+            branch="feature/archive-viewer",
+            worktree_of="base",
+        )
+
+        assert (result.snapshot_path / "contextspace" / "active_context.md").read_text(
+            encoding="utf-8"
+        ) == "new context"
+
+    def test_falls_back_to_workspace_when_contextspace_absent(
+        self, tmp_path: Path
+    ) -> None:
+        base_repo, worktree_repo = _setup_worktree(tmp_path)
+        car_root = worktree_repo / ".codex-autorunner"
+        shutil.rmtree(car_root / "contextspace")
+        _write(car_root / "workspace" / "active_context.md", "legacy context")
+        _write(car_root / "workspace" / "decisions.md", "legacy decisions")
+
+        result = archive_workspace_car_state(
+            base_repo_root=base_repo,
+            base_repo_id="base",
+            worktree_repo_root=worktree_repo,
+            worktree_repo_id="worktree",
+            branch="feature/archive-viewer",
+            worktree_of="base",
+        )
+
+        assert (result.snapshot_path / "contextspace" / "active_context.md").read_text(
+            encoding="utf-8"
+        ) == "legacy context"
+        assert (result.snapshot_path / "contextspace" / "decisions.md").read_text(
+            encoding="utf-8"
+        ) == "legacy decisions"
+
+    def test_workspace_reset_clears_both_contextspace_and_workspace(
+        self, tmp_path: Path
+    ) -> None:
+        base_repo, worktree_repo = _setup_worktree(tmp_path)
+        car_root = worktree_repo / ".codex-autorunner"
+        _write(car_root / "workspace" / "active_context.md", "legacy")
+
+        archive_workspace_car_state(
+            base_repo_root=base_repo,
+            base_repo_id="base",
+            worktree_repo_root=worktree_repo,
+            worktree_repo_id="worktree",
+            branch="feature/archive-viewer",
+            worktree_of="base",
+        )
+
+        assert not (car_root / "workspace").exists()
+        assert (
+            not (car_root / "contextspace" / "active_context.md").exists()
+            or (car_root / "contextspace" / "active_context.md").read_text(
+                encoding="utf-8"
+            )
+            == ""
+        )
+
+    def test_archive_snapshot_uses_contextspace_source(self, tmp_path: Path) -> None:
+        base_repo, worktree_repo = _setup_worktree(tmp_path)
+
+        result = archive_worktree_snapshot(
+            base_repo_root=base_repo,
+            base_repo_id="base",
+            worktree_repo_root=worktree_repo,
+            worktree_repo_id="worktree",
+            branch="feature/archive-viewer",
+            worktree_of="base",
+        )
+
+        assert (result.snapshot_path / "contextspace" / "active_context.md").exists()
+        assert not (result.snapshot_path / "workspace").exists()
+
+
+class TestContextspaceSourceHelper:
+    def test_prefers_contextspace(self, tmp_path: Path) -> None:
+        from codex_autorunner.core.archive import _contextspace_source
+
+        car_root = tmp_path / ".codex-autorunner"
+        (car_root / "contextspace").mkdir(parents=True)
+        (car_root / "workspace").mkdir(parents=True)
+
+        result = _contextspace_source(car_root)
+        assert result.name == "contextspace"
+
+    def test_falls_back_to_workspace(self, tmp_path: Path) -> None:
+        from codex_autorunner.core.archive import _contextspace_source
+
+        car_root = tmp_path / ".codex-autorunner"
+        (car_root / "workspace").mkdir(parents=True)
+
+        result = _contextspace_source(car_root)
+        assert result.name == "workspace"
+
+    def test_returns_contextspace_when_neither_exists(self, tmp_path: Path) -> None:
+        from codex_autorunner.core.archive import _contextspace_source
+
+        car_root = tmp_path / ".codex-autorunner"
+
+        result = _contextspace_source(car_root)
+        assert result.name == "contextspace"
+
+    def test_symlink_contextspace_preferred_over_workspace_dir(
+        self, tmp_path: Path
+    ) -> None:
+        from codex_autorunner.core.archive import _contextspace_source
+
+        car_root = tmp_path / ".codex-autorunner"
+        car_root.mkdir(parents=True)
+        link_target = tmp_path / "real_contextspace"
+        link_target.mkdir()
+        (car_root / "contextspace").symlink_to(link_target)
+        (car_root / "workspace").mkdir()
+
+        result = _contextspace_source(car_root)
+        assert result.name == "contextspace"
+        assert result.is_symlink()
+
+
+class TestFlowsArchiveHelpersContextspaceSource:
+    def test_uses_canonical_owner(self) -> None:
+        from codex_autorunner.core.archive import _contextspace_source as canonical
+        from codex_autorunner.core.flows.archive_helpers import (
+            _contextspace_source as imported,
+        )
+
+        assert imported is canonical
+
+    def test_prefers_contextspace(self, tmp_path: Path) -> None:
+        from codex_autorunner.core.flows.archive_helpers import _contextspace_source
+
+        car_root = tmp_path / ".codex-autorunner"
+        (car_root / "contextspace").mkdir(parents=True)
+        (car_root / "workspace").mkdir(parents=True)
+
+        result = _contextspace_source(car_root)
+        assert result.name == "contextspace"
+
+    def test_falls_back_to_workspace(self, tmp_path: Path) -> None:
+        from codex_autorunner.core.flows.archive_helpers import _contextspace_source
+
+        car_root = tmp_path / ".codex-autorunner"
+        (car_root / "workspace").mkdir(parents=True)
+
+        result = _contextspace_source(car_root)
+        assert result.name == "workspace"
+
+    def test_returns_contextspace_when_neither_exists(self, tmp_path: Path) -> None:
+        from codex_autorunner.core.flows.archive_helpers import _contextspace_source
+
+        car_root = tmp_path / ".codex-autorunner"
+
+        result = _contextspace_source(car_root)
+        assert result.name == "contextspace"

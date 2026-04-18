@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
@@ -195,41 +196,45 @@ def test_resolve_binding_for_pr_event_ignores_stale_archived_matching_thread(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
-    thread_target_id = _create_terminal_repo_thread(hub_root, archive=True)
+    os.environ["CAR_LEGACY_MIRROR_ENABLED"] = "true"
+    try:
+        thread_target_id = _create_terminal_repo_thread(hub_root, archive=True)
 
-    with open_sqlite(PmaThreadStore(hub_root).path) as legacy_conn:
-        with legacy_conn:
-            legacy_conn.execute(
-                """
-                UPDATE pma_managed_threads
-                   SET updated_at = ?,
-                       status_updated_at = ?
-                 WHERE managed_thread_id = ?
-                """,
-                (
-                    "2025-01-01T00:00:00Z",
-                    "2025-01-01T00:00:00Z",
-                    thread_target_id,
-                ),
-            )
+        with open_sqlite(PmaThreadStore(hub_root).path) as legacy_conn:
+            with legacy_conn:
+                legacy_conn.execute(
+                    """
+                    UPDATE pma_managed_threads
+                       SET updated_at = ?,
+                           status_updated_at = ?
+                     WHERE managed_thread_id = ?
+                    """,
+                    (
+                        "2025-01-01T00:00:00Z",
+                        "2025-01-01T00:00:00Z",
+                        thread_target_id,
+                    ),
+                )
 
-    with open_orchestration_sqlite(hub_root) as conn:
-        with conn:
-            conn.execute(
-                """
-                UPDATE orch_thread_targets
-                   SET updated_at = ?,
-                       status_updated_at = ?
-                 WHERE thread_target_id = ?
-                """,
-                (
-                    "2025-01-01T00:00:00Z",
-                    "2025-01-01T00:00:00Z",
-                    thread_target_id,
-                ),
-            )
+        with open_orchestration_sqlite(hub_root) as conn:
+            with conn:
+                conn.execute(
+                    """
+                    UPDATE orch_thread_targets
+                       SET updated_at = ?,
+                           status_updated_at = ?
+                     WHERE thread_target_id = ?
+                    """,
+                    (
+                        "2025-01-01T00:00:00Z",
+                        "2025-01-01T00:00:00Z",
+                        thread_target_id,
+                    ),
+                )
 
-    binding = resolve_binding_for_scm_event(hub_root, _make_event())
+        binding = resolve_binding_for_scm_event(hub_root, _make_event())
 
-    assert binding is not None
-    assert binding.thread_target_id is None
+        assert binding is not None
+        assert binding.thread_target_id is None
+    finally:
+        os.environ.pop("CAR_LEGACY_MIRROR_ENABLED", None)

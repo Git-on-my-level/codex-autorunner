@@ -1,7 +1,7 @@
 import { parseAppServerEvent, resetOpenCodeEventState, type ParsedAgentEvent, type AgentEvent } from "./agentEvents.js";
 import { summarizeEvents, renderCompactSummary, COMPACT_MAX_ACTIONS, COMPACT_MAX_TEXT_LENGTH } from "./eventSummarizer.js";
 import { saveChatHistory, loadChatHistory, type ChatStorageConfig } from "./docChatStorage.js";
-import { renderMarkdown } from "./messages.js";
+import { renderMarkdown } from "./markdown.js";
 
 export type ChatStatus = "idle" | "running" | "done" | "error" | "interrupted";
 

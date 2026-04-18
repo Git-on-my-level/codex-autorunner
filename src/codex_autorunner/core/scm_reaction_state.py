@@ -22,6 +22,27 @@ from .time_utils import now_iso
 _RESOLVED_STATES_ALLOW_REEMIT = frozenset({"resolved"})
 
 
+def reaction_state_kind(*, reaction_kind: str, operation_kind: str) -> str:
+    if reaction_kind != "review_comment":
+        return reaction_kind
+    return f"{reaction_kind}:{operation_kind}"
+
+
+def tracking_reaction_state_kind(
+    tracking: Mapping[str, Any],
+) -> Optional[str]:
+    state_kind = _normalize_text(tracking.get("reaction_state_kind"))
+    if state_kind is not None:
+        return state_kind
+    rk = _normalize_text(tracking.get("reaction_kind"))
+    ok = _normalize_text(tracking.get("operation_kind"))
+    if rk is None:
+        return None
+    if ok is None or rk != "review_comment":
+        return rk
+    return reaction_state_kind(reaction_kind=rk, operation_kind=ok)
+
+
 def _normalize_int(value: Any, *, field_name: str) -> int:
     try:
         return int(value)
@@ -1055,6 +1076,8 @@ __all__ = [
     "mark_reaction_delivery_failed",
     "mark_reaction_emitted",
     "mark_reaction_resolved",
+    "reaction_state_kind",
     "should_emit_reaction",
     "stable_reaction_fingerprint",
+    "tracking_reaction_state_kind",
 ]

@@ -63,6 +63,7 @@ from .managed_thread_runtime_payloads import (
     MANAGED_THREAD_PUBLIC_EXECUTION_ERROR,
     build_accepted_send_payload,
     build_archived_thread_payload,
+    build_execution_result_payload,
     build_execution_setup_error_payload,
     build_interrupt_failure_payload,
     build_not_active_thread_payload,
@@ -658,15 +659,15 @@ async def _run_managed_thread_execution(
                 to_state=transition_state,
                 reason=detail,
             )
-            return {
-                "status": response_status,
-                "managed_thread_id": managed_thread_id,
-                "managed_turn_id": current_turn_id,
-                "backend_thread_id": resolved_backend_thread_id or "",
-                "assistant_text": "",
-                "error": detail,
-                **response_payload,
-            }
+            return build_execution_result_payload(
+                status=response_status,
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=current_turn_id,
+                backend_thread_id=resolved_backend_thread_id or "",
+                assistant_text="",
+                error=detail,
+                response_payload=response_payload,
+            )
         thread_store.update_thread_after_turn(
             managed_thread_id,
             last_turn_id=current_turn_id,
@@ -686,15 +687,15 @@ async def _run_managed_thread_execution(
             to_state="completed",
             reason="managed_turn_completed",
         )
-        return {
-            "status": "ok",
-            "managed_thread_id": managed_thread_id,
-            "managed_turn_id": current_turn_id,
-            "backend_thread_id": resolved_backend_thread_id or "",
-            "assistant_text": outcome.assistant_text,
-            "error": None,
-            **response_payload,
-        }
+        return build_execution_result_payload(
+            status="ok",
+            managed_thread_id=managed_thread_id,
+            managed_turn_id=current_turn_id,
+            backend_thread_id=resolved_backend_thread_id or "",
+            assistant_text=outcome.assistant_text,
+            error=None,
+            response_payload=response_payload,
+        )
 
     if outcome.status == "interrupted":
         timeline_events.append(
@@ -732,15 +733,15 @@ async def _run_managed_thread_execution(
             to_state="interrupted",
             reason=detail,
         )
-        return {
-            "status": "interrupted",
-            "managed_thread_id": managed_thread_id,
-            "managed_turn_id": current_turn_id,
-            "backend_thread_id": resolved_backend_thread_id or "",
-            "assistant_text": "",
-            "error": detail,
-            **response_payload,
-        }
+        return build_execution_result_payload(
+            status="interrupted",
+            managed_thread_id=managed_thread_id,
+            managed_turn_id=current_turn_id,
+            backend_thread_id=resolved_backend_thread_id or "",
+            assistant_text="",
+            error=detail,
+            response_payload=response_payload,
+        )
 
     detail = sanitize_managed_thread_result_error(outcome.error)
     timeline_events.append(Failed(timestamp=now_iso(), error_message=detail))
@@ -783,15 +784,15 @@ async def _run_managed_thread_execution(
         to_state="failed",
         reason=detail,
     )
-    return {
-        "status": "error",
-        "managed_thread_id": managed_thread_id,
-        "managed_turn_id": current_turn_id,
-        "backend_thread_id": resolved_backend_thread_id or "",
-        "assistant_text": "",
-        "error": detail,
-        **response_payload,
-    }
+    return build_execution_result_payload(
+        status="error",
+        managed_thread_id=managed_thread_id,
+        managed_turn_id=current_turn_id,
+        backend_thread_id=resolved_backend_thread_id or "",
+        assistant_text="",
+        error=detail,
+        response_payload=response_payload,
+    )
 
 
 def ensure_managed_thread_queue_worker(app: Any, managed_thread_id: str) -> None:

@@ -33,6 +33,34 @@ def _truncate(text: Optional[str], limit: int) -> str:
     return raw[: max(0, limit - 3)] + "..."
 
 
+THREAD_SNAPSHOT_FIELDS: tuple[str, ...] = (
+    "managed_thread_id",
+    "agent",
+    "repo_id",
+    "resource_kind",
+    "resource_id",
+    "workspace_root",
+    "name",
+    "status",
+    "lifecycle_status",
+    "status_reason",
+    "status_terminal",
+    "status_changed_at",
+    "last_turn_id",
+    "last_message_preview",
+    "updated_at",
+    "chat_bound",
+    "binding_kind",
+    "binding_id",
+    "binding_count",
+    "binding_kinds",
+    "binding_ids",
+    "cleanup_protected",
+    "freshness",
+    "operator_status",
+)
+
+
 def _trim_extra(extra: Any, limit: int) -> Any:
     if extra is None:
         return None

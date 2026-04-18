@@ -4,7 +4,6 @@ import copy
 import hashlib
 import html
 import importlib
-import json
 import logging
 import re
 import threading
@@ -23,6 +22,11 @@ from .publish_operation_executors import (
     build_enqueue_managed_turn_executor,
     build_notify_chat_executor,
 )
+from .scm_escalation import (
+    create_escalation_operation,
+    format_duplicate_escalation_message,
+    format_failure_escalation_message,
+)
 from .scm_events import ScmEvent, ScmEventStore
 from .scm_observability import (
     SCM_AUDIT_BINDING_RESOLVED,
@@ -35,7 +39,11 @@ from .scm_observability import (
     with_correlation_id,
 )
 from .scm_reaction_router import route_scm_reactions
-from .scm_reaction_state import ScmReactionStateStore
+from .scm_reaction_state import (
+    ScmReactionStateStore,
+    reaction_state_kind,
+    tracking_reaction_state_kind,
+)
 from .scm_reaction_types import (
     ReactionIntent,
     ScmReactionConfig,
@@ -194,50 +202,6 @@ def _compact_mapping(payload: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _reaction_state_kind(*, reaction_kind: str, operation_kind: str) -> str:
-    if reaction_kind != "review_comment":
-        return reaction_kind
-    return f"{reaction_kind}:{operation_kind}"
-
-
-def _tracking_reaction_state_kind(tracking: Mapping[str, Any]) -> Optional[str]:
-    state_kind = _normalize_text(tracking.get("reaction_state_kind"))
-    if state_kind is not None:
-        return state_kind
-    reaction_kind = _normalize_text(tracking.get("reaction_kind"))
-    operation_kind = _normalize_text(tracking.get("operation_kind"))
-    if reaction_kind is None:
-        return None
-    if operation_kind is None or reaction_kind != "review_comment":
-        return reaction_kind
-    return _reaction_state_kind(
-        reaction_kind=reaction_kind,
-        operation_kind=operation_kind,
-    )
-
-
-def _stable_escalation_operation_key(
-    *,
-    binding_id: str,
-    reaction_kind: str,
-    fingerprint: str,
-    reason: str,
-) -> str:
-    encoded = json.dumps(
-        {
-            "binding_id": binding_id,
-            "reaction_kind": reaction_kind,
-            "fingerprint": fingerprint,
-            "reason": reason,
-        },
-        sort_keys=True,
-        ensure_ascii=True,
-        separators=(",", ":"),
-    )
-    digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:24]
-    return f"scm-reaction-escalation:{reason}:{digest}"
-
-
 def _intent_priority(intent: ReactionIntent) -> tuple[int, str]:
     priorities = {
         "react_pr_review_comment": 0,
@@ -348,60 +312,6 @@ def _reaction_subject(tracking: Mapping[str, Any]) -> str:
     if binding_id is not None:
         return f"binding {binding_id}"
     return "SCM binding"
-
-
-def _reaction_label(reaction_kind: str) -> str:
-    return reaction_kind.replace("_", " ")
-
-
-def _failure_escalation_message(
-    tracking: Mapping[str, Any],
-    *,
-    delivery_failure_count: int,
-    last_error_text: Optional[str],
-) -> str:
-    subject = _reaction_subject(tracking)
-    reaction_label = _reaction_label(str(tracking.get("reaction_kind") or "reaction"))
-    details = (
-        f" Last error: {last_error_text}."
-        if _normalize_text(last_error_text) is not None
-        else ""
-    )
-    return (
-        f"SCM automation escalation: {reaction_label} for {subject} failed delivery "
-        f"{delivery_failure_count} times.{details}"
-    )
-
-
-def _duplicate_escalation_message(
-    tracking: Mapping[str, Any],
-    *,
-    attempt_count: int,
-) -> str:
-    subject = _reaction_subject(tracking)
-    reaction_label = _reaction_label(str(tracking.get("reaction_kind") or "reaction"))
-    return (
-        f"SCM automation escalation: {reaction_label} for {subject} remained active "
-        f"across {attempt_count} identical deliveries. Duplicate follow-ups are suppressed."
-    )
-
-
-def _resolve_escalation_payload(
-    tracking: Mapping[str, Any], *, message: str
-) -> dict[str, Any]:
-    thread_target_id = _normalize_text(tracking.get("thread_target_id"))
-    repo_id = _normalize_text(tracking.get("repo_id"))
-    payload = {
-        "message": message,
-        "scm_reaction": dict(tracking),
-    }
-    if thread_target_id is not None:
-        payload["thread_target_id"] = thread_target_id
-        return payload
-    payload["delivery"] = "primary_pma"
-    if repo_id is not None:
-        payload["repo_id"] = repo_id
-    return payload
 
 
 def _tracking_from_payload(payload: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -675,7 +585,9 @@ class ScmAutomationService:
         enqueue_operation: PublishOperation,
         seen_operation_keys: set[str],
     ) -> Optional[PublishOperation]:
-        thread_target_id = _normalize_text(tracking.get("thread_target_id"))
+        thread_target_id = _normalize_text(
+            enqueue_operation.response.get("thread_target_id")
+        ) or _normalize_text(tracking.get("thread_target_id"))
         enqueue_status = _normalize_text(enqueue_operation.response.get("status"))
         if thread_target_id is None or enqueue_status not in {"queued", "running"}:
             return None
@@ -762,7 +674,7 @@ class ScmAutomationService:
             )
             binding_id: Optional[str] = None
             fingerprint: Optional[str] = None
-            reaction_state_kind: Optional[str] = None
+            rsk: Optional[str] = None
             tracking: dict[str, Any] = {}
             if binding is not None and intent.binding_id is not None:
                 binding_id = intent.binding_id
@@ -771,7 +683,7 @@ class ScmAutomationService:
                     binding=binding,
                     intent=intent,
                 )
-                reaction_state_kind = _reaction_state_kind(
+                rsk = reaction_state_kind(
                     reaction_kind=intent.reaction_kind,
                     operation_kind=intent.operation_kind,
                 )
@@ -786,27 +698,29 @@ class ScmAutomationService:
                         "pr_number": binding.pr_number,
                         "provider": event.provider,
                         "reaction_kind": intent.reaction_kind,
-                        "reaction_state_kind": reaction_state_kind,
+                        "reaction_state_kind": rsk,
                         "repo_id": binding.repo_id or event.repo_id,
                         "repo_slug": binding.repo_slug or event.repo_slug,
+                        "head_branch": binding.head_branch,
+                        "base_branch": binding.base_branch,
                         "thread_target_id": binding.thread_target_id,
                     }
                 )
                 self._reaction_state_store.resolve_other_active_reactions(
                     binding_id=binding_id,
-                    reaction_kind=reaction_state_kind,
+                    reaction_kind=rsk,
                     keep_fingerprint=fingerprint,
                     event_id=intent.event_id or event.event_id,
                     metadata=tracking,
                 )
                 existing = self._reaction_state_store.get_reaction_state(
                     binding_id=binding_id,
-                    reaction_kind=reaction_state_kind,
+                    reaction_kind=rsk,
                     fingerprint=fingerprint,
                 )
                 if not self._reaction_state_store.should_emit_reaction(
                     binding_id=binding_id,
-                    reaction_kind=reaction_state_kind,
+                    reaction_kind=rsk,
                     fingerprint=fingerprint,
                 ):
                     existing_attempt_count = int(
@@ -821,12 +735,15 @@ class ScmAutomationService:
                         and duplicate_threshold > 0
                         and existing_attempt_count + 1 >= duplicate_threshold
                     ):
-                        escalation_operation = self._create_escalation_operation(
+                        escalation_operation = create_escalation_operation(
+                            journal=self._journal,
+                            reaction_state_store=self._reaction_state_store,
+                            audit_recorder=self._audit_recorder,
                             binding_id=binding_id,
-                            reaction_kind=reaction_state_kind,
+                            reaction_kind=rsk,
                             fingerprint=fingerprint,
                             tracking=tracking,
-                            message=_duplicate_escalation_message(
+                            message=format_duplicate_escalation_message(
                                 tracking,
                                 attempt_count=existing_attempt_count + 1,
                             ),
@@ -842,7 +759,7 @@ class ScmAutomationService:
                     ):
                         self._reaction_state_store.mark_reaction_suppressed(
                             binding_id=binding_id,
-                            reaction_kind=reaction_state_kind,
+                            reaction_kind=rsk,
                             fingerprint=fingerprint,
                             event_id=intent.event_id or event.event_id,
                             metadata=tracking,
@@ -894,14 +811,10 @@ class ScmAutomationService:
                 operation=operation,
                 payload={"deduped": deduped},
             )
-            if (
-                fingerprint is not None
-                and binding_id is not None
-                and reaction_state_kind is not None
-            ):
+            if fingerprint is not None and binding_id is not None and rsk is not None:
                 self._reaction_state_store.mark_reaction_emitted(
                     binding_id=binding_id,
-                    reaction_kind=reaction_state_kind,
+                    reaction_kind=rsk,
                     fingerprint=fingerprint,
                     event_id=intent.event_id or event.event_id,
                     operation_key=operation_key,
@@ -929,78 +842,6 @@ class ScmAutomationService:
         self._reschedule_deferred_publish_drain_if_needed()
         return processed
 
-    def _create_escalation_operation(
-        self,
-        *,
-        binding_id: str,
-        reaction_kind: str,
-        fingerprint: str,
-        tracking: Mapping[str, Any],
-        message: str,
-        reason: str,
-        seen_operation_keys: set[str],
-        event_id: Optional[str],
-    ) -> Optional[PublishOperation]:
-        operation_key = _stable_escalation_operation_key(
-            binding_id=binding_id,
-            reaction_kind=reaction_kind,
-            fingerprint=fingerprint,
-            reason=reason,
-        )
-        if operation_key in seen_operation_keys:
-            return None
-        seen_operation_keys.add(operation_key)
-        correlation_id = _normalize_text(tracking.get("correlation_id"))
-        if correlation_id is None:
-            normalized_event_id = _normalize_text(event_id)
-            if normalized_event_id is not None:
-                correlation_id = f"scm:{normalized_event_id}"
-        payload = _resolve_escalation_payload(tracking, message=message)
-        if correlation_id is not None:
-            payload = with_correlation_id(payload, correlation_id=correlation_id)
-        operation, deduped = self._journal.create_operation(
-            operation_key=operation_key,
-            operation_kind="notify_chat",
-            payload=payload,
-        )
-        escalation_metadata = dict(tracking)
-        escalation_metadata["escalation_reason"] = reason
-        if correlation_id is not None:
-            try:
-                self._audit_recorder.record(
-                    action_type=SCM_AUDIT_PUBLISH_CREATED,
-                    correlation_id=correlation_id,
-                    operation=operation,
-                    payload={
-                        "deduped": deduped,
-                        "escalation_reason": reason,
-                    },
-                )
-            except (
-                Exception
-            ):  # intentional: defensive audit logging, must not crash caller
-                _LOGGER.warning(
-                    "SCM publish-created audit recording failed for %s",
-                    operation.operation_id,
-                    exc_info=True,
-                )
-        try:
-            self._reaction_state_store.mark_reaction_escalated(
-                binding_id=binding_id,
-                reaction_kind=reaction_kind,
-                fingerprint=fingerprint,
-                event_id=event_id,
-                operation_key=operation_key,
-                metadata=escalation_metadata,
-            )
-        except Exception:  # intentional: defensive state update, must not crash caller
-            _LOGGER.warning(
-                "SCM escalation state update failed for operation %s",
-                operation.operation_id,
-                exc_info=True,
-            )
-        return operation
-
     def _handle_processed_operations(
         self,
         operations: list[PublishOperation],
@@ -1010,9 +851,9 @@ class ScmAutomationService:
         for operation in operations:
             tracking = _tracking_from_payload(operation.payload)
             binding_id = _normalize_text(tracking.get("binding_id"))
-            reaction_state_kind = _tracking_reaction_state_kind(tracking)
+            rsk = tracking_reaction_state_kind(tracking)
             fingerprint = _normalize_text(tracking.get("fingerprint"))
-            if binding_id is None or reaction_state_kind is None or fingerprint is None:
+            if binding_id is None or rsk is None or fingerprint is None:
                 continue
             event_id = _normalize_text(tracking.get("event_id"))
             try:
@@ -1031,7 +872,7 @@ class ScmAutomationService:
                             escalations.append(notice_operation)
                     self._reaction_state_store.mark_reaction_delivery_succeeded(
                         binding_id=binding_id,
-                        reaction_kind=reaction_state_kind,
+                        reaction_kind=rsk,
                         fingerprint=fingerprint,
                         event_id=event_id,
                         operation_key=operation.operation_key,
@@ -1042,15 +883,13 @@ class ScmAutomationService:
                     continue
                 failed_state = self._reaction_state_store.mark_reaction_delivery_failed(
                     binding_id=binding_id,
-                    reaction_kind=reaction_state_kind,
+                    reaction_kind=rsk,
                     fingerprint=fingerprint,
                     event_id=event_id,
                     error_text=operation.last_error_text,
                     metadata=tracking,
                 )
-            except (
-                Exception
-            ):  # intentional: defensive state update, must not crash caller
+            except Exception:
                 _LOGGER.warning(
                     "SCM reaction-state update failed for operation %s",
                     operation.operation_id,
@@ -1067,12 +906,15 @@ class ScmAutomationService:
                 < failure_threshold
             ):
                 continue
-            escalation_operation = self._create_escalation_operation(
+            escalation_operation = create_escalation_operation(
+                journal=self._journal,
+                reaction_state_store=self._reaction_state_store,
+                audit_recorder=self._audit_recorder,
                 binding_id=binding_id,
-                reaction_kind=reaction_state_kind,
+                reaction_kind=rsk,
                 fingerprint=fingerprint,
                 tracking=tracking,
-                message=_failure_escalation_message(
+                message=format_failure_escalation_message(
                     tracking,
                     delivery_failure_count=int(
                         getattr(failed_state, "delivery_failure_count", 0) or 0
@@ -1101,9 +943,7 @@ class ScmAutomationService:
                     correlation_id=correlation_id,
                     operation=operation,
                 )
-            except (
-                Exception
-            ):  # intentional: defensive audit logging, must not crash caller
+            except Exception:
                 _LOGGER.warning(
                     "SCM publish-finished audit recording failed for %s",
                     operation.operation_id,

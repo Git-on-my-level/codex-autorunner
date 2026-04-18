@@ -9,19 +9,9 @@ import fs from 'fs';
 import path from 'path';
 import { glob } from 'glob';
 import { fileURLToPath } from 'url';
-import crypto from 'crypto';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-function computeFileHash(filePath) {
-  const stat = fs.statSync(filePath);
-  if (stat.isDirectory()) {
-    return null;
-  }
-  const content = fs.readFileSync(filePath);
-  return crypto.createHash('sha256').update(content).digest('hex').slice(0, 12);
-}
 
 async function main() {
   const staticDir = path.join(__dirname, '..', 'src', 'codex_autorunner', 'static');
@@ -65,11 +55,21 @@ async function main() {
   manifest.generated.sort((a, b) => a.path.localeCompare(b.path));
   manifest.manual.sort((a, b) => a.path.localeCompare(b.path));
 
-  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
-  
-  console.log(`Generated manifest at ${path.relative(process.cwd(), manifestPath)}`);
-  console.log(`  - ${manifest.generated.length} generated files`);
-  console.log(`  - ${manifest.manual.length} manual files`);
+  const nextContent = JSON.stringify(manifest, null, 2);
+  const prevContent = fs.existsSync(manifestPath)
+    ? fs.readFileSync(manifestPath, 'utf8')
+    : null;
+
+  if (prevContent === nextContent) {
+    console.log('Static asset manifest unchanged');
+    return;
+  }
+
+  fs.writeFileSync(manifestPath, nextContent, 'utf8');
+
+  console.log(
+    `Updated static asset manifest: ${path.relative(process.cwd(), manifestPath)} (${manifest.generated.length} generated, ${manifest.manual.length} manual)`,
+  );
 }
 
 main().catch(err => {

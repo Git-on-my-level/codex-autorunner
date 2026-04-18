@@ -263,5 +263,381 @@
       "permission_request_id": "perm-1",
       "permission_description": "Need approval"
     }
+  },
+  {
+    "name": "turn_completed_missing_turn_id",
+    "raw": {
+      "method": "turn/completed",
+      "params": {
+        "sessionId": "session-1",
+        "status": "completed",
+        "finalOutput": "turn reply"
+      }
+    },
+    "expected": {
+      "normalized_kind": "turn_terminal",
+      "terminal_status": "completed",
+      "runtime_terminal_status": "ok",
+      "uses_turn_id_fallback": true,
+      "closes_turn_buffer": true,
+      "assistant_text": "turn reply",
+      "output_delta": "",
+      "progress_message": "",
+      "error_message": null,
+      "session_status": null,
+      "session_update_kind": null
+    }
+  },
+  {
+    "name": "turn_cancelled_missing_turn_id",
+    "raw": {
+      "method": "turn/cancelled",
+      "params": {
+        "sessionId": "session-1",
+        "status": "cancelled"
+      }
+    },
+    "expected": {
+      "normalized_kind": "turn_terminal",
+      "terminal_status": "cancelled",
+      "runtime_terminal_status": "interrupted",
+      "uses_turn_id_fallback": true,
+      "closes_turn_buffer": true,
+      "assistant_text": "",
+      "output_delta": "",
+      "progress_message": "",
+      "error_message": null,
+      "session_status": null,
+      "session_update_kind": null
+    }
+  },
+  {
+    "name": "turn_failed_missing_turn_id",
+    "raw": {
+      "method": "turn/failed",
+      "params": {
+        "sessionId": "session-1",
+        "status": "failed",
+        "error": "turn error"
+      }
+    },
+    "expected": {
+      "normalized_kind": "turn_terminal",
+      "terminal_status": "failed",
+      "runtime_terminal_status": "error",
+      "uses_turn_id_fallback": true,
+      "closes_turn_buffer": true,
+      "assistant_text": "",
+      "output_delta": "",
+      "progress_message": "",
+      "error_message": "turn error",
+      "session_status": null,
+      "session_update_kind": null
+    }
+  },
+  {
+    "name": "session_status_slash_idle_missing_turn_id",
+    "raw": {
+      "method": "session/status",
+      "params": {
+        "sessionId": "session-1",
+        "status": {
+          "type": "idle"
+        },
+        "finalOutput": "slash variant reply"
+      }
+    },
+    "expected": {
+      "normalized_kind": "turn_terminal",
+      "terminal_status": "completed",
+      "runtime_terminal_status": "ok",
+      "uses_turn_id_fallback": true,
+      "closes_turn_buffer": false,
+      "assistant_text": "slash variant reply",
+      "output_delta": "",
+      "progress_message": "",
+      "error_message": null,
+      "session_status": "idle",
+      "session_update_kind": null
+    }
+  },
+  {
+    "name": "session_status_slash_busy_not_terminal",
+    "raw": {
+      "method": "session/status",
+      "params": {
+        "sessionId": "session-1",
+        "status": {
+          "type": "busy"
+        }
+      }
+    },
+    "expected": {
+      "normalized_kind": "progress",
+      "terminal_status": null,
+      "runtime_terminal_status": null,
+      "uses_turn_id_fallback": false,
+      "closes_turn_buffer": false,
+      "assistant_text": "",
+      "output_delta": "",
+      "progress_message": "busy",
+      "error_message": null,
+      "session_status": "busy",
+      "session_update_kind": null
+    }
+  },
+  {
+    "name": "session_status_properties_nested_idle",
+    "raw": {
+      "method": "session.status",
+      "params": {
+        "sessionId": "session-1",
+        "properties": {
+          "status": {
+            "type": "idle"
+          }
+        },
+        "finalOutput": "nested idle reply"
+      }
+    },
+    "expected": {
+      "normalized_kind": "turn_terminal",
+      "terminal_status": "completed",
+      "runtime_terminal_status": "ok",
+      "uses_turn_id_fallback": true,
+      "closes_turn_buffer": false,
+      "assistant_text": "nested idle reply",
+      "output_delta": "",
+      "progress_message": "",
+      "error_message": null,
+      "session_status": "idle",
+      "session_update_kind": null
+    }
+  },
+  {
+    "name": "session_idle_without_final_output",
+    "raw": {
+      "method": "session.idle",
+      "params": {
+        "sessionId": "session-1"
+      }
+    },
+    "expected": {
+      "normalized_kind": "turn_terminal",
+      "terminal_status": "completed",
+      "runtime_terminal_status": "ok",
+      "uses_turn_id_fallback": true,
+      "closes_turn_buffer": false,
+      "assistant_text": "",
+      "output_delta": "",
+      "progress_message": "",
+      "error_message": null,
+      "session_status": null,
+      "session_update_kind": null
+    }
+  },
+  {
+    "name": "session_status_string_idle",
+    "raw": {
+      "method": "session.status",
+      "params": {
+        "sessionId": "session-1",
+        "status": "idle",
+        "finalOutput": "string status reply"
+      }
+    },
+    "expected": {
+      "normalized_kind": "turn_terminal",
+      "terminal_status": "completed",
+      "runtime_terminal_status": "ok",
+      "uses_turn_id_fallback": true,
+      "closes_turn_buffer": false,
+      "assistant_text": "string status reply",
+      "output_delta": "",
+      "progress_message": "",
+      "error_message": null,
+      "session_status": "idle",
+      "session_update_kind": null
+    }
+  },
+  {
+    "name": "session_update_usage_update_missing_turn_id",
+    "raw": {
+      "method": "session/update",
+      "params": {
+        "sessionId": "session-1",
+        "update": {
+          "sessionUpdate": "usage_update",
+          "usage": {
+            "input": 42,
+            "output": 10
+          }
+        }
+      }
+    },
+    "expected": {
+      "normalized_kind": "token_usage",
+      "terminal_status": null,
+      "runtime_terminal_status": null,
+      "uses_turn_id_fallback": true,
+      "closes_turn_buffer": false,
+      "assistant_text": "",
+      "output_delta": "",
+      "progress_message": "",
+      "error_message": null,
+      "session_status": null,
+      "session_update_kind": "usage_update",
+      "usage": {"input": 42, "output": 10}
+    }
+  },
+  {
+    "name": "session_update_session_info_missing_turn_id",
+    "raw": {
+      "method": "session/update",
+      "params": {
+        "sessionId": "session-1",
+        "update": {
+          "sessionUpdate": "session_info_update"
+        }
+      }
+    },
+    "expected": {
+      "normalized_kind": "session",
+      "terminal_status": null,
+      "runtime_terminal_status": null,
+      "uses_turn_id_fallback": true,
+      "closes_turn_buffer": false,
+      "assistant_text": "",
+      "output_delta": "",
+      "progress_message": "",
+      "error_message": null,
+      "session_status": null,
+      "session_update_kind": "session_info_update"
+    }
+  },
+  {
+    "name": "session_update_unknown_kind_missing_turn_id",
+    "raw": {
+      "method": "session/update",
+      "params": {
+        "sessionId": "session-1",
+        "update": {
+          "sessionUpdate": "custom_future_kind",
+          "content": "unknown payload"
+        }
+      }
+    },
+    "expected": {
+      "normalized_kind": "unknown",
+      "terminal_status": null,
+      "runtime_terminal_status": null,
+      "uses_turn_id_fallback": true,
+      "closes_turn_buffer": false,
+      "assistant_text": "",
+      "output_delta": "",
+      "progress_message": "",
+      "error_message": null,
+      "session_status": null,
+      "session_update_kind": "custom_future_kind"
+    }
+  },
+  {
+    "name": "permission_requested_with_request_id",
+    "raw": {
+      "method": "permission/requested",
+      "params": {
+        "sessionId": "session-1",
+        "requestId": "req-42",
+        "description": "File write"
+      }
+    },
+    "expected": {
+      "normalized_kind": "permission_requested",
+      "terminal_status": null,
+      "runtime_terminal_status": null,
+      "uses_turn_id_fallback": false,
+      "closes_turn_buffer": false,
+      "assistant_text": "",
+      "output_delta": "",
+      "progress_message": "",
+      "error_message": null,
+      "session_status": null,
+      "session_update_kind": null,
+      "permission_request_id": "req-42",
+      "permission_description": "File write"
+    }
+  },
+  {
+    "name": "prompt_completed_with_succeeded_status",
+    "raw": {
+      "method": "prompt/completed",
+      "params": {
+        "sessionId": "session-1",
+        "status": "succeeded",
+        "finalOutput": "succeeded reply"
+      }
+    },
+    "expected": {
+      "normalized_kind": "turn_terminal",
+      "terminal_status": "succeeded",
+      "runtime_terminal_status": "ok",
+      "uses_turn_id_fallback": true,
+      "closes_turn_buffer": true,
+      "assistant_text": "succeeded reply",
+      "output_delta": "",
+      "progress_message": "",
+      "error_message": null,
+      "session_status": null,
+      "session_update_kind": null
+    }
+  },
+  {
+    "name": "prompt_completed_with_nested_turn_status",
+    "raw": {
+      "method": "prompt/completed",
+      "params": {
+        "sessionId": "session-1",
+        "turn": {
+          "status": "done"
+        },
+        "finalOutput": "nested status reply"
+      }
+    },
+    "expected": {
+      "normalized_kind": "turn_terminal",
+      "terminal_status": "done",
+      "runtime_terminal_status": "ok",
+      "uses_turn_id_fallback": true,
+      "closes_turn_buffer": true,
+      "assistant_text": "nested status reply",
+      "output_delta": "",
+      "progress_message": "",
+      "error_message": null,
+      "session_status": null,
+      "session_update_kind": null
+    }
+  },
+  {
+    "name": "turn_completed_with_aborted_status",
+    "raw": {
+      "method": "turn/completed",
+      "params": {
+        "sessionId": "session-1",
+        "status": "aborted"
+      }
+    },
+    "expected": {
+      "normalized_kind": "turn_terminal",
+      "terminal_status": "aborted",
+      "runtime_terminal_status": "interrupted",
+      "uses_turn_id_fallback": true,
+      "closes_turn_buffer": true,
+      "assistant_text": "",
+      "output_delta": "",
+      "progress_message": "",
+      "error_message": null,
+      "session_status": null,
+      "session_update_kind": null
+    }
   }
 ]

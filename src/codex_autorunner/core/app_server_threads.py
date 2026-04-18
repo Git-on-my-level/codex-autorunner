@@ -2,6 +2,15 @@
 
 Uses importlib to avoid a static core -> integrations import edge (see
 scripts/check_import_boundaries.py).
+
+Contract:
+- This module is a **re-export-only facade**. All behaviour lives in
+  ``integrations.app_server.threads``.
+- No new logic, helpers, or state may be added here. If a new export is
+  needed, add it to the real owner and re-export it here.
+- Known callers: ``core/pma_lifecycle.py`` (imports PMA_KEY, PMA_PREFIX,
+  AppServerThreadRegistry, pma_prefixes_for_reset). All other consumers
+  import directly from ``integrations.app_server.threads``.
 """
 
 from importlib import import_module

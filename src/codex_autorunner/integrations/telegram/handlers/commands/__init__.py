@@ -13,8 +13,17 @@ from .github import GitHubCommands
 from .shared import TelegramCommandSupportMixin
 from .voice import VoiceCommands
 from .workspace import WorkspaceCommands
+from .workspace_binding import WorkspaceBindingMixin
+from .workspace_resume import (
+    ResumeCommandArgs,
+    ResumeThreadData,
+    WorkspaceResumeMixin,
+)
+from .workspace_session_commands import WorkspaceSessionCommandsMixin
+from .workspace_status import WorkspaceStatusMixin
 
 SharedHelpers = TelegramCommandSupportMixin
+WorkspaceCommandsMixin = WorkspaceCommands
 
 __all__ = [
     "ApprovalsCommands",
@@ -24,9 +33,16 @@ __all__ = [
     "FlowCommands",
     "FormattingHelpers",
     "GitHubCommands",
+    "ResumeCommandArgs",
+    "ResumeThreadData",
     "SharedHelpers",
     "TelegramCommandSupportMixin",
     "VoiceCommands",
+    "WorkspaceBindingMixin",
     "WorkspaceCommands",
+    "WorkspaceCommandsMixin",
+    "WorkspaceResumeMixin",
+    "WorkspaceSessionCommandsMixin",
+    "WorkspaceStatusMixin",
     "build_command_specs",
 ]

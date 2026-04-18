@@ -11,6 +11,35 @@ from codex_autorunner.agents.registry import (
 from codex_autorunner.integrations.chat.agents import CHAT_AGENT_DEFINITIONS
 
 
+def _discord_test_config(root: Path):
+    from codex_autorunner.integrations.discord.config import (
+        DiscordBotConfig,
+        DiscordCommandRegistration,
+    )
+
+    return DiscordBotConfig(
+        root=root,
+        enabled=True,
+        bot_token_env="TOKEN",
+        app_id_env="APP",
+        bot_token="token",
+        application_id="app",
+        allowed_guild_ids=frozenset(),
+        allowed_channel_ids=frozenset(),
+        allowed_user_ids=frozenset(),
+        command_registration=DiscordCommandRegistration(
+            enabled=True,
+            scope="guild",
+            guild_ids=(),
+        ),
+        state_file=root / "state.sqlite3",
+        intents=1,
+        max_message_length=2000,
+        message_overflow="split",
+        pma_enabled=False,
+    )
+
+
 class TestAgentPickerIncludesHermes:
     def test_chat_agent_definitions_include_hermes(self) -> None:
         values = [d.value for d in CHAT_AGENT_DEFINITIONS]
@@ -74,33 +103,9 @@ class TestCapabilityHelpers:
     def test_agent_supports_capability_for_hermes(self, tmp_path: Path) -> None:
         import logging
 
-        from codex_autorunner.integrations.discord.config import (
-            DiscordBotConfig,
-            DiscordCommandRegistration,
-        )
         from codex_autorunner.integrations.discord.service import DiscordBotService
 
-        config = DiscordBotConfig(
-            root=tmp_path,
-            enabled=True,
-            bot_token_env="TOKEN",
-            app_id_env="APP",
-            bot_token="token",
-            application_id="app",
-            allowed_guild_ids=frozenset(),
-            allowed_channel_ids=frozenset(),
-            allowed_user_ids=frozenset(),
-            command_registration=DiscordCommandRegistration(
-                enabled=True,
-                scope="guild",
-                guild_ids=(),
-            ),
-            state_file=tmp_path / "state.sqlite3",
-            intents=1,
-            max_message_length=2000,
-            message_overflow="split",
-            pma_enabled=False,
-        )
+        config = _discord_test_config(tmp_path)
 
         service = DiscordBotService(
             config,
@@ -126,33 +131,9 @@ class TestCapabilityHelpers:
     ) -> None:
         import logging
 
-        from codex_autorunner.integrations.discord.config import (
-            DiscordBotConfig,
-            DiscordCommandRegistration,
-        )
         from codex_autorunner.integrations.discord.service import DiscordBotService
 
-        config = DiscordBotConfig(
-            root=tmp_path,
-            enabled=True,
-            bot_token_env="TOKEN",
-            app_id_env="APP",
-            bot_token="token",
-            application_id="app",
-            allowed_guild_ids=frozenset(),
-            allowed_channel_ids=frozenset(),
-            allowed_user_ids=frozenset(),
-            command_registration=DiscordCommandRegistration(
-                enabled=True,
-                scope="guild",
-                guild_ids=(),
-            ),
-            state_file=tmp_path / "state.sqlite3",
-            intents=1,
-            max_message_length=2000,
-            message_overflow="split",
-            pma_enabled=False,
-        )
+        config = _discord_test_config(tmp_path)
 
         service = DiscordBotService(
             config,
@@ -177,33 +158,9 @@ class TestCapabilityHelpers:
     def test_agent_display_name_returns_correct_name(self, tmp_path: Path) -> None:
         import logging
 
-        from codex_autorunner.integrations.discord.config import (
-            DiscordBotConfig,
-            DiscordCommandRegistration,
-        )
         from codex_autorunner.integrations.discord.service import DiscordBotService
 
-        config = DiscordBotConfig(
-            root=tmp_path,
-            enabled=True,
-            bot_token_env="TOKEN",
-            app_id_env="APP",
-            bot_token="token",
-            application_id="app",
-            allowed_guild_ids=frozenset(),
-            allowed_channel_ids=frozenset(),
-            allowed_user_ids=frozenset(),
-            command_registration=DiscordCommandRegistration(
-                enabled=True,
-                scope="guild",
-                guild_ids=(),
-            ),
-            state_file=tmp_path / "state.sqlite3",
-            intents=1,
-            max_message_length=2000,
-            message_overflow="split",
-            pma_enabled=False,
-        )
+        config = _discord_test_config(tmp_path)
 
         service = DiscordBotService(
             config,
@@ -217,33 +174,9 @@ class TestCapabilityHelpers:
     def test_agent_supports_resume_uses_capability(self, tmp_path: Path) -> None:
         import logging
 
-        from codex_autorunner.integrations.discord.config import (
-            DiscordBotConfig,
-            DiscordCommandRegistration,
-        )
         from codex_autorunner.integrations.discord.service import DiscordBotService
 
-        config = DiscordBotConfig(
-            root=tmp_path,
-            enabled=True,
-            bot_token_env="TOKEN",
-            app_id_env="APP",
-            bot_token="token",
-            application_id="app",
-            allowed_guild_ids=frozenset(),
-            allowed_channel_ids=frozenset(),
-            allowed_user_ids=frozenset(),
-            command_registration=DiscordCommandRegistration(
-                enabled=True,
-                scope="guild",
-                guild_ids=(),
-            ),
-            state_file=tmp_path / "state.sqlite3",
-            intents=1,
-            max_message_length=2000,
-            message_overflow="split",
-            pma_enabled=False,
-        )
+        config = _discord_test_config(tmp_path)
 
         service = DiscordBotService(
             config,
@@ -260,33 +193,9 @@ class TestCapabilityHelpers:
     ) -> None:
         import logging
 
-        from codex_autorunner.integrations.discord.config import (
-            DiscordBotConfig,
-            DiscordCommandRegistration,
-        )
         from codex_autorunner.integrations.discord.service import DiscordBotService
 
-        config = DiscordBotConfig(
-            root=tmp_path,
-            enabled=True,
-            bot_token_env="TOKEN",
-            app_id_env="APP",
-            bot_token="token",
-            application_id="app",
-            allowed_guild_ids=frozenset(),
-            allowed_channel_ids=frozenset(),
-            allowed_user_ids=frozenset(),
-            command_registration=DiscordCommandRegistration(
-                enabled=True,
-                scope="guild",
-                guild_ids=(),
-            ),
-            state_file=tmp_path / "state.sqlite3",
-            intents=1,
-            max_message_length=2000,
-            message_overflow="split",
-            pma_enabled=False,
-        )
+        config = _discord_test_config(tmp_path)
 
         service = DiscordBotService(
             config,

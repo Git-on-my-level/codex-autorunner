@@ -60,11 +60,19 @@ class CompactState:
     display_text: str
     message_id: int
     created_at: str
+    requester_user_id: Optional[str] = None
 
 
 @dataclass(frozen=True)
 class UpdateConfirmState:
     target: Optional[str] = None
+    requester_user_id: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class ModelPendingState:
+    option: ModelOption
+    requester_user_id: Optional[str] = None
 
 
 def _coerce_optional_telegram_int(value: object) -> Optional[int]:

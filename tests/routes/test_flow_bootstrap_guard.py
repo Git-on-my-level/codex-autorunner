@@ -521,7 +521,7 @@ def test_bootstrap_retries_when_flow_db_recovery_succeeds(tmp_path, monkeypatch)
     monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
     monkeypatch.setattr(flow_routes, "_start_flow_worker", lambda *_, **__: None)
     monkeypatch.setattr(
-        flow_routes, "_recover_flow_store_if_possible", lambda *_, **__: True
+        flow_routes, "recover_flow_store_if_possible", lambda *_, **__: True
     )
 
     class _ConfigErrorService:
@@ -586,7 +586,7 @@ def test_bootstrap_returns_503_on_sqlite_error_without_recovery(tmp_path, monkey
     monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
     monkeypatch.setattr(flow_routes, "_start_flow_worker", lambda *_, **__: None)
     monkeypatch.setattr(
-        flow_routes, "_recover_flow_store_if_possible", lambda *_, **__: False
+        flow_routes, "recover_flow_store_if_possible", lambda *_, **__: False
     )
 
     class _ConfigErrorService:
@@ -632,7 +632,7 @@ def test_bootstrap_returns_503_when_retry_attempt_hits_sqlite_error(
     monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
     monkeypatch.setattr(flow_routes, "_start_flow_worker", lambda *_, **__: None)
     monkeypatch.setattr(
-        flow_routes, "_recover_flow_store_if_possible", lambda *_, **__: True
+        flow_routes, "recover_flow_store_if_possible", lambda *_, **__: True
     )
 
     class _ConfigErrorService:
@@ -687,7 +687,7 @@ def test_recover_flow_store_rotates_corrupt_db(tmp_path):
     (runtime_dir / "flows.db-wal").write_text("wal", encoding="utf-8")
     (runtime_dir / "flows.db-shm").write_text("shm", encoding="utf-8")
 
-    recovered = flow_routes._recover_flow_store_if_possible(
+    recovered = flow_routes.recover_flow_store_if_possible(
         repo_root,
         "ticket_flow",
         FlowRoutesState(),

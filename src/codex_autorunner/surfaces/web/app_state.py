@@ -15,13 +15,13 @@ from ...core.config import (
     AppServerConfig,
     ConfigError,
     HubConfig,
-    _normalize_base_path,
     collect_env_overrides,
     derive_repo_config,
     load_hub_config,
     load_repo_config,
     resolve_env_for_root,
 )
+from ...core.config_parsers import normalize_base_path
 from ...core.flows.workspace_root import resolve_ticket_flow_workspace_root
 from ...core.hub_control_plane.service import HubSharedStateService
 from ...core.hub_projection_store import HubProjectionStore
@@ -52,6 +52,7 @@ from ...tickets.replies import resolve_reply_paths
 from .hub_jobs import HubJobManager
 from .runner_manager import RunnerManager
 from .static_assets import (
+    StaticAssetProvenance,
     asset_version,
     materialize_static_assets,
     require_static_assets,
@@ -94,6 +95,7 @@ class AppContext:
     static_dir: Path
     static_assets_context: Optional[object]
     asset_version: str
+    static_asset_provenance: StaticAssetProvenance
     logger: logging.Logger
     tui_idle_seconds: Optional[float]
     tui_idle_check_seconds: Optional[float]
@@ -117,6 +119,7 @@ class HubAppContext:
     static_dir: Path
     static_assets_context: Optional[object]
     asset_version: str
+    static_asset_provenance: StaticAssetProvenance
     logger: logging.Logger
 
 
@@ -344,7 +347,7 @@ def build_app_context(
         env = resolve_env_for_root(target_root)
         config = derive_repo_config(hub_config, target_root, load_env=False)
     normalized_base = (
-        _normalize_base_path(base_path)
+        normalize_base_path(base_path)
         if base_path is not None
         else config.server_base_path
     )
@@ -543,8 +546,8 @@ def build_app_context(
 
     def _load_static_assets(
         cache_root: Path, max_cache_entries: int, max_cache_age_days: Optional[int]
-    ) -> tuple[Path, Optional[ExitStack]]:
-        static_dir, static_context = materialize_static_assets(
+    ) -> tuple[Path, Optional[ExitStack], StaticAssetProvenance]:
+        static_dir, static_context, provenance = materialize_static_assets(
             cache_root,
             max_cache_entries=max_cache_entries,
             max_cache_age_days=max_cache_age_days,
@@ -562,10 +565,10 @@ def build_app_context(
                 exc=exc,
             )
             raise
-        return static_dir, static_context
+        return static_dir, static_context, provenance
 
     try:
-        static_dir, static_context = _load_static_assets(
+        static_dir, static_context, static_provenance = _load_static_assets(
             config.static_assets.cache_root,
             config.static_assets.max_cache_entries,
             config.static_assets.max_cache_age_days,
@@ -583,7 +586,7 @@ def build_app_context(
             hub_static.cache_root,
             exc=exc,
         )
-        static_dir, static_context = _load_static_assets(
+        static_dir, static_context, static_provenance = _load_static_assets(
             hub_static.cache_root,
             hub_static.max_cache_entries,
             hub_static.max_cache_age_days,
@@ -613,6 +616,7 @@ def build_app_context(
         static_dir=static_dir,
         static_assets_context=static_context,
         asset_version=asset_version(static_dir),
+        static_asset_provenance=static_provenance,
         logger=logger,
         tui_idle_seconds=tui_idle_seconds,
         tui_idle_check_seconds=tui_idle_check_seconds,
@@ -646,6 +650,7 @@ def apply_app_context(app, context: AppContext) -> None:
     app.state.static_dir = context.static_dir
     app.state.static_assets_context = context.static_assets_context
     app.state.asset_version = context.asset_version
+    app.state.static_asset_provenance = context.static_asset_provenance
 
 
 def build_hub_context(
@@ -667,7 +672,7 @@ def build_hub_context(
         config = replace(config, include_root_repo=True)
         dev_mode_root_repo_enabled = True
     normalized_base = (
-        _normalize_base_path(base_path)
+        normalize_base_path(base_path)
         if base_path is not None
         else config.server_base_path
     )
@@ -761,7 +766,7 @@ def build_hub_context(
         config.root,
         durable=bool(getattr(config, "durable_writes", False)),
     )
-    static_dir, static_context = materialize_static_assets(
+    static_dir, static_context, static_provenance = materialize_static_assets(
         config.static_assets.cache_root,
         max_cache_entries=config.static_assets.max_cache_entries,
         max_cache_age_days=config.static_assets.max_cache_age_days,
@@ -804,6 +809,7 @@ def build_hub_context(
         static_dir=static_dir,
         static_assets_context=static_context,
         asset_version=resolved_asset_version,
+        static_asset_provenance=static_provenance,
         logger=logger,
     )
 
@@ -825,4 +831,5 @@ def apply_hub_context(app, context: HubAppContext) -> None:
     app.state.static_dir = context.static_dir
     app.state.static_assets_context = context.static_assets_context
     app.state.asset_version = context.asset_version
+    app.state.static_asset_provenance = context.static_asset_provenance
     app.state.hub_supervisor = context.supervisor

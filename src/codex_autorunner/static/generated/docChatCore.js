@@ -2,7 +2,7 @@
 import { parseAppServerEvent, resetOpenCodeEventState } from "./agentEvents.js";
 import { summarizeEvents, renderCompactSummary, COMPACT_MAX_ACTIONS, COMPACT_MAX_TEXT_LENGTH } from "./eventSummarizer.js";
 import { saveChatHistory, loadChatHistory } from "./docChatStorage.js";
-import { renderMarkdown } from "./messages.js";
+import { renderMarkdown } from "./markdown.js";
 function getElements(prefix) {
     return {
         input: document.getElementById(`${prefix}-input`),

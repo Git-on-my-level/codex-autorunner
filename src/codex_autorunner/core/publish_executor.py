@@ -1,3 +1,18 @@
+"""Shared publish-operation executor: claim, dispatch, retry scheduling, and
+mutation-policy enforcement.
+
+Ownership boundaries:
+- ``PublishJournalStore`` (``publish_journal.py``) is the **sole** durable
+  owner of publish retry state, dedupe keys, and attempt history.
+- This module owns the runtime dispatch loop and retry-delay resolution.
+- Provider-specific adapters (e.g. ``integrations/github/publisher.py``)
+  implement ``PublishActionExecutor`` and must **not** carry their own retry
+  counters or deduplication state.
+- Mutation-policy evaluation is delegated to ``mutation_policy.py``; this
+  module merely checks the decision and raises ``PolicyDeniedPublishError``
+  when denied.
+"""
+
 from __future__ import annotations
 
 import logging

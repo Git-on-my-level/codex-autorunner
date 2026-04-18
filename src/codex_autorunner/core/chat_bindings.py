@@ -629,22 +629,38 @@ def _orchestration_binding_timestamps_by_workspace(
 def _active_pma_thread_counts(
     hub_root: Path, repo_id_by_workspace: Mapping[str, str]
 ) -> dict[str, int]:
-    db_path = default_pma_threads_db_path(hub_root)
-    if not db_path.exists():
-        return {}
     counts: Counter[str] = Counter()
     try:
-        rows = PmaThreadStore(hub_root).list_threads(status="active", limit=None)
-    except (OSError, RuntimeError, ValueError, sqlite3.OperationalError) as exc:
-        raise RuntimeError(
-            f"Failed reading active PMA thread counts from {db_path}: {exc}"
-        ) from exc
+        store = PmaThreadStore(hub_root)
+        raw_counts = store.count_threads_by_repo(status="active")
+    except (OSError, RuntimeError, ValueError, sqlite3.OperationalError):
+        raw_counts = {}
+    for raw_repo_id, raw_count in raw_counts.items():
+        repo_id = _normalize_repo_id(raw_repo_id)
+        if repo_id is None:
+            continue
+        count = _coerce_count(raw_count)
+        if count <= 0:
+            continue
+        counts[repo_id] += count
+    try:
+        with open_orchestration_sqlite(hub_root, durable=False) as conn:
+            rows = conn.execute(
+                """
+                SELECT workspace_root
+                  FROM orch_thread_targets
+                 WHERE lifecycle_status = 'active'
+                   AND (repo_id IS NULL OR TRIM(repo_id) = '')
+                """
+            ).fetchall()
+    except sqlite3.OperationalError:
+        return dict(counts)
 
     for row in rows:
         repo_id = _resolve_bound_repo_id(
-            repo_id=row.get("repo_id"),
+            repo_id=None,
             repo_id_by_workspace=repo_id_by_workspace,
-            workspace_values=(row.get("workspace_root"),),
+            workspace_values=(row["workspace_root"],),
         )
         if repo_id is None:
             continue
@@ -863,4 +879,56 @@ __all__ = [
     "preferred_non_pma_chat_notification_sources_by_workspace",
     "repo_has_active_chat_binding",
     "repo_has_active_non_pma_chat_binding",
+    "resolve_chat_state_path",
+    "resolve_repo_id_by_workspace_path",
+    "resolve_bound_repo_id",
+    "normalize_workspace_path",
+    "resolve_discord_state_path",
+    "resolve_telegram_state_path",
 ]
+
+
+def resolve_chat_state_path(
+    *,
+    hub_root: Path,
+    raw_config: Mapping[str, Any],
+    section: str,
+    default_state_file: str,
+) -> Path:
+    return _resolve_state_path(
+        hub_root=hub_root,
+        raw_config=raw_config,
+        section=section,
+        default_state_file=default_state_file,
+    )
+
+
+def resolve_repo_id_by_workspace_path(
+    hub_root: Path, raw_config: Mapping[str, Any]
+) -> dict[str, str]:
+    return _repo_id_by_workspace_path(hub_root, raw_config)
+
+
+def resolve_bound_repo_id(
+    *,
+    repo_id: Any,
+    repo_id_by_workspace: Mapping[str, str],
+    workspace_values: tuple[Any, ...] = (),
+) -> str | None:
+    return _resolve_bound_repo_id(
+        repo_id=repo_id,
+        repo_id_by_workspace=repo_id_by_workspace,
+        workspace_values=workspace_values,
+    )
+
+
+def normalize_workspace_path(value: Any) -> str | None:
+    return _normalize_workspace_path(value)
+
+
+def resolve_discord_state_path(hub_root: Path, raw_config: Mapping[str, Any]) -> Path:
+    return _resolve_discord_state_path(hub_root, raw_config)
+
+
+def resolve_telegram_state_path(hub_root: Path, raw_config: Mapping[str, Any]) -> Path:
+    return _resolve_telegram_state_path(hub_root, raw_config)

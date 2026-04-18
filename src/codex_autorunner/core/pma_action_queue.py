@@ -4,6 +4,7 @@ import logging
 from typing import Any, Mapping, Optional, Sequence
 
 from .freshness import build_freshness_payload, iso_now, resolve_stale_threshold_seconds
+from .pma_context_shared import THREAD_SNAPSHOT_FIELDS
 from .pma_file_inbox import (
     PMA_FILE_NEXT_ACTION_REVIEW_STALE,
     _extract_entry_freshness,
@@ -332,30 +333,19 @@ def _build_thread_queue_items(
                 else f"repo:{repo_id}"
             )
         )
-        items.append(
+        item: dict[str, Any] = {
+            k: entry.get(k) for k in THREAD_SNAPSHOT_FIELDS if k in entry
+        }
+        item["managed_thread_id"] = managed_thread_id or None
+        item["repo_id"] = repo_id or None
+        item["chat_bound"] = bool(entry.get("chat_bound"))
+        item["cleanup_protected"] = bool(entry.get("cleanup_protected"))
+        item["binding_count"] = int(entry.get("binding_count") or 0)
+        item["binding_kinds"] = list(entry.get("binding_kinds") or [])
+        item["binding_ids"] = list(entry.get("binding_ids") or [])
+        item.update(
             {
                 "item_type": "managed_thread_followup",
-                "managed_thread_id": managed_thread_id,
-                "repo_id": repo_id or None,
-                "agent": entry.get("agent"),
-                "resource_kind": entry.get("resource_kind"),
-                "resource_id": entry.get("resource_id"),
-                "workspace_root": entry.get("workspace_root"),
-                "name": entry.get("name"),
-                "status": entry.get("status"),
-                "lifecycle_status": entry.get("lifecycle_status"),
-                "status_reason": entry.get("status_reason"),
-                "status_terminal": entry.get("status_terminal"),
-                "last_turn_id": entry.get("last_turn_id"),
-                "last_message_preview": entry.get("last_message_preview"),
-                "updated_at": entry.get("updated_at"),
-                "chat_bound": bool(entry.get("chat_bound")),
-                "binding_kind": entry.get("binding_kind"),
-                "binding_id": entry.get("binding_id"),
-                "binding_count": int(entry.get("binding_count") or 0),
-                "binding_kinds": list(entry.get("binding_kinds") or []),
-                "binding_ids": list(entry.get("binding_ids") or []),
-                "cleanup_protected": bool(entry.get("cleanup_protected")),
                 "open_url": (
                     f"/hub/pma/threads/{managed_thread_id}"
                     if managed_thread_id
@@ -390,6 +380,7 @@ def _build_thread_queue_items(
                 ),
             }
         )
+        items.append(item)
     return _collapse_low_signal_thread_queue_items(items)
 
 

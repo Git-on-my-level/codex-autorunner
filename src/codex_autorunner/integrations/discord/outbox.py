@@ -13,7 +13,7 @@ from ...core.config import ConfigError, load_repo_config
 from ...core.flows import FlowStore
 from ...core.flows.archive_helpers import flow_run_archive_root
 from .rendering import DISCORD_MAX_MESSAGE_LENGTH, chunk_discord_message
-from .state import DiscordStateStore, OutboxRecord
+from .state import ChannelBinding, DiscordStateStore, OutboxRecord
 
 OUTBOX_RETRY_INTERVAL_SECONDS = 5.0
 OUTBOX_MAX_ATTEMPTS = 5
@@ -396,7 +396,9 @@ class DiscordOutboxManager:
         except (sqlite3.Error, RuntimeError):
             return False
         workspace_raw = (
-            binding.get("workspace_path") if isinstance(binding, dict) else None
+            binding.get("workspace_path")
+            if isinstance(binding, (dict, ChannelBinding))
+            else None
         )
         if not isinstance(workspace_raw, str) or not workspace_raw.strip():
             return False

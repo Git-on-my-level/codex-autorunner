@@ -81,7 +81,9 @@ async def handle_callback(handlers: Any, callback: TelegramCallbackQuery) -> Non
             ):
                 await handlers._answer_callback(callback, "Selection expired")
                 return
-            await handlers._resume_thread_by_id(key, parsed.thread_id, callback)
+            await handlers._selection_resume_thread_by_id(
+                key, parsed.thread_id, callback
+            )
     elif isinstance(parsed, BindCallback):
         if key:
             state = handlers._bind_options.get(key)
@@ -92,7 +94,9 @@ async def handle_callback(handlers: Any, callback: TelegramCallbackQuery) -> Non
             ):
                 await handlers._answer_callback(callback, "Selection expired")
                 return
-            await handlers._bind_topic_by_repo_id(key, parsed.repo_id, callback)
+            await handlers._selection_bind_topic_by_repo_id(
+                key, parsed.repo_id, callback
+            )
     elif isinstance(parsed, AgentCallback):
         if key:
             await handlers._handle_agent_callback(key, callback, parsed)

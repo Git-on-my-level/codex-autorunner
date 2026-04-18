@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterable, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Iterable, Mapping, Optional
 
 if TYPE_CHECKING:
     from ..housekeeping import HousekeepingRuleResult
@@ -365,16 +365,28 @@ def adapt_housekeeping_rule_result_to_plan(
     if not isinstance(summary, HousekeepingRuleResult):
         raise TypeError("summary must be a HousekeepingRuleResult")
 
-    candidates = tuple(
-        CleanupCandidate(
-            path=Path("<unknown>"),
-            size_bytes=0,
-            bucket=bucket,
-            action=CleanupAction.PRUNE,
-            reason=reason,
+    if summary.deleted_paths:
+        candidates = tuple(
+            CleanupCandidate(
+                path=Path(p),
+                size_bytes=0,
+                bucket=bucket,
+                action=CleanupAction.PRUNE,
+                reason=reason,
+            )
+            for p in summary.deleted_paths
         )
-        for _ in range(summary.deleted_count)
-    )
+    else:
+        candidates = tuple(
+            CleanupCandidate(
+                path=Path("<unknown>"),
+                size_bytes=0,
+                bucket=bucket,
+                action=CleanupAction.PRUNE,
+                reason=reason,
+            )
+            for _ in range(summary.deleted_count)
+        )
     return CleanupPlan(
         bucket=bucket,
         candidates=candidates,
@@ -397,11 +409,16 @@ def adapt_housekeeping_rule_result_to_result(
     deleted_count = 0 if dry_run else summary.deleted_count
     deleted_bytes = 0 if dry_run else summary.deleted_bytes
     kept_bytes = 0 if dry_run else max(plan.total_bytes - deleted_bytes, 0)
+    deleted_paths = (
+        tuple(Path(p) for p in summary.deleted_paths)
+        if not dry_run and summary.deleted_paths
+        else ()
+    )
 
     return CleanupResult(
         bucket=bucket,
         plan=plan,
-        deleted_paths=(),
+        deleted_paths=deleted_paths,
         deleted_count=deleted_count,
         deleted_bytes=deleted_bytes,
         kept_bytes=kept_bytes,
@@ -419,16 +436,28 @@ def adapt_report_prune_summary_to_plan(
         raise TypeError("summary must be a PruneSummary")
 
     candidates: list[CleanupCandidate] = []
-    for _ in range(summary.pruned):
-        candidates.append(
-            CleanupCandidate(
-                path=Path("<unknown>"),
-                size_bytes=0,
-                bucket=bucket,
-                action=CleanupAction.PRUNE,
-                reason=CleanupReason.COUNT_LIMIT,
+    if summary.pruned_paths:
+        for path_str in summary.pruned_paths:
+            candidates.append(
+                CleanupCandidate(
+                    path=Path(path_str),
+                    size_bytes=0,
+                    bucket=bucket,
+                    action=CleanupAction.PRUNE,
+                    reason=CleanupReason.COUNT_LIMIT,
+                )
             )
-        )
+    else:
+        for _ in range(summary.pruned):
+            candidates.append(
+                CleanupCandidate(
+                    path=Path("<unknown>"),
+                    size_bytes=0,
+                    bucket=bucket,
+                    action=CleanupAction.PRUNE,
+                    reason=CleanupReason.COUNT_LIMIT,
+                )
+            )
 
     return CleanupPlan(
         bucket=bucket,
@@ -449,16 +478,175 @@ def adapt_report_prune_summary_to_result(
     plan = adapt_report_prune_summary_to_plan(summary, bucket)
     deleted_count = 0 if dry_run else summary.pruned
     deleted_bytes = 0 if dry_run else (summary.bytes_before - summary.bytes_after)
+    deleted_paths = (
+        tuple(Path(p) for p in summary.pruned_paths)
+        if not dry_run and summary.pruned_paths
+        else ()
+    )
 
     return CleanupResult(
         bucket=bucket,
         plan=plan,
-        deleted_paths=(),
+        deleted_paths=deleted_paths,
         deleted_count=deleted_count,
         deleted_bytes=deleted_bytes,
         kept_bytes=summary.bytes_after,
         errors=(),
     )
+
+
+def _map_reason_str_to_cleanup_reason(reason_str: str) -> CleanupReason:
+    mapping = {
+        "live_workspace_guard": CleanupReason.LIVE_WORKSPACE_GUARD,
+        "lock_guard": CleanupReason.LOCK_GUARD,
+        "active_run_guard": CleanupReason.ACTIVE_RUN_GUARD,
+        "canonical_store_guard": CleanupReason.CANONICAL_STORE_GUARD,
+        "path_outside_root": CleanupReason.CANONICAL_STORE_GUARD,
+        "deletion_failed": CleanupReason.CANONICAL_STORE_GUARD,
+    }
+    return mapping.get(reason_str, CleanupReason.CANONICAL_STORE_GUARD)
+
+
+def adapt_workspace_summary_to_plan(
+    summary: Any,
+    bucket: RetentionBucket,
+) -> CleanupPlan:
+    candidates: list[CleanupCandidate] = []
+    blocked_count = len(summary.blocked_paths)
+    for path_str in summary.pruned_paths:
+        candidates.append(
+            CleanupCandidate(
+                path=Path(path_str),
+                size_bytes=0,
+                bucket=bucket,
+                action=CleanupAction.PRUNE,
+                reason=CleanupReason.STALE_WORKSPACE,
+            )
+        )
+    for i, path_str in enumerate(summary.blocked_paths):
+        reason_str = (
+            summary.blocked_reasons[i]
+            if i < len(summary.blocked_reasons)
+            else "unknown"
+        )
+        reason = _map_reason_str_to_cleanup_reason(reason_str)
+        candidates.append(
+            CleanupCandidate(
+                path=Path(path_str),
+                size_bytes=0,
+                bucket=bucket,
+                action=CleanupAction.SKIP_BLOCKED,
+                reason=reason,
+            )
+        )
+
+    return CleanupPlan(
+        bucket=bucket,
+        candidates=tuple(candidates),
+        total_bytes=summary.bytes_before,
+        reclaimable_bytes=summary.bytes_before - summary.bytes_after,
+        # Workspace prune summaries report all non-pruned entries as "kept",
+        # which already includes blocked workspaces and failed deletions. The
+        # shared cleanup plan tracks blocked candidates separately, so subtract
+        # them here to avoid double-counting a single workspace as both kept
+        # and blocked.
+        kept_count=max(summary.kept - blocked_count, 0),
+        prune_count=summary.pruned,
+        blocked_count=blocked_count,
+    )
+
+
+def adapt_workspace_summary_to_result(
+    summary: Any,
+    bucket: RetentionBucket,
+    dry_run: bool = False,
+) -> CleanupResult:
+    plan = adapt_workspace_summary_to_plan(summary, bucket)
+    deleted_paths = tuple(Path(p) for p in summary.pruned_paths) if not dry_run else ()
+    deleted_bytes = 0 if dry_run else (summary.bytes_before - summary.bytes_after)
+
+    return CleanupResult(
+        bucket=bucket,
+        plan=plan,
+        deleted_paths=deleted_paths,
+        deleted_count=len(deleted_paths),
+        deleted_bytes=deleted_bytes,
+        kept_bytes=summary.bytes_after,
+        errors=(),
+    )
+
+
+REPO_WORKTREE_ARCHIVE_BUCKET = RetentionBucket(
+    family="worktree_archives",
+    scope=RetentionScope.REPO,
+    retention_class=RetentionClass.REVIEWABLE,
+)
+
+REPO_RUN_ARCHIVE_BUCKET = RetentionBucket(
+    family="run_archives",
+    scope=RetentionScope.REPO,
+    retention_class=RetentionClass.REVIEWABLE,
+)
+
+REPO_FILEBOX_BUCKET = RetentionBucket(
+    family="filebox",
+    scope=RetentionScope.REPO,
+    retention_class=RetentionClass.EPHEMERAL,
+)
+
+REPO_REPORTS_BUCKET = RetentionBucket(
+    family="reports",
+    scope=RetentionScope.REPO,
+    retention_class=RetentionClass.REVIEWABLE,
+)
+
+REPO_WORKSPACE_BUCKET = RetentionBucket(
+    family="workspaces",
+    scope=RetentionScope.REPO,
+    retention_class=RetentionClass.EPHEMERAL,
+)
+
+GLOBAL_WORKSPACE_BUCKET = RetentionBucket(
+    family="workspaces",
+    scope=RetentionScope.GLOBAL,
+    retention_class=RetentionClass.EPHEMERAL,
+)
+
+REPO_LOGS_BUCKET = RetentionBucket(
+    family="logs",
+    scope=RetentionScope.REPO,
+    retention_class=RetentionClass.EPHEMERAL,
+)
+
+REPO_UPLOADS_BUCKET = RetentionBucket(
+    family="uploads",
+    scope=RetentionScope.REPO,
+    retention_class=RetentionClass.EPHEMERAL,
+)
+
+REPO_GITHUB_CONTEXT_BUCKET = RetentionBucket(
+    family="github_context",
+    scope=RetentionScope.REPO,
+    retention_class=RetentionClass.REVIEWABLE,
+)
+
+REPO_REVIEW_RUNS_BUCKET = RetentionBucket(
+    family="review_runs",
+    scope=RetentionScope.REPO,
+    retention_class=RetentionClass.REVIEWABLE,
+)
+
+GLOBAL_UPDATE_CACHE_BUCKET = RetentionBucket(
+    family="update_cache",
+    scope=RetentionScope.GLOBAL,
+    retention_class=RetentionClass.CACHE_ONLY,
+)
+
+GLOBAL_LOGS_BUCKET = RetentionBucket(
+    family="logs",
+    scope=RetentionScope.GLOBAL,
+    retention_class=RetentionClass.EPHEMERAL,
+)
 
 
 __all__ = [
@@ -483,4 +671,18 @@ __all__ = [
     "adapt_housekeeping_rule_result_to_result",
     "adapt_report_prune_summary_to_plan",
     "adapt_report_prune_summary_to_result",
+    "adapt_workspace_summary_to_plan",
+    "adapt_workspace_summary_to_result",
+    "REPO_WORKTREE_ARCHIVE_BUCKET",
+    "REPO_RUN_ARCHIVE_BUCKET",
+    "REPO_FILEBOX_BUCKET",
+    "REPO_REPORTS_BUCKET",
+    "REPO_WORKSPACE_BUCKET",
+    "GLOBAL_WORKSPACE_BUCKET",
+    "REPO_LOGS_BUCKET",
+    "REPO_UPLOADS_BUCKET",
+    "REPO_GITHUB_CONTEXT_BUCKET",
+    "REPO_REVIEW_RUNS_BUCKET",
+    "GLOBAL_UPDATE_CACHE_BUCKET",
+    "GLOBAL_LOGS_BUCKET",
 ]

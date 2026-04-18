@@ -12,6 +12,7 @@ from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
+from codex_autorunner.core.pr_bindings import PrBindingStore
 from codex_autorunner.core.publish_executor import (
     PublishExecutorRegistry,
     PublishOperationProcessor,
@@ -23,6 +24,7 @@ from codex_autorunner.core.publish_operation_executors import (
     build_enqueue_managed_turn_executor,
     build_notify_chat_executor,
 )
+from codex_autorunner.core.scm_events import ScmEventStore
 from codex_autorunner.integrations.discord.state import DiscordStateStore
 from codex_autorunner.integrations.github.publisher import (
     build_post_pr_comment_executor,
@@ -585,6 +587,206 @@ def test_enqueue_managed_turn_executor_reuses_existing_execution_for_same_operat
     assert len(turns) == 1
     assert turns[0]["request_kind"] == "review"
     assert turns[0]["client_turn_id"] == first["client_request_id"]
+
+
+def test_enqueue_managed_turn_executor_rebinds_archived_scm_thread_with_bootstrap_prompt(
+    tmp_path: Path,
+) -> None:
+    hub_root, workspace_root, repo_id = _publish_hub(tmp_path)
+    thread_store = PmaThreadStore(hub_root)
+    archived_thread = thread_store.create_thread(
+        "codex",
+        workspace_root,
+        repo_id=repo_id,
+        name="Original PR thread",
+        metadata={"head_branch": "feature/scm-rebind"},
+    )
+    thread_store.archive_thread(archived_thread["managed_thread_id"])
+
+    binding = PrBindingStore(hub_root).upsert_binding(
+        provider="github",
+        repo_slug="acme/widgets",
+        repo_id=repo_id,
+        pr_number=42,
+        pr_state="open",
+        head_branch="feature/scm-rebind",
+        base_branch="main",
+        thread_target_id=archived_thread["managed_thread_id"],
+    )
+    event = ScmEventStore(hub_root).record_event(
+        provider="github",
+        event_type="pull_request_review_comment",
+        event_id="github:event-rebind",
+        occurred_at="2026-03-25T00:00:00Z",
+        received_at="2026-03-25T00:00:01Z",
+        repo_slug="acme/widgets",
+        repo_id=repo_id,
+        pr_number=42,
+        payload={
+            "action": "created",
+            "comment_id": "314",
+            "author_login": "reviewer",
+            "body": "Please cover the archived-thread fallback.",
+            "path": "src/codex_autorunner/core/scm_automation_service.py",
+            "line": 371,
+        },
+    )
+    journal = PublishJournalStore(hub_root)
+    operation, _ = journal.create_operation(
+        operation_key="enqueue:scm:archived-thread",
+        operation_kind="enqueue_managed_turn",
+        payload={
+            "thread_target_id": archived_thread["managed_thread_id"],
+            "request": {
+                "kind": "message",
+                "message_text": "New PR review feedback arrived on acme/widgets#42.",
+                "metadata": {
+                    "scm": {
+                        "binding_id": binding.binding_id,
+                        "event_id": event.event_id,
+                        "provider": "github",
+                        "repo_slug": "acme/widgets",
+                        "repo_id": repo_id,
+                        "pr_number": 42,
+                    }
+                },
+            },
+            "scm_reaction": {
+                "binding_id": binding.binding_id,
+                "event_id": event.event_id,
+                "provider": "github",
+                "reaction_kind": "review_comment",
+                "repo_slug": "acme/widgets",
+                "repo_id": repo_id,
+                "pr_number": 42,
+                "head_branch": "feature/scm-rebind",
+                "base_branch": "main",
+                "thread_target_id": archived_thread["managed_thread_id"],
+            },
+        },
+    )
+
+    result = build_enqueue_managed_turn_executor(hub_root=hub_root)(operation)
+
+    assert result["thread_target_id"] != archived_thread["managed_thread_id"]
+    assert (
+        result["rebound_from_thread_target_id"] == archived_thread["managed_thread_id"]
+    )
+
+    rebound_binding = PrBindingStore(hub_root).get_binding_by_pr(
+        provider="github",
+        repo_slug="acme/widgets",
+        pr_number=42,
+    )
+    assert rebound_binding is not None
+    assert rebound_binding.thread_target_id == result["thread_target_id"]
+
+    turns = thread_store.list_turns(result["thread_target_id"])
+    assert len(turns) == 1
+    queued = turns[0]
+    assert "Bootstrap a fresh SCM PR follow-up session" in queued["prompt"]
+    assert "Target PR: acme/widgets#42" in queued["prompt"]
+    assert "Start with the latest review comment 314" in queued["prompt"]
+    assert "gh pr view 42 --repo acme/widgets --comments" in queued["prompt"]
+    assert "push them to the PR branch" in queued["prompt"]
+
+    replacement_thread = thread_store.get_thread(result["thread_target_id"])
+    assert replacement_thread is not None
+    assert replacement_thread["metadata"]["pr_number"] == 42
+    assert replacement_thread["metadata"]["pr_url"] == (
+        "https://github.com/acme/widgets/pull/42"
+    )
+    assert replacement_thread["metadata"]["head_branch"] == "feature/scm-rebind"
+
+
+def test_enqueue_managed_turn_executor_dedupes_retry_after_scm_rebind_to_new_thread(
+    tmp_path: Path,
+) -> None:
+    """If the PR binding moves to a replacement thread, retries must still dedupe."""
+    hub_root, workspace_root, repo_id = _publish_hub(tmp_path)
+    thread_store = PmaThreadStore(hub_root)
+    archived_thread = thread_store.create_thread(
+        "codex",
+        workspace_root,
+        repo_id=repo_id,
+        name="Original PR thread",
+    )
+    thread_store.archive_thread(archived_thread["managed_thread_id"])
+
+    binding = PrBindingStore(hub_root).upsert_binding(
+        provider="github",
+        repo_slug="acme/widgets",
+        repo_id=repo_id,
+        pr_number=42,
+        pr_state="open",
+        head_branch="feature/scm-rebind",
+        base_branch="main",
+        thread_target_id=archived_thread["managed_thread_id"],
+    )
+    event = ScmEventStore(hub_root).record_event(
+        provider="github",
+        event_type="pull_request_review_comment",
+        event_id="github:event-rebind-dedupe",
+        occurred_at="2026-03-25T00:00:00Z",
+        received_at="2026-03-25T00:00:01Z",
+        repo_slug="acme/widgets",
+        repo_id=repo_id,
+        pr_number=42,
+        payload={
+            "action": "created",
+            "comment_id": "314",
+            "author_login": "reviewer",
+            "body": "Dedupe after rebind.",
+            "path": "src/example.py",
+            "line": 1,
+        },
+    )
+    journal = PublishJournalStore(hub_root)
+    operation, _ = journal.create_operation(
+        operation_key="enqueue:scm:archived-thread-retry-dedupe",
+        operation_kind="enqueue_managed_turn",
+        payload={
+            "thread_target_id": archived_thread["managed_thread_id"],
+            "request": {
+                "kind": "message",
+                "message_text": "First attempt message.",
+                "metadata": {
+                    "scm": {
+                        "binding_id": binding.binding_id,
+                        "event_id": event.event_id,
+                        "provider": "github",
+                        "repo_slug": "acme/widgets",
+                        "repo_id": repo_id,
+                        "pr_number": 42,
+                    }
+                },
+            },
+            "scm_reaction": {
+                "binding_id": binding.binding_id,
+                "event_id": event.event_id,
+                "provider": "github",
+                "reaction_kind": "review_comment",
+                "repo_slug": "acme/widgets",
+                "repo_id": repo_id,
+                "pr_number": 42,
+                "thread_target_id": archived_thread["managed_thread_id"],
+            },
+        },
+    )
+
+    executor = build_enqueue_managed_turn_executor(hub_root=hub_root)
+    first = executor(operation)
+    second = executor(operation)
+
+    assert first["deduped"] is False
+    assert second["deduped"] is True
+    assert first["managed_turn_id"] == second["managed_turn_id"]
+    assert first["thread_target_id"] == second["thread_target_id"]
+
+    rebound_id = first["thread_target_id"]
+    assert rebound_id != archived_thread["managed_thread_id"]
+    turns = thread_store.list_turns(rebound_id)
+    assert len(turns) == 1
 
 
 def test_process_now_runs_first_publish_operation_types(

@@ -999,3 +999,231 @@ def test_gather_hub_message_snapshot_refreshes_repo_hint_cache_when_repo_inputs_
     assert first["items"] == []
     assert second["items"] == []
     assert calls["repo_hints"] == 2
+
+
+def test_gather_hub_message_snapshot_reuses_durable_projection_across_contexts(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir(parents=True, exist_ok=True)
+    calls = {"list_repos": 0}
+
+    def list_repos() -> list[object]:
+        calls["list_repos"] += 1
+        return []
+
+    def build_context() -> SimpleNamespace:
+        return SimpleNamespace(
+            supervisor=SimpleNamespace(
+                list_repos=list_repos,
+                state=SimpleNamespace(last_scan_at="2026-04-05T00:00:00Z"),
+            ),
+            config=SimpleNamespace(root=hub_root),
+            projection_store=HubProjectionStore(hub_root, durable=False),
+        )
+
+    monkeypatch.setattr(
+        hub_gather_service, "_gather_inbox", lambda *_args, **_kwargs: []
+    )
+    monkeypatch.setattr(
+        hub_gather_service, "build_hub_capability_hints", lambda **_kwargs: []
+    )
+    monkeypatch.setattr(
+        hub_gather_service, "build_repo_capability_hints", lambda **_kwargs: []
+    )
+    monkeypatch.setattr(
+        hub_gather_service, "load_hub_inbox_dismissals", lambda _root: {}
+    )
+
+    first_ctx = build_context()
+    hub_gather_service.gather_hub_message_snapshot(first_ctx, sections={"inbox"})
+    hub_gather_service._hub_snapshot_cache.clear()
+
+    second_ctx = build_context()
+    result = hub_gather_service.gather_hub_message_snapshot(
+        second_ctx, sections={"inbox"}
+    )
+
+    assert result["items"] == []
+    assert calls["list_repos"] == 1
+
+
+def test_repo_capability_hint_durable_projection_reuses_across_contexts(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    hub_root = tmp_path / "hub"
+    repo_root = hub_root / "demo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    snapshot = _repo_snapshot(repo_root)
+    calls = {"repo_hints": 0}
+
+    def fake_repo_hints(**_kwargs) -> list[dict[str, object]]:
+        calls["repo_hints"] += 1
+        return []
+
+    monkeypatch.setattr(
+        hub_gather_service, "_gather_inbox", lambda *_args, **_kwargs: []
+    )
+    monkeypatch.setattr(
+        hub_gather_service, "build_hub_capability_hints", lambda **_kwargs: []
+    )
+    monkeypatch.setattr(
+        hub_gather_service, "build_repo_capability_hints", fake_repo_hints
+    )
+    monkeypatch.setattr(
+        hub_gather_service, "load_hub_inbox_dismissals", lambda _root: {}
+    )
+
+    def build_context() -> SimpleNamespace:
+        return SimpleNamespace(
+            supervisor=SimpleNamespace(
+                list_repos=lambda: [snapshot],
+                state=SimpleNamespace(last_scan_at="2026-04-05T00:00:00Z"),
+            ),
+            config=SimpleNamespace(root=hub_root),
+            projection_store=HubProjectionStore(hub_root, durable=False),
+        )
+
+    first_ctx = build_context()
+    hub_gather_service.gather_hub_message_snapshot(first_ctx, sections={"inbox"})
+    hub_gather_service._repo_capability_hint_cache.clear()
+
+    second_ctx = build_context()
+    hub_gather_service.gather_hub_message_snapshot(second_ctx, sections={"inbox"})
+
+    assert calls["repo_hints"] == 1
+
+
+def test_hub_projection_store_fingerprint_mismatch_returns_none(tmp_path: Path) -> None:
+    store = HubProjectionStore(tmp_path, durable=False)
+    store.set_cache("key-1", {"version": 1}, {"data": "original"}, namespace="test_ns")
+    hit = store.get_cache("key-1", {"version": 1}, namespace="test_ns")
+    assert hit == {"data": "original"}
+
+    miss = store.get_cache("key-1", {"version": 2}, namespace="test_ns")
+    assert miss is None
+
+
+def test_hub_projection_store_ttl_expiry_returns_none(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import codex_autorunner.core.hub_projection_store as store_module
+
+    store = HubProjectionStore(tmp_path, durable=False)
+
+    now_ts = {"value": 1000.0}
+    monkeypatch.setattr(store_module, "_current_utc_ts", lambda: now_ts["value"])
+    monkeypatch.setattr(store_module, "now_iso", lambda: "1970-01-01T00:16:40Z")
+    store.set_cache("key-ttl", {"v": 1}, {"data": "fresh"}, namespace="test_ttl")
+
+    hit = store.get_cache(
+        "key-ttl", {"v": 1}, namespace="test_ttl", max_age_seconds=60.0
+    )
+    assert hit == {"data": "fresh"}
+
+    now_ts["value"] = 1100.0
+    expired = store.get_cache(
+        "key-ttl", {"v": 1}, namespace="test_ttl", max_age_seconds=60.0
+    )
+    assert expired is None
+
+
+def test_hub_projection_store_invalidate_clears_entry(tmp_path: Path) -> None:
+    store = HubProjectionStore(tmp_path, durable=False)
+    store.set_cache("key-inv", {"v": 1}, {"data": "x"}, namespace="test_inv")
+
+    hit = store.get_cache("key-inv", {"v": 1}, namespace="test_inv")
+    assert hit == {"data": "x"}
+
+    store.invalidate_cache("key-inv", namespace="test_inv")
+    miss = store.get_cache("key-inv", {"v": 1}, namespace="test_inv")
+    assert miss is None
+
+
+def test_hub_projection_store_delete_namespace_clears_all_keys(tmp_path: Path) -> None:
+    store = HubProjectionStore(tmp_path, durable=False)
+    store.set_cache("a", {"v": 1}, "data-a", namespace="test_ns_bulk")
+    store.set_cache("b", {"v": 1}, "data-b", namespace="test_ns_bulk")
+
+    assert store.get_cache("a", {"v": 1}, namespace="test_ns_bulk") == "data-a"
+    assert store.get_cache("b", {"v": 1}, namespace="test_ns_bulk") == "data-b"
+
+    store.delete(namespace="test_ns_bulk")
+
+    assert store.get_cache("a", {"v": 1}, namespace="test_ns_bulk") is None
+    assert store.get_cache("b", {"v": 1}, namespace="test_ns_bulk") is None
+
+
+def test_hub_projection_store_get_put_aliases(tmp_path: Path) -> None:
+    store = HubProjectionStore(tmp_path, durable=False)
+    store.put(namespace="alias_ns", key="k", fingerprint={"f": 1}, payload={"v": 42})
+    result = store.get(namespace="alias_ns", key="k", fingerprint={"f": 1})
+    assert result == {"v": 42}
+
+
+def test_hub_projection_store_survives_corrupt_payload(tmp_path: Path) -> None:
+    import sqlite3
+
+    store = HubProjectionStore(tmp_path, durable=False)
+    db_path = store.path
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with sqlite3.connect(str(db_path)) as conn:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS projection_cache "
+            "(namespace TEXT, cache_key TEXT, fingerprint TEXT, payload TEXT, "
+            "updated_at TEXT, PRIMARY KEY(namespace, cache_key))"
+        )
+        conn.execute(
+            "INSERT INTO projection_cache VALUES (?, ?, ?, ?, ?)",
+            (
+                "corrupt_ns",
+                "corrupt_key",
+                '"fp"',
+                "not-valid-json",
+                "2026-01-01T00:00:00Z",
+            ),
+        )
+
+    result = store.get_cache("corrupt_key", "fp", namespace="corrupt_ns")
+    assert result is None
+
+
+def test_path_stat_fingerprint_on_nonexistent_path() -> None:
+    from codex_autorunner.core.hub_projection_store import path_stat_fingerprint
+
+    exists, mtime_ns, size = path_stat_fingerprint(Path("/nonexistent/path/file.txt"))
+    assert exists is False
+    assert mtime_ns is None
+    assert size is None
+
+
+def test_path_stat_fingerprint_on_real_file(tmp_path: Path) -> None:
+    from codex_autorunner.core.hub_projection_store import path_stat_fingerprint
+
+    f = tmp_path / "test.txt"
+    f.write_text("hello", encoding="utf-8")
+    exists, mtime_ns, size = path_stat_fingerprint(f)
+    assert exists is True
+    assert mtime_ns is not None
+    assert size == 5
+
+
+def test_hub_projection_store_namespace_constants_are_stable() -> None:
+    from codex_autorunner.core.hub_projection_store import (
+        CHAT_BINDING_PROJECTION_KEY,
+        CHAT_BINDING_PROJECTION_NAMESPACE,
+        HUB_LISTING_PROJECTION_NAMESPACE,
+        HUB_SNAPSHOT_PROJECTION_NAMESPACE,
+        REPO_CAPABILITY_HINT_PROJECTION_NAMESPACE,
+        REPO_RUNTIME_PROJECTION_NAMESPACE,
+    )
+
+    assert REPO_RUNTIME_PROJECTION_NAMESPACE == "repo_runtime_v1"
+    assert HUB_LISTING_PROJECTION_NAMESPACE == "hub_listing_v1"
+    assert CHAT_BINDING_PROJECTION_NAMESPACE == "chat_binding_counts_v1"
+    assert CHAT_BINDING_PROJECTION_KEY == "active_by_source"
+    assert HUB_SNAPSHOT_PROJECTION_NAMESPACE == "hub_snapshot_v1"
+    assert REPO_CAPABILITY_HINT_PROJECTION_NAMESPACE == "repo_capability_hints_v1"

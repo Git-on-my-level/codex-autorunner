@@ -89,34 +89,74 @@ export function extractContextRemainingPercent(usage) {
     const percentRemaining = Math.round(((contextWindow - totalTokens) / contextWindow) * 100);
     return Math.max(0, Math.min(100, percentRemaining));
 }
-export async function readEventStream(res, handler) {
+const ESCAPED_NEWLINE_RE = /\\n(?=event:|data:|\\n)/g;
+function normalizeEscapedNewlines(buffer, detected) {
+    if (!detected) {
+        if (!buffer.includes("\n") && buffer.includes("\\n")) {
+            return { text: buffer.replace(ESCAPED_NEWLINE_RE, "\n"), detected: true };
+        }
+        return { text: buffer, detected: false };
+    }
+    return { text: buffer.replace(ESCAPED_NEWLINE_RE, "\n"), detected: true };
+}
+function parseSseChunk(chunk) {
+    let event = "message";
+    const dataLines = [];
+    chunk.split("\n").forEach((line) => {
+        if (line.startsWith("event:")) {
+            event = line.slice(6).trim();
+        }
+        else if (line.startsWith("data:")) {
+            dataLines.push(line.slice(5).trimStart());
+        }
+        else if (line.trim()) {
+            dataLines.push(line);
+        }
+    });
+    if (!dataLines.length)
+        return null;
+    return { event, data: dataLines.join("\n") };
+}
+export async function readEventStream(res, handler, options = {}) {
     if (!res.body)
         throw new Error("Streaming not supported in this browser");
     const reader = res.body.getReader();
     let buffer = "";
+    let escapedNewlinesDetected = false;
     for (;;) {
         const { value, done } = await reader.read();
         if (done)
             break;
-        buffer += decoder.decode(value, { stream: true });
+        const decoded = decoder.decode(value, { stream: true });
+        if (options.handleEscapedNewlines) {
+            const prev = buffer;
+            const norm = normalizeEscapedNewlines(prev, escapedNewlinesDetected);
+            escapedNewlinesDetected = norm.detected;
+            buffer = norm.text;
+            const decodedNorm = normalizeEscapedNewlines(decoded, escapedNewlinesDetected);
+            escapedNewlinesDetected = decodedNorm.detected;
+            buffer += decodedNorm.text;
+        }
+        else {
+            buffer += decoded;
+        }
         const chunks = buffer.split("\n\n");
         buffer = chunks.pop() || "";
         for (const chunk of chunks) {
             if (!chunk.trim())
                 continue;
-            let event = "message";
-            const dataLines = [];
-            chunk.split("\n").forEach((line) => {
-                if (line.startsWith("event:")) {
-                    event = line.slice(6).trim();
-                }
-                else if (line.startsWith("data:")) {
-                    dataLines.push(line.slice(5).trimStart());
-                }
-            });
-            if (!dataLines.length)
-                continue;
-            handler(event, dataLines.join("\n"));
+            const parsed = parseSseChunk(chunk);
+            if (parsed)
+                handler(parsed.event, parsed.data);
         }
+    }
+    if (buffer.trim()) {
+        if (options.handleEscapedNewlines && !escapedNewlinesDetected) {
+            const norm = normalizeEscapedNewlines(buffer, false);
+            buffer = norm.text;
+        }
+        const parsed = parseSseChunk(buffer);
+        if (parsed)
+            handler(parsed.event, parsed.data);
     }
 }

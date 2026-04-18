@@ -9,21 +9,15 @@ Targets:
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Dict, Optional
+from typing import Any, AsyncIterator, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from ....core import drafts as draft_utils
-from ....core.usage import persist_opencode_usage_snapshot
-from ....integrations.app_server.event_buffer import format_sse
-from .file_chat_routes import (
-    FileChatRoutesState as _ExtractedFileChatRoutesState,
-)
-from .file_chat_routes import build_file_chat_runtime_routes
+from ....core.sse import format_sse
+from .file_chat_routes import FileChatRoutesState
 from .file_chat_routes import targets as extracted_targets
 from .file_chat_routes.drafts import (
     apply_file_patch as extracted_apply_file_patch,
@@ -34,57 +28,50 @@ from .file_chat_routes.drafts import (
 from .file_chat_routes.drafts import (
     pending_file_patch as extracted_pending_file_patch,
 )
-from .file_chat_routes.execution import execute_file_chat as extracted_execute_file_chat
+from .file_chat_routes.execution import (
+    execute_file_chat as extracted_execute_file_chat,
+)
 from .file_chat_routes.execution import (
     resolve_file_chat_agent_selection as extracted_resolve_file_chat_agent_selection,
 )
-from .file_chat_routes.runtime import active_for_client as _active_for_client
-from .file_chat_routes.runtime import begin_turn_state as _begin_turn_state
-from .file_chat_routes.runtime import clear_interrupt_event as _clear_interrupt_event
-from .file_chat_routes.runtime import finalize_turn_state as _finalize_turn_state
-from .file_chat_routes.runtime import get_state as _get_state
-from .file_chat_routes.runtime import last_for_client as _last_for_client
-from .file_chat_routes.runtime import update_turn_state as _update_turn_state
+from .file_chat_routes.execution_agents import FileChatError
+from .file_chat_routes.runtime import (
+    active_for_client as _active_for_client,
+)
+from .file_chat_routes.runtime import (
+    begin_turn_state as _begin_turn_state,
+)
+from .file_chat_routes.runtime import (
+    clear_interrupt_event as _clear_interrupt_event,
+)
+from .file_chat_routes.runtime import (
+    finalize_turn_state as _finalize_turn_state,
+)
+from .file_chat_routes.runtime import (
+    get_state as _get_state,
+)
+from .file_chat_routes.runtime import (
+    last_for_client as _last_for_client,
+)
+from .file_chat_routes.runtime import (
+    update_turn_state as _update_turn_state,
+)
+from .file_chat_routes.stream_shaping import (
+    shape_stream_error,
+    shape_stream_events,
+    shape_stream_queued,
+)
 from .shared import SSE_HEADERS
 
-FILE_CHAT_STATE_NAME = draft_utils.FILE_CHAT_STATE_NAME
-FILE_CHAT_TIMEOUT_SECONDS = 180
+__all__ = ["FileChatRoutesState", "build_file_chat_routes"]
+
 logger = logging.getLogger(__name__)
-FileChatRoutesState = _ExtractedFileChatRoutesState
 
-# Keep the staged extraction seam visible while this module remains the composition owner.
-_EXTRACTED_FILE_CHAT_SEAMS = (
-    build_file_chat_runtime_routes,
-    extracted_execute_file_chat,
-)
-
-ExtractedTarget = extracted_targets._Target
 _Target = extracted_targets._Target
 _build_file_chat_prompt = extracted_targets.build_file_chat_prompt
 _build_patch = extracted_targets.build_patch
 _parse_target = extracted_targets.parse_target
-_read_file = extracted_targets.read_file
 _resolve_repo_root = extracted_targets.resolve_repo_root
-
-
-class FileChatError(Exception):
-    """Base error for file chat failures."""
-
-
-def _state_path(repo_root: Path) -> Path:
-    return draft_utils.state_path(repo_root)
-
-
-def _load_state(repo_root: Path) -> Dict[str, Any]:
-    return draft_utils.load_state(repo_root)
-
-
-def _save_state(repo_root: Path, state: Dict[str, Any]) -> None:
-    draft_utils.save_state(repo_root, state)
-
-
-def _hash_content(content: str) -> str:
-    return draft_utils.hash_content(content)
 
 
 def build_file_chat_routes() -> APIRouter:
@@ -100,7 +87,6 @@ def build_file_chat_routes() -> APIRouter:
 
     @router.post("/file-chat")
     async def chat_file(request: Request):
-        """Chat with a file target - optionally streams SSE events."""
         body = await request.json()
         target_raw = body.get("target")
         message = (body.get("message") or "").strip()
@@ -117,7 +103,6 @@ def build_file_chat_routes() -> APIRouter:
         repo_root = _resolve_repo_root(request)
         target = _parse_target(repo_root, str(target_raw or ""))
 
-        # Ensure target directory exists for contextspace docs (write on demand)
         if target.kind == "contextspace":
             target.path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -128,7 +113,6 @@ def build_file_chat_routes() -> APIRouter:
             profile=profile,
         )
 
-        # Concurrency guard per target
         s = _get_state(request)
         async with s.chat_lock:
             existing = s.active_chats.get(target.state_key)
@@ -156,7 +140,6 @@ def build_file_chat_routes() -> APIRouter:
             )
 
         try:
-            result: Dict[str, Any]
 
             async def _on_meta(agent_id: str, thread_id: str, turn_id: str) -> None:
                 await _update_turn_state(
@@ -168,7 +151,7 @@ def build_file_chat_routes() -> APIRouter:
                 )
 
             try:
-                result = await _execute_file_chat(
+                result = await extracted_execute_file_chat(
                     request,
                     repo_root,
                     target,
@@ -184,7 +167,7 @@ def build_file_chat_routes() -> APIRouter:
                 asyncio.CancelledError,
                 OSError,
                 FileChatError,
-            ) as exc:  # intentional: finalize error state before re-raise
+            ) as exc:
                 await _finalize_turn_state(
                     request,
                     target,
@@ -205,7 +188,7 @@ def build_file_chat_routes() -> APIRouter:
     async def _stream_file_chat(
         request: Request,
         repo_root: Path,
-        target: ExtractedTarget,
+        target: _Target,
         message: str,
         *,
         agent: str = "codex",
@@ -214,7 +197,7 @@ def build_file_chat_routes() -> APIRouter:
         reasoning: Optional[str] = None,
         client_turn_id: Optional[str] = None,
     ) -> AsyncIterator[str]:
-        yield format_sse("status", {"status": "queued"})
+        yield shape_stream_queued()
         try:
 
             async def _on_meta(agent_id: str, thread_id: str, turn_id: str) -> None:
@@ -227,7 +210,7 @@ def build_file_chat_routes() -> APIRouter:
                 )
 
             run_task = asyncio.create_task(
-                _execute_file_chat(
+                extracted_execute_file_chat(
                     request,
                     repo_root,
                     target,
@@ -241,10 +224,13 @@ def build_file_chat_routes() -> APIRouter:
             )
 
             async def _finalize() -> None:
-                result = {"status": "error", "detail": "File chat failed"}
+                result: Dict[str, Any] = {
+                    "status": "error",
+                    "detail": "File chat failed",
+                }
                 try:
                     result = await run_task
-                except Exception as exc:  # intentional: top-level error handler
+                except Exception as exc:
                     logger.exception("file chat task failed")
                     result = {
                         "status": "error",
@@ -259,334 +245,15 @@ def build_file_chat_routes() -> APIRouter:
             try:
                 result = await asyncio.shield(run_task)
             except asyncio.CancelledError:
-                # client disconnected; turn continues in background
                 return
 
-            if result.get("status") == "ok":
-                raw_events = result.pop("raw_events", []) or []
-                for event in raw_events:
-                    yield format_sse("app-server", event)
-                usage_parts = result.pop("usage_parts", []) or []
-                for usage in usage_parts:
-                    yield format_sse("token_usage", usage)
-                result["client_turn_id"] = client_turn_id or ""
-                yield format_sse("update", result)
-                yield format_sse("done", {"status": "ok"})
-            elif result.get("status") == "interrupted":
-                yield format_sse(
-                    "interrupted",
-                    {"detail": result.get("detail") or "File chat interrupted"},
-                )
-            else:
-                yield format_sse(
-                    "error", {"detail": result.get("detail") or "File chat failed"}
-                )
-        except Exception:  # intentional: top-level error handler
+            for event in shape_stream_events(result, client_turn_id=client_turn_id):
+                yield event
+        except Exception:
             logger.exception("file chat stream failed")
-            yield format_sse("error", {"detail": "File chat failed"})
+            yield shape_stream_error()
         finally:
             await _clear_interrupt_event(request, target.state_key)
-
-    async def _execute_file_chat(
-        request: Request,
-        repo_root: Path,
-        target: ExtractedTarget,
-        message: str,
-        *,
-        agent: str = "codex",
-        profile: Optional[str] = None,
-        model: Optional[str] = None,
-        reasoning: Optional[str] = None,
-        on_meta: Optional[Callable[[str, str, str], Any]] = None,
-        on_usage: Optional[Callable[[Dict[str, Any]], Any]] = None,
-    ) -> Dict[str, Any]:
-        return await extracted_execute_file_chat(
-            request,
-            repo_root,
-            target,
-            message,
-            agent=agent,
-            profile=profile,
-            model=model,
-            reasoning=reasoning,
-            on_meta=on_meta,
-            on_usage=on_usage,
-        )
-
-    async def _execute_app_server(
-        supervisor: Any,
-        repo_root: Path,
-        prompt: str,
-        interrupt_event: asyncio.Event,
-        *,
-        model: Optional[str] = None,
-        reasoning: Optional[str] = None,
-        agent_id: str = "codex",
-        thread_registry: Optional[Any] = None,
-        thread_key: Optional[str] = None,
-        on_meta: Optional[Callable[[str, str, str], Any]] = None,
-        events: Optional[Any] = None,
-    ) -> Dict[str, Any]:
-        client = await supervisor.get_client(repo_root)
-
-        thread_id = None
-        if thread_registry is not None and thread_key:
-            thread_id = thread_registry.get_thread_id(thread_key)
-        if thread_id:
-            try:
-                await client.thread_resume(thread_id)
-            except (RuntimeError, OSError):  # intentional: thread resume fallback
-                thread_id = None
-
-        if not thread_id:
-            thread = await client.thread_start(str(repo_root))
-            thread_id = thread.get("id")
-            if not isinstance(thread_id, str) or not thread_id:
-                raise FileChatError("App-server did not return a thread id")
-            if thread_registry is not None and thread_key:
-                thread_registry.set_thread_id(thread_key, thread_id)
-
-        turn_kwargs: Dict[str, Any] = {}
-        if model:
-            turn_kwargs["model"] = model
-        if reasoning:
-            turn_kwargs["effort"] = reasoning
-
-        handle = await client.turn_start(
-            thread_id,
-            prompt,
-            approval_policy="on-request",
-            sandbox_policy="dangerFullAccess",
-            **turn_kwargs,
-        )
-        if events is not None:
-            try:
-                await events.register_turn(thread_id, handle.turn_id)
-            except (
-                RuntimeError,
-                OSError,
-            ):  # intentional: non-critical event registration
-                logger.debug("file chat register_turn failed", exc_info=True)
-        if on_meta is not None:
-            try:
-                maybe = on_meta(agent_id, thread_id, handle.turn_id)
-                if asyncio.iscoroutine(maybe):
-                    await maybe
-            except (
-                RuntimeError,
-                TypeError,
-                OSError,
-            ):  # intentional: non-critical meta callback
-                logger.debug("file chat meta callback failed", exc_info=True)
-
-        turn_task = asyncio.create_task(handle.wait(timeout=None))
-        timeout_task = asyncio.create_task(asyncio.sleep(FILE_CHAT_TIMEOUT_SECONDS))
-        interrupt_task = asyncio.create_task(interrupt_event.wait())
-        try:
-            done, _ = await asyncio.wait(
-                {turn_task, timeout_task, interrupt_task},
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            if timeout_task in done:
-                turn_task.cancel()
-                return {"status": "error", "detail": "File chat timed out"}
-            if interrupt_task in done:
-                turn_task.cancel()
-                return {"status": "interrupted", "detail": "File chat interrupted"}
-            turn_result = await turn_task
-        finally:
-            timeout_task.cancel()
-            interrupt_task.cancel()
-
-        if getattr(turn_result, "errors", None):
-            errors = turn_result.errors
-            raise FileChatError(errors[-1] if errors else "App-server error")
-
-        output = "\n".join(getattr(turn_result, "agent_messages", []) or []).strip()
-        agent_message = _parse_agent_message(output)
-        raw_events = getattr(turn_result, "raw_events", []) or []
-        return {
-            "status": "ok",
-            "agent_message": agent_message,
-            "message": output,
-            "raw_events": raw_events,
-            "thread_id": thread_id,
-            "turn_id": getattr(handle, "turn_id", None),
-            "agent": agent_id,
-        }
-
-    async def _execute_opencode(
-        supervisor: Any,
-        repo_root: Path,
-        prompt: str,
-        interrupt_event: asyncio.Event,
-        *,
-        model: Optional[str] = None,
-        reasoning: Optional[str] = None,
-        thread_registry: Optional[Any] = None,
-        thread_key: Optional[str] = None,
-        stall_timeout_seconds: Optional[float] = None,
-        on_meta: Optional[Callable[[str, str, str], Any]] = None,
-        on_usage: Optional[Callable[[Dict[str, Any]], Any]] = None,
-    ) -> Dict[str, Any]:
-        from ....agents.opencode.runtime import (
-            PERMISSION_ALLOW,
-            build_turn_id,
-            collect_opencode_output,
-            extract_session_id,
-            opencode_stream_timeouts,
-            parse_message_response,
-            split_model_id,
-        )
-
-        client = await supervisor.get_client(repo_root)
-        session_id = None
-        if thread_registry is not None and thread_key:
-            session_id = thread_registry.get_thread_id(thread_key)
-        if not session_id:
-            session = await client.create_session(directory=str(repo_root))
-            session_id = extract_session_id(session, allow_fallback_id=True)
-            if not isinstance(session_id, str) or not session_id:
-                raise FileChatError("OpenCode did not return a session id")
-            if thread_registry is not None and thread_key:
-                thread_registry.set_thread_id(thread_key, session_id)
-
-        turn_id = build_turn_id(session_id)
-        if on_meta is not None:
-            try:
-                maybe = on_meta("opencode", session_id, turn_id)
-                if asyncio.iscoroutine(maybe):
-                    await maybe
-            except (
-                RuntimeError,
-                TypeError,
-                OSError,
-            ):  # intentional: non-critical meta callback
-                logger.debug("file chat opencode meta failed", exc_info=True)
-
-        model_payload = split_model_id(model)
-        await supervisor.mark_turn_started(repo_root)
-
-        usage_parts: list[Dict[str, Any]] = []
-
-        async def _part_handler(
-            part_type: str, part: Any, turn_id_arg: Optional[str] | None
-        ) -> None:
-            if part_type == "usage" and on_usage is not None:
-                usage_parts.append(part)
-                try:
-                    maybe = on_usage(part)
-                    if asyncio.iscoroutine(maybe):
-                        await maybe
-                except (
-                    RuntimeError,
-                    TypeError,
-                    OSError,
-                ):  # intentional: non-critical usage handler
-                    logger.debug("file chat usage handler failed", exc_info=True)
-
-        ready_event = asyncio.Event()
-        stall_timeout, first_event_timeout = opencode_stream_timeouts(
-            stall_timeout_seconds,
-        )
-        output_task = asyncio.create_task(
-            collect_opencode_output(
-                client,
-                session_id=session_id,
-                workspace_path=str(repo_root),
-                model_payload=model_payload,
-                permission_policy=PERMISSION_ALLOW,
-                question_policy="auto_first_option",
-                should_stop=interrupt_event.is_set,
-                ready_event=ready_event,
-                part_handler=_part_handler,
-                stall_timeout_seconds=stall_timeout,
-                first_event_timeout_seconds=first_event_timeout,
-                logger=logger,
-            )
-        )
-        with contextlib.suppress(asyncio.TimeoutError):
-            await asyncio.wait_for(ready_event.wait(), timeout=2.0)
-
-        prompt_task = asyncio.create_task(
-            client.prompt_async(
-                session_id,
-                message=prompt,
-                model=model_payload,
-                variant=reasoning,
-            )
-        )
-        timeout_task = asyncio.create_task(asyncio.sleep(FILE_CHAT_TIMEOUT_SECONDS))
-        interrupt_task = asyncio.create_task(interrupt_event.wait())
-        try:
-            prompt_response = None
-            try:
-                prompt_response = await prompt_task
-            except (
-                RuntimeError,
-                OSError,
-                FileChatError,
-            ) as exc:  # intentional: wraps all prompt failures
-                interrupt_event.set()
-                output_task.cancel()
-                raise FileChatError(f"OpenCode prompt failed: {exc}") from exc
-
-            done, _ = await asyncio.wait(
-                {output_task, timeout_task, interrupt_task},
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            if timeout_task in done:
-                output_task.cancel()
-                return {"status": "error", "detail": "File chat timed out"}
-            if interrupt_task in done:
-                output_task.cancel()
-                return {"status": "interrupted", "detail": "File chat interrupted"}
-            output_result = await output_task
-            if (not output_result.text) and prompt_response is not None:
-                fallback = parse_message_response(prompt_response)
-                if fallback.text:
-                    output_result = type(output_result)(
-                        text=fallback.text,
-                        error=output_result.error or fallback.error,
-                        usage=output_result.usage,
-                    )
-        finally:
-            timeout_task.cancel()
-            interrupt_task.cancel()
-            await supervisor.mark_turn_finished(repo_root)
-
-        if output_result.usage:
-            persist_opencode_usage_snapshot(
-                repo_root,
-                session_id=session_id,
-                turn_id=turn_id,
-                usage=output_result.usage,
-                source="live_stream",
-            )
-        if output_result.error:
-            raise FileChatError(output_result.error)
-        agent_message = _parse_agent_message(output_result.text)
-        result = {
-            "status": "ok",
-            "agent_message": agent_message,
-            "message": output_result.text,
-            "thread_id": session_id,
-            "turn_id": turn_id,
-            "agent": "opencode",
-        }
-        if usage_parts:
-            result["usage_parts"] = usage_parts
-        return result
-
-    def _parse_agent_message(output: str) -> str:
-        text = (output or "").strip()
-        if not text:
-            return "File updated via chat."
-        for line in text.splitlines():
-            if line.lower().startswith("agent:"):
-                return line[len("agent:") :].strip() or "File updated via chat."
-        first_line = text.splitlines()[0].strip()
-        return (first_line[:97] + "...") if len(first_line) > 100 else first_line
 
     @router.get("/file-chat/pending")
     async def pending_file_patch(request: Request, target: str):
@@ -658,8 +325,6 @@ def build_file_chat_routes() -> APIRouter:
             ev.set()
             return {"status": "interrupted", "detail": "File chat interrupted"}
 
-    # Legacy ticket endpoints (thin wrappers) to keep older UIs working.
-
     @router.post("/tickets/{index}/chat")
     async def chat_ticket(index: int, request: Request):
         body = await request.json()
@@ -711,7 +376,7 @@ def build_file_chat_routes() -> APIRouter:
             )
 
         try:
-            result = await _execute_file_chat(
+            result = await extracted_execute_file_chat(
                 request,
                 repo_root,
                 target,
@@ -797,7 +462,7 @@ def build_file_chat_routes() -> APIRouter:
                 KeyError,
                 RuntimeError,
                 OSError,
-            ):  # intentional: non-critical thread reset
+            ):
                 logger.debug(
                     "ticket chat thread reset failed for key=%s",
                     thread_key,

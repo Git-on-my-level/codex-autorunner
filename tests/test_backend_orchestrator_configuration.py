@@ -182,11 +182,10 @@ async def test_backend_orchestrator_forwards_input_items_when_present(
 
 
 @pytest.mark.asyncio
-async def test_backend_orchestrator_reconciles_session_id_without_input_items(
+async def test_backend_orchestrator_context_tracks_session_from_start_session(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     backend = _RecordingBackend()
-    backend.reported_session_id = "session-canonical"
 
     def _fake_factory(*_args: Any, **_kwargs: Any):
         def _build_backend(
@@ -218,7 +217,7 @@ async def test_backend_orchestrator_reconciles_session_id_without_input_items(
 
     context = orchestrator.get_context()
     assert context is not None
-    assert context.session_id == "session-canonical"
+    assert context.session_id == "session-123"
 
 
 def test_backend_orchestrator_run_turn_has_no_backend_isinstance_checks() -> None:
@@ -257,8 +256,6 @@ async def test_reset_thread_id_clears_runtime_state_for_codex_key(
     orchestrator._context = BackendContext(
         agent_id="codex",
         session_id="thread-old",
-        turn_id="turn-old",
-        thread_info={"id": "thread-old"},
     )
 
     reset_calls: list[Optional[str]] = []
@@ -274,8 +271,6 @@ async def test_reset_thread_id_clears_runtime_state_for_codex_key(
     assert reset_calls == ["codex"]
     assert orchestrator._context is not None
     assert orchestrator._context.session_id is None
-    assert orchestrator._context.turn_id is None
-    assert orchestrator._context.thread_info is None
 
 
 @pytest.mark.asyncio
@@ -309,8 +304,6 @@ async def test_reset_thread_id_targets_opencode_runtime_for_opencode_key(
     orchestrator._context = BackendContext(
         agent_id="codex",
         session_id="thread-old",
-        turn_id="turn-old",
-        thread_info={"id": "thread-old"},
     )
 
     reset_calls: list[Optional[str]] = []
@@ -327,7 +320,5 @@ async def test_reset_thread_id_targets_opencode_runtime_for_opencode_key(
     assert cleared is False
     assert reset_calls == ["opencode"]
     assert orchestrator._context is not None
-    # codex context should remain intact when resetting opencode state.
+    # codex context session_id should remain intact when resetting opencode state.
     assert orchestrator._context.session_id == "thread-old"
-    assert orchestrator._context.turn_id == "turn-old"
-    assert orchestrator._context.thread_info == {"id": "thread-old"}

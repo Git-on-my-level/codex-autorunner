@@ -18,36 +18,29 @@ import {
   ticketChatState,
   resumeTicketPendingTurn,
 } from "./ticketChatActions.js";
-import {
-  ensureAgentCatalog,
-  getRegisteredAgents,
-  getRegisteredAgentProfiles,
-  initAgentControls,
-} from "./agentControls.js";
+import { initAgentControls } from "./agentControls.js";
 import { initTicketVoice } from "./ticketVoice.js";
 import { initTicketChatEvents, renderTicketEvents, renderTicketMessages } from "./ticketChatEvents.js";
 import { initChatPasteUpload } from "./chatUploads.js";
 import { DocEditor } from "./docEditor.js";
 import { initTicketTemplates } from "./ticketTemplates.js";
+import {
+  type FrontmatterState,
+  type TicketData,
+  DEFAULT_FRONTMATTER,
+  sameUndoSnapshot,
+  extractFrontmatter,
+  getFrontmatterFromForm,
+  setFrontmatterForm,
+  refreshFrontmatterAgentProfileControls,
+  syncFrontmatterAgentProfileControls,
+  refreshFmModelOptions,
+  refreshFmReasoningOptions,
+  getCatalogForAgent,
+  buildTicketContent,
+} from "./ticketEditorFrontmatter.js";
 
-type TicketData = {
-  path?: string;
-  index?: number | null;
-  chat_key?: string | null;
-  frontmatter?: Record<string, unknown> | null;
-  body?: string | null;
-  errors?: string[];
-};
-
-type FrontmatterState = {
-  agent: string;
-  done: boolean;
-  ticketId: string;
-  title: string;
-  model: string;
-  reasoning: string;
-  profile: string;
-};
+export type { TicketData };
 
 type EditorState = {
   isOpen: boolean;
@@ -57,37 +50,9 @@ type EditorState = {
   ticketChatKey: string | null;
   originalBody: string;
   originalFrontmatter: FrontmatterState;
-  // Undo support
   undoStack: Array<{ body: string; frontmatter: FrontmatterState }>;
   lastSavedBody: string;
   lastSavedFrontmatter: FrontmatterState;
-};
-
-function sameUndoSnapshot(
-  previous: { body: string; frontmatter: FrontmatterState } | undefined,
-  next: { body: string; frontmatter: FrontmatterState }
-): boolean {
-  if (!previous) return false;
-  return (
-    previous.body === next.body &&
-    previous.frontmatter.agent === next.frontmatter.agent &&
-    previous.frontmatter.done === next.frontmatter.done &&
-    previous.frontmatter.ticketId === next.frontmatter.ticketId &&
-    previous.frontmatter.title === next.frontmatter.title &&
-    previous.frontmatter.model === next.frontmatter.model &&
-    previous.frontmatter.reasoning === next.frontmatter.reasoning &&
-    previous.frontmatter.profile === next.frontmatter.profile
-  );
-}
-
-const DEFAULT_FRONTMATTER: FrontmatterState = {
-  agent: "codex",
-  done: false,
-  ticketId: "",
-  title: "",
-  model: "",
-  reasoning: "",
-  profile: "",
 };
 
 const state: EditorState = {
@@ -103,7 +68,6 @@ const state: EditorState = {
   lastSavedFrontmatter: { ...DEFAULT_FRONTMATTER },
 };
 
-// Autosave debounce timer
 const AUTOSAVE_DELAY_MS = 1000;
 let ticketDocEditor: DocEditor | null = null;
 let ticketNavCache: TicketData[] = [];
@@ -201,14 +165,12 @@ function els(): {
   prevBtn: HTMLButtonElement | null;
   nextBtn: HTMLButtonElement | null;
   autosaveStatus: HTMLElement | null;
-  // Frontmatter form elements
   fmAgent: HTMLSelectElement | null;
   fmModel: HTMLSelectElement | null;
   fmReasoning: HTMLSelectElement | null;
   fmProfile: HTMLSelectElement | null;
   fmDone: HTMLInputElement | null;
   fmTitle: HTMLInputElement | null;
-  // Chat elements
   chatInput: HTMLTextAreaElement | null;
   chatSendBtn: HTMLButtonElement | null;
   chatVoiceBtn: HTMLButtonElement | null;
@@ -216,52 +178,50 @@ function els(): {
   chatStatus: HTMLElement | null;
   patchApplyBtn: HTMLButtonElement | null;
   patchDiscardBtn: HTMLButtonElement | null;
-  // Agent control selects (for chat)
   agentSelect: HTMLSelectElement | null;
   profileSelect: HTMLSelectElement | null;
   modelSelect: HTMLSelectElement | null;
   modelInput: HTMLInputElement | null;
   reasoningSelect: HTMLSelectElement | null;
-} {
-  return {
-    modal: document.getElementById("ticket-editor-modal"),
-    content: document.getElementById("ticket-editor-content") as HTMLTextAreaElement | null,
-    error: document.getElementById("ticket-editor-error"),
-    deleteBtn: document.getElementById("ticket-editor-delete") as HTMLButtonElement | null,
-    closeBtn: document.getElementById("ticket-editor-close") as HTMLButtonElement | null,
-    newBtn: document.getElementById("ticket-new-btn") as HTMLButtonElement | null,
-    insertCheckboxBtn: document.getElementById("ticket-insert-checkbox") as HTMLButtonElement | null,
-    undoBtn: document.getElementById("ticket-undo-btn") as HTMLButtonElement | null,
-    prevBtn: document.getElementById("ticket-nav-prev") as HTMLButtonElement | null,
-    nextBtn: document.getElementById("ticket-nav-next") as HTMLButtonElement | null,
-    autosaveStatus: document.getElementById("ticket-autosave-status"),
-    // Frontmatter form elements
-    fmAgent: document.getElementById("ticket-fm-agent") as HTMLSelectElement | null,
-    fmModel: document.getElementById("ticket-fm-model") as HTMLSelectElement | null,
-    fmReasoning: document.getElementById("ticket-fm-reasoning") as HTMLSelectElement | null,
-    fmProfile: document.getElementById("ticket-fm-profile") as HTMLSelectElement | null,
-    fmDone: document.getElementById("ticket-fm-done") as HTMLInputElement | null,
-    fmTitle: document.getElementById("ticket-fm-title") as HTMLInputElement | null,
-    // Chat elements
-    chatInput: document.getElementById("ticket-chat-input") as HTMLTextAreaElement | null,
-    chatSendBtn: document.getElementById("ticket-chat-send") as HTMLButtonElement | null,
-    chatVoiceBtn: document.getElementById("ticket-chat-voice") as HTMLButtonElement | null,
-    chatCancelBtn: document.getElementById("ticket-chat-cancel") as HTMLButtonElement | null,
-    chatStatus: document.getElementById("ticket-chat-status") as HTMLElement | null,
-    patchApplyBtn: document.getElementById("ticket-patch-apply") as HTMLButtonElement | null,
-    patchDiscardBtn: document.getElementById("ticket-patch-discard") as HTMLButtonElement | null,
-    // Agent control selects (for chat)
-    agentSelect: document.getElementById("ticket-chat-agent-select") as HTMLSelectElement | null,
-    profileSelect: document.getElementById("ticket-chat-profile-select") as HTMLSelectElement | null,
-    modelSelect: document.getElementById("ticket-chat-model-select") as HTMLSelectElement | null,
-    modelInput: document.getElementById("ticket-chat-model-input") as HTMLInputElement | null,
-    reasoningSelect: document.getElementById("ticket-chat-reasoning-select") as HTMLSelectElement | null,
-  };
-}
+  } {
+    return {
+      modal: document.getElementById("ticket-editor-modal"),
+      content: document.getElementById("ticket-editor-content") as HTMLTextAreaElement | null,
+      error: document.getElementById("ticket-editor-error"),
+      deleteBtn: document.getElementById("ticket-editor-delete") as HTMLButtonElement | null,
+      closeBtn: document.getElementById("ticket-editor-close") as HTMLButtonElement | null,
+      newBtn: document.getElementById("ticket-new-btn") as HTMLButtonElement | null,
+      insertCheckboxBtn: document.getElementById("ticket-insert-checkbox") as HTMLButtonElement | null,
+      undoBtn: document.getElementById("ticket-undo-btn") as HTMLButtonElement | null,
+      prevBtn: document.getElementById("ticket-nav-prev") as HTMLButtonElement | null,
+      nextBtn: document.getElementById("ticket-nav-next") as HTMLButtonElement | null,
+      autosaveStatus: document.getElementById("ticket-autosave-status"),
+      fmAgent: document.getElementById("ticket-fm-agent") as HTMLSelectElement | null,
+      fmModel: document.getElementById("ticket-fm-model") as HTMLSelectElement | null,
+      fmReasoning: document.getElementById("ticket-fm-reasoning") as HTMLSelectElement | null,
+      fmProfile: document.getElementById("ticket-fm-profile") as HTMLSelectElement | null,
+      fmDone: document.getElementById("ticket-fm-done") as HTMLInputElement | null,
+      fmTitle: document.getElementById("ticket-fm-title") as HTMLInputElement | null,
+      chatInput: document.getElementById("ticket-chat-input") as HTMLTextAreaElement | null,
+      chatSendBtn: document.getElementById("ticket-chat-send") as HTMLButtonElement | null,
+      chatVoiceBtn: document.getElementById("ticket-chat-voice") as HTMLButtonElement | null,
+      chatCancelBtn: document.getElementById("ticket-chat-cancel") as HTMLButtonElement | null,
+      chatStatus: document.getElementById("ticket-chat-status") as HTMLElement | null,
+      patchApplyBtn: document.getElementById("ticket-patch-apply") as HTMLButtonElement | null,
+      patchDiscardBtn: document.getElementById("ticket-patch-discard") as HTMLButtonElement | null,
+      agentSelect: document.getElementById("ticket-chat-agent-select") as HTMLSelectElement | null,
+      profileSelect: document.getElementById("ticket-chat-profile-select") as HTMLSelectElement | null,
+      modelSelect: document.getElementById("ticket-chat-model-select") as HTMLSelectElement | null,
+      modelInput: document.getElementById("ticket-chat-model-input") as HTMLInputElement | null,
+      reasoningSelect: document.getElementById("ticket-chat-reasoning-select") as HTMLSelectElement | null,
+    };
+  }
 
-/**
- * Insert a checkbox at the current cursor position
- */
+const fmEls = () => {
+  const { fmAgent, fmModel, fmReasoning, fmProfile, fmDone, fmTitle } = els();
+  return { fmAgent, fmModel, fmReasoning, fmProfile, fmDone, fmTitle };
+};
+
 function insertCheckbox(): void {
   const { content } = els();
   if (!content) return;
@@ -270,8 +230,6 @@ function insertCheckbox(): void {
   const text = content.value;
   const insert = "- [ ] ";
 
-  // If at start of line or after newline, insert directly
-  // Otherwise, insert on a new line
   const needsNewline = pos > 0 && text[pos - 1] !== "\n";
   const toInsert = needsNewline ? "\n" + insert : insert;
 
@@ -302,13 +260,10 @@ function setButtonsLoading(loading: boolean): void {
   });
 }
 
-/**
- * Update the autosave status indicator
- */
 function setAutosaveStatus(status: "saving" | "saved" | "error" | ""): void {
   const { autosaveStatus } = els();
   if (!autosaveStatus) return;
-  
+
   switch (status) {
     case "saving":
       autosaveStatus.textContent = "Saving…";
@@ -317,7 +272,6 @@ function setAutosaveStatus(status: "saving" | "saved" | "error" | ""): void {
     case "saved":
       autosaveStatus.textContent = "Saved";
       autosaveStatus.classList.remove("error");
-      // Clear after a short delay
       setTimeout(() => {
         if (autosaveStatus.textContent === "Saved") {
           autosaveStatus.textContent = "";
@@ -334,60 +288,43 @@ function setAutosaveStatus(status: "saving" | "saved" | "error" | ""): void {
   }
 }
 
-/**
- * Push current state to undo stack
- */
 function pushUndoState(): void {
   const { content, undoBtn } = els();
-  const fm = getFrontmatterFromForm();
+  const fm = getFrontmatterFromForm(fmEls, state.lastSavedFrontmatter, state.originalFrontmatter);
   const body = content?.value || "";
   const nextState = { body, frontmatter: { ...fm } };
-  
-  // Don't push if same as last undo state
+
   const last = state.undoStack[state.undoStack.length - 1];
   if (sameUndoSnapshot(last, nextState)) {
     return;
   }
-  
+
   state.undoStack.push(nextState);
-  
-  // Limit stack size
+
   if (state.undoStack.length > 50) {
     state.undoStack.shift();
   }
-  
-  // Enable undo button
+
   if (undoBtn) undoBtn.disabled = state.undoStack.length <= 1;
 }
 
-/**
- * Undo to previous state
- */
 function undoChange(): void {
   const { content, undoBtn } = els();
   if (!content || state.undoStack.length <= 1) return;
-  
-  // Pop current state
+
   state.undoStack.pop();
-  
-  // Get previous state
+
   const prev = state.undoStack[state.undoStack.length - 1];
   if (!prev) return;
-  
-  // Restore state
+
   content.value = prev.body;
-  setFrontmatterForm(prev.frontmatter);
-  
-  // Trigger autosave for the restored state
+  setFrontmatterForm(fmEls, prev.frontmatter);
+
   scheduleAutosave(true);
-  
-  // Update undo button
+
   if (undoBtn) undoBtn.disabled = state.undoStack.length <= 1;
 }
 
-/**
- * Update undo button state
- */
 function updateUndoButton(): void {
   const { undoBtn } = els();
   if (undoBtn) {
@@ -395,325 +332,11 @@ function updateUndoButton(): void {
   }
 }
 
-/**
- * Get current frontmatter values from form fields
- */
-function getFrontmatterFromForm(): FrontmatterState {
-  const { fmAgent, fmModel, fmReasoning, fmProfile, fmDone, fmTitle } = els();
-  return {
-    agent: fmAgent?.value || "codex",
-    done: fmDone?.checked || false,
-    ticketId:
-      state.lastSavedFrontmatter.ticketId ||
-      state.originalFrontmatter.ticketId ||
-      "",
-    title: fmTitle?.value || "",
-    model: fmModel?.value || "",
-    reasoning: fmReasoning?.value || "",
-    profile: fmProfile?.value || "",
-  };
-}
-
-/**
- * Set frontmatter form fields from values
- */
-function setFrontmatterForm(fm: FrontmatterState): void {
-  const { fmAgent, fmModel, fmReasoning, fmProfile, fmDone, fmTitle } = els();
-  if (fmAgent) fmAgent.value = fm.agent;
-  if (fmModel) fmModel.value = fm.model;
-  if (fmReasoning) fmReasoning.value = fm.reasoning;
-  if (fmProfile) fmProfile.value = fm.profile;
-  if (fmDone) fmDone.checked = fm.done;
-  if (fmTitle) fmTitle.value = fm.title;
-}
-
-/**
- * Extract frontmatter state from ticket data
- */
-function extractFrontmatter(ticket: TicketData): FrontmatterState {
-  const fm = ticket.frontmatter || {};
-  const extra =
-    typeof fm.extra === "object" && fm.extra ? (fm.extra as Record<string, unknown>) : {};
-  const ticketId =
-    (fm.ticket_id as string) || (extra.ticket_id as string) || "";
-  return {
-    agent: (fm.agent as string) || "codex",
-    done: Boolean(fm.done),
-    ticketId,
-    title: (fm.title as string) || "",
-    model: (fm.model as string) || "",
-    reasoning: (fm.reasoning as string) || "",
-    profile: (fm.profile as string) || "",
-  };
-}
-
-/**
- * Build full markdown content from frontmatter form + body textarea
- */
-function yamlQuote(value: string): string {
-  // Use JSON.stringify for simple, safe double-quoted scalars (handles colons, quotes, newlines).
-  return JSON.stringify(value ?? "");
-}
-
-function formatFrontmatterAgentLabel(agent: {
-  id: string;
-  name?: string;
-}, currentOnly: boolean = false): string {
-  const base = agent.name && agent.name !== agent.id
-    ? `${agent.name} (${agent.id})`
-    : agent.id;
-  return currentOnly ? `${base} (current)` : base;
-}
-
-function formatFrontmatterProfileLabel(
-  profile: { id: string; display_name?: string },
-  currentOnly: boolean = false
-): string {
-  const base =
-    profile.display_name && profile.display_name !== profile.id
-      ? `${profile.display_name} (${profile.id})`
-      : profile.id;
-  return currentOnly ? `${base} (current)` : base;
-}
-
-function isHermesAliasAgentId(agentId: string): boolean {
-  const normalized = (agentId || "").trim().toLowerCase();
-  if (!normalized || normalized === "hermes") return false;
-  return normalized.startsWith("hermes-") || normalized.startsWith("hermes_");
-}
-
-function renderFmAgentOptions(selectedAgent: string): string {
-  const { fmAgent } = els();
-  if (!fmAgent) return selectedAgent || "codex";
-
-  const agents = getRegisteredAgents().filter(
-    (agent) => !isHermesAliasAgentId(agent.id)
-  );
-  const hasCatalogAgents =
-    agents.length > 1 || (agents[0]?.id && agents[0].id !== "codex");
-  if (!hasCatalogAgents && fmAgent.options.length > 1) {
-    fmAgent.value = Array.from(fmAgent.options).some(
-      (option) => option.value === selectedAgent
-    )
-      ? selectedAgent
-      : fmAgent.value || "codex";
-    return fmAgent.value || "codex";
-  }
-
-  const currentMissing =
-    Boolean(selectedAgent) && !agents.some((agent) => agent.id === selectedAgent);
-  const nextValue = agents.some((agent) => agent.id === selectedAgent)
-    ? selectedAgent
-    : agents[0]?.id || "codex";
-  fmAgent.innerHTML = "";
-  for (const agent of agents) {
-    const option = document.createElement("option");
-    option.value = agent.id;
-    option.textContent = formatFrontmatterAgentLabel(agent);
-    fmAgent.appendChild(option);
-  }
-  if (currentMissing) {
-    const option = document.createElement("option");
-    option.value = selectedAgent;
-    option.textContent = formatFrontmatterAgentLabel({ id: selectedAgent }, true);
-    fmAgent.appendChild(option);
-  }
-  fmAgent.value = nextValue;
-  if (currentMissing) {
-    fmAgent.value = selectedAgent;
-  }
-  return fmAgent.value || nextValue;
-}
-
-function renderFmProfileOptions(agent: string, currentProfile: string): void {
-  const { fmProfile } = els();
-  if (!fmProfile) return;
-
-  const normalizedCurrent = currentProfile.trim();
-  const profiles = getRegisteredAgentProfiles(agent);
-  const currentMissing =
-    Boolean(normalizedCurrent) &&
-    !profiles.some((profile) => profile.id === normalizedCurrent);
-
-  fmProfile.innerHTML = "";
-
-  const defaultOption = document.createElement("option");
-  defaultOption.value = "";
-  defaultOption.textContent = profiles.length || normalizedCurrent
-    ? "Default profile"
-    : "No profiles";
-  fmProfile.appendChild(defaultOption);
-
-  for (const profile of profiles) {
-    const option = document.createElement("option");
-    option.value = profile.id;
-    option.textContent = formatFrontmatterProfileLabel(profile);
-    fmProfile.appendChild(option);
-  }
-
-  if (currentMissing) {
-    const option = document.createElement("option");
-    option.value = normalizedCurrent;
-    option.textContent = formatFrontmatterProfileLabel(
-      { id: normalizedCurrent },
-      true
-    );
-    fmProfile.appendChild(option);
-  }
-
-  const shouldShow = profiles.length > 0 || Boolean(normalizedCurrent);
-  fmProfile.classList.toggle("hidden", !shouldShow);
-  fmProfile.disabled = !shouldShow;
-  fmProfile.value = normalizedCurrent;
-  if (fmProfile.value !== normalizedCurrent) {
-    fmProfile.value = "";
-  }
-}
-
-function refreshFrontmatterAgentProfileControls(
-  agent: string,
-  profile: string
-): void {
-  const selectedAgent = renderFmAgentOptions(agent);
-  renderFmProfileOptions(selectedAgent, profile);
-}
-
-async function syncFrontmatterAgentProfileControls(
-  agent: string,
-  profile: string
-): Promise<void> {
-  refreshFrontmatterAgentProfileControls(agent, profile);
-  try {
-    await ensureAgentCatalog();
-  } catch {
-    return;
-  }
-  refreshFrontmatterAgentProfileControls(agent, profile);
-}
-
-function buildTicketContent(): string {
-  const { content } = els();
-  const fm = getFrontmatterFromForm();
-  const body = content?.value || "";
-
-  // Reconstruct frontmatter YAML with quoted scalars to tolerate special characters.
-  const lines: string[] = ["---"];
-
-  lines.push(`agent: ${yamlQuote(fm.agent)}`);
-  lines.push(`done: ${fm.done}`);
-  if (fm.ticketId) lines.push(`ticket_id: ${yamlQuote(fm.ticketId)}`);
-  if (fm.title) lines.push(`title: ${yamlQuote(fm.title)}`);
-  if (fm.profile) lines.push(`profile: ${yamlQuote(fm.profile)}`);
-  if (fm.model) lines.push(`model: ${yamlQuote(fm.model)}`);
-  if (fm.reasoning) lines.push(`reasoning: ${yamlQuote(fm.reasoning)}`);
-
-  lines.push("---");
-  lines.push("");
-  lines.push(body);
-
-  return lines.join("\n");
-}
-
-// Model catalog cache for frontmatter selects
-const fmModelCatalogs = new Map<string, { default_model: string; models: Array<{ id: string; display_name?: string; supports_reasoning: boolean; reasoning_options: string[] }> } | null>();
-
-/**
- * Load and populate the frontmatter model/reasoning selects based on the selected agent
- */
-async function refreshFmModelOptions(agent: string, preserveSelection: boolean = false): Promise<void> {
-  const { fmModel, fmReasoning } = els();
-  if (!fmModel || !fmReasoning) return;
-
-  const currentModel = preserveSelection ? fmModel.value : "";
-  const currentReasoning = preserveSelection ? fmReasoning.value : "";
-
-  // Fetch catalog if not cached
-  if (!fmModelCatalogs.has(agent)) {
-    try {
-      const data = await api(`/api/agents/${encodeURIComponent(agent)}/models`, { method: "GET" }) as Record<string, unknown>;
-      const models = Array.isArray(data?.models) ? data.models as Array<{ id: string; display_name?: string; supports_reasoning: boolean; reasoning_options: string[] }> : [];
-      const catalog = {
-        default_model: (data?.default_model as string) || "",
-        models,
-      };
-      fmModelCatalogs.set(agent, catalog);
-    } catch {
-      fmModelCatalogs.set(agent, null);
-    }
-  }
-
-  const catalog = fmModelCatalogs.get(agent);
-
-  // Populate model select
-  fmModel.innerHTML = "";
-  const defaultOption = document.createElement("option");
-  defaultOption.value = "";
-  defaultOption.textContent = "(default)";
-  fmModel.appendChild(defaultOption);
-
-  if (catalog?.models?.length) {
-    fmModel.disabled = false;
-    for (const m of catalog.models) {
-      const opt = document.createElement("option");
-      opt.value = m.id;
-      opt.textContent = m.display_name && m.display_name !== m.id ? `${m.display_name} (${m.id})` : m.id;
-      fmModel.appendChild(opt);
-    }
-    // Restore selection if valid
-    if (currentModel && catalog.models.some((m) => m.id === currentModel)) {
-      fmModel.value = currentModel;
-    }
-  } else {
-    fmModel.disabled = true;
-  }
-
-  // Populate reasoning select based on selected model
-  refreshFmReasoningOptions(catalog, fmModel.value, currentReasoning);
-}
-
-/**
- * Populate reasoning options based on selected model
- */
-function refreshFmReasoningOptions(
-  catalog: { models: Array<{ id: string; supports_reasoning: boolean; reasoning_options: string[] }> } | null | undefined,
-  modelId: string,
-  currentReasoning: string = ""
-): void {
-  const { fmReasoning } = els();
-  if (!fmReasoning) return;
-
-  fmReasoning.innerHTML = "";
-  const defaultOption = document.createElement("option");
-  defaultOption.value = "";
-  defaultOption.textContent = "(default)";
-  fmReasoning.appendChild(defaultOption);
-
-  const model = catalog?.models?.find((m) => m.id === modelId);
-  if (model?.supports_reasoning && model.reasoning_options?.length) {
-    fmReasoning.disabled = false;
-    for (const r of model.reasoning_options) {
-      const opt = document.createElement("option");
-      opt.value = r;
-      opt.textContent = r;
-      fmReasoning.appendChild(opt);
-    }
-    // Restore selection if valid
-    if (currentReasoning && model.reasoning_options.includes(currentReasoning)) {
-      fmReasoning.value = currentReasoning;
-    }
-  } else {
-    fmReasoning.disabled = true;
-  }
-}
-
-/**
- * Check if there are unsaved changes (compared to last saved state)
- */
 function hasUnsavedChanges(): boolean {
   const { content } = els();
-  const currentFm = getFrontmatterFromForm();
+  const currentFm = getFrontmatterFromForm(fmEls, state.lastSavedFrontmatter, state.originalFrontmatter);
   const currentBody = content?.value || "";
-  
+
   return (
     currentBody !== state.lastSavedBody ||
     currentFm.agent !== state.lastSavedFrontmatter.agent ||
@@ -726,9 +349,6 @@ function hasUnsavedChanges(): boolean {
   );
 }
 
-/**
- * Schedule autosave with debounce
- */
 function scheduleAutosave(force = false): void {
   scheduledAutosaveForce = scheduledAutosaveForce || force;
   if (scheduledAutosaveTimer) {
@@ -750,9 +370,6 @@ function clearScheduledAutosave(): void {
   scheduledAutosaveForce = false;
 }
 
-/**
- * Perform autosave (silent save without closing modal)
- */
 async function performAutosave(options: AutosaveOptions = {}): Promise<void> {
   if (options.allowWhenClosed) {
     autosaveAllowWhenClosedRequested = true;
@@ -785,21 +402,18 @@ async function performAutosave(options: AutosaveOptions = {}): Promise<void> {
 async function performAutosaveOnce(options: AutosaveOptions = {}): Promise<void> {
   const { content } = els();
   if (!content || (!state.isOpen && !options.allowWhenClosed)) return;
-  
-  // Don't autosave if no changes
+
   if (!hasUnsavedChanges()) return;
-  
-  const fm = getFrontmatterFromForm();
-  const fullContent = buildTicketContent();
-  
-  // Validate required fields
+
+  const fm = getFrontmatterFromForm(fmEls, state.lastSavedFrontmatter, state.originalFrontmatter);
+  const fullContent = buildTicketContent(els, () => fm);
+
   if (!fm.agent) return;
-  
+
   setAutosaveStatus("saving");
-  
+
   try {
     if (state.mode === "create") {
-      // Create with form data
       const createRes = await api("/api/flows/ticket_flow/tickets", {
         method: "POST",
         body: {
@@ -811,7 +425,6 @@ async function performAutosaveOnce(options: AutosaveOptions = {}): Promise<void>
       }) as TicketData;
 
       if (createRes?.index != null) {
-        // Switch to edit mode now that ticket exists
         state.mode = "edit";
         state.ticketIndex = createRes.index;
         state.ticketChatKey = createRes.chat_key || null;
@@ -829,20 +442,17 @@ async function performAutosaveOnce(options: AutosaveOptions = {}): Promise<void>
         if (createdTicketId) {
           fm.ticketId = createdTicketId;
         }
-        
-        // If done is true, update to set done flag
+
         if (fm.done) {
           await api(`/api/flows/ticket_flow/tickets/${createRes.index}`, {
             method: "PUT",
             body: { content: fullContent },
           });
         }
-        
-        // Set up chat for this ticket
+
         setTicketIndex(createRes.index, state.ticketChatKey);
       }
     } else {
-      // Update existing
       if (state.ticketIndex == null) return;
 
       await api(`/api/flows/ticket_flow/tickets/${state.ticketIndex}`, {
@@ -851,26 +461,19 @@ async function performAutosaveOnce(options: AutosaveOptions = {}): Promise<void>
       });
     }
 
-    // Update saved state
     state.lastSavedBody = content.value;
     state.lastSavedFrontmatter = { ...fm };
-    
+
     setAutosaveStatus("saved");
-    
-    // Notify that tickets changed
+
     publish("tickets:updated", {});
   } catch (err) {
-    // Surface the failure to the user and let DocEditor keep the "dirty" state
-    // so a retry is attempted instead of falsely reporting success.
     setAutosaveStatus("error");
     flash((err as Error)?.message || "Failed to save ticket", "error");
     throw err;
   }
 }
 
-/**
- * Trigger change tracking and schedule autosave
- */
 function onContentChange(): void {
   pushUndoState();
 }
@@ -880,10 +483,6 @@ function onFrontmatterChange(): void {
   scheduleAutosave(true);
 }
 
-/**
- * Open the ticket editor modal
- * @param ticket - If provided, opens in edit mode; otherwise creates new ticket
- */
 export function openTicketEditor(ticket?: TicketData): void {
   const { modal, content, deleteBtn, chatInput, fmTitle } = els();
   if (!modal || !content) return;
@@ -894,95 +493,80 @@ export function openTicketEditor(ticket?: TicketData): void {
   setAutosaveStatus("");
 
   if (ticket && ticket.index != null) {
-    // Edit mode
     state.mode = "edit";
     state.ticketIndex = ticket.index;
     state.ticketChatKey = ticket.chat_key || null;
-    
-    // Extract and set frontmatter
+
     const fm = extractFrontmatter(ticket);
     state.originalFrontmatter = { ...fm };
     state.lastSavedFrontmatter = { ...fm };
-    refreshFrontmatterAgentProfileControls(fm.agent, fm.profile);
-    setFrontmatterForm(fm);
+    refreshFrontmatterAgentProfileControls(fmEls, fm.agent, fm.profile);
+    setFrontmatterForm(fmEls, fm);
 
-    // Load agent/profile catalogs plus model/reasoning options, then restore selections.
-    void syncFrontmatterAgentProfileControls(fm.agent, fm.profile).then(() => {
-      setFrontmatterForm(fm);
+    void syncFrontmatterAgentProfileControls(fmEls, fm.agent, fm.profile).then(() => {
+      setFrontmatterForm(fmEls, fm);
     });
-    void refreshFmModelOptions(fm.agent, false).then(() => {
+    void refreshFmModelOptions(fmEls, fm.agent, false).then(() => {
       const { fmModel, fmReasoning } = els();
       if (fmModel && fm.model) fmModel.value = fm.model;
       if (fmReasoning && fm.reasoning) {
-        // Refresh reasoning options based on selected model first
-        const catalog = fmModelCatalogs.get(fm.agent);
-        refreshFmReasoningOptions(catalog, fm.model, fm.reasoning);
+        const catalog = getCatalogForAgent(fm.agent);
+        refreshFmReasoningOptions(fmEls, catalog, fm.model, fm.reasoning);
       }
     });
-    
-    // Set body (without frontmatter)
+
     let body = ticket.body || "";
-    
-    // If the body itself contains frontmatter, strip it if it's well-formed
+
     const [fmYaml, strippedBody] = splitMarkdownFrontmatter(body);
     if (fmYaml !== null) {
       body = strippedBody.trimStart();
     } else if (body.startsWith("---")) {
-      // If it starts with --- but splitMarkdownFrontmatter returned null, it's malformed.
-      // We keep it in the body so the user can see/fix it.
       flash("Malformed frontmatter detected in body", "error");
     } else {
-      // Ensure we don't accumulate whitespace from the backend's normalization
       body = body.trimStart();
     }
 
     state.originalBody = body;
     state.lastSavedBody = body;
     content.value = body;
-    
+
     if (deleteBtn) deleteBtn.classList.remove("hidden");
-    
-    // Set up chat for this ticket
+
     setTicketIndex(ticket.index, state.ticketChatKey);
-    // Load any pending draft
     void loadTicketPending(ticket.index, true);
   } else {
-    // Create mode
     state.mode = "create";
     state.ticketIndex = null;
     state.ticketChatKey = null;
-    
-    // Reset frontmatter to defaults
+
     state.originalFrontmatter = { ...DEFAULT_FRONTMATTER };
     state.lastSavedFrontmatter = { ...DEFAULT_FRONTMATTER };
     refreshFrontmatterAgentProfileControls(
+      fmEls,
       DEFAULT_FRONTMATTER.agent,
       DEFAULT_FRONTMATTER.profile
     );
-    setFrontmatterForm(DEFAULT_FRONTMATTER);
+    setFrontmatterForm(fmEls, DEFAULT_FRONTMATTER);
 
-    // Load agent/profile catalogs plus model/reasoning options for the default agent.
     void syncFrontmatterAgentProfileControls(
+      fmEls,
       DEFAULT_FRONTMATTER.agent,
       DEFAULT_FRONTMATTER.profile
     ).then(() => {
-      setFrontmatterForm(DEFAULT_FRONTMATTER);
+      setFrontmatterForm(fmEls, DEFAULT_FRONTMATTER);
     });
-    void refreshFmModelOptions(DEFAULT_FRONTMATTER.agent, false);
-    
-    // Clear body
+    void refreshFmModelOptions(fmEls, DEFAULT_FRONTMATTER.agent, false);
+
     state.originalBody = "";
     state.lastSavedBody = "";
     content.value = "";
-    
+
     if (deleteBtn) deleteBtn.classList.add("hidden");
-    
-    // Clear chat state for new ticket
+
     setTicketIndex(null, null);
   }
 
-  // Initialize undo stack with current state
-  state.undoStack = [{ body: content.value, frontmatter: getFrontmatterFromForm() }];
+  state.undoStack = [{ body: content.value, frontmatter: getFrontmatterFromForm(fmEls, state.lastSavedFrontmatter, state.originalFrontmatter) }];
   updateUndoButton();
 
   if (ticketDocEditor) {
@@ -999,7 +583,6 @@ export function openTicketEditor(ticket?: TicketData): void {
     },
   });
 
-  // Clear chat input
   if (chatInput) chatInput.value = "";
   renderTicketChat();
   renderTicketEvents();
@@ -1008,8 +591,7 @@ export function openTicketEditor(ticket?: TicketData): void {
 
   state.isOpen = true;
   modal.classList.remove("hidden");
-  
-  // Update URL with ticket index
+
   if (ticket?.index != null) {
     updateUrlParams({ ticket: ticket.index });
   }
@@ -1020,15 +602,11 @@ export function openTicketEditor(ticket?: TicketData): void {
 
   void updateTicketNavButtons();
 
-  // Focus on title field for new tickets
   if (state.mode === "create" && fmTitle) {
     fmTitle.focus();
   }
 }
 
-/**
- * Close the ticket editor modal (autosaves on close)
- */
 export function closeTicketEditor(): void {
   const { modal } = els();
   if (!modal) return;
@@ -1041,7 +619,6 @@ export function closeTicketEditor(): void {
   hideError();
 
   const finalizeClose = () => {
-    // Cancel any running chat
     if (ticketChatState.status === "running") {
       void cancelTicketChat();
     }
@@ -1057,24 +634,17 @@ export function closeTicketEditor(): void {
     ticketDocEditor = null;
     state.isClosing = false;
 
-    // Clear ticket from URL
     updateUrlParams({ ticket: null });
 
     void updateTicketNavButtons();
 
-    // Reset chat state
     resetTicketChatState();
     setTicketIndex(null, null);
 
-    // Notify that editor was closed (for selection state cleanup)
     publish("ticket-editor:closed", {});
   };
 
-  // Autosave on close if there are changes.
-  // Allow this pass to run even though isOpen was just set false.
   if (hasUnsavedChanges()) {
-    // Fire-and-forget: swallow rejection because the error is already flashed
-    // inside performAutosave and DocEditor keeps the buffer dirty for retry.
     void performAutosave({ allowWhenClosed: true }).catch(() => {}).finally(finalizeClose);
     return;
   }
@@ -1082,16 +652,10 @@ export function closeTicketEditor(): void {
   finalizeClose();
 }
 
-/**
- * Save the current ticket (triggers immediate autosave)
- */
 export async function saveTicket(): Promise<void> {
   await performAutosave();
 }
 
-/**
- * Delete the current ticket (only available in edit mode)
- */
 export async function deleteTicket(): Promise<void> {
   if (state.mode !== "edit" || state.ticketIndex == null) {
     flash("Cannot delete: no ticket selected", "error");
@@ -1115,14 +679,12 @@ export async function deleteTicket(): Promise<void> {
 
     flash("Ticket deleted");
 
-    // Close modal
     state.isOpen = false;
     state.originalBody = "";
     state.originalFrontmatter = { ...DEFAULT_FRONTMATTER };
     const { modal } = els();
     if (modal) modal.classList.add("hidden");
 
-    // Notify that tickets changed
     publish("tickets:updated", {});
   } catch (err) {
     showError((err as Error).message || "Failed to delete ticket");
@@ -1131,9 +693,6 @@ export async function deleteTicket(): Promise<void> {
   }
 }
 
-/**
- * Initialize the ticket editor - wire up event listeners
- */
 export function initTicketEditor(): void {
   const {
     modal,
@@ -1164,11 +723,9 @@ export function initTicketEditor(): void {
   } = els();
   if (!modal) return;
 
-  // Prevent double initialization
   if (modal.dataset.editorInitialized === "1") return;
   modal.dataset.editorInitialized = "1";
 
-  // Initialize agent controls for ticket chat (populates agent/model/reasoning selects)
   initAgentControls({
     agentSelect,
     profileSelect,
@@ -1177,16 +734,12 @@ export function initTicketEditor(): void {
     reasoningSelect,
   });
 
-  // Initialize voice input for ticket chat
   void initTicketVoice();
 
-  // Initialize rich chat experience (events toggle, etc.)
   initTicketChatEvents();
 
-  // Initialize ticket templates picker
   initTicketTemplates();
 
-  // Button handlers
   if (deleteBtn) deleteBtn.addEventListener("click", () => void deleteTicket());
   if (closeBtn) closeBtn.addEventListener("click", closeTicketEditor);
   if (newBtn) newBtn.addEventListener("click", () => openTicketEditor());
@@ -1201,26 +754,23 @@ export function initTicketEditor(): void {
     void navigateTicket(1);
   });
 
-  // Autosave on content changes
   if (content) {
     content.addEventListener("input", onContentChange);
   }
-  
-  // Autosave on frontmatter changes
+
   if (fmAgent) {
     fmAgent.addEventListener("change", () => {
       void (async () => {
-        await syncFrontmatterAgentProfileControls(fmAgent.value, "");
-        await refreshFmModelOptions(fmAgent.value, false);
+        await syncFrontmatterAgentProfileControls(fmEls, fmAgent.value, "");
+        await refreshFmModelOptions(fmEls, fmAgent.value, false);
         onFrontmatterChange();
       })();
     });
   }
   if (fmModel) {
     fmModel.addEventListener("change", () => {
-      // Refresh reasoning options when model changes
-      const catalog = fmModelCatalogs.get(fmAgent?.value || "codex");
-      refreshFmReasoningOptions(catalog, fmModel.value, fmReasoning?.value || "");
+      const catalog = getCatalogForAgent(fmAgent?.value || "codex");
+      refreshFmReasoningOptions(fmEls, catalog, fmModel.value, fmReasoning?.value || "");
       onFrontmatterChange();
     });
   }
@@ -1229,7 +779,6 @@ export function initTicketEditor(): void {
   if (fmTitle) fmTitle.addEventListener("input", onFrontmatterChange);
   if (fmProfile) fmProfile.addEventListener("change", onFrontmatterChange);
 
-  // Chat button handlers
   if (chatSendBtn) chatSendBtn.addEventListener("click", () => void sendTicketChat());
   if (chatCancelBtn) chatCancelBtn.addEventListener("click", () => void cancelTicketChat());
   if (patchApplyBtn) patchApplyBtn.addEventListener("click", () => void applyTicketPatch());
@@ -1257,7 +806,6 @@ export function initTicketEditor(): void {
     });
   }
 
-  // Cmd/Ctrl+Enter in chat input sends message
   if (chatInput) {
     chatInput.addEventListener("keydown", (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
@@ -1266,7 +814,6 @@ export function initTicketEditor(): void {
       }
     });
 
-    // Auto-resize textarea on input
     chatInput.addEventListener("input", () => {
       chatInput.style.height = "auto";
       chatInput.style.height = Math.min(chatInput.scrollHeight, 100) + "px";
@@ -1281,24 +828,20 @@ export function initTicketEditor(): void {
     });
   }
 
-  // Close on backdrop click
   modal.addEventListener("click", (e) => {
     if (e.target === modal) {
       closeTicketEditor();
     }
   });
 
-  // Close on Escape key
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && state.isOpen) {
       closeTicketEditor();
     }
   });
 
-  // Cmd/Ctrl+Z triggers undo
   document.addEventListener("keydown", (e) => {
     if (state.isOpen && (e.metaKey || e.ctrlKey) && e.key === "z" && !e.shiftKey) {
-      // Only handle if not in chat input
       const active = document.activeElement;
       if (active === chatInput) return;
       e.preventDefault();
@@ -1306,27 +849,21 @@ export function initTicketEditor(): void {
     }
   });
 
-  // Left/Right arrows navigate between tickets when editor is open and not typing
   document.addEventListener("keydown", (e) => {
     if (!state.isOpen) return;
 
-    // Check for navigation keys
     if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
 
-    // Don't interfere with typing
     if (isTypingTarget(e.target)) return;
 
-    // Require Alt modifier for navigation (no Ctrl/Meta/Shift)
     if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
 
     e.preventDefault();
     void navigateTicket(e.key === "ArrowLeft" ? -1 : 1);
   });
 
-  // Enter key creates new TODO checkbox when on a checkbox line
   if (content) {
     content.addEventListener("keydown", (e) => {
-      // Prevent manual frontmatter entry in the body
       if (e.key === "-" && content.selectionStart === 2 && content.value.startsWith("--") && !content.value.includes("\n")) {
         flash("Please use the frontmatter editor above", "error");
         e.preventDefault();
@@ -1355,8 +892,11 @@ export function initTicketEditor(): void {
   }
 }
 
-export { TicketData };
 export const __ticketEditorTest = {
-  isHermesAliasAgentId,
+  isHermesAliasAgentId: (id: string) => {
+    const normalized = (id || "").trim().toLowerCase();
+    if (!normalized || normalized === "hermes") return false;
+    return normalized.startsWith("hermes-") || normalized.startsWith("hermes_");
+  },
   sameUndoSnapshot,
 };

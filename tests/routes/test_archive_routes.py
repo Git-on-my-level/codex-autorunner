@@ -225,3 +225,85 @@ def test_local_archive_symlink_escape_is_rejected(tmp_path: Path) -> None:
         params={"run_id": "run-escape", "path": "contextspace/active_context.md"},
     )
     assert download.status_code == 400
+
+
+def test_local_archive_rejects_traversal_in_run_id(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    client = _client_for_repo(repo_root)
+
+    res = client.get("/api/archive/local/tree", params={"run_id": "../escape"})
+    assert res.status_code == 400
+
+    res = client.get(
+        "/api/archive/local/file",
+        params={"run_id": "../escape", "path": "anything"},
+    )
+    assert res.status_code == 400
+
+
+def test_archive_tree_rejects_empty_snapshot_id(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    client = _client_for_repo(repo_root)
+
+    res = client.get(
+        "/api/archive/tree", params={"snapshot_id": "", "path": "contextspace"}
+    )
+    assert res.status_code in (400, 404)
+
+
+def test_archive_file_read_rejects_absolute_path(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    client = _client_for_repo(repo_root)
+    _write_snapshot(repo_root, "wt1", "snap1", with_meta=False)
+
+    res = client.get(
+        "/api/archive/file",
+        params={"snapshot_id": "snap1", "path": "/etc/passwd"},
+    )
+    assert res.status_code == 400
+
+
+def test_local_archive_file_read_rejects_absolute_path(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    client = _client_for_repo(repo_root)
+
+    run_root = repo_root / ".codex-autorunner" / "archive" / "runs" / "run-456"
+    run_root.mkdir(parents=True, exist_ok=True)
+
+    res = client.get(
+        "/api/archive/local/file",
+        params={"run_id": "run-456", "path": "/etc/passwd"},
+    )
+    assert res.status_code == 400
+
+
+def test_archive_snapshots_only_lists_snapshots_with_meta(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    client = _client_for_repo(repo_root)
+
+    _write_snapshot(repo_root, "wt1", "snap-no-meta", with_meta=False)
+    _write_snapshot(repo_root, "wt1", "snap-with-meta", with_meta=True)
+
+    res = client.get("/api/archive/snapshots")
+    assert res.status_code == 200
+    snapshot_ids = {item["snapshot_id"] for item in res.json()["snapshots"]}
+    assert "snap-with-meta" in snapshot_ids
+    assert "snap-no-meta" not in snapshot_ids
+
+
+def test_archive_download_rejects_path_traversal(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    client = _client_for_repo(repo_root)
+    _write_snapshot(repo_root, "wt1", "snap1", with_meta=False)
+
+    res = client.get(
+        "/api/archive/download",
+        params={"snapshot_id": "snap1", "path": "../secret"},
+    )
+    assert res.status_code == 400

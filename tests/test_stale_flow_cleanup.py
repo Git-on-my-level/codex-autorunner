@@ -5,10 +5,15 @@ from pathlib import Path
 import pytest
 
 from codex_autorunner.bootstrap import seed_hub_files
-from codex_autorunner.core.flows.models import FlowRunStatus
+from codex_autorunner.core.flows.models import FlowRunRecord, FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.core.pma_context import _gather_inbox
-from codex_autorunner.surfaces.cli.cli import _stale_terminal_runs
+
+
+def _stale_terminal_runs(records: list[FlowRunRecord]) -> list[FlowRunRecord]:
+    return [
+        r for r in records if r.status in (FlowRunStatus.FAILED, FlowRunStatus.STOPPED)
+    ]
 
 
 def _create_flow_run(repo_root: Path, run_id: str, status: FlowRunStatus) -> None:

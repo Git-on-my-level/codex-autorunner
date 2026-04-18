@@ -1,13 +1,24 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any, Callable
 
-from .orchestration.runtime_bindings import get_runtime_thread_binding
 from .sqlite_utils import open_sqlite
 from .text_utils import _json_dumps
 
 LEGACY_MIRROR_MIGRATION_VERSION = 1
+
+
+def is_legacy_mirror_enabled() -> bool:
+    return os.environ.get("CAR_LEGACY_MIRROR_ENABLED", "").strip().lower() == "true"
+
+
+def _coerce_text(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None
 
 
 def sync_legacy_mirror(
@@ -20,6 +31,8 @@ def sync_legacy_mirror(
     execution_row_to_record: Callable[[Any], dict[str, Any]],
     ensure_legacy_schema: Callable[[Any], None],
 ) -> None:
+    if not is_legacy_mirror_enabled():
+        return
     with open_sqlite(legacy_db_path, durable=durable) as legacy_conn:
         ensure_legacy_schema(legacy_conn)
         thread_rows = orchestration_conn.execute(
@@ -49,9 +62,7 @@ def sync_legacy_mirror(
             legacy_conn.execute("DELETE FROM pma_managed_threads")
             for row in thread_rows:
                 legacy = thread_row_to_record(row)
-                runtime_binding = get_runtime_thread_binding(
-                    hub_root, legacy["managed_thread_id"]
-                )
+                canonical_backend_thread_id = _coerce_text(row["backend_thread_id"])
                 legacy_conn.execute(
                     """
                     INSERT INTO pma_managed_threads (
@@ -85,11 +96,7 @@ def sync_legacy_mirror(
                         legacy["resource_id"],
                         legacy["workspace_root"],
                         legacy["name"],
-                        (
-                            runtime_binding.backend_thread_id
-                            if runtime_binding is not None
-                            else None
-                        ),
+                        canonical_backend_thread_id,
                         legacy["status"],
                         legacy["normalized_status"],
                         legacy["status_reason_code"],
@@ -172,5 +179,6 @@ def sync_legacy_mirror(
 
 __all__ = [
     "LEGACY_MIRROR_MIGRATION_VERSION",
+    "is_legacy_mirror_enabled",
     "sync_legacy_mirror",
 ]

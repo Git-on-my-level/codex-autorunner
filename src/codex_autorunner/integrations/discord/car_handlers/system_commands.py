@@ -700,3 +700,154 @@ async def handle_car_mention(
             f"Your request: {request_arg}"
         ),
     )
+
+
+def _format_file_size(size: int) -> str:
+    if size < 1024:
+        return f"{size} B"
+    value = size / 1024
+    for unit in ("KB", "MB", "GB"):
+        if value < 1024:
+            return f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{value:.1f} TB"
+
+
+def _list_files_in_dir(folder: Path) -> list[tuple[str, int, str]]:
+    from ....core.filebox import list_regular_files
+
+    files: list[tuple[str, int, str]] = []
+    for path in list_regular_files(folder):
+        try:
+            stat = path.stat()
+            from datetime import datetime, timezone
+
+            mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).strftime(
+                "%Y-%m-%d %H:%M"
+            )
+            files.append((path.name, stat.st_size, mtime))
+        except OSError:
+            continue
+    return files
+
+
+def _delete_files_in_dir(folder: Path) -> int:
+    from ....core.filebox import delete_regular_files
+
+    return delete_regular_files(folder)
+
+
+async def handle_files_inbox(
+    service: Any,
+    interaction_id: str,
+    interaction_token: str,
+    *,
+    workspace_root: Path,
+) -> None:
+    from ....core.filebox import inbox_dir
+
+    inbox = inbox_dir(workspace_root)
+    files = _list_files_in_dir(inbox)
+    if not files:
+        await service.respond_ephemeral(
+            interaction_id, interaction_token, "Inbox: (empty)"
+        )
+        return
+    lines = [f"Inbox ({len(files)} file(s)):"]
+    for name, size, mtime in files[:20]:
+        lines.append(f"- {name} ({_format_file_size(size)}, {mtime})")
+    if len(files) > 20:
+        lines.append(f"... and {len(files) - 20} more")
+    await service.respond_ephemeral(interaction_id, interaction_token, "\n".join(lines))
+
+
+async def handle_files_outbox(
+    service: Any,
+    interaction_id: str,
+    interaction_token: str,
+    *,
+    workspace_root: Path,
+) -> None:
+    from ....core.filebox import (
+        outbox_dir,
+        outbox_pending_dir,
+        outbox_sent_dir,
+    )
+
+    outbox_root = outbox_dir(workspace_root)
+    pending = outbox_pending_dir(workspace_root)
+    sent = outbox_sent_dir(workspace_root)
+    root_files = _list_files_in_dir(outbox_root)
+    root_files = [entry for entry in root_files if entry[0] not in {"pending", "sent"}]
+    pending_files = _list_files_in_dir(pending)
+    sent_files = _list_files_in_dir(sent)
+    lines = []
+    if root_files:
+        lines.append(f"Outbox root ({len(root_files)} file(s)):")
+        for name, size, mtime in root_files[:20]:
+            lines.append(f"- {name} ({_format_file_size(size)}, {mtime})")
+        if len(root_files) > 20:
+            lines.append(f"... and {len(root_files) - 20} more")
+        lines.append("")
+    if pending_files:
+        lines.append(f"Outbox pending ({len(pending_files)} file(s)):")
+        for name, size, mtime in pending_files[:20]:
+            lines.append(f"- {name} ({_format_file_size(size)}, {mtime})")
+        if len(pending_files) > 20:
+            lines.append(f"... and {len(pending_files) - 20} more")
+    else:
+        lines.append("Outbox pending: (empty)")
+    lines.append("")
+    if sent_files:
+        lines.append(f"Outbox sent ({len(sent_files)} file(s)):")
+        for name, size, mtime in sent_files[:10]:
+            lines.append(f"- {name} ({_format_file_size(size)}, {mtime})")
+        if len(sent_files) > 10:
+            lines.append(f"... and {len(sent_files) - 10} more")
+    else:
+        lines.append("Outbox sent: (empty)")
+    await service.respond_ephemeral(interaction_id, interaction_token, "\n".join(lines))
+
+
+async def handle_files_clear(
+    service: Any,
+    interaction_id: str,
+    interaction_token: str,
+    *,
+    workspace_root: Path,
+    options: dict[str, Any],
+) -> None:
+    from ....core.filebox import (
+        inbox_dir,
+        outbox_dir,
+        outbox_pending_dir,
+        outbox_sent_dir,
+    )
+
+    target = (options.get("target") or "all").lower().strip()
+    inbox = inbox_dir(workspace_root)
+    outbox_root = outbox_dir(workspace_root)
+    pending = outbox_pending_dir(workspace_root)
+    sent = outbox_sent_dir(workspace_root)
+    deleted = 0
+    if target == "inbox":
+        deleted = _delete_files_in_dir(inbox)
+    elif target == "outbox":
+        deleted = _delete_files_in_dir(outbox_root)
+        deleted += _delete_files_in_dir(pending)
+        deleted += _delete_files_in_dir(sent)
+    elif target == "all":
+        deleted = _delete_files_in_dir(inbox)
+        deleted += _delete_files_in_dir(outbox_root)
+        deleted += _delete_files_in_dir(pending)
+        deleted += _delete_files_in_dir(sent)
+    else:
+        await service.respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            "Invalid target. Use: inbox, outbox, or all",
+        )
+        return
+    await service.respond_ephemeral(
+        interaction_id, interaction_token, f"Deleted {deleted} file(s)."
+    )

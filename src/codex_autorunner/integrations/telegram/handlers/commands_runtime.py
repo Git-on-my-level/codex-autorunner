@@ -70,6 +70,12 @@ from ..collaboration_helpers import (
     collaboration_summary_lines,
     evaluate_collaboration_summary,
 )
+from ..compact_status import (
+    compact_status_path,
+    mark_compact_notified,
+    read_compact_status,
+    write_compact_status,
+)
 from ..config import AppServerUnavailableError
 from ..constants import (
     COMMAND_DISABLED_TEMPLATE,
@@ -2467,7 +2473,14 @@ class TelegramCommandHandlers(
             return False
 
         state = self._compact_pending.get(key)
-        if not state or callback.message_id != state.message_id:
+        actor_id = (
+            str(callback.from_user_id) if callback.from_user_id is not None else None
+        )
+        if (
+            not state
+            or callback.message_id != state.message_id
+            or not self._selection_belongs_to_user(state, actor_id)
+        ):
             await self._answer_callback(callback, "Selection expired")
             return
         if parsed.action == "cancel":
@@ -2918,7 +2931,12 @@ Summary applied.""",
         update_target: Optional[str] = None,
     ) -> None:
         key = await self._resolve_topic_key(message.chat_id, message.thread_id)
-        self._update_confirm_options[key] = UpdateConfirmState(target=update_target)
+        self._update_confirm_options[key] = UpdateConfirmState(
+            target=update_target,
+            requester_user_id=(
+                str(message.from_user_id) if message.from_user_id is not None else None
+            ),
+        )
         self._touch_cache_timestamp("update_confirm_options", key)
         prompt = (
             _format_update_confirmation_warning(
@@ -3004,91 +3022,28 @@ Summary applied.""",
         )
 
     def _compact_status_path(self) -> Path:
-        return resolve_update_paths().compact_status_path
+        return compact_status_path()
 
     def _read_compact_status(self) -> Optional[CompactStatusState]:
-        path = self._compact_status_path()
-        if not path.exists():
-            return None
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError, ValueError):
-            return None
-        return CompactStatusState.from_payload(data)
+        return read_compact_status(self._compact_status_path())
 
     def _write_compact_status(
         self, status: str, message: str, **extra: Any
     ) -> CompactStatusState:
-        payload = CompactStatusState(
+        return write_compact_status(
+            path=self._compact_status_path(),
+            logger=self._logger,
             status=status,
             message=message,
-            at=time.time(),
-            chat_id=(
-                extra["chat_id"]
-                if isinstance(extra.get("chat_id"), int)
-                and not isinstance(extra.get("chat_id"), bool)
-                else None
-            ),
-            thread_id=(
-                extra["thread_id"]
-                if isinstance(extra.get("thread_id"), int)
-                and not isinstance(extra.get("thread_id"), bool)
-                else None
-            ),
-            message_id=(
-                extra["message_id"]
-                if isinstance(extra.get("message_id"), int)
-                and not isinstance(extra.get("message_id"), bool)
-                else None
-            ),
-            display_text=(
-                extra["display_text"]
-                if isinstance(extra.get("display_text"), str)
-                else None
-            ),
-            error_detail=(
-                extra["error_detail"]
-                if isinstance(extra.get("error_detail"), str)
-                else None
-            ),
-            started_at=(
-                float(extra["started_at"])
-                if isinstance(extra.get("started_at"), (int, float))
-                and not isinstance(extra.get("started_at"), bool)
-                else None
-            ),
-            notify_sent_at=(
-                float(extra["notify_sent_at"])
-                if isinstance(extra.get("notify_sent_at"), (int, float))
-                and not isinstance(extra.get("notify_sent_at"), bool)
-                else None
-            ),
+            **extra,
         )
-        path = self._compact_status_path()
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(payload.to_payload()), encoding="utf-8")
-        except (OSError, TypeError) as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "telegram.compact.status_write_failed",
-                exc=exc,
-            )
-        return payload
 
     def _mark_compact_notified(self, status: CompactStatusState) -> None:
-        path = self._compact_status_path()
-        updated = status.with_notify_sent_at(time.time())
-        try:
-            path.write_text(json.dumps(updated.to_payload()), encoding="utf-8")
-        except (OSError, TypeError) as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "telegram.compact.notify_write_failed",
-                exc=exc,
-            )
+        mark_compact_notified(
+            path=self._compact_status_path(),
+            logger=self._logger,
+            status=status,
+        )
 
     async def _maybe_send_update_status_notice(self) -> None:
         await self._update_status_notifier.maybe_send_notice()
