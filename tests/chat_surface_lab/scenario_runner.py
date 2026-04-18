@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from codex_autorunner.browser.runtime import BrowserRuntime
 from codex_autorunner.integrations.chat.ux_regression_contract import (
     CHAT_UX_LATENCY_BUDGETS,
 )
@@ -158,9 +159,11 @@ class ChatSurfaceScenarioRunner:
         *,
         output_root: Path,
         apply_runtime_patch: Optional[Callable[[HermesFixtureRuntime], None]] = None,
+        browser_runtime: Optional[BrowserRuntime] = None,
     ) -> None:
         self._output_root = output_root
         self._apply_runtime_patch = apply_runtime_patch
+        self._browser_runtime = browser_runtime or BrowserRuntime()
 
     async def run_scenario(self, scenario: ScenarioDefinition) -> ScenarioRunResult:
         scenario_output_dir = self._output_root / scenario.scenario_id
@@ -329,6 +332,7 @@ class ChatSurfaceScenarioRunner:
                 output_dir=output_dir / "artifacts",
                 scenario_id=scenario.scenario_id,
                 run_id=f"{scenario.scenario_id}-{surface.value}",
+                browser_runtime=self._browser_runtime,
             )
             log_records = tuple(getattr(context.result, "log_records", []) or [])
             return ScenarioSurfaceRunResult(

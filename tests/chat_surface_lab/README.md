@@ -39,6 +39,20 @@ TICKET-140 adds a declarative scenario corpus and runner:
 - `test_scenario_runner.py` validates real scenario execution and artifact
   outputs
 
+TICKET-150 adds evidence artifact rendering and indexing:
+
+- `transcript_renderer.py` renders deterministic `transcript.html` pages from
+  normalized transcript events
+- `evidence_artifacts.py` writes stable bundle outputs
+  (`transcript.json`, `timeline.json`, `logs.json`, `timing_report.json`,
+  `transcript.html`, `manifest.json`) and captures browser evidence artifacts
+  (`screenshot.png`, `a11y_snapshot.json`) through
+  `src/codex_autorunner/browser/runtime.py`
+- `test_transcript_renderer.py` validates deterministic HTML + event payload
+  rendering
+- `test_artifact_manifest.py` validates required manifest entries, stable
+  filenames, and failed-run artifact preservation
+
 ## Relationship to nearby packages
 
 - `tests.chat_surface_lab`
@@ -86,7 +100,27 @@ Run focused DSL checks:
 ```bash
 .venv/bin/python -m pytest tests/chat_surface_lab/test_scenario_runner.py -q
 .venv/bin/python -m pytest tests/chat_surface_lab/test_scenario_corpus.py -q
+.venv/bin/python -m pytest tests/chat_surface_lab/test_transcript_renderer.py -q
+.venv/bin/python -m pytest tests/chat_surface_lab/test_artifact_manifest.py -q
 ```
+
+## Evidence artifact schema
+
+Each executable scenario surface run writes an `artifacts/manifest.json` index
+with deterministic paths relative to that `artifacts/` directory.
+
+Stable artifact filenames:
+
+- `transcript.json`: normalized transcript schema (`schema_version=1`)
+- `timeline.json`: raw surface operation timeline (`schema_version=1`)
+- `transcript.html`: deterministic transcript renderer output for visual diffs
+- `logs.json`: structured log records captured during scenario execution
+- `timing_report.json`: derived timing metrics from `chat_ux_delta_*` fields
+- `manifest.json`: artifact index + browser capture status
+- `screenshot.png`: browser screenshot of `transcript.html` (when capture
+  succeeds)
+- `a11y_snapshot.json`: browser accessibility snapshot of `transcript.html`
+  (when capture succeeds)
 
 ## Adding a scenario
 

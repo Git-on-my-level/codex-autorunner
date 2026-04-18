@@ -1,18 +1,19 @@
 from __future__ import annotations
 
-import json
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from codex_autorunner.browser.runtime import BrowserRuntime
 from codex_autorunner.integrations.telegram.adapter import (
     TelegramAPIError,
     TelegramUpdate,
     chunk_message,
 )
 
-from .artifact_manifests import ArtifactKind, ArtifactManifest, ArtifactRecord
+from .artifact_manifests import ArtifactManifest
+from .evidence_artifacts import write_surface_evidence_artifacts
 from .transcript_models import (
     TranscriptEvent,
     TranscriptEventKind,
@@ -378,56 +379,18 @@ class TelegramSurfaceSimulator:
         output_dir: Path,
         scenario_id: str,
         run_id: str,
+        browser_runtime: Optional[BrowserRuntime] = None,
     ) -> ArtifactManifest:
-        output_dir.mkdir(parents=True, exist_ok=True)
-        timeline_path = output_dir / "surface_timeline.telegram.json"
-        transcript_path = output_dir / "normalized_transcript.telegram.json"
-        timeline_payload = {
-            "surface_kind": "telegram",
-            "events": self._surface_timeline,
-        }
         transcript = self.to_normalized_transcript(scenario_id=scenario_id)
-        transcript_payload = {
-            "scenario_id": transcript.scenario_id,
-            "metadata": dict(transcript.metadata),
-            "events": [
-                {
-                    "kind": event.kind.value,
-                    "party": event.party.value,
-                    "timestamp_ms": event.timestamp_ms,
-                    "surface_kind": event.surface_kind,
-                    "text": event.text,
-                    "metadata": dict(event.metadata),
-                }
-                for event in transcript.events
-            ],
-        }
-        timeline_path.write_text(
-            json.dumps(timeline_payload, indent=2, sort_keys=True),
-            encoding="utf-8",
-        )
-        transcript_path.write_text(
-            json.dumps(transcript_payload, indent=2, sort_keys=True),
-            encoding="utf-8",
-        )
-        return ArtifactManifest(
+        return write_surface_evidence_artifacts(
+            output_dir=output_dir,
             scenario_id=scenario_id,
             run_id=run_id,
-            artifacts=(
-                ArtifactRecord(
-                    kind=ArtifactKind.SURFACE_TIMELINE_JSON,
-                    path=timeline_path,
-                    description="Telegram simulator operation timeline",
-                    content_type="application/json",
-                ),
-                ArtifactRecord(
-                    kind=ArtifactKind.NORMALIZED_TRANSCRIPT_JSON,
-                    path=transcript_path,
-                    description="Telegram simulator normalized transcript",
-                    content_type="application/json",
-                ),
-            ),
-            metadata={"surface_kind": "telegram"},
+            surface_kind="telegram",
+            surface_timeline=self._surface_timeline,
+            transcript=transcript,
+            log_records=self.log_records,
+            browser_runtime=browser_runtime,
         )
 
     def _allocate_message_id(self) -> int:
