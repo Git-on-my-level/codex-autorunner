@@ -27,7 +27,6 @@ Canonical vs compatibility
 from __future__ import annotations
 
 import logging
-import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Optional
@@ -48,6 +47,7 @@ from ..archive_retention import (
 )
 from ..config import ConfigError, load_repo_config
 from ..pma_thread_store import PmaThreadStore
+from ..sqlite_utils import connect_sqlite
 from .models import FlowRunStatus
 from .store import FlowStore
 
@@ -97,7 +97,7 @@ def _checkpoint_and_vacuum_flow_db(
     vacuum: bool,
 ) -> None:
     store.close()
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(db_path)
     try:
         conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         if vacuum:

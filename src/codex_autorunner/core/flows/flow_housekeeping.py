@@ -229,7 +229,10 @@ def build_plan(
         if run_stat.is_active:
             plan.runs_skipped_active += 1
             continue
-        if not include_all_terminal and not run_stat.is_expired:
+        if include_all_terminal:
+            if not run_stat.is_terminal:
+                continue
+        elif not run_stat.is_expired:
             plan.runs_skipped_not_expired += 1
             continue
         plan.runs_to_process.append(run_stat)
