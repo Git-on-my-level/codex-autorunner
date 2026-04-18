@@ -21,7 +21,11 @@ from codex_autorunner.core.runtime import (
     summarize_opencode_lifecycle,
     zeroclaw_doctor_checks,
 )
-from codex_autorunner.integrations.chat.doctor import chat_doctor_checks
+from codex_autorunner.integrations.chat.doctor import (
+    ChatSurfaceLabContractStatus,
+    chat_doctor_checks,
+    chat_surface_lab_doctor_checks,
+)
 from codex_autorunner.integrations.chat.parity_checker import ParityCheckResult
 from codex_autorunner.integrations.telegram import doctor as telegram_doctor
 from codex_autorunner.integrations.telegram.doctor import (
@@ -1405,6 +1409,96 @@ def test_chat_doctor_checks_report_ux_regression_contract_failures(monkeypatch):
     assert "queued_visibility" in coverage_check.message
     assert coverage_check.fix is not None
     assert "concrete regression tests" in coverage_check.fix
+
+
+def test_chat_surface_lab_doctor_checks_report_contract_health(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.chat.doctor._collect_chat_surface_lab_contract_status",
+        lambda repo_root=None: ChatSurfaceLabContractStatus(
+            scenario_count=9,
+        ),
+    )
+
+    checks = chat_surface_lab_doctor_checks()
+    by_id = {check.check_id: check for check in checks}
+
+    scenario_check = by_id["chat.surface_lab.scenario_corpus"]
+    contract_check = by_id["chat.surface_lab.contract_links"]
+    artifact_check = by_id["chat.surface_lab.artifact_contract"]
+
+    assert scenario_check.passed is True
+    assert "9 files" in scenario_check.message
+    assert scenario_check.fix is None
+    assert contract_check.passed is True
+    assert contract_check.fix is None
+    assert artifact_check.passed is True
+    assert artifact_check.fix is None
+
+
+def test_chat_surface_lab_doctor_checks_failures_are_actionable(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.chat.doctor._collect_chat_surface_lab_contract_status",
+        lambda repo_root=None: ChatSurfaceLabContractStatus(
+            scenario_count=7,
+            parse_errors=("first_visible_feedback.json:missing scenario_id",),
+            missing_required_scenarios=("queued_visibility",),
+            missing_regression_links=("interrupt_confirmation",),
+            unknown_regression_links=("ghost_regression",),
+            missing_latency_budget_links=("queue_visible",),
+            unknown_latency_budget_links=("unexpected_budget",),
+            missing_latency_budget_assertions=("interrupt_visible",),
+            missing_artifact_kinds=("timing_report_json",),
+            missing_artifact_filenames=("timing_report.json",),
+        ),
+    )
+
+    checks = chat_surface_lab_doctor_checks()
+    by_id = {check.check_id: check for check in checks}
+
+    scenario_check = by_id["chat.surface_lab.scenario_corpus"]
+    contract_check = by_id["chat.surface_lab.contract_links"]
+    artifact_check = by_id["chat.surface_lab.artifact_contract"]
+
+    assert scenario_check.passed is False
+    assert "missing_scenarios=queued_visibility" in scenario_check.message
+    assert scenario_check.fix is not None
+    assert "make test-chat-surface-lab" in scenario_check.fix
+
+    assert contract_check.passed is False
+    assert "unknown_regression_links=ghost_regression" in contract_check.message
+    assert (
+        "missing_latency_budget_assertions=interrupt_visible" in contract_check.message
+    )
+    assert contract_check.fix is not None
+    assert "contract_links" in contract_check.fix
+
+    assert artifact_check.passed is False
+    assert "timing_report_json" in artifact_check.message
+    assert "timing_report.json" in artifact_check.message
+    assert artifact_check.fix is not None
+    assert "evidence_artifacts.py" in artifact_check.fix
+
+
+def test_chat_surface_lab_doctor_checks_skip_when_checkout_paths_missing(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.chat.doctor._collect_chat_surface_lab_contract_status",
+        lambda repo_root=None: ChatSurfaceLabContractStatus(
+            skipped=True,
+            skip_reason="missing checkout paths: tests/chat_surface_lab/scenarios",
+        ),
+    )
+
+    checks = chat_surface_lab_doctor_checks()
+    assert len(checks) == 1
+    check = checks[0]
+    assert check.passed is True
+    assert check.severity == "info"
+    assert check.check_id == "chat.surface_lab.skipped"
+    assert "missing checkout paths" in check.message
 
 
 @pytest.fixture

@@ -256,9 +256,11 @@ if [[ "$RUN_WEB_UI" == true ]]; then
   fi
 fi
 
-# --- Chat-apps lane hook (future chat-specific checks go here) ---------------
-# Currently chat-apps reuses core checks; add chat-specific linters/tests here
-# as the surface grows.  The aggregate lane sets this flag true as well.
+# --- Chat-apps lane checks ---------------------------------------------------
+if [[ "$RUN_CHAT_APPS" == true ]]; then
+  echo "Running chat-surface lab deterministic checks..."
+  make test-chat-surface-lab PYTHON="$PYTHON_BIN"
+fi
 
 echo "Checks passed (lane: $LANE)."
 echo "Optional extended checks: make test-chat-platform-contract"

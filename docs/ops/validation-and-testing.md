@@ -12,7 +12,7 @@ Validation is split into lanes so that small, scoped changes don't trigger the f
 |------|-------|-------------|
 | `core` | Backend/logic | Python lint, typecheck, core pytest, dead-code check |
 | `web-ui` | Frontend/UI | Core checks + ESLint, `pnpm run build`, JS tests, asset manifest check |
-| `chat-apps` | Chat integrations | Core checks (Discord/Telegram adapter tests run in CI via dedicated steps) |
+| `chat-apps` | Chat integrations | Core checks + deterministic chat-surface lab suite (`make test-chat-surface-lab`) |
 | `aggregate` | Full validation | All lane checks combined |
 
 ### Lane Detection
@@ -33,8 +33,18 @@ Changed files are classified by path prefixes and globs defined in `src/codex_au
 ./scripts/check.sh --lane web-ui
 ./scripts/check.sh --lane chat-apps
 
+# Run the chat-surface lab directly
+make test-chat-surface-lab
+
 # Force full validation (all lanes)
 ./scripts/check.sh --full
+```
+
+The chat-surface lab command is deterministic and does not require live
+Telegram/Discord credentials. It writes budget artifacts to:
+
+```bash
+.codex-autorunner/diagnostics/chat-latency-budgets/
 ```
 
 ### CI Routing
@@ -101,6 +111,7 @@ The following modules were migrated from timing-based sync to deterministic wait
 | `scripts/select_validation_lane.py` | Local lane detection CLI (stdin/file args) |
 | `scripts/select_ci_validation_jobs.py` | CI lane routing CLI (emits GitHub Actions outputs) |
 | `scripts/check.sh` | Lane-aware validation runner (local pre-commit) |
+| `scripts/chat_surface_latency_budgets.py` | Deterministic chat-surface budget suite writer |
 | `scripts/check_test_tmp_usage.py` | Hermetic /tmp usage guard |
 | `scripts/test_tmp_usage_allowlist.json` | Allowlist for known /tmp exceptions |
 | `tests/support/waits.py` | Deterministic wait helpers for tests |
@@ -111,3 +122,4 @@ The following modules were migrated from timing-based sync to deterministic wait
 - [CONTRIBUTING.md](../../CONTRIBUTING.md) — Developer setup and contribution guide
 - [running-in-a-vm.md](running-in-a-vm.md) — VM/cloud agent environment notes
 - [state-cleanup.md](state-cleanup.md) — CAR state retention and cleanup
+- [chat-surface-lab-runbook.md](chat-surface-lab-runbook.md) — Operator and agent runbook for lab execution and scenario authoring

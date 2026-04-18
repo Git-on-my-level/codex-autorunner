@@ -12,7 +12,13 @@ need to exercise real surface ingress plus a subprocess-backed runtime.
 
 ## Fastest way to use it
 
-Run the full UX regression suite before merging chat UX/runtime changes:
+Run the single lab entrypoint before merging chat UX/runtime changes:
+
+```bash
+make test-chat-surface-lab
+```
+
+For direct integration-focused pytest runs, use:
 
 ```bash
 .venv/bin/pytest tests/chat_surface_integration/test_hermes_pma_ux_regressions.py -m integration
@@ -64,6 +70,9 @@ scenario, transcript, and artifact contracts. This integration package remains
 the home for current high-signal regressions that exercise the real surface
 entrypoints. Later tickets may migrate common declarations into the lab
 package, but this ticket does not change the existing integration behavior.
+
+Operator and agent workflow details live in
+`docs/ops/chat-surface-lab-runbook.md`.
 
 ## Adding a new scenario
 
