@@ -44,12 +44,18 @@ _DISCORD_INGRESS_PATH = Path("src/codex_autorunner/integrations/discord/ingress.
 _DISCORD_INTERACTION_REGISTRY_PATH = Path(
     "src/codex_autorunner/integrations/discord/interaction_registry.py"
 )
+_DISCORD_INTERACTION_COMPONENT_HANDLERS_PATH = Path(
+    "src/codex_autorunner/integrations/discord/interaction_component_handlers.py"
+)
 _DISCORD_COMMANDS_PATH = Path("src/codex_autorunner/integrations/discord/commands.py")
 _TELEGRAM_TRIGGER_MODE_PATH = Path(
     "src/codex_autorunner/integrations/telegram/trigger_mode.py"
 )
 _TELEGRAM_MESSAGES_PATH = Path(
     "src/codex_autorunner/integrations/telegram/handlers/messages.py"
+)
+_TELEGRAM_MESSAGE_POLICY_PATH = Path(
+    "src/codex_autorunner/integrations/telegram/handlers/message_policy.py"
 )
 _TELEGRAM_COMMANDS_SPEC_PATH = Path(
     "src/codex_autorunner/integrations/telegram/handlers/commands_spec.py"
@@ -119,8 +125,20 @@ def run_parity_checks(
             repo_relative_path=_DISCORD_INTERACTION_REGISTRY_PATH,
         )
     )
+    discord_interaction_component_handlers_text = _read_text(
+        _resolve_source_path(
+            repo_root=repo_root,
+            repo_relative_path=_DISCORD_INTERACTION_COMPONENT_HANDLERS_PATH,
+        )
+    )
     telegram_trigger_mode_text = _read_text(source_paths["telegram_trigger_mode"])
     telegram_messages_text = _read_text(source_paths["telegram_messages"])
+    telegram_message_policy_text = _read_text(
+        _resolve_source_path(
+            repo_root=repo_root,
+            repo_relative_path=_TELEGRAM_MESSAGE_POLICY_PATH,
+        )
+    )
     discord_commands_text = _read_text(
         _resolve_source_path(
             repo_root=repo_root,
@@ -139,8 +157,12 @@ def run_parity_checks(
     discord_interaction_dispatch_ast = _parse_module(discord_interaction_dispatch_text)
     discord_ingress_ast = _parse_module(discord_ingress_text)
     discord_interaction_registry_ast = _parse_module(discord_interaction_registry_text)
+    discord_interaction_component_handlers_ast = _parse_module(
+        discord_interaction_component_handlers_text
+    )
     telegram_trigger_mode_ast = _parse_module(telegram_trigger_mode_text)
     telegram_messages_ast = _parse_module(telegram_messages_text)
+    telegram_message_policy_ast = _parse_module(telegram_message_policy_text)
     discord_commands_ast = _parse_module(discord_commands_text)
     telegram_commands_spec_ast = _parse_module(telegram_commands_spec_text)
 
@@ -178,11 +200,13 @@ def run_parity_checks(
             discord_service_ast=discord_service_ast,
             discord_interaction_dispatch_ast=discord_interaction_dispatch_ast,
             discord_interaction_registry_ast=discord_interaction_registry_ast,
+            discord_interaction_component_handlers_ast=discord_interaction_component_handlers_ast,
         ),
         _check_shared_plain_text_turn_policy_usage(
             discord_service_ast=discord_service_ast,
             telegram_trigger_mode_ast=telegram_trigger_mode_ast,
             telegram_messages_ast=telegram_messages_ast,
+            telegram_message_policy_ast=telegram_message_policy_ast,
         ),
         _check_chat_ux_latency_budget_contract_complete(
             ux_latency_budgets=ux_latency_budgets
@@ -979,10 +1003,19 @@ def _check_shared_plain_text_turn_policy_usage(
     discord_service_ast: ast.Module | None,
     telegram_trigger_mode_ast: ast.Module | None,
     telegram_messages_ast: ast.Module | None,
+    telegram_message_policy_ast: ast.Module | None = None,
 ) -> ParityCheckResult:
     telegram_trigger_handlers = _find_functions_by_name(
         telegram_trigger_mode_ast,
         "should_trigger_run",
+    )
+    telegram_message_policy_uses_trigger_mode = _module_imports_name(
+        telegram_message_policy_ast,
+        module_suffix="trigger_mode",
+        name="should_trigger_run",
+    ) and _module_has_call(
+        telegram_message_policy_ast,
+        callee_name="should_trigger_run",
     )
 
     checks = {
@@ -1003,6 +1036,18 @@ def _check_shared_plain_text_turn_policy_usage(
                 telegram_messages_ast,
                 callee_name="should_trigger_run",
             )
+        )
+        or (
+            _module_imports_name(
+                telegram_messages_ast,
+                module_suffix="message_policy",
+                name="evaluate_message_policy",
+            )
+            and _module_has_call(
+                telegram_messages_ast,
+                callee_name="_evaluate_message_policy",
+            )
+            and telegram_message_policy_uses_trigger_mode
         ),
     }
 
@@ -1151,6 +1196,7 @@ def _check_discord_interaction_component_guard_paths(
     discord_service_ast: ast.Module | None,
     discord_interaction_dispatch_ast: ast.Module | None = None,
     discord_interaction_registry_ast: ast.Module | None = None,
+    discord_interaction_component_handlers_ast: ast.Module | None = None,
 ) -> ParityCheckResult:
     normalized_interaction_handlers = _find_functions_by_name(
         discord_interaction_dispatch_ast,
@@ -1177,10 +1223,16 @@ def _check_discord_interaction_component_guard_paths(
         "_handle_component_interaction_normalized",
     )
     bind_select_handlers = _find_functions_by_name(
+        discord_interaction_component_handlers_ast,
+        "_handle_bind_select_component",
+    ) or _find_functions_by_name(
         discord_interaction_registry_ast,
         "_handle_bind_select_component",
     )
     flow_runs_select_handlers = _find_functions_by_name(
+        discord_interaction_component_handlers_ast,
+        "_handle_flow_runs_select_component",
+    ) or _find_functions_by_name(
         discord_interaction_registry_ast,
         "_handle_flow_runs_select_component",
     )
@@ -1343,7 +1395,13 @@ def _check_discord_interaction_component_guard_paths(
                 "normalized" if normalized_interaction_handlers else "execute_ingressed"
             ),
             "component_handler": (
-                "normalized" if normalized_component_handlers else "registry"
+                "normalized"
+                if normalized_component_handlers
+                else (
+                    "component_handlers"
+                    if discord_interaction_component_handlers_ast is not None
+                    else "registry"
+                )
             ),
         },
     )

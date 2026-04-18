@@ -24,3 +24,10 @@ pytest tests/integrations/chat/test_hermes_official_completion.py -q
 
 The harness is intentionally in `tests/chat_surface_harness/` so future agents
 can discover it without mining large support files.
+
+## Relationship to `tests/chat_surface_lab/`
+
+`tests/chat_surface_lab/` now owns the shared scenario, transcript, and
+artifact contracts for the broader chat-surface lab initiative. This harness
+package still owns reusable service-facing fixtures; future lab runners should
+import those shared contracts rather than re-declaring them here.

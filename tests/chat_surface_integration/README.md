@@ -57,6 +57,14 @@ orchestration/runtime layer rather than by a Telegram/Discord surface harness.
 Legacy ACP prompt-notification fixtures still exist in `fake_acp_server.py` for
 generic ACP compatibility work, but they are not the current Hermes contract.
 
+## Relationship to `tests/chat_surface_lab/`
+
+`tests/chat_surface_lab/` now provides the shared package boundary for
+scenario, transcript, and artifact contracts. This integration package remains
+the home for current high-signal regressions that exercise the real surface
+entrypoints. Later tickets may migrate common declarations into the lab
+package, but this ticket does not change the existing integration behavior.
+
 ## Adding a new scenario
 
 1. Add or extend a subprocess scenario in `tests/fixtures/fake_acp_server.py`.
