@@ -360,6 +360,44 @@ def test_create_subscription_auto_resolves_lane_from_thread_binding(tmp_path) ->
 
     assert subscription["thread_id"] == thread_id
     assert subscription["lane_id"] == "discord"
+    assert subscription["metadata"]["delivery_target"] == {
+        "surface_kind": "discord",
+        "surface_key": "discord:binding-1",
+    }
+
+
+def test_notify_transition_copies_subscription_delivery_target_into_wakeup(
+    tmp_path,
+) -> None:
+    store = PmaAutomationStore(tmp_path)
+    thread_id = _create_managed_thread(tmp_path, surface_kind="telegram")
+
+    subscription = store.create_subscription(
+        {
+            "event_type": "managed_thread_completed",
+            "thread_id": thread_id,
+        }
+    )["subscription"]
+
+    result = store.notify_transition(
+        {
+            "event_type": "managed_thread_completed",
+            "thread_id": thread_id,
+            "from_state": "running",
+            "to_state": "completed",
+            "transition_id": f"{thread_id}:completed",
+        }
+    )
+
+    assert result["matched"] == 1
+    assert result["created"] == 1
+    pending = store.list_pending_wakeups(limit=10)
+    assert len(pending) == 1
+    assert pending[0]["subscription_id"] == subscription["subscription_id"]
+    assert pending[0]["metadata"]["delivery_target"] == {
+        "surface_kind": "telegram",
+        "surface_key": "telegram:binding-1",
+    }
 
 
 def test_create_subscription_with_unknown_thread_requires_resolvable_lane(

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .chat_bindings import (
+    active_chat_binding_metadata_by_thread,
     normalize_workspace_path,
     preferred_non_pma_chat_notification_source_for_workspace,
     resolve_bound_repo_id,
@@ -23,7 +24,7 @@ from .chat_bindings import (
 )
 from .config import load_hub_config
 from .pma_notification_store import PmaNotificationStore
-from .text_utils import _normalize_optional_text
+from .text_utils import _normalize_optional_text, _normalize_pma_delivery_target
 from .time_utils import now_iso
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,27 @@ def _notification_context_payload(
     payload.setdefault("correlation_id", correlation_id)
     payload.setdefault("source_kind", source_kind)
     return payload
+
+
+def _delivery_target_matches_active_thread_binding(
+    *,
+    hub_root: Path,
+    managed_thread_id: Optional[str],
+    surface_kind: str,
+    surface_key: str,
+) -> bool:
+    normalized_thread_id = _normalize_optional_text(managed_thread_id)
+    if normalized_thread_id is None:
+        return True
+    binding_metadata = active_chat_binding_metadata_by_thread(hub_root=hub_root).get(
+        normalized_thread_id
+    )
+    if not isinstance(binding_metadata, dict):
+        return False
+    return (
+        _normalize_optional_text(binding_metadata.get("binding_kind")) == surface_kind
+        and _normalize_optional_text(binding_metadata.get("binding_id")) == surface_key
+    )
 
 
 def _build_discord_record_id(
@@ -296,6 +318,157 @@ async def _deliver_bound_telegram(
     return {"route": "bound", "targets": targets, "published": published}
 
 
+async def _deliver_direct_discord(
+    *,
+    hub_root: Path,
+    raw_config: dict[str, Any],
+    channel_id: str,
+    message: str,
+    correlation_id: str,
+    source_kind: str,
+    repo_id: Optional[str],
+    run_id: Optional[str],
+    managed_thread_id: Optional[str],
+    context_payload: Optional[dict[str, Any]],
+    notification_store: PmaNotificationStore,
+) -> dict[str, Any]:
+    from ..integrations.discord.rendering import (
+        chunk_discord_message,
+        format_discord_message,
+    )
+    from ..integrations.discord.state import DiscordStateStore
+    from ..integrations.discord.state import OutboxRecord as DiscordOutboxRecord
+
+    created_at = now_iso()
+    store = DiscordStateStore(resolve_discord_state_path(hub_root, raw_config))
+    try:
+        bindings = await store.list_bindings()
+        if not any(
+            _normalize_optional_text(binding.get("channel_id")) == channel_id
+            for binding in bindings
+        ):
+            return {"route": "explicit", "targets": 0, "published": 0}
+        chunks = chunk_discord_message(
+            format_discord_message(message),
+            max_len=_DISCORD_MESSAGE_MAX_LEN,
+            with_numbering=False,
+        )
+        if not chunks:
+            chunks = [format_discord_message(message)]
+        published = 0
+        for index, chunk in enumerate(chunks, start=1):
+            record_id = _build_discord_record_id(
+                correlation_id=correlation_id,
+                delivery_mode="bound",
+                channel_id=channel_id,
+                index=index,
+            )
+            _record_notification_delivery(
+                notification_store,
+                correlation_id=correlation_id,
+                source_kind=source_kind,
+                delivery_mode="bound",
+                surface_kind="discord",
+                surface_key=channel_id,
+                delivery_record_id=record_id,
+                repo_id=repo_id,
+                workspace_root=None,
+                run_id=run_id,
+                managed_thread_id=managed_thread_id,
+                context_payload=context_payload,
+            )
+            if await store.get_outbox(record_id) is not None:
+                continue
+            await store.enqueue_outbox(
+                DiscordOutboxRecord(
+                    record_id=record_id,
+                    channel_id=channel_id,
+                    message_id=None,
+                    operation="send",
+                    payload_json={"content": chunk},
+                    created_at=created_at,
+                )
+            )
+            published += 1
+        return {"route": "explicit", "targets": 1, "published": published}
+    finally:
+        await store.close()
+
+
+async def _deliver_direct_telegram(
+    *,
+    hub_root: Path,
+    raw_config: dict[str, Any],
+    topic_surface_key: str,
+    message: str,
+    correlation_id: str,
+    source_kind: str,
+    repo_id: Optional[str],
+    run_id: Optional[str],
+    managed_thread_id: Optional[str],
+    context_payload: Optional[dict[str, Any]],
+    notification_store: PmaNotificationStore,
+) -> dict[str, Any]:
+    from ..integrations.telegram.state import (
+        OutboxRecord as TelegramOutboxRecord,
+    )
+    from ..integrations.telegram.state import TelegramStateStore, parse_topic_key
+
+    created_at = now_iso()
+    store = TelegramStateStore(resolve_telegram_state_path(hub_root, raw_config))
+    try:
+        topics = await store.list_topics()
+        topic = topics.get(topic_surface_key)
+        if topic is None:
+            return {"route": "explicit", "targets": 0, "published": 0}
+        try:
+            chat_id, thread_id, scope = parse_topic_key(topic_surface_key)
+        except ValueError:
+            return {"route": "explicit", "targets": 0, "published": 0}
+        base_key = f"{chat_id}:{thread_id or 'root'}"
+        if scope != await store.get_topic_scope(base_key):
+            return {"route": "explicit", "targets": 0, "published": 0}
+        record_id = _build_telegram_record_id(
+            correlation_id=correlation_id,
+            delivery_mode="bound",
+            chat_id=chat_id,
+            thread_id=thread_id,
+        )
+        _record_notification_delivery(
+            notification_store,
+            correlation_id=correlation_id,
+            source_kind=source_kind,
+            delivery_mode="bound",
+            surface_kind="telegram",
+            surface_key=topic_surface_key,
+            delivery_record_id=record_id,
+            repo_id=repo_id,
+            workspace_root=None,
+            run_id=run_id,
+            managed_thread_id=managed_thread_id,
+            context_payload=context_payload,
+        )
+        if await store.get_outbox(record_id) is not None:
+            return {"route": "explicit", "targets": 1, "published": 0}
+        await store.enqueue_outbox(
+            TelegramOutboxRecord(
+                record_id=record_id,
+                chat_id=chat_id,
+                thread_id=thread_id,
+                reply_to_message_id=None,
+                placeholder_message_id=None,
+                text=message,
+                created_at=created_at,
+                operation="send",
+                message_id=None,
+                outbox_key=f"pma-notice:{correlation_id}:{topic_surface_key}:send",
+            )
+        )
+        return {"route": "explicit", "targets": 1, "published": 1}
+    finally:
+        await store.close()
+
+
 async def _deliver_primary_pma_discord(
     *,
     hub_root: Path,
@@ -507,6 +680,7 @@ async def deliver_pma_notification(
     workspace_root: Optional[Path] = None,
     run_id: Optional[str] = None,
     managed_thread_id: Optional[str] = None,
+    delivery_target: Optional[dict[str, Any]] = None,
     context_payload: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     text = str(message or "").strip()
@@ -528,6 +702,45 @@ async def deliver_pma_notification(
     )
     if normalized_delivery == "none":
         return {"route": "none", "targets": 0, "published": 0}
+    normalized_target = _normalize_pma_delivery_target(delivery_target)
+    if normalized_target is not None:
+        surface_kind, surface_key = normalized_target
+        if _delivery_target_matches_active_thread_binding(
+            hub_root=hub_root,
+            managed_thread_id=managed_thread_id,
+            surface_kind=surface_kind,
+            surface_key=surface_key,
+        ):
+            if surface_kind == "discord":
+                direct_outcome = await _deliver_direct_discord(
+                    hub_root=hub_root,
+                    raw_config=raw_config,
+                    channel_id=surface_key,
+                    message=text,
+                    correlation_id=correlation_id,
+                    source_kind=normalized_source_kind,
+                    repo_id=normalized_repo_id,
+                    run_id=run_id,
+                    managed_thread_id=managed_thread_id,
+                    context_payload=payload,
+                    notification_store=notification_store,
+                )
+            else:
+                direct_outcome = await _deliver_direct_telegram(
+                    hub_root=hub_root,
+                    raw_config=raw_config,
+                    topic_surface_key=surface_key,
+                    message=text,
+                    correlation_id=correlation_id,
+                    source_kind=normalized_source_kind,
+                    repo_id=normalized_repo_id,
+                    run_id=run_id,
+                    managed_thread_id=managed_thread_id,
+                    context_payload=payload,
+                    notification_store=notification_store,
+                )
+            if direct_outcome.get("targets", 0) > 0:
+                return direct_outcome
     if normalized_delivery in {"auto", "primary_pma"} and normalized_repo_id:
         pma_discord = await _deliver_primary_pma_discord(
             hub_root=hub_root,

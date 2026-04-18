@@ -7,12 +7,15 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.surfaces.web.routes.pma_routes.publish import (
     build_publish_correlation_id,
     build_publish_message,
     enqueue_with_retry,
     normalize_optional_text,
+    publish_automation_result,
     resolve_chat_state_path,
+    resolve_publish_workspace_root,
 )
 
 
@@ -174,3 +177,80 @@ class TestEnqueueWithRetry:
         with pytest.raises(RuntimeError, match="permanent"):
             await enqueue_with_retry(call)
         assert call.call_count == 3
+
+
+class TestResolvePublishWorkspaceRoot:
+    def test_falls_back_to_managed_thread_workspace(self, tmp_path: Path) -> None:
+        hub_root = (tmp_path / "hub").resolve()
+        hub_root.mkdir(parents=True, exist_ok=True)
+        workspace = (hub_root / "worktrees" / "repo-1").resolve()
+        workspace.mkdir(parents=True, exist_ok=True)
+
+        thread = PmaThreadStore(hub_root).create_thread("codex", workspace)
+        thread_id = str(thread["managed_thread_id"])
+        request = SimpleNamespace(
+            app=SimpleNamespace(
+                state=SimpleNamespace(config=SimpleNamespace(root=hub_root, raw={}))
+            )
+        )
+
+        result = resolve_publish_workspace_root(
+            request=request,
+            lifecycle_event=None,
+            wake_up={"thread_id": thread_id},
+        )
+
+        assert result == workspace
+
+
+class TestPublishAutomationResult:
+    @pytest.mark.anyio
+    async def test_forwards_delivery_target_and_thread_context(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        hub_root = (tmp_path / "hub").resolve()
+        hub_root.mkdir(parents=True, exist_ok=True)
+        request = SimpleNamespace(
+            app=SimpleNamespace(
+                state=SimpleNamespace(config=SimpleNamespace(root=hub_root, raw={}))
+            )
+        )
+        captured: dict[str, Any] = {}
+
+        async def _fake_deliver_pma_notification(**kwargs: Any) -> dict[str, Any]:
+            captured.update(kwargs)
+            return {"route": "explicit", "targets": 1, "published": 1}
+
+        monkeypatch.setattr(
+            "codex_autorunner.surfaces.web.routes.pma_routes.publish.deliver_pma_notification",
+            _fake_deliver_pma_notification,
+        )
+
+        result = await publish_automation_result(
+            request=request,
+            result={"status": "ok", "message": "done"},
+            client_turn_id="client-1",
+            lifecycle_event=None,
+            wake_up={
+                "wakeup_id": "wake-1",
+                "thread_id": "thread-123",
+                "delivery_target": {
+                    "surface_kind": "discord",
+                    "surface_key": "discord:preferred",
+                },
+                "metadata": {
+                    "delivery_target": {
+                        "surface_kind": "discord",
+                        "surface_key": "discord:stale",
+                    }
+                },
+            },
+        )
+
+        assert captured["managed_thread_id"] == "thread-123"
+        assert captured["delivery_target"] == {
+            "surface_kind": "discord",
+            "surface_key": "discord:preferred",
+        }
+        assert result["delivery_status"] == "success"
+        assert result["delivery_outcome"]["route"] == "explicit"

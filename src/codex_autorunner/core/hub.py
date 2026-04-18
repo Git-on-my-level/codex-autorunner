@@ -1690,6 +1690,12 @@ class HubSupervisor:
                 "subscription_id": wakeup.get("subscription_id"),
                 "timer_id": wakeup.get("timer_id"),
             }
+            metadata = wakeup.get("metadata")
+            if isinstance(metadata, dict):
+                wake_payload["metadata"] = dict(metadata)
+                delivery_target = metadata.get("delivery_target")
+                if isinstance(delivery_target, dict):
+                    wake_payload["delivery_target"] = dict(delivery_target)
             payload = {
                 "message": self._build_pma_wakeup_message(wake_payload),
                 "agent": None,

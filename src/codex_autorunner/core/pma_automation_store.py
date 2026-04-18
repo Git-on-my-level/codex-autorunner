@@ -34,7 +34,7 @@ from .pma_automation_types import (
     default_pma_automation_state,
 )
 from .pma_thread_store import PmaThreadStore
-from .text_utils import lock_path_for
+from .text_utils import _normalize_pma_delivery_target, lock_path_for
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +43,17 @@ class PmaAutomationThreadNotFoundError(ValueError):
     def __init__(self, thread_id: str) -> None:
         super().__init__(f"Unknown thread_id: {thread_id}")
         self.thread_id = thread_id
+
+
+def _normalize_delivery_target(value: Any) -> Optional[dict[str, str]]:
+    normalized = _normalize_pma_delivery_target(value)
+    if normalized is None:
+        return None
+    surface_kind, surface_key = normalized
+    return {
+        "surface_kind": surface_kind,
+        "surface_key": surface_key,
+    }
 
 
 @dataclass
@@ -1076,6 +1087,26 @@ class PmaAutomationStore:
             return binding_kind
         return DEFAULT_PMA_LANE_ID
 
+    def _resolve_thread_delivery_target(
+        self, *, thread_id: str
+    ) -> Optional[dict[str, str]]:
+        thread_store = PmaThreadStore(self._hub_root)
+        thread = thread_store.get_thread(thread_id)
+        if thread is None:
+            raise PmaAutomationThreadNotFoundError(thread_id)
+
+        binding_metadata = active_chat_binding_metadata_by_thread(
+            hub_root=self._hub_root
+        ).get(thread_id)
+        if not isinstance(binding_metadata, dict):
+            return None
+        return _normalize_delivery_target(
+            {
+                "surface_kind": binding_metadata.get("binding_kind"),
+                "surface_key": binding_metadata.get("binding_id"),
+            }
+        )
+
     def _resolve_subscription_lane_id(
         self,
         *,
@@ -1089,6 +1120,30 @@ class PmaAutomationStore:
 
         resolved_lane_id = self._resolve_thread_lane_id(thread_id=normalized_thread_id)
         return resolved_lane_id
+
+    def _resolve_subscription_metadata(
+        self,
+        *,
+        thread_id: Optional[str],
+        metadata: Optional[dict[str, Any]],
+    ) -> dict[str, Any]:
+        resolved_metadata = dict(metadata or {})
+        delivery_target = _normalize_delivery_target(
+            resolved_metadata.get("delivery_target")
+        )
+        normalized_thread_id = _normalize_text(thread_id)
+        if delivery_target is None and normalized_thread_id is not None:
+            try:
+                delivery_target = self._resolve_thread_delivery_target(
+                    thread_id=normalized_thread_id
+                )
+            except PmaAutomationThreadNotFoundError:
+                delivery_target = None
+        if delivery_target is not None:
+            resolved_metadata["delivery_target"] = delivery_target
+        else:
+            resolved_metadata.pop("delivery_target", None)
+        return resolved_metadata
 
     def upsert_subscription(
         self,
@@ -1113,6 +1168,10 @@ class PmaAutomationStore:
             thread_id=normalized_thread_id,
             lane_id=lane_id,
         )
+        resolved_metadata = self._resolve_subscription_metadata(
+            thread_id=normalized_thread_id,
+            metadata=metadata,
+        )
         if not normalized_event_types:
             logger.warning(
                 "Creating PMA subscription with empty event_types; subscription will match all events"
@@ -1136,7 +1195,7 @@ class PmaAutomationStore:
                         idempotency_key=key,
                         notify_once=notify_once,
                         max_matches=max_matches,
-                        metadata=metadata,
+                        metadata=resolved_metadata,
                     )
                     self._insert_subscription_row(conn, created)
             self._rewrite_json_mirror_unlocked()
@@ -1864,6 +1923,8 @@ class PmaAutomationStore:
                 if deduped:
                     continue
 
+                wakeup_metadata = dict(entry.metadata or {})
+                wakeup_metadata.update(metadata_payload)
                 wakeups.append(
                     PmaAutomationWakeup.create(
                         source="transition",
@@ -1878,7 +1939,7 @@ class PmaAutomationStore:
                         idempotency_key=wakeup_key,
                         subscription_id=subscription_id,
                         event_type=event_type_norm,
-                        metadata=dict(metadata_payload),
+                        metadata=wakeup_metadata,
                     )
                 )
                 created += 1
