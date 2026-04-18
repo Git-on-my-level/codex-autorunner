@@ -295,6 +295,13 @@ class LifecycleEventRouter:
                 f"lifecycle:{event.event_id}:subscription:"
                 f"{subscription_id or 'unknown'}"
             )
+            subscription_metadata = subscription.get("metadata")
+            metadata = (
+                dict(subscription_metadata)
+                if isinstance(subscription_metadata, dict)
+                else {}
+            )
+            metadata["origin"] = event.origin
             reason = (
                 str(subscription.get("reason")).strip()
                 if isinstance(subscription.get("reason"), str)
@@ -321,7 +328,7 @@ class LifecycleEventRouter:
                 event_id=event.event_id,
                 event_type=event.event_type.value,
                 event_data=event.data if isinstance(event.data, dict) else {},
-                metadata={"origin": event.origin},
+                metadata=metadata,
             )
             if not deduped:
                 created += 1

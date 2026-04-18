@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +20,9 @@ from codex_autorunner.core.hub_control_plane import (
     RemoteThreadExecutionStore,
     ThreadTargetListResponse,
     ThreadTargetResponse,
+)
+from codex_autorunner.core.hub_control_plane.background_runner import (
+    BoundedBackgroundRunner,
 )
 from codex_autorunner.core.orchestration.interfaces import ThreadExecutionStore
 from codex_autorunner.core.orchestration.models import ExecutionRecord, ThreadTarget
@@ -432,6 +437,40 @@ class _LoopBoundThreadClient(_FakeHubClient):
         return await super().get_thread_target(request)
 
 
+class _SlowGetThreadTargetClient(_FakeHubClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.finished = threading.Event()
+
+    async def get_thread_target(self, request):
+        self.calls.append(("get_thread_target", request))
+        try:
+            await asyncio.sleep(0.2)
+        finally:
+            self.finished.set()
+        return self.thread_response
+
+
+class _BlockingGetThreadTargetClient(_FakeHubClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    async def get_thread_target(self, request):
+        self.calls.append(("get_thread_target", request))
+        self.started.set()
+        await asyncio.to_thread(self.release.wait)
+        return self.thread_response
+
+
+class _SlowSetExecutionBackendIdClient(_FakeHubClient):
+    async def set_execution_backend_id(self, request):
+        self.calls.append(("set_execution_backend_id", request))
+        await asyncio.sleep(0.02)
+        return None
+
+
 def test_remote_execution_store_translates_transport_failures_to_hub_unavailable() -> (
     None
 ):
@@ -476,3 +515,73 @@ def test_remote_execution_store_clones_loop_bound_client_for_background_calls() 
 
     assert thread is not None
     assert thread.thread_target_id == "thread-1"
+
+
+def test_remote_execution_store_timeout_does_not_wait_for_background_shutdown() -> None:
+    client = _SlowGetThreadTargetClient()
+    store = RemoteThreadExecutionStore(client, timeout_seconds=0.01)
+
+    started = time.monotonic()
+    with pytest.raises(HubControlPlaneError) as exc_info:
+        store.get_thread_target("thread-1")
+    elapsed = time.monotonic() - started
+
+    assert exc_info.value.code == "hub_unavailable"
+    assert exc_info.value.details["operation"] == "get_thread_target"
+    assert exc_info.value.details["timeout_seconds"] == 0.01
+    assert elapsed < 0.1
+    assert client.finished.wait(timeout=1.0)
+
+
+def test_remote_execution_store_bounds_background_timeout_fallout() -> None:
+    runner = BoundedBackgroundRunner(
+        max_workers=1,
+        saturation_wait_seconds=0.0,
+        thread_name_prefix="test-hub-execution",
+    )
+    client = _BlockingGetThreadTargetClient()
+    store = RemoteThreadExecutionStore(
+        client,
+        timeout_seconds=0.5,
+        background_runner=runner,
+    )
+
+    errors: list[BaseException] = []
+
+    def _first_call() -> None:
+        try:
+            store.get_thread_target("thread-1")
+        except BaseException as exc:  # pragma: no cover - test assertion below
+            errors.append(exc)
+
+    worker = threading.Thread(target=_first_call)
+    worker.start()
+    assert client.started.wait(timeout=1.0)
+
+    with pytest.raises(HubControlPlaneError) as exc_info:
+        store.get_thread_target("thread-2")
+
+    client.release.set()
+    worker.join(timeout=1.0)
+    runner.close()
+
+    assert not errors
+    assert exc_info.value.code == "hub_unavailable"
+    assert exc_info.value.details["operation"] == "get_thread_target"
+    assert exc_info.value.details["max_workers"] == 1
+
+
+def test_remote_execution_store_uses_extended_timeout_for_backend_id_updates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "codex_autorunner.core.hub_control_plane.remote_execution_store."
+        "_EXECUTION_BACKEND_ID_TIMEOUT_SECONDS",
+        0.05,
+    )
+    store = RemoteThreadExecutionStore(
+        _SlowSetExecutionBackendIdClient(),
+        timeout_seconds=0.01,
+    )
+
+    store.set_execution_backend_id("exec-1", "turn-2")

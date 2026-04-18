@@ -571,3 +571,70 @@ def test_sync_pr_persists_binding_and_keeps_link_state_as_session_cache(
     assert "headBranch" not in written
     assert isinstance(written["updatedAtMs"], int)
     assert result["links"]["url"] == "https://github.com/acme/widgets/pull/17"
+
+
+def test_sync_pr_arms_polling_watch_from_hub_root_for_hub_repo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    repo_root = hub_root / "workspace" / "repo"
+    repo_root.mkdir(parents=True)
+    _write_manifest(hub_root, repo_rel="workspace/repo")
+
+    service = GitHubService(repo_root, raw_config={})
+    monkeypatch.setattr(service, "gh_authenticated", lambda: True)
+    monkeypatch.setattr(
+        service,
+        "repo_info",
+        lambda: RepoInfo(
+            name_with_owner="acme/widgets",
+            url="https://github.com/acme/widgets",
+            default_branch="main",
+        ),
+    )
+    monkeypatch.setattr(service, "read_link_state", lambda: {})
+    monkeypatch.setattr(service, "current_branch", lambda *, cwd=None: "feature/login")
+    monkeypatch.setattr(service, "is_clean", lambda *, cwd=None: True)
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.github.service._run_codex_sync_agent",
+        lambda **_: None,
+    )
+    monkeypatch.setattr(
+        service,
+        "pr_for_branch",
+        lambda *, branch, cwd=None: {
+            "url": "https://github.com/acme/widgets/pull/17",
+            "number": 17,
+            "state": "OPEN",
+            "isDraft": False,
+            "headRefName": branch,
+            "baseRefName": "main",
+            "title": "Login flow",
+        },
+    )
+
+    def _fake_gh(
+        args: list[str], *, cwd=None, check=True, timeout_seconds=None
+    ):  # type: ignore[no-untyped-def]
+        if args[:3] == ["pr", "view", "https://github.com/acme/widgets/pull/17"]:
+            return type("Proc", (), {"stdout": json.dumps({"body": ""})})()
+        raise AssertionError(f"unexpected gh args: {args}")
+
+    monkeypatch.setattr(service, "_gh", _fake_gh)
+    monkeypatch.setattr(service, "write_link_state", lambda state: state)
+
+    armed_hub_roots: list[Path] = []
+
+    def _capture_arm_watch(self, *, binding, workspace_root, reaction_config):  # type: ignore[no-untyped-def]
+        armed_hub_roots.append(self._hub_root)
+        _ = binding, workspace_root, reaction_config
+        return None
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.github.polling.GitHubScmPollingService.arm_watch",
+        _capture_arm_watch,
+    )
+
+    service.sync_pr(draft=False, title="Login flow", body="Initial body")
+
+    assert armed_hub_roots == [hub_root]

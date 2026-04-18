@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Optional, Union
 
+from codex_autorunner.core.orchestration.runtime_payload_shapes import TokenUsageShape
+
 
 @dataclass(frozen=True)
 class OutputDeltaNotification:
@@ -57,6 +59,10 @@ class TokenUsageNotification:
     usage: dict[str, Any]
     turn_id: Optional[str] = None
     thread_id: Optional[str] = None
+
+    @property
+    def typed_usage(self) -> TokenUsageShape:
+        return TokenUsageShape.from_raw(self.usage)
 
 
 @dataclass(frozen=True)

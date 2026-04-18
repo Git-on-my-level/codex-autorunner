@@ -2,7 +2,7 @@
 import { api, flash, setButtonLoading } from "./utils.js";
 import { initAgentControls, getSelectedAgent, getSelectedProfile, getSelectedModel, getSelectedReasoning, } from "./agentControls.js";
 import { fetchContextspace, ingestSpecToTickets, listTickets, writeContextspace, } from "./contextspaceApi.js";
-import { applyDraft, discardDraft, fetchPendingDraft, sendFileChat, interruptFileChat, newClientTurnId, streamTurnEvents, } from "./fileChat.js";
+import { applyDraft, discardDraft, fetchPendingDraft, sendFileChat, interruptFileChat, newClientTurnId, } from "./fileChat.js";
 import { DocEditor } from "./docEditor.js";
 import { createDocChat } from "./docChatCore.js";
 import { initChatPasteUpload } from "./chatUploads.js";
@@ -11,8 +11,9 @@ import { renderDiff } from "./diffRenderer.js";
 import { subscribe } from "./bus.js";
 import { DEFAULT_FILEBOX_BOX } from "./fileboxCatalog.js";
 import { isRepoHealthy } from "./health.js";
-import { loadPendingTurn, savePendingTurn, clearPendingTurn } from "./turnResume.js";
+import { loadPendingTurn, savePendingTurn } from "./turnResume.js";
 import { resumeFileChatTurn } from "./turnEvents.js";
+import { createTurnEventsController, startTurnEventsStream as sharedStartTurnEventsStream, clearManagedTurn, } from "./sharedTurnLifecycle.js";
 const CONTEXTSPACE_CHAT_EVENT_LIMIT = 8;
 const CONTEXTSPACE_CHAT_EVENT_MAX = 50;
 const CONTEXTSPACE_PENDING_KEY = "car.contextspace.pendingTurn";
@@ -47,7 +48,7 @@ const workspaceChat = createDocChat({
         messageAssistantFinalClass: "final",
     },
 });
-let currentTurnEventsController = null;
+const turnEventsCtrl = createTurnEventsController();
 function els() {
     return {
         root: document.getElementById("contextspace"),
@@ -409,20 +410,8 @@ async function discardWorkspaceDraft() {
         flash(err.message || "Failed to discard draft", "error");
     }
 }
-function clearTurnEventsStream() {
-    if (!currentTurnEventsController)
-        return;
-    try {
-        currentTurnEventsController.abort();
-    }
-    catch {
-        // ignore
-    }
-    currentTurnEventsController = null;
-}
 function clearPendingTurnState() {
-    clearTurnEventsStream();
-    clearPendingTurn(CONTEXTSPACE_PENDING_KEY);
+    clearManagedTurn(turnEventsCtrl, CONTEXTSPACE_PENDING_KEY);
 }
 function maybeStartTurnEventsFromUpdate(update) {
     const meta = update;
@@ -431,8 +420,7 @@ function maybeStartTurnEventsFromUpdate(update) {
     const agent = typeof meta.agent === "string" ? meta.agent : undefined;
     if (!threadId || !turnId)
         return;
-    clearTurnEventsStream();
-    currentTurnEventsController = streamTurnEvents({ agent, threadId, turnId }, {
+    sharedStartTurnEventsStream(turnEventsCtrl, { agent, threadId, turnId }, {
         onEvent: (event) => {
             workspaceChat.applyAppEvent(event);
             workspaceChat.renderEvents();
@@ -528,7 +516,7 @@ async function resumePendingWorkspaceTurn() {
                 workspaceChat.render();
             },
         });
-        currentTurnEventsController = outcome.controller;
+        turnEventsCtrl.current = outcome.controller;
         if (outcome.lastResult && outcome.lastResult.status) {
             applyFinalResult(outcome.lastResult);
             return;
@@ -567,7 +555,7 @@ async function sendChat() {
         chatInput.value = "";
     chatSend?.setAttribute("disabled", "true");
     chatCancel?.classList.remove("hidden");
-    clearTurnEventsStream();
+    turnEventsCtrl.abort();
     const clientTurnId = newClientTurnId("contextspace");
     savePendingTurn(CONTEXTSPACE_PENDING_KEY, {
         clientTurnId,

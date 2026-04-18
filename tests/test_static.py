@@ -22,10 +22,13 @@ def test_static_mobile_terminal_compose_view_assets():
         terminal_manager = (static_dir / "generated" / "terminalManager.js").read_text(
             encoding="utf-8"
         )
+        terminal_session = (static_dir / "generated" / "terminalSession.js").read_text(
+            encoding="utf-8"
+        )
         assert "mobile-terminal-view" in styles
         assert "_setMobileViewActive" in terminal_manager
-        assert "Math.round(delay / 1000)" in terminal_manager
-        assert "heartbeat stalled; closing terminal socket" in terminal_manager
+        assert "Math.round(delay / 1000)" in terminal_session
+        assert "heartbeat stalled; closing terminal socket" in terminal_session
     finally:
         if stack is not None:
             stack.close()

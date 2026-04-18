@@ -14,6 +14,7 @@ from .....core.car_context import (
     normalize_car_context_profile,
 )
 from .....core.chat_bindings import active_chat_binding_metadata_by_thread
+from .....core.hub_control_plane.models import THREAD_TARGET_LIST_LIFECYCLE_STATUSES
 from .....core.managed_thread_status import derive_managed_thread_operator_status
 from .....core.orchestration import ActiveWorkSummary
 from .....core.orchestration.models import Binding, ThreadTarget
@@ -447,7 +448,6 @@ def resolve_managed_thread_create_resolution(
     payload: PmaManagedThreadCreateRequest,
 ) -> ManagedThreadCreateResolution:
     hub_root = request.app.state.config.root
-    pma_config = request.app.state.config.pma
     raw_agent_id = normalize_optional_text(payload.agent)
     raw_profile = normalize_optional_text(payload.profile)
     if raw_agent_id is not None:
@@ -470,7 +470,9 @@ def resolve_managed_thread_create_resolution(
     workspace_root = normalize_optional_text(payload.workspace_root)
     followup_policy = resolve_managed_thread_followup_policy(
         payload,
-        default_terminal_followup=pma_config.managed_thread_terminal_followup_default,
+        # Terminal follow-up defaults now apply when the thread is used, not at
+        # spawn time, so create-thread only honors explicit follow-up intent.
+        default_terminal_followup=False,
     )
 
     owner_present = resource_kind is not None and resource_id is not None
@@ -580,7 +582,7 @@ def resolve_managed_thread_list_query(
     normalized_status = normalize_optional_text(status)
     normalized_lifecycle_status = normalize_optional_text(lifecycle_status)
     if (
-        normalized_status in {"active", "archived"}
+        normalized_status in THREAD_TARGET_LIST_LIFECYCLE_STATUSES
         and normalized_lifecycle_status is None
     ):
         normalized_lifecycle_status = normalized_status

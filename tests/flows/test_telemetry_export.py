@@ -53,6 +53,19 @@ def _create_active_run(store: FlowStore, run_id: str = "run-active-1") -> str:
     return record.id
 
 
+def _create_paused_run(store: FlowStore, run_id: str = "run-paused-1") -> str:
+    record = store.create_flow_run(
+        run_id=run_id, flow_type="ticket_flow", input_data={}
+    )
+    store.update_flow_run_status(
+        record.id,
+        status=FlowRunStatus.PAUSED,
+        started_at="2025-01-01T00:00:00Z",
+        finished_at="2025-01-01T00:00:00Z",
+    )
+    return record.id
+
+
 def _add_event(
     store: FlowStore,
     run_id: str,
@@ -392,6 +405,52 @@ def test_export_all_runs_mixed(temp_dir):
     assert len(skipped) == 1
     assert len(exported) == 1
     assert exported[0].exported_events == 1
+
+
+def test_export_all_runs_skips_paused_when_sweeping_all(temp_dir):
+    store = _make_store(temp_dir)
+    paused_id = _create_paused_run(store, "run-paused")
+    terminal_id = _create_terminal_run(store, "run-terminal")
+    _add_event(
+        store,
+        paused_id,
+        FlowEventType.APP_SERVER_EVENT,
+        {"message": {"method": "message.part.updated", "params": {}}, "turn_id": "t1"},
+        event_id="evt-paused-1",
+    )
+    _add_event(
+        store,
+        terminal_id,
+        FlowEventType.APP_SERVER_EVENT,
+        {"message": {"method": "message.part.updated", "params": {}}, "turn_id": "t1"},
+        event_id="evt-terminal-1",
+    )
+
+    result = export_all_runs(temp_dir, store, dry_run=False)
+    skipped = [r for r in result.records if r.skipped]
+    exported = [r for r in result.records if not r.skipped]
+    assert len(skipped) == 1
+    assert skipped[0].run_id == paused_id
+    assert skipped[0].skip_reason == "run is paused"
+    assert len(exported) == 1
+    assert exported[0].run_id == terminal_id
+
+
+def test_export_all_runs_explicit_run_id_still_exports_paused(temp_dir):
+    store = _make_store(temp_dir)
+    paused_id = _create_paused_run(store, "run-paused")
+    _add_event(
+        store,
+        paused_id,
+        FlowEventType.APP_SERVER_EVENT,
+        {"message": {"method": "message.part.updated", "params": {}}, "turn_id": "t1"},
+        event_id="evt-paused-1",
+    )
+
+    result = export_all_runs(temp_dir, store, dry_run=False, run_ids=[paused_id])
+    assert len(result.records) == 1
+    assert not result.records[0].skipped
+    assert result.records[0].exported_events == 1
 
 
 def test_export_all_runs_specific_run_ids(temp_dir):

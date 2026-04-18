@@ -13,15 +13,12 @@ from codex_autorunner.integrations.telegram.adapter import (
     TelegramPhotoSize,
     TelegramVoice,
 )
-from codex_autorunner.integrations.telegram.handlers.messages import (
-    _CoalescedBuffer,
-    _MediaBatchBuffer,
-    buffer_coalesced_message,
-    buffer_media_batch,
-    build_coalesced_message,
+from codex_autorunner.integrations.telegram.handlers.media_ingress import (
+    MediaBatchBuffer as _MediaBatchBuffer,
+)
+from codex_autorunner.integrations.telegram.handlers.media_ingress import (
     document_is_image,
     handle_media_message,
-    handle_message_inner,
     has_batchable_media,
     media_batch_key,
     message_has_media,
@@ -29,6 +26,13 @@ from codex_autorunner.integrations.telegram.handlers.messages import (
     select_image_candidate,
     select_photo,
     select_voice_candidate,
+)
+from codex_autorunner.integrations.telegram.handlers.messages import (
+    _CoalescedBuffer,
+    buffer_coalesced_message,
+    buffer_media_batch,
+    build_coalesced_message,
+    handle_message_inner,
     should_bypass_topic_queue,
 )
 from codex_autorunner.integrations.telegram.state import TelegramTopicRecord
@@ -1151,8 +1155,10 @@ async def test_handle_message_inner_uses_formatted_forwarded_prompt_text(
             captured["prompt_text"] = request.prompt_text
             await submit_thread_message(request)
 
+    import codex_autorunner.integrations.telegram.handlers.surface_ingress as _surface_ingress_mod
+
     monkeypatch.setattr(
-        msg_module,
+        _surface_ingress_mod,
         "build_surface_orchestration_ingress",
         lambda event_sink: _IngressStub(),
     )
@@ -1216,7 +1222,7 @@ async def test_handle_message_inner_uses_formatted_forwarded_prompt_text(
 
     await handle_message_inner(handlers, message, placeholder_id=99)
 
-    expected = "Forwarded message (automatic) from Ops [message 9]:\n" "deploy this"
+    expected = "Forwarded message (automatic) from Ops [message 9]:\ndeploy this"
     assert captured["prompt_text"] == expected
     assert captured["text_override"] == expected
     assert captured["runtime_matches"] is True
@@ -1254,8 +1260,10 @@ async def test_handle_media_message_uses_formatted_forwarded_caption(
             captured["prompt_text"] = request.prompt_text
             await submit_thread_message(request)
 
+    import codex_autorunner.integrations.telegram.handlers.media_ingress as _media_ingress_mod
+
     monkeypatch.setattr(
-        msg_module,
+        _media_ingress_mod,
         "build_surface_orchestration_ingress",
         lambda event_sink: _IngressStub(),
     )

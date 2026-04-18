@@ -1,0 +1,105 @@
+import { HUB_BASE } from "./env.js";
+import type { SessionCachePayload, HubData, HubUsageData, HubUsageRepo } from "./hubTypes.js";
+
+export const HUB_CACHE_TTL_MS = 30000;
+export const HUB_PERSISTENT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+export const HUB_CACHE_KEY = `car:hub:v2:${HUB_BASE || "/"}`;
+export const HUB_USAGE_CACHE_KEY = `car:hub-usage:${HUB_BASE || "/"}`;
+
+let hubUsageIndex: Record<string, HubUsageRepo> = {};
+let hubUsageUnmatched: HubUsageData["unmatched"] | null = null;
+
+export function getHubUsageUnmatched(): HubUsageData["unmatched"] | null {
+  return hubUsageUnmatched;
+}
+
+export function saveSessionCache<T>(key: string, value: T): void {
+  try {
+    const payload: SessionCachePayload<T> = { at: Date.now(), value };
+    sessionStorage.setItem(key, JSON.stringify(payload));
+  } catch (_err) {
+    // Ignore storage errors; cache is best-effort.
+  }
+}
+
+export function loadSessionCache<T>(key: string, maxAgeMs: number): T | null {
+  try {
+    const raw = sessionStorage.getItem(key);
+    if (!raw) return null;
+    const payload = JSON.parse(raw) as SessionCachePayload<T>;
+    if (!payload || typeof payload.at !== "number") return null;
+    if (maxAgeMs && Date.now() - payload.at > maxAgeMs) return null;
+    return payload.value;
+  } catch (_err) {
+    return null;
+  }
+}
+
+export function savePersistentCache<T>(key: string, value: T): void {
+  try {
+    const payload: SessionCachePayload<T> = { at: Date.now(), value };
+    localStorage.setItem(key, JSON.stringify(payload));
+  } catch (_err) {
+    // Ignore storage errors; cache is best-effort.
+  }
+}
+
+export function loadPersistentCache<T>(key: string, maxAgeMs: number): T | null {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const payload = JSON.parse(raw) as SessionCachePayload<T>;
+    if (!payload || typeof payload.at !== "number") return null;
+    if (maxAgeMs && Date.now() - payload.at > maxAgeMs) return null;
+    return payload.value;
+  } catch (_err) {
+    return null;
+  }
+}
+
+export function saveHubBootstrapCache(value: HubData): void {
+  saveSessionCache(HUB_CACHE_KEY, value);
+  savePersistentCache(HUB_CACHE_KEY, value);
+}
+
+export function loadHubBootstrapCache(): HubData | null {
+  const sessionValue = loadSessionCache<HubData | null>(HUB_CACHE_KEY, HUB_CACHE_TTL_MS);
+  if (sessionValue) return sessionValue;
+  const persistentValue = loadPersistentCache<HubData | null>(
+    HUB_CACHE_KEY,
+    HUB_PERSISTENT_CACHE_TTL_MS
+  );
+  if (persistentValue) {
+    saveSessionCache(HUB_CACHE_KEY, persistentValue);
+    return persistentValue;
+  }
+  return null;
+}
+
+export function formatTokensCompact(val: number | string | null | undefined): string {
+  if (val === null || val === undefined) return "0";
+  const num = Number(val);
+  if (Number.isNaN(num)) return String(val);
+  if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
+  if (num >= 1000) return `${(num / 1000).toFixed(0)}k`;
+  return num.toLocaleString();
+}
+
+export function indexHubUsage(data: HubUsageData | null): void {
+  hubUsageIndex = {};
+  hubUsageUnmatched = data?.unmatched || null;
+  if (!data?.repos) return;
+  data.repos.forEach((repo) => {
+    if (repo?.id) hubUsageIndex[repo.id] = repo;
+  });
+}
+
+export function getRepoUsage(repoId: string): { label: string; hasData: boolean } {
+  const usage = hubUsageIndex[repoId];
+  if (!usage) return { label: "—", hasData: false };
+  const totals = usage.totals || {};
+  return {
+    label: formatTokensCompact(totals.total_tokens),
+    hasData: true,
+  };
+}

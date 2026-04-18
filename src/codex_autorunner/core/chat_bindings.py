@@ -92,10 +92,12 @@ def _resolve_manifest_path(hub_root: Path, raw_config: Mapping[str, Any]) -> Pat
 def _chat_binding_counts_fingerprint(
     *, hub_root: Path, raw_config: Mapping[str, Any]
 ) -> tuple[Any, ...]:
+    orchestration_db_path = resolve_orchestration_sqlite_path(hub_root)
     return (
         path_stat_fingerprint(_resolve_manifest_path(hub_root, raw_config)),
         path_stat_fingerprint(default_pma_threads_db_path(hub_root)),
-        path_stat_fingerprint(resolve_orchestration_sqlite_path(hub_root)),
+        path_stat_fingerprint(orchestration_db_path),
+        path_stat_fingerprint(Path(f"{orchestration_db_path}-wal")),
         _chat_surface_enabled(raw_config, "discord_bot"),
         path_stat_fingerprint(_resolve_discord_state_path(hub_root, raw_config)),
         _chat_surface_enabled(raw_config, "telegram_bot"),
@@ -627,12 +629,12 @@ def _orchestration_binding_timestamps_by_workspace(
 def _active_pma_thread_counts(
     hub_root: Path, repo_id_by_workspace: Mapping[str, str]
 ) -> dict[str, int]:
-    db_path = default_pma_threads_db_path(hub_root)
-    if not db_path.exists():
-        return {}
-    store = PmaThreadStore(hub_root)
-    raw_counts = store.count_threads_by_repo(status="active")
     counts: Counter[str] = Counter()
+    try:
+        store = PmaThreadStore(hub_root)
+        raw_counts = store.count_threads_by_repo(status="active")
+    except (OSError, RuntimeError, ValueError, sqlite3.OperationalError):
+        raw_counts = {}
     for raw_repo_id, raw_count in raw_counts.items():
         repo_id = _normalize_repo_id(raw_repo_id)
         if repo_id is None:
@@ -642,21 +644,17 @@ def _active_pma_thread_counts(
             continue
         counts[repo_id] += count
     try:
-        with open_sqlite(db_path) as conn:
+        with open_orchestration_sqlite(hub_root, durable=False) as conn:
             rows = conn.execute(
                 """
                 SELECT workspace_root
-                  FROM pma_managed_threads
-                 WHERE status = 'active'
+                  FROM orch_thread_targets
+                 WHERE lifecycle_status = 'active'
                    AND (repo_id IS NULL OR TRIM(repo_id) = '')
                 """
             ).fetchall()
-    except sqlite3.OperationalError as exc:
-        if "no such table" in str(exc).lower():
-            return dict(counts)
-        raise RuntimeError(
-            f"Failed reading chat bindings from {db_path}: {exc}"
-        ) from exc
+    except sqlite3.OperationalError:
+        return dict(counts)
 
     for row in rows:
         repo_id = _resolve_bound_repo_id(
@@ -881,4 +879,56 @@ __all__ = [
     "preferred_non_pma_chat_notification_sources_by_workspace",
     "repo_has_active_chat_binding",
     "repo_has_active_non_pma_chat_binding",
+    "resolve_chat_state_path",
+    "resolve_repo_id_by_workspace_path",
+    "resolve_bound_repo_id",
+    "normalize_workspace_path",
+    "resolve_discord_state_path",
+    "resolve_telegram_state_path",
 ]
+
+
+def resolve_chat_state_path(
+    *,
+    hub_root: Path,
+    raw_config: Mapping[str, Any],
+    section: str,
+    default_state_file: str,
+) -> Path:
+    return _resolve_state_path(
+        hub_root=hub_root,
+        raw_config=raw_config,
+        section=section,
+        default_state_file=default_state_file,
+    )
+
+
+def resolve_repo_id_by_workspace_path(
+    hub_root: Path, raw_config: Mapping[str, Any]
+) -> dict[str, str]:
+    return _repo_id_by_workspace_path(hub_root, raw_config)
+
+
+def resolve_bound_repo_id(
+    *,
+    repo_id: Any,
+    repo_id_by_workspace: Mapping[str, str],
+    workspace_values: tuple[Any, ...] = (),
+) -> str | None:
+    return _resolve_bound_repo_id(
+        repo_id=repo_id,
+        repo_id_by_workspace=repo_id_by_workspace,
+        workspace_values=workspace_values,
+    )
+
+
+def normalize_workspace_path(value: Any) -> str | None:
+    return _normalize_workspace_path(value)
+
+
+def resolve_discord_state_path(hub_root: Path, raw_config: Mapping[str, Any]) -> Path:
+    return _resolve_discord_state_path(hub_root, raw_config)
+
+
+def resolve_telegram_state_path(hub_root: Path, raw_config: Mapping[str, Any]) -> Path:
+    return _resolve_telegram_state_path(hub_root, raw_config)

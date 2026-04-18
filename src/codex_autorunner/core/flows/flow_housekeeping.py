@@ -173,14 +173,12 @@ def gather_stats(
     records = store.list_flow_runs()
     stats.runs_total = len(records)
 
+    cutoff = _retention_cutoff(retention_config)
+
     for record in records:
-        is_active = record.status.is_active() or record.status.is_paused()
+        is_active = record.status.is_active()
         is_terminal = record.status.is_terminal()
-        is_expired = (
-            _is_run_expired(record, _retention_cutoff(retention_config))
-            if is_terminal
-            else False
-        )
+        is_expired = _is_run_expired(record, cutoff) if not is_active else False
 
         events_total, telemetry_total, wire_events = _count_events_for_run(
             store, record.id
@@ -231,10 +229,10 @@ def build_plan(
         if run_stat.is_active:
             plan.runs_skipped_active += 1
             continue
-        if not run_stat.is_terminal:
-            plan.runs_skipped_active += 1
-            continue
-        if not include_all_terminal and not run_stat.is_expired:
+        if include_all_terminal:
+            if not run_stat.is_terminal:
+                continue
+        elif not run_stat.is_expired:
             plan.runs_skipped_not_expired += 1
             continue
         plan.runs_to_process.append(run_stat)
@@ -244,7 +242,7 @@ def build_plan(
         if record is None:
             continue
         events, ev_app_seqs, tel_app_seqs, prune_delta, _retained = (
-            classify_events_for_run(store, record.id, is_terminal=True)
+            classify_events_for_run(store, record.id, is_terminal=run_stat.is_terminal)
         )
         plan.events_to_export += len(events)
         plan.events_to_prune += len(ev_app_seqs) + len(tel_app_seqs) + len(prune_delta)
@@ -287,7 +285,7 @@ def execute_housekeep(
     target_run_ids = [r.run_id for r in plan.runs_to_process]
 
     if not target_run_ids:
-        _logger.info("No expired terminal runs to housekeep")
+        _logger.info("No expired non-active runs to housekeep")
     else:
         export_result = export_all_runs(
             repo_root,

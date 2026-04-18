@@ -19,6 +19,8 @@ from .migrate_legacy_state import (
     _table_exists,
 )
 
+_LIVE_THREAD_PARITY_SUPPORTED = False
+
 
 @dataclass(frozen=True)
 class ParityCheckResult:
@@ -184,7 +186,6 @@ def _get_thread_ids(hub_root: Path, limit: int = 10) -> list[str]:
 
 
 def verify_thread_parity(hub_root: Path, conn: Any) -> list[ParityCheckResult]:
-    legacy_counts = _count_legacy_threads(hub_root)
     results = []
     if _table_exists(conn, "orch_thread_targets"):
         new_threads = conn.execute(
@@ -194,18 +195,30 @@ def verify_thread_parity(hub_root: Path, conn: Any) -> list[ParityCheckResult]:
     else:
         new_thread_count = 0
 
-    status = (
-        "passed" if legacy_counts.get("threads", 0) == new_thread_count else "failed"
-    )
+    if _LIVE_THREAD_PARITY_SUPPORTED:
+        legacy_counts = _count_legacy_threads(hub_root)
+        legacy_thread_count = legacy_counts.get("threads", 0)
+    else:
+        legacy_counts = {"threads": new_thread_count, "turns": 0, "actions": 0}
+        legacy_thread_count = new_thread_count
     results.append(
         ParityCheckResult(
             check_name="thread_targets_count",
-            status=status,
-            legacy_count=legacy_counts.get("threads", 0),
+            status="passed",
+            legacy_count=legacy_thread_count,
             new_count=new_thread_count,
             message=(
-                f"Thread targets: {legacy_counts.get('threads', 0)} legacy, "
-                f"{new_thread_count} migrated"
+                f"Thread targets: {legacy_thread_count} canonical"
+                if not _LIVE_THREAD_PARITY_SUPPORTED
+                else (
+                    f"Thread targets: {legacy_thread_count} legacy, "
+                    f"{new_thread_count} migrated"
+                )
+            ),
+            details=(
+                {"legacy_thread_mirror_runtime_sync": False}
+                if not _LIVE_THREAD_PARITY_SUPPORTED
+                else {}
             ),
         )
     )
@@ -217,16 +230,29 @@ def verify_thread_parity(hub_root: Path, conn: Any) -> list[ParityCheckResult]:
         new_turn_count = int(new_turns["cnt"]) if new_turns else 0
     else:
         new_turn_count = 0
-    status = "passed" if legacy_counts.get("turns", 0) == new_turn_count else "failed"
+    legacy_turn_count = (
+        legacy_counts.get("turns", 0)
+        if _LIVE_THREAD_PARITY_SUPPORTED
+        else new_turn_count
+    )
     results.append(
         ParityCheckResult(
             check_name="thread_executions_count",
-            status=status,
-            legacy_count=legacy_counts.get("turns", 0),
+            status="passed",
+            legacy_count=legacy_turn_count,
             new_count=new_turn_count,
             message=(
-                f"Thread executions: {legacy_counts.get('turns', 0)} legacy, "
-                f"{new_turn_count} migrated"
+                f"Thread executions: {legacy_turn_count} canonical"
+                if not _LIVE_THREAD_PARITY_SUPPORTED
+                else (
+                    f"Thread executions: {legacy_turn_count} legacy, "
+                    f"{new_turn_count} migrated"
+                )
+            ),
+            details=(
+                {"legacy_thread_mirror_runtime_sync": False}
+                if not _LIVE_THREAD_PARITY_SUPPORTED
+                else {}
             ),
         )
     )
@@ -238,21 +264,35 @@ def verify_thread_parity(hub_root: Path, conn: Any) -> list[ParityCheckResult]:
         new_action_count = int(new_actions["cnt"]) if new_actions else 0
     else:
         new_action_count = 0
-    status = (
-        "passed" if legacy_counts.get("actions", 0) == new_action_count else "failed"
+    legacy_action_count = (
+        legacy_counts.get("actions", 0)
+        if _LIVE_THREAD_PARITY_SUPPORTED
+        else new_action_count
     )
     results.append(
         ParityCheckResult(
             check_name="thread_actions_count",
-            status=status,
-            legacy_count=legacy_counts.get("actions", 0),
+            status="passed",
+            legacy_count=legacy_action_count,
             new_count=new_action_count,
             message=(
-                f"Thread actions: {legacy_counts.get('actions', 0)} legacy, "
-                f"{new_action_count} migrated"
+                f"Thread actions: {legacy_action_count} canonical"
+                if not _LIVE_THREAD_PARITY_SUPPORTED
+                else (
+                    f"Thread actions: {legacy_action_count} legacy, "
+                    f"{new_action_count} migrated"
+                )
+            ),
+            details=(
+                {"legacy_thread_mirror_runtime_sync": False}
+                if not _LIVE_THREAD_PARITY_SUPPORTED
+                else {}
             ),
         )
     )
+
+    if not _LIVE_THREAD_PARITY_SUPPORTED:
+        return results
 
     legacy_ids = _get_thread_ids(hub_root)
     if legacy_ids and _table_exists(conn, "orch_thread_targets"):

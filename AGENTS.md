@@ -1,88 +1,49 @@
 # Codex Autorunner - Agent Guide
 
-This repo dogfoods codex-autorunner to build itself. Read this before running the agent loop.
+This repo dogfoods codex-autorunner. Start here, then prefer the nearest nested `AGENTS.md` over repeating repo-wide rules.
 
-## CAR Constitution
-- Default posture: YOLO (full permissions)
-- Non-negotiable invariants: filesystem is truth; single source of runtime state under `.codex-autorunner/`; layered architecture (protocol-agnostic engine, adapters, surfaces); prefer determinism and explicit configs; keep diffs small and single-purpose; observability is a contract; agents propose + execute but files decide.
-- Quick start: read `docs/car_constitution/61_AGENT_CHEATSHEET.md`.
-- Routing: identity/invariants `docs/car_constitution/10_CODEBASE_CONSTITUTION.md`; placement `20_ARCHITECTURE_MAP.md`; change hygiene `30_ENGINEERING_STANDARDS.md`; debugging/timeouts `50_OBSERVABILITY_OPERATIONS.md`; posture `60_AGENT_ONBOARDING.md`; vocabulary `95_GLOSSARY.md`.
+## Start Here
 
-## Layout and key files
-- Core package: `src/codex_autorunner/` (engine, CLI, server/API, UI assets).
-- Frontend JS is generated from TypeScript: edit `src/codex_autorunner/static_src/*.ts`, not `src/codex_autorunner/static/*.js` (run `pnpm run build` after).
-- Runtime/config/state live under `.codex-autorunner/` (not at repo root):
-  - Primary work surface: `.codex-autorunner/tickets/TICKET-###.md` (required).
-  - Optional contextspace docs (auto-created on write; missing is OK):
-    - `.codex-autorunner/contextspace/active_context.md`
-    - `.codex-autorunner/contextspace/decisions.md`
-    - `.codex-autorunner/contextspace/spec.md`
-  - When asked to update tickets/contextspace docs, you MUST update the copies under `.codex-autorunner/`. Do not create new copies elsewhere.
-  - Document intent (canonical):
-    - Tickets: ordered units of work and the main execution surface.
-    - active_context: short-lived context for the current effort.
-    - decisions: durable architectural/product decisions and constraints.
-    - spec: source-of-truth requirements used to generate tickets.
-  - `ABOUT_CAR.md`: auto-generated quick reference for interactive sessions (regenerated if the marker is present).
-  - Config: `.codex-autorunner/config.yml` (generated).
-  - State/log: `.codex-autorunner/state.sqlite3`, `.codex-autorunner/codex-autorunner.log`, `.codex-autorunner/codex-server.log`, `.codex-autorunner/lock`.
-  - Hub-only: `.codex-autorunner/manifest.yml`, `.codex-autorunner/hub_state.json`, `.codex-autorunner/codex-autorunner-hub.log`.
-- Root defaults: `codex-autorunner.yml`; local overrides: `codex-autorunner.override.yml` (gitignored).
-- Config precedence: built-ins < `codex-autorunner.yml` < override < `.codex-autorunner/config.yml` < env.
+- Read `docs/car_constitution/61_AGENT_CHEATSHEET.md` first.
+- If the task mentions tickets, contextspace, dispatch, or `.codex-autorunner/`, also read `.codex-autorunner/ABOUT_CAR.md`.
+- If you need runtime setup details, read `.codex-autorunner/DESTINATION_QUICKSTART.md`.
 
-## CLI commands
-- init/run/once/status/log/edit/doctor/kill
-- ticket-flow (bootstrap/start/status/stop/archive; canonical ticket runner CLI)
-- usage
-- sessions/stop-session
-- serve (API/UI)
-- hub: `car hub serve|scan|create` (worktrees via UI/API)
+## Hard Invariants
 
-## Docs
+- Filesystem state is the source of truth.
+- Durable runtime state lives under `.codex-autorunner/`.
+- Keep the layered split intact: protocol-agnostic engine, adapters, surfaces.
+- Prefer deterministic behavior, explicit config, small diffs, and observable failures.
+- Agents can propose and execute, but files decide.
 
-Reference docs in `docs/` (e.g., configuration, operations, debugging).
+## Fast Routing
 
-## Worktree archives
-- Snapshots live under `.codex-autorunner/archive/worktrees/<worktree_repo_id>/<snapshot_id>/` in the base repo.
-- Archives are local runtime artifacts (gitignored, not committed).
-- Worktree cleanup archives by default; failures abort cleanup unless `force_archive` is set.
-- Browse snapshots in the web UI Archive tab (repo view).
-- More details: `docs/ops/worktree-archives.md`.
+- Core engine and config: `src/codex_autorunner/core/`, `docs/car_constitution/10_CODEBASE_CONSTITUTION.md`, `20_ARCHITECTURE_MAP.md`, `30_ENGINEERING_STANDARDS.md`.
+- Web UI frontend: `src/codex_autorunner/static_src/AGENTS.md`, then `src/codex_autorunner/static/AGENTS.md`.
+- Web backend and static asset serving: `src/codex_autorunner/surfaces/web/AGENTS.md`.
+- Frontend and web tests: `tests/AGENTS.md`.
+- Agent protocol work: `src/codex_autorunner/agents/acp/AGENTS.md`.
+- Debugging and ops: `docs/car_constitution/50_OBSERVABILITY_OPERATIONS.md`, `docs/ops/`.
 
-## Python venv
-- Run `make setup` to initialize the venv and dependencies if not already set up.
-- Always use the project venv (`.venv/bin/python`) for running Python and tests.
+## CAR Files
 
-## GitHub CLI
-- Use the `gh` CLI for GitHub interactions whenever possible.
-- Prefer `gh pr create --body-file` (or a here-doc) to preserve PR body newlines.
+- Update tickets only under `.codex-autorunner/tickets/`.
+- Update context docs only under `.codex-autorunner/contextspace/`.
+- Do not create duplicate ticket or context files elsewhere in the repo.
+- Treat `.codex-autorunner/` as intentional structure even when generated or gitignored.
 
-## Git commits
-- Use a 300 second timeout for `git commit` commands so pre-commit hooks can finish.
-- Avoid `--no-verify` and always err on the side of fixing things; if you must use it, ask the user first; if the fix is simple and non-harmful, make the fix and include it in your changes.
+## Repo Defaults
 
-## Releases
-- Release workflow details live in `docs/ops/release.md`.
+- Python: use the project venv, usually via `.venv/bin/python`; run `make setup` if needed.
+- Frontend JS: edit `src/codex_autorunner/static_src/*.ts`, not `src/codex_autorunner/static/generated/*.js`; run `pnpm run build` after TS changes.
+- Prefer `make` targets for common checks.
+- Use `gh` for GitHub operations when possible.
+- Use a 300 second timeout for `git commit`; avoid `--no-verify` unless the user approves.
+- Do not restart launchd services or run refresh scripts yourself; ask the user to do that. Preferred update path is `scripts/safe-refresh-local-mac-hub.sh`.
 
-## Make targets
-- Prefer running common scripts via `make` targets when available.
+## Useful Pointers
 
-## Safe updates (launchd mac hub)
-- Preferred path: `scripts/safe-refresh-local-mac-hub.sh` (staged venv swap, launchd reload, `/health` + static/telegram checks, rollback on failure).
-- `/system/update` and Telegram `/update` use the safe refresh script when available.
-- Common overrides: `UPDATE_TARGET=web|chat|telegram|discord|all`, `HEALTH_CHECK_STATIC=auto|true|false`, `HEALTH_CHECK_TELEGRAM=auto|true|false`, `HEALTH_CHECK_DISCORD=auto|true|false`, `HEALTH_PATH`, `HEALTH_STATIC_PATH`.
-- Do not restart launchd services or run refresh scripts yourself; ask the user to perform restarts.
-
-## Debugging
-- Telegram troubleshooting guide: `docs/ops/telegram-debugging.md`
-
-## Subagent Model Configuration
-- See `docs/adding-an-agent.md` for the review/subagent model setup and YAML example.
-
-## Dogfooding rules
-- We sometimes develop codex-autorunner using itself.
-- Note that `.codex-autorunner/` is auto-generated by the CLI tool.
-- If the UI reports missing static assets, avoid in-place pip/pipx upgrades on the live venv; use the safe refresher and verify `/health`.
-
-## Cursor Cloud specific instructions
-- See `docs/ops/running-in-a-vm.md` for VM/cloud-agent startup caveats, service commands, and known test quirks.
+- Release flow: `docs/ops/release.md`
+- Telegram debugging: `docs/ops/telegram-debugging.md`
+- VM/cloud caveats: `docs/ops/running-in-a-vm.md`
+- Subagent model configuration: `docs/adding-an-agent.md`

@@ -176,6 +176,7 @@ def create_hub_app(
     app.include_router(build_hub_control_plane_routes())
 
     app.state.hub_started = False
+    app.state.hub_deferred_startup_complete = False
     repo_server_overrides: Optional[ServerOverrides] = None
     if context.config.repo_server_inherit:
         repo_server_overrides = ServerOverrides(
@@ -327,25 +328,11 @@ def create_hub_app(
                                 "hub.deferred_startup.phase done=pma_lane_worker elapsed_ms=%.2f",
                                 (time.monotonic() - t_phase) * 1000,
                             )
-                t_phase = time.monotonic()
-                try:
-                    await mount_manager.start_repo_lifespans()
-                except (
-                    OSError,
-                    RuntimeError,
-                    AttributeError,
-                ) as exc:  # intentional: best-effort startup
-                    safe_log(
-                        log,
-                        logging.WARNING,
-                        "Hub repo lifespans failed during deferred startup",
-                        exc,
-                    )
-                else:
-                    log.info(
-                        "hub.deferred_startup.phase done=start_repo_lifespans elapsed_ms=%.2f",
-                        (time.monotonic() - t_phase) * 1000,
-                    )
+                log.info(
+                    "hub.deferred_startup.phase skipped=start_repo_lifespans "
+                    "detail=repo_apps_stay_lazy_until_first_request"
+                )
+                app.state.hub_deferred_startup_complete = True
                 log.info(
                     "hub.deferred_startup.complete total_elapsed_ms=%.2f",
                     (time.monotonic() - t0) * 1000,
@@ -354,10 +341,11 @@ def create_hub_app(
             tasks.append(asyncio.create_task(_deferred_hub_startup()))
             if app.state.config.housekeeping.enabled:
                 interval = max(app.state.config.housekeeping.interval_seconds, 1)
-                initial_delay = min(interval, 60)
+                housekeeping_initial_delay = min(interval, 60)
+                docker_reaper_initial_delay = 60
 
                 async def _managed_docker_reaper_loop():
-                    await asyncio.sleep(initial_delay)
+                    await asyncio.sleep(docker_reaper_initial_delay)
                     while True:
                         try:
                             await asyncio.to_thread(
@@ -380,6 +368,7 @@ def create_hub_app(
                         await asyncio.sleep(interval)
 
                 async def _housekeeping_loop():
+                    await asyncio.sleep(housekeeping_initial_delay)
                     while True:
                         try:
                             try:
@@ -465,9 +454,10 @@ def create_hub_app(
                     app.state.config.repo_defaults,
                     app.state.logger,
                 )
+                flow_sweep_initial_delay = min(flow_sweep_interval, 60)
 
                 async def _flow_telemetry_sweep_loop():
-                    await asyncio.sleep(initial_delay)
+                    await asyncio.sleep(flow_sweep_initial_delay)
                     while True:
                         try:
                             from ...core.flows.flow_telemetry_hooks import (
@@ -630,8 +620,8 @@ def create_hub_app(
 
             tasks.append(asyncio.create_task(_process_monitor_loop()))
             # Default lane worker starts in _deferred_hub_startup so /health is not blocked.
-            # Eager repo lifespans run there too; until then, /repos/* still activates via
-            # _LazyRepoApp._ensure_ready when hub_started is True.
+            # Repo apps stay lazy and still activate via _LazyRepoApp._ensure_ready once
+            # hub_started is True.
             startup_completed = True
             try:
                 yield

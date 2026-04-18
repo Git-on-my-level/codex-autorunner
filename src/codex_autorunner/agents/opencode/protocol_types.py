@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from codex_autorunner.core.orchestration.runtime_payload_shapes import TokenUsageShape
+
 
 @dataclass(frozen=True)
 class TextPart:
@@ -26,6 +28,19 @@ class UsagePart:
     reasoning_tokens: Optional[int] = None
     cached_tokens: Optional[int] = None
     context_window: Optional[int] = None
+
+    @property
+    def typed_usage(self) -> TokenUsageShape:
+        if not self.total_tokens and not self.input_tokens and not self.output_tokens:
+            return TokenUsageShape.from_raw(self.usage)
+        return TokenUsageShape(
+            total_tokens=self.total_tokens,
+            input_tokens=self.input_tokens,
+            output_tokens=self.output_tokens,
+            cached_tokens=self.cached_tokens,
+            reasoning_tokens=self.reasoning_tokens,
+            context_window=self.context_window,
+        )
 
 
 @dataclass(frozen=True)
@@ -65,6 +80,10 @@ class UsageEvent:
     usage: dict[str, Any]
     provider_id: Optional[str] = None
     model_id: Optional[str] = None
+
+    @property
+    def typed_usage(self) -> TokenUsageShape:
+        return TokenUsageShape.from_raw(self.usage)
 
 
 @dataclass(frozen=True)

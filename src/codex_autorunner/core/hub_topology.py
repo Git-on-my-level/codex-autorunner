@@ -436,24 +436,20 @@ def save_hub_state(
     state_path: Path,
     state: HubState,
     hub_root: Path,
-    *,
-    refresh_pma_threads_artifact: bool = True,
 ) -> None:
     payload = state.to_dict(hub_root)
     atomic_write(state_path, json.dumps(payload, indent=2) + "\n")
-    if refresh_pma_threads_artifact:
-        try:
-            _save_pma_threads_artifact(hub_root)
-        except (OSError, ValueError, TypeError) as exc:
-            logger.warning("Failed to write PMA thread snapshot artifact: %s", exc)
 
 
-def _save_pma_threads_artifact(hub_root: Path) -> None:
-    from .pma_context import _snapshot_pma_threads
+def refresh_pma_threads_artifact(hub_root: Path) -> None:
+    try:
+        from .pma_context import _snapshot_pma_threads
 
-    payload = {
-        "generated_at": now_iso(),
-        "threads": _snapshot_pma_threads(hub_root),
-    }
-    artifact_path = hub_root / ".codex-autorunner" / "pma_threads.json"
-    atomic_write(artifact_path, json.dumps(payload, indent=2) + "\n")
+        payload = {
+            "generated_at": now_iso(),
+            "threads": _snapshot_pma_threads(hub_root),
+        }
+        artifact_path = hub_root / ".codex-autorunner" / "pma_threads.json"
+        atomic_write(artifact_path, json.dumps(payload, indent=2) + "\n")
+    except (OSError, ValueError, TypeError) as exc:
+        logger.warning("Failed to write PMA thread snapshot artifact: %s", exc)

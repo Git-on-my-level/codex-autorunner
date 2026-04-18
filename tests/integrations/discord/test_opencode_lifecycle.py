@@ -571,3 +571,32 @@ async def test_discord_orchestrator_shares_workspace_opencode_supervisor(
         )
     finally:
         await store.close()
+
+
+@pytest.mark.anyio
+async def test_opencode_prune_interval_uses_longer_fallback_when_no_supervisors(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test.discord.opencode.empty"),
+        rest_client=_FakeRest(),
+        gateway_client=_FakeGateway(),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        interval = await service._next_opencode_prune_interval_seconds()
+        assert (
+            interval
+            == discord_service_module.DISCORD_OPENCODE_PRUNE_EMPTY_INTERVAL_SECONDS
+        )
+        assert (
+            interval
+            > discord_service_module.DISCORD_OPENCODE_PRUNE_FALLBACK_INTERVAL_SECONDS
+        )
+    finally:
+        await store.close()

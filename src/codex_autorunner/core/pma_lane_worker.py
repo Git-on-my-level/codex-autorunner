@@ -4,6 +4,7 @@ import asyncio
 import logging
 from typing import Any, Awaitable, Callable, Optional
 
+from .diagnostics.loop_attribution import track_loop
 from .pma_queue import PmaQueue, PmaQueueItem
 
 logger = logging.getLogger(__name__)
@@ -75,53 +76,61 @@ class PmaLaneWorker:
                 )
                 continue
 
-            if self._cancel_event.is_set():
-                await self._queue.fail_item(item, "cancelled by lane stop")
-                await self._notify(item, {"status": "error", "detail": "lane stopped"})
-                continue
+            with track_loop(f"pma.lane_worker.{self.lane_id}") as scope:
+                scope.record_db_read(1)
+                scope.mark_productive()
 
-            self._log.info(
-                "PMA lane item started (lane_id=%s item_id=%s)",
-                self.lane_id,
-                item.item_id,
-            )
-            item_terminalized = False
-            try:
-                result = await self._executor(item)
-                await self._queue.complete_item(item, result)
-                item_terminalized = True
+                if self._cancel_event.is_set():
+                    await self._queue.fail_item(item, "cancelled by lane stop")
+                    await self._notify(
+                        item, {"status": "error", "detail": "lane stopped"}
+                    )
+                    continue
+
                 self._log.info(
-                    "PMA lane item completed (lane_id=%s item_id=%s status=%s)",
+                    "PMA lane item started (lane_id=%s item_id=%s)",
                     self.lane_id,
                     item.item_id,
-                    result.get("status") if isinstance(result, dict) else None,
                 )
-                await self._notify(item, result)
-            except (
-                BaseException
-            ) as exc:  # intentional: executor is a user-provided callback
-                self._log.exception("Failed to process PMA queue item %s", item.item_id)
-                detail = str(exc).strip() or "PMA lane item terminated unexpectedly"
-                error_result = {"status": "error", "detail": detail}
-                if not item_terminalized:
-                    try:
-                        await self._queue.fail_item(item, detail)
-                        item_terminalized = True
-                    except Exception:
-                        self._log.exception(
-                            "Failed to persist PMA queue failure (lane_id=%s item_id=%s)",
-                            self.lane_id,
-                            item.item_id,
-                        )
-                self._log.info(
-                    "PMA lane item failed (lane_id=%s item_id=%s error=%s)",
-                    self.lane_id,
-                    item.item_id,
-                    detail,
-                )
-                await self._notify(item, error_result)
-                if isinstance(exc, asyncio.CancelledError):
-                    raise
+                item_terminalized = False
+                try:
+                    result = await self._executor(item)
+                    await self._queue.complete_item(item, result)
+                    item_terminalized = True
+                    self._log.info(
+                        "PMA lane item completed (lane_id=%s item_id=%s status=%s)",
+                        self.lane_id,
+                        item.item_id,
+                        result.get("status") if isinstance(result, dict) else None,
+                    )
+                    await self._notify(item, result)
+                except (
+                    BaseException
+                ) as exc:  # intentional: executor is a user-provided callback
+                    self._log.exception(
+                        "Failed to process PMA queue item %s", item.item_id
+                    )
+                    detail = str(exc).strip() or "PMA lane item terminated unexpectedly"
+                    error_result = {"status": "error", "detail": detail}
+                    if not item_terminalized:
+                        try:
+                            await self._queue.fail_item(item, detail)
+                            item_terminalized = True
+                        except Exception:
+                            self._log.exception(
+                                "Failed to persist PMA queue failure (lane_id=%s item_id=%s)",
+                                self.lane_id,
+                                item.item_id,
+                            )
+                    self._log.info(
+                        "PMA lane item failed (lane_id=%s item_id=%s error=%s)",
+                        self.lane_id,
+                        item.item_id,
+                        detail,
+                    )
+                    await self._notify(item, error_result)
+                    if isinstance(exc, asyncio.CancelledError):
+                        raise
 
     async def _notify(self, item: PmaQueueItem, result: dict[str, Any]) -> None:
         if self._on_result is None:

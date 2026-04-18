@@ -26,7 +26,10 @@ from ....core.force_attestation import FORCE_ATTESTATION_REQUIRED_PHRASE
 from ....core.locks import process_alive, process_command_matches
 from ....core.managed_processes import reap_managed_processes
 from ....core.managed_processes.registry import list_process_records
-from ....core.pytest_temp_cleanup import cleanup_repo_pytest_temp_runs
+from ....core.pytest_temp_cleanup import (
+    cleanup_repo_managed_temp_paths,
+    cleanup_repo_pytest_temp_runs,
+)
 from ....core.report_retention import (
     DEFAULT_REPORT_MAX_HISTORY_FILES,
     DEFAULT_REPORT_MAX_TOTAL_BYTES,
@@ -34,22 +37,33 @@ from ....core.report_retention import (
 )
 from ....core.runtime import RuntimeContext
 from ....core.state_retention import (
+    GLOBAL_LOGS_BUCKET,
+    GLOBAL_UPDATE_CACHE_BUCKET,
+    GLOBAL_WORKSPACE_BUCKET,
+    REPO_FILEBOX_BUCKET,
+    REPO_GITHUB_CONTEXT_BUCKET,
+    REPO_LOGS_BUCKET,
+    REPO_REPORTS_BUCKET,
+    REPO_REVIEW_RUNS_BUCKET,
+    REPO_RUN_ARCHIVE_BUCKET,
+    REPO_UPLOADS_BUCKET,
+    REPO_WORKSPACE_BUCKET,
+    REPO_WORKTREE_ARCHIVE_BUCKET,
     CleanupPlan,
     CleanupReason,
     CleanupResult,
     RetentionBucket,
-    RetentionClass,
     RetentionScope,
     adapt_archive_prune_summary_to_result,
     adapt_filebox_prune_summary_to_result,
     adapt_housekeeping_rule_result_to_result,
     adapt_report_prune_summary_to_result,
+    adapt_workspace_summary_to_result,
     aggregate_cleanup_results,
 )
 from ....core.state_roots import resolve_global_state_root
 from ....housekeeping import HousekeepingConfig, HousekeepingRule, run_housekeeping_once
 from ....integrations.app_server.retention import (
-    adapt_workspace_summary_to_result,
     prune_workspace_root,
     resolve_global_workspace_root,
     resolve_repo_workspace_root,
@@ -258,6 +272,39 @@ def register_cleanup_commands(
         for detail in summary.failed_paths:
             typer.echo(f"FAILED {detail}")
 
+    @cleanup_app.command("temp-roots")
+    def cleanup_temp_roots(
+        repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
+        hub: Optional[Path] = hub_root_path_option(),
+        dry_run: bool = typer.Option(
+            False,
+            "--dry-run",
+            help="Preview CAR temp-root cleanup without deleting inactive roots.",
+        ),
+    ) -> None:
+        """Prune stale CAR-managed temp roots outside repo-local state."""
+        engine = require_repo_config(repo, hub)
+        summary = cleanup_repo_managed_temp_paths(engine.repo_root, dry_run=dry_run)
+        prefix = "Dry run: " if dry_run else ""
+        typer.echo(
+            prefix
+            + "temp root cleanup: "
+            + " ".join(
+                [
+                    f"scanned={summary.scanned}",
+                    f"deleted={summary.deleted}",
+                    f"active={summary.active}",
+                    f"failed={summary.failed}",
+                    f"bytes_before={summary.bytes_before}",
+                    f"bytes_after={summary.bytes_after}",
+                ]
+            )
+        )
+        for path in summary.active_paths:
+            typer.echo(f"ACTIVE {path}")
+        for detail in summary.failed_paths:
+            typer.echo(f"FAILED {detail}")
+
     @cleanup_app.command("state")
     def cleanup_state(
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
@@ -291,11 +338,6 @@ def register_cleanup_commands(
         repo_root = engine.repo_root
         _run_repo_housekeeping_cleanup(engine, dry_run, results)
 
-        worktree_archive_bucket = RetentionBucket(
-            family="worktree_archives",
-            scope=RetentionScope.REPO,
-            retention_class=RetentionClass.REVIEWABLE,
-        )
         worktree_summary = prune_worktree_archive_root(
             repo_root / ".codex-autorunner" / "archive" / "worktrees",
             policy=resolve_worktree_archive_retention_policy(engine.config.pma),
@@ -303,15 +345,10 @@ def register_cleanup_commands(
         )
         results.append(
             adapt_archive_prune_summary_to_result(
-                worktree_summary, worktree_archive_bucket, dry_run=dry_run
+                worktree_summary, REPO_WORKTREE_ARCHIVE_BUCKET, dry_run=dry_run
             )
         )
 
-        run_archive_bucket = RetentionBucket(
-            family="run_archives",
-            scope=RetentionScope.REPO,
-            retention_class=RetentionClass.REVIEWABLE,
-        )
         run_summary = prune_run_archive_root(
             repo_root / ".codex-autorunner" / "archive" / "runs",
             policy=resolve_run_archive_retention_policy(engine.config.pma),
@@ -319,15 +356,10 @@ def register_cleanup_commands(
         )
         results.append(
             adapt_archive_prune_summary_to_result(
-                run_summary, run_archive_bucket, dry_run=dry_run
+                run_summary, REPO_RUN_ARCHIVE_BUCKET, dry_run=dry_run
             )
         )
 
-        filebox_bucket = RetentionBucket(
-            family="filebox",
-            scope=RetentionScope.REPO,
-            retention_class=RetentionClass.EPHEMERAL,
-        )
         filebox_summary = prune_filebox_root(
             repo_root,
             policy=resolve_filebox_retention_policy(engine.config.pma),
@@ -336,15 +368,10 @@ def register_cleanup_commands(
         )
         results.append(
             adapt_filebox_prune_summary_to_result(
-                filebox_summary, filebox_bucket, dry_run=dry_run
+                filebox_summary, REPO_FILEBOX_BUCKET, dry_run=dry_run
             )
         )
 
-        reports_bucket = RetentionBucket(
-            family="reports",
-            scope=RetentionScope.REPO,
-            retention_class=RetentionClass.REVIEWABLE,
-        )
         reports_dir = repo_root / ".codex-autorunner" / "reports"
         report_summary = prune_report_directory(
             reports_dir,
@@ -354,15 +381,10 @@ def register_cleanup_commands(
         )
         results.append(
             adapt_report_prune_summary_to_result(
-                report_summary, reports_bucket, dry_run=dry_run
+                report_summary, REPO_REPORTS_BUCKET, dry_run=dry_run
             )
         )
 
-        repo_workspace_bucket = RetentionBucket(
-            family="workspaces",
-            scope=RetentionScope.REPO,
-            retention_class=RetentionClass.EPHEMERAL,
-        )
         repo_workspace_root = resolve_repo_workspace_root(repo_root)
         active_workspace_ids, locked_workspace_ids, current_workspace_ids = (
             _resolve_workspace_guards(
@@ -380,7 +402,7 @@ def register_cleanup_commands(
         )
         results.append(
             adapt_workspace_summary_to_result(
-                repo_workspace_summary, repo_workspace_bucket, dry_run=dry_run
+                repo_workspace_summary, REPO_WORKSPACE_BUCKET, dry_run=dry_run
             )
         )
 
@@ -389,11 +411,6 @@ def register_cleanup_commands(
     ) -> None:
         _run_global_housekeeping_cleanup(engine, dry_run, results)
 
-        global_workspace_bucket = RetentionBucket(
-            family="workspaces",
-            scope=RetentionScope.GLOBAL,
-            retention_class=RetentionClass.EPHEMERAL,
-        )
         global_workspace_root = _resolve_global_cleanup_workspace_root(engine)
         try:
             active_workspace_ids, locked_workspace_ids, current_workspace_ids = (
@@ -404,7 +421,7 @@ def register_cleanup_commands(
         except RuntimeError as exc:
             results.append(
                 _make_skipped_cleanup_result(
-                    global_workspace_bucket,
+                    GLOBAL_WORKSPACE_BUCKET,
                     error=str(exc),
                 )
             )
@@ -420,7 +437,7 @@ def register_cleanup_commands(
         )
         results.append(
             adapt_workspace_summary_to_result(
-                global_workspace_summary, global_workspace_bucket, dry_run=dry_run
+                global_workspace_summary, GLOBAL_WORKSPACE_BUCKET, dry_run=dry_run
             )
         )
 
@@ -434,11 +451,7 @@ def register_cleanup_commands(
             specs=(
                 (
                     "run_logs",
-                    RetentionBucket(
-                        family="logs",
-                        scope=RetentionScope.REPO,
-                        retention_class=RetentionClass.EPHEMERAL,
-                    ),
+                    REPO_LOGS_BUCKET,
                     CleanupReason.AGE_LIMIT,
                     True,
                     False,
@@ -446,11 +459,7 @@ def register_cleanup_commands(
                 ),
                 (
                     "terminal_image_uploads",
-                    RetentionBucket(
-                        family="uploads",
-                        scope=RetentionScope.REPO,
-                        retention_class=RetentionClass.EPHEMERAL,
-                    ),
+                    REPO_UPLOADS_BUCKET,
                     CleanupReason.AGE_LIMIT,
                     True,
                     False,
@@ -458,11 +467,7 @@ def register_cleanup_commands(
                 ),
                 (
                     "telegram_images",
-                    RetentionBucket(
-                        family="uploads",
-                        scope=RetentionScope.REPO,
-                        retention_class=RetentionClass.EPHEMERAL,
-                    ),
+                    REPO_UPLOADS_BUCKET,
                     CleanupReason.AGE_LIMIT,
                     True,
                     False,
@@ -470,11 +475,7 @@ def register_cleanup_commands(
                 ),
                 (
                     "telegram_voice",
-                    RetentionBucket(
-                        family="uploads",
-                        scope=RetentionScope.REPO,
-                        retention_class=RetentionClass.EPHEMERAL,
-                    ),
+                    REPO_UPLOADS_BUCKET,
                     CleanupReason.AGE_LIMIT,
                     True,
                     False,
@@ -482,11 +483,7 @@ def register_cleanup_commands(
                 ),
                 (
                     "telegram_files",
-                    RetentionBucket(
-                        family="uploads",
-                        scope=RetentionScope.REPO,
-                        retention_class=RetentionClass.EPHEMERAL,
-                    ),
+                    REPO_UPLOADS_BUCKET,
                     CleanupReason.AGE_LIMIT,
                     True,
                     False,
@@ -494,11 +491,7 @@ def register_cleanup_commands(
                 ),
                 (
                     "github_context",
-                    RetentionBucket(
-                        family="github_context",
-                        scope=RetentionScope.REPO,
-                        retention_class=RetentionClass.REVIEWABLE,
-                    ),
+                    REPO_GITHUB_CONTEXT_BUCKET,
                     CleanupReason.AGE_LIMIT,
                     True,
                     False,
@@ -506,11 +499,7 @@ def register_cleanup_commands(
                 ),
                 (
                     "review_runs",
-                    RetentionBucket(
-                        family="review_runs",
-                        scope=RetentionScope.REPO,
-                        retention_class=RetentionClass.REVIEWABLE,
-                    ),
+                    REPO_REVIEW_RUNS_BUCKET,
                     CleanupReason.AGE_LIMIT,
                     True,
                     False,
@@ -529,11 +518,7 @@ def register_cleanup_commands(
             specs=(
                 (
                     "update_cache",
-                    RetentionBucket(
-                        family="update_cache",
-                        scope=RetentionScope.GLOBAL,
-                        retention_class=RetentionClass.CACHE_ONLY,
-                    ),
+                    GLOBAL_UPDATE_CACHE_BUCKET,
                     CleanupReason.CACHE_REBUILDABLE,
                     False,
                     True,
@@ -541,16 +526,13 @@ def register_cleanup_commands(
                 ),
                 (
                     "update_log",
-                    RetentionBucket(
-                        family="logs",
-                        scope=RetentionScope.GLOBAL,
-                        retention_class=RetentionClass.EPHEMERAL,
-                    ),
+                    GLOBAL_LOGS_BUCKET,
                     CleanupReason.AGE_LIMIT,
                     False,
                     True,
-                    lambda ctx: _resolve_global_cleanup_root(ctx)
-                    / "update-standalone.log",
+                    lambda ctx: (
+                        _resolve_global_cleanup_root(ctx) / "update-standalone.log"
+                    ),
                 ),
             ),
         )

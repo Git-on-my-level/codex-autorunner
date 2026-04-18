@@ -282,6 +282,17 @@ class TurnProgressTracker:
         )
         self.update_action_raw(self.last_output_index, self.output_buffer, "update")
 
+    def note_commentary(self, text: str) -> None:
+        commentary_text = _normalize_output_text(text)
+        if not commentary_text.strip():
+            return
+        self.add_action(
+            "commentary",
+            commentary_text,
+            "update",
+            normalize_text=False,
+        )
+
     def note_command(self, text: str) -> None:
         normalized = _normalize_inline_text(text)
         if not normalized:
@@ -345,7 +356,7 @@ def render_progress_text(
         actions = [
             action
             for action in tracker.actions
-            if action.label not in {"thinking", "tool", "command"}
+            if action.label not in {"thinking", "tool", "command", "commentary"}
         ]
         if tracker.max_actions > 0:
             actions = actions[-tracker.max_actions :]
@@ -399,7 +410,7 @@ def render_progress_text(
             block = [f"🧠 {action.text}"]
             if blocks:
                 block.insert(0, "")
-        elif action.label == "output":
+        elif action.label in {"output", "commentary"}:
             output_lines = action.text.split("\n")
             if not output_lines:
                 block = [action.text]

@@ -306,6 +306,27 @@ def test_final_mode_keeps_output_even_when_compact_window_excludes_it() -> None:
     assert "files:" not in rendered
 
 
+def test_render_progress_text_keeps_commentary_live_only() -> None:
+    tracker = TurnProgressTracker(
+        started_at=0.0,
+        agent="codex",
+        model="mock-model",
+        label="working",
+        max_actions=10,
+        max_output_chars=500,
+    )
+    tracker.note_output("streamed output")
+    tracker.note_commentary("interim commentary block")
+
+    live = render_progress_text(tracker, max_length=2000, now=1.0)
+    final = render_progress_text(tracker, max_length=2000, now=1.0, render_mode="final")
+
+    assert "streamed output" in live
+    assert "interim commentary block" in live
+    assert "streamed output" in final
+    assert "interim commentary block" not in final
+
+
 def test_final_mode_uses_consolidated_output_after_interleaved_actions() -> None:
     tracker = TurnProgressTracker(
         started_at=0.0,

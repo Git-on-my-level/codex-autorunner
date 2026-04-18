@@ -22,7 +22,6 @@ import {
   sendFileChat,
   interruptFileChat,
   newClientTurnId,
-  streamTurnEvents,
   type FileChatUpdate,
 } from "./fileChat.js";
 import { DocEditor } from "./docEditor.js";
@@ -33,8 +32,13 @@ import { renderDiff } from "./diffRenderer.js";
 import { subscribe } from "./bus.js";
 import { DEFAULT_FILEBOX_BOX } from "./fileboxCatalog.js";
 import { isRepoHealthy } from "./health.js";
-import { loadPendingTurn, savePendingTurn, clearPendingTurn } from "./turnResume.js";
+import { loadPendingTurn, savePendingTurn } from "./turnResume.js";
 import { resumeFileChatTurn } from "./turnEvents.js";
+import {
+  createTurnEventsController,
+  startTurnEventsStream as sharedStartTurnEventsStream,
+  clearManagedTurn,
+} from "./sharedTurnLifecycle.js";
 
 type ContextspaceDoc = {
   kind: string;
@@ -90,7 +94,7 @@ const workspaceChat = createDocChat({
   },
 });
 
-let currentTurnEventsController: AbortController | null = null;
+const turnEventsCtrl = createTurnEventsController();
 
 function els() {
   return {
@@ -473,19 +477,8 @@ async function discardWorkspaceDraft(): Promise<void> {
   }
 }
 
-function clearTurnEventsStream(): void {
-  if (!currentTurnEventsController) return;
-  try {
-    currentTurnEventsController.abort();
-  } catch {
-    // ignore
-  }
-  currentTurnEventsController = null;
-}
-
 function clearPendingTurnState(): void {
-  clearTurnEventsStream();
-  clearPendingTurn(CONTEXTSPACE_PENDING_KEY);
+  clearManagedTurn(turnEventsCtrl, CONTEXTSPACE_PENDING_KEY);
 }
 
 function maybeStartTurnEventsFromUpdate(update: FileChatUpdate): void {
@@ -494,17 +487,13 @@ function maybeStartTurnEventsFromUpdate(update: FileChatUpdate): void {
   const turnId = typeof meta.turn_id === "string" ? meta.turn_id : "";
   const agent = typeof meta.agent === "string" ? meta.agent : undefined;
   if (!threadId || !turnId) return;
-  clearTurnEventsStream();
-  currentTurnEventsController = streamTurnEvents(
-    { agent, threadId, turnId },
-    {
-      onEvent: (event) => {
-        workspaceChat.applyAppEvent(event);
-        workspaceChat.renderEvents();
-        workspaceChat.render();
-      },
-    }
-  );
+  sharedStartTurnEventsStream(turnEventsCtrl, { agent, threadId, turnId }, {
+    onEvent: (event) => {
+      workspaceChat.applyAppEvent(event);
+      workspaceChat.renderEvents();
+      workspaceChat.render();
+    },
+  });
 }
 
 function applyChatUpdate(update: FileChatUpdate): void {
@@ -598,7 +587,7 @@ async function resumePendingWorkspaceTurn(): Promise<void> {
         workspaceChat.render();
       },
     });
-    currentTurnEventsController = outcome.controller;
+    turnEventsCtrl.current = outcome.controller;
     if (outcome.lastResult && (outcome.lastResult as Record<string, unknown>).status) {
       applyFinalResult(outcome.lastResult as Record<string, unknown>);
       return;
@@ -637,7 +626,7 @@ async function sendChat(): Promise<void> {
   if (chatInput) chatInput.value = "";
   chatSend?.setAttribute("disabled", "true");
   chatCancel?.classList.remove("hidden");
-  clearTurnEventsStream();
+  turnEventsCtrl.abort();
 
   const clientTurnId = newClientTurnId("contextspace");
   savePendingTurn(CONTEXTSPACE_PENDING_KEY, {

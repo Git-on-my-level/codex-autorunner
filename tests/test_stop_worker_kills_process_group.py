@@ -11,6 +11,7 @@ from typer.testing import CliRunner
 from codex_autorunner.core.flows import worker_process
 from codex_autorunner.core.flows.models import FlowRunRecord, FlowRunStatus
 from codex_autorunner.core.orchestration.models import FlowRunTarget
+from codex_autorunner.flows.ticket_flow import runtime_helpers
 from codex_autorunner.surfaces.cli.commands import flow as flow_module
 
 
@@ -109,8 +110,12 @@ def _build_ticket_flow_app(
         "build_ticket_flow_orchestration_service",
         lambda *, workspace_root: _FakeFlowService(),
     )
-    monkeypatch.setattr(flow_module, "check_worker_health", lambda *_a, **_k: health)
-    monkeypatch.setattr(flow_module, "clear_worker_metadata", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        runtime_helpers, "check_worker_health", lambda *_a, **_k: health
+    )
+    monkeypatch.setattr(
+        runtime_helpers, "clear_worker_metadata", lambda *_a, **_k: None
+    )
 
     flow_app = typer.Typer(add_completion=False)
     ticket_flow_app = typer.Typer(add_completion=False)

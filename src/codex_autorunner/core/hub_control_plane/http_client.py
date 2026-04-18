@@ -72,6 +72,10 @@ from .models import (
 )
 
 _USE_CLIENT_DEFAULT_TIMEOUT = object()
+_SURFACE_BINDING_TIMEOUT_SECONDS = 30.0
+_THREAD_TARGET_CREATE_TIMEOUT_SECONDS = 30.0
+_EXECUTION_BACKEND_ID_TIMEOUT_SECONDS = 30.0
+_EXECUTION_RESULT_TIMEOUT_SECONDS = 30.0
 
 
 def _normalize_base_url(base_url: str) -> str:
@@ -165,6 +169,13 @@ class HttpHubControlPlaneClient(HubControlPlaneClient):
         with contextlib.suppress(RuntimeError, OSError):
             await client.aclose()
 
+    @staticmethod
+    def _format_transport_error(exc: httpx.RequestError) -> str:
+        message = str(exc).strip()
+        if message:
+            return message
+        return exc.__class__.__name__
+
     async def _request(
         self,
         *,
@@ -189,7 +200,8 @@ class HttpHubControlPlaneClient(HubControlPlaneClient):
         except httpx.RequestError as exc:
             raise HubControlPlaneError(
                 "transport_failure",
-                f"Hub control-plane transport request failed: {exc}",
+                "Hub control-plane transport request failed: "
+                f"{self._format_transport_error(exc)}",
                 details={"path": path, "method": method},
             ) from exc
         try:
@@ -245,7 +257,8 @@ class HttpHubControlPlaneClient(HubControlPlaneClient):
         except httpx.RequestError as exc:
             raise HubControlPlaneError(
                 "transport_failure",
-                f"Hub control-plane transport request failed: {exc}",
+                "Hub control-plane transport request failed: "
+                f"{self._format_transport_error(exc)}",
                 details={"path": path, "method": method},
             ) from exc
         if response.is_success:
@@ -324,6 +337,7 @@ class HttpHubControlPlaneClient(HubControlPlaneClient):
             method="GET",
             path="/hub/api/control-plane/surface-bindings",
             params=request.to_dict(),
+            timeout=_SURFACE_BINDING_TIMEOUT_SECONDS,
         )
         return SurfaceBindingResponse.from_mapping(payload)
 
@@ -334,6 +348,7 @@ class HttpHubControlPlaneClient(HubControlPlaneClient):
             method="PUT",
             path="/hub/api/control-plane/surface-bindings",
             json_payload=request.to_dict(),
+            timeout=_SURFACE_BINDING_TIMEOUT_SECONDS,
         )
         return SurfaceBindingResponse.from_mapping(payload)
 
@@ -421,6 +436,7 @@ class HttpHubControlPlaneClient(HubControlPlaneClient):
             method="POST",
             path="/hub/api/control-plane/thread-targets",
             json_payload=request.to_dict(),
+            timeout=_THREAD_TARGET_CREATE_TIMEOUT_SECONDS,
         )
         return ThreadTargetResponse.from_mapping(payload)
 
@@ -525,6 +541,7 @@ class HttpHubControlPlaneClient(HubControlPlaneClient):
                 f"{request.thread_target_id}/executions/{request.execution_id}/result"
             ),
             json_payload=request.to_dict(),
+            timeout=_EXECUTION_RESULT_TIMEOUT_SECONDS,
         )
         return ExecutionResponse.from_mapping(payload)
 
@@ -562,6 +579,7 @@ class HttpHubControlPlaneClient(HubControlPlaneClient):
                 f"{request.execution_id}/backend-id"
             ),
             json_payload=request.to_dict(),
+            timeout=_EXECUTION_BACKEND_ID_TIMEOUT_SECONDS,
         )
 
     async def claim_next_queued_execution(

@@ -6,8 +6,13 @@ from pathlib import Path
 import pytest
 
 from codex_autorunner.integrations.telegram.adapter import (
+    CompactCallback,
+    EffortCallback,
     TelegramCallbackQuery,
     UpdateConfirmCallback,
+)
+from codex_autorunner.integrations.telegram.handlers.commands.agent_model_utils import (
+    _send_agent_picker,
 )
 from codex_autorunner.integrations.telegram.handlers.commands.execution import (
     ExecutionCommands,
@@ -19,11 +24,16 @@ from codex_autorunner.integrations.telegram.handlers.commands_runtime import (
 from codex_autorunner.integrations.telegram.handlers.selections import (
     TelegramSelectionHandlers,
 )
+from codex_autorunner.integrations.telegram.helpers import ModelOption
 from codex_autorunner.integrations.telegram.types import (
+    CompactState,
     CompactStatusState,
+    ModelPendingState,
+    SelectionState,
     TelegramNoticeContext,
     UpdateConfirmState,
 )
+from codex_autorunner.integrations.telegram.ui_state import TelegramUiState
 
 
 class _ExecutionProgressHandler(ExecutionCommands):
@@ -49,8 +59,18 @@ class _ExecutionFallbackHandler(_ExecutionProgressHandler):
 
 
 class _UpdateConfirmHandler(TelegramSelectionHandlers):
-    def __init__(self, *, target: str | None) -> None:
-        self._update_confirm_options = {"10:20": UpdateConfirmState(target=target)}
+    def __init__(
+        self,
+        *,
+        target: str | None,
+        requester_user_id: str | None = None,
+    ) -> None:
+        self._update_confirm_options = {
+            "10:20": UpdateConfirmState(
+                target=target,
+                requester_user_id=requester_user_id,
+            )
+        }
         self.answers: list[str] = []
         self.finalized: list[str] = []
         self.started: list[dict[str, object]] = []
@@ -123,11 +143,88 @@ class _CompactStatusHandler(TelegramCommandHandlers):
         )
 
 
-def _callback() -> TelegramCallbackQuery:
+class _CompactCallbackHandler(TelegramCommandHandlers):
+    def __init__(self, state: CompactState | None) -> None:
+        self._compact_pending = {"10:20": state} if state is not None else {}
+        self.answers: list[str] = []
+
+    @staticmethod
+    def _selection_belongs_to_user(state: object, user_id: str | None) -> bool:
+        expected = getattr(state, "requester_user_id", None)
+        if expected is None:
+            return True
+        return isinstance(expected, str) and expected == user_id
+
+    async def _answer_callback(
+        self, _callback: TelegramCallbackQuery, text: str
+    ) -> None:
+        self.answers.append(text)
+
+
+class _ModelEffortHandler(TelegramSelectionHandlers):
+    def __init__(self, requester_user_id: str | None) -> None:
+        self._model_pending = {
+            "10:20": ModelPendingState(
+                option=ModelOption(
+                    model_id="gpt-5.4",
+                    label="GPT-5.4",
+                    efforts=("medium", "high"),
+                    default_effort="medium",
+                ),
+                requester_user_id=requester_user_id,
+            )
+        }
+        self.answers: list[str] = []
+
+    async def _answer_callback(
+        self, _callback: TelegramCallbackQuery, text: str
+    ) -> None:
+        self.answers.append(text)
+
+
+class _AgentPickerStub:
+    def __init__(self) -> None:
+        self._agent_options: dict[str, SelectionState] = {}
+        self.cache_touches: list[tuple[str, str]] = []
+        self.sent_messages: list[dict[str, object]] = []
+
+    def _opencode_available(self) -> bool:
+        return True
+
+    def _build_agent_keyboard(self, state: SelectionState) -> dict[str, object]:
+        return {"state_owner": state.requester_user_id}
+
+    def _touch_cache_timestamp(self, cache_name: str, key: str) -> None:
+        self.cache_touches.append((cache_name, key))
+
+    def _selection_prompt(self, prompt: str, _state: SelectionState) -> str:
+        return prompt
+
+    async def _send_message(
+        self,
+        chat_id: int,
+        text: str,
+        *,
+        thread_id: int | None,
+        reply_to: int | None,
+        reply_markup: object = None,
+    ) -> None:
+        self.sent_messages.append(
+            {
+                "chat_id": chat_id,
+                "text": text,
+                "thread_id": thread_id,
+                "reply_to": reply_to,
+                "reply_markup": reply_markup,
+            }
+        )
+
+
+def _callback(*, from_user_id: int = 99) -> TelegramCallbackQuery:
     return TelegramCallbackQuery(
         update_id=1,
         callback_id="cb-1",
-        from_user_id=99,
+        from_user_id=from_user_id,
         data="confirm",
         message_id=7,
         chat_id=10,
@@ -202,7 +299,7 @@ def test_compact_status_state_round_trips_payload() -> None:
 
 @pytest.mark.anyio
 async def test_update_confirm_callback_uses_typed_target_state() -> None:
-    handler = _UpdateConfirmHandler(target="web")
+    handler = _UpdateConfirmHandler(target="web", requester_user_id="99")
 
     await handler._handle_update_confirm_callback(
         "10:20",
@@ -220,6 +317,156 @@ async def test_update_confirm_callback_uses_typed_target_state() -> None:
         }
     ]
     assert handler.prompted == 0
+
+
+@pytest.mark.anyio
+async def test_update_confirm_callback_rejects_other_user() -> None:
+    handler = _UpdateConfirmHandler(target="web", requester_user_id="101")
+
+    await handler._handle_update_confirm_callback(
+        "10:20",
+        _callback(),
+        UpdateConfirmCallback(decision="yes"),
+    )
+
+    assert handler.answers == ["Selection expired"]
+    assert handler.started == []
+    assert handler.prompted == 0
+
+
+@pytest.mark.anyio
+async def test_update_confirm_callback_cancels_without_starting_update() -> None:
+    handler = _UpdateConfirmHandler(target="web", requester_user_id="99")
+
+    await handler._handle_update_confirm_callback(
+        "10:20",
+        _callback(),
+        UpdateConfirmCallback(decision="no"),
+    )
+
+    assert handler.answers == ["Cancelled"]
+    assert handler.finalized == ["Update cancelled."]
+    assert handler.started == []
+    assert handler.prompted == 0
+
+
+@pytest.mark.anyio
+async def test_update_confirm_callback_prompts_for_target_when_missing() -> None:
+    handler = _UpdateConfirmHandler(target=None, requester_user_id="99")
+
+    await handler._handle_update_confirm_callback(
+        "10:20",
+        _callback(),
+        UpdateConfirmCallback(decision="yes"),
+    )
+
+    assert handler.answers == ["Select update target"]
+    assert handler.started == []
+    assert handler.prompted == 1
+
+
+@pytest.mark.anyio
+async def test_compact_callback_rejects_other_user() -> None:
+    handler = _CompactCallbackHandler(
+        CompactState(
+            summary_text="summary",
+            display_text="summary",
+            message_id=7,
+            created_at="now",
+            requester_user_id="101",
+        )
+    )
+
+    await handler._handle_compact_callback(
+        "10:20",
+        _callback(),
+        CompactCallback(action="apply"),
+    )
+
+    assert handler.answers == ["Selection expired"]
+
+
+@pytest.mark.anyio
+async def test_effort_callback_rejects_other_user_after_model_pick() -> None:
+    handler = _ModelEffortHandler(requester_user_id="101")
+
+    await handler._handle_effort_callback(
+        "10:20",
+        _callback(),
+        EffortCallback(effort="high"),
+    )
+
+    assert handler.answers == ["Selection expired"]
+
+
+@pytest.mark.anyio
+async def test_send_agent_picker_records_requester_ownership() -> None:
+    handler = _AgentPickerStub()
+
+    await _send_agent_picker(
+        handler,
+        key="10:20",
+        current="codex",
+        chat_id=10,
+        thread_id=20,
+        message_id=30,
+        requester_user_id="99",
+    )
+
+    assert handler._agent_options["10:20"].requester_user_id == "99"
+    assert handler.cache_touches == [("agent_options", "10:20")]
+
+
+def test_ui_state_message_cleanup_preserves_other_users_owned_state() -> None:
+    state = TelegramUiState()
+    state.agent_options["10:20"] = SelectionState(
+        items=[("codex", "Codex")],
+        requester_user_id="101",
+    )
+    state.update_confirm_options["10:20"] = UpdateConfirmState(
+        target="web",
+        requester_user_id="101",
+    )
+    state.model_pending["10:20"] = ModelPendingState(
+        option=ModelOption(
+            model_id="gpt-5.4",
+            label="GPT-5.4",
+            efforts=("medium", "high"),
+        ),
+        requester_user_id="101",
+    )
+    state.compact_pending["10:20"] = CompactState(
+        summary_text="summary",
+        display_text="summary",
+        message_id=7,
+        created_at="now",
+        requester_user_id="101",
+    )
+
+    dismissed = state.clear_for_message("10:20", "99")
+
+    assert dismissed is None
+    assert "10:20" in state.agent_options
+    assert "10:20" in state.update_confirm_options
+    assert "10:20" in state.model_pending
+    assert "10:20" in state.compact_pending
+
+
+def test_ui_state_pending_cleanup_clears_matching_owner_state() -> None:
+    state = TelegramUiState()
+    state.agent_options["10:20"] = SelectionState(
+        items=[("codex", "Codex")],
+        requester_user_id="99",
+    )
+    state.update_confirm_options["10:20"] = UpdateConfirmState(
+        target="web",
+        requester_user_id="99",
+    )
+
+    state.clear_pending_options("10:20", "99")
+
+    assert "10:20" not in state.agent_options
+    assert "10:20" not in state.update_confirm_options
 
 
 @pytest.mark.anyio

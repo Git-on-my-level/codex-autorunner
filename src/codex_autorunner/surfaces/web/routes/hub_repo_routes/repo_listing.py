@@ -206,20 +206,24 @@ class HubRepoListingService:
                 payload=copy.deepcopy(payload),
             )
 
-    def _current_topology_snapshots(
+    async def _current_topology_snapshots(
         self, *, needs_repos: bool, needs_agent_workspaces: bool
     ) -> tuple[list[Any], list[Any]]:
         supervisor_state = getattr(self._context.supervisor, "state", None)
         snapshots = list(getattr(supervisor_state, "repos", []) or [])
         agent_workspaces = list(getattr(supervisor_state, "agent_workspaces", []) or [])
         if needs_repos and not snapshots:
-            snapshots = list(self._context.supervisor.list_repos())
+            snapshots = list(
+                await asyncio.to_thread(self._context.supervisor.list_repos)
+            )
             supervisor_state = getattr(self._context.supervisor, "state", None)
             agent_workspaces = list(
                 getattr(supervisor_state, "agent_workspaces", []) or agent_workspaces
             )
         if needs_agent_workspaces and not agent_workspaces:
-            agent_workspaces = list(self._context.supervisor.list_agent_workspaces())
+            agent_workspaces = list(
+                await asyncio.to_thread(self._context.supervisor.list_agent_workspaces)
+            )
         return snapshots, agent_workspaces
 
     def _force_list_repos(self) -> list[Any]:
@@ -258,7 +262,7 @@ class HubRepoListingService:
                     self._force_list_agent_workspaces
                 )
                 return [], list(agent_workspaces)
-        return self._current_topology_snapshots(
+        return await self._current_topology_snapshots(
             needs_repos=needs_repos,
             needs_agent_workspaces=needs_agent_workspaces,
         )
@@ -359,7 +363,7 @@ class HubRepoListingService:
 
         if needs_repos:
             if not snapshots or (needs_agent_workspaces and not agent_workspaces):
-                snapshots, agent_workspaces = self._current_topology_snapshots(
+                snapshots, agent_workspaces = await self._current_topology_snapshots(
                     needs_repos=True,
                     needs_agent_workspaces=needs_agent_workspaces,
                 )
@@ -385,7 +389,7 @@ class HubRepoListingService:
                 ]
         elif needs_agent_workspaces:
             if not agent_workspaces:
-                _, agent_workspace_snaps = self._current_topology_snapshots(
+                _, agent_workspace_snaps = await self._current_topology_snapshots(
                     needs_repos=False,
                     needs_agent_workspaces=True,
                 )

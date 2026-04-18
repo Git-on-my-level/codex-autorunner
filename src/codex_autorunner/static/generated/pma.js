@@ -8,11 +8,13 @@ import { initChatPasteUpload } from "./chatUploads.js";
 import { DEFAULT_FILEBOX_BOX, FILEBOX_BOXES, } from "./fileboxCatalog.js";
 import { getSelectedAgent, getSelectedProfile, getSelectedModel, getSelectedReasoning, initAgentControls, refreshAgentControls, } from "./agentControls.js";
 import { createFileBoxWidget } from "./fileboxUi.js";
-import { handleStreamEvent } from "./streamUtils.js";
+import { readEventStream, handleStreamEvent, } from "./streamUtils.js";
+import { newClientTurnId as newFileChatTurnId } from "./fileChat.js";
 import { initNotificationBell } from "./notificationBell.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
-import { loadPendingTurn as loadCanonicalPendingTurn, savePendingTurn as saveCanonicalPendingTurn, clearPendingTurn as clearCanonicalPendingTurn, } from "./turnResume.js";
+import { createTurnEventsController, } from "./sharedTurnLifecycle.js";
+import { loadPendingTurn, savePendingTurn, clearPendingTurn, } from "./turnResume.js";
 const pmaStyling = {
     eventClass: "chat-event",
     eventTitleClass: "chat-event-title",
@@ -47,7 +49,6 @@ let currentController = null;
 let currentOutboxBaseline = null;
 let isUnloading = false;
 let unloadHandlerInstalled = false;
-let currentEventsController = null;
 const PMA_PENDING_TURN_KEY = "car.pma.pendingTurn";
 const PMA_VIEW_KEY = "car.pma.view";
 const DEFAULT_PMA_LANE_ID = "pma:default";
@@ -59,26 +60,15 @@ let isSavingDoc = false;
 let activeContextAutoPrune = null;
 let pendingDeliverySummary = null;
 let pmaRefreshCleanup = null;
+const turnEventsCtrl = createTurnEventsController();
 function loadPMAPendingTurn() {
-    return loadCanonicalPendingTurn(PMA_PENDING_TURN_KEY);
+    return loadPendingTurn(PMA_PENDING_TURN_KEY);
 }
 function savePMAPendingTurn(turn) {
-    saveCanonicalPendingTurn(PMA_PENDING_TURN_KEY, turn);
+    savePendingTurn(PMA_PENDING_TURN_KEY, turn);
 }
 function clearPMAPendingTurn() {
-    clearCanonicalPendingTurn(PMA_PENDING_TURN_KEY);
-}
-function newClientTurnId() {
-    // crypto.randomUUID is not guaranteed everywhere; keep a safe fallback.
-    try {
-        if (typeof crypto !== "undefined" && "randomUUID" in crypto && typeof crypto.randomUUID === "function") {
-            return crypto.randomUUID();
-        }
-    }
-    catch {
-        // ignore
-    }
-    return `pma-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    clearPendingTurn(PMA_PENDING_TURN_KEY);
 }
 function loadPMAView() {
     const raw = localStorage.getItem(PMA_VIEW_KEY);
@@ -141,19 +131,35 @@ async function initFileBoxUI() {
     });
     await fileBoxCtrl.refresh();
 }
-function stopTurnEventsStream() {
-    if (currentEventsController) {
-        try {
-            currentEventsController.abort();
-        }
-        catch {
-            // ignore
-        }
-        currentEventsController = null;
+async function startTurnEventsStream(meta) {
+    turnEventsCtrl.abort();
+    if (!meta.threadId || !meta.turnId)
+        return;
+    if ((meta.agent || "codex").trim().toLowerCase() === "opencode")
+        return;
+    const ctrl = new AbortController();
+    turnEventsCtrl.current = ctrl;
+    const token = getAuthToken();
+    const headers = {};
+    if (token)
+        headers.Authorization = `Bearer ${token}`;
+    const url = resolvePath(`/hub/pma/turns/${encodeURIComponent(meta.turnId)}/events?thread_id=${encodeURIComponent(meta.threadId)}&agent=${encodeURIComponent(meta.agent || "codex")}`);
+    try {
+        const res = await fetch(url, {
+            method: "GET",
+            headers,
+            signal: ctrl.signal,
+        });
+        if (!res.ok)
+            return;
+        const contentType = res.headers.get("content-type") || "";
+        if (!contentType.includes("text/event-stream"))
+            return;
+        await readPMAStream(res, false);
     }
-}
-function sleep(ms) {
-    return new Promise((resolve) => window.setTimeout(resolve, ms));
+    catch {
+        // ignore (abort / network)
+    }
 }
 async function loadPMADocs() {
     try {
@@ -350,35 +356,8 @@ function resetActiveContext() {
         void savePMADoc("active_context.md", resetContent);
     });
 }
-async function startTurnEventsStream(meta) {
-    stopTurnEventsStream();
-    if (!meta.threadId || !meta.turnId)
-        return;
-    if ((meta.agent || "codex").trim().toLowerCase() === "opencode")
-        return;
-    const ctrl = new AbortController();
-    currentEventsController = ctrl;
-    const token = getAuthToken();
-    const headers = {};
-    if (token)
-        headers.Authorization = `Bearer ${token}`;
-    const url = resolvePath(`/hub/pma/turns/${encodeURIComponent(meta.turnId)}/events?thread_id=${encodeURIComponent(meta.threadId)}&agent=${encodeURIComponent(meta.agent || "codex")}`);
-    try {
-        const res = await fetch(url, {
-            method: "GET",
-            headers,
-            signal: ctrl.signal,
-        });
-        if (!res.ok)
-            return;
-        const contentType = res.headers.get("content-type") || "";
-        if (!contentType.includes("text/event-stream"))
-            return;
-        await readPMAStream(res, false);
-    }
-    catch {
-        // ignore (abort / network)
-    }
+function sleep(ms) {
+    return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 async function pollForTurnMeta(clientTurnId, options = {}) {
     if (!clientTurnId)
@@ -388,7 +367,7 @@ async function pollForTurnMeta(clientTurnId, options = {}) {
     while (Date.now() - started < timeoutMs) {
         if (!pmaChat || pmaChat.state.status !== "running")
             return;
-        if (currentEventsController)
+        if (turnEventsCtrl.current)
             return;
         if (options.signal?.aborted)
             return;
@@ -452,7 +431,6 @@ function getElements() {
         docsSnapshotBtn: document.getElementById("pma-docs-snapshot"),
     };
 }
-const decoder = new TextDecoder();
 function escapeMarkdownLinkText(text) {
     // Keep this ES2019-compatible (no String.prototype.replaceAll).
     return text.replace(/\\/g, "\\\\").replace(/\[/g, "\\[").replace(/\]/g, "\\]");
@@ -545,7 +523,7 @@ async function finalizePMAResponse(responseText, options = {}) {
     finally {
         currentOutboxBaseline = null;
         clearPMAPendingTurn();
-        stopTurnEventsStream();
+        turnEventsCtrl.abort();
     }
     const trimmed = (responseText || "").trim();
     const content = trimmed
@@ -736,7 +714,7 @@ async function sendMessage() {
         return;
     }
     // Ensure prior turn event streams are cleared so we don't render stale actions.
-    stopTurnEventsStream();
+    turnEventsCtrl.abort();
     pendingDeliverySummary = null;
     elements.input.value = "";
     elements.input.style.height = "auto";
@@ -744,7 +722,7 @@ async function sendMessage() {
     const profile = elements.profileSelect?.value || getSelectedProfile(agent);
     const model = elements.modelSelect?.value || getSelectedModel(agent);
     const reasoning = elements.reasoningSelect?.value || getSelectedReasoning(agent);
-    const clientTurnId = newClientTurnId();
+    const clientTurnId = newFileChatTurnId("pma");
     savePMAPendingTurn({ clientTurnId, message, startedAtMs: Date.now() });
     currentController = new AbortController();
     pmaChat.state.controller = currentController;
@@ -842,7 +820,7 @@ async function sendMessage() {
         pmaChat.render();
         pmaChat.renderMessages();
         clearPMAPendingTurn();
-        stopTurnEventsStream();
+        turnEventsCtrl.abort();
         pendingDeliverySummary = null;
     }
     finally {
@@ -851,68 +829,7 @@ async function sendMessage() {
     }
 }
 async function readPMAStream(res, finalizeOnClose = false) {
-    if (!res.body)
-        throw new Error("Streaming not supported in this browser");
-    const reader = res.body.getReader();
-    let buffer = "";
-    let escapedNewlines = false;
-    for (;;) {
-        const { value, done } = await reader.read();
-        if (done)
-            break;
-        const decoded = decoder.decode(value, { stream: true });
-        if (!escapedNewlines) {
-            const combined = buffer + decoded;
-            if (!combined.includes("\n") && combined.includes("\\n")) {
-                escapedNewlines = true;
-                buffer = buffer.replace(/\\n(?=event:|data:|\\n)/g, "\n");
-            }
-        }
-        buffer += escapedNewlines
-            ? decoded.replace(/\\n(?=event:|data:|\\n)/g, "\n")
-            : decoded;
-        const chunks = buffer.split("\n\n");
-        buffer = chunks.pop() || "";
-        for (const chunk of chunks) {
-            if (!chunk.trim())
-                continue;
-            let event = "message";
-            const dataLines = [];
-            chunk.split("\n").forEach((line) => {
-                if (line.startsWith("event:")) {
-                    event = line.slice(6).trim();
-                }
-                else if (line.startsWith("data:")) {
-                    dataLines.push(line.slice(5).trimStart());
-                }
-                else if (line.trim()) {
-                    dataLines.push(line);
-                }
-            });
-            if (dataLines.length === 0)
-                continue;
-            const data = dataLines.join("\n");
-            handleStreamEvent(event, data, pmaStreamHandlers);
-        }
-    }
-    if (buffer.trim()) {
-        let event = "message";
-        const dataLines = [];
-        buffer.split("\n").forEach((line) => {
-            if (line.startsWith("event:")) {
-                event = line.slice(6).trim();
-            }
-            else if (line.startsWith("data:")) {
-                dataLines.push(line.slice(5).trimStart());
-            }
-            else if (line.trim()) {
-                dataLines.push(line);
-            }
-        });
-        if (dataLines.length) {
-            handleStreamEvent(event, dataLines.join("\n"), pmaStreamHandlers);
-        }
-    }
+    await readEventStream(res, (event, data) => handleStreamEvent(event, data, pmaStreamHandlers), { handleEscapedNewlines: true });
     if (finalizeOnClose && pmaChat && pmaChat.state.status === "running") {
         const responseText = pmaChat.state.streamText || "";
         if (responseText.trim()) {
@@ -1008,7 +925,7 @@ async function resumePendingTurn() {
             const agent = typeof cur.agent === "string" ? cur.agent : "codex";
             if (threadId &&
                 turnId &&
-                !currentEventsController &&
+                !turnEventsCtrl.current &&
                 agent.trim().toLowerCase() !== "opencode") {
                 void startTurnEventsStream({ agent, threadId, turnId });
             }
@@ -1029,7 +946,7 @@ async function resumePendingTurn() {
                 pmaChat.render();
                 pmaChat.renderMessages();
                 clearPMAPendingTurn();
-                stopTurnEventsStream();
+                turnEventsCtrl.abort();
                 return;
             }
             if (status === "interrupted") {
@@ -1040,7 +957,7 @@ async function resumePendingTurn() {
                 pmaChat.render();
                 pmaChat.renderMessages();
                 clearPMAPendingTurn();
-                stopTurnEventsStream();
+                turnEventsCtrl.abort();
                 return;
             }
             // Still running; keep polling.
@@ -1110,7 +1027,7 @@ async function cancelRequest(options = {}) {
         currentController = null;
     }
     pendingDeliverySummary = null;
-    stopTurnEventsStream();
+    turnEventsCtrl.abort();
     if (interruptServer || stopLane) {
         await interruptActiveTurn({ stopLane });
     }
@@ -1128,7 +1045,7 @@ async function cancelRequest(options = {}) {
 function resetThread() {
     clearPMAPendingTurn();
     pendingDeliverySummary = null;
-    stopTurnEventsStream();
+    turnEventsCtrl.abort();
     if (pmaChat) {
         pmaChat.state.messages = [];
         pmaChat.state.events = [];

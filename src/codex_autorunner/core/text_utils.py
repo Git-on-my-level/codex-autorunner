@@ -25,6 +25,21 @@ def _normalize_optional_text(value: Any) -> Optional[str]:
     return text or None
 
 
+def _normalize_pma_delivery_target(value: Any) -> Optional[tuple[str, str]]:
+    """Validate ``surface_kind`` / ``surface_key`` for PMA chat delivery targets.
+
+    Uses strict string normalization for both fields so persistence and runtime
+    delivery agree on which payloads are valid.
+    """
+    if not isinstance(value, dict):
+        return None
+    surface_kind = _normalize_text(value.get("surface_kind"))
+    surface_key = _normalize_text(value.get("surface_key"))
+    if surface_kind not in {"discord", "telegram"} or surface_key is None:
+        return None
+    return surface_kind, surface_key
+
+
 def _json_dumps(obj: Any) -> str:
     return json.dumps(obj, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
 

@@ -11,12 +11,11 @@ from ...core.state_retention import (
     CleanupCandidate,
     CleanupPlan,
     CleanupReason,
-    CleanupResult,
     RetentionBucket,
     RetentionClass,
     RetentionScope,
+    adapt_workspace_summary_to_result,
     make_cleanup_plan,
-    make_cleanup_result,
 )
 from ...core.state_roots import (
     is_within_allowed_root,
@@ -90,6 +89,41 @@ def resolve_repo_workspace_root(repo_root: Path) -> Path:
     return repo_root / ".codex-autorunner" / "app_server_workspaces"
 
 
+def _walk_tree_metadata(path: Path) -> tuple[datetime | None, int]:
+    latest_timestamp: float | None = None
+    total_size = 0
+
+    try:
+        root_stat = path.stat()
+        if latest_timestamp is None or root_stat.st_mtime > latest_timestamp:
+            latest_timestamp = root_stat.st_mtime
+        if path.is_file():
+            total_size += root_stat.st_size
+    except OSError:
+        pass
+
+    if path.is_dir():
+        try:
+            for child in path.rglob("*"):
+                try:
+                    child_stat = child.stat()
+                except OSError:
+                    continue
+                if latest_timestamp is None or child_stat.st_mtime > latest_timestamp:
+                    latest_timestamp = child_stat.st_mtime
+                if child.is_file():
+                    total_size += child_stat.st_size
+        except OSError:
+            pass
+
+    latest_mtime = (
+        datetime.fromtimestamp(latest_timestamp, tz=timezone.utc)
+        if latest_timestamp is not None
+        else None
+    )
+    return latest_mtime, total_size
+
+
 def _collect_workspace_entries(root: Path) -> list[_WorkspaceEntry]:
     if not root.exists() or not root.is_dir():
         return []
@@ -101,10 +135,9 @@ def _collect_workspace_entries(root: Path) -> list[_WorkspaceEntry]:
     for path in iterator:
         if not path.is_dir():
             continue
-        latest_activity = _path_latest_mtime(path)
+        latest_activity, size_bytes = _walk_tree_metadata(path)
         if latest_activity is None:
             continue
-        size_bytes = _path_size_bytes(path)
         entries.append(
             _WorkspaceEntry(
                 workspace_id=path.name,
@@ -114,47 +147,6 @@ def _collect_workspace_entries(root: Path) -> list[_WorkspaceEntry]:
             )
         )
     return entries
-
-
-def _path_latest_mtime(path: Path) -> datetime | None:
-    latest_timestamp: float | None = None
-    for candidate in _iter_tree(path):
-        try:
-            candidate_timestamp = candidate.stat().st_mtime
-        except OSError:
-            continue
-        if latest_timestamp is None or candidate_timestamp > latest_timestamp:
-            latest_timestamp = candidate_timestamp
-    if latest_timestamp is None:
-        return None
-    return datetime.fromtimestamp(latest_timestamp, tz=timezone.utc)
-
-
-def _iter_tree(path: Path) -> Iterable[Path]:
-    yield path
-    if not path.is_dir():
-        return
-    try:
-        yield from path.rglob("*")
-    except OSError:
-        return
-
-
-def _path_size_bytes(path: Path) -> int:
-    if path.is_file():
-        try:
-            return path.stat().st_size
-        except OSError:
-            return 0
-    total = 0
-    for child in path.rglob("*"):
-        if not child.is_file():
-            continue
-        try:
-            total += child.stat().st_size
-        except OSError:
-            continue
-    return total
 
 
 def _remove_tree(path: Path) -> None:
@@ -323,7 +315,6 @@ def execute_workspace_retention(
             failed_prune_count += 1
             continue
 
-        size_bytes = _path_size_bytes(path)
         if not dry_run:
             try:
                 _remove_tree(path)
@@ -332,7 +323,7 @@ def execute_workspace_retention(
                 blocked_reasons.append("deletion_failed")
                 failed_prune_count += 1
                 continue
-            deleted_bytes += size_bytes
+            deleted_bytes += candidate.size_bytes
 
         pruned_paths.append(str(path))
 
@@ -386,70 +377,6 @@ def prune_workspace_root(
     return execute_workspace_retention(
         plan, workspace_root=workspace_root, dry_run=dry_run
     )
-
-
-def adapt_workspace_summary_to_result(
-    summary: WorkspacePruneSummary,
-    bucket: RetentionBucket,
-    dry_run: bool = False,
-) -> CleanupResult:
-    candidates: list[CleanupCandidate] = []
-    for path_str in summary.pruned_paths:
-        candidates.append(
-            CleanupCandidate(
-                path=Path(path_str),
-                size_bytes=0,
-                bucket=bucket,
-                action=CleanupAction.PRUNE,
-                reason=CleanupReason.STALE_WORKSPACE,
-            )
-        )
-    for i, path_str in enumerate(summary.blocked_paths):
-        reason_str = (
-            summary.blocked_reasons[i]
-            if i < len(summary.blocked_reasons)
-            else "unknown"
-        )
-        reason = _map_reason_str_to_cleanup_reason(reason_str)
-        candidates.append(
-            CleanupCandidate(
-                path=Path(path_str),
-                size_bytes=0,
-                bucket=bucket,
-                action=CleanupAction.SKIP_BLOCKED,
-                reason=reason,
-            )
-        )
-
-    plan = CleanupPlan(
-        bucket=bucket,
-        candidates=tuple(candidates),
-        total_bytes=summary.bytes_before,
-        reclaimable_bytes=summary.bytes_before - summary.bytes_after,
-        kept_count=summary.kept,
-        prune_count=summary.pruned,
-        blocked_count=len(summary.blocked_paths),
-    )
-    deleted_paths = tuple(Path(p) for p in summary.pruned_paths) if not dry_run else ()
-    deleted_bytes = 0 if dry_run else (summary.bytes_before - summary.bytes_after)
-
-    return make_cleanup_result(
-        plan,
-        deleted_paths=deleted_paths,
-        deleted_bytes=deleted_bytes,
-    )
-
-
-def _map_reason_str_to_cleanup_reason(reason_str: str) -> CleanupReason:
-    mapping = {
-        "live_workspace_guard": CleanupReason.LIVE_WORKSPACE_GUARD,
-        "lock_guard": CleanupReason.LOCK_GUARD,
-        "active_run_guard": CleanupReason.ACTIVE_RUN_GUARD,
-        "canonical_store_guard": CleanupReason.CANONICAL_STORE_GUARD,
-        "path_outside_root": CleanupReason.CANONICAL_STORE_GUARD,
-        "deletion_failed": CleanupReason.CANONICAL_STORE_GUARD,
-    }
-    return mapping.get(reason_str, CleanupReason.CANONICAL_STORE_GUARD)
 
 
 __all__ = [

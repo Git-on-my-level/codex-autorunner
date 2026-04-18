@@ -468,3 +468,137 @@ def test_waiting_cacheable_read_honors_timeout_budget(
             check=True,
             traffic_class="polling",
         )
+
+
+def test_rate_limit_cooldown_polling_blocked_interactive_allowed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CAR_GLOBAL_STATE_ROOT", str(tmp_path / "global-state"))
+    rate_limited_calls = {"count": 0}
+    interactive_calls = {"count": 0}
+    polling_after_calls = {"count": 0}
+
+    def _rate_limited_runner(
+        args: list[str], *, cwd: Path, timeout_seconds: int, check: bool
+    ) -> subprocess.CompletedProcess[str]:
+        _ = args, cwd, timeout_seconds, check
+        rate_limited_calls["count"] += 1
+        raise GitHubError(
+            "Command failed: gh api rate-limit: API rate limit exceeded",
+            status_code=429,
+        )
+
+    def _interactive_runner(
+        args: list[str], *, cwd: Path, timeout_seconds: int, check: bool
+    ) -> subprocess.CompletedProcess[str]:
+        _ = args, cwd, timeout_seconds, check
+        interactive_calls["count"] += 1
+        return subprocess.CompletedProcess(
+            args,
+            0,
+            stdout=json.dumps({"number": 17, "title": "Interactive bypass"}),
+            stderr="",
+        )
+
+    def _polling_after_runner(
+        args: list[str], *, cwd: Path, timeout_seconds: int, check: bool
+    ) -> subprocess.CompletedProcess[str]:
+        _ = args, cwd, timeout_seconds, check
+        polling_after_calls["count"] += 1
+        return subprocess.CompletedProcess(
+            args,
+            0,
+            stdout=json.dumps({"number": 17}),
+            stderr="",
+        )
+
+    rate_limited_svc = GitHubService(
+        tmp_path / "repo-rl",
+        raw_config={},
+        traffic_class="polling",
+        gh_runner=_rate_limited_runner,
+    )
+    interactive_svc = GitHubService(
+        tmp_path / "repo-int",
+        raw_config={},
+        traffic_class="interactive",
+        gh_runner=_interactive_runner,
+    )
+    polling_after_svc = GitHubService(
+        tmp_path / "repo-pa",
+        raw_config={},
+        traffic_class="polling",
+        gh_runner=_polling_after_runner,
+    )
+
+    with pytest.raises(GitHubError, match="rate limit exceeded"):
+        rate_limited_svc.pr_view(number=17)
+
+    result = interactive_svc.pr_view(number=17)
+    assert result["number"] == 17
+
+    with pytest.raises(GitHubError, match="global cooldown"):
+        polling_after_svc.pr_view(number=17)
+
+    assert rate_limited_calls["count"] == 1
+    assert interactive_calls["count"] == 1
+    assert polling_after_calls["count"] == 0
+
+
+def test_mutation_invalidation_clears_pr_view_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CAR_GLOBAL_STATE_ROOT", str(tmp_path / "global-state"))
+    runner_calls: list[list[str]] = []
+
+    def _runner(
+        args: list[str], *, cwd: Path, timeout_seconds: int, check: bool
+    ) -> subprocess.CompletedProcess[str]:
+        _ = cwd, timeout_seconds, check
+        runner_calls.append(list(args))
+        if args[1:3] == ["pr", "view"]:
+            return subprocess.CompletedProcess(
+                args,
+                0,
+                stdout=json.dumps({"number": 17, "title": "cached-view"}),
+                stderr="",
+            )
+        return subprocess.CompletedProcess(args, 0, stdout="{}", stderr="")
+
+    svc = GitHubService(
+        tmp_path / "repo-mut",
+        raw_config={},
+        traffic_class="polling",
+        gh_runner=_runner,
+    )
+
+    svc.pr_view(number=17)
+    svc.pr_view(number=17)
+    cache_hits = len(runner_calls)
+
+    svc.create_issue_comment(owner="acme", repo="widgets", number=17, body="mutation")
+
+    svc.pr_view(number=17)
+    assert len(runner_calls) == cache_hits + 2
+
+
+class TestLooksLikeRateLimitIsSharedClassifier:
+    def test_broker_exports_shared_classifier(self) -> None:
+        from codex_autorunner.integrations.github.broker import looks_like_rate_limit
+
+        assert looks_like_rate_limit("API rate limit exceeded")
+        assert looks_like_rate_limit("  Rate Limit hit  ")
+        assert not looks_like_rate_limit("not found")
+        assert not looks_like_rate_limit("")
+
+    def test_service_uses_shared_classifier(self) -> None:
+        from codex_autorunner.integrations.github import broker, service
+
+        assert service.looks_like_rate_limit is broker.looks_like_rate_limit
+
+    def test_polling_uses_shared_classifier(self) -> None:
+        from codex_autorunner.integrations.github import broker, polling
+
+        assert polling.looks_like_rate_limit is broker.looks_like_rate_limit

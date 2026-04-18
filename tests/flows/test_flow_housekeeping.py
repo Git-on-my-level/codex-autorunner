@@ -57,6 +57,23 @@ def _create_active_run(store: FlowStore, run_id: str = "run-active-1") -> str:
     return record.id
 
 
+def _create_paused_run(
+    store: FlowStore,
+    run_id: str = "run-paused-1",
+    finished_at: str = "2020-01-01T00:00:00Z",
+) -> str:
+    record = store.create_flow_run(
+        run_id=run_id, flow_type="ticket_flow", input_data={}
+    )
+    store.update_flow_run_status(
+        record.id,
+        status=FlowRunStatus.PAUSED,
+        started_at="2025-01-01T00:00:00Z",
+        finished_at=finished_at,
+    )
+    return record.id
+
+
 def _add_event(
     store: FlowStore,
     run_id: str,
@@ -233,6 +250,32 @@ class TestBuildPlan:
         assert len(plan.runs_to_process) == 1
         assert plan.runs_to_process[0].run_id == "run-old"
 
+    def test_plan_includes_expired_non_active_non_terminal(self, temp_dir):
+        store = _make_store(temp_dir)
+        db_path = temp_dir / "flows.db"
+        run_id = _create_paused_run(
+            store,
+            "run-paused-old",
+            finished_at="2020-01-01T00:00:00Z",
+        )
+        _add_event(
+            store,
+            run_id,
+            FlowEventType.APP_SERVER_EVENT,
+            {
+                "message": {"method": "message.part.updated", "params": {}},
+                "turn_id": "t1",
+            },
+            event_id="evt-paused-1",
+        )
+        config = FlowRetentionConfig(retention_days=7)
+        plan = build_plan(store, db_path, config)
+        assert plan.runs_skipped_active == 0
+        assert len(plan.runs_to_process) == 1
+        assert plan.runs_to_process[0].run_id == run_id
+        assert plan.events_to_export == 1
+        assert plan.events_to_prune == 0
+
     def test_plan_filters_by_run_ids(self, temp_dir):
         store = _make_store(temp_dir)
         db_path = temp_dir / "flows.db"
@@ -324,6 +367,32 @@ class TestExecuteHousekeep:
         result = execute_housekeep(temp_dir, store, db_path, config, dry_run=False)
         assert result.runs_processed == 0
         assert result.events_exported == 0
+
+    def test_execute_exports_non_active_non_terminal_without_pruning(self, temp_dir):
+        store = _make_store(temp_dir)
+        db_path = temp_dir / "flows.db"
+        run_id = _create_paused_run(
+            store,
+            "run-paused-old",
+            finished_at="2020-01-01T00:00:00Z",
+        )
+        _add_event(
+            store,
+            run_id,
+            FlowEventType.APP_SERVER_EVENT,
+            {
+                "message": {"method": "message.part.updated", "params": {}},
+                "turn_id": "t1",
+            },
+            event_id="evt-paused-1",
+        )
+        config = FlowRetentionConfig(retention_days=7)
+        result = execute_housekeep(temp_dir, store, db_path, config, dry_run=False)
+        assert result.runs_processed == 1
+        assert result.events_exported == 1
+        assert result.events_pruned == 0
+        assert len(result.archive_files) == 1
+        assert len(store.get_events(run_id)) == 1
 
     def test_execute_vacuums_after_prune(self, temp_dir):
         store = _make_store(temp_dir)

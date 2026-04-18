@@ -88,6 +88,68 @@ def explicit_thread_target_id(payload: Mapping[str, Any]) -> Optional[str]:
     return None
 
 
+def thread_head_branch_hint(thread_payload: Mapping[str, Any]) -> Optional[str]:
+    metadata = _mapping(thread_payload.get("metadata"))
+    for context in thread_contexts(metadata):
+        for key in _BRANCH_METADATA_KEYS:
+            candidate = _normalize_text(context.get(key))
+            if candidate is not None:
+                return candidate
+    return None
+
+
+def resolve_head_branch(
+    *,
+    workspace_root: Path,
+    head_branch_hint: Optional[str],
+    thread_payload: Optional[Mapping[str, Any]] = None,
+) -> Optional[str]:
+    resolved_hint = _normalize_text(head_branch_hint)
+    if resolved_hint is not None:
+        return resolved_hint
+    if isinstance(thread_payload, Mapping):
+        resolved_hint = thread_head_branch_hint(thread_payload)
+        if resolved_hint is not None:
+            return resolved_hint
+    return _normalize_text(git_branch(workspace_root))
+
+
+def claim_branch_binding_for_thread(
+    *,
+    hub_root: Path,
+    provider: str,
+    repo_id: Optional[str],
+    head_branch: Optional[str],
+    managed_thread_id: str,
+) -> Optional[PrBinding]:
+    normalized_repo_id = _normalize_text(repo_id)
+    normalized_head_branch = _normalize_text(head_branch)
+    if normalized_repo_id is None or normalized_head_branch is None:
+        return None
+    binding_store = PrBindingStore(hub_root)
+    claimed_binding: Optional[PrBinding] = None
+    for pr_state in _ACTIVE_PR_STATES:
+        bindings = binding_store.list_bindings(
+            provider=provider,
+            repo_id=normalized_repo_id,
+            pr_state=pr_state,
+            head_branch=normalized_head_branch,
+            limit=20,
+        )
+        for binding in bindings:
+            if binding.thread_target_id not in {None, managed_thread_id}:
+                continue
+            updated = binding_store.attach_thread_target(
+                provider=binding.provider,
+                repo_slug=binding.repo_slug,
+                pr_number=binding.pr_number,
+                thread_target_id=managed_thread_id,
+            )
+            if updated is not None and updated.thread_target_id == managed_thread_id:
+                claimed_binding = updated
+    return claimed_binding
+
+
 def binding_summary(binding: PrBinding) -> dict[str, Any]:
     summary: dict[str, Any] = {
         "repo_slug": binding.repo_slug,
@@ -308,11 +370,14 @@ def backfill_pr_binding_thread_target_ids(
 __all__ = [
     "backfill_pr_binding_thread_target_ids",
     "binding_summary",
+    "claim_branch_binding_for_thread",
     "claim_pr_binding_for_thread",
     "explicit_thread_target_id",
     "find_hub_binding_context",
+    "resolve_head_branch",
     "resolve_thread_target_id",
     "thread_contexts",
+    "thread_head_branch_hint",
     "thread_matches_branch",
     "upsert_pr_binding",
 ]

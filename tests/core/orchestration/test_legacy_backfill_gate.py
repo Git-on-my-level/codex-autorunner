@@ -8,7 +8,10 @@ from codex_autorunner.core.orchestration.legacy_backfill_gate import (
     ensure_legacy_orchestration_backfill,
 )
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
-from codex_autorunner.core.pma_thread_store import prepare_pma_thread_store
+from codex_autorunner.core.pma_thread_store import (
+    default_pma_threads_db_path,
+    prepare_pma_thread_store,
+)
 
 
 def test_ensure_legacy_orchestration_backfill_skips_work_when_marker_present(
@@ -48,3 +51,24 @@ def test_prepare_pma_thread_store_runs_thread_backfill_once_without_marker(
         prepare_pma_thread_store(hub_root, durable=False)
         prepare_pma_thread_store(hub_root, durable=False)
         assert mock_threads.call_count == 1
+
+
+def test_prepare_pma_thread_store_only_bootstraps_legacy_mirror_once(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+
+    def _touch_legacy_mirror(*args, **kwargs) -> None:  # type: ignore[no-untyped-def]
+        _ = args, kwargs
+        legacy_path = default_pma_threads_db_path(hub_root)
+        legacy_path.parent.mkdir(parents=True, exist_ok=True)
+        legacy_path.touch()
+
+    with patch(
+        "codex_autorunner.core.pma_thread_store_bootstrap.sync_legacy_mirror",
+        side_effect=_touch_legacy_mirror,
+    ) as mock_mirror:
+        prepare_pma_thread_store(hub_root, durable=False)
+        prepare_pma_thread_store(hub_root, durable=False)
+        assert mock_mirror.call_count == 1

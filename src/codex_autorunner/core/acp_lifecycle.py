@@ -77,6 +77,26 @@ def extract_session_update_kind(update: Mapping[str, Any]) -> Optional[str]:
     return _normalize_optional_text(value)
 
 
+def extract_message_phase(payload: Mapping[str, Any]) -> Optional[str]:
+    phase = _normalize_optional_text(payload.get("phase"))
+    if phase:
+        return phase.lower()
+    content = payload.get("content")
+    if isinstance(content, Mapping):
+        nested = _normalize_optional_text(content.get("phase"))
+        if nested:
+            return nested.lower()
+    return None
+
+
+def extract_already_streamed(payload: Mapping[str, Any]) -> bool:
+    for key in ("alreadyStreamed", "already_streamed"):
+        value = payload.get(key)
+        if isinstance(value, bool):
+            return value
+    return False
+
+
 def extract_usage(payload: Mapping[str, Any]) -> dict[str, Any]:
     usage = payload.get("usage")
     if isinstance(usage, Mapping):
@@ -359,6 +379,8 @@ class ACPLifecycleSnapshot:
     usage: dict[str, Any] = field(default_factory=dict)
     permission_request_id: str = ""
     permission_description: str = ""
+    message_phase: Optional[str] = None
+    already_streamed: bool = False
     uses_turn_id_fallback: bool = False
     closes_turn_buffer: bool = False
 
@@ -406,6 +428,8 @@ def analyze_acp_lifecycle_message(message: Mapping[str, Any]) -> ACPLifecycleSna
     error_message: Optional[str] = None
     permission_request_id = ""
     permission_description = ""
+    message_phase: Optional[str] = None
+    already_streamed = False
 
     if method in {"session/created", "session/loaded"}:
         normalized_kind = "session"
@@ -422,6 +446,8 @@ def analyze_acp_lifecycle_message(message: Mapping[str, Any]) -> ACPLifecycleSna
         normalized_kind = "unknown"
         if update_kind == "agent_message_chunk":
             normalized_kind = "output_delta"
+            message_phase = extract_message_phase(update)
+            already_streamed = extract_already_streamed(update)
             output_delta = extract_text_content(update.get("content")) or ""
             if not output_delta:
                 output_delta = extract_output_delta(update)
@@ -455,6 +481,7 @@ def analyze_acp_lifecycle_message(message: Mapping[str, Any]) -> ACPLifecycleSna
     elif method in {"prompt/message", "turn/message"}:
         normalized_kind = "message"
         assistant_text = extract_message_text(payload)
+        message_phase = extract_message_phase(payload)
     elif method in {"permission/requested", "session/request_permission"}:
         normalized_kind = "permission_requested"
         permission_request_id = (
@@ -486,6 +513,8 @@ def analyze_acp_lifecycle_message(message: Mapping[str, Any]) -> ACPLifecycleSna
         usage=usage,
         permission_request_id=permission_request_id,
         permission_description=permission_description,
+        message_phase=message_phase,
+        already_streamed=already_streamed,
         uses_turn_id_fallback=should_map_missing_turn_id(method, payload),
         closes_turn_buffer=should_close_turn_buffer(method, payload),
     )
@@ -513,10 +542,42 @@ def session_update_content_summary(update: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def classify_prompt_response_status(payload: Mapping[str, Any]) -> str:
+    result = coerce_mapping(payload)
+    raw_reason = result.get("stopReason") or result.get("stop_reason")
+    stop_reason = _normalize_optional_text(raw_reason) or ""
+    if stop_reason == "cancelled":
+        return "cancelled"
+    if stop_reason == "refusal":
+        return "failed"
+    return "completed"
+
+
+def prompt_terminal_method_for_status(status: str) -> str:
+    if status == "cancelled":
+        return "prompt/cancelled"
+    if status == "failed":
+        return "prompt/failed"
+    return "prompt/completed"
+
+
+def extract_prompt_response_error(payload: Mapping[str, Any]) -> Optional[str]:
+    if classify_prompt_response_status(payload) != "failed":
+        return None
+    result = coerce_mapping(payload)
+    return _normalize_optional_text(
+        result.get("message")
+        or result.get("error")
+        or result.get("stopReason")
+        or result.get("stop_reason")
+    )
+
+
 __all__ = [
     "ACPLifecycleSnapshot",
-    "analyze_acp_lifecycle_message",
     "ACPRuntimeTerminalStatus",
+    "analyze_acp_lifecycle_message",
+    "classify_prompt_response_status",
     "coerce_mapping",
     "extract_error_message",
     "extract_identifier",
@@ -524,12 +585,14 @@ __all__ = [
     "extract_output_delta",
     "extract_permission_description",
     "extract_progress_message",
+    "extract_prompt_response_error",
     "extract_session_update",
     "extract_session_update_kind",
     "extract_text",
     "extract_text_content",
     "extract_usage",
     "is_idle_terminal",
+    "prompt_terminal_method_for_status",
     "runtime_terminal_status_for_lifecycle",
     "session_status_type",
     "session_update_content_summary",

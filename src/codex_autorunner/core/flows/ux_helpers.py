@@ -4,13 +4,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Literal, Mapping, Optional, Protocol, Sequence
 
-from ...tickets.files import list_ticket_paths, ticket_is_done
+from ...tickets.files import list_ticket_paths
 from ..config import ConfigError, load_repo_config
 from ..freshness import resolve_stale_threshold_seconds
 from ..ticket_flow_projection import (
     build_canonical_state_v1,
+    collect_ticket_flow_census,
     select_authoritative_run_record,
 )
+from ..ticket_flow_summary import extract_current_step
 from .models import (
     FlowEventType,
     FlowRunRecord,
@@ -74,15 +76,8 @@ def _ticket_dir(repo_root: Path) -> Path:
 
 
 def ticket_progress(repo_root: Path) -> dict[str, int]:
-    ticket_dir = _ticket_dir(repo_root)
-    ticket_paths = list_ticket_paths(ticket_dir)
-    total = len(ticket_paths)
-    done = 0
-    if total:
-        for path in ticket_paths:
-            if ticket_is_done(path):
-                done += 1
-    return {"done": done, "total": total}
+    census = collect_ticket_flow_census(repo_root)
+    return {"done": census.done_count, "total": census.total_count}
 
 
 def bootstrap_check(
@@ -272,7 +267,7 @@ def _canonical_flow_status_state(
 
     run_state = None
     try:
-        from ..pma_context import build_ticket_flow_run_state
+        from ..pma_ticket_flow_state import build_ticket_flow_run_state
 
         run_state = build_ticket_flow_run_state(
             repo_root=repo_root,
@@ -356,24 +351,7 @@ def _format_ticket_flow_archive_status(record: FlowRunRecord) -> str:
 
 
 def _flow_status_current_step(record: FlowRunRecord) -> Optional[str]:
-    current_step = getattr(record, "current_step", None)
-    if isinstance(current_step, str) and current_step.strip():
-        return current_step.strip()
-    if isinstance(current_step, int):
-        return str(current_step)
-
-    state = record.state if isinstance(record.state, Mapping) else {}
-    ticket_engine = state.get("ticket_engine") if isinstance(state, Mapping) else {}
-    if not isinstance(ticket_engine, Mapping):
-        return None
-
-    for key in ("total_turns", "current_step", "step"):
-        value = ticket_engine.get(key)
-        if isinstance(value, int):
-            return str(value)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return None
+    return extract_current_step(record)
 
 
 def format_ticket_flow_status_lines(

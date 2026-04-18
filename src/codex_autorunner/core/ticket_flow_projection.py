@@ -417,3 +417,13 @@ def build_canonical_state_v1(
         "contradictions": contradictions,
         "freshness": freshness,
     }
+
+
+__all__ = [
+    "AuthoritativeRunFacts",
+    "TicketFlowCensus",
+    "build_canonical_state_v1",
+    "collect_ticket_flow_census",
+    "resolve_authoritative_ticket_flow_run",
+    "select_authoritative_run_record",
+]

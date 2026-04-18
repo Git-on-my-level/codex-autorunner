@@ -109,6 +109,24 @@ def register_hub_commands(
             return text[:width]
         return f"{text[: width - 3]}..."
 
+    def _format_text_table_lines(
+        columns: list[tuple[str, str, int]], rows: list[dict[str, str]]
+    ) -> list[str]:
+        widths: dict[str, int] = {}
+        for header, _key, max_width in columns:
+            cell_lengths = [len(row[header]) for row in rows] if rows else [0]
+            widths[header] = min(max(max(cell_lengths), len(header)), max_width)
+        header_line = "  ".join(
+            header.ljust(widths[header]) for header, _, _ in columns
+        )
+        separator_line = "  ".join("-" * widths[header] for header, _, _ in columns)
+        lines = [header_line, separator_line]
+        for row in rows:
+            lines.append(
+                "  ".join(row[header].ljust(widths[header]) for header, _, _ in columns)
+            )
+        return lines
+
     def _subscription_matches_text(subscription: dict[str, Any]) -> str:
         match_count = subscription.get("match_count")
         max_matches = subscription.get("max_matches")
@@ -151,20 +169,40 @@ def register_hub_commands(
                     ),
                 }
             )
-        widths: dict[str, int] = {}
-        for header, _key, max_width in columns:
-            cell_lengths = [len(row[header]) for row in rows] if rows else [0]
-            widths[header] = min(max(max(cell_lengths), len(header)), max_width)
-        header_line = "  ".join(
-            header.ljust(widths[header]) for header, _, _ in columns
+        return _format_text_table_lines(columns, rows)
+
+    def _repo_listing_payload(snapshot: Any) -> dict[str, Any]:
+        raw_status = getattr(snapshot, "status", None)
+        status_text = (
+            str(raw_status.value)
+            if hasattr(raw_status, "value") and raw_status is not None
+            else str(raw_status or "-")
         )
-        separator_line = "  ".join("-" * widths[header] for header, _, _ in columns)
-        lines = [header_line, separator_line]
-        for row in rows:
-            lines.append(
-                "  ".join(row[header].ljust(widths[header]) for header, _, _ in columns)
+        return {
+            "repo_id": str(getattr(snapshot, "id", "") or ""),
+            "branch": str(getattr(snapshot, "branch", "") or "-"),
+            "status": status_text,
+            "enabled": bool(getattr(snapshot, "enabled", False)),
+        }
+
+    def _render_repo_table(repos: list[dict[str, Any]]) -> list[str]:
+        columns = [
+            ("REPO_ID", "repo_id", 32),
+            ("BRANCH", "branch", 24),
+            ("STATUS", "status", 16),
+            ("ENABLED", "enabled", 7),
+        ]
+        rows: list[dict[str, str]] = []
+        for repo in repos:
+            rows.append(
+                {
+                    "REPO_ID": _truncate_table_cell(repo.get("repo_id"), width=32),
+                    "BRANCH": _truncate_table_cell(repo.get("branch"), width=24),
+                    "STATUS": _truncate_table_cell(repo.get("status"), width=16),
+                    "ENABLED": "yes" if bool(repo.get("enabled")) else "no",
+                }
             )
-        return lines
+        return _format_text_table_lines(columns, rows)
 
     def _destination_issues(
         manifest: Manifest,
@@ -1348,6 +1386,26 @@ def register_hub_commands(
                 else _with_hub_path(f"car hub destination show {snap.id}", config.root)
             )
             typer.echo(f"- {snap.id}: {snap.status.value} -> {hint}")
+
+    @hub_app.command("repos")
+    def hub_repos(
+        path: Optional[Path] = typer.Option(None, "--path", help="Hub root path"),
+        output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    ):
+        """List hub repos."""
+        config = require_hub_config(path)
+        supervisor = build_supervisor(config)
+        payload = [
+            _repo_listing_payload(snapshot) for snapshot in supervisor.list_repos()
+        ]
+        if output_json:
+            typer.echo(json.dumps({"repos": payload}, indent=2))
+            return
+        if not payload:
+            typer.echo("No repos.")
+            return
+        for line in _render_repo_table(payload):
+            typer.echo(line)
 
     @hub_app.command("cleanup")
     def hub_cleanup(

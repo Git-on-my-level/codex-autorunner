@@ -9,6 +9,7 @@ from codex_autorunner.agents.opencode import (
     stream_lifecycle as opencode_stream_lifecycle,
 )
 from codex_autorunner.agents.opencode.runtime import (
+    OpenCodeTurnOutput,
     collect_opencode_output,
     collect_opencode_output_from_events,
     extract_session_id,
@@ -1344,8 +1345,7 @@ async def test_collect_output_sessionless_completed_recovers_roleless_text() -> 
     events = [
         SSEEvent(
             event="message.completed",
-            data='{"info":{"id":"m1"},'
-            '"parts":[{"type":"text","text":"Final answer"}]}',
+            data='{"info":{"id":"m1"},"parts":[{"type":"text","text":"Final answer"}]}',
         ),
         SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
     ]
@@ -1665,3 +1665,326 @@ async def test_collect_output_completed_message_excludes_reasoning_from_final_te
     )
     assert output.text == "The final answer."
     assert "internal reasoning" not in output.text
+
+
+@pytest.mark.anyio
+async def test_collect_output_uses_prompt_response_awaitable_as_fallback() -> None:
+    async def _prompt_response():
+        return {
+            "info": {"id": "m1"},
+            "parts": [{"type": "text", "text": "prompt reply"}],
+        }
+
+    events = [SSEEvent(event="session.idle", data='{"sessionID":"s1"}')]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+        prompt_response_awaitable=_prompt_response(),
+    )
+    assert output.text == "prompt reply"
+    assert output.error is None
+
+
+@pytest.mark.anyio
+async def test_collect_output_prompt_response_awaitable_suppresses_echo() -> None:
+    async def _prompt_response():
+        return {
+            "info": {"id": "m1"},
+            "parts": [{"type": "text", "text": "What is the answer?"}],
+        }
+
+    events = [SSEEvent(event="session.idle", data='{"sessionID":"s1"}')]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+        prompt="What is the answer?",
+        prompt_response_awaitable=_prompt_response(),
+    )
+    assert output.text == ""
+    assert output.error is None
+
+
+@pytest.mark.anyio
+async def test_collect_output_prompt_response_awaitable_does_not_override_stream_text() -> (
+    None
+):
+    async def _prompt_response():
+        return {
+            "info": {"id": "m1"},
+            "parts": [{"type": "text", "text": "prompt reply"}],
+        }
+
+    events = [
+        SSEEvent(
+            event="message.part.updated",
+            data='{"sessionID":"s1","properties":{"delta":{"text":"streamed"},"part":{"type":"text","text":"streamed"}}}',
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+        prompt_response_awaitable=_prompt_response(),
+    )
+    assert output.text == "streamed"
+
+
+@pytest.mark.anyio
+async def test_collect_output_prompt_response_awaitable_filters_reasoning() -> None:
+    async def _prompt_response():
+        return {
+            "content": [
+                {"type": "reasoning", "text": "thinking"},
+                {"type": "text", "text": "actual answer"},
+            ],
+        }
+
+    events = [SSEEvent(event="session.idle", data='{"sessionID":"s1"}')]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+        prompt_response_awaitable=_prompt_response(),
+    )
+    assert output.text == "actual answer"
+    assert "thinking" not in output.text
+
+
+@pytest.mark.anyio
+async def test_collect_output_prompt_response_awaitable_error_handling() -> None:
+    async def _failing_response():
+        raise RuntimeError("prompt failed")
+
+    events = [SSEEvent(event="session.idle", data='{"sessionID":"s1"}')]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+        prompt_response_awaitable=_failing_response(),
+    )
+    assert output.text == ""
+    assert output.error is None
+
+
+@pytest.mark.anyio
+async def test_apply_prompt_response_fallback_basic() -> None:
+    from codex_autorunner.agents.opencode.output_assembly import (
+        apply_prompt_response_fallback,
+    )
+
+    output = OpenCodeTurnOutput(text="", error=None, usage=None)
+    result = apply_prompt_response_fallback(
+        output,
+        {"info": {"id": "m1"}, "parts": [{"type": "text", "text": "fallback"}]},
+    )
+    assert result.text == "fallback"
+    assert result.error is None
+
+
+@pytest.mark.anyio
+async def test_apply_prompt_response_fallback_preserves_existing_text() -> None:
+    from codex_autorunner.agents.opencode.output_assembly import (
+        apply_prompt_response_fallback,
+    )
+
+    output = OpenCodeTurnOutput(text="streamed", error=None, usage={"total": 5})
+    result = apply_prompt_response_fallback(
+        output,
+        {"info": {"id": "m1"}, "parts": [{"type": "text", "text": "fallback"}]},
+    )
+    assert result.text == "streamed"
+    assert result.usage == {"total": 5}
+
+
+@pytest.mark.anyio
+async def test_apply_prompt_response_fallback_suppresses_echo() -> None:
+    from codex_autorunner.agents.opencode.output_assembly import (
+        apply_prompt_response_fallback,
+    )
+
+    output = OpenCodeTurnOutput(text="", error=None, usage=None)
+    result = apply_prompt_response_fallback(
+        output,
+        {"info": {"id": "m1"}, "parts": [{"type": "text", "text": "my prompt"}]},
+        prompt="my prompt",
+    )
+    assert result.text == ""
+
+
+@pytest.mark.anyio
+async def test_apply_prompt_response_fallback_captures_error() -> None:
+    from codex_autorunner.agents.opencode.output_assembly import (
+        apply_prompt_response_fallback,
+    )
+
+    output = OpenCodeTurnOutput(text="streamed", error=None, usage=None)
+    result = apply_prompt_response_fallback(
+        output,
+        {"info": {"id": "m1", "error": "partial failure"}, "parts": []},
+    )
+    assert result.text == "streamed"
+    assert result.error == "partial failure"
+
+
+@pytest.mark.anyio
+async def test_apply_prompt_response_fallback_none_response() -> None:
+    from codex_autorunner.agents.opencode.output_assembly import (
+        apply_prompt_response_fallback,
+    )
+
+    output = OpenCodeTurnOutput(text="original", error=None, usage=None)
+    result = apply_prompt_response_fallback(output, None)
+    assert result is output
+
+
+@pytest.mark.anyio
+async def test_apply_prompt_response_fallback_no_change_returns_same() -> None:
+    from codex_autorunner.agents.opencode.output_assembly import (
+        apply_prompt_response_fallback,
+    )
+
+    output = OpenCodeTurnOutput(text="original", error="err", usage=None)
+    result = apply_prompt_response_fallback(
+        output,
+        {"info": {"id": "m1"}, "parts": [{"type": "text", "text": "fallback"}]},
+    )
+    assert result is output
+
+
+@pytest.mark.anyio
+async def test_output_recovery_tier_ordering() -> None:
+    """Verify output recovery tiers apply in the correct priority order.
+
+    Tiers (highest to lowest priority):
+    1. Streaming text deltas (accumulated during stream)
+    2. Fallback message from message.completed (role-resolved)
+    3. Messages fetcher recovery (API call)
+    4. Prompt response awaitable fallback
+
+    Higher tiers should win when present.
+    """
+
+    async def _messages_fetcher():
+        return [
+            {
+                "info": {"id": "m-api", "role": "assistant"},
+                "parts": [{"type": "text", "text": "api recovery"}],
+            }
+        ]
+
+    async def _prompt_response():
+        return {
+            "info": {"id": "m-pr"},
+            "parts": [{"type": "text", "text": "prompt response"}],
+        }
+
+    events = [SSEEvent(event="session.idle", data='{"sessionID":"s1"}')]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+        messages_fetcher=_messages_fetcher,
+        prompt_response_awaitable=_prompt_response(),
+    )
+    assert output.text == "api recovery"
+    assert output.error is None
+
+
+@pytest.mark.anyio
+async def test_output_recovery_stream_wins_over_completed_and_api() -> None:
+    """Streaming text should take precedence over completed message and API recovery."""
+
+    async def _messages_fetcher():
+        return [
+            {
+                "info": {"id": "m-api", "role": "assistant"},
+                "parts": [{"type": "text", "text": "api recovery"}],
+            }
+        ]
+
+    events = [
+        SSEEvent(
+            event="message.part.updated",
+            data='{"sessionID":"s1","properties":{"delta":{"text":"streamed"},'
+            '"part":{"type":"text","text":"streamed"}}}',
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+        messages_fetcher=_messages_fetcher,
+    )
+    assert output.text == "streamed"
+
+
+@pytest.mark.anyio
+async def test_output_recovery_completed_wins_over_api() -> None:
+    """message.completed text should take precedence over API recovery."""
+
+    async def _messages_fetcher():
+        return [
+            {
+                "info": {"id": "m-api", "role": "assistant"},
+                "parts": [{"type": "text", "text": "api recovery"}],
+            }
+        ]
+
+    events = [
+        SSEEvent(
+            event="message.completed",
+            data='{"sessionID":"s1","info":{"id":"m1","role":"assistant"},'
+            '"parts":[{"type":"text","text":"completed text"}]}',
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+        messages_fetcher=_messages_fetcher,
+    )
+    assert output.text == "completed text"
+
+
+@pytest.mark.anyio
+async def test_output_recovery_api_wins_over_prompt_response() -> None:
+    """Messages fetcher recovery should take precedence over prompt response."""
+
+    async def _messages_fetcher():
+        return [
+            {
+                "info": {"id": "m-api", "role": "assistant"},
+                "parts": [{"type": "text", "text": "api text"}],
+            }
+        ]
+
+    async def _prompt_response():
+        return {
+            "info": {"id": "m-pr"},
+            "parts": [{"type": "text", "text": "prompt text"}],
+        }
+
+    events = [SSEEvent(event="session.idle", data='{"sessionID":"s1"}')]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+        messages_fetcher=_messages_fetcher,
+        prompt_response_awaitable=_prompt_response(),
+    )
+    assert output.text == "api text"
+
+
+@pytest.mark.anyio
+async def test_output_recovery_prompt_response_is_last_resort() -> None:
+    """Prompt response should only be used when no other tier produces text."""
+
+    async def _prompt_response():
+        return {
+            "info": {"id": "m-pr"},
+            "parts": [{"type": "text", "text": "prompt response"}],
+        }
+
+    events = [SSEEvent(event="session.idle", data='{"sessionID":"s1"}')]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+        prompt_response_awaitable=_prompt_response(),
+    )
+    assert output.text == "prompt response"

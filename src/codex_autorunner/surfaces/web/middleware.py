@@ -10,7 +10,7 @@ from urllib.parse import parse_qs, urlparse
 
 from fastapi.responses import RedirectResponse, Response
 
-from ...core.config import _normalize_base_path
+from ...core.config_parsers import normalize_base_path
 from ...core.logging_utils import log_event
 from ...core.request_context import reset_request_id, set_request_id
 from .static_assets import security_headers
@@ -28,7 +28,7 @@ class BasePathRouterMiddleware:
 
     def __init__(self, app, base_path: str, known_prefixes=None):
         self.app = app
-        self.base_path = _normalize_base_path(base_path)
+        self.base_path = normalize_base_path(base_path)
         self.base_path_bytes = self.base_path.encode("utf-8")
         self.known_prefixes = tuple(
             known_prefixes
@@ -139,7 +139,7 @@ class AuthTokenMiddleware:
     def __init__(self, app, token: str, base_path: str = ""):
         self.app = app
         self.token = token
-        self.base_path = _normalize_base_path(base_path)
+        self.base_path = normalize_base_path(base_path)
         self.public_prefixes = ("/static", "/health", "/cat")
 
     def __getattr__(self, name):

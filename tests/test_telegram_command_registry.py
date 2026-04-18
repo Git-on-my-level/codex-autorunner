@@ -4,6 +4,10 @@ from codex_autorunner.integrations.telegram.commands_registry import (
     build_command_payloads,
     diff_command_lists,
 )
+from codex_autorunner.integrations.telegram.handlers.commands import (
+    WorkspaceCommands,
+    WorkspaceCommandsMixin,
+)
 from tests.fixtures.telegram_command_helpers import make_command_spec
 
 # Cross-cutting parse/registration contract cases live in
@@ -83,3 +87,7 @@ def test_diff_command_lists_detects_order_changes() -> None:
     assert diff.removed == []
     assert diff.changed == []
     assert diff.order_changed is True
+
+
+def test_workspace_commands_mixin_alias_preserved() -> None:
+    assert WorkspaceCommandsMixin is WorkspaceCommands

@@ -26,6 +26,7 @@ from codex_autorunner.core.hub_control_plane import (
     RunningExecutionLookupRequest,
     SurfaceBindingListRequest,
     SurfaceBindingUpsertRequest,
+    ThreadTargetListRequest,
     TranscriptWriteRequest,
     WorkspaceSetupCommandRequest,
     serialize_run_event,
@@ -131,6 +132,22 @@ def test_shared_state_service_handshake_and_listing(tmp_path: Path) -> None:
     assert handshake.hub_asset_version == "web-asset-1"
     assert "notification_reply_targets" in handshake.capabilities
     assert workspaces.workspaces[0].workspace_id == "wksp-1"
+
+
+def test_shared_state_service_thread_listing_accepts_status_alias(
+    tmp_path: Path,
+) -> None:
+    service, thread_target_id = _build_service(tmp_path)
+
+    active = service.list_thread_targets(
+        ThreadTargetListRequest.from_mapping({"status": "active"})
+    )
+    idle = service.list_thread_targets(
+        ThreadTargetListRequest.from_mapping({"status": "idle"})
+    )
+
+    assert [thread.thread_target_id for thread in active.threads] == [thread_target_id]
+    assert [thread.thread_target_id for thread in idle.threads] == [thread_target_id]
 
 
 def test_shared_state_service_reply_lookup_and_binding_idempotency(

@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from dataclasses import dataclass, field
 from typing import Any, Literal, Optional
 
 from ..acp_lifecycle import (
     analyze_acp_lifecycle_message,
+    extract_message_phase,
 )
 from ..acp_lifecycle import (
     extract_error_message as _extract_error_message,
@@ -18,6 +18,16 @@ from ..acp_lifecycle import (
     extract_output_delta as _extract_output_delta,
 )
 from ..time_utils import now_iso
+from .codex_item_normalizers import (
+    extract_agent_message_text as _shared_extract_agent_message_text,
+)
+from .codex_item_normalizers import (
+    extract_codex_usage,
+    is_commentary_agent_message,
+)
+from .codex_item_normalizers import (
+    merge_runtime_raw_events as _merge_runtime_raw_events,
+)
 from .execution_history import ExecutionCheckpoint, ExecutionCheckpointSignal
 from .stream_text_merge import merge_assistant_stream_text
 
@@ -420,36 +430,6 @@ class RuntimeTurnTerminalStateMachine:
         )
 
 
-def _merge_runtime_raw_events(
-    streamed_raw_events: list[Any],
-    result_raw_events: list[Any],
-) -> list[Any]:
-    streamed = list(streamed_raw_events or [])
-    result = list(result_raw_events or [])
-    if not streamed:
-        return result
-    if not result:
-        return streamed
-    streamed_keys = [_runtime_raw_event_key(item) for item in streamed]
-    result_keys = [_runtime_raw_event_key(item) for item in result]
-    max_overlap = min(len(streamed_keys), len(result_keys))
-    for overlap in range(max_overlap, 0, -1):
-        if streamed_keys[-overlap:] == result_keys[:overlap]:
-            return streamed + result[overlap:]
-    return streamed + result
-
-
-def _runtime_raw_event_key(raw_event: Any) -> str:
-    if isinstance(raw_event, (dict, list)):
-        return json.dumps(
-            raw_event,
-            sort_keys=True,
-            separators=(",", ":"),
-            default=str,
-        )
-    return str(raw_event)
-
-
 def _inspect_raw_event(
     raw_event: Any,
     *,
@@ -476,10 +456,14 @@ def _inspect_raw_event(
 
     if method in {"message.completed", "message.updated"}:
         role = _extract_message_role(params)
-        if role != "user":
+        if (
+            role != "user"
+            and str(params.get("phase") or "").strip().lower() != "commentary"
+        ):
             assistant_message_text = _extract_message_text(params)
     elif method in {"prompt/message", "turn/message"}:
-        assistant_message_text = lifecycle.assistant_text
+        if lifecycle.message_phase != "commentary":
+            assistant_message_text = lifecycle.assistant_text
     elif lifecycle.runtime_terminal_status is not None:
         assistant_message_text = lifecycle.assistant_text or None
         terminal_signal = RuntimeThreadTerminalSignal(
@@ -504,29 +488,36 @@ def _inspect_raw_event(
         if (
             isinstance(item, dict)
             and str(item.get("type") or "").strip() == "agentMessage"
-            and str(item.get("phase") or "").strip().lower() != "commentary"
+            and not is_commentary_agent_message(item)
         ):
-            assistant_message_text = _extract_agent_message_text(item)
+            assistant_message_text = _shared_extract_agent_message_text(item) or None
 
-    if assistant_message_text is None and (
-        method
-        in {
-            "prompt/output",
-            "prompt/delta",
-            "prompt/progress",
-            "turn/progress",
-            "item/agentMessage/delta",
-            "message.delta",
-            "turn/streamDelta",
-        }
-        or "outputdelta" in method_lower
+    if (
+        assistant_message_text is None
+        and (
+            method
+            in {
+                "prompt/output",
+                "prompt/delta",
+                "prompt/progress",
+                "turn/progress",
+                "item/agentMessage/delta",
+                "message.delta",
+                "turn/streamDelta",
+            }
+            or "outputdelta" in method_lower
+        )
+        and extract_message_phase(params) != "commentary"
     ):
         assistant_stream_text = _extract_output_delta(params)
     if assistant_stream_text is None and method == "session/update":
         update = params.get("update")
         if isinstance(update, dict):
             update_kind = str(lifecycle.session_update_kind or "").strip()
-            if update_kind == "agent_message_chunk":
+            if (
+                update_kind == "agent_message_chunk"
+                and lifecycle.message_phase != "commentary"
+            ):
                 assistant_stream_text = _extract_output_delta(update)
 
     return _RawEventInspection(
@@ -540,10 +531,7 @@ def _inspect_raw_event(
 
 
 def _extract_usage(params: dict[str, Any]) -> Optional[dict[str, Any]]:
-    usage = params.get("usage") or params.get("tokenUsage")
-    if isinstance(usage, dict):
-        return usage
-    return None
+    return extract_codex_usage(params)
 
 
 def _checkpoint_preview(value: str, limit: int = 240) -> str:
@@ -565,36 +553,6 @@ def _extract_message_role(params: dict[str, Any]) -> str:
         if isinstance(role, str):
             return role.strip().lower()
     return ""
-
-
-def _extract_agent_message_text(item: dict[str, Any]) -> Optional[str]:
-    for key in ("text", "message"):
-        text = _string_from_value(item.get(key))
-        if text:
-            return text
-    content = item.get("content")
-    if isinstance(content, list):
-        parts = [_string_from_value(part) for part in content]
-        joined = "".join(part for part in parts if part)
-        return joined or None
-    return _string_from_value(content)
-
-
-def _string_from_value(value: Any) -> Optional[str]:
-    if isinstance(value, str):
-        text = value.strip()
-        return text or None
-    if isinstance(value, dict):
-        for key in ("text", "message", "content", "value"):
-            nested_text = _string_from_value(value.get(key))
-            if nested_text:
-                return nested_text
-        return None
-    if isinstance(value, list):
-        parts = [_string_from_value(item) for item in value]
-        joined = "".join(part for part in parts if part)
-        return joined or None
-    return None
 
 
 __all__ = [

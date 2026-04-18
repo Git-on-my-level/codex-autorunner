@@ -8,6 +8,11 @@ artifacts, the live `flows.db`, GitHub issue/PR context, and lightweight
 metadata stay available for later review in the Archive UI without copying the
 full runtime state unless you opt into a full archive profile.
 
+Archives are **reviewable retained output**, not live source of truth. The
+canonical live stores (`flows.db` for run history, `contextspace/` for durable
+context, `tickets/` for the ticket queue) remain authoritative. Archive
+snapshots exist for operator review and audit.
+
 Archives are local runtime data and are not meant to be committed. The
 base repo's `.codex-autorunner/` folder is gitignored.
 
@@ -82,7 +87,7 @@ Open the repo web UI and select the **Archive** tab. You can:
   - Snapshot copies: `logs/` inside the snapshot directory.
 
 ## Expected size and storage hygiene
-Archive size depends on run history and attachments. CAR now prunes archive
+Archive size depends on run history and attachments. CAR prunes archive
 history automatically using PMA retention settings:
 
 - `pma.worktree_archive_max_snapshots_per_repo`
@@ -91,6 +96,14 @@ history automatically using PMA retention settings:
 - `pma.run_archive_max_entries`
 - `pma.run_archive_max_age_days`
 - `pma.run_archive_max_total_bytes`
+
+Retention pruning after archive is **best-effort**: it must not fail the
+archive operation itself. If pruning encounters an error, the archive is still
+published and the pruning failure is logged.
+
+Snapshots without a `META.json` file (incomplete staging directories) are
+intentionally invisible to retention pruning and will not appear in prune
+planning or dry-run reports.
 
 To run pruning on demand, use:
 
@@ -103,14 +116,17 @@ Add `--dry-run` to preview deletions without removing anything.
 ## Relation to State-Wide Cleanup
 
 Worktree archives are one of several retention families managed by CAR. The
-umbrella `car cleanup state` command orchestrates cleanup across all families:
+umbrella `car cleanup state` command orchestrates cleanup across all families.
+Each family belongs to a single retention class that determines its cleanup
+behavior:
 
-- **worktree_archives**: `.codex-autorunner/archive/worktrees/` (reviewable)
-- **run_archives**: `.codex-autorunner/archive/runs/` (reviewable)
-- **filebox**: `.codex-autorunner/filebox/` (ephemeral)
-- **reports**: `.codex-autorunner/reports/` (reviewable history)
-- **workspaces**: repo-local `app_server_workspaces/` and global
-  `~/.codex-autorunner/workspaces/` (ephemeral)
+| Family | Path | Class | Live store? |
+|--------|------|-------|-------------|
+| worktree_archives | `archive/worktrees/` | reviewable | No — retained output only |
+| run_archives | `archive/runs/` | reviewable | No — retained output only; `flows.db` is canonical live store |
+| filebox | `filebox/` | ephemeral | No — staging only |
+| reports | `reports/` | reviewable | No — history files (stable outputs like `latest-*` are durable) |
+| workspaces | `app_server_workspaces/`, global `workspaces/` | ephemeral | No — supervisor state only |
 
 To preview state-wide cleanup:
 

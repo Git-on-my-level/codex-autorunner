@@ -124,6 +124,9 @@ The migration may have already been done, or you're using a fresh repo. No actio
 - **Before:** CAR uses `.codex-autorunner/workspace/`
 - **After:** CAR uses `.codex-autorunner/contextspace/`
 - The runtime will only read from the new path; old configs pointing to workspace will need updating.
+- Archive operations preserve legacy workspace content through a single migration shim
+  (`_contextspace_source` in `core/archive.py`). This is the **only** place the
+  workspace fallback is implemented. Do not add new fallback logic elsewhere.
 
 ## Additional resources
 

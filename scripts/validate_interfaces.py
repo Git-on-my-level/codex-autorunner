@@ -204,7 +204,7 @@ def main() -> int:
     parser.add_argument(
         "--typescript",
         type=Path,
-        default=Path("src/codex_autorunner/static_src/hub.ts"),
+        default=Path("src/codex_autorunner/static_src/hubTypes.ts"),
         help="Path to TypeScript hub interface file.",
     )
     parser.add_argument(

@@ -1,3 +1,14 @@
+"""PMA hygiene: explicit mutation bridge over canonical PMA state.
+
+This module builds cleanup candidate reports and applies approved cleanup
+actions.  It must remain downstream of canonical PMA state (orchestration
+SQLite tables for threads, automation, and queues) and must not become an
+alternate owner of routing, lifecycle, or workspace-identity truth.
+
+Workspace/repo resolution for notification delivery lives in
+``pma_chat_delivery`` and uses shared helpers from ``chat_bindings``.
+"""
+
 from __future__ import annotations
 
 from collections import Counter
@@ -553,6 +564,14 @@ def _revalidate_managed_thread_cleanup(
     binding_store: OrchestrationBindingStore,
     managed_thread_id: str,
 ) -> Optional[str]:
+    """Re-query canonical stores before applying a destructive thread cleanup.
+
+    This is a deliberate mutation gate, not a classification step.  It
+    independently verifies that the thread is still safe to archive by
+    checking the canonical stores, even if the report was generated
+    earlier.  Returns ``None`` when cleanup is safe, or a human-readable
+    reason string when it is blocked.
+    """
     normalized_thread_id = managed_thread_id.strip()
     if not normalized_thread_id:
         return "missing managed_thread_id"

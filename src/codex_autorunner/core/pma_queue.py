@@ -19,8 +19,9 @@ from .utils import atomic_write
 PMA_QUEUE_DIR = ".codex-autorunner/pma/queue"
 QUEUE_FILE_SUFFIX = ".jsonl"
 DEFAULT_COMPACTION_KEEP_LAST = 200
+COMPACTION_MIN_TERMINAL_ROWS = 500
+PMA_LANE_SOURCE_KIND = "pma_lane"
 COMPACTION_MIN_SIZE_BYTES = 256 * 1024
-
 logger = logging.getLogger(__name__)
 
 
@@ -101,6 +102,7 @@ class PmaQueue:
         self._replayed_lanes: set[str] = set()
         self._lock: Optional[asyncio.Lock] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._lane_mirror_mtimes: dict[str, float] = {}
         self._initialize_canonical_state()
 
     def _initialize_canonical_state(self) -> None:
@@ -310,6 +312,7 @@ class PmaQueue:
             return True
 
         poll_interval = max(0.1, poll_interval_seconds)
+
         while True:
             wait_tasks = [asyncio.create_task(event.wait())]
             if cancel_event is not None:
@@ -333,9 +336,21 @@ class PmaQueue:
                 event.clear()
                 return True
 
+            mirror_path = self._lane_queue_path(lane_id)
+            try:
+                current_mtime = mirror_path.stat().st_mtime
+            except OSError:
+                current_mtime = 0.0
+            prev_mtime = self._lane_mirror_mtimes.get(lane_id, 0.0)
+
+            if current_mtime == prev_mtime:
+                continue
+
             added = await self._refresh_lane_from_disk(lane_id)
             if added:
                 return True
+
+            self._lane_mirror_mtimes[lane_id] = current_mtime
 
     async def list_items(self, lane_id: str) -> list[PmaQueueItem]:
         async with self._ensure_lane_lock(lane_id):
@@ -431,11 +446,10 @@ class PmaQueue:
             return True
 
     async def _maybe_compact_lane(self, lane_id: str) -> None:
-        path = self._lane_queue_path(lane_id)
-        try:
-            if path.stat().st_size < COMPACTION_MIN_SIZE_BYTES:
-                return
-        except OSError:
+        terminal_count = await asyncio.to_thread(
+            self._count_terminal_rows_sync, lane_id
+        )
+        if terminal_count < COMPACTION_MIN_TERMINAL_ROWS:
             return
         await self.compact_lane(lane_id)
 
@@ -508,7 +522,7 @@ class PmaQueue:
                     """,
                     (
                         item.lane_id,
-                        "pma_lane",
+                        PMA_LANE_SOURCE_KIND,
                         item.item_id,
                         item.idempotency_key,
                         item.state.value,
@@ -587,7 +601,7 @@ class PmaQueue:
         return (
             item.item_id,
             item.lane_id,
-            "pma_lane",
+            PMA_LANE_SOURCE_KIND,
             item.item_id,
             item.idempotency_key,
             item.state.value,
@@ -632,9 +646,10 @@ class PmaQueue:
                 SELECT *
                   FROM orch_queue_items
                  WHERE lane_id = ?
+                   AND source_kind = ?
                  ORDER BY rowid ASC
                 """,
-                (lane_id,),
+                (lane_id, PMA_LANE_SOURCE_KIND),
             ).fetchall()
         return [self._row_to_item(row) for row in rows]
 
@@ -658,19 +673,37 @@ class PmaQueue:
                 )
         self._sync_lane_mirror_sync(lane_id)
 
+    def _count_terminal_rows_sync(self, lane_id: str) -> int:
+        placeholders = ",".join("?" for _ in TERMINAL_STATES)
+        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            row = conn.execute(
+                f"""
+                SELECT COUNT(*) AS cnt
+                  FROM orch_queue_items
+                 WHERE lane_id = ?
+                   AND source_kind = ?
+                   AND state IN ({placeholders})
+                """,
+                (lane_id, PMA_LANE_SOURCE_KIND, *TERMINAL_STATES),
+            ).fetchone()
+        return int(row["cnt"]) if row else 0
+
     def _get_all_lanes_sync(self) -> list[str]:
         with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
             rows = conn.execute(
                 """
                 SELECT DISTINCT lane_id
                   FROM orch_queue_items
+                 WHERE source_kind = ?
                  ORDER BY lane_id ASC
-                """
+                """,
+                (PMA_LANE_SOURCE_KIND,),
             ).fetchall()
         return [str(row["lane_id"]) for row in rows if row["lane_id"]]
 
 
 __all__ = [
+    "PMA_LANE_SOURCE_KIND",
     "PmaQueue",
     "PmaQueueItem",
     "QueueItemState",

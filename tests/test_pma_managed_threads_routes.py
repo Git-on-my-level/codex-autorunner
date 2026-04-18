@@ -77,15 +77,13 @@ def test_create_managed_thread_with_repo_owner(hub_env) -> None:
     stored = store.get_thread(thread["managed_thread_id"])
     assert stored is not None
     assert stored.get("backend_thread_id") is None
-    notification = resp.json().get("notification") or {}
-    subscription = notification.get("subscription") or {}
-    assert subscription.get("thread_id") == thread["managed_thread_id"]
+    assert "notification" not in resp.json()
 
     automation_store = app.state.hub_supervisor.get_pma_automation_store()
     subscriptions = automation_store.list_subscriptions(
         thread_id=thread["managed_thread_id"]
     )
-    assert len(subscriptions) == 1
+    assert subscriptions == []
 
 
 def test_create_managed_thread_with_workspace_root(hub_env) -> None:
@@ -851,6 +849,87 @@ def test_create_subscription_auto_resolves_lane_from_bound_thread(hub_env) -> No
     assert subscription["lane_id"] == "discord"
 
 
+def test_create_subscription_warns_when_active_auto_subscription_covers_scope(
+    hub_env,
+) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                **_repo_owner(hub_env),
+                "notify_on": "terminal",
+                "notify_lane": "discord",
+            },
+        )
+        assert create_resp.status_code == 200
+        auto_subscription = (create_resp.json().get("notification") or {}).get(
+            "subscription"
+        ) or {}
+        thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+        subscription_resp = client.post(
+            "/hub/pma/subscriptions",
+            json={
+                "event_type": "managed_thread_completed",
+                "thread_id": thread_id,
+            },
+        )
+
+    assert subscription_resp.status_code == 200
+    payload = subscription_resp.json()
+    assert payload["deduped"] is True
+    assert "warning" in payload
+    assert "confirm=true" in payload["warning"]
+    assert payload["subscription"]["subscription_id"] == auto_subscription.get(
+        "subscription_id"
+    )
+
+    automation_store = app.state.hub_supervisor.get_pma_automation_store()
+    subscriptions = automation_store.list_subscriptions(thread_id=thread_id)
+    assert len(subscriptions) == 1
+
+
+def test_create_subscription_confirm_allows_duplicate_over_active_auto_subscription(
+    hub_env,
+) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                **_repo_owner(hub_env),
+                "notify_on": "terminal",
+                "notify_lane": "discord",
+            },
+        )
+        assert create_resp.status_code == 200
+        thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+        subscription_resp = client.post(
+            "/hub/pma/subscriptions",
+            json={
+                "event_type": "managed_thread_completed",
+                "thread_id": thread_id,
+                "confirm": True,
+            },
+        )
+
+    assert subscription_resp.status_code == 200
+    payload = subscription_resp.json()
+    assert payload["deduped"] is False
+    assert "warning" not in payload
+    assert payload["subscription"]["thread_id"] == thread_id
+
+    automation_store = app.state.hub_supervisor.get_pma_automation_store()
+    subscriptions = automation_store.list_subscriptions(thread_id=thread_id)
+    assert len(subscriptions) == 2
+
+
 def test_create_subscription_with_unknown_thread_returns_404(hub_env) -> None:
     app = create_hub_app(hub_env.hub_root)
 
@@ -953,6 +1032,32 @@ def test_create_managed_thread_default_followup_ignores_partial_automation_store
         create_resp = client.post(
             "/hub/pma/threads",
             json={"agent": "codex", **_repo_owner(hub_env)},
+        )
+
+    assert create_resp.status_code == 200
+    payload = create_resp.json()
+    assert "notification" not in payload
+
+
+def test_create_managed_thread_notify_once_only_does_not_opt_in_followup(
+    hub_env,
+) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    class PartialAutomationStore:
+        def create_subscription(self) -> None:
+            return None
+
+    app.state.hub_supervisor.get_pma_automation_store = lambda: PartialAutomationStore()
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                **_repo_owner(hub_env),
+                "notify_once": True,
+            },
         )
 
     assert create_resp.status_code == 200

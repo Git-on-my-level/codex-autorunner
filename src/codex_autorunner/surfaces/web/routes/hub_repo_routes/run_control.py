@@ -10,6 +10,7 @@ from .....core.runtime import LockError
 
 if TYPE_CHECKING:
     from ...app_state import HubAppContext
+    from .cache_coordinator import HubCacheCoordinator
     from .mount_manager import HubMountManager
     from .services import HubRepoEnricher
 
@@ -20,12 +21,22 @@ class HubRunControlService:
         context: HubAppContext,
         mount_manager: HubMountManager,
         enricher: HubRepoEnricher,
+        *,
+        cache_coordinator: HubCacheCoordinator | None = None,
     ) -> None:
         self._context = context
         self._mount_manager = mount_manager
         self._enricher = enricher
+        self._cache = cache_coordinator
 
-    async def _refresh_repo_listing_cache(self) -> None:
+    async def _invalidate_caches(self) -> None:
+        if self._cache is not None:
+            await self._cache.invalidate_caches()
+            return
+        await self._legacy_refresh()
+        self._enricher.invalidate_runtime_caches()
+
+    async def _legacy_refresh(self) -> None:
         from .....core.logging_utils import safe_log
 
         try:
@@ -59,9 +70,8 @@ class HubRunControlService:
             Exception
         ) as exc:  # intentional: pluggable spawn_fn may raise unpredictable errors
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        await self._refresh_repo_listing_cache()
+        await self._invalidate_caches()
         await self._mount_manager.refresh_mounts([snapshot], full_refresh=False)
-        self._enricher.invalidate_runtime_caches()
         return self._enricher.enrich_repo(snapshot)
 
     async def stop_repo(self, repo_id: str) -> dict:
@@ -74,8 +84,7 @@ class HubRunControlService:
             )
         except (ValueError, OSError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        await self._refresh_repo_listing_cache()
-        self._enricher.invalidate_runtime_caches()
+        await self._invalidate_caches()
         return self._enricher.enrich_repo(snapshot)
 
     async def resume_repo(self, repo_id: str, once: bool = False) -> dict:
@@ -97,9 +106,8 @@ class HubRunControlService:
             Exception
         ) as exc:  # intentional: pluggable spawn_fn may raise unpredictable errors
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        await self._refresh_repo_listing_cache()
+        await self._invalidate_caches()
         await self._mount_manager.refresh_mounts([snapshot], full_refresh=False)
-        self._enricher.invalidate_runtime_caches()
         return self._enricher.enrich_repo(snapshot)
 
     async def kill_repo(self, repo_id: str) -> dict:
@@ -112,8 +120,7 @@ class HubRunControlService:
             )
         except (ValueError, OSError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        await self._refresh_repo_listing_cache()
-        self._enricher.invalidate_runtime_caches()
+        await self._invalidate_caches()
         return self._enricher.enrich_repo(snapshot)
 
     async def init_repo(self, repo_id: str) -> dict:
@@ -126,9 +133,8 @@ class HubRunControlService:
             )
         except (ValueError, OSError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        await self._refresh_repo_listing_cache()
+        await self._invalidate_caches()
         await self._mount_manager.refresh_mounts([snapshot], full_refresh=False)
-        self._enricher.invalidate_runtime_caches()
         return self._enricher.enrich_repo(snapshot)
 
     async def sync_main(self, repo_id: str) -> dict:
@@ -141,7 +147,6 @@ class HubRunControlService:
             )
         except (ValueError, OSError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        await self._refresh_repo_listing_cache()
+        await self._invalidate_caches()
         await self._mount_manager.refresh_mounts([snapshot], full_refresh=False)
-        self._enricher.invalidate_runtime_caches()
         return self._enricher.enrich_repo(snapshot)

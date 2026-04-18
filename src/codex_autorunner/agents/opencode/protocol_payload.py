@@ -752,3 +752,35 @@ def extract_message_info(params: dict[str, Any]) -> dict[str, Any]:
         if isinstance(nested, dict):
             return nested
     return {}
+
+
+def extract_part_and_delta(
+    payload: Any,
+) -> tuple[Optional[dict[str, Any]], Any]:
+    """Extract (part_dict, delta_value) from a message-part event payload.
+
+    Handles ``properties.part`` / ``properties.delta`` nesting as well as
+    direct ``part`` / ``delta`` keys, centralising the drift-vulnerable
+    property layout that ``message.part.updated`` and ``message.part.delta``
+    events use.
+    """
+    if not isinstance(payload, dict):
+        return None, None
+    properties = payload.get("properties")
+    if isinstance(properties, dict):
+        part = properties.get("part")
+        delta = properties.get("delta")
+    else:
+        part = payload.get("part")
+        delta = payload.get("delta")
+    part_dict = part if isinstance(part, dict) else None
+    return part_dict, delta
+
+
+def extract_delta_text_value(delta: Any) -> Optional[str]:
+    """Extract text from a delta value that may be a dict with a ``text`` key or a plain string."""
+    if isinstance(delta, dict):
+        return delta.get("text")
+    if isinstance(delta, str):
+        return delta
+    return None

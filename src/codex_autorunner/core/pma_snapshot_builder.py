@@ -198,50 +198,73 @@ def _build_snapshot_freshness_summary(
     pma_threads: list[dict[str, Any]],
     pma_files_detail: Mapping[str, list[dict[str, Any]]],
 ) -> dict[str, Any]:
+    sections = {
+        "repos": summarize_section_freshness(
+            repos,
+            generated_at=generated_at,
+            stale_threshold_seconds=stale_threshold_seconds,
+            extractor=_extract_entry_freshness,
+        ),
+        "agent_workspaces": summarize_section_freshness(
+            agent_workspaces,
+            generated_at=generated_at,
+            stale_threshold_seconds=stale_threshold_seconds,
+        ),
+        "inbox": summarize_section_freshness(
+            inbox,
+            generated_at=generated_at,
+            stale_threshold_seconds=stale_threshold_seconds,
+            extractor=_extract_entry_freshness,
+        ),
+        "action_queue": summarize_section_freshness(
+            action_queue,
+            generated_at=generated_at,
+            stale_threshold_seconds=stale_threshold_seconds,
+            extractor=_extract_entry_freshness,
+        ),
+        "pma_threads": summarize_section_freshness(
+            pma_threads,
+            generated_at=generated_at,
+            stale_threshold_seconds=stale_threshold_seconds,
+        ),
+        "pma_file_inbox": summarize_section_freshness(
+            pma_files_detail.get("inbox") or [],
+            generated_at=generated_at,
+            stale_threshold_seconds=stale_threshold_seconds,
+        ),
+        "pma_file_outbox": summarize_section_freshness(
+            pma_files_detail.get("outbox") or [],
+            generated_at=generated_at,
+            stale_threshold_seconds=stale_threshold_seconds,
+        ),
+    }
+    included_sections = {
+        section_name: payload
+        for section_name, payload in sections.items()
+        if int(payload.get("entity_count") or 0) > 0
+        or int(payload.get("stale_count") or 0) > 0
+        or int(payload.get("unknown_count") or 0) > 0
+    }
+    stale_sections = [
+        section_name
+        for section_name, payload in included_sections.items()
+        if int(payload.get("entity_count") or 0) > 0
+        and int(payload.get("stale_count") or 0) > 0
+    ]
+    stale_summary = None
+    if stale_sections:
+        section_label = "section" if len(stale_sections) == 1 else "sections"
+        stale_summary = (
+            f"{len(stale_sections)} {section_label} stale "
+            f"({', '.join(stale_sections)})"
+        )
     return {
         "schema_version": 1,
         "generated_at": generated_at,
         "stale_threshold_seconds": stale_threshold_seconds,
-        "sections": {
-            "repos": summarize_section_freshness(
-                repos,
-                generated_at=generated_at,
-                stale_threshold_seconds=stale_threshold_seconds,
-                extractor=_extract_entry_freshness,
-            ),
-            "agent_workspaces": summarize_section_freshness(
-                agent_workspaces,
-                generated_at=generated_at,
-                stale_threshold_seconds=stale_threshold_seconds,
-            ),
-            "inbox": summarize_section_freshness(
-                inbox,
-                generated_at=generated_at,
-                stale_threshold_seconds=stale_threshold_seconds,
-                extractor=_extract_entry_freshness,
-            ),
-            "action_queue": summarize_section_freshness(
-                action_queue,
-                generated_at=generated_at,
-                stale_threshold_seconds=stale_threshold_seconds,
-                extractor=_extract_entry_freshness,
-            ),
-            "pma_threads": summarize_section_freshness(
-                pma_threads,
-                generated_at=generated_at,
-                stale_threshold_seconds=stale_threshold_seconds,
-            ),
-            "pma_file_inbox": summarize_section_freshness(
-                pma_files_detail.get("inbox") or [],
-                generated_at=generated_at,
-                stale_threshold_seconds=stale_threshold_seconds,
-            ),
-            "pma_file_outbox": summarize_section_freshness(
-                pma_files_detail.get("outbox") or [],
-                generated_at=generated_at,
-                stale_threshold_seconds=stale_threshold_seconds,
-            ),
-        },
+        "sections": included_sections,
+        "stale_sections": stale_sections,
+        "stale_summary": stale_summary,
     }
 
 
@@ -373,16 +396,11 @@ def _collect_hub_local_artifacts(
         return pma_files, pma_files_detail, pma_threads, automation
 
     pma_files, pma_files_detail = _snapshot_pma_files(hub_root)
-    pma_threads = snapshot_pma_threads(hub_root)
-    for thread in pma_threads:
-        thread["freshness"] = build_freshness_payload(
-            generated_at=generated_at,
-            stale_threshold_seconds=stale_threshold_seconds,
-            candidates=[
-                ("thread_status_changed_at", thread.get("status_changed_at")),
-                ("thread_updated_at", thread.get("updated_at")),
-            ],
-        )
+    pma_threads = snapshot_pma_threads(
+        hub_root,
+        generated_at=generated_at,
+        stale_threshold_seconds=stale_threshold_seconds,
+    )
     for box in BOXES:
         for index, entry in enumerate(pma_files_detail.get(box) or []):
             entry["freshness"] = build_freshness_payload(
@@ -447,29 +465,33 @@ async def build_hub_snapshot_payload(
         }
 
     limits = PmaSnapshotLimits.from_supervisor(supervisor)
-    repos, agent_workspaces, inbox, lifecycle_events, process_monitor = (
-        await asyncio.gather(
-            asyncio.to_thread(
-                _build_repo_summaries,
-                supervisor,
-                stale_threshold_seconds=stale_threshold_seconds,
-                limits=limits,
-            ),
-            asyncio.to_thread(
-                _build_agent_workspace_summaries,
-                supervisor,
-                hub_root=hub_root,
-                limits=limits,
-            ),
-            asyncio.to_thread(
-                gather_inbox,
-                supervisor,
-                max_text_chars=limits.max_text_chars,
-                stale_threshold_seconds=stale_threshold_seconds,
-            ),
-            asyncio.to_thread(_gather_lifecycle_events, supervisor, limit=20),
-            _build_process_monitor_payload(),
-        )
+    (
+        repos,
+        agent_workspaces,
+        inbox,
+        lifecycle_events,
+        process_monitor,
+    ) = await asyncio.gather(
+        asyncio.to_thread(
+            _build_repo_summaries,
+            supervisor,
+            stale_threshold_seconds=stale_threshold_seconds,
+            limits=limits,
+        ),
+        asyncio.to_thread(
+            _build_agent_workspace_summaries,
+            supervisor,
+            hub_root=hub_root,
+            limits=limits,
+        ),
+        asyncio.to_thread(
+            gather_inbox,
+            supervisor,
+            max_text_chars=limits.max_text_chars,
+            stale_threshold_seconds=stale_threshold_seconds,
+        ),
+        asyncio.to_thread(_gather_lifecycle_events, supervisor, limit=20),
+        _build_process_monitor_payload(),
     )
     inbox = inbox[: limits.max_messages]
 

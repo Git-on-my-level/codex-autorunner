@@ -37,6 +37,7 @@ from .git_utils import (
     git_failure_detail,
     git_head_sha,
     git_is_clean,
+    git_mutation_lock,
     git_upstream_status,
     resolve_ref_sha,
     run_git,
@@ -64,6 +65,7 @@ from .hub_topology import (
     normalize_pinned_parent_repo_ids,
     prune_pinned_parent_repo_ids,
     read_lock_status,  # noqa: F401  re-exported for consumers
+    refresh_pma_threads_artifact,
     save_hub_state,
 )
 from .hub_worktree_manager import WorktreeManager
@@ -90,6 +92,7 @@ logger = logging.getLogger("codex_autorunner.hub")
 
 _GIT_FETCH_TIMEOUT_SECONDS = 120
 _GIT_PULL_TIMEOUT_SECONDS = 120
+_LIST_REPOS_CACHE_TTL_SECONDS = 30.0
 
 BackendFactoryBuilder = Callable[[Path, RepoConfig], BackendFactory]
 AppServerSupervisorFactoryBuilder = Callable[[RepoConfig], AppServerSupervisorFactory]
@@ -293,6 +296,13 @@ class RepoRunner:
         self._controller.resume(once=once)
 
 
+HubStartupPhase = str
+HUB_STARTUP_CONSTRUCTED: HubStartupPhase = "constructed"
+HUB_STARTUP_RECONCILING: HubStartupPhase = "reconciling"
+HUB_STARTUP_READY: HubStartupPhase = "ready"
+HUB_STARTUP_STARTED: HubStartupPhase = "started"
+
+
 class HubSupervisor:
     def __init__(
         self,
@@ -308,6 +318,7 @@ class HubSupervisor:
         scm_poll_processor: Optional[Callable[[int], dict[str, int]]] = None,
         start_lifecycle_worker: bool = True,
     ):
+        self._startup_phase: HubStartupPhase = HUB_STARTUP_CONSTRUCTED
         self.hub_config = hub_config
         self.state_path = hub_config.root / ".codex-autorunner" / "hub_state.json"
         self._runner_orchestrator = RunnerOrchestrator(
@@ -358,6 +369,7 @@ class HubSupervisor:
         self._pma_automation_store: Optional[PmaAutomationStore] = None
         self._pma_lane_worker_starter: Optional[Callable[[str], None]] = None
         self._scm_poll_processor = scm_poll_processor
+        self._invalidation_callbacks: List[Callable[[], None]] = []
         self._repo_manager = RepoManager(
             hub_config,
             on_invalidate_cache=self._invalidate_list_cache,
@@ -373,7 +385,9 @@ class HubSupervisor:
             ctx=self._worktree_bridge,
         )
         self._wire_outbox_lifecycle()
+        self._startup_phase = HUB_STARTUP_RECONCILING
         self._reconcile_startup()
+        self._startup_phase = HUB_STARTUP_READY
         if start_lifecycle_worker:
             self.startup()
 
@@ -414,12 +428,16 @@ class HubSupervisor:
             pinned_parent_repo_ids=pinned_parent_repo_ids,
         )
         save_hub_state(self.state_path, self.state, self.hub_config.root)
+        refresh_pma_threads_artifact(self.hub_config.root)
         return snapshots
 
     def list_repos(self, *, use_cache: bool = True) -> List[RepoSnapshot]:
         with self._list_lock:
             if use_cache and self._list_cache and self._list_cache_at is not None:
-                if time.monotonic() - self._list_cache_at < 2.0:
+                if (
+                    time.monotonic() - self._list_cache_at
+                    < _LIST_REPOS_CACHE_TTL_SECONDS
+                ):
                     return self._list_cache
             if use_cache and self._startup_repo_state_pending and self.state.repos:
                 self._startup_repo_state_pending = False
@@ -444,7 +462,6 @@ class HubSupervisor:
                 self.state_path,
                 self.state,
                 self.hub_config.root,
-                refresh_pma_threads_artifact=False,
             )
             self._list_cache = snapshots
             self._list_cache_at = time.monotonic()
@@ -481,7 +498,6 @@ class HubSupervisor:
                 self.state_path,
                 self.state,
                 self.hub_config.root,
-                refresh_pma_threads_artifact=False,
             )
             return list(self.state.pinned_parent_repo_ids)
 
@@ -717,60 +733,61 @@ class HubSupervisor:
         if not git_is_clean(repo_root):
             raise ValueError("Repo has uncommitted changes; commit or stash first")
 
-        try:
-            proc = run_git(
-                ["fetch", "--prune", "origin"],
-                repo_root,
-                check=False,
-                timeout_seconds=_GIT_FETCH_TIMEOUT_SECONDS,
-            )
-        except GitError as exc:
-            raise ValueError(f"git fetch failed: {exc}") from exc
-        if proc.returncode != 0:
-            raise ValueError(f"git fetch failed: {git_failure_detail(proc)}")
-
-        default_branch = git_default_branch(repo_root)
-        if not default_branch:
-            raise ValueError("Unable to resolve origin default branch")
-
-        try:
-            proc = run_git(["checkout", default_branch], repo_root, check=False)
-        except GitError as exc:
-            raise ValueError(f"git checkout failed: {exc}") from exc
-        if proc.returncode != 0:
+        with git_mutation_lock(repo_root):
             try:
                 proc = run_git(
-                    ["checkout", "-B", default_branch, f"origin/{default_branch}"],
+                    ["fetch", "--prune", "origin"],
                     repo_root,
                     check=False,
+                    timeout_seconds=_GIT_FETCH_TIMEOUT_SECONDS,
                 )
+            except GitError as exc:
+                raise ValueError(f"git fetch failed: {exc}") from exc
+            if proc.returncode != 0:
+                raise ValueError(f"git fetch failed: {git_failure_detail(proc)}")
+
+            default_branch = git_default_branch(repo_root)
+            if not default_branch:
+                raise ValueError("Unable to resolve origin default branch")
+
+            try:
+                proc = run_git(["checkout", default_branch], repo_root, check=False)
             except GitError as exc:
                 raise ValueError(f"git checkout failed: {exc}") from exc
             if proc.returncode != 0:
-                raise ValueError(f"git checkout failed: {git_failure_detail(proc)}")
+                try:
+                    proc = run_git(
+                        ["checkout", "-B", default_branch, f"origin/{default_branch}"],
+                        repo_root,
+                        check=False,
+                    )
+                except GitError as exc:
+                    raise ValueError(f"git checkout failed: {exc}") from exc
+                if proc.returncode != 0:
+                    raise ValueError(f"git checkout failed: {git_failure_detail(proc)}")
 
-        try:
-            proc = run_git(
-                ["pull", "--ff-only", "origin", default_branch],
-                repo_root,
-                check=False,
-                timeout_seconds=_GIT_PULL_TIMEOUT_SECONDS,
-            )
-        except GitError as exc:
-            raise ValueError(f"git pull failed: {exc}") from exc
-        if proc.returncode != 0:
-            raise ValueError(f"git pull failed: {git_failure_detail(proc)}")
-        local_sha = git_head_sha(repo_root)
-        if not local_sha:
-            raise ValueError("Unable to resolve local HEAD after sync")
-        origin_ref = f"refs/remotes/origin/{default_branch}"
-        origin_sha = resolve_ref_sha(repo_root, origin_ref)
-        if local_sha != origin_sha:
-            raise ValueError(
-                "Sync main did not land on origin/%s: local=%s origin=%s. "
-                "Local branch may contain extra commits; resolve divergence first."
-                % (default_branch, local_sha[:12], origin_sha[:12])
-            )
+            try:
+                proc = run_git(
+                    ["pull", "--ff-only", "origin", default_branch],
+                    repo_root,
+                    check=False,
+                    timeout_seconds=_GIT_PULL_TIMEOUT_SECONDS,
+                )
+            except GitError as exc:
+                raise ValueError(f"git pull failed: {exc}") from exc
+            if proc.returncode != 0:
+                raise ValueError(f"git pull failed: {git_failure_detail(proc)}")
+            local_sha = git_head_sha(repo_root)
+            if not local_sha:
+                raise ValueError("Unable to resolve local HEAD after sync")
+            origin_ref = f"refs/remotes/origin/{default_branch}"
+            origin_sha = resolve_ref_sha(repo_root, origin_ref)
+            if local_sha != origin_sha:
+                raise ValueError(
+                    "Sync main did not land on origin/%s: local=%s origin=%s. "
+                    "Local branch may contain extra commits; resolve divergence first."
+                    % (default_branch, local_sha[:12], origin_sha[:12])
+                )
         return self._snapshot_for_repo(repo_id)
 
     def create_repo(
@@ -1315,11 +1332,19 @@ class HubSupervisor:
             raise ValueError(f"Agent workspace {workspace_id} not found in manifest")
         return build_agent_workspace_snapshot(workspace, self.hub_config.root)
 
+    def register_invalidation_callback(self, callback: Callable[[], None]) -> None:
+        self._invalidation_callbacks.append(callback)
+
     def _invalidate_list_cache(self) -> None:
         with self._list_lock:
             self._list_cache = None
             self._list_cache_at = None
             self._startup_repo_state_pending = False
+        for cb in self._invalidation_callbacks:
+            try:
+                cb()
+            except (OSError, ValueError, TypeError, RuntimeError):
+                logger.exception("Invalidation callback failed")
 
     @property
     def lifecycle_emitter(self) -> LifecycleEventEmitter:
@@ -1389,18 +1414,28 @@ class HubSupervisor:
     def trigger_pma_from_lifecycle_event(self, event: LifecycleEvent) -> None:
         self._process_lifecycle_event(event)
 
-    def _process_lifecycle_event_cycle(self) -> None:
-        self.process_lifecycle_events()
-        self.process_scm_automation_polls()
-        self.process_pma_automation_timers()
-        self.drain_pma_automation_wakeups()
+    def _process_lifecycle_event_cycle(self) -> bool:
+        productive = False
+        if self.process_lifecycle_events() > 0:
+            productive = True
+        scm_counts = self.process_scm_automation_polls()
+        if scm_counts.get("polled", 0) > 0 or scm_counts.get("events_emitted", 0) > 0:
+            productive = True
+        timer_count = self.process_pma_automation_timers()
+        if timer_count > 0:
+            productive = True
+        wakeup_count = self.drain_pma_automation_wakeups()
+        if wakeup_count > 0:
+            productive = True
+        return productive
 
-    def process_lifecycle_events(self) -> None:
-        self._lifecycle_event_processor.process_events(limit=100)
+    def process_lifecycle_events(self) -> int:
+        processed = self._lifecycle_event_processor.process_events(limit=100)
         try:
             self.drain_pma_automation_wakeups()
         except Exception:
             logger.exception("Failed draining PMA automation wake-ups")
+        return processed
 
     def process_scm_automation_polls(self, *, limit: int = 20) -> dict[str, int]:
         processor = self._scm_poll_processor
@@ -1446,8 +1481,13 @@ class HubSupervisor:
     def _stop_lifecycle_event_processor(self) -> None:
         self._lifecycle_worker.stop()
 
+    @property
+    def startup_phase(self) -> HubStartupPhase:
+        return self._startup_phase
+
     def startup(self) -> None:
         self._start_lifecycle_event_processor()
+        self._startup_phase = HUB_STARTUP_STARTED
 
     def shutdown(self) -> None:
         self._stop_lifecycle_event_processor()
@@ -1469,6 +1509,7 @@ class HubSupervisor:
                 self._lifecycle_emitter.emit_dispatch_created(
                     repo_id, run_id, data=data, origin=origin
                 )
+                self._lifecycle_worker.wake()
 
         set_lifecycle_emitter(_emit_outbox_event)
 
@@ -1649,6 +1690,12 @@ class HubSupervisor:
                 "subscription_id": wakeup.get("subscription_id"),
                 "timer_id": wakeup.get("timer_id"),
             }
+            metadata = wakeup.get("metadata")
+            if isinstance(metadata, dict):
+                wake_payload["metadata"] = dict(metadata)
+                delivery_target = metadata.get("delivery_target")
+                if isinstance(delivery_target, dict):
+                    wake_payload["delivery_target"] = dict(delivery_target)
             payload = {
                 "message": self._build_pma_wakeup_message(wake_payload),
                 "agent": None,

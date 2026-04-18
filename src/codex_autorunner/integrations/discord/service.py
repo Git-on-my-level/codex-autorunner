@@ -6,7 +6,6 @@ import hashlib
 import json
 import logging
 import os
-import subprocess
 import time
 import uuid
 from dataclasses import dataclass, replace
@@ -42,14 +41,13 @@ from ...core.config import (
     resolve_env_for_root,
 )
 from ...core.filebox import (
-    delete_regular_files,
     inbox_dir,
     list_regular_files,
     outbox_dir,
     outbox_pending_dir,
     outbox_sent_dir,
 )
-from ...core.filebox_retention import (
+from ...core.filebox_retention import (  # noqa: F401 - re-exported for test monkeypatching
     prune_filebox_root,
     resolve_filebox_retention_policy,
 )
@@ -75,17 +73,15 @@ from ...core.git_utils import (  # noqa: F401 - kept for test monkeypatching
 from ...core.hub_control_plane import (
     HandshakeCompatibility,
     HttpHubControlPlaneClient,
-    HubControlPlaneError,
-    evaluate_handshake_compatibility,
 )
-from ...core.hub_control_plane.models import (
-    HandshakeRequest as _HandshakeRequest,
-)
+from ...core.hub_control_plane.handshake_startup import perform_startup_hub_handshake
 from ...core.hub_control_plane.service import (
     CONTROL_PLANE_API_VERSION as _CONTROL_PLANE_API_VERSION,
 )
 from ...core.logging_utils import log_event
-from ...core.managed_processes import reap_managed_processes
+from ...core.managed_processes import (
+    reap_managed_processes,
+)  # noqa: F401 - re-exported for test monkeypatching
 from ...core.orchestration import (
     ORCHESTRATION_SCHEMA_VERSION,
     ChatOperationRecoveryAction,
@@ -124,7 +120,7 @@ from ...integrations.agents.opencode_supervisor_factory import (
     build_opencode_supervisor_from_repo_config,
 )
 from ...integrations.app_server.client import ApprovalDecision, CodexAppServerClient
-from ...integrations.app_server.env import app_server_env, build_app_server_env
+from ...integrations.app_server.env import build_app_server_env
 from ...integrations.app_server.event_buffer import AppServerEventBuffer
 from ...integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ...integrations.app_server.threads import (
@@ -189,10 +185,6 @@ from ...integrations.chat.picker_filter import (
 )
 from ...integrations.chat.queue_control import ChatQueueControlStore
 from ...integrations.chat.run_mirror import ChatRunMirror
-from ...integrations.chat.session_messages import (
-    build_fresh_session_started_lines,
-    build_thread_detail_lines,
-)
 from ...integrations.chat.turn_policy import (
     PlainTextTurnContext,
     should_trigger_plain_text_turn,
@@ -213,19 +205,42 @@ from ...tickets.frontmatter import parse_markdown_frontmatter
 from ...voice import VoiceConfig, VoiceService, VoiceServiceError
 from ...voice.provider_catalog import normalize_voice_provider
 from ...voice.service import VoiceTransientError
-from ..telegram.constants import DEFAULT_SKILLS_LIST_LIMIT
-from ..telegram.helpers import _format_skills_list
 from .adapter import DiscordChatAdapter
 from .car_command_dispatch import handle_car_command as dispatch_car_command
+from .channel_messaging import (
+    _coerce_id as _cm_coerce_id,
+)
+from .channel_messaging import (
+    _first_non_empty_text as _cm_first_non_empty_text,
+)
+from .channel_messaging import (
+    _nested_text as _cm_nested_text,
+)
+from .channel_messaging import (
+    delete_channel_message as _delete_channel_message_impl,
+)
+from .channel_messaging import (
+    handle_discord_outbox_delivery as _handle_discord_outbox_delivery_impl,
+)
+from .channel_messaging import (
+    record_channel_directory_seen as _record_channel_directory_seen_impl,
+)
+from .channel_messaging import (
+    resolve_channel_name as _resolve_channel_name_impl,
+)
+from .channel_messaging import (
+    resolve_guild_name as _resolve_guild_name_impl,
+)
+from .channel_messaging import (
+    send_channel_message as _send_channel_message_impl,
+)
 from .collaboration_helpers import (
     collaboration_probe_text,
 )
-from .command_registry import sync_commands
 from .command_runner import CommandRunner as _CommandRunner
 from .command_runner import RunnerConfig as _RunnerConfig
 from .components import (
     DISCORD_SELECT_OPTION_MAX_OPTIONS,
-    build_model_effort_picker,
     build_ticket_filter_picker,
     build_ticket_picker,
 )
@@ -282,9 +297,6 @@ from .interaction_dispatch import (
     handle_component_interaction as _dispatch_component_interaction,
 )
 from .interaction_registry import (
-    MODEL_EFFORT_SELECT_ID,
-    TICKETS_MODAL_PREFIX,
-    build_application_commands,
     component_admission_ack_policy,
     component_dispatch_ack_policy,
     component_route_for_custom_id,
@@ -297,10 +309,6 @@ from .interaction_registry import (
     slash_command_route_for_path,
     slash_command_workspace_lock_policy,
 )
-from .interaction_runtime import (
-    defer_and_update_runtime_component_message,
-    ensure_ephemeral_response_deferred,
-)
 from .interaction_session import (
     DiscordInteractionSession,
     InteractionSessionKind,
@@ -309,9 +317,7 @@ from .interactions import extract_interaction_id, extract_interaction_token
 from .managed_thread_delivery import deliver_discord_managed_thread_record
 from .message_turns import (
     DiscordMessageTurnResult,
-    bind_discord_progress_task_context,
     build_discord_thread_orchestration_service,
-    reconcile_discord_turn_progress_leases,
     resolve_bound_workspace_root,
     run_agent_turn_for_message,
     run_managed_thread_turn_for_message,
@@ -339,13 +345,50 @@ from .pma_commands import (
     handle_pma_status,
 )
 from .rendering import (
-    chunk_discord_message,
     format_discord_message,
-    sanitize_discord_outbound_text,
     truncate_for_discord,
 )
 from .response_helpers import DiscordResponder
 from .rest import DISCORD_INTERACTION_CALLBACK_TIMEOUT_SECONDS, DiscordRestClient
+from .service_lifecycle import (
+    apply_pending_chat_queue_resets as _apply_pending_chat_queue_resets_impl,
+)
+from .service_lifecycle import (
+    close_all_app_server_supervisors as _close_all_app_server_supervisors_impl,
+)
+from .service_lifecycle import (
+    close_all_opencode_supervisors as _close_all_opencode_supervisors_impl,
+)
+from .service_lifecycle import (
+    is_within_cold_start_window as _is_within_cold_start_window_impl,
+)
+from .service_lifecycle import (
+    on_background_task_done as _on_background_task_done_impl,
+)
+from .service_lifecycle import (
+    reconcile_background_task_failure as _reconcile_background_task_failure_impl,
+)
+from .service_lifecycle import (
+    reconcile_progress_leases_on_startup as _reconcile_progress_leases_on_startup_impl,
+)
+from .service_lifecycle import (
+    run_chat_queue_reset_loop as _run_chat_queue_reset_loop_impl,
+)
+from .service_lifecycle import (
+    run_opencode_prune_loop as _run_opencode_prune_loop_impl,
+)
+from .service_lifecycle import (
+    service_uptime_ms as _service_uptime_ms_impl,
+)
+from .service_lifecycle import (
+    shutdown_service as _shutdown_impl,
+)
+from .service_lifecycle import (
+    sync_application_commands_on_startup as _sync_application_commands_on_startup_impl,
+)
+from .service_lifecycle import (
+    validate_command_sync_config as _validate_command_sync_config_impl,
+)
 from .service_normalization import (
     DiscordAttachmentAdapter,
     SavedDiscordAttachment,
@@ -491,12 +534,19 @@ def _plan_delivery_recovery_cursor(
 
 DISCORD_EPHEMERAL_FLAG = 64
 CHAT_QUEUE_RESET_POLL_INTERVAL_SECONDS = 2.0
+CHAT_QUEUE_RESET_POLL_MAX_INTERVAL_SECONDS = 30.0
+CHAT_QUEUE_RESET_POLL_BACKOFF_GROW_FACTOR = 1.5
 DISCORD_TURN_PROGRESS_MIN_EDIT_INTERVAL_SECONDS = 1.0
 DISCORD_TURN_PROGRESS_HEARTBEAT_INTERVAL_SECONDS = 2.0
 DISCORD_TURN_PROGRESS_MAX_ACTIONS = 12
 DISCORD_TYPING_HEARTBEAT_INTERVAL_SECONDS = 5.0
-DISCORD_BACKGROUND_TASK_SHUTDOWN_GRACE_SECONDS = 10.0
 DISCORD_INTERACTION_COLD_START_WINDOW_SECONDS = 120.0
+DISCORD_BACKGROUND_TASK_SHUTDOWN_GRACE_SECONDS = (
+    10.0  # noqa: F401 - re-exported for test monkeypatching
+)
+DISCORD_HUB_HANDSHAKE_RETRY_WINDOW_SECONDS = 45.0
+DISCORD_HUB_HANDSHAKE_RETRY_DELAY_SECONDS = 1.0
+DISCORD_HUB_HANDSHAKE_RETRY_MAX_DELAY_SECONDS = 5.0
 SHELL_OUTPUT_TRUNCATION_SUFFIX = "\n...[truncated]..."
 DISCORD_ATTACHMENT_MAX_BYTES = 100_000_000
 THREAD_LIST_MAX_PAGES = 5
@@ -504,6 +554,7 @@ THREAD_LIST_PAGE_LIMIT = 100
 APP_SERVER_START_BACKOFF_INITIAL_SECONDS = 1.0
 APP_SERVER_START_BACKOFF_MAX_SECONDS = 30.0
 DISCORD_OPENCODE_PRUNE_FALLBACK_INTERVAL_SECONDS = 300.0
+DISCORD_OPENCODE_PRUNE_EMPTY_INTERVAL_SECONDS = 600.0
 # Kept for test compatibility; queued notice payloads are shaped in
 # service_normalization.py.
 DISCORD_QUEUED_PLACEHOLDER_TEXT = "Queued (waiting for available worker...)"
@@ -569,7 +620,7 @@ class _DiscordAppServerSupervisorAdapter:
         return await supervisor.get_client(canonical_root)
 
     async def close_all(self) -> None:
-        await self._service._close_all_app_server_supervisors()
+        await _close_all_app_server_supervisors_impl(self._service)
 
 
 class _DiscordOpenCodeSupervisorAdapter:
@@ -643,7 +694,7 @@ class _DiscordOpenCodeSupervisorAdapter:
         await supervisor.mark_turn_finished(canonical_root)
 
     async def close_all(self) -> None:
-        await self._service._close_all_opencode_supervisors()
+        await _close_all_opencode_supervisors_impl(self._service)
 
 
 class DiscordBotService:
@@ -844,6 +895,8 @@ class DiscordBotService:
         self._ingress = InteractionIngress(self, logger=self._logger)
         self._ingress_pre_ack_reservations: set[str] = set()
         self._ingress_pre_ack_reservations_lock = asyncio.Lock()
+        self._chat_operation_write_lock_guard = asyncio.Lock()
+        self._chat_operation_write_locks: dict[str, asyncio.Lock] = {}
         self._command_runner = _CommandRunner(
             self,
             config=_RunnerConfig(
@@ -859,6 +912,15 @@ class DiscordBotService:
         self._service_started_at_monotonic: Optional[float] = None
         self._delivery_worker: Optional[ManagedThreadDeliveryWorker] = None
         self._delivery_worker_task: Optional[asyncio.Task[None]] = None
+        self._hub_handshake_retry_window_seconds = (
+            DISCORD_HUB_HANDSHAKE_RETRY_WINDOW_SECONDS
+        )
+        self._hub_handshake_retry_delay_seconds = (
+            DISCORD_HUB_HANDSHAKE_RETRY_DELAY_SECONDS
+        )
+        self._hub_handshake_retry_max_delay_seconds = (
+            DISCORD_HUB_HANDSHAKE_RETRY_MAX_DELAY_SECONDS
+        )
 
     def _build_delivery_worker(self) -> ManagedThreadDeliveryWorker:
         service = self
@@ -895,17 +957,21 @@ class DiscordBotService:
             raise SystemExit(1)
         self._reap_managed_processes(stage="startup")
         await self._store.initialize()
-        await self._reconcile_discord_progress_leases_on_startup()
+        await _reconcile_progress_leases_on_startup_impl(self)
         await self._resume_interaction_recovery()
-        self._validate_command_sync_config()
+        _validate_command_sync_config_impl(self)
         self._outbox.start()
         outbox_task = asyncio.create_task(self._outbox.run_loop())
-        self._opencode_prune_task = asyncio.create_task(self._run_opencode_prune_loop())
+        self._opencode_prune_task = asyncio.create_task(
+            _run_opencode_prune_loop_impl(self)
+        )
         if self._filebox_housekeeping_enabled():
             self._filebox_prune_task = asyncio.create_task(
                 self._run_filebox_prune_loop()
             )
-        chat_queue_reset_task = asyncio.create_task(self._run_chat_queue_reset_loop())
+        chat_queue_reset_task = asyncio.create_task(
+            _run_chat_queue_reset_loop_impl(self)
+        )
         pause_watch_task = asyncio.create_task(self._watch_ticket_flow_pauses())
         terminal_watch_task = asyncio.create_task(self._watch_ticket_flow_terminals())
         dispatcher_loop_task = asyncio.create_task(self._run_dispatcher_loop())
@@ -927,7 +993,7 @@ class DiscordBotService:
             )
             try:
                 await self._update_status_notifier.maybe_send_notice()
-            except Exception as exc:  # intentional: top-level error handler
+            except Exception as exc:
                 log_event(
                     self._logger,
                     logging.WARNING,
@@ -937,9 +1003,9 @@ class DiscordBotService:
             await self._gateway.run(self._on_dispatch)
         finally:
             await self._command_runner.shutdown()
-            with contextlib.suppress(Exception):  # intentional: shutdown cleanup
+            with contextlib.suppress(Exception):
                 await self._dispatcher.wait_idle()
-            with contextlib.suppress(Exception):  # intentional: shutdown cleanup
+            with contextlib.suppress(Exception):
                 await self._dispatcher.close()
             dispatcher_loop_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -971,17 +1037,10 @@ class DiscordBotService:
                 with contextlib.suppress(asyncio.CancelledError):
                     await self._delivery_worker_task
                 self._delivery_worker_task = None
-            await self._shutdown()
+            await _shutdown_impl(self)
 
     def _service_uptime_ms(self, *, now: Optional[float] = None) -> Optional[float]:
-        started_at_raw = getattr(self, "_service_started_at_monotonic", None)
-        started_at = (
-            float(started_at_raw) if isinstance(started_at_raw, (int, float)) else None
-        )
-        if started_at is None:
-            return None
-        current = time.monotonic() if now is None else now
-        return round(max(0.0, (current - started_at) * 1000), 1)
+        return _service_uptime_ms_impl(self, now=now)
 
     async def _perform_hub_handshake(self) -> bool:
         expected_schema_generation = ORCHESTRATION_SCHEMA_VERSION
@@ -995,80 +1054,28 @@ class DiscordBotService:
             )
             return False
 
-        try:
-            response = await self._hub_client.handshake(
-                _HandshakeRequest(
-                    client_name="discord",
-                    client_api_version=_CONTROL_PLANE_API_VERSION,
-                    expected_schema_generation=expected_schema_generation,
-                )
-            )
-            compatibility = evaluate_handshake_compatibility(
-                response,
-                client_api_version=_CONTROL_PLANE_API_VERSION,
-                expected_schema_generation=expected_schema_generation,
-            )
+        ok, compatibility = await perform_startup_hub_handshake(
+            hub_client=self._hub_client,
+            log_event_name_prefix="discord",
+            handshake_client_name="discord",
+            hub_root_str=str(self._config.root),
+            startup_monotonic=self._service_started_at_monotonic,
+            retry_window_seconds=self._hub_handshake_retry_window_seconds,
+            retry_delay_seconds=self._hub_handshake_retry_delay_seconds,
+            retry_max_delay_seconds=self._hub_handshake_retry_max_delay_seconds,
+            client_api_version=_CONTROL_PLANE_API_VERSION,
+            logger=self._logger,
+        )
+        if compatibility is not None:
             self._hub_handshake_compatibility = compatibility
-            if compatibility.compatible:
-                log_event(
-                    self._logger,
-                    logging.INFO,
-                    "discord.hub_control_plane.handshake_ok",
-                    hub_root=str(self._config.root),
-                    api_version=response.api_version,
-                    schema_generation=response.schema_generation,
-                    expected_schema_generation=expected_schema_generation,
-                )
-                return True
-            else:
-                log_event(
-                    self._logger,
-                    logging.ERROR,
-                    "discord.hub_control_plane.handshake_incompatible",
-                    hub_root=str(self._config.root),
-                    reason=compatibility.reason,
-                    server_api_version=compatibility.server_api_version,
-                    client_api_version=compatibility.client_api_version,
-                    server_schema_generation=compatibility.server_schema_generation,
-                    expected_schema_generation=compatibility.expected_schema_generation,
-                )
-                return False
-        except HubControlPlaneError as exc:
-            log_event(
-                self._logger,
-                logging.ERROR,
-                "discord.hub_control_plane.handshake_failed",
-                hub_root=str(self._config.root),
-                error_code=exc.code,
-                retryable=exc.retryable,
-                message=str(exc),
-                expected_schema_generation=expected_schema_generation,
-            )
-            return False
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.ERROR,
-                "discord.hub_control_plane.handshake_unexpected_error",
-                hub_root=str(self._config.root),
-                exc=exc,
-                expected_schema_generation=expected_schema_generation,
-            )
-            return False
+        return ok
 
     @property
     def hub_client(self) -> Optional[HttpHubControlPlaneClient]:
         return self._hub_client
 
     def _is_within_cold_start_window(self, *, now: Optional[float] = None) -> bool:
-        started_at_raw = getattr(self, "_service_started_at_monotonic", None)
-        started_at = (
-            float(started_at_raw) if isinstance(started_at_raw, (int, float)) else None
-        )
-        if started_at is None:
-            return False
-        current = time.monotonic() if now is None else now
-        return current - started_at <= DISCORD_INTERACTION_COLD_START_WINDOW_SECONDS
+        return _is_within_cold_start_window_impl(self, now=now)
 
     def _interaction_telemetry_fields(
         self,
@@ -1396,17 +1403,66 @@ class DiscordBotService:
         if not isinstance(token, str) or not token.strip():
             return None
         normalized = token.strip()
-        resolved = self._resolve_workspace_from_token(
-            normalized,
-            self._list_bind_workspace_candidates(),
-        )
-        if resolved is not None:
-            candidate = canonicalize_path(Path(resolved[2]))
-            return candidate if candidate.exists() and candidate.is_dir() else None
         candidate = Path(normalized)
-        if not candidate.is_absolute():
-            candidate = self._config.root / candidate
-        workspace_root = canonicalize_path(candidate)
+        # Keep bind-target resolution pre-ack strictly local and cheap. The full
+        # bind handler can do slower candidate enumeration after Discord has been
+        # acknowledged, but scheduler lock resolution must not spend the ack budget
+        # on live hub calls.
+        if candidate.is_absolute() or "/" in normalized or "\\" in normalized:
+            if not candidate.is_absolute():
+                candidate = self._config.root / candidate
+            workspace_root = canonicalize_path(candidate)
+            return (
+                workspace_root
+                if workspace_root.exists() and workspace_root.is_dir()
+                else None
+            )
+
+        cheap_candidates: list[tuple[Optional[str], Optional[str], str]] = [
+            ("repo", repo_id, str(canonicalize_path(Path(path))))
+            for repo_id, path in self._list_manifest_repos()
+        ]
+        seen_paths = {workspace_path for _kind, _id, workspace_path in cheap_candidates}
+        cheap_candidates.extend(
+            (
+                "agent_workspace",
+                workspace_id,
+                workspace_path,
+            )
+            for workspace_id, workspace_path, _display_name in self._list_agent_workspaces_from_cache()
+        )
+        seen_paths.update(
+            workspace_path for _kind, _id, workspace_path in cheap_candidates
+        )
+        try:
+            for child in sorted(
+                self._config.root.iterdir(),
+                key=lambda entry: entry.name.lower(),
+            ):
+                if not child.is_dir():
+                    continue
+                if child.name.startswith("."):
+                    continue
+                normalized_path = str(canonicalize_path(child))
+                if normalized_path in seen_paths:
+                    continue
+                seen_paths.add(normalized_path)
+                cheap_candidates.append((None, None, normalized_path))
+        except OSError:
+            self._logger.debug(
+                "failed to scan root directory for scheduler bind candidates",
+                exc_info=True,
+            )
+        resolved = self._resolve_workspace_from_token(normalized, cheap_candidates)
+        if resolved is not None:
+            resolved_root = canonicalize_path(Path(resolved[2]))
+            return (
+                resolved_root
+                if resolved_root.exists() and resolved_root.is_dir()
+                else None
+            )
+
+        workspace_root = canonicalize_path(self._config.root / candidate)
         return (
             workspace_root
             if workspace_root.exists() and workspace_root.is_dir()
@@ -3290,20 +3346,14 @@ class DiscordBotService:
         return bool(repo_config.housekeeping.enabled)
 
     async def _next_opencode_prune_interval_seconds(self) -> float:
-        async with self._opencode_lock:
-            intervals = [
-                entry.prune_interval_seconds
-                for entry in self._opencode_supervisors.values()
-                if entry.prune_interval_seconds is not None
-            ]
-        if intervals:
-            return min(intervals)
-        return DISCORD_OPENCODE_PRUNE_FALLBACK_INTERVAL_SECONDS
+        from .service_lifecycle import (
+            next_opencode_prune_interval_seconds as _next_interval_impl,
+        )
+
+        return await _next_interval_impl(self)
 
     async def _run_opencode_prune_loop(self) -> None:
-        while True:
-            await asyncio.sleep(await self._next_opencode_prune_interval_seconds())
-            await self._prune_opencode_supervisors()
+        await _run_opencode_prune_loop_impl(self)
 
     async def _run_filebox_prune_loop(self) -> None:
         while True:
@@ -3466,9 +3516,9 @@ class DiscordBotService:
                     self._opencode_supervisors.pop(workspace_path, None)
                     evicted_supervisors += 1
                     evicted_objects.append(entry.supervisor)
-            for supervisor in evicted_objects:
-                with contextlib.suppress(Exception):  # intentional: shutdown cleanup
-                    await supervisor.close_all()
+        for supervisor in evicted_objects:
+            with contextlib.suppress(Exception):
+                await supervisor.close_all()
 
         async with self._opencode_lock:
             cached_supervisors_after = len(self._opencode_supervisors)
@@ -3667,72 +3717,6 @@ class DiscordBotService:
             raise RuntimeError("Discord turn finished without a result")
         return turn_result
 
-    @staticmethod
-    def _extract_command_result(
-        result: subprocess.CompletedProcess[str],
-    ) -> tuple[str, str, Optional[int]]:
-        stdout = result.stdout if isinstance(result.stdout, str) else ""
-        stderr = result.stderr if isinstance(result.stderr, str) else ""
-        exit_code = int(result.returncode) if isinstance(result.returncode, int) else 0
-        return stdout, stderr, exit_code
-
-    @staticmethod
-    def _format_shell_body(
-        command: str, stdout: str, stderr: str, exit_code: Optional[int]
-    ) -> str:
-        lines = [f"$ {command}"]
-        if stdout:
-            lines.append(stdout.rstrip("\n"))
-        if stderr:
-            if stdout:
-                lines.append("")
-            lines.append("[stderr]")
-            lines.append(stderr.rstrip("\n"))
-        if not stdout and not stderr:
-            lines.append("(no output)")
-        if exit_code is not None and exit_code != 0:
-            lines.append(f"(exit {exit_code})")
-        return "\n".join(lines)
-
-    @staticmethod
-    def _format_shell_message(body: str, *, note: Optional[str]) -> str:
-        if note:
-            return f"{note}\n```text\n{body}\n```"
-        return f"```text\n{body}\n```"
-
-    def _prepare_shell_response(
-        self,
-        full_body: str,
-        *,
-        filename: str,
-    ) -> tuple[str, Optional[bytes]]:
-        max_output_chars = max(1, int(self._config.shell.max_output_chars))
-        max_message_length = max(64, int(self._config.max_message_length))
-
-        message = self._format_shell_message(full_body, note=None)
-        if len(full_body) <= max_output_chars and len(message) <= max_message_length:
-            return message, None
-
-        note = f"Output too long; attached full output as {filename}. Showing head."
-        head = full_body[:max_output_chars].rstrip()
-        if len(head) < len(full_body):
-            head = f"{head}{SHELL_OUTPUT_TRUNCATION_SUFFIX}"
-        message = self._format_shell_message(head, note=note)
-        if len(message) > max_message_length:
-            overhead = len(self._format_shell_message("", note=note))
-            allowed = max(
-                0,
-                max_message_length - overhead - len(SHELL_OUTPUT_TRUNCATION_SUFFIX),
-            )
-            head = full_body[:allowed].rstrip()
-            if len(head) < len(full_body):
-                head = f"{head}{SHELL_OUTPUT_TRUNCATION_SUFFIX}"
-            message = self._format_shell_message(head, note=note)
-            if len(message) > max_message_length:
-                message = truncate_for_discord(message, max_len=max_message_length)
-
-        return message, full_body.encode("utf-8", errors="replace")
-
     async def _handle_bang_shell(
         self,
         *,
@@ -3741,118 +3725,15 @@ class DiscordBotService:
         text: str,
         workspace_root: Path,
     ) -> None:
-        if not self._config.shell.enabled:
-            await self._send_channel_message_safe(
-                channel_id,
-                {
-                    "content": (
-                        "Shell commands are disabled. Enable `discord_bot.shell.enabled`."
-                    )
-                },
-                record_id=f"shell:{message_id}:disabled",
-            )
-            return
+        from .car_handlers.shell_commands import handle_bang_shell
 
-        command_text = text[1:].strip()
-        if not command_text:
-            await self._send_channel_message_safe(
-                channel_id,
-                {
-                    "content": "Prefix a command with `!` to run it locally. Example: `!ls`"
-                },
-                record_id=f"shell:{message_id}:usage",
-            )
-            return
-
-        timeout_seconds = max(0.1, self._config.shell.timeout_ms / 1000.0)
-        timeout_label = int(timeout_seconds + 0.999)
-        shell_command = ["bash", "-lc", command_text]
-        shell_env = app_server_env(shell_command, workspace_root)
-        try:
-            result = await asyncio.to_thread(
-                subprocess.run,
-                shell_command,
-                cwd=workspace_root,
-                capture_output=True,
-                text=True,
-                timeout=timeout_seconds,
-                env=shell_env,
-            )
-        except subprocess.TimeoutExpired:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.shell.timeout",
-                channel_id=channel_id,
-                command=command_text,
-                timeout_seconds=timeout_seconds,
-            )
-            await self._send_channel_message_safe(
-                channel_id,
-                {
-                    "content": (
-                        f"Shell command timed out after {timeout_label}s: `{command_text}`.\n"
-                        "Interactive commands (top/htop/watch/tail -f) do not exit. "
-                        "Try a one-shot flag like `top -l 1` (macOS) or `top -b -n 1` (Linux)."
-                    )
-                },
-                record_id=f"shell:{message_id}:timeout",
-            )
-            return
-        except subprocess.SubprocessError as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.shell.failed",
-                channel_id=channel_id,
-                command=command_text,
-                workspace_root=str(workspace_root),
-                exc=exc,
-            )
-            await self._send_channel_message_safe(
-                channel_id,
-                {"content": "Shell command failed; check logs for details."},
-                record_id=f"shell:{message_id}:failed",
-            )
-            return
-
-        stdout, stderr, exit_code = self._extract_command_result(result)
-        full_body = self._format_shell_body(command_text, stdout, stderr, exit_code)
-        filename = f"shell-output-{uuid.uuid4().hex[:8]}.txt"
-        response_text, attachment = self._prepare_shell_response(
-            full_body,
-            filename=filename,
+        await handle_bang_shell(
+            self,
+            channel_id=channel_id,
+            message_id=message_id,
+            text=text,
+            workspace_root=workspace_root,
         )
-        await self._send_channel_message_safe(
-            channel_id,
-            {"content": response_text},
-            record_id=f"shell:{message_id}:result",
-        )
-        if attachment is None:
-            return
-        try:
-            await self._rest.create_channel_message_with_attachment(
-                channel_id=channel_id,
-                data=attachment,
-                filename=filename,
-            )
-        except (DiscordAPIError, OSError) as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.shell.attachment_failed",
-                channel_id=channel_id,
-                command=command_text,
-                filename=filename,
-                exc=exc,
-            )
-            await self._send_channel_message_safe(
-                channel_id,
-                {
-                    "content": "Failed to attach full shell output; showing truncated output."
-                },
-                record_id=f"shell:{message_id}:attachment_failed",
-            )
 
     async def _handle_car_command(
         self,
@@ -3886,15 +3767,10 @@ class DiscordBotService:
         command_path: tuple[str, ...],
         options: dict[str, Any],
     ) -> None:
-        subcommand = command_path[1] if len(command_path) > 1 else "status"
-        if subcommand not in ("on", "off", "status"):
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Unknown PMA subcommand. Use on, off, or status.",
-            )
-            return
-        await self._handle_pma_command(
+        from .pma_commands import handle_pma_command_from_normalized
+
+        await handle_pma_command_from_normalized(
+            self,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
@@ -3904,50 +3780,10 @@ class DiscordBotService:
         )
 
     def _validate_command_sync_config(self) -> None:
-        registration = self._config.command_registration
-        if not registration.enabled:
-            return
-
-        application_id = (self._config.application_id or "").strip()
-        if not application_id:
-            raise ValueError("missing Discord application id for command sync")
-        if registration.scope == "guild" and not registration.guild_ids:
-            raise ValueError("guild scope requires at least one guild_id")
+        _validate_command_sync_config_impl(self)
 
     async def _sync_application_commands_on_startup(self) -> None:
-        registration = self._config.command_registration
-        if not registration.enabled:
-            log_event(
-                self._logger,
-                logging.INFO,
-                "discord.commands.sync.disabled",
-            )
-            return
-
-        self._validate_command_sync_config()
-
-        application_id = (self._config.application_id or "").strip()
-        commands = build_application_commands(self)
-        try:
-            await sync_commands(
-                self._rest,
-                application_id=application_id,
-                commands=commands,
-                scope=registration.scope,
-                guild_ids=registration.guild_ids,
-                logger=self._logger,
-            )
-        except ValueError:
-            raise
-        except (DiscordAPIError, OSError, RuntimeError) as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.commands.sync.startup_failed",
-                scope=registration.scope,
-                command_count=len(commands),
-                exc=exc,
-            )
+        await _sync_application_commands_on_startup_impl(self)
 
     async def _run_startup_command_sync_background(self) -> None:
         started_at = time.monotonic()
@@ -3959,7 +3795,7 @@ class DiscordBotService:
         )
         try:
             await self._sync_application_commands_on_startup()
-        except Exception as exc:  # intentional: background startup sync is best-effort
+        except Exception as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -3979,99 +3815,13 @@ class DiscordBotService:
         )
 
     async def _shutdown(self) -> None:
-        shutdown_deadline = (
-            time.monotonic() + DISCORD_BACKGROUND_TASK_SHUTDOWN_GRACE_SECONDS
-        )
-        pending_shutdown_tasks: list[asyncio.Task[Any]] = []
-        while True:
-            drainable_tasks = [
-                task
-                for task in list(self._background_shutdown_wait_tasks)
-                if not task.done()
-            ]
-            if not drainable_tasks:
-                break
-            remaining = shutdown_deadline - time.monotonic()
-            if remaining <= 0:
-                pending_shutdown_tasks = drainable_tasks
-                break
-            done, pending = await asyncio.wait(
-                drainable_tasks,
-                timeout=remaining,
-            )
-            self._background_shutdown_wait_tasks.difference_update(done)
-            pending_shutdown_tasks = list(pending)
-            if pending:
-                break
-        if pending_shutdown_tasks:
-            shutdown_reconcile_contexts: list[dict[str, Any]] = []
-            for task in pending_shutdown_tasks:
-                task_context = getattr(task, "_discord_progress_task_context", None)
-                if not isinstance(task_context, dict) or not task_context:
-                    continue
-                shutdown_context = dict(task_context)
-                shutdown_note = shutdown_context.get("shutdown_note")
-                if isinstance(shutdown_note, str) and shutdown_note.strip():
-                    shutdown_context["failure_note"] = shutdown_note.strip()
-                shutdown_reconcile_contexts.append(shutdown_context)
-            if shutdown_reconcile_contexts:
-                await asyncio.gather(
-                    *(
-                        self._reconcile_background_task_failure(
-                            task_context,
-                            allow_channel_fallback=False,
-                        )
-                        for task_context in shutdown_reconcile_contexts
-                    ),
-                    return_exceptions=True,
-                )
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.background_task.shutdown_timeout",
-                timeout_seconds=DISCORD_BACKGROUND_TASK_SHUTDOWN_GRACE_SECONDS,
-                pending_count=len(pending_shutdown_tasks),
-            )
-        if self._background_tasks:
-            for task in list(self._background_tasks):
-                task.cancel()
-            await asyncio.gather(*list(self._background_tasks), return_exceptions=True)
-            self._background_tasks.clear()
-        self._background_shutdown_wait_tasks.clear()
-        await self._command_runner.shutdown()
-        if self._owns_gateway:
-            with contextlib.suppress(Exception):  # intentional: shutdown cleanup
-                await self._gateway.stop()
-        if self._owns_rest and hasattr(self._rest, "close"):
-            with contextlib.suppress(Exception):  # intentional: shutdown cleanup
-                await self._rest.close()
-        if self._owns_store:
-            with contextlib.suppress(Exception):  # intentional: shutdown cleanup
-                await self._store.close()
-        await self._close_all_app_server_supervisors()
-        await self._close_all_opencode_supervisors()
-        if self._hub_client is not None:
-            with contextlib.suppress(Exception):
-                await self._hub_client.aclose()
-        self._reap_managed_processes(stage="shutdown")
+        await _shutdown_impl(self)
 
     async def _close_all_app_server_supervisors(self) -> None:
-        async with self._app_server_lock:
-            supervisors = list(self._app_server_supervisors.values())
-            self._app_server_supervisors.clear()
-        for supervisor in supervisors:
-            with contextlib.suppress(Exception):  # intentional: shutdown cleanup
-                await supervisor.close_all()
+        await _close_all_app_server_supervisors_impl(self)
 
     async def _close_all_opencode_supervisors(self) -> None:
-        async with self._opencode_lock:
-            opencode_supervisors = [
-                entry.supervisor for entry in self._opencode_supervisors.values()
-            ]
-            self._opencode_supervisors.clear()
-        for supervisor in opencode_supervisors:
-            with contextlib.suppress(Exception):  # intentional: shutdown cleanup
-                await supervisor.close_all()
+        await _close_all_opencode_supervisors_impl(self)
 
     async def _watch_ticket_flow_pauses(self) -> None:
         await watch_ticket_flow_pauses(self)
@@ -4080,39 +3830,10 @@ class DiscordBotService:
         await _scan_and_enqueue_pause_notifications_impl(self)
 
     async def _run_chat_queue_reset_loop(self) -> None:
-        while True:
-            try:
-                await self._apply_pending_chat_queue_resets()
-            except Exception as exc:  # intentional: long-running loop must not crash
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "discord.chat_queue.reset_scan_failed",
-                    exc=exc,
-                )
-            await asyncio.sleep(CHAT_QUEUE_RESET_POLL_INTERVAL_SECONDS)
+        await _run_chat_queue_reset_loop_impl(self)
 
     async def _apply_pending_chat_queue_resets(self) -> None:
-        requests = self._chat_queue_control_store.take_reset_requests(
-            platform="discord"
-        )
-        for request in requests:
-            conversation_id = str(request.get("conversation_id") or "").strip()
-            if not conversation_id:
-                continue
-            result = await self._dispatcher.force_reset(conversation_id)
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.chat_queue.reset_applied",
-                conversation_id=conversation_id,
-                chat_id=request.get("chat_id"),
-                thread_id=request.get("thread_id"),
-                requested_at=request.get("requested_at"),
-                requested_by=request.get("requested_by"),
-                cancelled_pending=result.get("cancelled_pending"),
-                cancelled_active=result.get("cancelled_active"),
-            )
+        await _apply_pending_chat_queue_resets_impl(self)
 
     async def _watch_ticket_flow_terminals(self) -> None:
         await watch_ticket_flow_terminals(self)
@@ -4120,37 +3841,12 @@ class DiscordBotService:
     async def _send_channel_message(
         self, channel_id: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
-        payload = dict(payload)
-        content = payload.get("content")
-        if isinstance(content, str):
-            payload["content"] = sanitize_discord_outbound_text(content)
-        content_len = len(payload.get("content", "") or "")
-        log_event(
-            self._logger,
-            logging.DEBUG,
-            "discord.channel_message.sending",
-            channel_id=channel_id,
-            content_len=content_len,
+        return await _send_channel_message_impl(
+            self._rest, self._logger, channel_id, payload
         )
-        response = await self._rest.create_channel_message(
-            channel_id=channel_id, payload=payload
-        )
-        message_id = response.get("id") if isinstance(response, dict) else None
-        log_event(
-            self._logger,
-            logging.DEBUG,
-            "discord.channel_message.sent",
-            channel_id=channel_id,
-            content_len=content_len,
-            message_id=message_id,
-        )
-        return response
 
     async def _delete_channel_message(self, channel_id: str, message_id: str) -> None:
-        await self._rest.delete_channel_message(
-            channel_id=channel_id,
-            message_id=message_id,
-        )
+        await _delete_channel_message_impl(self._rest, channel_id, message_id)
 
     async def _send_channel_message_safe(
         self,
@@ -4159,73 +3855,24 @@ class DiscordBotService:
         *,
         record_id: Optional[str] = None,
     ) -> None:
-        try:
-            await self._send_channel_message(channel_id, payload)
-            return
-        except (DiscordAPIError, OSError, RuntimeError) as exc:
-            outbox_record_id = (
-                record_id or f"retry:{channel_id}:{uuid.uuid4().hex[:12]}"
-            )
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.channel_message.send_failed",
-                channel_id=channel_id,
-                record_id=outbox_record_id,
-                exc=exc,
-            )
-            try:
-                await self._store.enqueue_outbox(
-                    OutboxRecord(
-                        record_id=outbox_record_id,
-                        channel_id=channel_id,
-                        message_id=None,
-                        operation="send",
-                        payload_json=dict(payload),
-                    )
-                )
-            except (OSError, ValueError, TypeError) as enqueue_exc:
-                log_event(
-                    self._logger,
-                    logging.ERROR,
-                    "discord.channel_message.enqueue_failed",
-                    channel_id=channel_id,
-                    record_id=outbox_record_id,
-                    exc=enqueue_exc,
-                )
+        from .channel_messaging import send_channel_message_safe as _impl
+
+        await _impl(
+            self._store,
+            self._rest,
+            self._logger,
+            self._send_channel_message,
+            channel_id,
+            payload,
+            record_id=record_id,
+        )
 
     async def _handle_discord_outbox_delivery(
         self, record: OutboxRecord, delivered_message_id: Optional[str]
     ) -> None:
-        if not isinstance(delivered_message_id, str) or not delivered_message_id:
-            return
-        if self._hub_client is None:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.outbox.delivery_mark.hub_client_unavailable",
-                record_id=record.record_id,
-            )
-            return
-        from ...core.hub_control_plane import (
-            NotificationDeliveryMarkRequest as _CPDeliveryMarkRequest,
+        await _handle_discord_outbox_delivery_impl(
+            self._hub_client, self._logger, record, delivered_message_id
         )
-
-        try:
-            await self._hub_client.mark_notification_delivered(
-                _CPDeliveryMarkRequest(
-                    delivery_record_id=record.record_id,
-                    delivered_message_id=delivered_message_id,
-                )
-            )
-        except (HubControlPlaneError, OSError, ValueError) as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.outbox.delivery_mark.control_plane_failed",
-                record_id=record.record_id,
-                exc=exc,
-            )
 
     async def _delete_channel_message_safe(
         self,
@@ -4234,45 +3881,16 @@ class DiscordBotService:
         *,
         record_id: Optional[str] = None,
     ) -> bool:
-        if not isinstance(message_id, str) or not message_id:
-            return False
-        try:
-            await self._delete_channel_message(channel_id, message_id)
-            return True
-        except (DiscordAPIError, OSError, RuntimeError) as exc:
-            outbox_record_id = (
-                record_id or f"retry:delete:{channel_id}:{uuid.uuid4().hex[:12]}"
-            )
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.channel_message.delete_failed",
-                channel_id=channel_id,
-                message_id=message_id,
-                record_id=outbox_record_id,
-                exc=exc,
-            )
-            try:
-                await self._store.enqueue_outbox(
-                    OutboxRecord(
-                        record_id=outbox_record_id,
-                        channel_id=channel_id,
-                        message_id=message_id,
-                        operation="delete",
-                        payload_json={},
-                    )
-                )
-            except (OSError, ValueError) as enqueue_exc:
-                log_event(
-                    self._logger,
-                    logging.ERROR,
-                    "discord.channel_message.delete_enqueue_failed",
-                    channel_id=channel_id,
-                    message_id=message_id,
-                    record_id=outbox_record_id,
-                    exc=enqueue_exc,
-                )
-        return False
+        from .channel_messaging import delete_channel_message_safe as _impl
+
+        return await _impl(
+            self._store,
+            self._delete_channel_message,
+            self._logger,
+            channel_id,
+            message_id,
+            record_id=record_id,
+        )
 
     def _spawn_task(
         self, coro: Awaitable[None], *, await_on_shutdown: bool = False
@@ -4281,31 +3899,11 @@ class DiscordBotService:
         self._background_tasks.add(task)
         if await_on_shutdown:
             self._background_shutdown_wait_tasks.add(task)
-        task.add_done_callback(self._on_background_task_done)
+        task.add_done_callback(lambda t: _on_background_task_done_impl(self, t))
         return task
 
     async def _reconcile_discord_progress_leases_on_startup(self) -> None:
-        try:
-            reconciled = await reconcile_discord_turn_progress_leases(
-                self,
-                orphaned=True,
-                startup=True,
-            )
-        except Exception as exc:  # intentional: startup reconciliation is best-effort
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.turn.progress_reconcile_startup_failed",
-                exc=exc,
-            )
-            return
-        if reconciled:
-            log_event(
-                self._logger,
-                logging.INFO,
-                "discord.turn.progress_reconcile_startup_finished",
-                reconciled=reconciled,
-            )
+        await _reconcile_progress_leases_on_startup_impl(self)
 
     async def _reconcile_background_task_failure(
         self,
@@ -4313,79 +3911,12 @@ class DiscordBotService:
         *,
         allow_channel_fallback: bool = True,
     ) -> int:
-        failure_note = task_context.get("failure_note")
-        if not isinstance(failure_note, str) or not failure_note.strip():
-            failure_note = "Status: this progress message lost its worker."
-        reconciled = await reconcile_discord_turn_progress_leases(
-            self,
-            lease_id=(
-                task_context.get("lease_id")
-                if isinstance(task_context.get("lease_id"), str)
-                else None
-            ),
-            managed_thread_id=(
-                task_context.get("managed_thread_id")
-                if isinstance(task_context.get("managed_thread_id"), str)
-                else None
-            ),
-            execution_id=(
-                task_context.get("execution_id")
-                if isinstance(task_context.get("execution_id"), str)
-                else None
-            ),
-            channel_id=(
-                task_context.get("channel_id")
-                if isinstance(task_context.get("channel_id"), str)
-                else None
-            ),
-            message_id=(
-                task_context.get("message_id")
-                if isinstance(task_context.get("message_id"), str)
-                else None
-            ),
-            failure_note=failure_note,
-            orphaned=bool(task_context.get("orphaned")),
+        return await _reconcile_background_task_failure_impl(
+            self, task_context, allow_channel_fallback=allow_channel_fallback
         )
-        if reconciled:
-            return int(reconciled)
-        if not allow_channel_fallback:
-            return 0
-        fallback_channel_id = (
-            task_context.get("channel_id")
-            if isinstance(task_context.get("channel_id"), str)
-            else None
-        )
-        if fallback_channel_id:
-            await self._send_channel_message_safe(
-                fallback_channel_id,
-                {"content": failure_note},
-            )
-        return 0
 
     def _on_background_task_done(self, task: asyncio.Task[Any]) -> None:
-        self._background_tasks.discard(task)
-        self._background_shutdown_wait_tasks.discard(task)
-        task_context = getattr(task, "_discord_progress_task_context", None)
-        try:
-            task.result()
-        except asyncio.CancelledError:
-            return
-        except (
-            Exception
-        ) as exc:  # intentional: top-level error handler for background tasks
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.background_task.failed",
-                exc=exc,
-            )
-            if isinstance(task_context, dict) and task_context:
-
-                async def _reconcile_failure() -> None:
-                    await self._reconcile_background_task_failure(task_context)
-
-                reconcile_task = self._spawn_task(_reconcile_failure())
-                bind_discord_progress_task_context(reconcile_task)
+        _on_background_task_done_impl(self, task)
 
     async def _on_dispatch(self, event_type: str, payload: dict[str, Any]) -> None:
         if event_type == "INTERACTION_CREATE":
@@ -4563,178 +4094,25 @@ class DiscordBotService:
     async def _record_channel_directory_seen_from_message_payload(
         self, payload: dict[str, Any]
     ) -> None:
-        channel_id = self._coerce_id(payload.get("channel_id"))
-        if channel_id is None:
-            return
-        guild_id = self._coerce_id(payload.get("guild_id"))
-
-        guild_label = self._first_non_empty_text(
-            payload.get("guild_name"),
-            self._nested_text(payload, "guild", "name"),
-        )
-        channel_label_raw = self._first_non_empty_text(
-            payload.get("channel_name"),
-            self._nested_text(payload, "channel", "name"),
-        )
-        if channel_label_raw is not None:
-            channel_label_raw = channel_label_raw.lstrip("#")
-            self._channel_name_cache[channel_id] = channel_label_raw
-        else:
-            if channel_id in self._channel_name_cache:
-                cached_channel = self._channel_name_cache[channel_id]
-                channel_label_raw = cached_channel if cached_channel else None
-            else:
-                channel_label_raw = await self._resolve_channel_name(channel_id)
-
-        if guild_id is not None:
-            if guild_label is not None:
-                self._guild_name_cache[guild_id] = guild_label
-            else:
-                if guild_id in self._guild_name_cache:
-                    cached_guild = self._guild_name_cache[guild_id]
-                    guild_label = cached_guild if cached_guild else None
-                else:
-                    guild_label = await self._resolve_guild_name(guild_id)
-
-        channel_label = (
-            f"#{channel_label_raw.lstrip('#')}"
-            if channel_label_raw is not None
-            else f"#{channel_id}"
-        )
-
-        if guild_id is not None:
-            display = f"{guild_label or f'guild:{guild_id}'} / {channel_label}"
-        else:
-            display = channel_label if channel_label_raw is not None else channel_id
-
-        meta: dict[str, Any] = {}
-        if guild_id is not None:
-            meta["guild_id"] = guild_id
-
-        try:
-            self._channel_directory_store.record_seen(
-                "discord",
-                channel_id,
-                None,
-                display,
-                meta,
-            )
-        except (OSError, ValueError, TypeError) as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.channel_directory.record_failed",
-                channel_id=channel_id,
-                guild_id=guild_id,
-                exc=exc,
-            )
+        await _record_channel_directory_seen_impl(self, payload)
 
     async def _resolve_channel_name(self, channel_id: str) -> Optional[str]:
-        fetch = getattr(self._rest, "get_channel", None)
-        if not callable(fetch):
-            self._channel_name_cache[channel_id] = ""
-            return None
-        in_flight = self._channel_name_lookups.get(channel_id)
-        if in_flight is None:
-
-            async def _load_channel_name() -> Optional[str]:
-                try:
-                    payload = await fetch(channel_id=channel_id)
-                except (DiscordAPIError, OSError) as exc:
-                    log_event(
-                        self._logger,
-                        logging.WARNING,
-                        "discord.channel_directory.channel_lookup_failed",
-                        channel_id=channel_id,
-                        exc=exc,
-                    )
-                    self._channel_name_cache[channel_id] = ""
-                    return None
-                if not isinstance(payload, dict):
-                    self._channel_name_cache[channel_id] = ""
-                    return None
-                channel_label = self._first_non_empty_text(payload.get("name"))
-                if channel_label is None:
-                    self._channel_name_cache[channel_id] = ""
-                    return None
-                normalized = channel_label.lstrip("#")
-                self._channel_name_cache[channel_id] = normalized
-                return normalized
-
-            in_flight = asyncio.create_task(_load_channel_name())
-            self._channel_name_lookups[channel_id] = in_flight
-        try:
-            return await in_flight
-        finally:
-            if self._channel_name_lookups.get(channel_id) is in_flight:
-                self._channel_name_lookups.pop(channel_id, None)
+        return await _resolve_channel_name_impl(self, channel_id)
 
     async def _resolve_guild_name(self, guild_id: str) -> Optional[str]:
-        fetch = getattr(self._rest, "get_guild", None)
-        if not callable(fetch):
-            self._guild_name_cache[guild_id] = ""
-            return None
-        in_flight = self._guild_name_lookups.get(guild_id)
-        if in_flight is None:
-
-            async def _load_guild_name() -> Optional[str]:
-                try:
-                    payload = await fetch(guild_id=guild_id)
-                except (DiscordAPIError, OSError) as exc:
-                    log_event(
-                        self._logger,
-                        logging.WARNING,
-                        "discord.channel_directory.guild_lookup_failed",
-                        guild_id=guild_id,
-                        exc=exc,
-                    )
-                    self._guild_name_cache[guild_id] = ""
-                    return None
-                if not isinstance(payload, dict):
-                    self._guild_name_cache[guild_id] = ""
-                    return None
-                guild_label = self._first_non_empty_text(payload.get("name"))
-                if guild_label is None:
-                    self._guild_name_cache[guild_id] = ""
-                    return None
-                self._guild_name_cache[guild_id] = guild_label
-                return guild_label
-
-            in_flight = asyncio.create_task(_load_guild_name())
-            self._guild_name_lookups[guild_id] = in_flight
-        try:
-            return await in_flight
-        finally:
-            if self._guild_name_lookups.get(guild_id) is in_flight:
-                self._guild_name_lookups.pop(guild_id, None)
+        return await _resolve_guild_name_impl(self, guild_id)
 
     @staticmethod
     def _nested_text(payload: dict[str, Any], key: str, field: str) -> Optional[str]:
-        candidate = payload.get(key)
-        if not isinstance(candidate, dict):
-            return None
-        return DiscordBotService._first_non_empty_text(candidate.get(field))
+        return _cm_nested_text(payload, key, field)
 
     @staticmethod
     def _first_non_empty_text(*values: Any) -> Optional[str]:
-        for value in values:
-            if isinstance(value, str):
-                normalized = value.strip()
-                if normalized:
-                    return normalized
-        return None
+        return _cm_first_non_empty_text(*values)
 
     @staticmethod
     def _coerce_id(value: Any) -> Optional[str]:
-        if isinstance(value, bool):
-            return None
-        if isinstance(value, int):
-            return str(value)
-        if isinstance(value, str):
-            normalized = value.strip()
-            if normalized:
-                return normalized
-        return None
+        return _cm_coerce_id(value)
 
     async def _handle_bind(
         self,
@@ -4761,6 +4139,11 @@ class DiscordBotService:
 
     def _list_agent_workspaces(self) -> list[tuple[str, str, str]]:
         from .workspace_commands import _list_agent_workspaces as _impl
+
+        return _impl(self)
+
+    def _list_agent_workspaces_from_cache(self) -> list[tuple[str, str, str]]:
+        from .workspace_commands import _list_agent_workspaces_from_cache as _impl
 
         return _impl(self)
 
@@ -4985,43 +4368,14 @@ class DiscordBotService:
         channel_id: str,
         values: Optional[list[str]],
     ) -> None:
-        if not values:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Please select a filter and try again.",
-            )
-            return
-        deferred = await self._defer_component_update(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-        )
-        if not deferred:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Discord interaction acknowledgement failed. Please retry.",
-            )
-            return
-        workspace_root = await self._require_bound_workspace(
-            interaction_id, interaction_token, channel_id=channel_id
-        )
-        if not workspace_root:
-            return
-        status_filter = values[0].strip().lower()
-        if status_filter not in {"all", "open", "done"}:
-            status_filter = "all"
-        search_query = self._pending_ticket_search_queries.get(channel_id, "")
-        self._pending_ticket_filters[channel_id] = status_filter
-        await self._update_component_message(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            text=self._ticket_prompt_text(search_query=search_query),
-            components=self._build_ticket_components(
-                workspace_root,
-                status_filter=status_filter,
-                search_query=search_query,
-            ),
+        from .flow_commands import handle_ticket_filter_component
+
+        await handle_ticket_filter_component(
+            self,
+            interaction_id,
+            interaction_token,
+            channel_id=channel_id,
+            values=values,
         )
 
     async def _handle_ticket_select_component(
@@ -5032,41 +4386,14 @@ class DiscordBotService:
         channel_id: str,
         values: Optional[list[str]],
     ) -> None:
-        if not values:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Please select a ticket and try again.",
-            )
-            return
-        if values[0] == "none":
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "No tickets available for this filter.",
-            )
-            return
-        workspace_root = await self._require_bound_workspace(
-            interaction_id, interaction_token, channel_id=channel_id
-        )
-        if not workspace_root:
-            return
-        ticket_rel = self._resolve_ticket_picker_value(
-            values[0],
-            workspace_root=workspace_root,
-        )
-        if not ticket_rel:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Ticket selection is invalid. Re-open the ticket list and try again.",
-            )
-            return
-        await self._open_ticket_modal(
+        from .flow_commands import handle_ticket_select_component
+
+        await handle_ticket_select_component(
+            self,
             interaction_id,
             interaction_token,
-            workspace_root=workspace_root,
-            ticket_rel=ticket_rel,
+            channel_id=channel_id,
+            values=values,
         )
 
     async def _open_ticket_modal(
@@ -5077,73 +4404,14 @@ class DiscordBotService:
         workspace_root: Path,
         ticket_rel: str,
     ) -> None:
-        ticket_dir = self._ticket_dir(workspace_root).resolve()
-        candidate = (workspace_root / ticket_rel).resolve()
-        try:
-            candidate.relative_to(ticket_dir)
-        except ValueError:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Ticket path is invalid. Re-open the ticket list and try again.",
-            )
-            return
-        if not candidate.exists() or not candidate.is_file():
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Ticket file not found. Re-open the ticket list and try again.",
-            )
-            return
-        try:
-            ticket_text = await asyncio.wait_for(
-                asyncio.to_thread(candidate.read_text, encoding="utf-8"),
-                timeout=1.5,
-            )
-        except asyncio.TimeoutError:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                (
-                    "Ticket load timed out before opening the modal. "
-                    "Try again or edit the file directly."
-                ),
-            )
-            return
-        except Exception as exc:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                f"Failed to read ticket: {exc}",
-            )
-            return
-        max_len = 4000
-        if len(ticket_text) > max_len:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                (
-                    f"`{ticket_rel}` is too large to edit in a Discord modal "
-                    f"({len(ticket_text)} characters; limit {max_len}). "
-                    "Use the web UI or edit the file directly."
-                ),
-            )
-            return
+        from .flow_commands import _open_ticket_modal
 
-        token = uuid.uuid4().hex[:12]
-        self._pending_ticket_context[token] = {
-            "workspace_root": str(workspace_root),
-            "ticket_rel": ticket_rel,
-        }
-
-        title = "Edit ticket"
-        await self._respond_modal(
+        await _open_ticket_modal(
+            self,
             interaction_id,
             interaction_token,
-            custom_id=f"{TICKETS_MODAL_PREFIX}:{token}",
-            title=title,
-            field_label="Ticket",
-            field_value=ticket_text,
+            workspace_root=workspace_root,
+            ticket_rel=ticket_rel,
         )
 
     async def _handle_tickets(
@@ -5540,6 +4808,40 @@ class DiscordBotService:
             return store
         return None
 
+    def _ensure_chat_operation_write_lock_state(self) -> None:
+        """Tests may construct partial ``DiscordBotService`` fixtures without ``__init__``."""
+        if getattr(self, "_chat_operation_write_lock_guard", None) is None:
+            self._chat_operation_write_lock_guard = asyncio.Lock()
+        if getattr(self, "_chat_operation_write_locks", None) is None:
+            self._chat_operation_write_locks = {}
+
+    @contextlib.asynccontextmanager
+    async def _chat_operation_write_guard(self, operation_id: str):
+        """Serialize ledger read/write for one interaction across asyncio tasks.
+
+        ``SQLiteChatOperationLedger.patch_operation`` is read-modify-write; concurrent
+        ``asyncio.to_thread`` calls could otherwise apply stale snapshots after offloading.
+        """
+        self._ensure_chat_operation_write_lock_state()
+        normalized = str(operation_id or "").strip()
+        async with self._chat_operation_write_lock_guard:
+            lock = self._chat_operation_write_locks.get(normalized)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._chat_operation_write_locks[normalized] = lock
+        async with lock:
+            yield
+
+    async def _chat_operation_get(
+        self, operation_id: str
+    ) -> Optional[ChatOperationSnapshot]:
+        store = self._chat_operation_store_or_none()
+        if store is None:
+            return None
+        # Keep Discord ingress callbacks non-blocking on SQLite lock contention.
+        async with self._chat_operation_write_guard(operation_id):
+            return await asyncio.to_thread(store.get_operation, operation_id)
+
     def _chat_operation_terminal_duplicate(
         self, snapshot: ChatOperationSnapshot
     ) -> bool:
@@ -5590,25 +4892,35 @@ class DiscordBotService:
         store = self._chat_operation_store_or_none()
         if store is None:
             return None
-        registration = store.register_operation(
-            operation_id=ctx.interaction_id,
-            surface_kind="discord",
-            surface_operation_key=ctx.interaction_id,
-            state=ChatOperationState.RECEIVED,
-            conversation_id=conversation_id,
-            metadata=self._interaction_ledger_metadata(ctx),
-        )
-        store.patch_operation(
-            registration.snapshot.operation_id,
-            ack_requested_at=now_iso(),
-        )
-        if registration.inserted:
-            return registration.snapshot
-        return store.patch_operation(
-            ctx.interaction_id,
-            conversation_id=conversation_id or registration.snapshot.conversation_id,
-            metadata_updates=self._interaction_ledger_metadata(ctx),
-        )
+
+        interaction_id = ctx.interaction_id
+        metadata = self._interaction_ledger_metadata(ctx)
+
+        def _register_sync() -> Optional[ChatOperationSnapshot]:
+            registration = store.register_operation(
+                operation_id=interaction_id,
+                surface_kind="discord",
+                surface_operation_key=interaction_id,
+                state=ChatOperationState.RECEIVED,
+                conversation_id=conversation_id,
+                metadata=metadata,
+            )
+            store.patch_operation(
+                registration.snapshot.operation_id,
+                ack_requested_at=now_iso(),
+            )
+            if registration.inserted:
+                return registration.snapshot
+            return store.patch_operation(
+                interaction_id,
+                conversation_id=(
+                    conversation_id or registration.snapshot.conversation_id
+                ),
+                metadata_updates=metadata,
+            )
+
+        async with self._chat_operation_write_guard(interaction_id):
+            return await asyncio.to_thread(_register_sync)
 
     async def _patch_chat_operation(
         self,
@@ -5623,79 +4935,91 @@ class DiscordBotService:
         if store is None:
             return None
         patch_state = state if state is not None else _PATCH_STATE_UNSET
-        try:
-            return store.patch_operation(
-                interaction_id,
-                state=patch_state,
-                validate_transition=validate_transition,
-                metadata_updates=metadata_updates,
-                **changes,
-            )
-        except ValueError:
-            current = store.get_operation(interaction_id)
-            if current is None:
-                return None
-            if current.first_visible_feedback_at is not None:
-                changes["first_visible_feedback_at"] = current.first_visible_feedback_at
-            fallback_state = state or current.state
-            merged_metadata = dict(current.metadata)
-            if metadata_updates:
-                merged_metadata.update(dict(metadata_updates))
-            return store.upsert_operation(
-                replace(
-                    current,
-                    state=fallback_state,
-                    execution_id=changes.get("execution_id", current.execution_id),
-                    backend_turn_id=changes.get(
-                        "backend_turn_id", current.backend_turn_id
-                    ),
-                    status_message=changes.get(
-                        "status_message", current.status_message
-                    ),
-                    blocking_reason=changes.get(
-                        "blocking_reason", current.blocking_reason
-                    ),
-                    conversation_id=changes.get(
-                        "conversation_id", current.conversation_id
-                    ),
-                    ack_requested_at=changes.get(
-                        "ack_requested_at", current.ack_requested_at
-                    ),
-                    ack_completed_at=changes.get(
-                        "ack_completed_at", current.ack_completed_at
-                    ),
-                    first_visible_feedback_at=changes.get(
-                        "first_visible_feedback_at",
-                        current.first_visible_feedback_at,
-                    ),
-                    anchor_ref=changes.get("anchor_ref", current.anchor_ref),
-                    interrupt_ref=changes.get("interrupt_ref", current.interrupt_ref),
-                    delivery_state=changes.get(
-                        "delivery_state", current.delivery_state
-                    ),
-                    delivery_cursor=changes.get(
-                        "delivery_cursor", current.delivery_cursor
-                    ),
-                    delivery_attempt_count=int(
-                        changes.get(
-                            "delivery_attempt_count",
-                            current.delivery_attempt_count,
-                        )
-                        or 0
-                    ),
-                    delivery_claimed_at=changes.get(
-                        "delivery_claimed_at", current.delivery_claimed_at
-                    ),
-                    terminal_outcome=changes.get(
-                        "terminal_outcome", current.terminal_outcome
-                    ),
-                    terminal_detail=changes.get(
-                        "terminal_detail", current.terminal_detail
-                    ),
-                    updated_at=changes.get("updated_at", now_iso()),
-                    metadata=merged_metadata,
+
+        def _patch_sync() -> Optional[ChatOperationSnapshot]:
+            changes_local = dict(changes)
+            try:
+                return store.patch_operation(
+                    interaction_id,
+                    state=patch_state,
+                    validate_transition=validate_transition,
+                    metadata_updates=metadata_updates,
+                    **changes_local,
                 )
-            )
+            except ValueError:
+                current = store.get_operation(interaction_id)
+                if current is None:
+                    return None
+                if current.first_visible_feedback_at is not None:
+                    changes_local["first_visible_feedback_at"] = (
+                        current.first_visible_feedback_at
+                    )
+                fallback_state = state or current.state
+                merged_metadata = dict(current.metadata)
+                if metadata_updates:
+                    merged_metadata.update(dict(metadata_updates))
+                return store.upsert_operation(
+                    replace(
+                        current,
+                        state=fallback_state,
+                        execution_id=changes_local.get(
+                            "execution_id", current.execution_id
+                        ),
+                        backend_turn_id=changes_local.get(
+                            "backend_turn_id", current.backend_turn_id
+                        ),
+                        status_message=changes_local.get(
+                            "status_message", current.status_message
+                        ),
+                        blocking_reason=changes_local.get(
+                            "blocking_reason", current.blocking_reason
+                        ),
+                        conversation_id=changes_local.get(
+                            "conversation_id", current.conversation_id
+                        ),
+                        ack_requested_at=changes_local.get(
+                            "ack_requested_at", current.ack_requested_at
+                        ),
+                        ack_completed_at=changes_local.get(
+                            "ack_completed_at", current.ack_completed_at
+                        ),
+                        first_visible_feedback_at=changes_local.get(
+                            "first_visible_feedback_at",
+                            current.first_visible_feedback_at,
+                        ),
+                        anchor_ref=changes_local.get("anchor_ref", current.anchor_ref),
+                        interrupt_ref=changes_local.get(
+                            "interrupt_ref", current.interrupt_ref
+                        ),
+                        delivery_state=changes_local.get(
+                            "delivery_state", current.delivery_state
+                        ),
+                        delivery_cursor=changes_local.get(
+                            "delivery_cursor", current.delivery_cursor
+                        ),
+                        delivery_attempt_count=int(
+                            changes_local.get(
+                                "delivery_attempt_count",
+                                current.delivery_attempt_count,
+                            )
+                            or 0
+                        ),
+                        delivery_claimed_at=changes_local.get(
+                            "delivery_claimed_at", current.delivery_claimed_at
+                        ),
+                        terminal_outcome=changes_local.get(
+                            "terminal_outcome", current.terminal_outcome
+                        ),
+                        terminal_detail=changes_local.get(
+                            "terminal_detail", current.terminal_detail
+                        ),
+                        updated_at=changes_local.get("updated_at", now_iso()),
+                        metadata=merged_metadata,
+                    )
+                )
+
+        async with self._chat_operation_write_guard(interaction_id):
+            return await asyncio.to_thread(_patch_sync)
 
     async def _record_interaction_ack(
         self,
@@ -5989,6 +5313,11 @@ class DiscordBotService:
         reason: str,
         log_level: int = logging.WARNING,
     ) -> None:
+        recovery_event = (
+            "discord.interaction.recovery.delivery_expired"
+            if scheduler_state == "delivery_expired"
+            else "discord.interaction.recovery.abandoned"
+        )
         await self._store.mark_interaction_scheduler_state(
             record.interaction_id,
             scheduler_state=scheduler_state,
@@ -6007,7 +5336,7 @@ class DiscordBotService:
         log_event(
             self._logger,
             log_level,
-            "discord.interaction.recovery.abandoned",
+            recovery_event,
             interaction_id=record.interaction_id,
             scheduler_state=scheduler_state,
             execution_status=record.execution_status,
@@ -6020,11 +5349,19 @@ class DiscordBotService:
         shared_store = self._chat_operation_store_or_none()
         for record in records:
             envelope = self._envelope_from_ledger_record(record)
-            if envelope is None or record.payload_json is None:
+            if envelope is None:
                 await self._mark_interaction_recovery_terminal(
                     record,
                     scheduler_state="abandoned",
                     reason="missing_runtime_envelope",
+                    log_level=logging.ERROR,
+                )
+                continue
+            if record.payload_json is None:
+                await self._mark_interaction_recovery_terminal(
+                    record,
+                    scheduler_state="abandoned",
+                    reason="missing_runtime_payload",
                     log_level=logging.ERROR,
                 )
                 continue
@@ -6311,10 +5648,7 @@ class DiscordBotService:
             if ctx.interaction_id in reservations:
                 return True
             reservations.add(ctx.interaction_id)
-        snapshot = None
-        store = self._chat_operation_store_or_none()
-        if store is not None:
-            snapshot = store.get_operation(ctx.interaction_id)
+        snapshot = await self._chat_operation_get(ctx.interaction_id)
         record = await self._store.get_interaction(ctx.interaction_id)
         if snapshot is None and record is None:
             return False
@@ -6378,10 +5712,7 @@ class DiscordBotService:
         if registration.inserted:
             return False
         record = registration.record
-        snapshot = None
-        store = self._chat_operation_store_or_none()
-        if store is not None:
-            snapshot = store.get_operation(ctx.interaction_id)
+        snapshot = await self._chat_operation_get(ctx.interaction_id)
         has_pending_delivery = bool(
             isinstance(record.delivery_cursor_json, dict)
             and str(record.delivery_cursor_json.get("state") or "").strip()
@@ -6613,95 +5944,14 @@ class DiscordBotService:
         workspace_root: Path,
         options: dict[str, Any],
     ) -> None:
-        import subprocess
+        from .workspace_commands import handle_diff
 
-        path_arg = options.get("path")
-        cwd = workspace_root
-        if isinstance(path_arg, str) and path_arg.strip():
-            candidate = Path(path_arg.strip())
-            if not candidate.is_absolute():
-                candidate = workspace_root / candidate
-            try:
-                cwd = canonicalize_path(candidate)
-            except (OSError, ValueError):
-                cwd = workspace_root
-
-        session = self._ensure_interaction_session(
+        await handle_diff(
+            self,
             interaction_id,
             interaction_token,
-        )
-        deferred = session.has_initial_response()
-        if not deferred:
-            deferred = await self._defer_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-            )
-        git_check = ["git", "rev-parse", "--is-inside-work-tree"]
-        try:
-            result = await asyncio.to_thread(
-                subprocess.run,
-                git_check,
-                cwd=cwd,
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if result.returncode != 0:
-                await self._send_or_respond_ephemeral(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    deferred=deferred,
-                    text="Not a git repository.",
-                )
-                return
-        except subprocess.TimeoutExpired:
-            await self._send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text="Git check timed out.",
-            )
-            return
-        except subprocess.SubprocessError as exc:
-            await self._send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=f"Git check failed: {exc}",
-            )
-            return
-
-        diff_cmd = [
-            "bash",
-            "-lc",
-            "git diff --color; git ls-files --others --exclude-standard | "
-            'while read -r f; do git diff --color --no-index -- /dev/null "$f"; done',
-        ]
-        try:
-            result = await asyncio.to_thread(
-                subprocess.run,
-                diff_cmd,
-                cwd=cwd,
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            output = result.stdout
-            if not output.strip():
-                output = "(No diff output.)"
-        except subprocess.TimeoutExpired:
-            output = "Git diff timed out after 30 seconds."
-        except subprocess.SubprocessError as exc:
-            output = f"Failed to run git diff: {exc}"
-
-        from .rendering import truncate_for_discord
-
-        output = truncate_for_discord(output, self._config.max_message_length - 100)
-        await self._send_or_respond_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            deferred=deferred,
-            text=output,
+            workspace_root=workspace_root,
+            options=options,
         )
 
     async def _handle_skills(
@@ -6712,108 +5962,15 @@ class DiscordBotService:
         workspace_root: Path,
         options: dict[str, Any],
     ) -> None:
-        skill_entries = await self._list_skill_entries_for_workspace(workspace_root)
-        if skill_entries is None:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Workspace unavailable. Re-bind this channel and try again.",
-            )
-            return
+        from .workspace_commands import handle_skills
 
-        search_query = self._normalize_search_query(options.get("search"))
-        if search_query:
-            filtered_entries = self._filter_skill_entries(
-                skill_entries,
-                search_query,
-                limit=max(len(skill_entries), DEFAULT_SKILLS_LIST_LIMIT),
-            )
-            if not filtered_entries:
-                await self._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
-                    f"No skills found matching `{search_query}`.",
-                )
-                return
-            lines = [f"Skills matching `{search_query}`:"]
-            for name, description in filtered_entries[:DEFAULT_SKILLS_LIST_LIMIT]:
-                if description:
-                    lines.append(f"{name} - {description}")
-                else:
-                    lines.append(name)
-            if len(filtered_entries) > DEFAULT_SKILLS_LIST_LIMIT:
-                lines.append(
-                    f"...and {len(filtered_entries) - DEFAULT_SKILLS_LIST_LIMIT} more matches."
-                )
-            lines.append("Use $<SkillName> in your next message to invoke a skill.")
-            skills_text = "\n".join(lines)
-        else:
-            if not skill_entries:
-                await self._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
-                    "No skills found.",
-                )
-                return
-            skills_text = _format_skills_list(
-                [
-                    {
-                        "cwd": str(workspace_root),
-                        "skills": [
-                            {
-                                "name": name,
-                                "shortDescription": description,
-                            }
-                            for name, description in skill_entries
-                        ],
-                    }
-                ],
-                str(workspace_root),
-            )
-
-        styled_lines: list[str] = []
-        for line in skills_text.splitlines():
-            if (
-                not line
-                or line == "Skills:"
-                or line.startswith("Skills matching ")
-                or line.startswith("...and ")
-                or line.startswith("Use $")
-            ):
-                styled_lines.append(line)
-                continue
-            if " - " in line:
-                name, description = line.split(" - ", 1)
-                styled_lines.append(f"**{name}** - {description}")
-            else:
-                styled_lines.append(f"**{line}**")
-        rendered = format_discord_message("\n".join(styled_lines))
-        chunks = chunk_discord_message(
-            rendered,
-            max_len=self._config.max_message_length,
-            with_numbering=False,
-        )
-        if not chunks:
-            chunks = ["No skills found."]
-
-        await self._respond_ephemeral(
+        await handle_skills(
+            self,
             interaction_id,
             interaction_token,
-            chunks[0],
+            workspace_root=workspace_root,
+            options=options,
         )
-        for chunk in chunks[1:]:
-            sent = await self._send_followup_ephemeral(
-                interaction_token=interaction_token,
-                content=chunk,
-            )
-            if not sent:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "discord.skills.followup_failed",
-                    workspace_path=str(workspace_root),
-                )
-                break
 
     async def _handle_ticket_modal_submit(
         self,
@@ -6824,111 +5981,15 @@ class DiscordBotService:
         custom_id: str,
         values: dict[str, Any],
     ) -> None:
-        if not custom_id.startswith(f"{TICKETS_MODAL_PREFIX}:"):
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Unknown modal submission.",
-            )
-            return
+        from .flow_commands import handle_ticket_modal_submit
 
-        token = custom_id.split(":", 1)[1].strip()
-        context = self._pending_ticket_context.pop(token, None)
-        if not context:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "This ticket modal has expired. Re-open it and try again.",
-            )
-            return
-
-        ticket_rel = context.get("ticket_rel")
-        if not isinstance(ticket_rel, str) or not ticket_rel or ticket_rel == "none":
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "This ticket selection expired. Re-run `/car tickets` and choose one.",
-            )
-            return
-
-        ticket_body_raw = values.get(TICKETS_BODY_INPUT_ID)
-        ticket_body = ticket_body_raw if isinstance(ticket_body_raw, str) else None
-        if ticket_body is None:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Ticket content is missing. Please try again.",
-            )
-            return
-
-        workspace_root = Path(context.get("workspace_root", "")).expanduser()
-        ticket_dir = self._ticket_dir(workspace_root).resolve()
-        candidate = (workspace_root / ticket_rel).resolve()
-        try:
-            candidate.relative_to(ticket_dir)
-        except ValueError:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Ticket path is invalid. Re-open the ticket and try again.",
-            )
-            return
-
-        try:
-            candidate.write_text(ticket_body, encoding="utf-8")
-        except (OSError, ValueError, TypeError) as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.ticket.write_failed",
-                path=str(candidate),
-                exc=exc,
-            )
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                f"Failed to write ticket: {exc}",
-            )
-            return
-
-        await self._respond_ephemeral(
+        await handle_ticket_modal_submit(
+            self,
             interaction_id,
             interaction_token,
-            f"Saved {safe_relpath(candidate, workspace_root)}.",
-        )
-
-    async def _respond_modal(
-        self,
-        interaction_id: str,
-        interaction_token: str,
-        *,
-        custom_id: str,
-        title: str,
-        field_label: str,
-        field_value: str,
-    ) -> None:
-        await self._apply_discord_effect(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            effect=DiscordModalEffect(
-                kind=InteractionSessionKind.COMPONENT,
-                custom_id=custom_id,
-                title=title,
-                components=[
-                    {
-                        "type": 18,
-                        "label": field_label[:45],
-                        "component": {
-                            "type": 4,
-                            "custom_id": TICKETS_BODY_INPUT_ID,
-                            "style": 2,
-                            "value": field_value[:4000],
-                            "required": True,
-                            "max_length": 4000,
-                        },
-                    },
-                ],
-            ),
+            channel_id=channel_id,
+            custom_id=custom_id,
+            values=values,
         )
 
     async def _handle_mcp(
@@ -6938,11 +5999,13 @@ class DiscordBotService:
         *,
         workspace_root: Path,
     ) -> None:
-        await self._respond_ephemeral(
+        from .workspace_commands import handle_mcp
+
+        await handle_mcp(
+            self,
             interaction_id,
             interaction_token,
-            "MCP server status requires the app server client. "
-            "This command is not yet available in Discord.",
+            workspace_root=workspace_root,
         )
 
     async def _handle_init(
@@ -7025,40 +6088,12 @@ class DiscordBotService:
         interaction_id: str,
         interaction_token: str,
     ) -> None:
-        if not self._manifest_path or not self._manifest_path.exists():
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Hub manifest not configured.",
-            )
-            return
+        from .workspace_commands import handle_repos
 
-        try:
-            manifest = load_manifest(self._manifest_path, self._config.root)
-        except (OSError, ValueError) as exc:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                f"Failed to load manifest: {exc}",
-            )
-            return
-
-        lines = ["Repositories:"]
-        for repo in manifest.repos:
-            if not repo.enabled:
-                continue
-            lines.append(f"- `{repo.id}` ({repo.path})")
-
-        if len(lines) == 1:
-            lines.append("No enabled repositories found.")
-
-        lines.append("\nUse /car bind to select a workspace.")
-
-        content = format_discord_message("\n".join(lines))
-        await self._respond_ephemeral(
+        await handle_repos(
+            self,
             interaction_id,
             interaction_token,
-            content,
         )
 
     async def _handle_car_new(
@@ -7068,128 +6103,13 @@ class DiscordBotService:
         *,
         channel_id: str,
     ) -> None:
-        session = self._ensure_interaction_session(
+        from .car_handlers.session_commands import handle_car_new
+
+        await self._run_effectful_handler(
+            handle_car_new,
             interaction_id,
             interaction_token,
-        )
-        deferred = session.has_initial_response()
-        if not deferred:
-            deferred = await self._defer_public(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-            )
-        binding = await self._store.get_binding(channel_id=channel_id)
-        if binding is None:
-            text = format_discord_message(
-                "This channel is not bound. Run `/car bind path:<...>` first."
-            )
-            await self._send_or_respond_public(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=text,
-            )
-            return
-
-        pma_enabled = bool(binding.get("pma_enabled", False))
-        workspace_raw = binding.get("workspace_path")
-        workspace_root: Optional[Path] = None
-        if isinstance(workspace_raw, str) and workspace_raw.strip():
-            workspace_root = canonicalize_path(Path(workspace_raw))
-            if not workspace_root.exists() or not workspace_root.is_dir():
-                workspace_root = None
-        if workspace_root is None:
-            if pma_enabled:
-                workspace_root = canonicalize_path(Path(self._config.root))
-            else:
-                text = format_discord_message(
-                    "Binding is invalid. Run `/car bind path:<workspace>`."
-                )
-                await self._send_or_respond_public(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    deferred=deferred,
-                    text=text,
-                )
-                return
-
-        agent, agent_profile = self._resolve_agent_state(binding)
-        resource_kind = (
-            str(binding.get("resource_kind")).strip()
-            if isinstance(binding.get("resource_kind"), str)
-            and str(binding.get("resource_kind")).strip()
-            else None
-        )
-        resource_id = (
-            str(binding.get("resource_id")).strip()
-            if isinstance(binding.get("resource_id"), str)
-            and str(binding.get("resource_id")).strip()
-            else None
-        )
-
-        try:
-            had_previous, _new_thread_id = await self._reset_discord_thread_binding(
-                channel_id=channel_id,
-                workspace_root=workspace_root,
-                agent=agent,
-                agent_profile=agent_profile,
-                repo_id=(
-                    str(binding.get("repo_id")).strip()
-                    if isinstance(binding.get("repo_id"), str)
-                    and str(binding.get("repo_id")).strip()
-                    else None
-                ),
-                resource_kind=resource_kind,
-                resource_id=resource_id,
-                pma_enabled=pma_enabled,
-            )
-        except (
-            Exception
-        ) as exc:  # intentional: top-level error handler for thread reset
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.new.reset_failed",
-                channel_id=channel_id,
-                workspace_root=str(workspace_root),
-                agent=agent,
-                exc=exc,
-            )
-            text = format_discord_message("Failed to start a fresh session.")
-            await self._send_or_respond_public(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=text,
-            )
-            return
-        await self._store.clear_pending_compact_seed(channel_id=channel_id)
-        mode_label = "PMA" if pma_enabled else "repo"
-        state_label = "cleared previous thread" if had_previous else "new thread ready"
-        actor_label = self._format_agent_state(agent, agent_profile)
-        text = format_discord_message(
-            "\n".join(
-                [
-                    *build_fresh_session_started_lines(
-                        mode_label=mode_label,
-                        actor_label=actor_label,
-                        state_label=state_label,
-                    ),
-                    *build_thread_detail_lines(
-                        thread_id=_new_thread_id,
-                        workspace_path=str(workspace_root),
-                        actor_label=actor_label,
-                        model=self._status_model_label(binding),
-                        effort=self._status_effort_label(binding, agent),
-                    ),
-                ]
-            )
-        )
-        await self._send_or_respond_public(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            deferred=deferred,
-            text=text,
+            channel_id=channel_id,
         )
 
     async def _handle_car_newt(
@@ -7470,22 +6390,14 @@ class DiscordBotService:
         channel_id: str,
         selected_profile: str,
     ) -> None:
-        profile_value = selected_profile.strip()
-        if not profile_value:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Please select a Hermes profile and try again.",
-            )
-            return
-        profile_option = (
-            "clear" if profile_value in {"clear", "reset"} else profile_value
-        )
-        await self._handle_car_agent(
+        from .car_handlers.agent_commands import handle_agent_profile_picker_selection
+
+        await handle_agent_profile_picker_selection(
+            self,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
-            options={"profile": profile_option},
+            selected_profile=selected_profile,
         )
 
     def _pending_interaction_scope_key(
@@ -7526,55 +6438,15 @@ class DiscordBotService:
         user_id: Optional[str],
         selected_model: str,
     ) -> None:
-        model_value = selected_model.strip()
-        if not model_value:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Please select a model and try again.",
-            )
-            return
-        if model_value in {"clear", "reset"}:
-            pending_key = self._pending_interaction_scope_key(
-                channel_id=channel_id,
-                user_id=user_id,
-            )
-            self._pending_model_effort.pop(pending_key, None)
-            await self._handle_car_model(
-                interaction_id,
-                interaction_token,
-                channel_id=channel_id,
-                user_id=user_id,
-                options={"name": "clear"},
-            )
-            return
+        from .car_handlers.agent_commands import handle_model_picker_selection
 
-        binding = await self._store.get_binding(channel_id=channel_id)
-        current_agent, _current_profile = self._resolve_agent_state(binding)
-
-        if self._agent_supports_effort(current_agent):
-            pending_key = self._pending_interaction_scope_key(
-                channel_id=channel_id,
-                user_id=user_id,
-            )
-            self._pending_model_effort[pending_key] = model_value
-            await self._respond_with_components(
-                interaction_id,
-                interaction_token,
-                (
-                    f"Selected model: `{model_value}`\n"
-                    "Select reasoning effort (or none):"
-                ),
-                [build_model_effort_picker(custom_id=MODEL_EFFORT_SELECT_ID)],
-            )
-            return
-
-        await self._handle_car_model(
+        await handle_model_picker_selection(
+            self,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
             user_id=user_id,
-            options={"name": model_value},
+            selected_model=selected_model,
         )
 
     async def _handle_model_effort_selection(
@@ -7586,37 +6458,15 @@ class DiscordBotService:
         user_id: Optional[str],
         selected_effort: str,
     ) -> None:
-        pending_key = self._pending_interaction_scope_key(
-            channel_id=channel_id,
-            user_id=user_id,
-        )
-        model_name = self._pending_model_effort.pop(pending_key, None)
-        if not isinstance(model_name, str) or not model_name:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Model selection expired. Please re-run `/car model`.",
-            )
-            return
+        from .car_handlers.agent_commands import handle_model_effort_selection
 
-        effort_value = selected_effort.strip().lower()
-        if effort_value not in self.VALID_REASONING_EFFORTS and effort_value != "none":
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                f"Invalid effort '{selected_effort}'.",
-            )
-            return
-
-        model_options: dict[str, Any] = {"name": model_name}
-        if effort_value != "none":
-            model_options["effort"] = effort_value
-        await self._handle_car_model(
+        await handle_model_effort_selection(
+            self,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
             user_id=user_id,
-            options=model_options,
+            selected_effort=selected_effort,
         )
 
     async def _resolve_workspace_for_flow_read(
@@ -8102,33 +6952,8 @@ class DiscordBotService:
     ) -> Path:
         return write_user_reply(self, workspace_root, record, text)
 
-    def _format_file_size(self, size: int) -> str:
-        if size < 1024:
-            return f"{size} B"
-        value = size / 1024
-        for unit in ("KB", "MB", "GB"):
-            if value < 1024:
-                return f"{value:.1f} {unit}"
-            value /= 1024
-        return f"{value:.1f} TB"
-
     def _list_paths_in_dir(self, folder: Path) -> list[Path]:
         return list_regular_files(folder)
-
-    def _list_files_in_dir(self, folder: Path) -> list[tuple[str, int, str]]:
-        files: list[tuple[str, int, str]] = []
-        for path in self._list_paths_in_dir(folder):
-            try:
-                stat = path.stat()
-                from datetime import datetime, timezone
-
-                mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).strftime(
-                    "%Y-%m-%d %H:%M"
-                )
-                files.append((path.name, stat.st_size, mtime))
-            except OSError:
-                continue
-        return files
 
     async def _send_outbox_file(
         self,
@@ -8255,9 +7080,6 @@ class DiscordBotService:
                 channel_id=channel_id,
             )
 
-    def _delete_files_in_dir(self, folder: Path) -> int:
-        return delete_regular_files(folder)
-
     async def _handle_files_inbox(
         self,
         interaction_id: str,
@@ -8265,20 +7087,13 @@ class DiscordBotService:
         *,
         workspace_root: Path,
     ) -> None:
-        inbox = inbox_dir(workspace_root)
-        files = self._list_files_in_dir(inbox)
-        if not files:
-            await self._respond_ephemeral(
-                interaction_id, interaction_token, "Inbox: (empty)"
-            )
-            return
-        lines = [f"Inbox ({len(files)} file(s)):"]
-        for name, size, mtime in files[:20]:
-            lines.append(f"- {name} ({self._format_file_size(size)}, {mtime})")
-        if len(files) > 20:
-            lines.append(f"... and {len(files) - 20} more")
-        await self._respond_ephemeral(
-            interaction_id, interaction_token, "\n".join(lines)
+        from .car_handlers.system_commands import handle_files_inbox
+
+        await handle_files_inbox(
+            self,
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
         )
 
     async def _handle_files_outbox(
@@ -8288,42 +7103,13 @@ class DiscordBotService:
         *,
         workspace_root: Path,
     ) -> None:
-        outbox_root = outbox_dir(workspace_root)
-        pending = outbox_pending_dir(workspace_root)
-        sent = outbox_sent_dir(workspace_root)
-        root_files = self._list_files_in_dir(outbox_root)
-        root_files = [
-            entry for entry in root_files if entry[0] not in {"pending", "sent"}
-        ]
-        pending_files = self._list_files_in_dir(pending)
-        sent_files = self._list_files_in_dir(sent)
-        lines = []
-        if root_files:
-            lines.append(f"Outbox root ({len(root_files)} file(s)):")
-            for name, size, mtime in root_files[:20]:
-                lines.append(f"- {name} ({self._format_file_size(size)}, {mtime})")
-            if len(root_files) > 20:
-                lines.append(f"... and {len(root_files) - 20} more")
-            lines.append("")
-        if pending_files:
-            lines.append(f"Outbox pending ({len(pending_files)} file(s)):")
-            for name, size, mtime in pending_files[:20]:
-                lines.append(f"- {name} ({self._format_file_size(size)}, {mtime})")
-            if len(pending_files) > 20:
-                lines.append(f"... and {len(pending_files) - 20} more")
-        else:
-            lines.append("Outbox pending: (empty)")
-        lines.append("")
-        if sent_files:
-            lines.append(f"Outbox sent ({len(sent_files)} file(s)):")
-            for name, size, mtime in sent_files[:10]:
-                lines.append(f"- {name} ({self._format_file_size(size)}, {mtime})")
-            if len(sent_files) > 10:
-                lines.append(f"... and {len(sent_files) - 10} more")
-        else:
-            lines.append("Outbox sent: (empty)")
-        await self._respond_ephemeral(
-            interaction_id, interaction_token, "\n".join(lines)
+        from .car_handlers.system_commands import handle_files_outbox
+
+        await handle_files_outbox(
+            self,
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
         )
 
     async def _handle_files_clear(
@@ -8334,32 +7120,14 @@ class DiscordBotService:
         workspace_root: Path,
         options: dict[str, Any],
     ) -> None:
-        target = (options.get("target") or "all").lower().strip()
-        inbox = inbox_dir(workspace_root)
-        outbox_root = outbox_dir(workspace_root)
-        pending = outbox_pending_dir(workspace_root)
-        sent = outbox_sent_dir(workspace_root)
-        deleted = 0
-        if target == "inbox":
-            deleted = self._delete_files_in_dir(inbox)
-        elif target == "outbox":
-            deleted = self._delete_files_in_dir(outbox_root)
-            deleted += self._delete_files_in_dir(pending)
-            deleted += self._delete_files_in_dir(sent)
-        elif target == "all":
-            deleted = self._delete_files_in_dir(inbox)
-            deleted += self._delete_files_in_dir(outbox_root)
-            deleted += self._delete_files_in_dir(pending)
-            deleted += self._delete_files_in_dir(sent)
-        else:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Invalid target. Use: inbox, outbox, or all",
-            )
-            return
-        await self._respond_ephemeral(
-            interaction_id, interaction_token, f"Deleted {deleted} file(s)."
+        from .car_handlers.system_commands import handle_files_clear
+
+        await handle_files_clear(
+            self,
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
+            options=options,
         )
 
     async def _handle_pma_command(
@@ -8372,35 +7140,17 @@ class DiscordBotService:
         command_path: tuple[str, ...],
         options: Optional[dict[str, Any]] = None,
     ) -> None:
-        if not self._config.pma_enabled:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "PMA is disabled in hub config. Set pma.enabled: true to enable.",
-            )
-            return
-        subcommand = command_path[1] if len(command_path) > 1 else "status"
-        if subcommand == "on":
-            await self._handle_pma_on(
-                interaction_id,
-                interaction_token,
-                channel_id=channel_id,
-                guild_id=guild_id,
-            )
-        elif subcommand == "off":
-            await self._handle_pma_off(
-                interaction_id, interaction_token, channel_id=channel_id
-            )
-        elif subcommand == "status":
-            await self._handle_pma_status(
-                interaction_id, interaction_token, channel_id=channel_id
-            )
-        else:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Unknown PMA subcommand. Use on, off, or status.",
-            )
+        from .pma_commands import handle_pma_command
+
+        await handle_pma_command(
+            self,
+            interaction_id,
+            interaction_token,
+            channel_id=channel_id,
+            guild_id=guild_id,
+            command_path=command_path,
+            options=options,
+        )
 
     async def _handle_pma_on(
         self,
@@ -9327,16 +8077,15 @@ class DiscordBotService:
         interaction_token: str,
         text: str,
     ) -> None:
-        deferred = await ensure_ephemeral_response_deferred(
+        from .car_handlers.queue_interrupt_handlers import (
+            send_interrupt_component_response,
+        )
+
+        await send_interrupt_component_response(
             self,
             interaction_id,
             interaction_token,
-        )
-        await self.send_or_respond_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            deferred=deferred,
-            text=text,
+            text,
         )
 
     async def _handle_cancel_turn_button(
@@ -9349,42 +8098,16 @@ class DiscordBotService:
         message_id: Optional[str] = None,
         custom_id: str = "cancel_turn",
     ) -> None:
-        from .components import parse_cancel_turn_custom_id
+        from .car_handlers.queue_interrupt_handlers import handle_cancel_turn_button
 
-        thread_target_id, execution_id = parse_cancel_turn_custom_id(custom_id)
-        await defer_and_update_runtime_component_message(
+        await handle_cancel_turn_button(
             self,
             interaction_id,
             interaction_token,
-            "Stopping current turn...",
-            components=[],
-        )
-        from ..chat.chat_ux_telemetry import ChatUxMilestone, ChatUxTimingSnapshot
-
-        cancel_snapshot = ChatUxTimingSnapshot(
-            platform="discord", channel_id=channel_id
-        )
-        cancel_snapshot.record(ChatUxMilestone.RAW_EVENT_RECEIVED)
-        cancel_snapshot.record(ChatUxMilestone.INTERRUPT_REQUESTED_VISIBLE)
-        log_event(
-            self._logger,
-            logging.INFO,
-            "discord.turn.cancel_acknowledged",
             channel_id=channel_id,
-            thread_target_id=thread_target_id,
-            execution_id=execution_id,
-            **cancel_snapshot.to_log_fields(),
-        )
-        await self._handle_car_interrupt(
-            interaction_id,
-            interaction_token,
-            channel_id=channel_id,
-            source="component",
-            thread_target_id=thread_target_id,
-            execution_id=execution_id,
-            source_custom_id=custom_id,
-            source_message_id=message_id,
-            source_user_id=user_id,
+            user_id=user_id,
+            message_id=message_id,
+            custom_id=custom_id,
         )
 
     async def _handle_cancel_queued_turn_button(
@@ -9396,73 +8119,17 @@ class DiscordBotService:
         custom_id: str,
         message_id: Optional[str] = None,
     ) -> None:
-        from .components import parse_cancel_queued_turn_custom_id
-        from .message_turns import clear_discord_turn_progress_leases
+        from .car_handlers.queue_interrupt_handlers import (
+            handle_cancel_queued_turn_button,
+        )
 
-        execution_id = parse_cancel_queued_turn_custom_id(custom_id)
-        if not execution_id:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Queued request is unavailable.",
-            )
-            return
-        binding = await self._store.get_binding(channel_id=channel_id)
-        pma_enabled = bool(binding.get("pma_enabled", False)) if binding else False
-        mode = "pma" if pma_enabled else "repo"
-        orchestration_service, _binding_row, current_thread = (
-            self._get_discord_thread_binding(channel_id=channel_id, mode=mode)
-        )
-        if current_thread is None:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Queued request is unavailable.",
-            )
-            return
-        cancelled = orchestration_service.cancel_queued_execution(
-            current_thread.thread_target_id,
-            execution_id,
-        )
-        if not cancelled:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Queued request is no longer pending.",
-            )
-            return
-        await defer_and_update_runtime_component_message(
+        await handle_cancel_queued_turn_button(
             self,
             interaction_id,
             interaction_token,
-            "Cancelling queued request...",
-            components=[],
-        )
-        await clear_discord_turn_progress_leases(
-            self,
-            managed_thread_id=current_thread.thread_target_id,
-            execution_id=execution_id,
-        )
-        if message_id:
-            with contextlib.suppress(
-                DiscordAPIError,
-                RuntimeError,
-                ConnectionError,
-                OSError,
-                ValueError,
-            ):
-                await self._rest.edit_channel_message(
-                    channel_id=channel_id,
-                    message_id=message_id,
-                    payload={
-                        "content": "Queued request cancelled.",
-                        "components": [],
-                    },
-                )
-        await self._respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            "Queued request cancelled.",
+            channel_id=channel_id,
+            custom_id=custom_id,
+            message_id=message_id,
         )
 
     async def _handle_queued_turn_interrupt_send_button(
@@ -9475,76 +8142,18 @@ class DiscordBotService:
         user_id: Optional[str] = None,
         message_id: Optional[str] = None,
     ) -> None:
-        from .components import parse_queued_turn_interrupt_send_custom_id
+        from .car_handlers.queue_interrupt_handlers import (
+            handle_queued_turn_interrupt_send_button,
+        )
 
-        execution_id, source_message_id = parse_queued_turn_interrupt_send_custom_id(
-            custom_id
-        )
-        if not execution_id or not source_message_id:
-            await self._send_interrupt_component_response(
-                interaction_id,
-                interaction_token,
-                "Queued request is unavailable.",
-            )
-            return
-        binding = await self._store.get_binding(channel_id=channel_id)
-        pma_enabled = bool(binding.get("pma_enabled", False)) if binding else False
-        mode = "pma" if pma_enabled else "repo"
-        orchestration_service, _binding_row, current_thread = (
-            self._get_discord_thread_binding(channel_id=channel_id, mode=mode)
-        )
-        if current_thread is None:
-            await self._send_interrupt_component_response(
-                interaction_id,
-                interaction_token,
-                "Queued request is unavailable.",
-            )
-            return
-        promoted = orchestration_service.promote_queued_execution(
-            current_thread.thread_target_id,
-            execution_id,
-        )
-        if not promoted:
-            await self._send_interrupt_component_response(
-                interaction_id,
-                interaction_token,
-                "Queued request is no longer pending.",
-            )
-            return
-        get_running_execution = getattr(
-            orchestration_service,
-            "get_running_execution",
-            None,
-        )
-        if callable(get_running_execution):
-            running_execution = get_running_execution(current_thread.thread_target_id)
-            if running_execution is None:
-                await self._send_interrupt_component_response(
-                    interaction_id,
-                    interaction_token,
-                    "Queued request moved to the front.",
-                )
-                return
-        await defer_and_update_runtime_component_message(
+        await handle_queued_turn_interrupt_send_button(
             self,
             interaction_id,
             interaction_token,
-            "Message received. Switching to it now...",
-            components=[],
-        )
-        await self._handle_car_interrupt(
-            interaction_id,
-            interaction_token,
             channel_id=channel_id,
-            active_turn_text="Message received. Switching to it now...",
-            cancel_queued=False,
-            allow_promoted_no_active_success=True,
-            progress_reuse_source_message_id=source_message_id,
-            progress_reuse_acknowledgement="Message received. Switching to it now...",
-            source="component",
-            source_custom_id=custom_id,
-            source_message_id=message_id,
-            source_user_id=user_id,
+            custom_id=custom_id,
+            user_id=user_id,
+            message_id=message_id,
         )
 
     async def _handle_queue_cancel_button(
@@ -9557,47 +8166,16 @@ class DiscordBotService:
         guild_id: Optional[str],
         message_id: Optional[str] = None,
     ) -> None:
-        source_message_id = custom_id.split(":", 1)[1].strip()
-        if not source_message_id:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Queued request is unavailable.",
-            )
-            return
-        conversation_id = self._dispatcher_conversation_id(
-            channel_id=channel_id,
-            guild_id=guild_id,
-        )
-        cancelled = await self._dispatcher.cancel_pending_message(
-            conversation_id,
-            source_message_id,
-        )
-        if not cancelled:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Queued request is no longer pending.",
-            )
-            return
-        await defer_and_update_runtime_component_message(
+        from .car_handlers.queue_interrupt_handlers import handle_queue_cancel_button
+
+        await handle_queue_cancel_button(
             self,
             interaction_id,
             interaction_token,
-            "Cancelling queued request...",
-            components=[],
-        )
-        await self._clear_queued_notice(
-            conversation_id=conversation_id,
-            source_message_id=source_message_id,
             channel_id=channel_id,
-        )
-        if message_id:
-            self._queued_notice_messages.pop((conversation_id, source_message_id), None)
-        await self._respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            "Queued request cancelled.",
+            custom_id=custom_id,
+            guild_id=guild_id,
+            message_id=message_id,
         )
 
     async def _handle_queue_interrupt_send_button(
@@ -9611,60 +8189,19 @@ class DiscordBotService:
         user_id: Optional[str] = None,
         message_id: Optional[str] = None,
     ) -> None:
-        source_message_id = custom_id.split(":", 1)[1].strip()
-        if not source_message_id:
-            await self._send_interrupt_component_response(
-                interaction_id,
-                interaction_token,
-                "Queued request is unavailable.",
-            )
-            return
-        conversation_id = self._dispatcher_conversation_id(
-            channel_id=channel_id,
-            guild_id=guild_id,
+        from .car_handlers.queue_interrupt_handlers import (
+            handle_queue_interrupt_send_button,
         )
-        promoted = await self._dispatcher.promote_pending_message(
-            conversation_id,
-            source_message_id,
-        )
-        if not promoted:
-            await self._send_interrupt_component_response(
-                interaction_id,
-                interaction_token,
-                "Queued request is no longer pending.",
-            )
-            return
-        binding = await self._store.get_binding(channel_id=channel_id)
-        pma_enabled = bool(binding.get("pma_enabled", False)) if binding else False
-        mode = "pma" if pma_enabled else "repo"
-        _orchestration_service, _binding_row, current_thread = (
-            self._get_discord_thread_binding(channel_id=channel_id, mode=mode)
-        )
-        if current_thread is None:
-            await self._send_interrupt_component_response(
-                interaction_id,
-                interaction_token,
-                "Queued request moved to the front.",
-            )
-            return
-        await defer_and_update_runtime_component_message(
+
+        await handle_queue_interrupt_send_button(
             self,
             interaction_id,
             interaction_token,
-            "Message received. Switching to it now...",
-            components=[],
-        )
-        await self._handle_car_interrupt(
-            interaction_id,
-            interaction_token,
             channel_id=channel_id,
-            active_turn_text="Message received. Switching to it now...",
-            progress_reuse_source_message_id=source_message_id,
-            progress_reuse_acknowledgement="Message received. Switching to it now...",
-            source="component",
-            source_custom_id=custom_id,
-            source_message_id=message_id,
-            source_user_id=user_id,
+            custom_id=custom_id,
+            guild_id=guild_id,
+            user_id=user_id,
+            message_id=message_id,
         )
 
     async def _handle_continue_turn_button(
@@ -9672,13 +8209,12 @@ class DiscordBotService:
         interaction_id: str,
         interaction_token: str,
     ) -> None:
-        await self._respond_ephemeral(
+        from .car_handlers.queue_interrupt_handlers import handle_continue_turn_button
+
+        await handle_continue_turn_button(
+            self,
             interaction_id,
             interaction_token,
-            (
-                "Compaction complete. Send your next message to continue this "
-                "session, or use `/car new` to start a fresh session."
-            ),
         )
 
 

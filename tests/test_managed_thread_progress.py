@@ -221,6 +221,129 @@ def test_apply_run_event_to_progress_tracker_preserves_boundary_between_snapshot
     ]
 
 
+def test_apply_run_event_to_progress_tracker_renders_commentary_live_only() -> None:
+    tracker = _tracker()
+    runtime_state = ProgressRuntimeState()
+
+    outcome = apply_run_event_to_progress_tracker(
+        tracker,
+        RunNotice(
+            timestamp="2026-03-15T00:00:00Z",
+            kind="commentary",
+            message="Checking the ACP event path",
+        ),
+        runtime_state=runtime_state,
+    )
+
+    assert outcome.changed is True
+    assert outcome.force is True
+    assert [action.label for action in tracker.actions] == ["commentary"]
+
+    live = render_progress_text(tracker, max_length=2000, now=1.0)
+    final = render_progress_text(tracker, max_length=2000, now=1.0, render_mode="final")
+
+    assert "Checking the ACP event path" in live
+    assert "Checking the ACP event path" not in final
+
+
+def test_apply_run_event_to_progress_tracker_commentary_preserves_segments() -> None:
+    tracker = _tracker()
+    runtime_state = ProgressRuntimeState()
+
+    apply_run_event_to_progress_tracker(
+        tracker,
+        RunNotice(timestamp="t0", kind="commentary", message="First interim note"),
+        runtime_state=runtime_state,
+    )
+    apply_run_event_to_progress_tracker(
+        tracker,
+        RunNotice(timestamp="t1", kind="commentary", message="Second interim note"),
+        runtime_state=runtime_state,
+    )
+
+    commentary_actions = [
+        action.text for action in tracker.actions if action.label == "commentary"
+    ]
+    assert commentary_actions == ["First interim note", "Second interim note"]
+
+
+def test_apply_run_event_to_progress_tracker_already_streamed_commentary_only_ends_segment() -> (
+    None
+):
+    tracker = _tracker()
+    runtime_state = ProgressRuntimeState()
+
+    apply_run_event_to_progress_tracker(
+        tracker,
+        OutputDelta(
+            timestamp="t0",
+            content="streamed answer",
+            delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+        ),
+        runtime_state=runtime_state,
+    )
+
+    outcome = apply_run_event_to_progress_tracker(
+        tracker,
+        RunNotice(
+            timestamp="t1",
+            kind="commentary",
+            message="streamed answer",
+            data={"already_streamed": True},
+        ),
+        runtime_state=runtime_state,
+    )
+
+    assert outcome.changed is False
+    assert [action.label for action in tracker.actions] == ["output"]
+    assert tracker.last_output_index is None
+
+
+def test_tool_call_ends_output_segment_before_later_commentary_and_snapshot() -> None:
+    tracker = _tracker()
+    runtime_state = ProgressRuntimeState()
+
+    apply_run_event_to_progress_tracker(
+        tracker,
+        OutputDelta(
+            timestamp="t0",
+            content="initial output",
+            delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
+        ),
+        runtime_state=runtime_state,
+    )
+    apply_run_event_to_progress_tracker(
+        tracker,
+        ToolCall(timestamp="t1", tool_name="exec", tool_input={}),
+        runtime_state=runtime_state,
+    )
+    apply_run_event_to_progress_tracker(
+        tracker,
+        RunNotice(
+            timestamp="t2",
+            kind="commentary",
+            message="post-tool commentary",
+        ),
+        runtime_state=runtime_state,
+    )
+    apply_run_event_to_progress_tracker(
+        tracker,
+        OutputDelta(
+            timestamp="t3",
+            content="post-tool snapshot",
+            delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
+        ),
+        runtime_state=runtime_state,
+    )
+
+    actions = [(action.label, action.text) for action in tracker.actions]
+    assert actions == [
+        ("output", "initial output"),
+        ("commentary", "post-tool commentary"),
+        ("output", "post-tool snapshot"),
+    ]
+
+
 def test_progress_notice_shows_when_no_transient_action() -> None:
     tracker = _tracker()
 

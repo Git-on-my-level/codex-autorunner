@@ -37,6 +37,7 @@ from .....core.pma_dispatches import (
 from .....core.pma_transcripts import PmaTranscriptStore
 from .....core.time_utils import now_iso
 from .....core.utils import atomic_write
+from .history_helpers import serialize_dispatch_item, sorted_doc_names
 
 logger = logging.getLogger(__name__)
 
@@ -116,19 +117,7 @@ def build_history_files_docs_router(
                     names.add(path.name)
             except OSError:
                 pass
-        ordered: list[str] = []
-        for doc_name in (
-            "AGENTS.md",
-            "active_context.md",
-            "context_log.md",
-            "ABOUT_CAR.md",
-            "prompt.md",
-        ):
-            if doc_name in names:
-                ordered.append(doc_name)
-        remaining = sorted(name for name in names if name not in ordered)
-        ordered.extend(remaining)
-        return ordered
+        return sorted_doc_names(names)
 
     async def _write_doc_history(
         hub_root: Path, doc_name: str, content: str
@@ -631,21 +620,7 @@ def build_history_files_docs_router(
         dispatches = list_pma_dispatches(
             hub_root, include_resolved=include_resolved, limit=limit
         )
-        return {
-            "items": [
-                {
-                    "id": item.dispatch_id,
-                    "title": item.title,
-                    "body": item.body,
-                    "priority": item.priority,
-                    "links": item.links,
-                    "created_at": item.created_at,
-                    "resolved_at": item.resolved_at,
-                    "source_turn_id": item.source_turn_id,
-                }
-                for item in dispatches
-            ]
-        }
+        return {"items": [serialize_dispatch_item(item) for item in dispatches]}
 
     @router.get("/dispatches/{dispatch_id}")
     def get_pma_dispatch(dispatch_id: str, request: Request) -> dict[str, Any]:
@@ -657,18 +632,7 @@ def build_history_files_docs_router(
         match = next((item for item in items if item.dispatch_id == dispatch_id), None)
         if not match:
             raise HTTPException(status_code=404, detail="Dispatch not found")
-        return {
-            "dispatch": {
-                "id": match.dispatch_id,
-                "title": match.title,
-                "body": match.body,
-                "priority": match.priority,
-                "links": match.links,
-                "created_at": match.created_at,
-                "resolved_at": match.resolved_at,
-                "source_turn_id": match.source_turn_id,
-            }
-        }
+        return {"dispatch": serialize_dispatch_item(match)}
 
     @router.post("/dispatches/{dispatch_id}/resolve")
     def resolve_pma_dispatch_endpoint(
@@ -684,15 +648,4 @@ def build_history_files_docs_router(
                 status_code=500,
                 detail="Failed to resolve dispatch: " + "; ".join(errors),
             )
-        return {
-            "dispatch": {
-                "id": dispatch.dispatch_id,
-                "title": dispatch.title,
-                "body": dispatch.body,
-                "priority": dispatch.priority,
-                "links": dispatch.links,
-                "created_at": dispatch.created_at,
-                "resolved_at": dispatch.resolved_at,
-                "source_turn_id": dispatch.source_turn_id,
-            }
-        }
+        return {"dispatch": serialize_dispatch_item(dispatch)}

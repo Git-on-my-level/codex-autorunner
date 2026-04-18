@@ -9,9 +9,10 @@ import { publish } from "./bus.js";
 import { createDocChat } from "./docChatCore.js";
 import { saveTicketChatHistory } from "./ticketChatStorage.js";
 import { renderDiff } from "./diffRenderer.js";
-import { newClientTurnId, streamTurnEvents } from "./fileChat.js";
-import { loadPendingTurn, savePendingTurn, clearPendingTurn } from "./turnResume.js";
+import { newClientTurnId } from "./fileChat.js";
+import { loadPendingTurn, savePendingTurn } from "./turnResume.js";
 import { resumeFileChatTurn } from "./turnEvents.js";
+import { createTurnEventsController, startTurnEventsStream as sharedStartTurnEventsStream, clearManagedTurn, } from "./sharedTurnLifecycle.js";
 import { getSelectedAgent, getSelectedProfile, getSelectedModel, getSelectedReasoning, setSelectedAgentProfile, } from "./agentControls.js";
 // Limits for events display
 export const TICKET_CHAT_EVENT_LIMIT = 8;
@@ -116,7 +117,7 @@ export const ticketChatState = Object.assign(ticketChat.state, {
     activeAgent: null,
     activeProfile: null,
 });
-let currentTurnEventsController = null;
+const turnEventsCtrl = createTurnEventsController();
 export function getTicketChatElements() {
     const base = ticketChat.elements;
     return {
@@ -214,20 +215,8 @@ export async function startNewTicketChatThread() {
 export function clearTicketEvents() {
     ticketChat.clearEvents();
 }
-function clearTurnEventsStream() {
-    if (currentTurnEventsController) {
-        try {
-            currentTurnEventsController.abort();
-        }
-        catch {
-            // ignore
-        }
-        currentTurnEventsController = null;
-    }
-}
 function clearPendingTurnState(pendingKey) {
-    clearTurnEventsStream();
-    clearPendingTurn(pendingKey);
+    clearManagedTurn(turnEventsCtrl, pendingKey);
 }
 function handleTicketTurnMeta(update) {
     const threadId = typeof update.thread_id === "string" ? update.thread_id : "";
@@ -235,8 +224,7 @@ function handleTicketTurnMeta(update) {
     const agent = typeof update.agent === "string" ? update.agent : "codex";
     if (!threadId || !turnId)
         return;
-    clearTurnEventsStream();
-    currentTurnEventsController = streamTurnEvents({ agent, threadId, turnId }, {
+    sharedStartTurnEventsStream(turnEventsCtrl, { agent, threadId, turnId }, {
         onEvent: (event) => {
             ticketChat.applyAppEvent(event);
             ticketChat.renderEvents();
@@ -330,7 +318,7 @@ export function setTicketIndex(index, ticketChatKey = null) {
     ticketChatState.draft = null;
     clearActiveTurnScope();
     resetTicketChatState();
-    clearTurnEventsStream();
+    turnEventsCtrl.abort();
     // Clear chat history when switching tickets
     if (changed) {
         ticketChat.setTarget(nextTarget);
@@ -352,7 +340,7 @@ export function syncTicketChatTargetToSelection() {
     }
     ticketChatState.draft = null;
     resetTicketChatState();
-    clearTurnEventsStream();
+    turnEventsCtrl.abort();
     ticketChat.setTarget(nextTarget);
 }
 export function renderTicketChat() {
@@ -409,7 +397,7 @@ export async function sendTicketChat() {
     resetTicketChatState();
     ticketChatState.status = "running";
     ticketChatState.statusText = "queued";
-    clearTurnEventsStream();
+    turnEventsCtrl.abort();
     ticketChatState.controller = new AbortController();
     const agent = els.agentSelect
         ? (els.agentSelect.value || "codex")
@@ -485,7 +473,7 @@ export async function cancelTicketChat() {
     if (ticketChatState.controller) {
         ticketChatState.controller.abort();
     }
-    clearTurnEventsStream();
+    turnEventsCtrl.abort();
     // Send interrupt to server
     if (ticketChatState.ticketIndex != null) {
         try {
@@ -576,7 +564,7 @@ export async function resumeTicketPendingTurn(index, ticketChatKey = null) {
                 renderTicketChat();
             },
         });
-        currentTurnEventsController = outcome.controller;
+        turnEventsCtrl.current = outcome.controller;
         if (outcome.lastResult && outcome.lastResult.status) {
             applyTicketChatResult(outcome.lastResult);
             clearPendingTurnState(pendingKey);

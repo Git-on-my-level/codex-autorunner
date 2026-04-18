@@ -25,6 +25,16 @@ NotificationHandler = Callable[[Mapping[str, object]], Awaitable[None]]
 
 
 class AgentBackendFactory:
+    """Creates and caches backend adapters and their supervisors.
+
+    Ownership (TICKET-1170):
+    - Owns supervisor instances (OpenCodeSupervisor, WorkspaceAppServerSupervisor).
+    - Owns the backend adapter cache (dict[str, AgentBackend]).
+    - Supervisors own process lifecycle; backends own protocol-specific state.
+    - reset_session_state() delegates to cached backends.
+    - close_all() closes backends and supervisors in order.
+    """
+
     def __init__(
         self,
         repo_root: Path,

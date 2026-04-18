@@ -8,6 +8,7 @@ import pytest
 
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
+from codex_autorunner.core.orchestration import OrchestrationBindingStore
 from codex_autorunner.core.pma_chat_delivery import (
     deliver_pma_notification,
     notify_preferred_bound_chat_for_workspace,
@@ -17,6 +18,7 @@ from codex_autorunner.core.pma_notification_store import (
     PmaNotificationStore,
     build_notification_context_block,
 )
+from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.integrations.discord.state import DiscordStateStore
 from codex_autorunner.integrations.telegram.state import TelegramStateStore, topic_key
 from tests.conftest import write_test_config
@@ -51,6 +53,19 @@ def _write_manifest(hub_root: Path, repo_id: str, workspace: Path) -> None:
         ),
         encoding="utf-8",
     )
+
+
+def _create_bound_thread(
+    hub_root: Path, workspace: Path, *, surface_kind: str, surface_key: str
+) -> str:
+    thread = PmaThreadStore(hub_root).create_thread("codex", workspace)
+    thread_id = str(thread["managed_thread_id"])
+    OrchestrationBindingStore(hub_root).upsert_binding(
+        surface_kind=surface_kind,
+        surface_key=surface_key,
+        thread_target_id=thread_id,
+    )
+    return thread_id
 
 
 def _set_discord_binding_updated_at(
@@ -252,6 +267,126 @@ async def test_deliver_pma_notification_persists_replyable_context_for_bound_del
         assert "<notification_context>" in context_block
         assert '"notification_id"' in context_block
         assert '"dispatch_paused"' in context_block
+    finally:
+        await discord_store.close()
+
+
+@pytest.mark.anyio
+async def test_deliver_pma_notification_uses_explicit_delivery_target_for_bound_thread(
+    tmp_path: Path,
+) -> None:
+    hub_root = _hub(tmp_path)
+    workspace = (hub_root / "worktrees" / "repo-g").resolve()
+    workspace.mkdir(parents=True, exist_ok=True)
+    _write_manifest(hub_root, "repo-g", workspace)
+
+    discord_store = DiscordStateStore(
+        hub_root / ".codex-autorunner" / "discord_state.sqlite3"
+    )
+    try:
+        await discord_store.upsert_binding(
+            channel_id="repo-g-discord",
+            guild_id="guild-1",
+            workspace_path=str(workspace),
+            repo_id="repo-g",
+        )
+        thread_id = _create_bound_thread(
+            hub_root,
+            workspace,
+            surface_kind="discord",
+            surface_key="repo-g-discord",
+        )
+
+        outcome = await deliver_pma_notification(
+            hub_root=hub_root,
+            repo_id="repo-g",
+            message="Terminal follow-up",
+            correlation_id="corr-explicit-1",
+            delivery="auto",
+            source_kind="managed_thread_completed",
+            managed_thread_id=thread_id,
+            delivery_target={
+                "surface_kind": "discord",
+                "surface_key": "repo-g-discord",
+            },
+        )
+
+        assert outcome == {"route": "explicit", "targets": 1, "published": 1}
+        outbox = await discord_store.list_outbox()
+        assert any(
+            record.channel_id == "repo-g-discord"
+            and record.payload_json.get("content") == "Terminal follow-up"
+            for record in outbox
+        )
+    finally:
+        await discord_store.close()
+
+
+@pytest.mark.anyio
+async def test_deliver_pma_notification_falls_back_when_explicit_target_binding_changes(
+    tmp_path: Path,
+) -> None:
+    hub_root = _hub(tmp_path)
+    workspace = (hub_root / "worktrees" / "repo-h").resolve()
+    workspace.mkdir(parents=True, exist_ok=True)
+    _write_manifest(hub_root, "repo-h", workspace)
+
+    discord_store = DiscordStateStore(
+        hub_root / ".codex-autorunner" / "discord_state.sqlite3"
+    )
+    try:
+        await discord_store.upsert_binding(
+            channel_id="repo-h-origin",
+            guild_id="guild-1",
+            workspace_path=str(workspace),
+            repo_id="repo-h",
+        )
+        await discord_store.upsert_binding(
+            channel_id="repo-h-default",
+            guild_id="guild-1",
+            workspace_path=str(workspace),
+            repo_id="repo-h",
+        )
+        await discord_store.update_pma_state(
+            channel_id="repo-h-default",
+            pma_enabled=True,
+            pma_prev_workspace_path=str(workspace),
+            pma_prev_repo_id="repo-h",
+        )
+        thread_id = _create_bound_thread(
+            hub_root,
+            workspace,
+            surface_kind="discord",
+            surface_key="repo-h-origin",
+        )
+        OrchestrationBindingStore(hub_root).upsert_binding(
+            surface_kind="telegram",
+            surface_key=topic_key(7101, 8102),
+            thread_target_id=thread_id,
+        )
+
+        outcome = await deliver_pma_notification(
+            hub_root=hub_root,
+            repo_id="repo-h",
+            message="Fallback delivery",
+            correlation_id="corr-explicit-2",
+            delivery="auto",
+            source_kind="managed_thread_completed",
+            managed_thread_id=thread_id,
+            delivery_target={
+                "surface_kind": "discord",
+                "surface_key": "repo-h-origin",
+            },
+        )
+
+        assert outcome == {"route": "primary_pma", "targets": 1, "published": 1}
+        outbox = await discord_store.list_outbox()
+        assert any(
+            record.channel_id == "repo-h-default"
+            and record.payload_json.get("content") == "Fallback delivery"
+            for record in outbox
+        )
+        assert not any(record.channel_id == "repo-h-origin" for record in outbox)
     finally:
         await discord_store.close()
 

@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import errno
+import os
+import time
 from pathlib import Path
 
 from codex_autorunner.core import pytest_temp_cleanup as cleanup_module
 from codex_autorunner.core.pytest_temp_cleanup import (
     TempPathScanResult,
     TempRootProcess,
+    cleanup_repo_managed_temp_paths,
     cleanup_repo_pytest_temp_runs,
     cleanup_temp_paths,
+    discover_repo_temp_paths,
     repo_pytest_temp_root,
 )
 
@@ -57,6 +61,104 @@ def test_cleanup_repo_pytest_temp_runs_skips_recent_run_dirs(
     assert summary.scanned == 0
     assert summary.deleted == 0
     assert recent_run.exists() is True
+
+
+def test_cleanup_repo_pytest_temp_runs_scans_multiple_temp_roots(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    temp_a = tmp_path / "tmp-a"
+    temp_b = tmp_path / "tmp-b"
+    stale_a = repo_pytest_temp_root(repo_root, temp_base=temp_a) / "stale-a"
+    stale_b = repo_pytest_temp_root(repo_root, temp_base=temp_b) / "stale-b"
+    (stale_a / "data").mkdir(parents=True)
+    (stale_b / "data").mkdir(parents=True)
+    (stale_a / "data" / "artifact.bin").write_bytes(b"1234")
+    (stale_b / "data" / "artifact.bin").write_bytes(b"5678")
+    monkeypatch.setattr(
+        cleanup_module,
+        "candidate_system_temp_roots",
+        lambda: (temp_a, temp_b),
+    )
+
+    summary = cleanup_repo_pytest_temp_runs(repo_root)
+
+    assert summary.scanned == 2
+    assert summary.deleted == 2
+    assert stale_a.exists() is False
+    assert stale_b.exists() is False
+
+
+def test_discover_repo_temp_paths_finds_car_dirs_and_repo_workspaces(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    temp_base = tmp_path / "tmp"
+    car_profile = temp_base / "car-hub-profile-20260414"
+    workspace = temp_base / "tmp.NmYoDUn4Sd"
+    (car_profile / "Profile").mkdir(parents=True)
+    (workspace / "repo" / ".git").mkdir(parents=True)
+    (workspace / "flows.db").write_text("sqlite", encoding="utf-8")
+
+    paths = discover_repo_temp_paths(repo_root, temp_base=temp_base)
+
+    assert paths == (car_profile, workspace)
+
+
+def test_cleanup_repo_managed_temp_paths_combines_pytest_and_generic_temp_roots(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    temp_base = tmp_path / "tmp"
+    stale_run = repo_pytest_temp_root(repo_root, temp_base=temp_base) / "stale"
+    generic_root = temp_base / "car-hub-profile-20260414"
+    (stale_run / "payload").mkdir(parents=True)
+    (generic_root / "Profile").mkdir(parents=True)
+    (stale_run / "payload" / "artifact.bin").write_bytes(b"1234")
+    (generic_root / "Profile" / "prefs.json").write_text(
+        "{}",
+        encoding="utf-8",
+    )
+
+    summary = cleanup_repo_managed_temp_paths(repo_root, temp_base=temp_base)
+
+    assert summary.scanned == 2
+    assert summary.deleted == 2
+    assert stale_run.exists() is False
+    assert generic_root.exists() is False
+
+
+def test_cleanup_repo_managed_temp_paths_skips_recent_generic_car_dirs(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    temp_base = tmp_path / "tmp"
+    stale_run = repo_pytest_temp_root(repo_root, temp_base=temp_base) / "stale"
+    recent_generic = temp_base / "car-hub-profile-20260414"
+    (stale_run / "payload").mkdir(parents=True)
+    (recent_generic / "Profile").mkdir(parents=True)
+    (stale_run / "payload" / "artifact.bin").write_bytes(b"1234")
+    (recent_generic / "Profile" / "prefs.json").write_text(
+        "{}",
+        encoding="utf-8",
+    )
+    old = time.time() - 400.0
+    os.utime(stale_run, (old, old))
+
+    summary = cleanup_repo_managed_temp_paths(
+        repo_root,
+        temp_base=temp_base,
+        min_age_seconds=300.0,
+    )
+
+    assert summary.scanned == 1
+    assert summary.deleted == 1
+    assert stale_run.exists() is False
+    assert recent_generic.exists() is True
 
 
 def test_cleanup_temp_paths_skips_active_roots(tmp_path: Path) -> None:

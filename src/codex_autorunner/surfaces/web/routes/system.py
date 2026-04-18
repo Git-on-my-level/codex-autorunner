@@ -35,6 +35,7 @@ from ..schemas import (
     SystemUpdateTargetOption,
     SystemUpdateTargetsResponse,
 )
+from ..serializers import build_orchestration_health
 from ..static_assets import missing_static_assets
 from ..static_refresh import refresh_static_assets
 
@@ -88,23 +89,26 @@ def build_system_routes() -> APIRouter:
                 collect_execution_history_database_health,
                 config.root,
             )
-            orchestration_health = {
-                "database_path": database_health.database_path,
-                "database_size_bytes": database_health.size_bytes,
-                "database_size_status": database_health.status,
-                "database_size_warning_bytes": (
-                    database_health.warning_threshold_bytes
-                ),
-                "database_size_error_bytes": database_health.error_threshold_bytes,
-            }
             last_housekeeping = getattr(
                 getattr(request.app, "state", None),
                 "orchestration_housekeeping",
                 None,
             )
-            if isinstance(last_housekeeping, dict):
-                orchestration_health["last_housekeeping"] = last_housekeeping
+            orchestration_health = build_orchestration_health(
+                database_health,
+                last_housekeeping=(
+                    last_housekeeping if isinstance(last_housekeeping, dict) else None
+                ),
+            )
         static_dir = getattr(getattr(request.app, "state", None), "static_dir", None)
+        static_asset_provenance_raw = getattr(
+            getattr(request.app, "state", None), "static_asset_provenance", None
+        )
+        static_asset_provenance = (
+            static_asset_provenance_raw.value
+            if static_asset_provenance_raw is not None
+            else None
+        )
         if not isinstance(static_dir, Path):
             return JSONResponse(
                 {
@@ -127,13 +131,26 @@ def build_system_routes() -> APIRouter:
                 else:
                     missing = ["index.html"]
             if not missing:
-                return {
+                response: dict = {
                     "status": "ok",
                     "mode": mode,
                     "base_path": base_path,
                     "asset_version": asset_version,
+                    "static_asset_provenance": static_asset_provenance,
                     "orchestration": orchestration_health,
                 }
+                if mode == "hub":
+                    supervisor = getattr(request.app.state, "hub_supervisor", None)
+                    if supervisor is not None:
+                        response["hub_startup_phase"] = getattr(
+                            supervisor, "startup_phase", None
+                        )
+                    deferred_done = getattr(
+                        request.app.state, "hub_deferred_startup_complete", None
+                    )
+                    if deferred_done is not None:
+                        response["hub_deferred_startup_complete"] = deferred_done
+                return response
             return JSONResponse(
                 {
                     "status": "error",
@@ -145,13 +162,26 @@ def build_system_routes() -> APIRouter:
                 },
                 status_code=500,
             )
-        return {
+        response = {
             "status": "ok",
             "mode": mode,
             "base_path": base_path,
             "asset_version": asset_version,
+            "static_asset_provenance": static_asset_provenance,
             "orchestration": orchestration_health,
         }
+        if mode == "hub":
+            supervisor = getattr(request.app.state, "hub_supervisor", None)
+            if supervisor is not None:
+                response["hub_startup_phase"] = getattr(
+                    supervisor, "startup_phase", None
+                )
+            deferred_done = getattr(
+                request.app.state, "hub_deferred_startup_complete", None
+            )
+            if deferred_done is not None:
+                response["hub_deferred_startup_complete"] = deferred_done
+        return response
 
     @router.get("/system/update/check", response_model=SystemUpdateCheckResponse)
     async def system_update_check(request: Request):

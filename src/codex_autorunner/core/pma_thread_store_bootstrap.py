@@ -99,7 +99,8 @@ class PmaThreadStoreBootstrap:
                 migrate=False,
             ) as conn:
                 if self._prepare_marker_present(conn):
-                    self._run_legacy_mirror(conn)
+                    if not self._db_path.exists():
+                        self._run_legacy_mirror(conn)
                     return
                 self._run_legacy_mirror(conn)
                 self._mark_prepared(conn)
@@ -125,7 +126,6 @@ class PmaThreadStoreBootstrap:
                 migrate=False,
             ) as conn:
                 yield conn
-                self._run_legacy_mirror(conn)
 
 
 __all__ = [

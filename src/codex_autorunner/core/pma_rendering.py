@@ -140,9 +140,13 @@ def _render_freshness_section(
                 + (" STALE" if is_stale else "")
             )
     if stale_section_names:
-        warning_sections = ", ".join(
-            _truncate(name, max_field_chars) for name in stale_section_names
-        )
+        stale_summary = snapshot_freshness.get("stale_summary")
+        if isinstance(stale_summary, str) and stale_summary.strip():
+            warning_sections = _truncate(stale_summary.strip(), max_field_chars * 4)
+        else:
+            warning_sections = ", ".join(
+                _truncate(name, max_field_chars) for name in stale_section_names
+            )
         lines.append(
             f"WARNING: stale sections may be outdated; refresh before acting on: {warning_sections}"
         )
@@ -650,11 +654,17 @@ def _render_pma_threads_section(
         )
         agent = _field(thread, "agent", max_field_chars)
         raw_status = str(thread.get("status") or "")
-        lifecycle_status = str(thread.get("lifecycle_status") or "-")
-        operator_status = derive_managed_thread_operator_status(
-            normalized_status=raw_status, lifecycle_status=lifecycle_status
-        )
-        status_display = _truncate(operator_status, max_field_chars)
+        precomputed = _field(thread, "operator_status", max_field_chars)
+        if precomputed:
+            status_display = precomputed
+        else:
+            lifecycle_status = str(thread.get("lifecycle_status") or "-")
+            status_display = _truncate(
+                derive_managed_thread_operator_status(
+                    normalized_status=raw_status, lifecycle_status=lifecycle_status
+                ),
+                max_field_chars,
+            )
         last_turn_outcome = _truncate(
             (
                 raw_status

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import httpx
+import pytest
 
 from codex_autorunner.core.hub_control_plane import (
     ControlPlaneVersion,
@@ -459,3 +460,106 @@ async def test_http_client_uses_extended_timeout_for_workspace_setup_commands() 
             "timeout": None,
         }
     ]
+
+
+async def test_http_client_uses_extended_timeout_for_backend_id_updates() -> None:
+    from codex_autorunner.core.hub_control_plane.http_client import (
+        HttpHubControlPlaneClient,
+    )
+    from codex_autorunner.core.hub_control_plane.models import (
+        ExecutionBackendIdUpdateRequest,
+    )
+
+    class _FakeAsyncClient:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        async def request(
+            self,
+            method: str,
+            path: str,
+            *,
+            json: dict[str, object] | None = None,
+            params: dict[str, object] | None = None,
+            timeout: float | None = None,
+        ) -> httpx.Response:
+            self.calls.append(
+                {
+                    "method": method,
+                    "path": path,
+                    "json": json,
+                    "params": params,
+                    "timeout": timeout,
+                }
+            )
+            return httpx.Response(204)
+
+    fake_client = _FakeAsyncClient()
+    client = HttpHubControlPlaneClient(
+        base_url="http://localhost:9999",
+        timeout=10.0,
+        http_client=fake_client,  # type: ignore[arg-type]
+    )
+
+    await client.set_execution_backend_id(
+        ExecutionBackendIdUpdateRequest(
+            execution_id="exec-1",
+            backend_turn_id="turn-2",
+        )
+    )
+
+    assert fake_client.calls == [
+        {
+            "method": "PUT",
+            "path": "/hub/api/control-plane/thread-executions/exec-1/backend-id",
+            "json": {
+                "execution_id": "exec-1",
+                "backend_turn_id": "turn-2",
+            },
+            "params": None,
+            "timeout": 30.0,
+        }
+    ]
+
+
+async def test_http_client_includes_exception_class_for_blank_transport_errors() -> (
+    None
+):
+    from codex_autorunner.core.hub_control_plane.http_client import (
+        HttpHubControlPlaneClient,
+    )
+
+    request = httpx.Request(
+        "POST", "http://localhost:9999/hub/api/control-plane/handshake"
+    )
+
+    class _FakeAsyncClient:
+        async def request(
+            self,
+            method: str,
+            path: str,
+            *,
+            json: dict[str, object] | None = None,
+            params: dict[str, object] | None = None,
+            timeout: float | None = None,
+        ) -> httpx.Response:
+            raise httpx.ReadTimeout("", request=request)
+
+    client = HttpHubControlPlaneClient(
+        base_url="http://localhost:9999",
+        http_client=_FakeAsyncClient(),  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(HubControlPlaneError) as exc_info:
+        await client.handshake(
+            HandshakeRequest(
+                client_name="discord",
+                client_api_version="1.0.0",
+                expected_schema_generation=1,
+            )
+        )
+
+    assert exc_info.value.code == "transport_failure"
+    assert (
+        str(exc_info.value) == "Hub control-plane transport request failed: ReadTimeout"
+    )

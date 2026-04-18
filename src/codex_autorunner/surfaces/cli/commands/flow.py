@@ -33,10 +33,8 @@ from ....core.flows.models import (
 )
 from ....core.flows.start_policy import evaluate_ticket_start_policy
 from ....core.flows.telemetry_export import export_all_runs
-from ....core.flows.ux_helpers import build_flow_status_snapshot, ensure_worker
+from ....core.flows.ux_helpers import build_flow_status_snapshot
 from ....core.flows.worker_process import (
-    check_worker_health,
-    clear_worker_metadata,
     register_worker_metadata,
     write_worker_crash_info,
     write_worker_exit_info,
@@ -50,9 +48,16 @@ from ....core.orchestration import build_ticket_flow_orchestration_service
 from ....core.orchestration.models import FlowRunTarget
 from ....core.runtime import RuntimeContext
 from ....core.utils import resolve_executable
+from ....flows.ticket_flow.runtime_helpers import (
+    ensure_ticket_flow_worker,
+    flow_run_record_from_target,
+    resolve_run_reuse_policy,
+    seed_bootstrap_ticket_if_needed,
+    select_resumable_run,
+    stop_ticket_flow_worker,
+)
 from ....tickets import DEFAULT_MAX_TOTAL_TURNS, AgentPool
-from ....tickets.files import list_ticket_paths, read_ticket, ticket_is_done
-from ....tickets.frontmatter import generate_ticket_id
+from ....tickets.files import list_ticket_paths, read_ticket
 from ..hub_path_option import hub_root_path_option
 
 logger = logging.getLogger(__name__)
@@ -80,12 +85,6 @@ def _build_force_attestation(
         "user_request": force_attestation,
         "target_scope": target_scope,
     }
-
-
-def _stale_terminal_runs(records: list[FlowRunRecord]) -> list[FlowRunRecord]:
-    return [
-        r for r in records if r.status in (FlowRunStatus.FAILED, FlowRunStatus.STOPPED)
-    ]
 
 
 def register_flow_commands(
@@ -379,26 +378,6 @@ def register_flow_commands(
         store.initialize()
         return store
 
-    def _active_or_paused_run(records: list[FlowRunRecord]) -> Optional[FlowRunRecord]:
-        for record in records:
-            if record.status in (FlowRunStatus.RUNNING, FlowRunStatus.PAUSED):
-                return record
-        return None
-
-    def _resumable_run(
-        records: list[FlowRunRecord],
-    ) -> tuple[Optional[FlowRunRecord], str]:
-        """Return a resumable run and the reason."""
-        if not records:
-            return None, "new_run"
-        active = _active_or_paused_run(records)
-        if active:
-            return active, "active"
-        latest = records[0]
-        if latest.status == FlowRunStatus.COMPLETED:
-            return latest, "completed_pending"
-        return None, "new_run"
-
     def _ticket_flow_status_payload(
         engine: RuntimeContext, record: FlowRunRecord, store: Optional[FlowStore]
     ) -> dict:
@@ -406,10 +385,32 @@ def register_flow_commands(
         health = snapshot.get("worker_health")
         effective_ticket = snapshot.get("effective_current_ticket")
         state = record.state if isinstance(record.state, dict) else {}
+        raw_ticket_engine = state.get("ticket_engine")
+        ticket_engine: dict[str, Any]
+        if isinstance(raw_ticket_engine, dict):
+            ticket_engine = raw_ticket_engine
+        else:
+            ticket_engine = {}
         reason_summary = state.get("reason_summary")
         normalized_reason_summary = (
             reason_summary.strip()
             if isinstance(reason_summary, str) and reason_summary.strip()
+            else None
+        )
+        reason = ticket_engine.get("reason")
+        normalized_reason = (
+            reason.strip() if isinstance(reason, str) and reason.strip() else None
+        )
+        reason_code = ticket_engine.get("reason_code")
+        normalized_reason_code = (
+            reason_code.strip()
+            if isinstance(reason_code, str) and reason_code.strip()
+            else None
+        )
+        reason_details = ticket_engine.get("reason_details")
+        normalized_reason_details = (
+            reason_details.strip()
+            if isinstance(reason_details, str) and reason_details.strip()
             else None
         )
         error_message = (
@@ -431,6 +432,9 @@ def register_flow_commands(
             "current_ticket": effective_ticket,
             "ticket_progress": snapshot.get("ticket_progress"),
             "reason_summary": normalized_reason_summary,
+            "reason": normalized_reason,
+            "reason_code": normalized_reason_code,
+            "reason_details": normalized_reason_details,
             "error_message": error_message,
             "worker": (
                 {
@@ -473,6 +477,19 @@ def register_flow_commands(
         reason_summary = payload.get("reason_summary")
         if isinstance(reason_summary, str) and reason_summary.strip():
             typer.echo(f"summary: {reason_summary.strip()}")
+        reason_code = payload.get("reason_code")
+        if isinstance(reason_code, str) and reason_code.strip():
+            typer.echo(f"reason_code: {reason_code.strip()}")
+        reason = payload.get("reason")
+        if (
+            isinstance(reason, str)
+            and reason.strip()
+            and reason.strip() != str(reason_summary or "").strip()
+        ):
+            typer.echo(f"reason: {reason.strip()}")
+        reason_details = payload.get("reason_details")
+        if isinstance(reason_details, str) and reason_details.strip():
+            typer.echo(f"reason_details: {reason_details.strip()}")
         error_message = payload.get("error_message")
         if isinstance(error_message, str) and error_message.strip():
             typer.echo(f"error: {error_message.strip()}")
@@ -499,88 +516,18 @@ def register_flow_commands(
                     if isinstance(stderr_tail, str) and stderr_tail.strip():
                         typer.echo(f"worker_stderr: {stderr_tail.strip()}")
 
-    def _start_ticket_flow_worker(
-        repo_root: Path, run_id: str, is_terminal: bool = False
-    ) -> None:
-        result = ensure_worker(repo_root, run_id, is_terminal=is_terminal)
-        if result == {"status": "reused"}:
-            return
-
-    def _stop_ticket_flow_worker(repo_root: Path, run_id: str) -> None:
-        health = check_worker_health(repo_root, run_id)
-        if health.status in {"dead", "mismatch", "invalid"}:
-            try:
-                clear_worker_metadata(health.artifact_path.parent)
-            except OSError:
-                logger.debug("Failed to clear worker metadata", exc_info=True)
-        if not health.pid:
-            return
-        try:
-            if os.name != "nt" and hasattr(os, "killpg"):
-                # Workers are spawned as session/group leaders, so pgid == pid.
-                os.killpg(health.pid, signal.SIGTERM)
-            else:
-                os.kill(health.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-        except PermissionError:
-            # Keep stop idempotent when process ownership changed unexpectedly.
-            pass
-        except OSError:
-            try:
-                os.kill(health.pid, signal.SIGTERM)
-            except OSError:
-                logger.debug(
-                    "Fallback SIGTERM to worker pid %d failed",
-                    health.pid,
-                    exc_info=True,
-                )
-
     def _ticket_flow_controller(
         engine: RuntimeContext,
     ) -> tuple[FlowController, AgentPool]:
-        db_path, artifacts_root, _ = _ticket_flow_paths(engine)
-        agent_pool = build_agent_pool(engine.config)
-        definition = build_ticket_flow_definition(
-            agent_pool=agent_pool,
-            auto_commit_default=engine.config.git_auto_commit,
-            include_previous_ticket_context_default=(
-                engine.config.ticket_flow.include_previous_ticket_context
-            ),
-            max_total_turns_default=(
-                engine.config.ticket_flow.max_total_turns
-                if engine.config.ticket_flow.max_total_turns is not None
-                else DEFAULT_MAX_TOTAL_TURNS
-            ),
+        from ....flows.ticket_flow.runtime_helpers import (
+            build_ticket_flow_runtime_resources,
         )
-        definition.validate()
-        controller = FlowController(
-            definition=definition,
-            db_path=db_path,
-            artifacts_root=artifacts_root,
-            durable=engine.config.durable_writes,
-        )
-        controller.initialize()
-        return controller, agent_pool
+
+        resources = build_ticket_flow_runtime_resources(engine.repo_root)
+        return resources.controller, resources.agent_pool
 
     def _ticket_flow_orchestration_service(engine: RuntimeContext):
         return build_ticket_flow_orchestration_service(workspace_root=engine.repo_root)
-
-    def _flow_run_record_from_target(target: FlowRunTarget) -> FlowRunRecord:
-        return FlowRunRecord(
-            id=target.run_id,
-            flow_type=target.flow_type,
-            status=FlowRunStatus(target.status),
-            input_data={},
-            state=dict(target.state or {}),
-            current_step=target.current_step,
-            stop_requested=False,
-            created_at=target.created_at or "",
-            started_at=target.started_at,
-            finished_at=target.finished_at,
-            error_message=target.error_message,
-            metadata=dict(target.metadata or {}),
-        )
 
     @flow_app.command("worker")
     def flow_worker(
@@ -818,73 +765,41 @@ def register_flow_commands(
         guard_unregistered_hub_repo(engine.repo_root, hub)
         _, _, ticket_dir = _ticket_flow_paths(engine)
         ticket_dir.mkdir(parents=True, exist_ok=True)
-        ticket_path = ticket_dir / "TICKET-001.md"
 
         service = _ticket_flow_orchestration_service(engine)
         records = [
-            _flow_run_record_from_target(target) for target in service.list_flow_runs()
+            flow_run_record_from_target(target) for target in service.list_flow_runs()
         ]
-        stale_terminal = _stale_terminal_runs(records)
-        if not force_new:
-            existing_run, reason = _resumable_run(records)
-            if existing_run and reason == "active":
-                _start_ticket_flow_worker(
-                    engine.repo_root, existing_run.id, is_terminal=False
-                )
-                typer.echo(
-                    f"reused run={existing_run.id} | car ticket-flow status --run-id {existing_run.id}"
-                )
-                return
-            elif existing_run and reason == "completed_pending":
-                existing_tickets = list_ticket_paths(ticket_dir)
-                pending_count = len(
-                    [t for t in existing_tickets if not ticket_is_done(t)]
-                )
-                if pending_count > 0:
-                    typer.echo(
-                        f"run {existing_run.id} completed with {pending_count} pending tickets. "
-                        f"use --force-new to reset dispatch history."
-                    )
-                    raise_exit("Add --force-new to create a new run.")
+        reuse = resolve_run_reuse_policy(
+            records, force_new=force_new, ticket_dir=ticket_dir
+        )
 
-        if stale_terminal:
-            stale_id = stale_terminal[0].id
+        if reuse.action == "reuse_active":
+            assert reuse.run is not None
+            ensure_ticket_flow_worker(engine.repo_root, reuse.run.id, is_terminal=False)
             typer.echo(
-                f"warning: {len(stale_terminal)} stale runs (FAILED/STOPPED). "
+                f"reused run={reuse.run.id} | car ticket-flow status --run-id {reuse.run.id}"
+            )
+            return
+
+        if reuse.action == "completed_pending" and reuse.pending_ticket_count > 0:
+            assert reuse.run is not None
+            typer.echo(
+                f"run {reuse.run.id} completed with {reuse.pending_ticket_count} pending tickets. "
+                f"use --force-new to reset dispatch history."
+            )
+            raise_exit("Add --force-new to create a new run.")
+
+        if reuse.stale_terminal_runs:
+            stale_id = reuse.stale_terminal_runs[0].id
+            typer.echo(
+                f"warning: {len(reuse.stale_terminal_runs)} stale runs (FAILED/STOPPED). "
                 f"inspect: car ticket-flow status --run-id {stale_id}. "
                 f"archive: car ticket-flow archive --run-id {stale_id} --force. "
                 f"use --force-new to suppress."
             )
 
-        existing_tickets = list_ticket_paths(ticket_dir)
-        seeded = False
-        if not existing_tickets and not ticket_path.exists():
-            bootstrap_ticket_id = generate_ticket_id()
-            template = f"""---
-agent: codex
-done: false
-ticket_id: "{bootstrap_ticket_id}"
-title: Bootstrap ticket plan
-goal: Capture scope and seed follow-up tickets
----
-
-You are the first ticket in a new ticket_flow run.
-
-- Read `.codex-autorunner/ISSUE.md`. If it is missing:
-  - If GitHub is available, ask the user for the issue/PR URL or number and create `.codex-autorunner/ISSUE.md` from it.
-  - If GitHub is not available, write `DISPATCH.md` with `mode: pause` asking the user to describe the work (or share a doc). After the reply, create `.codex-autorunner/ISSUE.md` with their input.
-- If helpful, create or update contextspace docs under `.codex-autorunner/contextspace/`:
-  - `active_context.md` for current context and links
-  - `decisions.md` for decisions/rationale
-  - `spec.md` for requirements and constraints
-- Break the work into additional `TICKET-00X.md` files with clear owners/goals; keep this ticket open until they exist.
-- Place any supporting artifacts in `.codex-autorunner/runs/<run_id>/dispatch/` if needed.
-- Write `DISPATCH.md` to dispatch a message to the user:
-  - Use `mode: pause` (handoff) to wait for user response. This pauses execution.
-  - Use `mode: notify` (informational) to message the user but keep running.
-"""
-            ticket_path.write_text(template, encoding="utf-8")
-            seeded = True
+        seeded = seed_bootstrap_ticket_if_needed(ticket_dir)
 
         run_id = str(uuid.uuid4())
         input_data: dict[str, object] = {}
@@ -952,40 +867,37 @@ You are the first ticket in a new ticket_flow run.
 
         service = _ticket_flow_orchestration_service(engine)
         records = [
-            _flow_run_record_from_target(target) for target in service.list_flow_runs()
+            flow_run_record_from_target(target) for target in service.list_flow_runs()
         ]
-        stale_terminal = _stale_terminal_runs(records)
-        if not force_new:
-            existing_run, reason = _resumable_run(records)
-            if existing_run and reason == "active":
-                report = _ticket_flow_preflight(engine, ticket_dir)
-                if report.has_errors():
-                    typer.echo("Ticket flow preflight failed:", err=True)
-                    _print_preflight_report(report)
-                    raise_exit("Fix the above errors before starting the ticket flow.")
-                _start_ticket_flow_worker(
-                    engine.repo_root, existing_run.id, is_terminal=False
-                )
-                typer.echo(
-                    f"reused run={existing_run.id} | car ticket-flow status --run-id {existing_run.id}"
-                )
-                return
-            elif existing_run and reason == "completed_pending":
-                existing_tickets = list_ticket_paths(ticket_dir)
-                pending_count = len(
-                    [t for t in existing_tickets if not ticket_is_done(t)]
-                )
-                if pending_count > 0:
-                    typer.echo(
-                        f"run {existing_run.id} completed with {pending_count} pending tickets. "
-                        f"use --force-new to reset dispatch history."
-                    )
-                    raise_exit("Add --force-new to create a new run.")
+        reuse = resolve_run_reuse_policy(
+            records, force_new=force_new, ticket_dir=ticket_dir
+        )
 
-        if stale_terminal:
-            stale_id = stale_terminal[0].id
+        if reuse.action == "reuse_active":
+            assert reuse.run is not None
+            report = _ticket_flow_preflight(engine, ticket_dir)
+            if report.has_errors():
+                typer.echo("Ticket flow preflight failed:", err=True)
+                _print_preflight_report(report)
+                raise_exit("Fix the above errors before starting the ticket flow.")
+            ensure_ticket_flow_worker(engine.repo_root, reuse.run.id, is_terminal=False)
             typer.echo(
-                f"warning: {len(stale_terminal)} stale runs (FAILED/STOPPED). "
+                f"reused run={reuse.run.id} | car ticket-flow status --run-id {reuse.run.id}"
+            )
+            return
+
+        if reuse.action == "completed_pending" and reuse.pending_ticket_count > 0:
+            assert reuse.run is not None
+            typer.echo(
+                f"run {reuse.run.id} completed with {reuse.pending_ticket_count} pending tickets. "
+                f"use --force-new to reset dispatch history."
+            )
+            raise_exit("Add --force-new to create a new run.")
+
+        if reuse.stale_terminal_runs:
+            stale_id = reuse.stale_terminal_runs[0].id
+            typer.echo(
+                f"warning: {len(reuse.stale_terminal_runs)} stale runs (FAILED/STOPPED). "
                 f"inspect: car ticket-flow status --run-id {stale_id}. "
                 f"archive: car ticket-flow archive --run-id {stale_id} --force. "
                 f"use --force-new to suppress."
@@ -1046,7 +958,7 @@ You are the first ticket in a new ticket_flow run.
         try:
             record = store.get_flow_run(normalized_run_id)
             if not record:
-                record = _flow_run_record_from_target(target)
+                record = flow_run_record_from_target(target)
             payload = _ticket_flow_status_payload(engine, record, store)
         finally:
             store.close()
@@ -1076,7 +988,7 @@ You are the first ticket in a new ticket_flow run.
             raise_exit("No ticket_flow runs found.")
         normalized_run_id = target.run_id
 
-        _stop_ticket_flow_worker(engine.repo_root, normalized_run_id)
+        stop_ticket_flow_worker(engine.repo_root, normalized_run_id)
         updated = asyncio.run(service.stop_flow_run(normalized_run_id))
 
         typer.echo(
@@ -1100,6 +1012,11 @@ You are the first ticket in a new ticket_flow run.
             "true",
             "--delete-run",
             help="Delete flow run record after archive (true|false)",
+        ),
+        no_vacuum: bool = typer.Option(
+            False,
+            "--no-vacuum",
+            help="Skip VACUUM after deleting flow rows (WAL checkpoint still runs).",
         ),
         dry_run: bool = typer.Option(False, "--dry-run", help="Preview only"),
         output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
@@ -1130,6 +1047,7 @@ You are the first ticket in a new ticket_flow run.
                     "record": record,
                     "force": force,
                     "delete_run": parsed_delete_run,
+                    "vacuum": not no_vacuum,
                     "dry_run": dry_run,
                 }
                 force_attestation_payload: Optional[dict[str, str]] = None
@@ -1170,14 +1088,19 @@ You are the first ticket in a new ticket_flow run.
             False, "--dry-run", help="Preview what would be exported/pruned"
         ),
         run_id: Optional[str] = typer.Option(
-            None, "--run-id", help="Export a specific run (default: all terminal runs)"
+            None,
+            "--run-id",
+            help="Export a specific run (default: all non-active runs except paused)",
         ),
         output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     ):
-        """Export wire telemetry from flow_events for terminal runs.
+        """Export wire telemetry from flow_events.
 
         Writes per-run JSONL.GZ archives under .codex-autorunner/flows/{run_id}/
-        and prunes redundant rows from the database. Use --dry-run to preview.
+        and prunes redundant rows from the database for eligible runs.
+        Paused runs are omitted when exporting all runs; pass --run-id for a paused run.
+
+        Use --dry-run to preview.
         """
         engine = require_repo_config(repo, hub)
         db_path = engine.repo_root / ".codex-autorunner" / "flows.db"
@@ -1460,5 +1383,5 @@ You are the first ticket in a new ticket_flow run.
         _ticket_flow_preflight=_ticket_flow_preflight,
         ticket_flow_preflight_report=ticket_flow_preflight_report,
         ticket_flow_print_preflight_report=_print_preflight_report,
-        ticket_flow_resumable_run=_resumable_run,
+        ticket_flow_resumable_run=select_resumable_run,
     )

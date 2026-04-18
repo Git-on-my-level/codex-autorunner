@@ -1,6 +1,33 @@
+"""Flow-run archive owner.
+
+Ownership boundaries
+--------------------
+This module owns **per-run flow artifact archiving** under
+``.codex-autorunner/archive/runs/``.  It is the single authoritative planner
+and executor for that archive root.
+
+Worktree snapshot archives (``.codex-autorunner/archive/worktrees/``) are owned
+by ``core.archive`` instead.
+
+This module consumes shared infrastructure from ``core.archive``:
+``ArchiveEntrySpec``, ``execute_archive_entries``, and
+``_contextspace_source``.  The flow-run entry planner
+(``build_flow_archive_entries``) lives here because it serves a fundamentally
+different selection model (move-based, flag-driven) from the intent-driven
+worktree/CAR-state entry planner in ``core.archive``.
+
+Canonical vs compatibility
+--------------------------
+- ``flows.db`` / FlowStore is the canonical live run-history store.
+- ``archive/runs/**`` holds retained review artifacts, not live state.
+- ``contextspace/`` is canonical; ``workspace/`` is a compatibility-only
+  fallback consumed through ``_contextspace_source()``.
+"""
+
 from __future__ import annotations
 
 import logging
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Optional
@@ -11,7 +38,7 @@ from ...tickets.files import list_ticket_paths
 from ...tickets.outbox import resolve_outbox_paths
 from ..archive import (
     ArchiveEntrySpec,
-    build_common_car_archive_entries,
+    _contextspace_source,
     execute_archive_entries,
 )
 from ..archive_retention import (
@@ -21,10 +48,15 @@ from ..archive_retention import (
 )
 from ..config import ConfigError, load_repo_config
 from ..pma_thread_store import PmaThreadStore
+from ..sqlite_utils import connect_sqlite
 from .models import FlowRunStatus
 from .store import FlowStore
 
 logger = logging.getLogger(__name__)
+
+
+def _run_archive_root(repo_root: Path) -> Path:
+    return repo_root / ".codex-autorunner" / "archive" / "runs"
 
 
 def flow_run_artifacts_root(repo_root: Path, run_id: str) -> Path:
@@ -32,7 +64,7 @@ def flow_run_artifacts_root(repo_root: Path, run_id: str) -> Path:
 
 
 def flow_run_archive_root(repo_root: Path, run_id: str) -> Path:
-    return repo_root / ".codex-autorunner" / "archive" / "runs" / run_id
+    return _run_archive_root(repo_root) / run_id
 
 
 def _get_durable_writes(repo_root: Path) -> bool:
@@ -59,14 +91,112 @@ def _next_archive_dir(base_dir: Path) -> Path:
     return base_dir.parent / f"{base_dir.name}_{suffix}"
 
 
-def _contextspace_source(car_root: Path) -> Path:
-    contextspace = car_root / "contextspace"
-    if contextspace.exists() or contextspace.is_symlink():
-        return contextspace
-    legacy_workspace = car_root / "workspace"
-    if legacy_workspace.exists() or legacy_workspace.is_symlink():
-        return legacy_workspace
-    return contextspace
+def _checkpoint_and_vacuum_flow_db(
+    *,
+    store: FlowStore,
+    db_path: Path,
+    repo_root: Path,
+    vacuum: bool,
+) -> None:
+    """Best-effort WAL truncate and optional VACUUM after bulk deletes.
+
+    Deletes are already committed; if another writer holds ``flows.db``, these
+    operations may fail with ``SQLITE_BUSY``. That should not fail the archive
+    command after the destructive work is done.
+    """
+    store.close()
+    try:
+        conn = connect_sqlite(db_path, durable=_get_durable_writes(repo_root.resolve()))
+        try:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            if vacuum:
+                conn.execute("VACUUM")
+        finally:
+            conn.close()
+    except sqlite3.OperationalError as exc:
+        logger.warning(
+            "flows.db checkpoint/vacuum skipped after archive (database may be busy): %s",
+            exc,
+        )
+
+
+def build_flow_archive_entries(
+    source_root: Path,
+    dest_root: Path,
+    *,
+    include_contextspace: bool = True,
+    include_flow_store: bool = False,
+    include_config: bool = False,
+    include_runtime_state: bool = False,
+    include_logs: bool = False,
+    include_github_context: bool = False,
+) -> list[ArchiveEntrySpec]:
+    entries: list[ArchiveEntrySpec] = []
+    if include_contextspace:
+        entries.append(
+            ArchiveEntrySpec(
+                label="contextspace",
+                source=_contextspace_source(source_root),
+                dest=dest_root / "contextspace",
+            )
+        )
+    if include_flow_store:
+        entries.append(
+            ArchiveEntrySpec(
+                label="flows.db",
+                source=source_root / "flows.db",
+                dest=dest_root / "flows.db",
+            )
+        )
+    if include_config:
+        entries.append(
+            ArchiveEntrySpec(
+                label="config.yml",
+                source=source_root / "config.yml",
+                dest=dest_root / "config" / "config.yml",
+            )
+        )
+    if include_runtime_state:
+        entries.extend(
+            [
+                ArchiveEntrySpec(
+                    label="state.sqlite3",
+                    source=source_root / "state.sqlite3",
+                    dest=dest_root / "state" / "state.sqlite3",
+                ),
+                ArchiveEntrySpec(
+                    label="app_server_threads.json",
+                    source=source_root / "app_server_threads.json",
+                    dest=dest_root / "state" / "app_server_threads.json",
+                    required=False,
+                ),
+            ]
+        )
+    if include_logs:
+        entries.extend(
+            [
+                ArchiveEntrySpec(
+                    label="codex-autorunner.log",
+                    source=source_root / "codex-autorunner.log",
+                    dest=dest_root / "logs" / "codex-autorunner.log",
+                ),
+                ArchiveEntrySpec(
+                    label="codex-server.log",
+                    source=source_root / "codex-server.log",
+                    dest=dest_root / "logs" / "codex-server.log",
+                ),
+            ]
+        )
+    if include_github_context:
+        entries.append(
+            ArchiveEntrySpec(
+                label="github_context",
+                source=source_root / "github_context",
+                dest=dest_root / "github_context",
+                required=False,
+            )
+        )
+    return entries
 
 
 def _find_hub_root(repo_root: Path) -> Path:
@@ -165,7 +295,7 @@ def _build_flow_archive_entries(
     flow_state_root = flow_run_artifacts_root(repo_root, run_id)
     target_runs_dir = _next_archive_dir(archive_root / "archived_runs")
     ticket_paths = list(list_ticket_paths(repo_root / ".codex-autorunner" / "tickets"))
-    entries = build_common_car_archive_entries(
+    entries = build_flow_archive_entries(
         car_root,
         archive_root,
         include_contextspace=False,
@@ -292,6 +422,8 @@ def archive_terminal_flow_runs(
     store: FlowStore,
     exclude_run_ids: frozenset[str] | None = None,
     delete_run: bool = True,
+    vacuum: bool = True,
+    maintain_db: bool = True,
 ) -> dict[str, Any]:
     excluded = exclude_run_ids or frozenset()
     records = [
@@ -337,6 +469,13 @@ def archive_terminal_flow_runs(
             )
         if delete_run and store.delete_flow_run(record.id):
             deleted_run_ids.append(record.id)
+    if maintain_db and deleted_run_ids:
+        _checkpoint_and_vacuum_flow_db(
+            store=store,
+            db_path=repo_root / ".codex-autorunner" / "flows.db",
+            repo_root=repo_root,
+            vacuum=vacuum,
+        )
     return {
         "archived_run_ids": archived_run_ids,
         "archived_run_count": len(archived_run_ids),
@@ -356,6 +495,7 @@ def archive_flow_run_artifacts(
     run_id: str,
     force: bool,
     delete_run: bool,
+    vacuum: bool = True,
     force_attestation: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
     repo_root = repo_root.resolve()
@@ -426,16 +566,17 @@ def archive_flow_run_artifacts(
         summary["missing_paths"] = list(execution.missing_paths)
         retention_policy = _get_run_archive_retention_policy(repo_root)
         if retention_policy is not None:
+            runs_root = _run_archive_root(repo_root)
             try:
                 prune_summary = prune_run_archive_root(
-                    repo_root / ".codex-autorunner" / "archive" / "runs",
+                    runs_root,
                     policy=retention_policy,
                     preserve_paths=(Path(str(archive_plan["archive_root"])),),
                 )
             except Exception:  # intentional: non-critical archive pruning
                 logger.warning(
                     "Failed to prune archived runs under %s",
-                    repo_root / ".codex-autorunner" / "archive" / "runs",
+                    runs_root,
                     exc_info=True,
                 )
             else:
@@ -455,13 +596,26 @@ def archive_flow_run_artifacts(
             )
 
         if delete_run:
-            summary["deleted_run"] = bool(store.delete_flow_run(record.id))
+            deleted_any = bool(store.delete_flow_run(record.id))
+            summary["deleted_run"] = deleted_any
             summary["related_terminal_cleanup"] = archive_terminal_flow_runs(
                 repo_root,
                 store=store,
                 exclude_run_ids=frozenset({record.id}),
                 delete_run=True,
+                vacuum=vacuum,
+                maintain_db=False,
             )
+            deleted_any = deleted_any or bool(
+                summary["related_terminal_cleanup"].get("deleted_run_count")
+            )
+            if deleted_any:
+                _checkpoint_and_vacuum_flow_db(
+                    store=store,
+                    db_path=db_path,
+                    repo_root=repo_root,
+                    vacuum=vacuum,
+                )
 
         # Preserve the historical archive scan contract for callers that inspect
         # the active-thread query parameters during cleanup.
@@ -477,6 +631,7 @@ __all__ = [
     "_build_run_scoped_archive_entries",
     "archive_terminal_flow_runs",
     "archive_flow_run_artifacts",
+    "build_flow_archive_entries",
     "flow_run_archive_root",
     "flow_run_artifacts_root",
 ]

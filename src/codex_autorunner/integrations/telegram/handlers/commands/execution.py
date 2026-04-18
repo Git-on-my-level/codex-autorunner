@@ -139,7 +139,6 @@ from ...constants import (
 from ...forwarding import format_forwarded_telegram_message_text
 from ...helpers import (
     _clear_pending_compact_seed,
-    _compact_preview,
     _compose_agent_response,
     _compose_interrupt_response,
     _extract_thread_id,
@@ -147,13 +146,9 @@ from ...helpers import (
     _set_thread_summary,
     _with_conversation_id,
     format_public_error,
-    is_interrupt_status,
 )
 from ...immediate_feedback_bridge import telegram_create_or_reuse_working_anchor
 from ...state import topic_key as build_topic_key
-from ..utils import (
-    _build_opencode_token_usage,
-)
 
 if TYPE_CHECKING:
     from ...state import TelegramTopicRecord
@@ -162,7 +157,14 @@ from .command_utils import (
     _format_httpx_exception,
     _format_opencode_exception,
 )
+from .opencode_stream_parts import OpenCodeStreamPartHandler
 from .shared import FILES_HINT_TEMPLATE, TelegramCommandSupportMixin
+from .turn_lifecycle import (
+    clear_turn_runtime_state,
+    compose_interrupt_aware_response,
+    resolve_interrupt_status_fallback,
+    try_register_turn_and_start_progress,
+)
 
 _GENERIC_TELEGRAM_ERRORS = {
     "Telegram request failed",
@@ -1152,35 +1154,21 @@ async def _run_telegram_managed_thread_turn(
             backend_turn_id = str(
                 started_execution.execution.execution_id or ""
             ).strip()
-        turn_key = (
-            handlers._turn_key(backend_thread_id, backend_turn_id)
-            if backend_thread_id and backend_turn_id
-            else None
-        )
-        if turn_key is None:
+        if not backend_thread_id or not backend_turn_id:
             return
-        from ...types import TurnContext
-
-        ctx = TurnContext(
+        registered_turn_key = await try_register_turn_and_start_progress(
+            handlers,
+            thread_id=backend_thread_id,
+            turn_id=backend_turn_id,
             topic_key=topic_key,
-            chat_id=message.chat_id,
-            thread_id=message.thread_id,
-            codex_thread_id=backend_thread_id,
-            reply_to_message_id=message.message_id,
-            placeholder_message_id=prepared_placeholder_id,
+            message=message,
+            placeholder_id=prepared_placeholder_id,
+            runtime=runtime,
+            agent=handlers._effective_agent(record),
+            model=record.model,
+            label="working",
             placeholder_reused=placeholder_id is not None,
         )
-        if handlers._register_turn_context(turn_key, backend_turn_id, ctx):
-            registered_turn_key = turn_key
-            runtime.current_turn_id = backend_turn_id
-            runtime.current_turn_key = turn_key
-            await handlers._start_turn_progress(
-                turn_key,
-                ctx=ctx,
-                agent=handlers._effective_agent(record),
-                model=record.model,
-                label="working",
-            )
 
     async def _on_submission_error(exc: BaseException) -> _TurnRunFailure:
         if isinstance(exc, asyncio.TimeoutError) and chat_ux_snapshot is not None:
@@ -1248,31 +1236,20 @@ async def _run_telegram_managed_thread_turn(
             turn_delivery_state = _TurnDeliveryState()
             finalize_turn_progress = getattr(handlers, "_finalize_turn_progress", None)
             if callable(finalize_turn_progress):
-                finalize_turn_progress(
-                    registered_turn_key,
-                    turn_delivery_state,
-                )
-            else:
-                if registered_turn_key is None:
+                finalize_turn_progress(registered_turn_key, turn_delivery_state)
+            elif registered_turn_key is not None:
+                try:
                     turn_delivery_state.capture_progress_summary(
                         handlers,
                         registered_turn_key,
                     )
-                else:
-                    try:
-                        turn_delivery_state.capture_progress_summary(
-                            handlers,
-                            registered_turn_key,
-                        )
-                    finally:
-                        handlers._turn_contexts.pop(registered_turn_key, None)
-                        handlers._clear_thinking_preview(registered_turn_key)
-                        handlers._clear_turn_progress(registered_turn_key)
+                finally:
+                    handlers._turn_contexts.pop(registered_turn_key, None)
+                    handlers._clear_thinking_preview(registered_turn_key)
+                    handlers._clear_turn_progress(registered_turn_key)
             intermediate_response = turn_delivery_state.intermediate_response
         finally:
-            runtime.current_turn_id = None
-            runtime.current_turn_key = None
-            runtime.interrupt_requested = False
+            clear_turn_runtime_state(runtime)
 
     async def _on_finalized(
         _flow: Any,
@@ -1282,16 +1259,13 @@ async def _run_telegram_managed_thread_turn(
         resolved_backend_thread_id = finalized.backend_thread_id or None
         if finalized.status != "ok":
             failure_message = str(finalized.error or public_execution_error)
-            interrupt_status_fallback_text: Optional[str] = None
+            _, interrupt_status_fallback_text = resolve_interrupt_status_fallback(
+                turn_status=finalized.status,
+                runtime=runtime,
+                turn_id=backend_turn_id,
+            )
             if finalized.status == "interrupted":
                 failure_message = _compose_interrupt_response(failure_message)
-                if (
-                    runtime.interrupt_message_id is not None
-                    and runtime.interrupt_turn_id == backend_turn_id
-                ):
-                    interrupt_status_fallback_text = "Interrupted."
-            elif runtime.interrupt_turn_id == backend_turn_id:
-                interrupt_status_fallback_text = "Interrupt requested; turn completed."
             response_sent = False
             if send_failure_response and not getattr(
                 _flow, "durable_delivery_performed", False
@@ -1369,9 +1343,11 @@ async def _run_telegram_managed_thread_turn(
                 message.thread_id,
                 _apply_state,
             )
-        interrupt_status_fallback_text = None
-        if runtime.interrupt_turn_id == backend_turn_id:
-            interrupt_status_fallback_text = "Interrupt requested; turn completed."
+        _, interrupt_status_fallback_text = resolve_interrupt_status_fallback(
+            turn_status="ok",
+            runtime=runtime,
+            turn_id=backend_turn_id,
+        )
         if chat_ux_snapshot is not None:
             chat_ux_snapshot.record(ChatUxMilestone.TERMINAL_DELIVERY)
             emit_chat_ux_timing(
@@ -2029,25 +2005,20 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                     turn_id = build_turn_id(thread_id)
                     if thread_id:
                         self._token_usage_by_thread.pop(thread_id, None)
-                    runtime.current_turn_id = turn_id
-                    runtime.current_turn_key = (thread_id, turn_id)
-                    from ...types import TurnContext
-
-                    ctx = TurnContext(
+                    turn_key = await try_register_turn_and_start_progress(
+                        self,
+                        thread_id=thread_id,
+                        turn_id=turn_id,
                         topic_key=key,
-                        chat_id=message.chat_id,
-                        thread_id=message.thread_id,
-                        codex_thread_id=thread_id,
-                        reply_to_message_id=message.message_id,
-                        placeholder_message_id=placeholder_id,
+                        message=message,
+                        placeholder_id=placeholder_id,
+                        runtime=runtime,
+                        agent="opencode",
+                        model=record.model,
+                        label="working",
                     )
-                    turn_key = self._turn_key(thread_id, turn_id)
-                    if turn_key is None or not self._register_turn_context(
-                        turn_key, turn_id, ctx
-                    ):
-                        runtime.current_turn_id = None
-                        runtime.current_turn_key = None
-                        runtime.interrupt_requested = False
+                    if turn_key is None:
+                        clear_turn_runtime_state(runtime)
                         return await self._maybe_send_failure(
                             message,
                             "Turn collision detected; please retry.",
@@ -2057,14 +2028,6 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                             transcript_message_id=transcript_message_id,
                             transcript_text=transcript_text,
                         )
-
-                    await self._start_turn_progress(
-                        turn_key,
-                        ctx=ctx,
-                        agent="opencode",
-                        model=record.model,
-                        label="working",
-                    )
 
                     approval_policy, _sandbox_policy = self._effective_policies(record)
                     permission_policy = map_approval_policy_to_permission(
@@ -2127,275 +2090,15 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                             asyncio.create_task(_abort_opencode())
                         return runtime.interrupt_requested
 
-                    reasoning_buffers: dict[str, str] = {}
-                    watched_session_ids = {thread_id}
-                    subagent_labels: dict[str, str] = {}
-                    opencode_context_window: Optional[int] = None
-                    context_window_resolved = False
-
-                    async def _handle_opencode_part(
-                        part_type: str,
-                        part: dict[str, Any],
-                        delta_text: Optional[str],
-                    ) -> None:
-                        nonlocal opencode_context_window
-                        nonlocal context_window_resolved
-                        if turn_key is None:
-                            return
-                        tracker = self._turn_progress_trackers.get(turn_key)
-                        if tracker is None:
-                            return
-                        session_id = None
-                        for key in ("sessionID", "sessionId", "session_id"):
-                            value = part.get(key)
-                            if isinstance(value, str) and value:
-                                session_id = value
-                                break
-                        if not session_id:
-                            session_id = thread_id
-                        is_primary_session = session_id == thread_id
-                        subagent_label = subagent_labels.get(session_id)
-                        if part_type == "reasoning":
-                            part_id = (
-                                part.get("id") or part.get("partId") or "reasoning"
-                            )
-                            buffer_key = f"{session_id}:{part_id}"
-                            buffer = reasoning_buffers.get(buffer_key, "")
-                            if delta_text:
-                                buffer = f"{buffer}{delta_text}"
-                            else:
-                                raw_text = part.get("text")
-                                if isinstance(raw_text, str) and raw_text:
-                                    buffer = raw_text
-                            if buffer:
-                                reasoning_buffers[buffer_key] = buffer
-                                preview = _compact_preview(buffer, limit=240)
-                                if is_primary_session:
-                                    tracker.note_thinking(preview)
-                                else:
-                                    if not subagent_label:
-                                        subagent_label = "@subagent"
-                                        subagent_labels.setdefault(
-                                            session_id, subagent_label
-                                        )
-                                    if not tracker.update_action_by_item_id(
-                                        buffer_key,
-                                        preview,
-                                        "update",
-                                        label="thinking",
-                                        subagent_label=subagent_label,
-                                    ):
-                                        tracker.add_action(
-                                            "thinking",
-                                            preview,
-                                            "update",
-                                            item_id=buffer_key,
-                                            subagent_label=subagent_label,
-                                        )
-                        elif part_type == "text":
-                            if delta_text:
-                                tracker.note_output(delta_text)
-                            else:
-                                raw_text = part.get("text")
-                                if isinstance(raw_text, str) and raw_text:
-                                    tracker.note_output(raw_text)
-                        elif part_type == "tool":
-                            tool_id = part.get("callID") or part.get("id")
-                            tool_name = part.get("tool") or part.get("name") or "tool"
-                            status = None
-                            state = part.get("state")
-                            if isinstance(state, dict):
-                                status = state.get("status")
-                            label = (
-                                f"{tool_name} ({status})"
-                                if isinstance(status, str) and status
-                                else str(tool_name)
-                            )
-                            if (
-                                is_primary_session
-                                and isinstance(tool_name, str)
-                                and tool_name == "task"
-                                and isinstance(state, dict)
-                            ):
-                                metadata = state.get("metadata")
-                                if isinstance(metadata, dict):
-                                    child_session_id = metadata.get(
-                                        "sessionId"
-                                    ) or metadata.get("sessionID")
-                                    if (
-                                        isinstance(child_session_id, str)
-                                        and child_session_id
-                                    ):
-                                        watched_session_ids.add(child_session_id)
-                                        child_label = None
-                                        input_payload = state.get("input")
-                                        if isinstance(input_payload, dict):
-                                            child_label = input_payload.get(
-                                                "subagent_type"
-                                            ) or input_payload.get("subagentType")
-                                        if (
-                                            isinstance(child_label, str)
-                                            and child_label.strip()
-                                        ):
-                                            child_label = child_label.strip()
-                                            if not child_label.startswith("@"):
-                                                child_label = f"@{child_label}"
-                                            subagent_labels.setdefault(
-                                                child_session_id, child_label
-                                            )
-                                        else:
-                                            subagent_labels.setdefault(
-                                                child_session_id, "@subagent"
-                                            )
-                                detail_parts: list[str] = []
-                                title = state.get("title")
-                                if isinstance(title, str) and title.strip():
-                                    detail_parts.append(title.strip())
-                                input_payload = state.get("input")
-                                if isinstance(input_payload, dict):
-                                    description = input_payload.get("description")
-                                    if (
-                                        isinstance(description, str)
-                                        and description.strip()
-                                    ):
-                                        detail_parts.append(description.strip())
-                                summary = None
-                                if isinstance(metadata, dict):
-                                    summary = metadata.get("summary")
-                                if isinstance(summary, str) and summary.strip():
-                                    detail_parts.append(summary.strip())
-                                if detail_parts:
-                                    seen: set[str] = set()
-                                    unique_parts = [
-                                        part_text
-                                        for part_text in detail_parts
-                                        if part_text not in seen
-                                        and not seen.add(part_text)
-                                    ]
-                                    detail_text = " / ".join(unique_parts)
-                                    label = f"{label} - {_compact_preview(detail_text, limit=160)}"
-                            mapped_status = "update"
-                            if isinstance(status, str):
-                                status_lower = status.lower()
-                                if status_lower in ("completed", "done", "success"):
-                                    mapped_status = "done"
-                                elif status_lower in ("error", "failed", "fail"):
-                                    mapped_status = "fail"
-                                elif status_lower in ("pending", "running"):
-                                    mapped_status = "running"
-                            scoped_tool_id = (
-                                f"{session_id}:{tool_id}"
-                                if isinstance(tool_id, str) and tool_id
-                                else None
-                            )
-                            if is_primary_session:
-                                if not tracker.update_action_by_item_id(
-                                    scoped_tool_id,
-                                    label,
-                                    mapped_status,
-                                    label="tool",
-                                ):
-                                    tracker.add_action(
-                                        "tool",
-                                        label,
-                                        mapped_status,
-                                        item_id=scoped_tool_id,
-                                    )
-                            else:
-                                if not subagent_label:
-                                    subagent_label = "@subagent"
-                                    subagent_labels.setdefault(
-                                        session_id, subagent_label
-                                    )
-                                if not tracker.update_action_by_item_id(
-                                    scoped_tool_id,
-                                    label,
-                                    mapped_status,
-                                    label=subagent_label,
-                                ):
-                                    tracker.add_action(
-                                        subagent_label,
-                                        label,
-                                        mapped_status,
-                                        item_id=scoped_tool_id,
-                                    )
-                        elif part_type == "patch":
-                            patch_id = part.get("id") or part.get("hash")
-                            files = part.get("files")
-                            scoped_patch_id = (
-                                f"{session_id}:{patch_id}"
-                                if isinstance(patch_id, str) and patch_id
-                                else None
-                            )
-                            if isinstance(files, list) and files:
-                                summary = ", ".join(str(file) for file in files)
-                                if not tracker.update_action_by_item_id(
-                                    scoped_patch_id, summary, "done", label="files"
-                                ):
-                                    tracker.add_action(
-                                        "files",
-                                        summary,
-                                        "done",
-                                        item_id=scoped_patch_id,
-                                    )
-                            else:
-                                if not tracker.update_action_by_item_id(
-                                    scoped_patch_id, "Patch", "done", label="files"
-                                ):
-                                    tracker.add_action(
-                                        "files",
-                                        "Patch",
-                                        "done",
-                                        item_id=scoped_patch_id,
-                                    )
-                        elif part_type == "agent":
-                            agent_name = part.get("name") or "agent"
-                            tracker.add_action("agent", str(agent_name), "done")
-                        elif part_type == "step-start":
-                            tracker.add_action("step", "started", "update")
-                        elif part_type == "step-finish":
-                            reason = part.get("reason") or "finished"
-                            tracker.add_action("step", str(reason), "done")
-                        elif part_type == "usage":
-                            token_usage = (
-                                _build_opencode_token_usage(part)
-                                if isinstance(part, dict)
-                                else None
-                            )
-                            if token_usage:
-                                if is_primary_session:
-                                    last_usage = token_usage.get("last")
-                                    if isinstance(last_usage, dict):
-                                        token_usage["total"] = dict(last_usage)
-                                    if (
-                                        "modelContextWindow" not in token_usage
-                                        and not context_window_resolved
-                                    ):
-                                        opencode_context_window = await self._resolve_opencode_model_context_window(
-                                            opencode_client,
-                                            workspace_root,
-                                            model_payload,
-                                        )
-                                        context_window_resolved = True
-                                    if (
-                                        "modelContextWindow" not in token_usage
-                                        and isinstance(opencode_context_window, int)
-                                        and opencode_context_window > 0
-                                    ):
-                                        token_usage["modelContextWindow"] = (
-                                            opencode_context_window
-                                        )
-                                    self._cache_token_usage(
-                                        token_usage,
-                                        turn_id=turn_id,
-                                        thread_id=thread_id,
-                                    )
-                                    await self._note_progress_context_usage(
-                                        token_usage,
-                                        turn_id=turn_id,
-                                        thread_id=thread_id,
-                                    )
-                        await self._schedule_progress_edit(turn_key)
+                    part_handler = OpenCodeStreamPartHandler(
+                        self,
+                        turn_key=turn_key,
+                        thread_id=thread_id,
+                        turn_id=turn_id,
+                        workspace_root=workspace_root,
+                        opencode_client=opencode_client,
+                        model_payload=model_payload,
+                    )
 
                     ready_event = asyncio.Event()
                     sse_ready_at: Optional[float] = None
@@ -2408,7 +2111,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                             session_id=thread_id,
                             workspace_path=str(workspace_root),
                             model_payload=model_payload,
-                            progress_session_ids=watched_session_ids,
+                            progress_session_ids=part_handler.watched_session_ids,
                             permission_policy=permission_policy,
                             permission_handler=(
                                 _permission_handler
@@ -2417,7 +2120,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                             ),
                             question_handler=_question_handler,
                             should_stop=_should_stop,
-                            part_handler=_handle_opencode_part,
+                            part_handler=part_handler,
                             ready_event=ready_event,
                             stall_timeout_seconds=stall_timeout,
                             first_event_timeout_seconds=first_event_timeout,
@@ -2628,9 +2331,9 @@ class ExecutionCommands(TelegramCommandSupportMixin):
         finally:
             self._finalize_turn_progress(turn_key, turn_delivery_state)
             if runtime.current_turn_key == (thread_id, turn_id):
-                runtime.current_turn_id = None
-                runtime.current_turn_key = None
-            runtime.interrupt_requested = False
+                clear_turn_runtime_state(runtime)
+            else:
+                runtime.interrupt_requested = False
 
     async def _execute_codex_turn(
         self,
@@ -2922,25 +2625,20 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                     codex_thread_id=thread_id,
                     turn_started_at=now_iso(),
                 )
-                turn_key = self._turn_key(thread_id, turn_handle.turn_id)
-                runtime.current_turn_id = turn_handle.turn_id
-                runtime.current_turn_key = turn_key
-                from ...types import TurnContext
-
-                ctx = TurnContext(
+                turn_key = await try_register_turn_and_start_progress(
+                    self,
+                    thread_id=thread_id,
+                    turn_id=turn_handle.turn_id,
                     topic_key=key,
-                    chat_id=message.chat_id,
-                    thread_id=message.thread_id,
-                    codex_thread_id=thread_id,
-                    reply_to_message_id=message.message_id,
-                    placeholder_message_id=placeholder_id,
+                    message=message,
+                    placeholder_id=placeholder_id,
+                    runtime=runtime,
+                    agent=self._effective_agent_label(record),
+                    model=record.model,
+                    label="working",
                 )
-                if turn_key is None or not self._register_turn_context(
-                    turn_key, turn_handle.turn_id, ctx
-                ):
-                    runtime.current_turn_id = None
-                    runtime.current_turn_key = None
-                    runtime.interrupt_requested = False
+                if turn_key is None:
+                    clear_turn_runtime_state(runtime)
                     return await self._maybe_send_failure(
                         message,
                         "Turn collision detected; please retry.",
@@ -2950,14 +2648,6 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                         transcript_message_id=transcript_message_id,
                         transcript_text=transcript_text,
                     )
-
-                await self._start_turn_progress(
-                    turn_key,
-                    ctx=ctx,
-                    agent=self._effective_agent_label(record),
-                    model=record.model,
-                    label="working",
-                )
 
                 result = await self._wait_for_turn_result(
                     client,
@@ -2977,9 +2667,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
             if turn_handle is not None:
                 if turn_key is not None:
                     self._turn_contexts.pop(turn_key, None)
-            runtime.current_turn_id = None
-            runtime.current_turn_key = None
-            runtime.interrupt_requested = False
+            clear_turn_runtime_state(runtime)
             failure_message = "Codex turn failed; check logs for details."
             reason = "codex_turn_failed"
             if isinstance(exc, asyncio.TimeoutError):
@@ -3042,9 +2730,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
         finally:
             if turn_handle is not None:
                 self._finalize_turn_progress(turn_key, turn_delivery_state)
-            runtime.current_turn_id = None
-            runtime.current_turn_key = None
-            runtime.interrupt_requested = False
+            clear_turn_runtime_state(runtime)
 
         response = _compose_agent_response(
             getattr(result, "final_message", None),
@@ -3071,18 +2757,19 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 )
 
         turn_handle_id = turn_handle.turn_id if turn_handle else None
-        interrupt_status_fallback_text = None
-        if is_interrupt_status(result.status):
-            response = _compose_interrupt_response(response)
-            if (
-                runtime.interrupt_message_id is not None
-                and runtime.interrupt_turn_id == turn_handle_id
-            ):
-                interrupt_status_fallback_text = "Interrupted."
-            runtime.interrupt_requested = False
-        elif runtime.interrupt_turn_id == turn_handle_id:
-            interrupt_status_fallback_text = "Interrupt requested; turn completed."
-            runtime.interrupt_requested = False
+        was_interrupted, interrupt_status_fallback_text = (
+            resolve_interrupt_status_fallback(
+                turn_status=result.status,
+                runtime=runtime,
+                turn_id=turn_handle_id,
+            )
+        )
+        if was_interrupted:
+            response = compose_interrupt_aware_response(
+                response,
+                turn_status=result.status,
+            )
+        runtime.interrupt_requested = False
 
         log_event(
             self._logger,

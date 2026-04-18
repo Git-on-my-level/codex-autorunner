@@ -39,6 +39,24 @@ from ..ports.run_event import (
 )
 from ..sse import SSEEvent, parse_sse_lines
 from ..time_utils import now_iso
+from .codex_item_normalizers import (
+    extract_agent_message_text as _extract_agent_message_text,
+)
+from .codex_item_normalizers import (
+    is_commentary_agent_message as _is_commentary_agent_message,
+)
+from .codex_item_normalizers import (
+    merge_runtime_raw_events,
+)
+from .codex_item_normalizers import (
+    normalize_tool_name as _normalize_tool_name,
+)
+from .codex_item_normalizers import (
+    output_delta_type_for_method as _output_delta_type_for_method,
+)
+from .codex_item_normalizers import (
+    reasoning_buffer_key as _reasoning_buffer_key,
+)
 from .opencode_event_fields import (
     coerce_dict as _event_coerce_dict,
 )
@@ -63,6 +81,10 @@ from .opencode_event_fields import (
 from .opencode_event_fields import (
     extract_part_type as _event_extract_part_type,
 )
+from .runtime_payload_shapes import (
+    OpenCodeToolPartShape,
+    TokenUsageShape,
+)
 from .runtime_threads import RuntimeThreadOutcome
 from .stream_text_merge import merge_assistant_stream_text
 
@@ -72,34 +94,11 @@ _APPROVAL_METHODS = {
 }
 
 
-def _runtime_raw_event_key(raw_event: Any) -> str:
-    if isinstance(raw_event, (dict, list)):
-        return json.dumps(
-            raw_event,
-            sort_keys=True,
-            separators=(",", ":"),
-            default=str,
-        )
-    return str(raw_event)
-
-
 def merge_runtime_thread_raw_events(
     streamed_raw_events: list[Any] | tuple[Any, ...],
     result_raw_events: list[Any] | tuple[Any, ...],
 ) -> list[Any]:
-    streamed = list(streamed_raw_events or [])
-    result = list(result_raw_events or [])
-    if not streamed:
-        return result
-    if not result:
-        return streamed
-    streamed_keys = [_runtime_raw_event_key(item) for item in streamed]
-    result_keys = [_runtime_raw_event_key(item) for item in result]
-    max_overlap = min(len(streamed_keys), len(result_keys))
-    for overlap in range(max_overlap, 0, -1):
-        if streamed_keys[-overlap:] == result_keys[:overlap]:
-            return streamed + result[overlap:]
-    return streamed + result
+    return merge_runtime_raw_events(streamed_raw_events, result_raw_events)
 
 
 @dataclass
@@ -433,6 +432,20 @@ def normalize_runtime_thread_message(
         update = _extract_session_update(params)
         update_kind = acp_lifecycle.session_update_kind or ""
         if update_kind == "agent_message_chunk":
+            if acp_lifecycle.message_phase == "commentary":
+                commentary_text = acp_lifecycle.output_delta or _extract_output_delta(
+                    _extract_session_update_message_params(update)
+                )
+                if not commentary_text:
+                    return []
+                return [
+                    RunNotice(
+                        timestamp=event_timestamp,
+                        kind="commentary",
+                        message=commentary_text,
+                        data={"already_streamed": acp_lifecycle.already_streamed},
+                    )
+                ]
             return _assistant_stream_events(
                 _extract_session_update_message_params(update),
                 state,
@@ -466,6 +479,15 @@ def normalize_runtime_thread_message(
         content = acp_lifecycle.assistant_text
         if not content:
             return []
+        if acp_lifecycle.message_phase == "commentary":
+            return [
+                RunNotice(
+                    timestamp=event_timestamp,
+                    kind="commentary",
+                    message=content,
+                    data={"already_streamed": acp_lifecycle.already_streamed},
+                )
+            ]
         state.note_message_text(content)
         return [
             OutputDelta(
@@ -564,7 +586,17 @@ def normalize_runtime_thread_message(
             return []
         if item_type == "agentMessage":
             if _is_commentary_agent_message(item):
-                return []
+                content = _extract_agent_message_text(item)
+                if not content:
+                    return []
+                return [
+                    RunNotice(
+                        timestamp=event_timestamp,
+                        kind="commentary",
+                        message=content,
+                        data={"already_streamed": _extract_already_streamed_flag(item)},
+                    )
+                ]
             content = _extract_agent_message_text(item)
             if not content:
                 return []
@@ -688,7 +720,17 @@ def normalize_runtime_thread_message(
             timestamp=event_timestamp,
         )
         if _extract_message_phase(params) == "commentary":
-            return role_events
+            content = _extract_message_text(params)
+            if not content:
+                return role_events
+            return role_events + [
+                RunNotice(
+                    timestamp=event_timestamp,
+                    kind="commentary",
+                    message=content,
+                    data={"already_streamed": _extract_already_streamed_flag(params)},
+                )
+            ]
         content = _extract_message_text(params)
         if not content:
             return role_events
@@ -762,7 +804,7 @@ def normalize_runtime_thread_message(
             state.completed_seen = True
         return []
 
-    if method == "session.status":
+    if method in {"session.status", "session/status"}:
         if acp_lifecycle.runtime_terminal_status == "ok":
             state.completed_seen = True
             return []
@@ -788,7 +830,17 @@ def _assistant_stream_events(
 ) -> list[RunEvent]:
     phase = str(params.get("phase") or "").strip().lower()
     if phase == "commentary":
-        return []
+        content = _extract_output_delta(params)
+        if not content:
+            return []
+        return [
+            RunNotice(
+                timestamp=timestamp or now_iso(),
+                kind="commentary",
+                message=content,
+                data={"already_streamed": _extract_already_streamed_flag(params)},
+            )
+        ]
     content = _extract_output_delta(params)
     if not content:
         return []
@@ -983,73 +1035,41 @@ def _extract_opencode_reasoning_text(
     return delta_text
 
 
-def _output_delta_type_for_method(method: str) -> str:
-    normalized = method.strip().lower()
-    if normalized in {
-        "item/commandexecution/outputdelta",
-        "item/filechange/outputdelta",
-    }:
-        return RUN_EVENT_DELTA_TYPE_LOG_LINE
-    return RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM
-
-
 def _normalize_opencode_tool_part(
     part: dict[str, Any],
     state: RuntimeThreadRunEventState,
     *,
     timestamp: Optional[str] = None,
 ) -> list[RunEvent]:
-    event_timestamp = timestamp or now_iso()
-    tool_name = part.get("tool") or part.get("name") or ""
-    if not isinstance(tool_name, str) or not tool_name.strip():
+    shape = OpenCodeToolPartShape.from_raw_part(part)
+    if shape is None:
         return []
 
-    tool_id = part.get("callID") or part.get("id") or tool_name
-    tool_id_text = str(tool_id).strip() if tool_id is not None else tool_name.strip()
-    state_payload = _coerce_dict(part.get("state"))
-    status = state_payload.get("status")
-    status_text = str(status).strip().lower() if isinstance(status, str) else ""
-    last_status = state.opencode_tool_status.get(tool_id_text)
-
-    input_payload: dict[str, Any] = {}
-    for key in ("input", "command", "cmd", "script"):
-        value = part.get(key)
-        if isinstance(value, str) and value.strip():
-            input_payload[key] = value.strip()
-            break
-    if not input_payload:
-        args = part.get("args") or part.get("arguments") or part.get("params")
-        if isinstance(args, dict):
-            for key in ("command", "cmd", "script", "input"):
-                value = args.get(key)
-                if isinstance(value, str) and value.strip():
-                    input_payload[key] = value.strip()
-                    break
-        elif isinstance(args, str) and args.strip():
-            input_payload["input"] = args.strip()
+    event_timestamp = timestamp or now_iso()
+    last_status = state.opencode_tool_status.get(shape.tool_id)
 
     events: list[RunEvent] = []
-    if last_status is None or status_text in {"running", "pending"}:
-        if last_status != status_text:
+    if last_status is None or shape.status in {"running", "pending"}:
+        if last_status != shape.status:
             events.append(
                 ToolCall(
                     timestamp=event_timestamp,
-                    tool_name=tool_name.strip(),
-                    tool_input=input_payload,
+                    tool_name=shape.tool_name,
+                    tool_input=shape.input_payload,
                 )
             )
 
-    if status_text == "completed" and last_status != status_text:
+    if shape.status == "completed" and last_status != shape.status:
         events.append(
             ToolResult(
                 timestamp=event_timestamp,
-                tool_name=tool_name.strip(),
-                status=status_text,
-                result=dict(state_payload),
+                tool_name=shape.tool_name,
+                status=shape.status,
+                result=dict(shape.state_payload),
                 error=None,
             )
         )
-        exit_code = state_payload.get("exitCode")
+        exit_code = shape.state_payload.get("exitCode")
         if exit_code is not None:
             events.append(
                 OutputDelta(
@@ -1058,17 +1078,17 @@ def _normalize_opencode_tool_part(
                     delta_type=RUN_EVENT_DELTA_TYPE_LOG_LINE,
                 )
             )
-    elif status_text in {"error", "failed"} and last_status != status_text:
+    elif shape.status in {"error", "failed"} and last_status != shape.status:
         events.append(
             ToolResult(
                 timestamp=event_timestamp,
-                tool_name=tool_name.strip(),
-                status=status_text,
-                result=dict(state_payload),
-                error=state_payload.get("error"),
+                tool_name=shape.tool_name,
+                status=shape.status,
+                result=dict(shape.state_payload),
+                error=shape.error,
             )
         )
-        error = state_payload.get("error")
+        error = shape.error
         if isinstance(error, dict):
             error = error.get("message") or error.get("error")
         if isinstance(error, str) and error.strip():
@@ -1080,8 +1100,8 @@ def _normalize_opencode_tool_part(
                 )
             )
 
-    if status_text:
-        state.opencode_tool_status[tool_id_text] = status_text
+    if shape.status:
+        state.opencode_tool_status[shape.tool_id] = shape.status
     return events
 
 
@@ -1123,117 +1143,10 @@ def _normalize_opencode_patch_part(
 
 
 def _extract_opencode_usage_part(part: dict[str, Any]) -> Optional[dict[str, Any]]:
-    usage: dict[str, Any] = {}
-
-    total_tokens = part.get("totalTokens")
-    if isinstance(total_tokens, int):
-        usage["totalTokens"] = total_tokens
-    input_tokens = part.get("inputTokens")
-    if isinstance(input_tokens, int):
-        usage["inputTokens"] = input_tokens
-    cached_tokens = part.get("cachedInputTokens")
-    if isinstance(cached_tokens, int):
-        usage["cachedInputTokens"] = cached_tokens
-    output_tokens = part.get("outputTokens")
-    if isinstance(output_tokens, int):
-        usage["outputTokens"] = output_tokens
-    reasoning_tokens = part.get("reasoningTokens")
-    if isinstance(reasoning_tokens, int):
-        usage["reasoningTokens"] = reasoning_tokens
-    context_window = part.get("modelContextWindow")
-    if isinstance(context_window, int):
-        usage["modelContextWindow"] = context_window
-
-    if usage:
-        return usage
-    return None
-
-
-def _normalize_tool_name(
-    params: dict[str, Any],
-    *,
-    item: Optional[dict[str, Any]] = None,
-) -> tuple[str, dict[str, Any]]:
-    item_dict = item if isinstance(item, dict) else _coerce_dict(params.get("item"))
-    item_type = item_dict.get("type")
-
-    if item_type == "commandExecution":
-        command = item_dict.get("command")
-        if not command:
-            command = params.get("command")
-        if isinstance(command, list):
-            command = " ".join(str(part) for part in command).strip()
-        if isinstance(command, str) and command:
-            return command, {"command": command}
-        return "commandExecution", {}
-
-    if item_type == "fileChange":
-        files = item_dict.get("files")
-        if isinstance(files, list):
-            paths = [str(entry) for entry in files if isinstance(entry, str)]
-            if paths:
-                return "fileChange", {"files": paths}
-        return "fileChange", {}
-
-    if item_type == "tool":
-        name = item_dict.get("name") or item_dict.get("tool") or item_dict.get("id")
-        if isinstance(name, str) and name:
-            return name, {}
-        return "tool", {}
-
-    tool_call = _coerce_dict(item_dict.get("toolCall") or item_dict.get("tool_call"))
-    name = tool_call.get("name") or params.get("toolName") or params.get("tool_name")
-    if isinstance(name, str) and name:
-        input_payload = tool_call.get("input")
-        if isinstance(input_payload, dict):
-            return name, input_payload
-        input_payload = params.get("toolInput") or params.get("input")
-        if isinstance(input_payload, dict):
-            return name, input_payload
-        return name, {}
-    return "", {}
-
-
-def _reasoning_buffer_key(
-    params: dict[str, Any],
-    *,
-    item: Optional[dict[str, Any]] = None,
-) -> Optional[str]:
-    for key in ("itemId", "item_id", "turnId", "turn_id"):
-        value = params.get(key)
-        if isinstance(value, str) and value:
-            return value
-    if isinstance(item, dict):
-        for key in ("id", "itemId", "turnId", "turn_id"):
-            value = item.get(key)
-            if isinstance(value, str) and value:
-                return value
-    return None
-
-
-def _extract_agent_message_text(item: dict[str, Any]) -> str:
-    text = item.get("text")
-    if isinstance(text, str) and text.strip():
-        return text
-    content = item.get("content")
-    if isinstance(content, list):
-        parts: list[str] = []
-        for entry in content:
-            if not isinstance(entry, dict):
-                continue
-            entry_type = entry.get("type")
-            if entry_type not in (None, "output_text", "text", "message"):
-                continue
-            candidate = entry.get("text")
-            if isinstance(candidate, str) and candidate.strip():
-                parts.append(candidate)
-        if parts:
-            return "".join(parts)
-    return ""
-
-
-def _is_commentary_agent_message(item: dict[str, Any]) -> bool:
-    return str(item.get("phase") or "").strip().lower() == "commentary"
+    shape = TokenUsageShape.from_raw(part)
+    if shape.is_empty():
+        return None
+    return shape.to_dict()
 
 
 def _extract_message_phase(params: dict[str, Any]) -> Optional[str]:
@@ -1245,6 +1158,19 @@ def _extract_message_phase(params: dict[str, Any]) -> Optional[str]:
     if isinstance(nested_phase, str) and nested_phase.strip():
         return nested_phase.strip().lower()
     return None
+
+
+def _extract_already_streamed_flag(payload: dict[str, Any]) -> bool:
+    for key in ("already_streamed", "alreadyStreamed"):
+        value = payload.get(key)
+        if isinstance(value, bool):
+            return value
+    info = _extract_message_info(payload)
+    for key in ("already_streamed", "alreadyStreamed"):
+        value = info.get(key)
+        if isinstance(value, bool):
+            return value
+    return False
 
 
 def _extract_usage(params: dict[str, Any]) -> Optional[dict[str, Any]]:
@@ -1369,4 +1295,6 @@ __all__ = [
     "_extract_agent_message_text",
     "_extract_usage",
     "_coerce_dict",
+    "_reasoning_buffer_key",
+    "_is_commentary_agent_message",
 ]

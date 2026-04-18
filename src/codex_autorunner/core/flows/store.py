@@ -31,6 +31,16 @@ _REQUIRED_SCHEMA_TABLES = frozenset(
     {"schema_info", "flow_runs", "flow_events", "flow_artifacts"}
 )
 _DELETE_SEQ_BATCH_SIZE = 900
+_MAX_RUN_AGENT_STREAM_DELTA_ROWS = 10_000
+_MAX_RUN_APP_SERVER_EVENT_ROWS = 10_000
+_MAX_RUN_APP_SERVER_TELEMETRY_ROWS = 10_000
+_FLOW_EVENT_TYPE_LIVE_CAPS: dict[str, int] = {
+    FlowEventType.AGENT_STREAM_DELTA.value: _MAX_RUN_AGENT_STREAM_DELTA_ROWS,
+    FlowEventType.APP_SERVER_EVENT.value: _MAX_RUN_APP_SERVER_EVENT_ROWS,
+}
+_FLOW_TELEMETRY_TYPE_LIVE_CAPS: dict[str, int] = {
+    FlowEventType.APP_SERVER_EVENT.value: _MAX_RUN_APP_SERVER_TELEMETRY_ROWS,
+}
 _SQLITE_PRAGMAS_READONLY = (
     "PRAGMA foreign_keys=ON;",
     f"PRAGMA busy_timeout={DEFAULT_SQLITE_BUSY_TIMEOUT_MS};",
@@ -219,6 +229,9 @@ class FlowStore:
             "CREATE INDEX IF NOT EXISTS idx_flow_events_run_id ON flow_events(run_id, seq)"
         )
         conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_flow_events_run_type ON flow_events(run_id, event_type, seq)"
+        )
+        conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_flow_artifacts_run_id ON flow_artifacts(run_id)"
         )
         conn.execute(
@@ -278,6 +291,9 @@ class FlowStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_flow_events_run_id ON flow_events(run_id, seq)"
             )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_flow_events_run_type ON flow_events(run_id, event_type, seq)"
+            )
         elif version == 3:
             conn.execute(
                 """
@@ -298,6 +314,79 @@ class FlowStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_flow_telemetry_run_type ON flow_telemetry(run_id, event_type, seq)"
             )
+
+    def _prune_rows_for_run_event_type(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        table_name: str,
+        run_id: str,
+        event_type: str,
+        max_rows: int,
+    ) -> int:
+        if table_name not in {"flow_events", "flow_telemetry"}:
+            raise ValueError(
+                f"Unsupported flow table for overflow pruning: {table_name}"
+            )
+        if max_rows <= 0:
+            return 0
+        cutoff_row = conn.execute(
+            f"""
+            SELECT seq
+            FROM {table_name}
+            WHERE run_id = ? AND event_type = ?
+            ORDER BY seq DESC
+            LIMIT 1 OFFSET ?
+            """,
+            (run_id, event_type, max_rows - 1),
+        ).fetchone()
+        if cutoff_row is None:
+            return 0
+        cutoff_seq = int(cutoff_row["seq"])
+        cursor = conn.execute(
+            f"""
+            DELETE FROM {table_name}
+            WHERE run_id = ? AND event_type = ? AND seq < ?
+            """,
+            (run_id, event_type, cutoff_seq),
+        )
+        return int(cursor.rowcount or 0)
+
+    def _enforce_live_event_cap(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        run_id: str,
+        event_type: FlowEventType,
+    ) -> int:
+        max_rows = _FLOW_EVENT_TYPE_LIVE_CAPS.get(event_type.value)
+        if max_rows is None:
+            return 0
+        return self._prune_rows_for_run_event_type(
+            conn,
+            table_name="flow_events",
+            run_id=run_id,
+            event_type=event_type.value,
+            max_rows=max_rows,
+        )
+
+    def _enforce_live_telemetry_cap(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        run_id: str,
+        event_type: FlowEventType,
+    ) -> int:
+        max_rows = _FLOW_TELEMETRY_TYPE_LIVE_CAPS.get(event_type.value)
+        if max_rows is None:
+            return 0
+        return self._prune_rows_for_run_event_type(
+            conn,
+            table_name="flow_telemetry",
+            run_id=run_id,
+            event_type=event_type.value,
+            max_rows=max_rows,
+        )
 
     def create_flow_run(
         self,
@@ -448,6 +537,30 @@ class FlowStore:
         rows = conn.execute(query, params).fetchall()
         return [self._row_to_flow_run(row) for row in rows]
 
+    def count_active_flow_runs(self, flow_type: Optional[str] = None) -> int:
+        conn = self._get_conn()
+        query = "SELECT COUNT(*) FROM flow_runs WHERE status IN (?, ?, ?)"
+        params: List[Any] = [
+            FlowRunStatus.RUNNING.value,
+            FlowRunStatus.STOPPING.value,
+            FlowRunStatus.PAUSED.value,
+        ]
+        if flow_type is not None:
+            query += " AND flow_type = ?"
+            params.append(flow_type)
+        row = conn.execute(query, params).fetchone()
+        return int(row[0]) if row is not None else 0
+
+    def count_flow_runs_total(self) -> int:
+        conn = self._get_conn()
+        row = conn.execute("SELECT COUNT(*) FROM flow_runs").fetchone()
+        return int(row[0]) if row is not None else 0
+
+    def count_flow_events_total(self) -> int:
+        conn = self._get_conn()
+        row = conn.execute("SELECT COUNT(*) FROM flow_events").fetchone()
+        return int(row[0]) if row is not None else 0
+
     def get_latest_flow_run(
         self, flow_type: Optional[str] = None, status: Optional[FlowRunStatus] = None
     ) -> Optional[FlowRunRecord]:
@@ -553,6 +666,7 @@ class FlowStore:
                     step_id,
                 ),
             )
+            self._enforce_live_event_cap(conn, run_id=run_id, event_type=event_type)
             row = conn.execute(
                 "SELECT * FROM flow_events WHERE id = ?", (event_id,)
             ).fetchone()
@@ -792,6 +906,7 @@ class FlowStore:
                     json.dumps(normalized_data),
                 ),
             )
+            self._enforce_live_telemetry_cap(conn, run_id=run_id, event_type=event_type)
             row = conn.execute(
                 "SELECT * FROM flow_telemetry WHERE id = ?", (telemetry_id,)
             ).fetchone()

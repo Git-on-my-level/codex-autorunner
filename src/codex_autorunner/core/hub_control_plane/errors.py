@@ -37,6 +37,18 @@ def default_retryable(code: HubControlPlaneErrorCode) -> bool:
     return code in {"hub_unavailable", "transport_failure"}
 
 
+def is_retryable_hub_control_plane_failure(exc: BaseException) -> bool:
+    """True for duck-typed control-plane failures that match :func:`default_retryable`."""
+    if not bool(getattr(exc, "retryable", False)):
+        return False
+    raw_code = str(getattr(exc, "code", "") or "").strip()
+    try:
+        code = _parse_error_code(raw_code)
+    except ValueError:
+        return False
+    return default_retryable(code)
+
+
 @dataclass(frozen=True)
 class HubControlPlaneErrorInfo:
     """Serializable error payload for the shared-state control plane."""
@@ -111,4 +123,5 @@ __all__ = [
     "HubControlPlaneErrorCode",
     "HubControlPlaneErrorInfo",
     "default_retryable",
+    "is_retryable_hub_control_plane_failure",
 ]

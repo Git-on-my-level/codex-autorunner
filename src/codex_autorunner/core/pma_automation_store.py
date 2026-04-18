@@ -34,15 +34,31 @@ from .pma_automation_types import (
     default_pma_automation_state,
 )
 from .pma_thread_store import PmaThreadStore
-from .text_utils import lock_path_for
+from .text_utils import _normalize_pma_delivery_target, lock_path_for
 
 logger = logging.getLogger(__name__)
+
+MANAGED_THREAD_AUTO_SUBSCRIPTION_PREFIXES = (
+    "managed-thread-notify:",
+    "managed-thread-send-notify:",
+)
 
 
 class PmaAutomationThreadNotFoundError(ValueError):
     def __init__(self, thread_id: str) -> None:
         super().__init__(f"Unknown thread_id: {thread_id}")
         self.thread_id = thread_id
+
+
+def _normalize_delivery_target(value: Any) -> Optional[dict[str, str]]:
+    normalized = _normalize_pma_delivery_target(value)
+    if normalized is None:
+        return None
+    surface_kind, surface_key = normalized
+    return {
+        "surface_kind": surface_kind,
+        "surface_key": surface_key,
+    }
 
 
 @dataclass
@@ -658,6 +674,103 @@ class PmaAutomationStore:
             return []
         return [str(item).lower() for item in parsed if isinstance(item, str)]
 
+    def _row_to_subscription(self, row: Any) -> PmaLifecycleSubscription:
+        return PmaLifecycleSubscription(
+            subscription_id=str(row["subscription_id"]),
+            created_at=str(row["created_at"]),
+            updated_at=str(row["updated_at"]),
+            state=str(row["state"] or "active"),
+            event_types=self._json_load_list(row["event_types_json"]),
+            repo_id=row["repo_id"],
+            run_id=row["run_id"],
+            thread_id=row["thread_target_id"],
+            lane_id=str(row["lane_id"] or DEFAULT_PMA_LANE_ID),
+            from_state=row["from_state"],
+            to_state=row["to_state"],
+            reason=row["reason_text"],
+            idempotency_key=row["idempotency_key"],
+            max_matches=(
+                int(row["max_matches"]) if row["max_matches"] is not None else None
+            ),
+            match_count=int(row["match_count"] or 0),
+            metadata=self._json_load(row["metadata_json"]),
+        )
+
+    def _row_to_timer(self, row: Any) -> PmaAutomationTimer:
+        payload = self._json_load(row["payload_json"])
+        metadata = cast(
+            dict[str, Any],
+            (
+                payload.get("metadata")
+                if isinstance(payload.get("metadata"), dict)
+                else {}
+            ),
+        )
+        return PmaAutomationTimer(
+            timer_id=str(row["timer_id"]),
+            due_at=str(row["available_at"]),
+            created_at=str(row["created_at"]),
+            updated_at=str(row["updated_at"]),
+            state=str(row["state"] or "pending"),
+            fired_at=row["fired_at"],
+            timer_type=str(row["timer_kind"] or TIMER_TYPE_ONE_SHOT),
+            idle_seconds=(
+                int(row["idle_seconds"]) if row["idle_seconds"] is not None else None
+            ),
+            subscription_id=row["subscription_id"],
+            repo_id=row["repo_id"],
+            run_id=row["run_id"],
+            thread_id=row["thread_target_id"],
+            lane_id=_normalize_lane_id(payload.get("lane_id")),
+            from_state=_normalize_text(payload.get("from_state")),
+            to_state=_normalize_text(payload.get("to_state")),
+            reason=row["reason_text"],
+            idempotency_key=row["idempotency_key"],
+            metadata=metadata,
+        )
+
+    def _row_to_wakeup(self, row: Any) -> PmaAutomationWakeup:
+        payload = self._json_load(row["payload_json"])
+        event_data = cast(
+            dict[str, Any],
+            (
+                payload.get("event_data")
+                if isinstance(payload.get("event_data"), dict)
+                else {}
+            ),
+        )
+        metadata = cast(
+            dict[str, Any],
+            (
+                payload.get("metadata")
+                if isinstance(payload.get("metadata"), dict)
+                else {}
+            ),
+        )
+        return PmaAutomationWakeup(
+            wakeup_id=str(row["wakeup_id"]),
+            created_at=str(row["created_at"]),
+            updated_at=str(row["updated_at"]),
+            state=str(row["state"] or "pending"),
+            dispatched_at=row["dispatched_at"],
+            source=str(row["wakeup_kind"] or "automation"),
+            repo_id=row["repo_id"],
+            run_id=row["run_id"],
+            thread_id=row["thread_target_id"],
+            lane_id=str(row["lane_id"] or DEFAULT_PMA_LANE_ID),
+            from_state=_normalize_text(payload.get("from_state")),
+            to_state=_normalize_text(payload.get("to_state")),
+            reason=row["reason_text"],
+            timestamp=row["timestamp"],
+            idempotency_key=row["idempotency_key"],
+            subscription_id=row["subscription_id"],
+            timer_id=row["timer_id"],
+            event_id=row["event_id"],
+            event_type=row["event_type"],
+            event_data=event_data,
+            metadata=metadata,
+        )
+
     def _load_subscriptions_from_sqlite(
         self,
         conn: Any,
@@ -669,33 +782,7 @@ class PmaAutomationStore:
              ORDER BY created_at ASC, subscription_id ASC
             """
         ).fetchall()
-        out: list[PmaLifecycleSubscription] = []
-        for row in rows:
-            out.append(
-                PmaLifecycleSubscription(
-                    subscription_id=str(row["subscription_id"]),
-                    created_at=str(row["created_at"]),
-                    updated_at=str(row["updated_at"]),
-                    state=str(row["state"] or "active"),
-                    event_types=self._json_load_list(row["event_types_json"]),
-                    repo_id=row["repo_id"],
-                    run_id=row["run_id"],
-                    thread_id=row["thread_target_id"],
-                    lane_id=str(row["lane_id"] or DEFAULT_PMA_LANE_ID),
-                    from_state=row["from_state"],
-                    to_state=row["to_state"],
-                    reason=row["reason_text"],
-                    idempotency_key=row["idempotency_key"],
-                    max_matches=(
-                        int(row["max_matches"])
-                        if row["max_matches"] is not None
-                        else None
-                    ),
-                    match_count=int(row["match_count"] or 0),
-                    metadata=self._json_load(row["metadata_json"]),
-                )
-            )
-        return out
+        return [self._row_to_subscription(row) for row in rows]
 
     def _load_timers_from_sqlite(self, conn: Any) -> list[PmaAutomationTimer]:
         rows = conn.execute(
@@ -705,44 +792,7 @@ class PmaAutomationStore:
              ORDER BY created_at ASC, timer_id ASC
             """
         ).fetchall()
-        out: list[PmaAutomationTimer] = []
-        for row in rows:
-            payload = self._json_load(row["payload_json"])
-            metadata = cast(
-                dict[str, Any],
-                (
-                    payload.get("metadata")
-                    if isinstance(payload.get("metadata"), dict)
-                    else {}
-                ),
-            )
-            out.append(
-                PmaAutomationTimer(
-                    timer_id=str(row["timer_id"]),
-                    due_at=str(row["available_at"]),
-                    created_at=str(row["created_at"]),
-                    updated_at=str(row["updated_at"]),
-                    state=str(row["state"] or "pending"),
-                    fired_at=row["fired_at"],
-                    timer_type=str(row["timer_kind"] or TIMER_TYPE_ONE_SHOT),
-                    idle_seconds=(
-                        int(row["idle_seconds"])
-                        if row["idle_seconds"] is not None
-                        else None
-                    ),
-                    subscription_id=row["subscription_id"],
-                    repo_id=row["repo_id"],
-                    run_id=row["run_id"],
-                    thread_id=row["thread_target_id"],
-                    lane_id=_normalize_lane_id(payload.get("lane_id")),
-                    from_state=_normalize_text(payload.get("from_state")),
-                    to_state=_normalize_text(payload.get("to_state")),
-                    reason=row["reason_text"],
-                    idempotency_key=row["idempotency_key"],
-                    metadata=metadata,
-                )
-            )
-        return out
+        return [self._row_to_timer(row) for row in rows]
 
     def _load_wakeups_from_sqlite(self, conn: Any) -> list[PmaAutomationWakeup]:
         rows = conn.execute(
@@ -752,51 +802,178 @@ class PmaAutomationStore:
              ORDER BY created_at ASC, wakeup_id ASC
             """
         ).fetchall()
-        out: list[PmaAutomationWakeup] = []
-        for row in rows:
-            payload = self._json_load(row["payload_json"])
-            event_data = cast(
-                dict[str, Any],
-                (
-                    payload.get("event_data")
-                    if isinstance(payload.get("event_data"), dict)
-                    else {}
+        return [self._row_to_wakeup(row) for row in rows]
+
+    def _insert_subscription_row(
+        self, conn: Any, subscription: PmaLifecycleSubscription
+    ) -> None:
+        conn.execute(
+            """
+            INSERT INTO orch_automation_subscriptions (
+                subscription_id, event_types_json, repo_id, run_id,
+                thread_target_id, binding_id, lane_id, from_state, to_state,
+                notify_once, state, match_count, metadata_json,
+                created_at, updated_at, disabled_at,
+                reason_text, idempotency_key, max_matches
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                subscription.subscription_id,
+                json.dumps(subscription.event_types),
+                subscription.repo_id,
+                subscription.run_id,
+                subscription.thread_id,
+                None,
+                subscription.lane_id,
+                subscription.from_state,
+                subscription.to_state,
+                1 if subscription.max_matches == 1 else 0,
+                subscription.state,
+                subscription.match_count,
+                json.dumps(subscription.metadata),
+                subscription.created_at,
+                subscription.updated_at,
+                (subscription.updated_at if subscription.state != "active" else None),
+                subscription.reason,
+                subscription.idempotency_key,
+                subscription.max_matches,
+            ),
+        )
+
+    def _insert_timer_row(self, conn: Any, timer: PmaAutomationTimer) -> None:
+        conn.execute(
+            """
+            INSERT INTO orch_automation_timers (
+                timer_id, subscription_id, repo_id, run_id,
+                thread_target_id, timer_kind, schedule_key, available_at,
+                payload_json, state, created_at, updated_at,
+                fired_at, reason_text, idempotency_key, idle_seconds
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                timer.timer_id,
+                timer.subscription_id,
+                timer.repo_id,
+                timer.run_id,
+                timer.thread_id,
+                timer.timer_type,
+                timer.subscription_id or timer.idempotency_key,
+                timer.due_at,
+                json.dumps(
+                    {
+                        "metadata": timer.metadata,
+                        "from_state": timer.from_state,
+                        "to_state": timer.to_state,
+                    }
                 ),
-            )
-            metadata = cast(
-                dict[str, Any],
-                (
-                    payload.get("metadata")
-                    if isinstance(payload.get("metadata"), dict)
-                    else {}
+                timer.state,
+                timer.created_at,
+                timer.updated_at,
+                timer.fired_at,
+                timer.reason,
+                timer.idempotency_key,
+                timer.idle_seconds,
+            ),
+        )
+
+    def _insert_wakeup_row(self, conn: Any, wakeup: PmaAutomationWakeup) -> None:
+        conn.execute(
+            """
+            INSERT INTO orch_automation_wakeups (
+                wakeup_id, subscription_id, repo_id, run_id,
+                thread_target_id, lane_id, wakeup_kind, state,
+                available_at, claimed_at, completed_at, reason_text,
+                payload_json, created_at, updated_at,
+                dispatched_at, timestamp, idempotency_key,
+                timer_id, event_id, event_type
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                wakeup.wakeup_id,
+                wakeup.subscription_id,
+                wakeup.repo_id,
+                wakeup.run_id,
+                wakeup.thread_id,
+                wakeup.lane_id,
+                wakeup.source,
+                wakeup.state,
+                wakeup.timestamp,
+                None,
+                None,
+                wakeup.reason,
+                json.dumps(
+                    {
+                        "metadata": wakeup.metadata,
+                        "event_data": wakeup.event_data,
+                        "from_state": wakeup.from_state,
+                        "to_state": wakeup.to_state,
+                    }
                 ),
-            )
-            out.append(
-                PmaAutomationWakeup(
-                    wakeup_id=str(row["wakeup_id"]),
-                    created_at=str(row["created_at"]),
-                    updated_at=str(row["updated_at"]),
-                    state=str(row["state"] or "pending"),
-                    dispatched_at=row["dispatched_at"],
-                    source=str(row["wakeup_kind"] or "automation"),
-                    repo_id=row["repo_id"],
-                    run_id=row["run_id"],
-                    thread_id=row["thread_target_id"],
-                    lane_id=str(row["lane_id"] or DEFAULT_PMA_LANE_ID),
-                    from_state=_normalize_text(payload.get("from_state")),
-                    to_state=_normalize_text(payload.get("to_state")),
-                    reason=row["reason_text"],
-                    timestamp=row["timestamp"],
-                    idempotency_key=row["idempotency_key"],
-                    subscription_id=row["subscription_id"],
-                    timer_id=row["timer_id"],
-                    event_id=row["event_id"],
-                    event_type=row["event_type"],
-                    event_data=event_data,
-                    metadata=metadata,
-                )
-            )
-        return out
+                wakeup.created_at,
+                wakeup.updated_at,
+                wakeup.dispatched_at,
+                wakeup.timestamp,
+                wakeup.idempotency_key,
+                wakeup.timer_id,
+                wakeup.event_id,
+                wakeup.event_type,
+            ),
+        )
+
+    def _find_active_subscription_by_key(
+        self, conn: Any, key: str
+    ) -> Optional[PmaLifecycleSubscription]:
+        rows = conn.execute(
+            """
+            SELECT *
+              FROM orch_automation_subscriptions
+             WHERE idempotency_key = ? AND state = 'active'
+             LIMIT 1
+            """,
+            (key,),
+        ).fetchall()
+        return self._row_to_subscription(rows[0]) if rows else None
+
+    def _find_pending_timer_by_key(
+        self, conn: Any, key: str
+    ) -> Optional[PmaAutomationTimer]:
+        rows = conn.execute(
+            """
+            SELECT *
+              FROM orch_automation_timers
+             WHERE idempotency_key = ? AND state = 'pending'
+             LIMIT 1
+            """,
+            (key,),
+        ).fetchall()
+        return self._row_to_timer(rows[0]) if rows else None
+
+    def _find_wakeup_by_key(self, conn: Any, key: str) -> Optional[PmaAutomationWakeup]:
+        rows = conn.execute(
+            """
+            SELECT *
+              FROM orch_automation_wakeups
+             WHERE idempotency_key = ?
+             LIMIT 1
+            """,
+            (key,),
+        ).fetchall()
+        return self._row_to_wakeup(rows[0]) if rows else None
+
+    def _subscription_id_exists(self, conn: Any, sub_id: str) -> bool:
+        row = conn.execute(
+            "SELECT 1 FROM orch_automation_subscriptions WHERE subscription_id = ?",
+            (sub_id,),
+        ).fetchone()
+        return row is not None
+
+    def _rewrite_json_mirror_unlocked(self) -> None:
+        state = self._load_unlocked()
+        if state is None:
+            state = self._persistence._load_unlocked()
+        if state is None:
+            state = default_pma_automation_state()
+        self._persistence._save_unlocked(state)
 
     def _normalize_subscriptions(self, value: Any) -> list[PmaLifecycleSubscription]:
         out: list[PmaLifecycleSubscription] = []
@@ -915,6 +1092,26 @@ class PmaAutomationStore:
             return binding_kind
         return DEFAULT_PMA_LANE_ID
 
+    def _resolve_thread_delivery_target(
+        self, *, thread_id: str
+    ) -> Optional[dict[str, str]]:
+        thread_store = PmaThreadStore(self._hub_root)
+        thread = thread_store.get_thread(thread_id)
+        if thread is None:
+            raise PmaAutomationThreadNotFoundError(thread_id)
+
+        binding_metadata = active_chat_binding_metadata_by_thread(
+            hub_root=self._hub_root
+        ).get(thread_id)
+        if not isinstance(binding_metadata, dict):
+            return None
+        return _normalize_delivery_target(
+            {
+                "surface_kind": binding_metadata.get("binding_kind"),
+                "surface_key": binding_metadata.get("binding_id"),
+            }
+        )
+
     def _resolve_subscription_lane_id(
         self,
         *,
@@ -928,6 +1125,110 @@ class PmaAutomationStore:
 
         resolved_lane_id = self._resolve_thread_lane_id(thread_id=normalized_thread_id)
         return resolved_lane_id
+
+    @staticmethod
+    def _is_auto_subscription_key(idempotency_key: Optional[str]) -> bool:
+        normalized_key = _normalize_text(idempotency_key)
+        if normalized_key is None:
+            return False
+        return normalized_key.startswith(MANAGED_THREAD_AUTO_SUBSCRIPTION_PREFIXES)
+
+    @staticmethod
+    def _scope_value_is_covered(
+        *, requested: Optional[str], existing: Optional[str]
+    ) -> bool:
+        if existing is None:
+            return True
+        if requested is None:
+            return False
+        return existing == requested
+
+    @staticmethod
+    def _event_types_are_covered(
+        *,
+        requested: list[str],
+        existing: list[str],
+    ) -> bool:
+        if not existing:
+            return True
+        if not requested:
+            return False
+        existing_set = set(existing)
+        return all(event_type in existing_set for event_type in requested)
+
+    def _find_covering_auto_subscription(
+        self,
+        *,
+        event_types: list[str],
+        repo_id: Optional[str],
+        run_id: Optional[str],
+        thread_id: Optional[str],
+        from_state: Optional[str],
+        to_state: Optional[str],
+    ) -> Optional[PmaLifecycleSubscription]:
+        state = self.load()
+        subscriptions = self._normalize_subscriptions(state.get("subscriptions"))
+        for entry in subscriptions:
+            if entry.state != "active":
+                continue
+            if not self._is_auto_subscription_key(entry.idempotency_key):
+                continue
+            if not self._event_types_are_covered(
+                requested=event_types,
+                existing=entry.event_types,
+            ):
+                continue
+            if not self._scope_value_is_covered(
+                requested=repo_id,
+                existing=entry.repo_id,
+            ):
+                continue
+            if not self._scope_value_is_covered(
+                requested=run_id,
+                existing=entry.run_id,
+            ):
+                continue
+            if not self._scope_value_is_covered(
+                requested=thread_id,
+                existing=entry.thread_id,
+            ):
+                continue
+            if not self._scope_value_is_covered(
+                requested=from_state,
+                existing=entry.from_state,
+            ):
+                continue
+            if not self._scope_value_is_covered(
+                requested=to_state,
+                existing=entry.to_state,
+            ):
+                continue
+            return entry
+        return None
+
+    def _resolve_subscription_metadata(
+        self,
+        *,
+        thread_id: Optional[str],
+        metadata: Optional[dict[str, Any]],
+    ) -> dict[str, Any]:
+        resolved_metadata = dict(metadata or {})
+        delivery_target = _normalize_delivery_target(
+            resolved_metadata.get("delivery_target")
+        )
+        normalized_thread_id = _normalize_text(thread_id)
+        if delivery_target is None and normalized_thread_id is not None:
+            try:
+                delivery_target = self._resolve_thread_delivery_target(
+                    thread_id=normalized_thread_id
+                )
+            except PmaAutomationThreadNotFoundError:
+                delivery_target = None
+        if delivery_target is not None:
+            resolved_metadata["delivery_target"] = delivery_target
+        else:
+            resolved_metadata.pop("delivery_target", None)
+        return resolved_metadata
 
     def upsert_subscription(
         self,
@@ -952,54 +1253,98 @@ class PmaAutomationStore:
             thread_id=normalized_thread_id,
             lane_id=lane_id,
         )
+        resolved_metadata = self._resolve_subscription_metadata(
+            thread_id=normalized_thread_id,
+            metadata=metadata,
+        )
         if not normalized_event_types:
             logger.warning(
                 "Creating PMA subscription with empty event_types; subscription will match all events"
             )
         with file_lock(self._lock_path()):
-            state, subscriptions, timers, wakeups = self._load_structured_unlocked()
-            if key is not None:
-                for existing in subscriptions:
-                    if existing.state != "active":
-                        continue
-                    if existing.idempotency_key == key:
-                        return existing, True
-            created = PmaLifecycleSubscription.create(
-                event_types=normalized_event_types,
-                repo_id=repo_id,
-                run_id=run_id,
-                thread_id=normalized_thread_id,
-                lane_id=resolved_lane_id,
-                from_state=from_state,
-                to_state=to_state,
-                reason=reason,
-                idempotency_key=key,
-                notify_once=notify_once,
-                max_matches=max_matches,
-                metadata=metadata,
-            )
-            subscriptions.append(created)
-            self._save_structured_unlocked(state, subscriptions, timers, wakeups)
+            with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+                with conn:
+                    if key is not None:
+                        existing = self._find_active_subscription_by_key(conn, key)
+                        if existing is not None:
+                            return existing, True
+                    created = PmaLifecycleSubscription.create(
+                        event_types=normalized_event_types,
+                        repo_id=repo_id,
+                        run_id=run_id,
+                        thread_id=normalized_thread_id,
+                        lane_id=resolved_lane_id,
+                        from_state=from_state,
+                        to_state=to_state,
+                        reason=reason,
+                        idempotency_key=key,
+                        notify_once=notify_once,
+                        max_matches=max_matches,
+                        metadata=resolved_metadata,
+                    )
+                    self._insert_subscription_row(conn, created)
+            self._rewrite_json_mirror_unlocked()
             return created, False
 
     def create_subscription(
         self, payload: Optional[dict[str, Any]] = None, **kwargs: Any
     ) -> dict[str, Any]:
         data = self._coerce_payload(payload, kwargs)
-        created, deduped = self.upsert_subscription(
-            event_types=self._normalize_subscription_event_types(
-                data.get("event_types"),
-                singular=data.get("event_type"),
+        normalized_event_types = self._normalize_subscription_event_types(
+            data.get("event_types"),
+            singular=data.get("event_type"),
+        )
+        normalized_repo_id = _normalize_text(data.get("repo_id"))
+        normalized_run_id = _normalize_text(data.get("run_id"))
+        normalized_thread_id = _normalize_text(data.get("thread_id"))
+        normalized_from_state = _normalize_text(data.get("from_state"))
+        normalized_to_state = _normalize_text(data.get("to_state"))
+        normalized_idempotency_key = _normalize_text(data.get("idempotency_key"))
+        confirm_duplicate = _normalize_bool(data.get("confirm"), fallback=False)
+        if not confirm_duplicate and not self._is_auto_subscription_key(
+            normalized_idempotency_key
+        ):
+            existing_auto = self._find_covering_auto_subscription(
+                event_types=normalized_event_types,
+                repo_id=normalized_repo_id,
+                run_id=normalized_run_id,
+                thread_id=normalized_thread_id,
+                from_state=normalized_from_state,
+                to_state=normalized_to_state,
             )
-            or None,
-            repo_id=_normalize_text(data.get("repo_id")),
-            run_id=_normalize_text(data.get("run_id")),
-            thread_id=_normalize_text(data.get("thread_id")),
+            if existing_auto is not None:
+                scope_label = "this scope"
+                if normalized_thread_id is not None:
+                    scope_label = "this thread"
+                elif normalized_run_id is not None:
+                    scope_label = "this run"
+                elif normalized_repo_id is not None:
+                    scope_label = "this repo"
+                event_label = (
+                    normalized_event_types[0]
+                    if len(normalized_event_types) == 1
+                    else "the requested event scope"
+                )
+                return {
+                    "subscription": existing_auto.to_dict(),
+                    "deduped": True,
+                    "warning": (
+                        "An active auto-subscription "
+                        f"({existing_auto.idempotency_key or existing_auto.subscription_id}) "
+                        f"already covers {event_label} for {scope_label}. "
+                        "Pass confirm=true to create a duplicate subscription."
+                    ),
+                }
+        created, deduped = self.upsert_subscription(
+            event_types=normalized_event_types or None,
+            repo_id=normalized_repo_id,
+            run_id=normalized_run_id,
+            thread_id=normalized_thread_id,
             lane_id=_normalize_text(data.get("lane_id")),
-            from_state=_normalize_text(data.get("from_state")),
-            to_state=_normalize_text(data.get("to_state")),
+            from_state=normalized_from_state,
+            to_state=normalized_to_state,
             reason=_normalize_text(data.get("reason")),
-            idempotency_key=_normalize_text(data.get("idempotency_key")),
+            idempotency_key=normalized_idempotency_key,
             notify_once=_normalize_bool(data.get("notify_once"), fallback=None),
             max_matches=_normalize_positive_int(data.get("max_matches"), fallback=None),
             metadata=(
@@ -1012,20 +1357,24 @@ class PmaAutomationStore:
         target_id = _normalize_text(subscription_id)
         if target_id is None:
             return False
+        stamp = _iso_now()
         with file_lock(self._lock_path()):
-            state, subscriptions, timers, wakeups = self._load_structured_unlocked()
-            changed = False
-            for entry in subscriptions:
-                if entry.subscription_id != target_id:
-                    continue
-                if entry.state == "cancelled":
-                    continue
-                entry.state = "cancelled"
-                entry.updated_at = _iso_now()
-                changed = True
-                break
+            with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+                with conn:
+                    cursor = conn.execute(
+                        """
+                        UPDATE orch_automation_subscriptions
+                           SET state = 'cancelled',
+                               updated_at = ?,
+                               disabled_at = ?
+                         WHERE subscription_id = ?
+                           AND state != 'cancelled'
+                        """,
+                        (stamp, stamp, target_id),
+                    )
+                    changed = cursor.rowcount > 0
             if changed:
-                self._save_structured_unlocked(state, subscriptions, timers, wakeups)
+                self._rewrite_json_mirror_unlocked()
             return changed
 
     def purge_subscription(
@@ -1035,20 +1384,44 @@ class PmaAutomationStore:
         if target_id is None:
             return False
         with file_lock(self._lock_path()):
-            state, subscriptions, timers, wakeups = self._load_structured_unlocked()
-            retained: list[PmaLifecycleSubscription] = []
-            removed = False
-            for entry in subscriptions:
-                if entry.subscription_id != target_id:
-                    retained.append(entry)
-                    continue
-                if require_inactive and entry.state == "active":
-                    retained.append(entry)
-                    continue
-                removed = True
-            if removed:
-                self._save_structured_unlocked(state, retained, timers, wakeups)
-            return removed
+            with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+                with conn:
+                    row = conn.execute(
+                        "SELECT state FROM orch_automation_subscriptions WHERE subscription_id = ?",
+                        (target_id,),
+                    ).fetchone()
+                    if row is None:
+                        return False
+                    if require_inactive and str(row["state"]) == "active":
+                        return False
+                    orphaned_timers = conn.execute(
+                        "SELECT COUNT(*) AS c FROM orch_automation_timers WHERE subscription_id = ?",
+                        (target_id,),
+                    ).fetchone()["c"]
+                    orphaned_wakeups = conn.execute(
+                        "SELECT COUNT(*) AS c FROM orch_automation_wakeups WHERE subscription_id = ?",
+                        (target_id,),
+                    ).fetchone()["c"]
+                    if orphaned_timers or orphaned_wakeups:
+                        logger.warning(
+                            "Dropping orphaned automation rows before save (timers=%s, wakeups=%s)",
+                            orphaned_timers,
+                            orphaned_wakeups,
+                        )
+                    conn.execute(
+                        "DELETE FROM orch_automation_wakeups WHERE subscription_id = ?",
+                        (target_id,),
+                    )
+                    conn.execute(
+                        "DELETE FROM orch_automation_timers WHERE subscription_id = ?",
+                        (target_id,),
+                    )
+                    conn.execute(
+                        "DELETE FROM orch_automation_subscriptions WHERE subscription_id = ?",
+                        (target_id,),
+                    )
+            self._rewrite_json_mirror_unlocked()
+            return True
 
     def purge_subscriptions(
         self,
@@ -1058,16 +1431,51 @@ class PmaAutomationStore:
     ) -> list[dict[str, Any]]:
         target_state = _normalize_text(state_filter)
         with file_lock(self._lock_path()):
-            state, subscriptions, timers, wakeups = self._load_structured_unlocked()
-            removed: list[PmaLifecycleSubscription] = []
-            retained: list[PmaLifecycleSubscription] = []
-            for entry in subscriptions:
-                if target_state is not None and entry.state != target_state:
-                    retained.append(entry)
-                    continue
-                removed.append(entry)
+            with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+                query = "SELECT * FROM orch_automation_subscriptions"
+                params: tuple[Any, ...] = ()
+                if target_state is not None:
+                    query += " WHERE state = ?"
+                    params = (target_state,)
+                rows = conn.execute(query, params).fetchall()
+                removed = [self._row_to_subscription(row) for row in rows]
+                if removed and not dry_run:
+                    removed_ids = [entry.subscription_id for entry in removed]
+                    total_orphaned_timers = 0
+                    total_orphaned_wakeups = 0
+                    with conn:
+                        for sub_id in removed_ids:
+                            orphaned_timers = conn.execute(
+                                "SELECT COUNT(*) AS c FROM orch_automation_timers WHERE subscription_id = ?",
+                                (sub_id,),
+                            ).fetchone()["c"]
+                            orphaned_wakeups = conn.execute(
+                                "SELECT COUNT(*) AS c FROM orch_automation_wakeups WHERE subscription_id = ?",
+                                (sub_id,),
+                            ).fetchone()["c"]
+                            total_orphaned_timers += orphaned_timers
+                            total_orphaned_wakeups += orphaned_wakeups
+                            conn.execute(
+                                "DELETE FROM orch_automation_wakeups WHERE subscription_id = ?",
+                                (sub_id,),
+                            )
+                            conn.execute(
+                                "DELETE FROM orch_automation_timers WHERE subscription_id = ?",
+                                (sub_id,),
+                            )
+                        placeholders = ",".join("?" for _ in removed_ids)
+                        conn.execute(
+                            f"DELETE FROM orch_automation_subscriptions WHERE subscription_id IN ({placeholders})",
+                            tuple(removed_ids),
+                        )
+                    if total_orphaned_timers or total_orphaned_wakeups:
+                        logger.warning(
+                            "Dropping orphaned automation rows before save (timers=%s, wakeups=%s)",
+                            total_orphaned_timers,
+                            total_orphaned_wakeups,
+                        )
             if removed and not dry_run:
-                self._save_structured_unlocked(state, retained, timers, wakeups)
+                self._rewrite_json_mirror_unlocked()
             return [entry.to_dict() for entry in removed]
 
     def list_subscriptions(
@@ -1168,41 +1576,37 @@ class PmaAutomationStore:
         if normalized_due_at is None:
             raise ValueError("due_at is required")
         with file_lock(self._lock_path()):
-            state, subscriptions, timers, wakeups = self._load_structured_unlocked()
-            normalized_subscription_id = _normalize_text(subscription_id)
-            if normalized_subscription_id is not None:
-                known_subscription_ids = {
-                    entry.subscription_id
-                    for entry in subscriptions
-                    if entry.subscription_id
-                }
-                if normalized_subscription_id not in known_subscription_ids:
-                    raise ValueError(
-                        f"Unknown subscription_id: {normalized_subscription_id}"
+            with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+                with conn:
+                    normalized_subscription_id = _normalize_text(subscription_id)
+                    if normalized_subscription_id is not None:
+                        if not self._subscription_id_exists(
+                            conn, normalized_subscription_id
+                        ):
+                            raise ValueError(
+                                f"Unknown subscription_id: {normalized_subscription_id}"
+                            )
+                    if key is not None:
+                        existing = self._find_pending_timer_by_key(conn, key)
+                        if existing is not None:
+                            return existing, True
+                    created = PmaAutomationTimer.create(
+                        due_at=normalized_due_at,
+                        timer_type=timer_type,
+                        idle_seconds=idle_seconds,
+                        subscription_id=normalized_subscription_id,
+                        repo_id=repo_id,
+                        run_id=run_id,
+                        thread_id=thread_id,
+                        lane_id=lane_id,
+                        from_state=from_state,
+                        to_state=to_state,
+                        reason=reason,
+                        idempotency_key=key,
+                        metadata=metadata,
                     )
-            if key is not None:
-                for existing in timers:
-                    if existing.state != "pending":
-                        continue
-                    if existing.idempotency_key == key:
-                        return existing, True
-            created = PmaAutomationTimer.create(
-                due_at=normalized_due_at,
-                timer_type=timer_type,
-                idle_seconds=idle_seconds,
-                subscription_id=normalized_subscription_id,
-                repo_id=repo_id,
-                run_id=run_id,
-                thread_id=thread_id,
-                lane_id=lane_id,
-                from_state=from_state,
-                to_state=to_state,
-                reason=reason,
-                idempotency_key=key,
-                metadata=metadata,
-            )
-            timers.append(created)
-            self._save_structured_unlocked(state, subscriptions, timers, wakeups)
+                    self._insert_timer_row(conn, created)
+            self._rewrite_json_mirror_unlocked()
             return created, False
 
     def create_timer(
@@ -1263,21 +1667,34 @@ class PmaAutomationStore:
         if cancelled_at is None:
             cancelled_at = _iso_now()
         with file_lock(self._lock_path()):
-            state, subscriptions, timers, wakeups = self._load_structured_unlocked()
-            changed = False
-            for entry in timers:
-                if entry.timer_id != target_id:
-                    continue
-                if entry.state == "cancelled":
-                    continue
-                entry.state = "cancelled"
-                entry.updated_at = cancelled_at
-                if reason is not None:
-                    entry.reason = reason
-                changed = True
-                break
+            with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+                with conn:
+                    if reason is not None:
+                        cursor = conn.execute(
+                            """
+                            UPDATE orch_automation_timers
+                               SET state = 'cancelled',
+                                   updated_at = ?,
+                                   reason_text = ?
+                             WHERE timer_id = ?
+                               AND state != 'cancelled'
+                            """,
+                            (cancelled_at, reason, target_id),
+                        )
+                    else:
+                        cursor = conn.execute(
+                            """
+                            UPDATE orch_automation_timers
+                               SET state = 'cancelled',
+                                   updated_at = ?
+                             WHERE timer_id = ?
+                               AND state != 'cancelled'
+                            """,
+                            (cancelled_at, target_id),
+                        )
+                    changed = cursor.rowcount > 0
             if changed:
-                self._save_structured_unlocked(state, subscriptions, timers, wakeups)
+                self._rewrite_json_mirror_unlocked()
             return changed
 
     def purge_timer(self, timer_id: str, *, require_inactive: bool = True) -> bool:
@@ -1285,20 +1702,22 @@ class PmaAutomationStore:
         if target_id is None:
             return False
         with file_lock(self._lock_path()):
-            state, subscriptions, timers, wakeups = self._load_structured_unlocked()
-            retained: list[PmaAutomationTimer] = []
-            removed = False
-            for entry in timers:
-                if entry.timer_id != target_id:
-                    retained.append(entry)
-                    continue
-                if require_inactive and entry.state == "pending":
-                    retained.append(entry)
-                    continue
-                removed = True
-            if removed:
-                self._save_structured_unlocked(state, subscriptions, retained, wakeups)
-            return removed
+            with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+                with conn:
+                    row = conn.execute(
+                        "SELECT state FROM orch_automation_timers WHERE timer_id = ?",
+                        (target_id,),
+                    ).fetchone()
+                    if row is None:
+                        return False
+                    if require_inactive and str(row["state"]) == "pending":
+                        return False
+                    conn.execute(
+                        "DELETE FROM orch_automation_timers WHERE timer_id = ?",
+                        (target_id,),
+                    )
+            self._rewrite_json_mirror_unlocked()
+            return True
 
     def list_timers(
         self,
@@ -1630,6 +2049,8 @@ class PmaAutomationStore:
                 if deduped:
                     continue
 
+                wakeup_metadata = dict(entry.metadata or {})
+                wakeup_metadata.update(metadata_payload)
                 wakeups.append(
                     PmaAutomationWakeup.create(
                         source="transition",
@@ -1644,7 +2065,7 @@ class PmaAutomationStore:
                         idempotency_key=wakeup_key,
                         subscription_id=subscription_id,
                         event_type=event_type_norm,
-                        metadata=dict(metadata_payload),
+                        metadata=wakeup_metadata,
                     )
                 )
                 created += 1
