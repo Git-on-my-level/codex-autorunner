@@ -498,3 +498,83 @@ async def test_hub_control_plane_http_client_maps_typed_errors(
 
     assert exc_info.value.code == "hub_rejected"
     assert exc_info.value.retryable is False
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_status", "expected_retryable"),
+    [
+        (
+            HubControlPlaneError("hub_unavailable", "Hub service unreachable"),
+            503,
+            True,
+        ),
+        (
+            HubControlPlaneError("hub_incompatible", "API version mismatch"),
+            409,
+            False,
+        ),
+        (
+            HubControlPlaneError("hub_rejected", "Invalid request payload"),
+            400,
+            False,
+        ),
+    ],
+)
+def test_hub_control_plane_routes_map_error_codes_to_http_status(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    error: HubControlPlaneError,
+    expected_status: int,
+    expected_retryable: bool,
+) -> None:
+    app, _thread_target_id = _build_test_app(tmp_path)
+    service = app.state.hub_control_plane_service
+
+    def _raise_handshake(_request: object) -> object:
+        raise error
+
+    monkeypatch.setattr(service, "handshake", _raise_handshake)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/hub/api/control-plane/handshake",
+            json={"client_name": "telegram", "client_api_version": "1.0.0"},
+        )
+
+    assert response.status_code == expected_status
+    body = response.json()
+    assert body["error"]["code"] == error.code
+    assert body["error"]["retryable"] is expected_retryable
+
+
+def test_hub_control_plane_unknown_thread_target_returns_not_found(
+    tmp_path: Path,
+) -> None:
+    app, _thread_target_id = _build_test_app(tmp_path)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/hub/api/control-plane/thread-targets/query",
+            json={"thread_target_id": "nonexistent-thread"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body.get("thread") is None
+
+
+def test_hub_control_plane_get_execution_returns_error_for_unknown(
+    tmp_path: Path,
+) -> None:
+    app, thread_target_id = _build_test_app(tmp_path)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/hub/api/control-plane/executions/query",
+            json={
+                "thread_target_id": thread_target_id,
+                "execution_id": "nonexistent-execution",
+            },
+        )
+
+    assert response.status_code == 404

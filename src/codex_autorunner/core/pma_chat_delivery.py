@@ -1,3 +1,11 @@
+"""PMA notification delivery bridge: mirrors PMA notifications into chat outboxes.
+
+This module is a delivery bridge, not a routing owner.  Workspace/repo
+identity resolution, state-path resolution, and binding matching all
+delegate to shared helpers in ``chat_bindings`` so that this module does
+not become a hidden owner of routing or lifecycle truth.
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -5,84 +13,22 @@ import logging
 from pathlib import Path
 from typing import Any, Optional
 
-import yaml
-
-from ..manifest import load_manifest
 from .chat_bindings import (
-    DISCORD_STATE_FILE_DEFAULT,
-    TELEGRAM_STATE_FILE_DEFAULT,
+    normalize_workspace_path,
     preferred_non_pma_chat_notification_source_for_workspace,
+    resolve_bound_repo_id,
+    resolve_discord_state_path,
+    resolve_repo_id_by_workspace_path,
+    resolve_telegram_state_path,
 )
 from .config import load_hub_config
 from .pma_notification_store import PmaNotificationStore
 from .text_utils import _normalize_optional_text
 from .time_utils import now_iso
-from .utils import canonicalize_path
 
 logger = logging.getLogger(__name__)
 
 _DISCORD_MESSAGE_MAX_LEN = 1900
-
-
-def _resolve_state_path(
-    hub_root: Path, raw_config: dict[str, Any], *, section: str, default_state_file: str
-) -> Path:
-    section_cfg = raw_config.get(section) if isinstance(raw_config, dict) else {}
-    if not isinstance(section_cfg, dict):
-        section_cfg = {}
-    state_file = section_cfg.get("state_file")
-    if not isinstance(state_file, str) or not state_file.strip():
-        state_file = default_state_file
-    state_path = Path(state_file)
-    if not state_path.is_absolute():
-        state_path = hub_root / state_path
-    return state_path.resolve()
-
-
-def _binding_matches_workspace(binding_workspace: Any, workspace_root: Path) -> bool:
-    if not isinstance(binding_workspace, str) or not binding_workspace.strip():
-        return False
-    try:
-        return canonicalize_path(Path(binding_workspace)) == canonicalize_path(
-            workspace_root
-        )
-    except (OSError, TypeError, ValueError):
-        return False
-
-
-def _repo_id_by_workspace_path(hub_root: Path) -> dict[str, str]:
-    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
-    if not manifest_path.exists():
-        return {}
-    try:
-        loaded = load_manifest(manifest_path, hub_root)
-    except (OSError, ValueError, yaml.YAMLError):
-        return {}
-    mapping: dict[str, str] = {}
-    for repo in loaded.repos:
-        try:
-            workspace_path = canonicalize_path(hub_root / repo.path)
-        except (OSError, ValueError):
-            continue
-        mapping[str(workspace_path)] = repo.id
-    return mapping
-
-
-def _resolve_repo_id(
-    *,
-    repo_id: Any,
-    workspace_path: Any,
-    repo_id_by_workspace: dict[str, str],
-) -> Optional[str]:
-    normalized_repo_id = _normalize_optional_text(repo_id)
-    if normalized_repo_id:
-        return normalized_repo_id
-    if not isinstance(workspace_path, str) or not workspace_path.strip():
-        return None
-    try:
-        return repo_id_by_workspace.get(str(canonicalize_path(Path(workspace_path))))
-    except (OSError, TypeError, ValueError):
-        return None
 
 
 def _notification_context_payload(
@@ -181,32 +127,25 @@ async def _deliver_bound_discord(
     from ..integrations.discord.state import OutboxRecord as DiscordOutboxRecord
 
     normalized_repo_id = _normalize_optional_text(repo_id)
-    repo_id_by_workspace = _repo_id_by_workspace_path(hub_root)
+    repo_id_by_workspace = resolve_repo_id_by_workspace_path(hub_root, raw_config)
     created_at = now_iso()
     targets = 0
     published = 0
-    store = DiscordStateStore(
-        _resolve_state_path(
-            hub_root,
-            raw_config,
-            section="discord_bot",
-            default_state_file=DISCORD_STATE_FILE_DEFAULT,
-        )
-    )
+    store = DiscordStateStore(resolve_discord_state_path(hub_root, raw_config))
     try:
         bindings = await store.list_bindings()
         channels: list[str] = []
         for binding in bindings:
             if bool(binding.get("pma_enabled")):
                 continue
-            if not _binding_matches_workspace(
-                binding.get("workspace_path"), workspace_root
-            ):
+            if normalize_workspace_path(
+                binding.get("workspace_path")
+            ) != normalize_workspace_path(workspace_root):
                 continue
-            binding_repo_id = _resolve_repo_id(
+            binding_repo_id = resolve_bound_repo_id(
                 repo_id=binding.get("repo_id"),
-                workspace_path=binding.get("workspace_path"),
                 repo_id_by_workspace=repo_id_by_workspace,
+                workspace_values=(binding.get("workspace_path"),),
             )
             if normalized_repo_id and binding_repo_id not in {None, normalized_repo_id}:
                 continue
@@ -284,18 +223,11 @@ async def _deliver_bound_telegram(
     from ..integrations.telegram.state import TelegramStateStore, parse_topic_key
 
     normalized_repo_id = _normalize_optional_text(repo_id)
-    repo_id_by_workspace = _repo_id_by_workspace_path(hub_root)
+    repo_id_by_workspace = resolve_repo_id_by_workspace_path(hub_root, raw_config)
     created_at = now_iso()
     targets = 0
     published = 0
-    store = TelegramStateStore(
-        _resolve_state_path(
-            hub_root,
-            raw_config,
-            section="telegram_bot",
-            default_state_file=TELEGRAM_STATE_FILE_DEFAULT,
-        )
-    )
+    store = TelegramStateStore(resolve_telegram_state_path(hub_root, raw_config))
     try:
         topics = await store.list_topics()
         for surface_key in sorted(topics):
@@ -309,14 +241,14 @@ async def _deliver_bound_telegram(
             base_key = f"{chat_id}:{thread_id or 'root'}"
             if scope != await store.get_topic_scope(base_key):
                 continue
-            if not _binding_matches_workspace(
-                getattr(topic, "workspace_path", None), workspace_root
-            ):
+            if normalize_workspace_path(
+                getattr(topic, "workspace_path", None)
+            ) != normalize_workspace_path(workspace_root):
                 continue
-            binding_repo_id = _resolve_repo_id(
+            binding_repo_id = resolve_bound_repo_id(
                 repo_id=getattr(topic, "repo_id", None),
-                workspace_path=getattr(topic, "workspace_path", None),
                 repo_id_by_workspace=repo_id_by_workspace,
+                workspace_values=(getattr(topic, "workspace_path", None),),
             )
             if normalized_repo_id and binding_repo_id not in {None, normalized_repo_id}:
                 continue
@@ -384,30 +316,23 @@ async def _deliver_primary_pma_discord(
     from ..integrations.discord.state import DiscordStateStore
     from ..integrations.discord.state import OutboxRecord as DiscordOutboxRecord
 
-    repo_id_by_workspace = _repo_id_by_workspace_path(hub_root)
+    repo_id_by_workspace = resolve_repo_id_by_workspace_path(hub_root, raw_config)
     created_at = now_iso()
     candidates: list[tuple[str, str, Optional[Path]]] = []
-    store = DiscordStateStore(
-        _resolve_state_path(
-            hub_root,
-            raw_config,
-            section="discord_bot",
-            default_state_file=DISCORD_STATE_FILE_DEFAULT,
-        )
-    )
+    store = DiscordStateStore(resolve_discord_state_path(hub_root, raw_config))
     try:
         for binding in await store.list_bindings():
             if not bool(binding.get("pma_enabled")):
                 continue
-            binding_repo_id = _resolve_repo_id(
+            binding_repo_id = resolve_bound_repo_id(
                 repo_id=binding.get("repo_id"),
-                workspace_path=binding.get("workspace_path"),
                 repo_id_by_workspace=repo_id_by_workspace,
+                workspace_values=(binding.get("workspace_path"),),
             )
-            prev_binding_repo_id = _resolve_repo_id(
+            prev_binding_repo_id = resolve_bound_repo_id(
                 repo_id=binding.get("pma_prev_repo_id"),
-                workspace_path=binding.get("pma_prev_workspace_path"),
                 repo_id_by_workspace=repo_id_by_workspace,
+                workspace_values=(binding.get("pma_prev_workspace_path"),),
             )
             prev_repo_id = _normalize_optional_text(binding.get("pma_prev_repo_id"))
             if repo_id not in {binding_repo_id, prev_repo_id, prev_binding_repo_id}:
@@ -494,16 +419,9 @@ async def _deliver_primary_pma_telegram(
     )
     from ..integrations.telegram.state import TelegramStateStore, parse_topic_key
 
-    repo_id_by_workspace = _repo_id_by_workspace_path(hub_root)
+    repo_id_by_workspace = resolve_repo_id_by_workspace_path(hub_root, raw_config)
     created_at = now_iso()
-    store = TelegramStateStore(
-        _resolve_state_path(
-            hub_root,
-            raw_config,
-            section="telegram_bot",
-            default_state_file=TELEGRAM_STATE_FILE_DEFAULT,
-        )
-    )
+    store = TelegramStateStore(resolve_telegram_state_path(hub_root, raw_config))
     try:
         topics = await store.list_topics()
         for surface_key in sorted(topics):
@@ -517,15 +435,15 @@ async def _deliver_primary_pma_telegram(
             base_key = f"{chat_id}:{thread_id or 'root'}"
             if scope != await store.get_topic_scope(base_key):
                 continue
-            binding_repo_id = _resolve_repo_id(
+            binding_repo_id = resolve_bound_repo_id(
                 repo_id=getattr(topic, "repo_id", None),
-                workspace_path=getattr(topic, "workspace_path", None),
                 repo_id_by_workspace=repo_id_by_workspace,
+                workspace_values=(getattr(topic, "workspace_path", None),),
             )
-            prev_binding_repo_id = _resolve_repo_id(
+            prev_binding_repo_id = resolve_bound_repo_id(
                 repo_id=getattr(topic, "pma_prev_repo_id", None),
-                workspace_path=getattr(topic, "pma_prev_workspace_path", None),
                 repo_id_by_workspace=repo_id_by_workspace,
+                workspace_values=(getattr(topic, "pma_prev_workspace_path", None),),
             )
             prev_repo_id = _normalize_optional_text(
                 getattr(topic, "pma_prev_repo_id", None)
@@ -599,7 +517,7 @@ async def deliver_pma_notification(
         return {"route": normalized_delivery, "targets": 0, "published": 0}
     try:
         raw_config = load_hub_config(hub_root).raw
-    except (OSError, ValueError, yaml.YAMLError):
+    except (OSError, ValueError):
         raw_config = {}
     notification_store = PmaNotificationStore(hub_root)
     payload = _notification_context_payload(

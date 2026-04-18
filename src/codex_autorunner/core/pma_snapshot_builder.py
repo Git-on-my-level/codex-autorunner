@@ -396,16 +396,11 @@ def _collect_hub_local_artifacts(
         return pma_files, pma_files_detail, pma_threads, automation
 
     pma_files, pma_files_detail = _snapshot_pma_files(hub_root)
-    pma_threads = snapshot_pma_threads(hub_root)
-    for thread in pma_threads:
-        thread["freshness"] = build_freshness_payload(
-            generated_at=generated_at,
-            stale_threshold_seconds=stale_threshold_seconds,
-            candidates=[
-                ("thread_status_changed_at", thread.get("status_changed_at")),
-                ("thread_updated_at", thread.get("updated_at")),
-            ],
-        )
+    pma_threads = snapshot_pma_threads(
+        hub_root,
+        generated_at=generated_at,
+        stale_threshold_seconds=stale_threshold_seconds,
+    )
     for box in BOXES:
         for index, entry in enumerate(pma_files_detail.get(box) or []):
             entry["freshness"] = build_freshness_payload(
@@ -470,29 +465,33 @@ async def build_hub_snapshot_payload(
         }
 
     limits = PmaSnapshotLimits.from_supervisor(supervisor)
-    repos, agent_workspaces, inbox, lifecycle_events, process_monitor = (
-        await asyncio.gather(
-            asyncio.to_thread(
-                _build_repo_summaries,
-                supervisor,
-                stale_threshold_seconds=stale_threshold_seconds,
-                limits=limits,
-            ),
-            asyncio.to_thread(
-                _build_agent_workspace_summaries,
-                supervisor,
-                hub_root=hub_root,
-                limits=limits,
-            ),
-            asyncio.to_thread(
-                gather_inbox,
-                supervisor,
-                max_text_chars=limits.max_text_chars,
-                stale_threshold_seconds=stale_threshold_seconds,
-            ),
-            asyncio.to_thread(_gather_lifecycle_events, supervisor, limit=20),
-            _build_process_monitor_payload(),
-        )
+    (
+        repos,
+        agent_workspaces,
+        inbox,
+        lifecycle_events,
+        process_monitor,
+    ) = await asyncio.gather(
+        asyncio.to_thread(
+            _build_repo_summaries,
+            supervisor,
+            stale_threshold_seconds=stale_threshold_seconds,
+            limits=limits,
+        ),
+        asyncio.to_thread(
+            _build_agent_workspace_summaries,
+            supervisor,
+            hub_root=hub_root,
+            limits=limits,
+        ),
+        asyncio.to_thread(
+            gather_inbox,
+            supervisor,
+            max_text_chars=limits.max_text_chars,
+            stale_threshold_seconds=stale_threshold_seconds,
+        ),
+        asyncio.to_thread(_gather_lifecycle_events, supervisor, limit=20),
+        _build_process_monitor_payload(),
     )
     inbox = inbox[: limits.max_messages]
 

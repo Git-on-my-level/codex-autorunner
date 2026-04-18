@@ -77,10 +77,37 @@
       "path": "generated/fileChat.js"
     },
     {
+      "path": "generated/formatUtils.js"
+    },
+    {
       "path": "generated/health.js"
     },
     {
       "path": "generated/hub.js"
+    },
+    {
+      "path": "generated/hubActions.js"
+    },
+    {
+      "path": "generated/hubCache.js"
+    },
+    {
+      "path": "generated/hubDomBindings.js"
+    },
+    {
+      "path": "generated/hubFilters.js"
+    },
+    {
+      "path": "generated/hubModals.js"
+    },
+    {
+      "path": "generated/hubRefresh.js"
+    },
+    {
+      "path": "generated/hubRepoCards.js"
+    },
+    {
+      "path": "generated/hubTypes.js"
     },
     {
       "path": "generated/liveUpdates.js"
@@ -89,7 +116,13 @@
       "path": "generated/loader.js"
     },
     {
+      "path": "generated/markdown.js"
+    },
+    {
       "path": "generated/messages.js"
+    },
+    {
+      "path": "generated/messagesBell.js"
     },
     {
       "path": "generated/mobileCompact.js"
@@ -110,6 +143,9 @@
       "path": "generated/settings.js"
     },
     {
+      "path": "generated/sharedTurnLifecycle.js"
+    },
+    {
       "path": "generated/smartRefresh.js"
     },
     {
@@ -128,6 +164,27 @@
       "path": "generated/terminalManager.js"
     },
     {
+      "path": "generated/terminalMobile.js"
+    },
+    {
+      "path": "generated/terminalReplay.js"
+    },
+    {
+      "path": "generated/terminalSession.js"
+    },
+    {
+      "path": "generated/terminalTextInput.js"
+    },
+    {
+      "path": "generated/terminalTranscript.js"
+    },
+    {
+      "path": "generated/terminalTypes.js"
+    },
+    {
+      "path": "generated/terminalVoice.js"
+    },
+    {
       "path": "generated/ticketChatActions.js"
     },
     {
@@ -141,6 +198,18 @@
     },
     {
       "path": "generated/ticketEditor.js"
+    },
+    {
+      "path": "generated/ticketEditorFrontmatter.js"
+    },
+    {
+      "path": "generated/ticketFlowState.js"
+    },
+    {
+      "path": "generated/ticketFlowStream.js"
+    },
+    {
+      "path": "generated/ticketFlowView.js"
     },
     {
       "path": "generated/tickets.js"
@@ -159,6 +228,9 @@
     },
     {
       "path": "generated/updateTargets.js"
+    },
+    {
+      "path": "generated/usageChart.js"
     },
     {
       "path": "generated/utils.js"

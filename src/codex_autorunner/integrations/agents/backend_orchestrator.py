@@ -1,10 +1,31 @@
 """
 Backend orchestrator that manages protocol-agnostic backend lifecycle.
 
+Ownership boundaries (TICKET-1170):
+
+- **Supervisors** (WorkspaceAppServerSupervisor, OpenCodeSupervisor) own
+  runtime process startup, caching, idle eviction, and workspace-scoped
+  client lifecycle.  They are the single source of truth for *process*
+  state.
+
+- **AgentBackendFactory** (wiring.py) owns supervisor creation/caching and
+  backend adapter creation/caching.  It is the single owner of the
+  supervisor instances and the backend cache.
+
+- **Backend adapters** (CodexAppServerBackend, OpenCodeBackend) own
+  protocol-specific session/turn state (_session_id, _turn_id,
+  _thread_info).  They delegate process lifecycle to supervisors via
+  _ensure_client() and active-turn counting via mark_turn_started/finished.
+
+- **BackendOrchestrator** (this class) owns Engine-facing thread-id
+  persistence (AppServerThreadRegistry) and a lightweight BackendContext
+  that tracks the agent_id and session_id for the current run.  It does
+  *not* own process lifecycle or supervisor instances.  All process
+  lifecycle is delegated to AgentBackendFactory and its supervisors.
+
 The orchestrator sits between the Engine and backend adapters, handling
-backend-specific concerns like supervisor management, event handling,
-and session/thread tracking while exposing a clean, protocol-neutral
-interface to the Engine.
+session/thread tracking while exposing a clean, protocol-neutral interface
+to the Engine.
 """
 
 import asyncio
@@ -12,7 +33,7 @@ import logging
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, AsyncGenerator, Callable, Optional
+from typing import Any, AsyncGenerator, Optional
 
 from ...core.config import RepoConfig
 from ...core.ports.agent_backend import AgentBackend
@@ -31,29 +52,29 @@ from ...integrations.app_server.threads import (
 )
 from .wiring import AgentBackendFactory, BackendFactory
 
-SessionIdGetter = Callable[[str], Optional[str]]
-SessionIdSetter = Callable[[str, str], None]
-
 
 @dataclass
 class BackendContext:
-    """Context for a backend run."""
+    """Context for a backend run.
+
+    Only tracks orchestrator-level state (agent_id and session_id).
+    Turn ID and thread info are owned by the backend adapters and
+    queried via get_last_turn_id() / get_last_thread_info().
+    """
 
     agent_id: str
     session_id: Optional[str]
-    turn_id: Optional[str]
-    thread_info: Optional[dict[str, Any]]
 
 
 class BackendOrchestrator:
     """
     Orchestrates backend operations, keeping Engine protocol-agnostic.
 
-    This class manages:
-    - Backend factory and lifecycle
-    - Backend-specific supervisors (Codex app server, OpenCode)
-    - Backend-specific event handling and notification routing
-    - Session/thread tracking for backends that support it
+    Ownership:
+    - Delegates process/supervisor lifecycle to AgentBackendFactory.
+    - Delegates session/turn state to backend adapters.
+    - Owns Engine-facing thread-id persistence (AppServerThreadRegistry).
+    - Tracks the current run's agent_id and session_id via BackendContext.
     """
 
     def __init__(
@@ -131,8 +152,6 @@ class BackendOrchestrator:
         self._context = BackendContext(
             agent_id=agent_id,
             session_id=session,
-            turn_id=None,
-            thread_info=None,
         )
 
         return session
@@ -202,11 +221,6 @@ class BackendOrchestrator:
         async for event in event_stream:
             yield event
 
-            # Update context from events
-            if hasattr(event, "session_id") and event.session_id:
-                if self._context:
-                    self._context.session_id = event.session_id
-
     async def interrupt(self, agent_id: str, state: RunnerState) -> None:
         """Interrupt the current backend session."""
         if self._context and self._context.session_id:
@@ -221,16 +235,12 @@ class BackendOrchestrator:
         """Get the last turn ID from the active backend."""
         if self._active_backend:
             return getattr(self._active_backend, "last_turn_id", None)
-        if self._context:
-            return self._context.turn_id
         return None
 
     def get_last_thread_info(self) -> Optional[dict[str, Any]]:
         """Get the last thread info from the active backend."""
         if self._active_backend:
             return getattr(self._active_backend, "last_thread_info", None)
-        if self._context:
-            return self._context.thread_info
         return None
 
     def get_last_token_total(self) -> Optional[dict[str, Any]]:
@@ -248,19 +258,6 @@ class BackendOrchestrator:
                 await result
         self._active_backend = None
         self._context = None
-
-    def update_context(
-        self,
-        *,
-        turn_id: Optional[str] = None,
-        thread_info: Optional[dict[str, Any]] = None,
-    ) -> None:
-        """Update the backend context with new information."""
-        if self._context:
-            if turn_id:
-                self._context.turn_id = turn_id
-            if thread_info:
-                self._context.thread_info = thread_info
 
     def get_thread_id(self, session_key: str) -> Optional[str]:
         """Get the thread ID for a given session key."""
@@ -303,47 +300,10 @@ class BackendOrchestrator:
             agent_id is None or self._context.agent_id == agent_id
         ):
             self._context.session_id = None
-            self._context.turn_id = None
-            self._context.thread_info = None
 
         factory = self._agent_backend_factory()
         if factory is not None:
             factory.reset_session_state(agent_id=agent_id)
-            return
-
-        if self._active_backend is None:
-            return
-        reset = getattr(self._active_backend, "reset_session_state", None)
-        if callable(reset):
-            reset()
-
-    def ensure_opencode_supervisor(self) -> Optional[Any]:
-        """
-        Ensure OpenCode supervisor exists.
-
-        This method delegates to the backend factory for supervisor management,
-        keeping Engine protocol-agnostic.
-        """
-        factory = self._agent_backend_factory()
-        if factory is not None:
-            return factory._ensure_opencode_supervisor()
-        return None
-
-    def build_app_server_supervisor(
-        self, *, event_prefix: str, notification_handler: Optional[NotificationHandler]
-    ) -> Optional[Any]:
-        """
-        Build a Codex app server supervisor factory.
-
-        This method centralizes backend-specific supervisor creation, keeping
-        Engine protocol-agnostic.
-        """
-        from .wiring import build_app_server_supervisor_factory
-
-        factory_fn = build_app_server_supervisor_factory(
-            self._config, logger=self._logger
-        )
-        return factory_fn(event_prefix, notification_handler)
 
 
 def build_backend_orchestrator(

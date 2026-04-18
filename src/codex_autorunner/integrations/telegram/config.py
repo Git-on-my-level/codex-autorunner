@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import re
 import shlex
@@ -39,6 +40,8 @@ from .constants import (
     UPDATE_ID_PERSIST_INTERVAL_SECONDS,
 )
 from .state import APPROVAL_MODE_YOLO, normalize_approval_mode
+
+_TELEGRAM_CONFIG_LOGGER = logging.getLogger("codex_autorunner.telegram.config")
 
 DEFAULT_ALLOWED_UPDATES = ("message", "edited_message", "callback_query")
 DEFAULT_POLL_TIMEOUT_SECONDS = 30
@@ -620,6 +623,16 @@ class TelegramBotConfig:
             extra_env_vars=extra_env_vars,
             fallback=DEFAULT_APP_SERVER_COMMAND,
         )
+
+        _legacy_telegram_env_value = env.get(LEGACY_TELEGRAM_APP_SERVER_COMMAND_ENV)
+        if _legacy_telegram_env_value and _legacy_telegram_env_value.strip():
+            if not env.get(GLOBAL_APP_SERVER_COMMAND_ENV, "").strip():
+                _TELEGRAM_CONFIG_LOGGER.warning(
+                    "The %s env var is deprecated and will be removed in a "
+                    "future release. Use %s instead.",
+                    LEGACY_TELEGRAM_APP_SERVER_COMMAND_ENV,
+                    GLOBAL_APP_SERVER_COMMAND_ENV,
+                )
 
         app_server_raw_value = cfg.get("app_server")
         app_server_raw: dict[str, Any] = (

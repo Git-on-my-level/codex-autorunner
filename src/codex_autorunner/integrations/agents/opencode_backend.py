@@ -10,8 +10,8 @@ import httpx
 from ...agents.opencode.client import OpenCodeClient, OpenCodeProtocolError
 from ...agents.opencode.event_decoder import decode_sse_event
 from ...agents.opencode.logging import OpenCodeEventFormatter
+from ...agents.opencode.output_assembly import apply_prompt_response_fallback
 from ...agents.opencode.runtime import (
-    OpenCodeTurnOutput,
     build_turn_id,
     collect_opencode_output,
     extract_session_id,
@@ -48,6 +48,16 @@ _logger = logging.getLogger(__name__)
 
 
 class OpenCodeBackend(AgentBackend):
+    """Adapts OpenCode SSE/REST protocol to the AgentBackend interface.
+
+    Ownership (TICKET-1170):
+    - Owns protocol-specific session state: _session_id, _temporary_session_id.
+    - Owns turn-level state: _last_turn_id, _last_token_total, _message_count.
+    - Delegates process lifecycle and client caching to OpenCodeSupervisor.
+    - Delegates active-turn counting to OpenCodeSupervisor via
+      mark_turn_started/finished.
+    """
+
     def __init__(
         self,
         *,
@@ -460,20 +470,12 @@ class OpenCodeBackend(AgentBackend):
                 )
                 return
 
-            if prompt_response is not None and not output_result.text:
-                fallback = parse_message_response(prompt_response)
-                if fallback.text:
-                    output_result = OpenCodeTurnOutput(
-                        text=fallback.text,
-                        error=output_result.error,
-                        usage=output_result.usage,
-                    )
-                if fallback.error and not output_result.error:
-                    output_result = OpenCodeTurnOutput(
-                        text=output_result.text,
-                        error=fallback.error,
-                        usage=output_result.usage,
-                    )
+            if prompt_response is not None:
+                output_result = apply_prompt_response_fallback(
+                    output_result,
+                    prompt_response,
+                    prompt=message,
+                )
 
             canonical_usage = output_result.usage or latest_usage_snapshot
             if isinstance(canonical_usage, dict):

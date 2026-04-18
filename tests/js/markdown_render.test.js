@@ -12,7 +12,7 @@ try {
 }
 globalThis.HTMLElement = dom.window.HTMLElement;
 
-const { renderMarkdown } = await import("../../src/codex_autorunner/static/generated/messages.js");
+const { renderMarkdown } = await import("../../src/codex_autorunner/static/generated/markdown.js");
 
 test("renders relative markdown links", () => {
   const html = renderMarkdown("See [file](/car/hub/filebox/foo.zip)");

@@ -6,7 +6,6 @@ import pytest
 
 from codex_autorunner.core.config_contract import CONFIG_VERSION, ConfigError
 from codex_autorunner.core.config_validation import (
-    _is_loopback_host,
     _is_strict_int,
     _normalize_ticket_flow_approval_mode,
     _validate_agents_config,
@@ -21,6 +20,7 @@ from codex_autorunner.core.config_validation import (
     _validate_update_config,
     _validate_usage_config,
     _validate_version,
+    is_loopback_host,
 )
 
 
@@ -95,16 +95,16 @@ class TestIsLoopbackHost:
         ["localhost", "127.0.0.1", "::1"],
     )
     def test_loopback_hosts(self, host: str) -> None:
-        assert _is_loopback_host(host) is True
+        assert is_loopback_host(host) is True
 
     def test_unspecified_is_not_loopback(self) -> None:
-        assert _is_loopback_host("0.0.0.0") is False
+        assert is_loopback_host("0.0.0.0") is False
 
     def test_non_loopback_ip(self) -> None:
-        assert _is_loopback_host("192.168.1.1") is False
+        assert is_loopback_host("192.168.1.1") is False
 
     def test_non_ip_string(self) -> None:
-        assert _is_loopback_host("example.com") is False
+        assert is_loopback_host("example.com") is False
 
 
 class TestIsStrictInt:
@@ -1047,3 +1047,21 @@ class TestValidateRepoConfig:
         cfg["static_assets"] = {"max_cache_entries": -1}
         with pytest.raises(ConfigError, match="must be >= 0"):
             _validate_repo_config(cfg, root=tmp_path)
+
+
+class TestValidatorOwnsRejectionNotParser:
+    """
+    These tests verify that config_validation.py is the authority for
+    rejecting invalid authored config values.  The parser layer should
+    never see these values in the canonical load path.
+    """
+
+    def test_app_server_output_policy_rejected_by_validator(self) -> None:
+        with pytest.raises(ConfigError, match="must be one of"):
+            _validate_app_server_config(
+                {"app_server": {"output": {"policy": "garbage"}}}
+            )
+
+    def test_opencode_server_scope_rejected_by_validator(self) -> None:
+        with pytest.raises(ConfigError, match="must be 'workspace' or 'global'"):
+            _validate_opencode_config({"opencode": {"server_scope": "everywhere"}})

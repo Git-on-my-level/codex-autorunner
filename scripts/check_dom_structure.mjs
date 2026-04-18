@@ -90,6 +90,42 @@ function main() {
     );
   }
 
+  // 5) Shell containers: hub-shell, pma-shell, repo-shell must exist.
+  const shellIds = ["hub-shell", "pma-shell", "repo-shell"];
+  for (const shellId of shellIds) {
+    if (!html.includes(`id="${shellId}"`)) {
+      fail(`Missing shell container #${shellId}`);
+    }
+  }
+
+  // 6) Hub and PMA mode toggle buttons must have data-hub-mode attributes.
+  const modeButtons = html.match(/data-hub-mode="[^"]*"/g) || [];
+  const modeValues = modeButtons.map((m) => m.match(/data-hub-mode="([^"]*)"/)[1]);
+  const uniqueModes = new Set(modeValues);
+  if (!uniqueModes.has("manual") || !uniqueModes.has("pma")) {
+    fail(
+      `Expected data-hub-mode="manual" and data-hub-mode="pma", found: ${[...uniqueModes].join(", ")}`
+    );
+  }
+  if (modeButtons.length < 4) {
+    fail(
+      `Expected at least 4 mode toggle buttons (2 in hub, 2 in PMA), found ${modeButtons.length}`
+    );
+  }
+
+  // 7) Boot loader element must exist for dismissBootLoader().
+  if (!html.includes('id="car-boot-loader"')) {
+    fail('Missing #car-boot-loader element needed by app.ts dismissBootLoader()');
+  }
+
+  // 8) Bootstrap and loader script tags must reference generated/ directory.
+  if (!html.includes('src="static/generated/bootstrap.js')) {
+    fail('Missing bootstrap script tag referencing static/generated/bootstrap.js');
+  }
+  if (!html.includes('src="static/generated/loader.js')) {
+    fail('Missing loader script tag referencing static/generated/loader.js');
+  }
+
   if (process.exitCode) {
     process.exit(process.exitCode);
   } else {

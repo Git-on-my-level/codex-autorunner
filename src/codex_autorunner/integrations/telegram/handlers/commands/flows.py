@@ -711,21 +711,17 @@ class FlowCommands(TelegramCommandSupportMixin):
         notice = None
         flow_service = self._ticket_flow_orchestration_service(repo_root)
         if action == "resume":
-            store = _load_flow_store(repo_root)
-            try:
-                store.initialize()
-                run_id, error = self._resolve_run_id_input(store, run_id_raw)
-                record = store.get_flow_run(run_id) if run_id else None
-                if run_id_raw and error:
-                    record = None
-                if error is None and record is None:
-                    record = select_ticket_flow_run(store, selection="paused")
-                if error is None and record is None:
-                    error = "No paused ticket flow run found."
-                if error is None and record.status != FlowRunStatus.PAUSED:
-                    error = f"Run {record.id} is {record.status.value}, not paused."
-            finally:
-                store.close()
+            record, error = self._resolve_lifecycle_run(
+                repo_root,
+                run_id_raw,
+                selection="paused",
+                not_found_error="No paused ticket flow run found.",
+                guard=lambda r: (
+                    f"Run {r.id} is {r.status.value}, not paused."
+                    if r.status != FlowRunStatus.PAUSED
+                    else None
+                ),
+            )
             if error is None:
                 try:
                     await _answer_once("Working...")
@@ -735,51 +731,38 @@ class FlowCommands(TelegramCommandSupportMixin):
                 else:
                     notice = "Resumed."
         elif action == "stop":
-            store = _load_flow_store(repo_root)
-            try:
-                store.initialize()
-                run_id, error = self._resolve_run_id_input(store, run_id_raw)
-                record = store.get_flow_run(run_id) if run_id else None
-                if run_id_raw and error:
-                    record = None
-                if error is None and record is None:
-                    record = select_ticket_flow_run(store, selection="active")
-                if error is None and record is None:
-                    error = "No active ticket flow run found."
-                if error is None and record.status.is_terminal():
-                    error = f"Run {record.id} is already {record.status.value}."
-            finally:
-                store.close()
+            record, error = self._resolve_lifecycle_run(
+                repo_root,
+                run_id_raw,
+                selection="active",
+                not_found_error="No active ticket flow run found.",
+                guard=lambda r: (
+                    f"Run {r.id} is already {r.status.value}."
+                    if r.status.is_terminal()
+                    else None
+                ),
+            )
             if error is None:
                 await _answer_once("Working...")
                 await flow_service.stop_flow_run(record.id)
                 notice = "Stopped."
         elif action == "recover":
-            store = _load_flow_store(repo_root)
-            try:
-                store.initialize()
-                run_id, error = self._resolve_run_id_input(store, run_id_raw)
-                record = store.get_flow_run(run_id) if run_id else None
-                if run_id_raw and error:
-                    record = None
-                if error is None and record is None:
-                    record = select_ticket_flow_run(store, selection="active")
-                if error is None and record is None:
-                    error = "No active ticket flow run found."
-                if error is None:
-                    await _answer_once("Working...")
-                    record, updated, locked = await self._run_blocking_flow_call(
-                        flow_service.reconcile_flow_run,
-                        record.id,
-                    )
-                    if locked:
-                        error = (
-                            f"Run {record.run_id} is locked for reconcile; try again."
-                        )
-                    else:
-                        notice = "Recovered." if updated else "No changes needed."
-            finally:
-                store.close()
+            record, error = self._resolve_lifecycle_run(
+                repo_root,
+                run_id_raw,
+                selection="active",
+                not_found_error="No active ticket flow run found.",
+            )
+            if error is None:
+                await _answer_once("Working...")
+                record, updated, locked = await self._run_blocking_flow_call(
+                    flow_service.reconcile_flow_run,
+                    record.id,
+                )
+                if locked:
+                    error = f"Run {record.run_id} is locked for reconcile; try again."
+                else:
+                    notice = "Recovered." if updated else "No changes needed."
         elif action in {
             "archive",
             "archive_confirm",
@@ -881,6 +864,34 @@ class FlowCommands(TelegramCommandSupportMixin):
         if len(matches) > 1:
             return None, "Run ID prefix is ambiguous. Use the full run_id."
         return None, "Invalid run_id."
+
+    def _resolve_lifecycle_run(
+        self,
+        repo_root: Path,
+        run_id_raw: Optional[str],
+        *,
+        selection: str,
+        not_found_error: str = "No matching ticket flow run found.",
+        guard: Optional[Callable[[object], Optional[str]]] = None,
+    ) -> tuple[Optional[object], Optional[str]]:
+        store = _load_flow_store(repo_root)
+        try:
+            store.initialize()
+            run_id, error = self._resolve_run_id_input(store, run_id_raw)
+            record = store.get_flow_run(run_id) if run_id else None
+            if run_id_raw and error:
+                return None, error
+            if error is None and record is None:
+                record = select_ticket_flow_run(store, selection=selection)
+            if error is None and record is None:
+                return None, not_found_error
+            if guard is not None:
+                guard_error = guard(record)
+                if guard_error is not None:
+                    return None, guard_error
+        finally:
+            store.close()
+        return record, None
 
     def _first_non_flag(self, argv: list[str]) -> Optional[str]:
         for part in argv:
@@ -1775,41 +1786,27 @@ You are the first ticket in a new ticket_flow run.
     async def _handle_flow_resume(
         self, message: TelegramMessage, repo_root: Path, argv: list[str]
     ) -> None:
-        store = _load_flow_store(repo_root)
-        try:
-            store.initialize()
-            run_id_raw = self._first_non_flag(argv)
-            run_id, error = self._resolve_run_id_input(store, run_id_raw)
-            record = store.get_flow_run(run_id) if run_id else None
-            if run_id_raw and error:
-                await self._send_message(
-                    message.chat_id,
-                    error,
-                    thread_id=message.thread_id,
-                    reply_to=message.message_id,
-                )
-                return
-            if record is None:
-                record = select_ticket_flow_run(store, selection="paused")
-            if record is None:
-                await self._send_message(
-                    message.chat_id,
-                    "No paused ticket flow run found.",
-                    thread_id=message.thread_id,
-                    reply_to=message.message_id,
-                )
-                return
-            if record.status != FlowRunStatus.PAUSED:
-                await self._send_message(
-                    message.chat_id,
-                    f"Run {_code(record.id)} is {record.status.value}, not paused.",
-                    thread_id=message.thread_id,
-                    reply_to=message.message_id,
-                    parse_mode="Markdown",
-                )
-                return
-        finally:
-            store.close()
+        run_id_raw = self._first_non_flag(argv)
+        record, error = self._resolve_lifecycle_run(
+            repo_root,
+            run_id_raw,
+            selection="paused",
+            not_found_error="No paused ticket flow run found.",
+            guard=lambda r: (
+                f"Run {_code(r.id)} is {r.status.value}, not paused."
+                if r.status != FlowRunStatus.PAUSED
+                else None
+            ),
+        )
+        if error:
+            await self._send_message(
+                message.chat_id,
+                error,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+                parse_mode="Markdown" if "`" in error else None,
+            )
+            return
 
         force = self._has_flag(argv, "--force")
         run_mirror = self._flow_run_mirror(repo_root)
@@ -1859,41 +1856,27 @@ You are the first ticket in a new ticket_flow run.
     async def _handle_flow_stop(
         self, message: TelegramMessage, repo_root: Path, argv: list[str]
     ) -> None:
-        store = _load_flow_store(repo_root)
-        try:
-            store.initialize()
-            run_id_raw = self._first_non_flag(argv)
-            run_id, error = self._resolve_run_id_input(store, run_id_raw)
-            record = store.get_flow_run(run_id) if run_id else None
-            if run_id_raw and error:
-                await self._send_message(
-                    message.chat_id,
-                    error,
-                    thread_id=message.thread_id,
-                    reply_to=message.message_id,
-                )
-                return
-            if record is None:
-                record = select_ticket_flow_run(store, selection="active")
-            if record is None:
-                await self._send_message(
-                    message.chat_id,
-                    "No active ticket flow run found.",
-                    thread_id=message.thread_id,
-                    reply_to=message.message_id,
-                )
-                return
-            if record.status.is_terminal():
-                await self._send_message(
-                    message.chat_id,
-                    f"Run {_code(record.id)} is already {record.status.value}.",
-                    thread_id=message.thread_id,
-                    reply_to=message.message_id,
-                    parse_mode="Markdown",
-                )
-                return
-        finally:
-            store.close()
+        run_id_raw = self._first_non_flag(argv)
+        record, error = self._resolve_lifecycle_run(
+            repo_root,
+            run_id_raw,
+            selection="active",
+            not_found_error="No active ticket flow run found.",
+            guard=lambda r: (
+                f"Run {_code(r.id)} is already {r.status.value}."
+                if r.status.is_terminal()
+                else None
+            ),
+        )
+        if error:
+            await self._send_message(
+                message.chat_id,
+                error,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+                parse_mode="Markdown" if "`" in error else None,
+            )
+            return
 
         run_mirror = self._flow_run_mirror(repo_root)
         run_mirror.mirror_inbound(

@@ -1,0 +1,11 @@
+# Code scanning configuration for CodeQL (see init step `config-file` in codeql.yml).
+#
+# Archive HTTP routes join user-relative segments only after `normalize_archive_rel_path`
+# rejects traversal (`..`), absolute paths, and ensures `relative_to` the resolved archive
+# root. CodeQL's py/path-injection query does not model that sanitizer, so it flags every
+# subsequent Path use as uncontrolled input. Those findings are false positives for this
+# surface; we exclude only these files from analysis rather than disabling the query repo-wide.
+name: codex-autorunner CodeQL
+paths-ignore:
+  - src/codex_autorunner/surfaces/web/routes/archive.py
+  - src/codex_autorunner/surfaces/web/routes/archive_helpers.py

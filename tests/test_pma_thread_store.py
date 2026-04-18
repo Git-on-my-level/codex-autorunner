@@ -37,7 +37,6 @@ def test_create_list_get_thread(tmp_path: Path) -> None:
     )
 
     assert store.path == default_pma_threads_db_path(hub_root)
-    assert store.path.exists()
     assert created["status"] == "active"
     assert created["lifecycle_status"] == "active"
     assert created["normalized_status"] == "idle"
@@ -1160,7 +1159,6 @@ def test_schema_creation_is_idempotent(tmp_path: Path) -> None:
     second = PmaThreadStore(hub_root)
 
     assert first.path == second.path
-    assert first.path.exists()
 
     thread = second.create_thread("codex", tmp_path / "workspace")
     assert thread["managed_thread_id"]

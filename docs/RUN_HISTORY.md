@@ -12,6 +12,16 @@ Use `FlowStore` at `.codex-autorunner/flows.db` as the single source of truth fo
 
 Legacy numeric run directories are compatibility-only and must not be used for new run history features.
 
+### Archived Run Artifacts Are Not Live History
+
+Archived run artifacts under `.codex-autorunner/archive/runs/**` are
+**reviewable retained output**, not live source of truth. They exist for
+operator review and audit after a run completes. Do not query archive
+directories to discover which runs exist; always use FlowStore.
+
+Run archives are pruned by age/count/byte retention policies (see
+[STATE_ROOTS.md](STATE_ROOTS.md) and [state-cleanup.md](ops/state-cleanup.md)).
+
 ## What Runs Exist
 
 Use FlowStore run records:
@@ -60,3 +70,33 @@ When flow-chat mirroring is enabled, `flow_artifacts` may include:
 
 - Legacy numeric run logs (`.codex-autorunner/runs/<int>/run.log`) are deprecated and not canonical for new runs.
 - Legacy `run_index` storage/APIs have been removed from runtime code paths.
+
+## Usage Attribution Confidence
+
+Hub usage summaries attribute token events to repos using a two-tier matcher:
+
+1. **Exact path match** (high confidence): the event's `cwd` is the repo root or a
+   subdirectory of it.
+2. **Heuristic name match** (low confidence): the event's `cwd` contains a path
+   component matching `repo-id--*`, which is the conventional worktree naming
+   pattern. This match is name-based and may misattribute usage when
+   non-worktree directories follow the same convention.
+
+Both matched and unmatched usage is always visible in hub summaries. The
+`source_confidence` field in each `UsageSummary` distinguishes the two tiers:
+
+- `confidence: "high"` — all events matched by exact path.
+- `confidence: "low"` — all events matched by heuristic only.
+- `confidence: "mixed"` — a combination of exact and heuristic matches.
+- `confidence: "none"` — no events.
+
+The `heuristic_events` count in the confidence dict reports how many events
+were attributed via heuristic matching. Operators can use this to assess
+attribution quality and decide whether stronger bindings are needed.
+
+### Unmatched Usage
+
+Events that match no known repo remain in the `unmatched` bucket rather than
+being silently forced into a repo attribution. This is a contract: usage
+reports must never silently upgrade an unmatched or heuristic-only event into
+an authoritative attribution.

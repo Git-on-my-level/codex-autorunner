@@ -27,6 +27,14 @@ class AppServerHandle:
 
 
 class WorkspaceAppServerSupervisor:
+    """Manages per-workspace Codex app-server subprocess handles.
+
+    Ownership (TICKET-1170):
+    - Owns process lifecycle: spawning, startup, idle eviction, close_all.
+    - Owns workspace-scoped client caching (AppServerHandle per workspace_id).
+    - Does NOT own session/turn state (that lives in CodexAppServerBackend).
+    """
+
     def __init__(
         self,
         command: Sequence[str],

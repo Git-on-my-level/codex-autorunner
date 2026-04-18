@@ -23,16 +23,24 @@ import {
   refreshAgentControls,
 } from "./agentControls.js";
 import { createFileBoxWidget, type FileBoxListing } from "./fileboxUi.js";
-import { handleStreamEvent, type StreamEventHandler } from "./streamUtils.js";
+import {
+  readEventStream,
+  handleStreamEvent,
+  type StreamEventHandler,
+} from "./streamUtils.js";
+import { newClientTurnId as newFileChatTurnId } from "./fileChat.js";
 
 import { initNotificationBell } from "./notificationBell.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
 import {
-  loadPendingTurn as loadCanonicalPendingTurn,
-  savePendingTurn as saveCanonicalPendingTurn,
-  clearPendingTurn as clearCanonicalPendingTurn,
+  createTurnEventsController,
   type PendingTurn,
+} from "./sharedTurnLifecycle.js";
+import {
+  loadPendingTurn,
+  savePendingTurn,
+  clearPendingTurn,
 } from "./turnResume.js";
 
 const pmaStyling: ChatStyling = {
@@ -100,7 +108,6 @@ let currentController: AbortController | null = null;
 let currentOutboxBaseline: Set<string> | null = null;
 let isUnloading = false;
 let unloadHandlerInstalled = false;
-let currentEventsController: AbortController | null = null;
 const PMA_PENDING_TURN_KEY = "car.pma.pendingTurn";
 const PMA_VIEW_KEY = "car.pma.view";
 const DEFAULT_PMA_LANE_ID = "pma:default";
@@ -112,18 +119,19 @@ let isSavingDoc = false;
 let activeContextAutoPrune: PMADocsResponse["active_context_auto_prune"] = null;
 let pendingDeliverySummary: PMADeliverySummary | null = null;
 let pmaRefreshCleanup: (() => void) | null = null;
+const turnEventsCtrl = createTurnEventsController();
 type PMAView = "chat" | "memory";
 
 function loadPMAPendingTurn(): PendingTurn | null {
-  return loadCanonicalPendingTurn(PMA_PENDING_TURN_KEY);
+  return loadPendingTurn(PMA_PENDING_TURN_KEY);
 }
 
 function savePMAPendingTurn(turn: PendingTurn): void {
-  saveCanonicalPendingTurn(PMA_PENDING_TURN_KEY, turn);
+  savePendingTurn(PMA_PENDING_TURN_KEY, turn);
 }
 
 function clearPMAPendingTurn(): void {
-  clearCanonicalPendingTurn(PMA_PENDING_TURN_KEY);
+  clearPendingTurn(PMA_PENDING_TURN_KEY);
 }
 
 type PMADeliveryStatus =
@@ -138,19 +146,6 @@ type PMADeliverySummary = {
   statusText: string;
   messageTag: string;
 };
-
-function newClientTurnId(): string {
-  // crypto.randomUUID is not guaranteed everywhere; keep a safe fallback.
-  try {
-     
-    if (typeof crypto !== "undefined" && "randomUUID" in crypto && typeof crypto.randomUUID === "function") {
-      return crypto.randomUUID();
-    }
-  } catch {
-    // ignore
-  }
-  return `pma-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
 
 function loadPMAView(): PMAView {
   const raw = localStorage.getItem(PMA_VIEW_KEY);
@@ -216,19 +211,41 @@ async function initFileBoxUI(): Promise<void> {
   await fileBoxCtrl.refresh();
 }
 
-function stopTurnEventsStream(): void {
-  if (currentEventsController) {
-    try {
-      currentEventsController.abort();
-    } catch {
-      // ignore
-    }
-    currentEventsController = null;
-  }
-}
+async function startTurnEventsStream(meta: {
+  agent: string;
+  threadId: string;
+  turnId: string;
+}): Promise<void> {
+  turnEventsCtrl.abort();
+  if (!meta.threadId || !meta.turnId) return;
+  if ((meta.agent || "codex").trim().toLowerCase() === "opencode") return;
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
+  const ctrl = new AbortController();
+  turnEventsCtrl.current = ctrl;
+
+  const token = getAuthToken();
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const url = resolvePath(
+    `/hub/pma/turns/${encodeURIComponent(meta.turnId)}/events?thread_id=${encodeURIComponent(
+      meta.threadId
+    )}&agent=${encodeURIComponent(meta.agent || "codex")}`
+  );
+
+  try {
+    const res = await fetch(url, {
+      method: "GET",
+      headers,
+      signal: ctrl.signal,
+    });
+    if (!res.ok) return;
+    const contentType = res.headers.get("content-type") || "";
+    if (!contentType.includes("text/event-stream")) return;
+    await readPMAStream(res, false);
+  } catch {
+    // ignore (abort / network)
+  }
 }
 
 async function loadPMADocs(): Promise<void> {
@@ -423,41 +440,8 @@ function resetActiveContext(): void {
   });
 }
 
-async function startTurnEventsStream(meta: {
-  agent: string;
-  threadId: string;
-  turnId: string;
-}): Promise<void> {
-  stopTurnEventsStream();
-  if (!meta.threadId || !meta.turnId) return;
-  if ((meta.agent || "codex").trim().toLowerCase() === "opencode") return;
-
-  const ctrl = new AbortController();
-  currentEventsController = ctrl;
-
-  const token = getAuthToken();
-  const headers: Record<string, string> = {};
-  if (token) headers.Authorization = `Bearer ${token}`;
-
-  const url = resolvePath(
-    `/hub/pma/turns/${encodeURIComponent(meta.turnId)}/events?thread_id=${encodeURIComponent(
-      meta.threadId
-    )}&agent=${encodeURIComponent(meta.agent || "codex")}`
-  );
-
-  try {
-    const res = await fetch(url, {
-      method: "GET",
-      headers,
-      signal: ctrl.signal,
-    });
-    if (!res.ok) return;
-    const contentType = res.headers.get("content-type") || "";
-    if (!contentType.includes("text/event-stream")) return;
-    await readPMAStream(res, false);
-  } catch {
-    // ignore (abort / network)
-  }
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 async function pollForTurnMeta(
@@ -470,7 +454,7 @@ async function pollForTurnMeta(
 
   while (Date.now() - started < timeoutMs) {
     if (!pmaChat || pmaChat.state.status !== "running") return;
-    if (currentEventsController) return;
+    if (turnEventsCtrl.current) return;
     if (options.signal?.aborted) return;
 
     try {
@@ -539,8 +523,6 @@ function getElements() {
     docsSnapshotBtn: document.getElementById("pma-docs-snapshot") as HTMLButtonElement | null,
   };
 }
-
-const decoder = new TextDecoder();
 
 function escapeMarkdownLinkText(text: string): string {
   // Keep this ES2019-compatible (no String.prototype.replaceAll).
@@ -640,7 +622,7 @@ async function finalizePMAResponse(
   } finally {
     currentOutboxBaseline = null;
     clearPMAPendingTurn();
-    stopTurnEventsStream();
+    turnEventsCtrl.abort();
   }
 
   const trimmed = (responseText || "").trim();
@@ -846,7 +828,7 @@ async function sendMessage(): Promise<void> {
   }
 
   // Ensure prior turn event streams are cleared so we don't render stale actions.
-  stopTurnEventsStream();
+  turnEventsCtrl.abort();
   pendingDeliverySummary = null;
 
   elements.input.value = "";
@@ -856,7 +838,7 @@ async function sendMessage(): Promise<void> {
   const profile = elements.profileSelect?.value || getSelectedProfile(agent);
   const model = elements.modelSelect?.value || getSelectedModel(agent);
   const reasoning = elements.reasoningSelect?.value || getSelectedReasoning(agent);
-  const clientTurnId = newClientTurnId();
+  const clientTurnId = newFileChatTurnId("pma");
   savePMAPendingTurn({ clientTurnId, message, startedAtMs: Date.now() });
 
   currentController = new AbortController();
@@ -955,7 +937,7 @@ async function sendMessage(): Promise<void> {
     pmaChat.render();
     pmaChat.renderMessages();
     clearPMAPendingTurn();
-    stopTurnEventsStream();
+    turnEventsCtrl.abort();
     pendingDeliverySummary = null;
   } finally {
     currentController = null;
@@ -964,71 +946,11 @@ async function sendMessage(): Promise<void> {
 }
 
 async function readPMAStream(res: Response, finalizeOnClose = false): Promise<void> {
-  if (!res.body) throw new Error("Streaming not supported in this browser");
-
-  const reader = res.body.getReader();
-  let buffer = "";
-  let escapedNewlines = false;
-
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-
-    const decoded = decoder.decode(value, { stream: true });
-
-    if (!escapedNewlines) {
-      const combined = buffer + decoded;
-      if (!combined.includes("\n") && combined.includes("\\n")) {
-        escapedNewlines = true;
-        buffer = buffer.replace(/\\n(?=event:|data:|\\n)/g, "\n");
-      }
-    }
-
-    buffer += escapedNewlines
-      ? decoded.replace(/\\n(?=event:|data:|\\n)/g, "\n")
-      : decoded;
-
-    const chunks = buffer.split("\n\n");
-    buffer = chunks.pop() || "";
-
-    for (const chunk of chunks) {
-      if (!chunk.trim()) continue;
-
-      let event = "message";
-      const dataLines: string[] = [];
-
-      chunk.split("\n").forEach((line) => {
-        if (line.startsWith("event:")) {
-          event = line.slice(6).trim();
-        } else if (line.startsWith("data:")) {
-          dataLines.push(line.slice(5).trimStart());
-        } else if (line.trim()) {
-          dataLines.push(line);
-        }
-      });
-
-      if (dataLines.length === 0) continue;
-      const data = dataLines.join("\n");
-      handleStreamEvent(event, data, pmaStreamHandlers);
-    }
-  }
-
-  if (buffer.trim()) {
-    let event = "message";
-    const dataLines: string[] = [];
-    buffer.split("\n").forEach((line) => {
-      if (line.startsWith("event:")) {
-        event = line.slice(6).trim();
-      } else if (line.startsWith("data:")) {
-        dataLines.push(line.slice(5).trimStart());
-      } else if (line.trim()) {
-        dataLines.push(line);
-      }
-    });
-    if (dataLines.length) {
-      handleStreamEvent(event, dataLines.join("\n"), pmaStreamHandlers);
-    }
-  }
+  await readEventStream(
+    res,
+    (event, data) => handleStreamEvent(event, data, pmaStreamHandlers),
+    { handleEscapedNewlines: true }
+  );
 
   if (finalizeOnClose && pmaChat && pmaChat.state.status === "running") {
     const responseText = pmaChat.state.streamText || "";
@@ -1140,7 +1062,7 @@ async function resumePendingTurn(): Promise<void> {
       if (
         threadId &&
         turnId &&
-        !currentEventsController &&
+        !turnEventsCtrl.current &&
         agent.trim().toLowerCase() !== "opencode"
       ) {
         void startTurnEventsStream({ agent, threadId, turnId });
@@ -1163,7 +1085,7 @@ async function resumePendingTurn(): Promise<void> {
         pmaChat.render();
         pmaChat.renderMessages();
         clearPMAPendingTurn();
-        stopTurnEventsStream();
+        turnEventsCtrl.abort();
         return;
       }
       if (status === "interrupted") {
@@ -1174,7 +1096,7 @@ async function resumePendingTurn(): Promise<void> {
         pmaChat.render();
         pmaChat.renderMessages();
         clearPMAPendingTurn();
-        stopTurnEventsStream();
+        turnEventsCtrl.abort();
         return;
       }
 
@@ -1258,7 +1180,7 @@ async function cancelRequest(options: CancelRequestOptions = {}): Promise<void> 
     currentController = null;
   }
   pendingDeliverySummary = null;
-  stopTurnEventsStream();
+  turnEventsCtrl.abort();
   if (interruptServer || stopLane) {
     await interruptActiveTurn({ stopLane });
   }
@@ -1277,7 +1199,7 @@ async function cancelRequest(options: CancelRequestOptions = {}): Promise<void> 
 function resetThread(): void {
   clearPMAPendingTurn();
   pendingDeliverySummary = null;
-  stopTurnEventsStream();
+  turnEventsCtrl.abort();
   if (pmaChat) {
     pmaChat.state.messages = [];
     pmaChat.state.events = [];

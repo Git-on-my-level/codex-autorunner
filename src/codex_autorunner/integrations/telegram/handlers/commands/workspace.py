@@ -101,6 +101,10 @@ from .agent_model_utils import (
     _send_agent_profile_picker as _send_telegram_agent_profile_picker,
 )
 from .shared import TelegramCommandSupportMixin
+from .workspace_binding import WorkspaceBindingMixin
+from .workspace_resume import WorkspaceResumeMixin
+from .workspace_session_commands import WorkspaceSessionCommandsMixin
+from .workspace_status import WorkspaceStatusMixin
 
 if TYPE_CHECKING:
     from ...state import TelegramTopicRecord
@@ -172,7 +176,13 @@ def _telegram_status_base_lines(
     return lines
 
 
-class WorkspaceCommands(TelegramCommandSupportMixin):
+class WorkspaceCommands(
+    TelegramCommandSupportMixin,
+    WorkspaceBindingMixin,
+    WorkspaceSessionCommandsMixin,
+    WorkspaceResumeMixin,
+    WorkspaceStatusMixin,
+):
     def _process_monitor_root(
         self,
         record: Optional["TelegramTopicRecord"],
@@ -889,7 +899,6 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
         hub_client = getattr(self, "_hub_client", None)
         if hub_client is not None:
             try:
-                import asyncio
                 from concurrent.futures import ThreadPoolExecutor
 
                 from .....core.hub_control_plane import AgentWorkspaceListRequest

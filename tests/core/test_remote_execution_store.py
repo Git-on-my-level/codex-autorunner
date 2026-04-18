@@ -464,6 +464,13 @@ class _BlockingGetThreadTargetClient(_FakeHubClient):
         return self.thread_response
 
 
+class _SlowSetExecutionBackendIdClient(_FakeHubClient):
+    async def set_execution_backend_id(self, request):
+        self.calls.append(("set_execution_backend_id", request))
+        await asyncio.sleep(0.02)
+        return None
+
+
 def test_remote_execution_store_translates_transport_failures_to_hub_unavailable() -> (
     None
 ):
@@ -562,3 +569,19 @@ def test_remote_execution_store_bounds_background_timeout_fallout() -> None:
     assert exc_info.value.code == "hub_unavailable"
     assert exc_info.value.details["operation"] == "get_thread_target"
     assert exc_info.value.details["max_workers"] == 1
+
+
+def test_remote_execution_store_uses_extended_timeout_for_backend_id_updates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "codex_autorunner.core.hub_control_plane.remote_execution_store."
+        "_EXECUTION_BACKEND_ID_TIMEOUT_SECONDS",
+        0.05,
+    )
+    store = RemoteThreadExecutionStore(
+        _SlowSetExecutionBackendIdClient(),
+        timeout_seconds=0.01,
+    )
+
+    store.set_execution_backend_id("exec-1", "turn-2")

@@ -19,6 +19,8 @@ REPO_RUNTIME_PROJECTION_NAMESPACE = "repo_runtime_v1"
 HUB_LISTING_PROJECTION_NAMESPACE = "hub_listing_v1"
 CHAT_BINDING_PROJECTION_NAMESPACE = "chat_binding_counts_v1"
 CHAT_BINDING_PROJECTION_KEY = "active_by_source"
+HUB_SNAPSHOT_PROJECTION_NAMESPACE = "hub_snapshot_v1"
+REPO_CAPABILITY_HINT_PROJECTION_NAMESPACE = "repo_capability_hints_v1"
 
 
 def _stable_json(value: Any) -> str:

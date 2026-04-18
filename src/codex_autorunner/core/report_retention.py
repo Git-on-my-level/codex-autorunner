@@ -14,6 +14,8 @@ class PruneSummary:
     pruned: int
     bytes_before: int
     bytes_after: int
+    pruned_paths: tuple[str, ...] = ()
+    kept_paths: tuple[str, ...] = ()
 
 
 def prune_report_directory(
@@ -82,8 +84,10 @@ def prune_report_directory(
                 bytes_after -= size
 
     pruned_count = 0
+    pruned_path_list: list[str] = []
     if dry_run:
         pruned_count = len(prune_history)
+        pruned_path_list = sorted(str(p) for p, _ in prune_history)
         final_kept = len(kept_paths)
         final_bytes = bytes_after
     else:
@@ -91,19 +95,26 @@ def prune_report_directory(
             try:
                 path.unlink(missing_ok=True)
                 pruned_count += 1
+                pruned_path_list.append(str(path))
             except OSError:
                 continue
 
         final_kept = 0
         final_bytes = 0
+        kept_path_list: list[str] = []
         for path, size in sized:
             if path.exists():
                 final_kept += 1
                 final_bytes += size
+                kept_path_list.append(str(path))
 
     return PruneSummary(
         kept=final_kept,
         pruned=pruned_count,
         bytes_before=bytes_before,
         bytes_after=final_bytes,
+        pruned_paths=tuple(pruned_path_list),
+        kept_paths=(
+            tuple(kept_path_list) if not dry_run else tuple(str(p) for p in kept_paths)
+        ),
     )

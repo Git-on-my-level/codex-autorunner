@@ -27,6 +27,27 @@ _FLOW_STATUS_ICONS = {
 _ACTIVE_FLOW_STATUSES = {"running", "pending", "paused", "stopping"}
 
 
+def extract_current_step(record: FlowRunRecord) -> Optional[str]:
+    current_step = getattr(record, "current_step", None)
+    if isinstance(current_step, str) and current_step.strip():
+        return current_step.strip()
+    if isinstance(current_step, int):
+        return str(current_step)
+
+    state = record.state if isinstance(record.state, dict) else {}
+    ticket_engine = state.get("ticket_engine") if isinstance(state, dict) else {}
+    if not isinstance(ticket_engine, dict):
+        return None
+
+    for key in ("total_turns", "current_step", "step"):
+        value = ticket_engine.get(key)
+        if isinstance(value, int):
+            return str(value)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
 def build_ticket_flow_display(
     *,
     status: Optional[str],
@@ -120,15 +141,13 @@ def build_ticket_flow_summary(
         run_id=record.id if record else None,
     )
 
-    state = record.state if record and isinstance(record.state, dict) else {}
-    engine = state.get("ticket_engine") if isinstance(state, dict) else {}
-    engine = engine if isinstance(engine, dict) else {}
-    current_step = engine.get("total_turns")
+    current_step = extract_current_step(record) if record else None
 
     summary: dict[str, Any] = {
         "status": display["status"],
         "status_label": display["status_label"],
         "status_icon": display["status_icon"],
+        "is_active": display["is_active"],
         "run_id": display["run_id"],
         "done_count": display["done_count"],
         "total_count": display["total_count"],
@@ -144,3 +163,11 @@ def build_ticket_flow_summary(
             format_failure_summary(failure_payload) if failure_payload else None
         )
     return summary
+
+
+__all__ = [
+    "build_ticket_flow_display",
+    "build_ticket_flow_summary",
+    "extract_current_step",
+    "format_ticket_flow_summary_lines",
+]

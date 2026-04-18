@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from codex_autorunner.surfaces.web.routes.pma_routes.tail_stream import (
+from codex_autorunner.surfaces.web.routes.pma_routes.managed_thread_tail_serializers import (
     _record_serialized_tail_event,
 )
 

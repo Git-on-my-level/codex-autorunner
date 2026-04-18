@@ -288,6 +288,20 @@ class TestPmaBaseKeyHelper:
         assert pma_base_key("zeroclaw") == "pma.zeroclaw"
         assert pma_base_key("codex-alt") == "pma.codex-alt"
 
+    def test_profile_suffix_appended_to_codex_family(self) -> None:
+        assert pma_base_key("codex", "m4-pma") == "pma.profile.m4-pma"
+        assert pma_base_key("", "team-a") == "pma.profile.team-a"
+
+    def test_profile_suffix_appended_to_opencode(self) -> None:
+        assert pma_base_key("opencode", "m4-pma") == "pma.opencode.profile.m4-pma"
+
+    def test_profile_suffix_appended_to_other_agent(self) -> None:
+        assert pma_base_key("hermes", "m4-pma") == "pma.hermes.profile.m4-pma"
+
+    def test_none_profile_omits_suffix(self) -> None:
+        assert pma_base_key("hermes", None) == "pma.hermes"
+        assert pma_base_key("codex", None) == PMA_KEY
+
 
 class TestPmaTopicScopedKeyHelper:
     def test_builds_topic_scoped_key(self) -> None:
@@ -468,6 +482,18 @@ class TestPmaPrefixForAgent:
         assert pma_prefix_for_agent("zeroclaw") == "pma.zeroclaw."
         assert pma_prefix_for_agent("codex-alt") == "pma.codex-alt."
 
+    def test_profile_scoped_prefix_for_opencode(self) -> None:
+        assert (
+            pma_prefix_for_agent("opencode", "m4-pma") == "pma.opencode.profile.m4-pma."
+        )
+
+    def test_profile_scoped_prefix_for_codex_family(self) -> None:
+        assert pma_prefix_for_agent("codex", "team-a") == "pma.profile.team-a."
+        assert pma_prefix_for_agent(None, "team-a") == "pma.profile.team-a."
+
+    def test_profile_scoped_prefix_for_other_agent(self) -> None:
+        assert pma_prefix_for_agent("hermes", "m4-pma") == "pma.hermes.profile.m4-pma."
+
 
 class TestPmaPrefixesForReset:
     def test_returns_opencode_prefix_for_opencode_agent(self) -> None:
@@ -486,6 +512,24 @@ class TestPmaPrefixesForReset:
         for agent in (None, "all", ""):
             result = pma_prefixes_for_reset(agent)
             assert result == [PMA_PREFIX]
+
+    def test_profile_scoped_returns_single_prefix(self) -> None:
+        assert pma_prefixes_for_reset("hermes", "m4-pma") == [
+            "pma.hermes.profile.m4-pma."
+        ]
+
+    def test_profile_scoped_codex_family(self) -> None:
+        assert pma_prefixes_for_reset("codex", "team-a") == ["pma.profile.team-a."]
+        assert pma_prefixes_for_reset(None, "team-a") == ["pma.profile.team-a."]
+
+    def test_profile_scoped_opencode(self) -> None:
+        assert pma_prefixes_for_reset("opencode", "m4-pma") == [
+            "pma.opencode.profile.m4-pma."
+        ]
+
+    def test_profile_none_falls_back_to_agent_prefix(self) -> None:
+        assert pma_prefixes_for_reset("hermes", None) == ["pma.hermes."]
+        assert pma_prefixes_for_reset("opencode", None) == [PMA_OPENCODE_PREFIX]
 
 
 class TestPmaLegacyAliasMigration:
@@ -525,3 +569,160 @@ class TestPmaLegacyAliasMigration:
         assert resolved == "thread-migrated"
         assert registry.get_thread_id(canonical) == "thread-migrated"
         assert registry.get_thread_id(legacy) is None
+
+
+class TestPmaLegacyMigrationProvenance:
+    def test_migration_moves_value_from_legacy_to_canonical(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "app_server_threads.json"
+        registry = AppServerThreadRegistry(path)
+        agent, profile = "hermes", "m4-pma"
+        logical_base = pma_base_key(agent, profile)
+        canonical = f"{logical_base}.42:root"
+        legacy_key = pma_base_key("hermes_m4_pma") + ".42:root"
+        registry.set_thread_id(legacy_key, "thread-from-legacy")
+
+        fallbacks = pma_legacy_migration_fallback_keys(canonical, agent, profile)
+        assert legacy_key in fallbacks
+
+        resolved = registry.get_thread_id_with_fallback(canonical, *fallbacks)
+        assert resolved == "thread-from-legacy"
+        assert registry.get_thread_id(canonical) == "thread-from-legacy"
+        assert registry.get_thread_id(legacy_key) is None
+
+    def test_no_migration_when_canonical_exists(self, tmp_path: Path) -> None:
+        path = tmp_path / "app_server_threads.json"
+        registry = AppServerThreadRegistry(path)
+        agent, profile = "hermes", "m4-pma"
+        logical_base = pma_base_key(agent, profile)
+        canonical = f"{logical_base}.55:root"
+        registry.set_thread_id(canonical, "thread-canonical")
+        legacy_key = pma_base_key("hermes-m4-pma") + ".55:root"
+        registry.set_thread_id(legacy_key, "thread-legacy")
+
+        resolved = registry.get_thread_id_with_fallback(canonical, legacy_key)
+        assert resolved == "thread-canonical"
+
+    def test_legacy_keys_do_not_include_current_profile_key(self) -> None:
+        keys = pma_legacy_alias_keys("hermes", "m4-pma")
+        current_key = pma_base_key("hermes", "m4-pma")
+        assert current_key not in keys
+
+    def test_fallback_keys_preserve_topic_suffix(self) -> None:
+        canonical = "pma.hermes.profile-x.99:7"
+        fallbacks = pma_legacy_migration_fallback_keys(canonical, "hermes", "profile-x")
+        for fb in fallbacks:
+            assert fb.endswith(".99:7")
+
+    def test_get_thread_id_returns_none_when_no_legacy_or_canonical(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "app_server_threads.json"
+        registry = AppServerThreadRegistry(path)
+        canonical = "pma.hermes.m4-pma.11:root"
+        fallbacks = pma_legacy_migration_fallback_keys(canonical, "hermes", "m4-pma")
+
+        resolved = registry.get_thread_id_with_fallback(canonical, *fallbacks)
+        assert resolved is None
+
+    def test_migration_is_idempotent(self, tmp_path: Path) -> None:
+        path = tmp_path / "app_server_threads.json"
+        registry = AppServerThreadRegistry(path)
+        agent, profile = "hermes", "m4-pma"
+        logical_base = pma_base_key(agent, profile)
+        canonical = f"{logical_base}.33:root"
+        legacy_key = pma_base_key("hermes-m4-pma") + ".33:root"
+        registry.set_thread_id(legacy_key, "thread-migrated")
+
+        fallbacks = pma_legacy_migration_fallback_keys(canonical, agent, profile)
+        first = registry.get_thread_id_with_fallback(canonical, *fallbacks)
+        second = registry.get_thread_id_with_fallback(canonical, *fallbacks)
+
+        assert first == "thread-migrated"
+        assert second == "thread-migrated"
+
+
+class TestCoreImportFacadeContract:
+    def test_core_app_server_threads_re_exports_registry(self) -> None:
+        from codex_autorunner.core.app_server_threads import (
+            AppServerThreadRegistry as CoreRegistry,
+        )
+
+        assert CoreRegistry is AppServerThreadRegistry
+
+
+class TestProfileScopedRegistryRoundTrip:
+    def test_profile_scoped_pma_key_round_trip(self, tmp_path: Path) -> None:
+        path = tmp_path / "app_server_threads.json"
+        registry = AppServerThreadRegistry(path)
+        key = pma_base_key("hermes", "m4-pma")
+
+        registry.set_thread_id(key, "thread-profile-1")
+        assert registry.get_thread_id(key) == "thread-profile-1"
+
+    def test_profile_scoped_key_independent_from_base(self, tmp_path: Path) -> None:
+        path = tmp_path / "app_server_threads.json"
+        registry = AppServerThreadRegistry(path)
+        base_key = pma_base_key("hermes")
+        profile_key = pma_base_key("hermes", "m4-pma")
+
+        registry.set_thread_id(base_key, "thread-base")
+        registry.set_thread_id(profile_key, "thread-profile")
+
+        assert registry.get_thread_id(base_key) == "thread-base"
+        assert registry.get_thread_id(profile_key) == "thread-profile"
+
+    def test_reset_by_prefix_preserves_profile_scoped_keys(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "app_server_threads.json"
+        registry = AppServerThreadRegistry(path)
+        profile_prefix = pma_prefix_for_agent("hermes", "m4-pma")
+        base_key = pma_base_key("hermes")
+        profile_key = pma_base_key("hermes", "m4-pma")
+
+        registry.set_thread_id(base_key, "thread-base")
+        registry.set_thread_id(profile_key, "thread-profile")
+
+        cleared = registry.reset_threads_by_prefix(profile_prefix)
+
+        assert profile_key not in cleared
+        assert registry.get_thread_id(base_key) == "thread-base"
+        assert registry.get_thread_id(profile_key) == "thread-profile"
+
+    def test_profile_scoped_legacy_migration_round_trip(self, tmp_path: Path) -> None:
+        path = tmp_path / "app_server_threads.json"
+        registry = AppServerThreadRegistry(path)
+        agent, profile = "hermes", "m4-pma"
+        logical_base = pma_base_key(agent, profile)
+        canonical = f"{logical_base}.42:root"
+
+        legacy_key = pma_base_key("hermes-m4-pma") + ".42:root"
+        registry.set_thread_id(legacy_key, "thread-from-legacy-profile")
+
+        fallbacks = pma_legacy_migration_fallback_keys(canonical, agent, profile)
+        resolved = registry.get_thread_id_with_fallback(canonical, *fallbacks)
+
+        assert resolved == "thread-from-legacy-profile"
+        assert registry.get_thread_id(canonical) == "thread-from-legacy-profile"
+        assert registry.get_thread_id(legacy_key) is None
+
+    def test_profile_scoped_prefixes_for_reset_matches_stored_keys(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "app_server_threads.json"
+        registry = AppServerThreadRegistry(path)
+        prefix = pma_prefixes_for_reset("hermes", "m4-pma")[0]
+        key_in_scope = pma_base_key("hermes", "m4-pma") + ".99.7"
+        key_out_of_scope = pma_base_key("hermes") + ".99.7"
+
+        registry.set_thread_id(key_in_scope, "in-scope")
+        registry.set_thread_id(key_out_of_scope, "out-of-scope")
+
+        cleared = registry.reset_threads_by_prefix(prefix)
+
+        assert key_in_scope in cleared
+        assert key_out_of_scope not in cleared
+        assert registry.get_thread_id(key_in_scope) is None
+        assert registry.get_thread_id(key_out_of_scope) == "out-of-scope"

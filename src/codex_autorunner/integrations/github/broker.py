@@ -86,7 +86,7 @@ def _normalize_non_negative_int(value: Any) -> Optional[int]:
     return normalized if normalized >= 0 else None
 
 
-def _looks_like_rate_limit(detail: str) -> bool:
+def looks_like_rate_limit(detail: str) -> bool:
     normalized = (detail or "").strip().lower()
     return bool(normalized) and "rate limit" in normalized
 
@@ -339,11 +339,11 @@ class GitHubCliBroker:
                     check=check,
                 )
             except Exception as exc:
-                if _looks_like_rate_limit(str(exc)):
+                if looks_like_rate_limit(str(exc)):
                     self._record_rate_limit_hit(traffic_class=traffic_class)
                 raise
 
-            if proc.returncode != 0 and _looks_like_rate_limit(
+            if proc.returncode != 0 and looks_like_rate_limit(
                 (proc.stderr or "").strip() or (proc.stdout or "").strip()
             ):
                 self._record_rate_limit_hit(traffic_class=traffic_class)
@@ -739,4 +739,4 @@ class GitHubCliBroker:
         )
 
 
-__all__ = ["GitHubCliBroker"]
+__all__ = ["GitHubCliBroker", "looks_like_rate_limit"]

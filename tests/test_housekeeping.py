@@ -59,6 +59,9 @@ def test_directory_rule_max_files_deletes_oldest(tmp_path: Path) -> None:
     assert result.deleted_count == 2
     assert newest.exists()
     assert not oldest.exists()
+    assert len(result.deleted_paths) == 2
+    assert str(oldest) in result.deleted_paths
+    assert str(middle) in result.deleted_paths
 
 
 def test_directory_rule_respects_min_age(tmp_path: Path) -> None:
@@ -116,6 +119,8 @@ def test_directory_rule_dry_run_does_not_delete(tmp_path: Path) -> None:
     summary = run_housekeeping_once(config, tmp_path)
     result = summary.rules[0]
     assert result.deleted_count == 1
+    assert len(result.deleted_paths) == 1
+    assert str(target) in result.deleted_paths
     assert target.exists()
 
 

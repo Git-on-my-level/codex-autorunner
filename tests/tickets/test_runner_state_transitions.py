@@ -29,6 +29,9 @@ from codex_autorunner.tickets.runner_post_turn import (
     build_dispatch_pause_result,
     build_loop_guard_pause_result,
     build_pause_result,
+    check_ticket_frontmatter,
+    get_repo_fingerprint,
+    handle_frontmatter_recheck,
 )
 from codex_autorunner.tickets.runner_types import TurnExecutionResult
 
@@ -640,3 +643,143 @@ def _make_mock_result():
         turn_id="turn-1",
     )
     return result
+
+
+class TestHandleFrontmatterRecheck:
+    def test_no_errors_returns_updated_fm(self, tmp_path):
+        ticket_path = tmp_path / "TICKET-001.md"
+        ticket_path.write_text(
+            "---\nagent: codex\ndone: false\ntitle: Test\n---\n\nBody\n",
+            encoding="utf-8",
+        )
+        result = handle_frontmatter_recheck(
+            ticket_path=ticket_path,
+            lint_errors=None,
+            lint_retries=0,
+            max_lint_retries=3,
+            agent_conversation_id="conv-1",
+        )
+        assert result.should_pause is False
+        assert result.should_retry is False
+        assert result.updated_frontmatter is not None
+        assert result.updated_frontmatter.done is False
+
+    def test_errors_below_limit_returns_retry(self, tmp_path):
+        ticket_path = tmp_path / "TICKET-001.md"
+        ticket_path.write_text(
+            "---\nagent: codex\n# done missing\n---\n\nBody\n",
+            encoding="utf-8",
+        )
+        result = handle_frontmatter_recheck(
+            ticket_path=ticket_path,
+            lint_errors=["frontmatter invalid"],
+            lint_retries=0,
+            max_lint_retries=3,
+            agent_conversation_id="conv-1",
+        )
+        assert result.should_retry is True
+        assert result.should_pause is False
+        assert result.lint_state is not None
+        assert result.lint_state["retries"] == 1
+        assert result.lint_state["conversation_id"] == "conv-1"
+        assert result.lint_state["errors"] is not None
+
+    def test_errors_at_limit_returns_pause(self, tmp_path):
+        ticket_path = tmp_path / "TICKET-001.md"
+        ticket_path.write_text(
+            "---\nagent: codex\n# done missing\n---\n\nBody\n",
+            encoding="utf-8",
+        )
+        result = handle_frontmatter_recheck(
+            ticket_path=ticket_path,
+            lint_errors=["frontmatter invalid"],
+            lint_retries=3,
+            max_lint_retries=3,
+            agent_conversation_id="conv-1",
+        )
+        assert result.should_pause is True
+        assert result.should_retry is False
+        assert result.pause_reason_code == "needs_user_fix"
+        assert "Exceeded lint retry limit" in (result.pause_reason_details or "")
+
+
+class TestGetRepoFingerprint:
+    def test_returns_head_and_status_when_git_repo(self, tmp_path):
+        _init_git_repo(tmp_path)
+        fp = get_repo_fingerprint(tmp_path)
+        assert fp is not None
+        lines = fp.split("\n")
+        assert len(lines[0]) == 40
+        assert lines[0].strip() != ""
+
+    def test_returns_none_when_not_git_repo(self, tmp_path):
+        fp = get_repo_fingerprint(tmp_path)
+        assert fp is None
+
+    def test_includes_dirty_status(self, tmp_path):
+        _init_git_repo(tmp_path)
+        (tmp_path / "dirty.txt").write_text("dirty\n", encoding="utf-8")
+        fp = get_repo_fingerprint(tmp_path)
+        assert fp is not None
+        assert "dirty.txt" in fp
+
+
+class TestCheckTicketFrontmatter:
+    def test_rewrites_error_prefix_for_read_failure(self, tmp_path):
+        nonexistent = tmp_path / "TICKET-999.md"
+        fm, errors = check_ticket_frontmatter(ticket_path=nonexistent)
+        assert fm is None
+        assert errors is not None
+        assert any("Failed to read ticket after turn:" in e for e in errors)
+
+    def test_valid_frontmatter_returns_no_errors(self, tmp_path):
+        ticket_path = tmp_path / "TICKET-001.md"
+        ticket_path.write_text(
+            "---\nagent: codex\ndone: false\ntitle: Test\n---\n\nBody\n",
+            encoding="utf-8",
+        )
+        fm, errors = check_ticket_frontmatter(ticket_path=ticket_path)
+        assert fm is not None
+        assert errors is None or errors == []
+
+
+class TestCheckpointGit:
+    def test_returns_none_on_clean_repo(self, tmp_path):
+        from codex_autorunner.tickets.runner_post_turn import checkpoint_git
+
+        _init_git_repo(tmp_path)
+        err = checkpoint_git(
+            workspace_root=tmp_path,
+            run_id="run-1",
+            turn=1,
+            agent="codex",
+            checkpoint_message_template="checkpoint {run_id} turn {turn}",
+        )
+        assert err is None
+
+    def test_returns_none_after_successful_commit(self, tmp_path):
+        from codex_autorunner.tickets.runner_post_turn import checkpoint_git
+
+        _init_git_repo(tmp_path)
+        (tmp_path / "work.txt").write_text("content\n", encoding="utf-8")
+        err = checkpoint_git(
+            workspace_root=tmp_path,
+            run_id="run-1",
+            turn=1,
+            agent="codex",
+            checkpoint_message_template="checkpoint {run_id} turn {turn} agent {agent}",
+        )
+        assert err is None
+
+    def test_returns_error_string_on_git_failure(self, tmp_path):
+        from codex_autorunner.tickets.runner_post_turn import checkpoint_git
+
+        err = checkpoint_git(
+            workspace_root=tmp_path,
+            run_id="run-1",
+            turn=1,
+            agent="codex",
+            checkpoint_message_template="checkpoint",
+        )
+        assert isinstance(err, str)
+        assert len(err) > 0

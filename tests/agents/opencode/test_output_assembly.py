@@ -690,3 +690,128 @@ async def test_has_text_and_has_pending() -> None:
     )
     asm.on_handle_role_update(msg_id, role)
     assert asm.has_text
+
+
+@pytest.mark.anyio
+async def test_on_prompt_response_stores_text() -> None:
+    asm = OutputAssembler(session_id="s1")
+    asm.on_prompt_response(
+        {"info": {"id": "m1"}, "parts": [{"type": "text", "text": "prompt reply"}]}
+    )
+    result = await asm.build_result()
+    assert result.text == "prompt reply"
+
+
+@pytest.mark.anyio
+async def test_on_prompt_response_stores_error() -> None:
+    asm = OutputAssembler(session_id="s1")
+    asm.on_prompt_response({"info": {"id": "m1", "error": "rate limited"}, "parts": []})
+    result = await asm.build_result()
+    assert result.text == ""
+    assert result.error == "rate limited"
+
+
+@pytest.mark.anyio
+async def test_on_prompt_response_suppresses_echo() -> None:
+    asm = OutputAssembler(session_id="s1", prompt="What is the answer?")
+    asm.on_prompt_response(
+        {
+            "info": {"id": "m1"},
+            "parts": [{"type": "text", "text": "What is the answer?"}],
+        }
+    )
+    result = await asm.build_result()
+    assert result.text == ""
+
+
+@pytest.mark.anyio
+async def test_on_prompt_response_does_not_override_stream_text() -> None:
+    asm = OutputAssembler(session_id="s1")
+    await asm.on_text_delta(
+        part_message_id=None,
+        delta_text="streamed answer",
+        part_id=None,
+        part_dict=None,
+    )
+    asm.flush_pending()
+    asm.on_prompt_response(
+        {"info": {"id": "m1"}, "parts": [{"type": "text", "text": "prompt reply"}]}
+    )
+    result = await asm.build_result()
+    assert result.text == "streamed answer"
+
+
+@pytest.mark.anyio
+async def test_on_prompt_response_does_not_override_completed_assistant_text() -> None:
+    asm = OutputAssembler(session_id="s1")
+    asm.on_primary_assistant_completion(
+        {
+            "info": {"id": "m1", "role": "assistant"},
+            "parts": [{"type": "text", "text": "completed"}],
+        },
+        message_role="assistant",
+    )
+    asm.on_prompt_response(
+        {"info": {"id": "m1"}, "parts": [{"type": "text", "text": "prompt reply"}]}
+    )
+    result = await asm.build_result()
+    assert result.text == "completed"
+
+
+@pytest.mark.anyio
+async def test_on_prompt_response_filters_reasoning_from_content() -> None:
+    asm = OutputAssembler(session_id="s1")
+    asm.on_prompt_response(
+        {
+            "content": [
+                {"type": "reasoning", "text": "chain of thought"},
+                {"type": "text", "text": "actual answer"},
+            ],
+        }
+    )
+    result = await asm.build_result()
+    assert result.text == "actual answer"
+    assert "chain of thought" not in result.text
+
+
+@pytest.mark.anyio
+async def test_on_prompt_response_used_after_messages_fetcher_fails() -> None:
+    async def _fetch_messages():
+        return []
+
+    asm = OutputAssembler(
+        session_id="s1",
+        messages_fetcher=_fetch_messages,
+    )
+    asm.on_prompt_response(
+        {"info": {"id": "m1"}, "parts": [{"type": "text", "text": "prompt reply"}]}
+    )
+    result = await asm.build_result()
+    assert result.text == "prompt reply"
+
+
+@pytest.mark.anyio
+async def test_on_prompt_response_none_is_noop() -> None:
+    asm = OutputAssembler(session_id="s1")
+    asm.on_prompt_response(None)
+    result = await asm.build_result()
+    assert result.text == ""
+    assert result.error is None
+
+
+@pytest.mark.anyio
+async def test_on_prompt_response_error_supplements_text() -> None:
+    asm = OutputAssembler(session_id="s1")
+    await asm.on_text_delta(
+        part_message_id=None,
+        delta_text="streamed answer",
+        part_id=None,
+        part_dict=None,
+    )
+    asm.flush_pending()
+    asm.on_prompt_response(
+        {"info": {"id": "m1", "error": "partial error"}, "parts": []}
+    )
+    result = await asm.build_result()
+    assert result.text == "streamed answer"
+    assert result.error == "partial error"

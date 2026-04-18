@@ -9,6 +9,8 @@ from codex_autorunner.integrations.app_server import client as app_server_client
 from codex_autorunner.integrations.app_server.client import (
     CodexAppServerClient,
     CodexAppServerDisconnected,
+)
+from codex_autorunner.integrations.app_server.protocol_helpers import (
     _extract_agent_message_text,
 )
 
@@ -1011,18 +1013,23 @@ async def test_completion_gap_recovery_emits_synthetic_turn_completed_notificati
 
         assert result.status == "completed"
         assert state.turn_completed_seen is True
-        assert any(
-            event.get("method") == "turn/completed"
-            and event.get("params", {}).get("turnId") == "turn-1"
-            and event.get("params", {}).get("threadId") == "thread-1"
-            and event.get("params", {}).get("status") == "completed"
-            and event.get("params", {}).get("synthetic") is True
-            and event.get("params", {}).get("recoveredVia") == "thread/resume"
+        synthetic_notifications = [
+            event
             for event in notifications
-        )
+            if event.get("method") == "turn/completed"
+            and event.get("params", {}).get("synthetic") is True
+        ]
+        assert len(synthetic_notifications) >= 1
+        synthetic_params = synthetic_notifications[0]["params"]
+        assert synthetic_params["turnId"] == "turn-1"
+        assert synthetic_params["threadId"] == "thread-1"
+        assert synthetic_params["status"] == "completed"
+        assert synthetic_params["recoveredVia"] == "thread/resume"
+        assert synthetic_params["recoverySource"] == "turn_completion_gap"
         assert any(
             event.get("method") == "turn/completed"
             and event.get("params", {}).get("synthetic") is True
+            and event.get("params", {}).get("recoverySource") == "turn_completion_gap"
             for event in result.raw_events
         )
     finally:
@@ -1224,6 +1231,177 @@ async def test_turn_hint_progress_clears_completion_gap_window(
         )
 
         assert resume_calls == 0
+    finally:
+        await client.close()
+
+
+@pytest.mark.anyio
+async def test_stall_recovery_emits_synthetic_notification_with_provenance(
+    tmp_path: Path,
+) -> None:
+    notifications: list[dict[str, object]] = []
+    handler_started = asyncio.Event()
+    release_handler = asyncio.Event()
+
+    async def on_notification(message: dict[str, object]) -> None:
+        notifications.append(message)
+        handler_started.set()
+        await release_handler.wait()
+
+    client = CodexAppServerClient(
+        fixture_command("basic"),
+        cwd=tmp_path,
+        turn_stall_timeout_seconds=0.01,
+        turn_stall_poll_interval_seconds=0.02,
+        turn_stall_recovery_min_interval_seconds=0.0,
+        turn_completion_gap_timeout_seconds=None,
+        notification_handler=on_notification,
+    )
+    try:
+        state = client._ensure_turn_state("turn-1", "thread-1")
+        state.last_event_at -= 1.0
+
+        async def _resume(thread_id: str, **kwargs: object) -> dict[str, object]:
+            _ = kwargs
+            return {
+                "thread": {
+                    "id": thread_id,
+                    "turns": [
+                        {
+                            "id": "turn-1",
+                            "status": "completed",
+                            "items": [
+                                {
+                                    "type": "agentMessage",
+                                    "text": "recovered reply",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            }
+
+        client.thread_resume = _resume  # type: ignore[method-assign]
+
+        result = await asyncio.wait_for(
+            client.wait_for_turn("turn-1", thread_id="thread-1", timeout=1.0),
+            timeout=0.5,
+        )
+        await asyncio.wait_for(handler_started.wait(), timeout=0.5)
+
+        assert result.status == "completed"
+        assert state.turn_completed_seen is True
+
+        synthetic_notifications = [
+            event
+            for event in notifications
+            if event.get("method") == "turn/completed"
+            and event.get("params", {}).get("synthetic") is True
+        ]
+        assert len(synthetic_notifications) >= 1
+        params = synthetic_notifications[0]["params"]
+        assert params["recoveredVia"] == "thread/resume"
+        assert params["recoverySource"] == "turn_stall"
+        assert params["turnId"] == "turn-1"
+        assert params["threadId"] == "thread-1"
+
+        assert any(
+            event.get("method") == "turn/completed"
+            and event.get("params", {}).get("synthetic") is True
+            and event.get("params", {}).get("recoverySource") == "turn_stall"
+            for event in result.raw_events
+        )
+    finally:
+        release_handler.set()
+        await client.close()
+
+
+@pytest.mark.anyio
+async def test_exhausted_stall_recovery_records_provenance_in_raw_events(
+    tmp_path: Path,
+) -> None:
+    client = CodexAppServerClient(
+        fixture_command("basic"),
+        cwd=tmp_path,
+        turn_stall_timeout_seconds=0.01,
+        turn_stall_poll_interval_seconds=0.02,
+        turn_stall_recovery_min_interval_seconds=0.0,
+        turn_stall_max_recovery_attempts=2,
+    )
+    try:
+        state = client._ensure_turn_state("turn-1", "thread-1")
+        state.last_event_at -= 1.0
+
+        async def _resume(thread_id: str, **kwargs: object) -> dict[str, object]:
+            _ = kwargs
+            return {
+                "thread": {
+                    "id": thread_id,
+                    "turns": [{"id": "turn-1", "status": "running"}],
+                }
+            }
+
+        client.thread_resume = _resume  # type: ignore[method-assign]
+
+        result = await client.wait_for_turn("turn-1", thread_id="thread-1", timeout=1.0)
+        assert result.status == "failed"
+
+        exhausted_events = [
+            event
+            for event in result.raw_events
+            if event.get("method") == "turn/stalledRecoveryExhausted"
+        ]
+        assert len(exhausted_events) >= 1
+        params = exhausted_events[0].get("params", {})
+        assert params["turnId"] == "turn-1"
+        assert params["threadId"] == "thread-1"
+        assert params["reason"] == "resume_non_terminal"
+        assert params["recoveryAttempts"] == 2
+        assert params["maxRecoveryAttempts"] == 2
+    finally:
+        await client.close()
+
+
+@pytest.mark.anyio
+async def test_exhausted_completion_gap_recovery_records_provenance_in_raw_events(
+    tmp_path: Path,
+) -> None:
+    client = CodexAppServerClient(
+        fixture_command("basic"),
+        cwd=tmp_path,
+        turn_stall_timeout_seconds=10.0,
+        turn_stall_poll_interval_seconds=0.02,
+        turn_stall_recovery_min_interval_seconds=0.0,
+        turn_stall_max_recovery_attempts=2,
+        turn_completion_gap_timeout_seconds=0.01,
+    )
+    try:
+        state = client._ensure_turn_state("turn-1", "thread-1")
+        state.status = "running"
+        state.item_completed_count = 3
+        state.completion_gap_started_at = time.monotonic() - 1.0
+
+        async def _resume(thread_id: str, **kwargs: object) -> dict[str, object]:
+            _ = kwargs
+            return {}
+
+        client.thread_resume = _resume  # type: ignore[method-assign]
+
+        result = await client.wait_for_turn("turn-1", thread_id="thread-1", timeout=1.0)
+        assert result.status == "failed"
+
+        exhausted_events = [
+            event
+            for event in result.raw_events
+            if event.get("method") == "turn/completionGapRecoveryExhausted"
+        ]
+        assert len(exhausted_events) >= 1
+        params = exhausted_events[0].get("params", {})
+        assert params["turnId"] == "turn-1"
+        assert params["threadId"] == "thread-1"
+        assert params["reason"] == "resume_snapshot_missing"
+        assert params["recoveryAttempts"] == 2
+        assert params["maxRecoveryAttempts"] == 2
     finally:
         await client.close()
 

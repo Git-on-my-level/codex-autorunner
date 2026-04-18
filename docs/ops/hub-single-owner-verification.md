@@ -47,6 +47,9 @@ Expected result:
 
 - `hub_endpoint.json` points at the running hub process.
 - Both health endpoints return quickly with `{"status":"ok",...}`.
+- The response includes `hub_startup_phase` (one of `constructed`, `reconciling`,
+  `ready`, `started`) and `hub_deferred_startup_complete` (boolean) so you can
+  observe startup progress without guessing from logs alone.
 
 ### 2. Distinguish incompatibility from hub unavailability
 

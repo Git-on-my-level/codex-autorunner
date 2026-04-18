@@ -52,6 +52,9 @@ async def _handle_agent_command(
             chat_id=message.chat_id,
             thread_id=message.thread_id,
             message_id=message.message_id,
+            requester_user_id=(
+                str(message.from_user_id) if message.from_user_id is not None else None
+            ),
         )
         return
     desired = normalize_chat_agent(argv[0], context=commands)
@@ -179,6 +182,7 @@ async def _send_agent_picker(
     chat_id: int,
     thread_id: Optional[int],
     message_id: int,
+    requester_user_id: Optional[str],
 ) -> None:
     availability = "available"
     if not commands._opencode_available():
@@ -188,7 +192,7 @@ async def _send_agent_picker(
         availability=availability,
         context=commands,
     )
-    state = SelectionState(items=items)
+    state = SelectionState(items=items, requester_user_id=requester_user_id)
     keyboard = commands._build_agent_keyboard(state)
     commands._agent_options[key] = state
     commands._touch_cache_timestamp("agent_options", key)

@@ -24,11 +24,13 @@ from ...core.flows.worker_process import (
 from ...core.flows.workspace_root import (
     normalize_ticket_flow_input_data as _normalize_ticket_flow_input_data,
 )
+from ...core.orchestration.models import FlowRunTarget
 from ...core.runtime import RuntimeContext
 from ...integrations.agents import build_backend_orchestrator
 from ...integrations.agents.build_agent_pool import build_agent_pool
 from ...tickets import DEFAULT_MAX_TOTAL_TURNS
-from ...tickets.files import list_ticket_paths, safe_relpath
+from ...tickets.files import list_ticket_paths, safe_relpath, ticket_is_done
+from ...tickets.frontmatter import generate_ticket_id
 from .definition import build_ticket_flow_definition
 
 logger = logging.getLogger(__name__)
@@ -352,3 +354,122 @@ def archive_ticket_flow_run(
         force=force,
         delete_run=delete_run,
     )
+
+
+def flow_run_record_from_target(target: FlowRunTarget) -> FlowRunRecord:
+    return FlowRunRecord(
+        id=target.run_id,
+        flow_type=target.flow_type,
+        status=FlowRunStatus(target.status),
+        input_data={},
+        state=dict(target.state or {}),
+        current_step=target.current_step,
+        stop_requested=False,
+        created_at=target.created_at or "",
+        started_at=target.started_at,
+        finished_at=target.finished_at,
+        error_message=target.error_message,
+        metadata=dict(target.metadata or {}),
+    )
+
+
+def select_active_or_paused_run(
+    records: list[FlowRunRecord],
+) -> Optional[FlowRunRecord]:
+    for record in records:
+        if record.status in (FlowRunStatus.RUNNING, FlowRunStatus.PAUSED):
+            return record
+    return None
+
+
+def select_resumable_run(
+    records: list[FlowRunRecord],
+) -> tuple[Optional[FlowRunRecord], str]:
+    if not records:
+        return None, "new_run"
+    active = select_active_or_paused_run(records)
+    if active:
+        return active, "active"
+    latest = records[0]
+    if latest.status == FlowRunStatus.COMPLETED:
+        return latest, "completed_pending"
+    return None, "new_run"
+
+
+def render_bootstrap_ticket_template(ticket_id: str) -> str:
+    return f"""---
+agent: codex
+done: false
+ticket_id: "{ticket_id}"
+title: Bootstrap ticket plan
+goal: Capture scope and seed follow-up tickets
+---
+
+You are the first ticket in a new ticket_flow run.
+
+- Read `.codex-autorunner/ISSUE.md`. If it is missing:
+  - If GitHub is available, ask the user for the issue/PR URL or number and create `.codex-autorunner/ISSUE.md` from it.
+  - If GitHub is not available, write `DISPATCH.md` with `mode: pause` asking the user to describe the work (or share a doc). After the reply, create `.codex-autorunner/ISSUE.md` with their input.
+- If helpful, create or update contextspace docs under `.codex-autorunner/contextspace/`:
+  - `active_context.md` for current context and links
+  - `decisions.md` for decisions/rationale
+  - `spec.md` for requirements and constraints
+- Break the work into additional `TICKET-00X.md` files with clear owners/goals; keep this ticket open until they exist.
+- Place any supporting artifacts in `.codex-autorunner/runs/<run_id>/dispatch/` if needed.
+- Write `DISPATCH.md` to dispatch a message to the user:
+  - Use `mode: pause` (handoff) to wait for user response. This pauses execution.
+  - Use `mode: notify` (informational) to message the user but keep running.
+"""
+
+
+@dataclass(frozen=True)
+class RunReuseResult:
+    action: str
+    run: Optional[FlowRunRecord] = None
+    pending_ticket_count: int = 0
+    stale_terminal_runs: tuple[FlowRunRecord, ...] = ()
+
+
+def resolve_run_reuse_policy(
+    records: list[FlowRunRecord],
+    *,
+    force_new: bool,
+    ticket_dir: Path,
+) -> RunReuseResult:
+    stale = tuple(
+        r for r in records if r.status in (FlowRunStatus.FAILED, FlowRunStatus.STOPPED)
+    )
+
+    if force_new:
+        return RunReuseResult(action="start_new", stale_terminal_runs=stale)
+
+    existing_run, reason = select_resumable_run(records)
+    if existing_run and reason == "active":
+        return RunReuseResult(
+            action="reuse_active",
+            run=existing_run,
+            stale_terminal_runs=stale,
+        )
+
+    if existing_run and reason == "completed_pending":
+        pending = sum(1 for t in list_ticket_paths(ticket_dir) if not ticket_is_done(t))
+        return RunReuseResult(
+            action="completed_pending",
+            run=existing_run,
+            pending_ticket_count=pending,
+            stale_terminal_runs=stale,
+        )
+
+    return RunReuseResult(action="start_new", stale_terminal_runs=stale)
+
+
+def seed_bootstrap_ticket_if_needed(ticket_dir: Path) -> bool:
+    existing = list_ticket_paths(ticket_dir)
+    ticket_path = ticket_dir / "TICKET-001.md"
+    if existing or ticket_path.exists():
+        return False
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    bootstrap_ticket_id = generate_ticket_id()
+    template = render_bootstrap_ticket_template(bootstrap_ticket_id)
+    ticket_path.write_text(template, encoding="utf-8")
+    return True

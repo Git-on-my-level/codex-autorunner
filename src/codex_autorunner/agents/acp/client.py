@@ -11,7 +11,19 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable, Optional, Sequence
 
 from ...core.acp_lifecycle import (
+    classify_prompt_response_status as _classify_prompt_response_status,
+)
+from ...core.acp_lifecycle import (
     coerce_mapping as _coerce_mapping,
+)
+from ...core.acp_lifecycle import (
+    extract_identifier as _extract_identifier,
+)
+from ...core.acp_lifecycle import (
+    extract_prompt_response_error as _extract_prompt_response_error,
+)
+from ...core.acp_lifecycle import (
+    prompt_terminal_method_for_status as _prompt_terminal_method_for_status,
 )
 from ...core.acp_lifecycle import (
     session_update_content_summary as _session_update_content_summary,
@@ -803,7 +815,7 @@ class ACPClient:
         if self._notification_handler is not None:
             await self._notification_handler(event)
         if event.turn_id:
-            state = self._prompts.get(event.turn_id)
+            state = await self._resolve_prompt_state_for_event(event)
             if state is None:
                 self._orphan_events[event.turn_id].append(event)
             else:
@@ -816,7 +828,7 @@ class ACPClient:
         event = normalize_notification(message)
         await self._notifications.put(event)
         if event.turn_id:
-            state = self._prompts.get(event.turn_id)
+            state = await self._resolve_prompt_state_for_event(event)
             if state is None:
                 self._orphan_events[event.turn_id].append(event)
             else:
@@ -914,6 +926,39 @@ class ACPClient:
             aliased_turn_id=normalized_alias,
             **self._prompt_trace_fields(state),
         )
+
+    async def _resolve_prompt_state_for_event(
+        self,
+        event: ACPEvent,
+    ) -> Optional[_PromptState]:
+        if not event.turn_id:
+            return None
+        state = self._prompts.get(event.turn_id)
+        if state is not None:
+            return state
+        session_id = _normalize_optional_text(event.session_id)
+        if not session_id:
+            return None
+        active_turn_id = self._session_active_turns.get(session_id)
+        if not active_turn_id or active_turn_id == event.turn_id:
+            return None
+        active_state = self._prompts.get(active_turn_id)
+        if active_state is None or active_state.closed:
+            return None
+        request_task = active_state.request_task
+        if request_task is None or request_task.done():
+            return None
+        await self._register_prompt_turn_alias(active_state, event.turn_id)
+        self._log_trace_event(
+            "acp.prompt.turn_alias_inferred_from_event",
+            session_id=session_id,
+            turn_id=active_state.turn_id,
+            aliased_turn_id=event.turn_id,
+            event_method=event.method,
+            event_kind=event.kind,
+            **self._prompt_trace_fields(active_state),
+        )
+        return active_state
 
     async def _replay_orphan_prompt_events(
         self,
@@ -1134,14 +1179,22 @@ class ACPClient:
             await state.queue.put(_QUEUE_SENTINEL)
             return
         result_payload = _coerce_mapping(result)
-        response_turn_id = self._official_prompt_response_turn_id(result_payload)
+        response_turn_id = _extract_identifier(
+            result_payload,
+            "userMessageId",
+            "user_message_id",
+            "turnId",
+            "turn_id",
+        )
         await self._register_prompt_turn_alias(state, response_turn_id)
+        response_status = _classify_prompt_response_status(result_payload)
+        response_method = _prompt_terminal_method_for_status(response_status)
         self._log_trace_event(
             "acp.prompt.request_returned",
             session_id=state.session_id,
             turn_id=state.turn_id,
             response_turn_id=response_turn_id,
-            status=self._official_prompt_terminal_status(result_payload),
+            status=response_status,
             stop_reason=_normalize_optional_text(
                 result_payload.get("stopReason") or result_payload.get("stop_reason")
             ),
@@ -1155,7 +1208,7 @@ class ACPClient:
                 session_id=state.session_id,
                 turn_id=state.turn_id,
                 response_turn_id=response_turn_id,
-                status=self._official_prompt_terminal_status(result_payload),
+                status=response_status,
                 stop_reason=_normalize_optional_text(
                     result_payload.get("stopReason")
                     or result_payload.get("stop_reason")
@@ -1167,13 +1220,13 @@ class ACPClient:
             return
         terminal_event = normalize_notification(
             {
-                "method": self._official_prompt_terminal_method(result),
+                "method": response_method,
                 "params": {
                     "sessionId": state.session_id,
                     "turnId": state.turn_id,
-                    "status": self._official_prompt_terminal_status(result),
+                    "status": response_status,
                     "finalOutput": state.final_output,
-                    "message": self._official_prompt_terminal_error(result),
+                    "message": _extract_prompt_response_error(result_payload),
                 },
             }
         )
@@ -1185,45 +1238,6 @@ class ACPClient:
             state,
             terminal_event,
             completion_source="prompt_return",
-        )
-
-    def _official_prompt_terminal_method(self, payload: Any) -> str:
-        status = self._official_prompt_terminal_status(payload)
-        if status == "cancelled":
-            return "prompt/cancelled"
-        if status == "failed":
-            return "prompt/failed"
-        return "prompt/completed"
-
-    def _official_prompt_response_turn_id(self, payload: Any) -> Optional[str]:
-        result = _coerce_mapping(payload)
-        return _normalize_optional_text(
-            result.get("userMessageId")
-            or result.get("user_message_id")
-            or result.get("turnId")
-            or result.get("turn_id")
-        )
-
-    def _official_prompt_terminal_status(self, payload: Any) -> str:
-        result = _coerce_mapping(payload)
-        stop_reason = _normalize_optional_text(
-            result.get("stopReason") or result.get("stop_reason")
-        )
-        if stop_reason == "cancelled":
-            return "cancelled"
-        if stop_reason == "refusal":
-            return "failed"
-        return "completed"
-
-    def _official_prompt_terminal_error(self, payload: Any) -> Optional[str]:
-        if self._official_prompt_terminal_status(payload) != "failed":
-            return None
-        result = _coerce_mapping(payload)
-        return _normalize_optional_text(
-            result.get("message")
-            or result.get("error")
-            or result.get("stopReason")
-            or result.get("stop_reason")
         )
 
     def _message_with_mapped_turn_id(self, message: dict[str, Any]) -> dict[str, Any]:

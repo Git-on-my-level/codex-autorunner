@@ -308,7 +308,7 @@ def recover_flow_store_if_possible(
             exc,
         )
         return True
-    except (sqlite3.Error, OSError) as recover_exc:
+    except (sqlite3.Error, OSError, RuntimeError) as recover_exc:
         _logger.warning(
             "Flow DB recovery failed at %s after error %s: %s",
             db_path,
@@ -319,5 +319,5 @@ def recover_flow_store_if_possible(
     finally:
         try:
             store.close()
-        except sqlite3.Error:
+        except (sqlite3.Error, OSError):
             _logger.debug("Failed to close flow store during recovery", exc_info=True)

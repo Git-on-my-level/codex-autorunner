@@ -18,7 +18,7 @@ from codex_autorunner.core.ports.run_event import OutputDelta
 from codex_autorunner.integrations.app_server.event_buffer import AppServerEventBuffer
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes.pma_routes import tail_stream
-from codex_autorunner.surfaces.web.routes.pma_routes.tail_stream import (
+from codex_autorunner.surfaces.web.routes.pma_routes.managed_thread_tail_serializers import (
     _refresh_active_turn_diagnostics,
 )
 from tests.conftest import write_test_config

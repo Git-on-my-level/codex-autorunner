@@ -2,14 +2,22 @@ import pytest
 
 from codex_autorunner.integrations.telegram.adapter import (
     TelegramCallbackQuery,
+    encode_agent_callback,
+    encode_agent_profile_callback,
     encode_bind_callback,
     encode_cancel_callback,
+    encode_effort_callback,
     encode_flow_callback,
     encode_flow_run_callback,
+    encode_model_callback,
+    encode_page_callback,
     encode_question_custom_callback,
     encode_question_done_callback,
     encode_question_option_callback,
     encode_resume_callback,
+    encode_review_commit_callback,
+    encode_update_callback,
+    encode_update_confirm_callback,
 )
 from codex_autorunner.integrations.telegram.handlers.callbacks import handle_callback
 from codex_autorunner.integrations.telegram.types import CompactState, SelectionState
@@ -31,12 +39,12 @@ class _HandlerStub:
     ) -> None:
         self.calls.append(("answer", text))
 
-    async def _resume_thread_by_id(
+    async def _selection_resume_thread_by_id(
         self, key: str, thread_id: str, _callback: TelegramCallbackQuery
     ) -> None:
         self.calls.append(("resume", key, thread_id))
 
-    async def _bind_topic_by_repo_id(
+    async def _selection_bind_topic_by_repo_id(
         self, key: str, repo_id: str, _callback: TelegramCallbackQuery
     ) -> None:
         self.calls.append(("bind", key, repo_id))
@@ -64,6 +72,51 @@ class _HandlerStub:
         self, key: str, _callback: TelegramCallbackQuery, parsed: object
     ) -> None:
         self.calls.append(("flow-run", key, parsed))
+
+    async def _handle_agent_callback(
+        self, key: str, _callback: TelegramCallbackQuery, parsed: object
+    ) -> None:
+        self.calls.append(("agent", key, parsed))
+
+    async def _handle_agent_profile_callback(
+        self, key: str, _callback: TelegramCallbackQuery, parsed: object
+    ) -> None:
+        self.calls.append(("agent-profile", key, parsed))
+
+    async def _handle_model_callback(
+        self, key: str, _callback: TelegramCallbackQuery, parsed: object
+    ) -> None:
+        self.calls.append(("model", key, parsed))
+
+    async def _handle_effort_callback(
+        self, key: str, _callback: TelegramCallbackQuery, parsed: object
+    ) -> None:
+        self.calls.append(("effort", key, parsed))
+
+    async def _handle_update_callback(
+        self, key: str, _callback: TelegramCallbackQuery, parsed: object
+    ) -> None:
+        self.calls.append(("update", key, parsed))
+
+    async def _handle_update_confirm_callback(
+        self, key: str, _callback: TelegramCallbackQuery, parsed: object
+    ) -> None:
+        self.calls.append(("update-confirm", key, parsed))
+
+    async def _handle_review_commit_callback(
+        self, key: str, _callback: TelegramCallbackQuery, parsed: object
+    ) -> None:
+        self.calls.append(("review-commit", key, parsed))
+
+    async def _handle_selection_cancel(
+        self, key: str, parsed: object, _callback: TelegramCallbackQuery
+    ) -> None:
+        self.calls.append(("selection-cancel", key, parsed))
+
+    async def _handle_selection_page(
+        self, key: str, parsed: object, _callback: TelegramCallbackQuery
+    ) -> None:
+        self.calls.append(("page", key, parsed))
 
     async def _handle_queue_cancel_callback(
         self, _callback: TelegramCallbackQuery, kind: str
@@ -297,6 +350,42 @@ async def test_handle_callback_flow_run_action() -> None:
     await handle_callback(handlers, callback)
     assert handlers.calls
     assert handlers.calls[0][0] == "flow-run"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("data", "expected_call"),
+    [
+        (encode_agent_callback("codex"), "agent"),
+        (encode_agent_profile_callback("fast"), "agent-profile"),
+        (encode_model_callback("gpt-5.4"), "model"),
+        (encode_effort_callback("high"), "effort"),
+        (encode_update_callback("web"), "update"),
+        (encode_update_confirm_callback("yes"), "update-confirm"),
+        (encode_review_commit_callback("abc123"), "review-commit"),
+        (encode_cancel_callback("agent"), "selection-cancel"),
+        (encode_page_callback("agent", 1), "page"),
+    ],
+)
+async def test_handle_callback_routes_extended_selection_callbacks(
+    data: str, expected_call: str
+) -> None:
+    handlers = _HandlerStub()
+    callback = TelegramCallbackQuery(
+        update_id=12,
+        callback_id="cb12",
+        from_user_id=11,
+        data=data,
+        message_id=16,
+        chat_id=50,
+        thread_id=51,
+    )
+
+    await handle_callback(handlers, callback)
+
+    assert handlers.calls
+    assert handlers.calls[0][0] == expected_call
+    assert handlers.calls[0][1] == "50:51"
 
 
 @pytest.mark.anyio

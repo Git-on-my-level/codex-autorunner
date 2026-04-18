@@ -4,95 +4,62 @@ import asyncio
 import dataclasses
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any, Optional, Sequence
+from typing import Any, Optional
 
 from ....core.logging_utils import log_event
-from ....core.orchestration import (
-    FlowTarget,
-    PausedFlowTarget,
-    SurfaceThreadMessageRequest,
-    build_surface_orchestration_ingress,
-)
-from ....core.pma_notification_store import (
-    build_notification_context_block,
-    notification_surface_key,
-)
 from ....core.utils import canonicalize_path
-from ....integrations.chat.constants import TOPIC_NOT_BOUND_MESSAGE
 from ...chat.forwarding import compose_forwarded_message_text
 from ...chat.handlers.messages import message_text_candidate
-from ...chat.media import audio_content_type_for_input, is_image_mime_or_path
-from ...chat.turn_policy import PlainTextTurnContext, should_trigger_plain_text_turn
 from ..adapter import (
-    TelegramDocument,
     TelegramMessage,
-    TelegramPhotoSize,
     is_interrupt_alias,
     parse_command,
 )
-from ..config import TelegramMediaCandidate
 from ..constants import TELEGRAM_MAX_MESSAGE_LENGTH
 from ..forwarding import (
     format_forwarded_telegram_message_text,
     is_forwarded_telegram_message,
     message_forward_info,
 )
-from ..state import TelegramTopicRecord
-from ..trigger_mode import should_trigger_run
-from .commands.execution import _build_telegram_thread_orchestration_service
+from ..ui_state import TelegramUiState
+from .media_ingress import (
+    MediaBatchBuffer as _MediaBatchBuffer,
+)
+from .media_ingress import (
+    handle_media_message as _handle_media_message_impl,
+)
+from .media_ingress import (
+    has_batchable_media,
+    media_batch_key,
+    message_has_media,
+)
+from .message_policy import (
+    activated_record_allows_plain_text_turn as _activated_record_allows_plain_text_turn,
+)
+from .message_policy import (
+    evaluate_message_policy as _evaluate_message_policy,
+)
+from .message_policy import (
+    event_logger as _event_logger,
+)
+from .message_policy import (
+    log_message_policy_result as _log_message_policy_result,
+)
 from .questions import handle_custom_text_input
+from .surface_ingress import (
+    TelegramSurfaceTurnDispatch as _TelegramSurfaceTurnDispatch,
+)
+from .surface_ingress import (
+    submit_telegram_surface_turn as _submit_telegram_surface_turn,
+)
 
 _logger = logging.getLogger(__name__)
 
 COALESCE_LONG_MESSAGE_WINDOW_SECONDS = 6.0
 COALESCE_LONG_MESSAGE_THRESHOLD = TELEGRAM_MAX_MESSAGE_LENGTH - 256
-MEDIA_BATCH_WINDOW_SECONDS = 1.0
-MAX_BATCH_ITEMS = 10
-
-
-def _evaluate_message_policy(
-    handlers: Any,
-    message: TelegramMessage,
-    *,
-    text: str,
-    is_explicit_command: bool,
-) -> Any:
-    evaluator = getattr(handlers, "_evaluate_collaboration_message_policy", None)
-    if callable(evaluator):
-        return evaluator(
-            message,
-            text=text,
-            is_explicit_command=is_explicit_command,
-        )
-    if is_explicit_command:
-        return SimpleNamespace(command_allowed=True, should_start_turn=False)
-    trigger_mode = getattr(getattr(handlers, "_config", None), "trigger_mode", "all")
-    if trigger_mode == "mentions" and not should_trigger_run(
-        message,
-        text=text,
-        bot_username=getattr(handlers, "_bot_username", None),
-    ):
-        return SimpleNamespace(command_allowed=True, should_start_turn=False)
-    return SimpleNamespace(command_allowed=True, should_start_turn=True)
-
-
-def _log_message_policy_result(
-    handlers: Any, message: TelegramMessage, result: Any
-) -> None:
-    logger = getattr(handlers, "_log_collaboration_policy_result", None)
-    if callable(logger):
-        logger(message, result)
-
-
-def _event_logger(handlers: Any) -> logging.Logger:
-    candidate = getattr(handlers, "_logger", None)
-    if hasattr(candidate, "log"):
-        return candidate
-    return logging.getLogger(__name__)
 
 
 async def _run_with_typing_indicator(
@@ -124,262 +91,6 @@ async def _run_with_typing_indicator(
                 _logger.debug("typing indicator end failed", exc_info=True)
 
 
-def _paused_flow_status(run_record: Any) -> str:
-    status = getattr(run_record, "status", None)
-    if status is None:
-        return "paused"
-    return str(getattr(status, "value", status))
-
-
-async def _resolve_paused_flow_core(
-    paused: Optional[tuple[str, Any]],
-    workspace_root: Optional[Path],
-) -> Optional[PausedFlowTarget]:
-    if paused is None:
-        return None
-    run_id, run_record = paused
-    ws = workspace_root or Path(".")
-    return PausedFlowTarget(
-        flow_target=FlowTarget(
-            flow_target_id="ticket_flow",
-            flow_type="ticket_flow",
-            display_name="ticket_flow",
-            workspace_root=str(ws),
-        ),
-        run_id=run_id,
-        status=_paused_flow_status(run_record),
-        workspace_root=ws,
-    )
-
-
-async def _download_message_media(
-    handlers: Any,
-    message: TelegramMessage,
-) -> list[tuple[str, bytes]]:
-    files: list[tuple[str, bytes]] = []
-    if message.photos:
-        photos = sorted(
-            message.photos,
-            key=lambda p: (p.file_size or 0, p.width * p.height),
-            reverse=True,
-        )
-        if photos:
-            best = photos[0]
-            try:
-                file_info = await handlers._bot.get_file(best.file_id)
-                data = await handlers._bot.download_file(
-                    file_info.file_path,
-                    max_size_bytes=handlers._config.media.max_image_bytes,
-                )
-                files.append((f"photo_{best.file_id}.jpg", data))
-            except Exception as exc:
-                handlers._logger.debug("Failed to download photo: %s", exc)
-    elif message.document:
-        try:
-            file_info = await handlers._bot.get_file(message.document.file_id)
-            data = await handlers._bot.download_file(
-                file_info.file_path,
-                max_size_bytes=handlers._config.media.max_file_bytes,
-            )
-            filename = (
-                message.document.file_name or f"document_{message.document.file_id}"
-            )
-            files.append((filename, data))
-        except Exception as exc:
-            handlers._logger.debug("Failed to download document: %s", exc)
-    elif message.audio:
-        try:
-            file_info = await handlers._bot.get_file(message.audio.file_id)
-            data = await handlers._bot.download_file(
-                file_info.file_path,
-                max_size_bytes=handlers._config.media.max_file_bytes,
-            )
-            filename = message.audio.file_name or f"audio_{message.audio.file_id}"
-            files.append((filename, data))
-        except Exception as exc:
-            handlers._logger.debug("Failed to download audio: %s", exc)
-    elif message.voice:
-        try:
-            file_info = await handlers._bot.get_file(message.voice.file_id)
-            data = await handlers._bot.download_file(
-                file_info.file_path,
-                max_size_bytes=handlers._config.media.max_voice_bytes,
-            )
-            files.append((f"voice_{message.voice.file_id}.ogg", data))
-        except Exception as exc:
-            handlers._logger.debug("Failed to download voice: %s", exc)
-    return files
-
-
-async def _submit_flow_reply_core(
-    handlers: Any,
-    message: TelegramMessage,
-    paused: Optional[tuple[str, Any]],
-    workspace_root: Path,
-    reply_text: str,
-    files: Optional[list[tuple[str, bytes]]] = None,
-) -> None:
-    if paused is None:
-        return
-    run_id, run_record = paused
-    expected_media = bool(
-        message.photos or message.document or message.audio or message.voice
-    )
-    if expected_media and not files:
-        await handlers._send_message(
-            message.chat_id,
-            "Failed to download media for paused flow reply. Please retry.",
-            thread_id=message.thread_id,
-            reply_to=message.message_id,
-        )
-        return
-    success, result = await handlers._write_user_reply_from_telegram(
-        workspace_root,
-        run_id,
-        run_record,
-        message,
-        reply_text,
-        files,
-    )
-    await handlers._send_message(
-        message.chat_id,
-        result,
-        thread_id=message.thread_id,
-        reply_to=message.message_id,
-    )
-    if success:
-        await handlers._ticket_flow_bridge.auto_resume_run(workspace_root, run_id)
-
-
-def _build_normal_message_kwargs(
-    *,
-    text_override: str,
-    placeholder_id: Optional[int],
-    record: Any,
-    notification_reply: Any,
-    handlers: Any,
-) -> dict[str, Any]:
-    kwargs: dict[str, Any] = {
-        "text_override": text_override,
-        "placeholder_id": placeholder_id,
-    }
-    if notification_reply is not None:
-        kwargs["record"] = dataclasses.replace(
-            record or TelegramTopicRecord(),
-            pma_enabled=True,
-            repo_id=notification_reply.repo_id or getattr(record, "repo_id", None),
-            workspace_path=(
-                notification_reply.workspace_root
-                or str(getattr(handlers, "_hub_root", None) or "")
-                or getattr(record, "workspace_path", None)
-            ),
-        )
-        kwargs["surface_key_override"] = notification_surface_key(
-            notification_reply.notification_id
-        )
-        kwargs["pma_context_prefix"] = build_notification_context_block(
-            notification_reply
-        )
-    return kwargs
-
-
-async def _submit_thread_message_core(
-    handlers: Any,
-    message: TelegramMessage,
-    runtime: Any,
-    record: Any,
-    text_override: str,
-    placeholder_id: Optional[int],
-    notification_reply: Any,
-) -> None:
-    image_candidate = select_image_candidate(message)
-    if image_candidate:
-        if not handlers._config.media.images:
-            await handlers._send_message(
-                message.chat_id,
-                "Image handling is disabled.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        await handlers._handle_image_message(
-            message,
-            runtime,
-            record,
-            image_candidate,
-            text_override,
-            placeholder_id=placeholder_id,
-        )
-        return
-
-    voice_candidate = select_voice_candidate(message)
-    if voice_candidate:
-        if not handlers._config.media.voice:
-            await handlers._send_message(
-                message.chat_id,
-                "Voice transcription is disabled.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        await handlers._handle_voice_message(
-            message,
-            runtime,
-            record,
-            voice_candidate,
-            text_override,
-            placeholder_id=placeholder_id,
-        )
-        return
-
-    file_candidate = select_file_candidate(message)
-    if file_candidate:
-        if not handlers._config.media.files:
-            await handlers._send_message(
-                message.chat_id,
-                "File handling is disabled.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        await handlers._handle_file_message(
-            message,
-            runtime,
-            record,
-            file_candidate,
-            text_override,
-            placeholder_id=placeholder_id,
-        )
-        return
-
-    if not text_override:
-        await handlers._send_message(
-            message.chat_id,
-            "Unsupported media type.",
-            thread_id=message.thread_id,
-            reply_to=message.message_id,
-        )
-        return
-
-    normal_kwargs = _build_normal_message_kwargs(
-        text_override=text_override,
-        placeholder_id=placeholder_id,
-        record=record,
-        notification_reply=notification_reply,
-        handlers=handlers,
-    )
-    await handlers._handle_normal_message(message, runtime, **normal_kwargs)
-
-
-async def _clear_message_placeholder(
-    handlers: Any,
-    message: TelegramMessage,
-    placeholder_id: Optional[int],
-) -> None:
-    if placeholder_id is not None:
-        await handlers._delete_message(message.chat_id, placeholder_id)
-
-
 def _has_pending_custom_question(handlers: Any, message: TelegramMessage) -> bool:
     for pending in handlers._pending_questions.values():
         if (
@@ -391,27 +102,26 @@ def _has_pending_custom_question(handlers: Any, message: TelegramMessage) -> boo
     return False
 
 
-def _pending_state_belongs_to_actor(state: Any, actor_id: Optional[str]) -> bool:
-    if state is None:
-        return False
-    if isinstance(state, dict):
-        expected = state.get("requester_user_id")
-    else:
-        expected = getattr(state, "requester_user_id", None)
-    if expected is None:
-        return True
-    return expected == actor_id
-
-
-def _pop_pending_state_if_owned(
-    state_map: dict[str, Any],
-    key: str,
-    actor_id: Optional[str],
-) -> Any:
-    state = state_map.get(key)
-    if not _pending_state_belongs_to_actor(state, actor_id):
-        return None
-    return state_map.pop(key, None)
+def _ui_state(handlers: Any) -> TelegramUiState:
+    state = getattr(handlers, "_ui_state", None)
+    if isinstance(state, TelegramUiState):
+        return state
+    fallback = TelegramUiState()
+    fallback.pending_questions = getattr(handlers, "_pending_questions", {})
+    fallback.resume_options = getattr(handlers, "_resume_options", {})
+    fallback.bind_options = getattr(handlers, "_bind_options", {})
+    fallback.flow_run_options = getattr(handlers, "_flow_run_options", {})
+    fallback.update_options = getattr(handlers, "_update_options", {})
+    fallback.update_confirm_options = getattr(handlers, "_update_confirm_options", {})
+    fallback.review_commit_options = getattr(handlers, "_review_commit_options", {})
+    fallback.review_commit_subjects = getattr(handlers, "_review_commit_subjects", {})
+    fallback.pending_review_custom = getattr(handlers, "_pending_review_custom", {})
+    fallback.compact_pending = getattr(handlers, "_compact_pending", {})
+    fallback.agent_options = getattr(handlers, "_agent_options", {})
+    fallback.agent_profile_options = getattr(handlers, "_agent_profile_options", {})
+    fallback.model_options = getattr(handlers, "_model_options", {})
+    fallback.model_pending = getattr(handlers, "_model_pending", {})
+    return fallback
 
 
 @dataclass
@@ -425,41 +135,6 @@ class _CoalescedBuffer:
     last_part_len: int = 0
 
 
-@dataclass
-class _MediaBatchBuffer:
-    topic_key: str
-    messages: list[TelegramMessage] = field(default_factory=list)
-    placeholder_id: Optional[int] = None
-    task: Optional[asyncio.Task[None]] = None
-    media_group_id: Optional[str] = None
-    created_at: float = 0.0
-
-
-@dataclass(frozen=True)
-class _TelegramSurfaceTurnDispatch:
-    handlers: Any
-    message: TelegramMessage
-    runtime: Any
-    record: Any
-    topic_key: str
-    workspace_root: Path
-    prompt_text: str
-    flow_reply_text: str
-    pma_enabled: bool
-    paused: Optional[tuple[str, Any]]
-    notification_reply: Any
-    placeholder_id: Optional[int]
-
-    def build_request(self) -> SurfaceThreadMessageRequest:
-        return SurfaceThreadMessageRequest(
-            surface_kind="telegram",
-            workspace_root=self.workspace_root,
-            prompt_text=self.prompt_text,
-            agent_id=getattr(self.record, "agent", None),
-            pma_enabled=self.pma_enabled,
-        )
-
-
 def _message_text_candidate(message: TelegramMessage) -> tuple[str, str, Any]:
     return message_text_candidate(
         text=message.text,
@@ -469,84 +144,11 @@ def _message_text_candidate(message: TelegramMessage) -> tuple[str, str, Any]:
     )
 
 
-def _record_with_media_workspace(
-    handlers: Any, record: Any
-) -> tuple[Any, Optional[str]]:
-    """Ensure media handlers have a workspace path, including PMA topics."""
-    if record is None:
-        return None, None
-    pma_enabled = bool(getattr(record, "pma_enabled", False))
-    if not pma_enabled:
-        return record, None
-    hub_root = getattr(handlers, "_hub_root", None)
-    if hub_root is None:
-        return None, "PMA unavailable; hub root not configured."
-    return dataclasses.replace(record, workspace_path=str(hub_root)), None
-
-
-def _activated_record_allows_plain_text_turn(
-    handlers: Any,
-    message: TelegramMessage,
-    *,
-    text: str,
-    record: Any,
-    policy_result: Any,
-) -> bool:
-    if record is None:
-        return False
-    if not (
-        bool(getattr(record, "pma_enabled", False))
-        or bool(getattr(record, "workspace_path", None))
-    ):
-        return False
-    if getattr(policy_result, "matched_destination", None) is not None:
-        return False
-    if getattr(policy_result, "destination_mode", None) != "command_only":
-        return False
-    if getattr(policy_result, "reason", None) != "plain_text_disabled":
-        return False
-
-    default_trigger = getattr(
-        getattr(handlers, "_collaboration_policy", None),
-        "default_plain_text_trigger",
-        "always",
-    )
-    if default_trigger == "disabled":
-        return False
-    if default_trigger not in {"always", "mentions"}:
-        return False
-    return should_trigger_plain_text_turn(
-        mode=default_trigger,
-        context=PlainTextTurnContext(
-            text=text,
-            chat_type=message.chat_type,
-            bot_username=getattr(handlers, "_bot_username", None),
-            reply_to_is_bot=message.reply_to_is_bot,
-            reply_to_username=message.reply_to_username,
-            reply_to_message_id=(
-                str(message.reply_to_message_id)
-                if message.reply_to_message_id is not None
-                else None
-            ),
-            thread_id=str(message.thread_id) if message.thread_id is not None else None,
-        ),
-    )
-
-
 async def _clear_pending_options(
     handlers: Any, key: str, message: TelegramMessage
 ) -> None:
-    agent_profile_options = getattr(handlers, "_agent_profile_options", None)
-    handlers._resume_options.pop(key, None)
-    handlers._bind_options.pop(key, None)
-    handlers._agent_options.pop(key, None)
-    if isinstance(agent_profile_options, dict):
-        agent_profile_options.pop(key, None)
-    handlers._model_options.pop(key, None)
-    handlers._model_pending.pop(key, None)
-    handlers._review_commit_options.pop(key, None)
-    handlers._review_commit_subjects.pop(key, None)
-    pending_review_custom = handlers._pending_review_custom.pop(key, None)
+    actor_id = str(message.from_user_id) if message.from_user_id is not None else None
+    pending_review_custom = _ui_state(handlers).clear_pending_options(key, actor_id)
     await handlers._dismiss_review_custom_prompt(message, pending_review_custom)
 
 
@@ -622,140 +224,13 @@ async def _run_placeholder_wrapped_work(
     await wrapped
 
 
-def _build_telegram_surface_ingress(
+async def _clear_message_placeholder(
     handlers: Any,
-    *,
-    topic_key: str,
     message: TelegramMessage,
-) -> Any:
-    event_logger = _event_logger(handlers)
-    return build_surface_orchestration_ingress(
-        event_sink=lambda orchestration_event: log_event(
-            event_logger,
-            logging.INFO,
-            f"telegram.{orchestration_event.event_type}",
-            topic_key=topic_key,
-            chat_id=message.chat_id,
-            thread_id=message.thread_id,
-            message_id=message.message_id,
-            surface_kind=orchestration_event.surface_kind,
-            target_kind=orchestration_event.target_kind,
-            target_id=orchestration_event.target_id,
-            status=orchestration_event.status,
-            **orchestration_event.metadata,
-        )
-    )
-
-
-async def _resolve_telegram_paused_flow(
-    _request: SurfaceThreadMessageRequest,
-    *,
-    dispatch: _TelegramSurfaceTurnDispatch,
-) -> Optional[PausedFlowTarget]:
-    return await _resolve_paused_flow_core(dispatch.paused, dispatch.workspace_root)
-
-
-async def _submit_telegram_flow_reply(
-    _request: SurfaceThreadMessageRequest,
-    flow_target: PausedFlowTarget,
-    *,
-    dispatch: _TelegramSurfaceTurnDispatch,
+    placeholder_id: Optional[int],
 ) -> None:
-    await _submit_flow_reply_core(
-        dispatch.handlers,
-        dispatch.message,
-        dispatch.paused,
-        dispatch.workspace_root,
-        dispatch.flow_reply_text,
-    )
-
-
-async def _submit_telegram_thread_message(
-    _request: SurfaceThreadMessageRequest,
-    *,
-    dispatch: _TelegramSurfaceTurnDispatch,
-) -> None:
-    await _submit_thread_message_core(
-        dispatch.handlers,
-        dispatch.message,
-        dispatch.runtime,
-        dispatch.record,
-        text_override=dispatch.prompt_text,
-        placeholder_id=dispatch.placeholder_id,
-        notification_reply=dispatch.notification_reply,
-    )
-
-
-async def _bind_telegram_notification_continuation(
-    dispatch: _TelegramSurfaceTurnDispatch,
-) -> None:
-    notification_reply = dispatch.notification_reply
-    if notification_reply is None:
-        return
-    orch_service = _build_telegram_thread_orchestration_service(dispatch.handlers)
-    orch_binding = (
-        orch_service.get_binding(
-            surface_kind="telegram",
-            surface_key=notification_surface_key(notification_reply.notification_id),
-        )
-        if orch_service is not None
-        else None
-    )
-    if orch_binding is not None:
-        hub_client = getattr(dispatch.handlers, "_hub_client", None)
-        if hub_client is not None:
-            from ....core.hub_control_plane import (
-                NotificationContinuationBindRequest as _CPContinuationRequest,
-            )
-
-            try:
-                await hub_client.bind_notification_continuation(
-                    _CPContinuationRequest(
-                        notification_id=notification_reply.notification_id,
-                        thread_target_id=orch_binding.thread_target_id,
-                    )
-                )
-                return
-            except Exception as exc:
-                log_event(
-                    _event_logger(dispatch.handlers),
-                    logging.WARNING,
-                    "telegram.notification.continuation_bind.control_plane_failed",
-                    notification_id=notification_reply.notification_id,
-                    exc=exc,
-                )
-        else:
-            log_event(
-                _event_logger(dispatch.handlers),
-                logging.WARNING,
-                "telegram.notification.continuation_bind.hub_client_unavailable",
-                notification_id=notification_reply.notification_id,
-            )
-
-
-async def _submit_telegram_surface_turn(
-    dispatch: _TelegramSurfaceTurnDispatch,
-) -> None:
-    ingress = _build_telegram_surface_ingress(
-        dispatch.handlers,
-        topic_key=dispatch.topic_key,
-        message=dispatch.message,
-    )
-    request = dispatch.build_request()
-    if dispatch.notification_reply is not None:
-        await _submit_telegram_thread_message(request, dispatch=dispatch)
-        await _bind_telegram_notification_continuation(dispatch)
-        return
-    await ingress.submit_message(
-        request,
-        resolve_paused_flow_target=partial(
-            _resolve_telegram_paused_flow, dispatch=dispatch
-        ),
-        submit_flow_reply=partial(_submit_telegram_flow_reply, dispatch=dispatch),
-        submit_thread_message=partial(
-            _submit_telegram_thread_message, dispatch=dispatch
-        ),
-    )
+    if placeholder_id is not None:
+        await handlers._delete_message(message.chat_id, placeholder_id)
 
 
 async def handle_message(handlers: Any, message: TelegramMessage) -> None:
@@ -944,12 +419,7 @@ async def handle_message_inner(
     )
 
     if text and not command_policy_result.command_allowed:
-        has_pending_state = (
-            bool(handlers._resume_options.get(key))
-            or bool(handlers._bind_options.get(key))
-            or bool(handlers._review_commit_options.get(key))
-            or bool(handlers._pending_review_custom.get(key))
-        )
+        has_pending_state = _ui_state(handlers).has_policy_blocking_state(key)
         if has_pending_state:
             _log_message_policy_result(handlers, message, command_policy_result)
             await _clear_message_placeholder(handlers, message, placeholder_id)
@@ -984,15 +454,7 @@ async def handle_message_inner(
             _log_message_policy_result(handlers, message, command_policy_result)
             await _clear_message_placeholder(handlers, message, placeholder_id)
             return
-        agent_profile_options = getattr(handlers, "_agent_profile_options", None)
-        _pop_pending_state_if_owned(handlers._resume_options, key, actor_id)
-        _pop_pending_state_if_owned(handlers._bind_options, key, actor_id)
-        handlers._flow_run_options.pop(key, None)
-        handlers._agent_options.pop(key, None)
-        if isinstance(agent_profile_options, dict):
-            agent_profile_options.pop(key, None)
-        handlers._model_options.pop(key, None)
-        handlers._model_pending.pop(key, None)
+        _ui_state(handlers).clear_for_bang_command(key, actor_id)
 
         await _enqueue_or_run_topic_call(
             handlers,
@@ -1027,53 +489,12 @@ async def handle_message_inner(
         await _clear_message_placeholder(handlers, message, placeholder_id)
         return
     if command:
-        agent_profile_options = getattr(handlers, "_agent_profile_options", None)
-        if command.name != "resume":
-            _pop_pending_state_if_owned(handlers._resume_options, key, actor_id)
-        if command.name != "bind":
-            _pop_pending_state_if_owned(handlers._bind_options, key, actor_id)
-        if command.name != "agent":
-            handlers._agent_options.pop(key, None)
-            if isinstance(agent_profile_options, dict):
-                agent_profile_options.pop(key, None)
-        if command.name != "model":
-            handlers._model_options.pop(key, None)
-            handlers._model_pending.pop(key, None)
-        if command.name != "review":
-            review_state = _pop_pending_state_if_owned(
-                handlers._review_commit_options,
-                key,
-                actor_id,
-            )
-            if review_state is not None:
-                handlers._review_commit_subjects.pop(key, None)
-            pending_review_custom = _pop_pending_state_if_owned(
-                handlers._pending_review_custom,
-                key,
-                actor_id,
-            )
-            await handlers._dismiss_review_custom_prompt(message, pending_review_custom)
+        pending_review_custom = _ui_state(handlers).clear_for_command(
+            key, actor_id, command.name
+        )
+        await handlers._dismiss_review_custom_prompt(message, pending_review_custom)
     else:
-        agent_profile_options = getattr(handlers, "_agent_profile_options", None)
-        _pop_pending_state_if_owned(handlers._resume_options, key, actor_id)
-        _pop_pending_state_if_owned(handlers._bind_options, key, actor_id)
-        handlers._agent_options.pop(key, None)
-        if isinstance(agent_profile_options, dict):
-            agent_profile_options.pop(key, None)
-        handlers._model_options.pop(key, None)
-        handlers._model_pending.pop(key, None)
-        review_state = _pop_pending_state_if_owned(
-            handlers._review_commit_options,
-            key,
-            actor_id,
-        )
-        if review_state is not None:
-            handlers._review_commit_subjects.pop(key, None)
-        pending_review_custom = _pop_pending_state_if_owned(
-            handlers._pending_review_custom,
-            key,
-            actor_id,
-        )
+        pending_review_custom = _ui_state(handlers).clear_for_message(key, actor_id)
         await handlers._dismiss_review_custom_prompt(message, pending_review_custom)
     if command:
         if not command_policy_result.command_allowed:
@@ -1357,112 +778,6 @@ def build_coalesced_message(buffer: _CoalescedBuffer) -> TelegramMessage:
     return dataclasses.replace(buffer.message, text=combined_text, caption=None)
 
 
-def message_has_media(message: TelegramMessage) -> bool:
-    return bool(message.photos or message.document or message.voice or message.audio)
-
-
-def select_photo(
-    photos: Sequence[TelegramPhotoSize],
-) -> Optional[TelegramPhotoSize]:
-    if not photos:
-        return None
-    return max(
-        photos,
-        key=lambda item: ((item.file_size or 0), item.width * item.height),
-    )
-
-
-def document_is_image(document: TelegramDocument) -> bool:
-    return is_image_mime_or_path(document.mime_type, document.file_name)
-
-
-def select_image_candidate(
-    message: TelegramMessage,
-) -> Optional[TelegramMediaCandidate]:
-    photo = select_photo(message.photos)
-    if photo:
-        return TelegramMediaCandidate(
-            kind="photo",
-            file_id=photo.file_id,
-            file_name=None,
-            mime_type=None,
-            file_size=photo.file_size,
-        )
-    if message.document and document_is_image(message.document):
-        document = message.document
-        return TelegramMediaCandidate(
-            kind="document",
-            file_id=document.file_id,
-            file_name=document.file_name,
-            mime_type=document.mime_type,
-            file_size=document.file_size,
-        )
-    return None
-
-
-def select_voice_candidate(
-    message: TelegramMessage,
-) -> Optional[TelegramMediaCandidate]:
-    if message.voice:
-        voice = message.voice
-        mime_type = audio_content_type_for_input(
-            mime_type=voice.mime_type,
-            file_name=None,
-            source_url=None,
-        )
-        return TelegramMediaCandidate(
-            kind="voice",
-            file_id=voice.file_id,
-            file_name=None,
-            mime_type=mime_type,
-            file_size=voice.file_size,
-            duration=voice.duration,
-        )
-    if message.audio:
-        audio = message.audio
-        mime_type = audio_content_type_for_input(
-            mime_type=audio.mime_type,
-            file_name=audio.file_name,
-            source_url=None,
-        )
-        return TelegramMediaCandidate(
-            kind="audio",
-            file_id=audio.file_id,
-            file_name=audio.file_name,
-            mime_type=mime_type,
-            file_size=audio.file_size,
-            duration=audio.duration,
-        )
-    return None
-
-
-def select_file_candidate(
-    message: TelegramMessage,
-) -> Optional[TelegramMediaCandidate]:
-    if message.document and not document_is_image(message.document):
-        document = message.document
-        return TelegramMediaCandidate(
-            kind="file",
-            file_id=document.file_id,
-            file_name=document.file_name,
-            mime_type=document.mime_type,
-            file_size=document.file_size,
-        )
-    return None
-
-
-def has_batchable_media(message: TelegramMessage) -> bool:
-    return bool(message.photos or message.document)
-
-
-async def media_batch_key(handlers: Any, message: TelegramMessage) -> str:
-    topic_key = await handlers._resolve_topic_key(message.chat_id, message.thread_id)
-    user_id = message.from_user_id
-    if message.media_group_id:
-        return f"{topic_key}:user:{user_id}:mg:{message.media_group_id}"
-    return f"{topic_key}:user:{user_id}:burst"
-
-
 async def buffer_media_batch(
     handlers: Any,
     message: TelegramMessage,
@@ -1482,7 +797,7 @@ async def buffer_media_batch(
     drop_placeholder = False
     async with lock:
         buffer = handlers._media_batch_buffers.get(key)
-        if buffer is not None and len(buffer.messages) >= MAX_BATCH_ITEMS:
+        if buffer is not None and len(buffer.messages) >= 10:
             if buffer.task and buffer.task is not asyncio.current_task():
                 buffer.task.cancel()
 
@@ -1590,191 +905,10 @@ async def handle_media_message(
     *,
     placeholder_id: Optional[int] = None,
 ) -> None:
-    if not handlers._config.media.enabled:
-        await handlers._send_message(
-            message.chat_id,
-            "Media handling is disabled.",
-            thread_id=message.thread_id,
-            reply_to=message.message_id,
-        )
-        return
-    key = await handlers._resolve_topic_key(message.chat_id, message.thread_id)
-    record = await handlers._router.get_topic(key)
-    record, pma_error = _record_with_media_workspace(handlers, record)
-    if pma_error:
-        await handlers._send_message(
-            message.chat_id,
-            pma_error,
-            thread_id=message.thread_id,
-            reply_to=message.message_id,
-        )
-        return
-    if record is None or not record.workspace_path:
-        await handlers._send_message(
-            message.chat_id,
-            handlers._with_conversation_id(
-                TOPIC_NOT_BOUND_MESSAGE,
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-            ),
-            thread_id=message.thread_id,
-            reply_to=message.message_id,
-        )
-        return
-
-    pma_enabled = bool(getattr(record, "pma_enabled", False))
-    workspace_root = canonicalize_path(Path(record.workspace_path))
-    notification_reply = None
-    if message.reply_to_message_id is not None:
-        hub_client = getattr(handlers, "_hub_client", None)
-        if hub_client is not None:
-            from ....core.hub_control_plane import (
-                NotificationReplyTargetLookupRequest as _CPReplyTargetRequest,
-            )
-
-            try:
-                cp_response = await hub_client.get_notification_reply_target(
-                    _CPReplyTargetRequest(
-                        surface_kind="telegram",
-                        surface_key=key,
-                        delivered_message_id=str(message.reply_to_message_id),
-                    )
-                )
-                if cp_response.record is not None:
-                    notification_reply = cp_response.record
-            except Exception as exc:
-                log_event(
-                    _event_logger(handlers),
-                    logging.WARNING,
-                    "telegram.media.reply_target.control_plane_failed",
-                    topic_key=key,
-                    message_id=message.message_id,
-                    exc=exc,
-                )
-    turn_caption_text = format_forwarded_telegram_message_text(message, caption_text)
-    paused = None
-    if not pma_enabled and notification_reply is None:
-        preferred_run_id = handlers._ticket_flow_pause_targets.get(
-            str(workspace_root), None
-        )
-        paused = handlers._get_paused_ticket_flow(
-            workspace_root, preferred_run_id=preferred_run_id
-        )
-    event_logger = _event_logger(handlers)
-    ingress = build_surface_orchestration_ingress(
-        event_sink=lambda orchestration_event: log_event(
-            event_logger,
-            logging.INFO,
-            f"telegram.{orchestration_event.event_type}",
-            topic_key=key,
-            chat_id=message.chat_id,
-            thread_id=message.thread_id,
-            message_id=message.message_id,
-            surface_kind=orchestration_event.surface_kind,
-            target_kind=orchestration_event.target_kind,
-            target_id=orchestration_event.target_id,
-            status=orchestration_event.status,
-            **orchestration_event.metadata,
-        )
-    )
-
-    async def _resolve_paused_flow(
-        _request: SurfaceThreadMessageRequest,
-    ) -> Optional[PausedFlowTarget]:
-        return await _resolve_paused_flow_core(paused, workspace_root)
-
-    async def _submit_flow_reply(
-        _request: SurfaceThreadMessageRequest, flow_target: PausedFlowTarget
-    ) -> None:
-        reply_text = caption_text.strip() if isinstance(caption_text, str) else ""
-        if not reply_text:
-            reply_text = "Media reply attached."
-        files = await _download_message_media(handlers, message)
-        await _submit_flow_reply_core(
-            handlers,
-            message,
-            paused,
-            workspace_root,
-            compose_forwarded_message_text(
-                reply_text,
-                message_forward_info(message, reply_text),
-            ),
-            files=files,
-        )
-
-    async def _submit_thread_message(
-        _request: SurfaceThreadMessageRequest,
-    ) -> None:
-        await _submit_thread_message_core(
-            handlers,
-            message,
-            runtime,
-            record,
-            text_override=turn_caption_text,
-            placeholder_id=placeholder_id,
-            notification_reply=notification_reply,
-        )
-
-    if notification_reply is not None:
-        await _submit_thread_message(
-            SurfaceThreadMessageRequest(
-                surface_kind="telegram",
-                workspace_root=workspace_root,
-                prompt_text=turn_caption_text,
-                agent_id=getattr(record, "agent", None),
-                pma_enabled=True,
-            )
-        )
-        orch_service = _build_telegram_thread_orchestration_service(handlers)
-        orch_binding = (
-            orch_service.get_binding(
-                surface_kind="telegram",
-                surface_key=notification_surface_key(
-                    notification_reply.notification_id
-                ),
-            )
-            if orch_service is not None
-            else None
-        )
-        if orch_binding is not None:
-            hub_client = getattr(handlers, "_hub_client", None)
-            if hub_client is not None:
-                from ....core.hub_control_plane import (
-                    NotificationContinuationBindRequest as _CPContinuationRequest,
-                )
-
-                try:
-                    await hub_client.bind_notification_continuation(
-                        _CPContinuationRequest(
-                            notification_id=notification_reply.notification_id,
-                            thread_target_id=orch_binding.thread_target_id,
-                        )
-                    )
-                except Exception as exc:
-                    log_event(
-                        _event_logger(handlers),
-                        logging.WARNING,
-                        "telegram.media.continuation_bind.control_plane_failed",
-                        notification_id=notification_reply.notification_id,
-                        exc=exc,
-                    )
-            else:
-                log_event(
-                    _event_logger(handlers),
-                    logging.WARNING,
-                    "telegram.media.continuation_bind.hub_client_unavailable",
-                    notification_id=notification_reply.notification_id,
-                )
-        return
-    await ingress.submit_message(
-        SurfaceThreadMessageRequest(
-            surface_kind="telegram",
-            workspace_root=workspace_root,
-            prompt_text=turn_caption_text,
-            agent_id=getattr(record, "agent", None),
-            pma_enabled=pma_enabled,
-        ),
-        resolve_paused_flow_target=_resolve_paused_flow,
-        submit_flow_reply=_submit_flow_reply,
-        submit_thread_message=_submit_thread_message,
+    await _handle_media_message_impl(
+        handlers,
+        message,
+        runtime,
+        caption_text,
+        placeholder_id=placeholder_id,
     )
