@@ -207,6 +207,45 @@
     }
   },
   {
+    "name": "session_update_commentary_message_chunk_missing_turn_id",
+    "raw": {
+      "method": "session/update",
+      "params": {
+        "sessionId": "session-1",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "phase": "commentary",
+          "alreadyStreamed": true,
+          "content": [
+            {
+              "type": "text",
+              "text": "draft"
+            },
+            {
+              "type": "output_text",
+              "text": " plan"
+            }
+          ]
+        }
+      }
+    },
+    "expected": {
+      "normalized_kind": "output_delta",
+      "terminal_status": null,
+      "runtime_terminal_status": null,
+      "uses_turn_id_fallback": true,
+      "closes_turn_buffer": false,
+      "assistant_text": "",
+      "output_delta": "draft plan",
+      "progress_message": "",
+      "error_message": null,
+      "session_status": null,
+      "session_update_kind": "agent_message_chunk",
+      "message_phase": "commentary",
+      "already_streamed": true
+    }
+  },
+  {
     "name": "session_update_thought_chunk_missing_turn_id",
     "raw": {
       "method": "session/update",

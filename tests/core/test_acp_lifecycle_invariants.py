@@ -511,6 +511,26 @@ def test_analyze_acp_lifecycle_session_update_agent_message_chunk() -> None:
     assert snap.output_delta == "streamed text"
 
 
+def test_analyze_acp_lifecycle_session_update_commentary_metadata() -> None:
+    snap = analyze_acp_lifecycle_message(
+        {
+            "method": "session/update",
+            "params": {
+                "update": {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": "draft plan",
+                    "phase": "commentary",
+                    "alreadyStreamed": True,
+                }
+            },
+        }
+    )
+    assert snap.normalized_kind == "output_delta"
+    assert snap.output_delta == "draft plan"
+    assert snap.message_phase == "commentary"
+    assert snap.already_streamed is True
+
+
 def test_analyze_acp_lifecycle_session_update_agent_thought_chunk() -> None:
     snap = analyze_acp_lifecycle_message(
         {

@@ -94,6 +94,7 @@ def apply_run_event_to_progress_tracker(
 
     if isinstance(run_event, ToolCall):
         tool_name = run_event.tool_name.strip() if run_event.tool_name else ""
+        tracker.end_output_segment()
         tracker.note_tool(tool_name or "Tool call")
         return ProgressTrackerEventOutcome(changed=True, force=True)
 
@@ -113,6 +114,18 @@ def apply_run_event_to_progress_tracker(
                 changed=True,
                 force=prior_transient is None or prior_transient.label != "thinking",
             )
+        if run_event.kind == "commentary":
+            already_streamed = bool(
+                run_event.data.get("already_streamed")
+                or run_event.data.get("alreadyStreamed")
+            )
+            tracker.end_output_segment()
+            if already_streamed:
+                return ProgressTrackerEventOutcome(changed=False)
+            if not notice:
+                return ProgressTrackerEventOutcome(changed=False)
+            tracker.note_commentary(notice)
+            return ProgressTrackerEventOutcome(changed=True, force=True)
         if run_event.kind == "interrupted":
             if tracker.label == "done" and runtime_state.final_message:
                 return ProgressTrackerEventOutcome(changed=False)

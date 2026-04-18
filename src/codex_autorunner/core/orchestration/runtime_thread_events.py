@@ -432,6 +432,20 @@ def normalize_runtime_thread_message(
         update = _extract_session_update(params)
         update_kind = acp_lifecycle.session_update_kind or ""
         if update_kind == "agent_message_chunk":
+            if acp_lifecycle.message_phase == "commentary":
+                commentary_text = acp_lifecycle.output_delta or _extract_output_delta(
+                    _extract_session_update_message_params(update)
+                )
+                if not commentary_text:
+                    return []
+                return [
+                    RunNotice(
+                        timestamp=event_timestamp,
+                        kind="commentary",
+                        message=commentary_text,
+                        data={"already_streamed": acp_lifecycle.already_streamed},
+                    )
+                ]
             return _assistant_stream_events(
                 _extract_session_update_message_params(update),
                 state,
@@ -465,6 +479,15 @@ def normalize_runtime_thread_message(
         content = acp_lifecycle.assistant_text
         if not content:
             return []
+        if acp_lifecycle.message_phase == "commentary":
+            return [
+                RunNotice(
+                    timestamp=event_timestamp,
+                    kind="commentary",
+                    message=content,
+                    data={"already_streamed": acp_lifecycle.already_streamed},
+                )
+            ]
         state.note_message_text(content)
         return [
             OutputDelta(
@@ -563,7 +586,17 @@ def normalize_runtime_thread_message(
             return []
         if item_type == "agentMessage":
             if _is_commentary_agent_message(item):
-                return []
+                content = _extract_agent_message_text(item)
+                if not content:
+                    return []
+                return [
+                    RunNotice(
+                        timestamp=event_timestamp,
+                        kind="commentary",
+                        message=content,
+                        data={"already_streamed": _extract_already_streamed_flag(item)},
+                    )
+                ]
             content = _extract_agent_message_text(item)
             if not content:
                 return []
@@ -687,7 +720,17 @@ def normalize_runtime_thread_message(
             timestamp=event_timestamp,
         )
         if _extract_message_phase(params) == "commentary":
-            return role_events
+            content = _extract_message_text(params)
+            if not content:
+                return role_events
+            return role_events + [
+                RunNotice(
+                    timestamp=event_timestamp,
+                    kind="commentary",
+                    message=content,
+                    data={"already_streamed": _extract_already_streamed_flag(params)},
+                )
+            ]
         content = _extract_message_text(params)
         if not content:
             return role_events
@@ -787,7 +830,17 @@ def _assistant_stream_events(
 ) -> list[RunEvent]:
     phase = str(params.get("phase") or "").strip().lower()
     if phase == "commentary":
-        return []
+        content = _extract_output_delta(params)
+        if not content:
+            return []
+        return [
+            RunNotice(
+                timestamp=timestamp or now_iso(),
+                kind="commentary",
+                message=content,
+                data={"already_streamed": _extract_already_streamed_flag(params)},
+            )
+        ]
     content = _extract_output_delta(params)
     if not content:
         return []
@@ -1105,6 +1158,19 @@ def _extract_message_phase(params: dict[str, Any]) -> Optional[str]:
     if isinstance(nested_phase, str) and nested_phase.strip():
         return nested_phase.strip().lower()
     return None
+
+
+def _extract_already_streamed_flag(payload: dict[str, Any]) -> bool:
+    for key in ("already_streamed", "alreadyStreamed"):
+        value = payload.get(key)
+        if isinstance(value, bool):
+            return value
+    info = _extract_message_info(payload)
+    for key in ("already_streamed", "alreadyStreamed"):
+        value = info.get(key)
+        if isinstance(value, bool):
+            return value
+    return False
 
 
 def _extract_usage(params: dict[str, Any]) -> Optional[dict[str, Any]]:

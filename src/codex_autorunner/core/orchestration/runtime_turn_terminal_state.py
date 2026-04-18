@@ -455,10 +455,14 @@ def _inspect_raw_event(
 
     if method in {"message.completed", "message.updated"}:
         role = _extract_message_role(params)
-        if role != "user":
+        if (
+            role != "user"
+            and str(params.get("phase") or "").strip().lower() != "commentary"
+        ):
             assistant_message_text = _extract_message_text(params)
     elif method in {"prompt/message", "turn/message"}:
-        assistant_message_text = lifecycle.assistant_text
+        if lifecycle.message_phase != "commentary":
+            assistant_message_text = lifecycle.assistant_text
     elif lifecycle.runtime_terminal_status is not None:
         assistant_message_text = lifecycle.assistant_text or None
         terminal_signal = RuntimeThreadTerminalSignal(
@@ -487,25 +491,32 @@ def _inspect_raw_event(
         ):
             assistant_message_text = _shared_extract_agent_message_text(item) or None
 
-    if assistant_message_text is None and (
-        method
-        in {
-            "prompt/output",
-            "prompt/delta",
-            "prompt/progress",
-            "turn/progress",
-            "item/agentMessage/delta",
-            "message.delta",
-            "turn/streamDelta",
-        }
-        or "outputdelta" in method_lower
+    if (
+        assistant_message_text is None
+        and (
+            method
+            in {
+                "prompt/output",
+                "prompt/delta",
+                "prompt/progress",
+                "turn/progress",
+                "item/agentMessage/delta",
+                "message.delta",
+                "turn/streamDelta",
+            }
+            or "outputdelta" in method_lower
+        )
+        and lifecycle.message_phase != "commentary"
     ):
         assistant_stream_text = _extract_output_delta(params)
     if assistant_stream_text is None and method == "session/update":
         update = params.get("update")
         if isinstance(update, dict):
             update_kind = str(lifecycle.session_update_kind or "").strip()
-            if update_kind == "agent_message_chunk":
+            if (
+                update_kind == "agent_message_chunk"
+                and lifecycle.message_phase != "commentary"
+            ):
                 assistant_stream_text = _extract_output_delta(update)
 
     return _RawEventInspection(

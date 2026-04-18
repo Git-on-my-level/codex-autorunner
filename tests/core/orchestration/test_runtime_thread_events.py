@@ -43,9 +43,18 @@ async def test_normalize_runtime_thread_raw_event_shared_lifecycle_corpus() -> N
                 assert events[0].error_message == expected["error_message"]
                 assert state.last_error_message == expected["error_message"]
         elif expected["normalized_kind"] == "output_delta":
-            assert isinstance(events[0], OutputDelta)
-            assert events[0].content == expected["output_delta"]
-            assert state.best_assistant_text() == expected["output_delta"]
+            if expected.get("message_phase") == "commentary":
+                assert isinstance(events[0], RunNotice)
+                assert events[0].kind == "commentary"
+                assert events[0].message == expected["output_delta"]
+                assert events[0].data.get("already_streamed") is expected.get(
+                    "already_streamed", False
+                )
+                assert state.best_assistant_text() == ""
+            else:
+                assert isinstance(events[0], OutputDelta)
+                assert events[0].content == expected["output_delta"]
+                assert state.best_assistant_text() == expected["output_delta"]
         elif expected["normalized_kind"] == "progress":
             if (
                 raw["method"] in {"session.status", "session/status"}
@@ -584,6 +593,41 @@ async def test_normalize_runtime_thread_raw_event_handles_official_session_updat
     assert len(output) == 1
     assert isinstance(output[0], OutputDelta)
     assert output[0].content == "hello world"
+
+
+async def test_normalize_runtime_thread_raw_event_maps_official_commentary_update_to_notice() -> (
+    None
+):
+    state = RuntimeThreadRunEventState()
+
+    events = await normalize_runtime_thread_raw_event(
+        {
+            "message": {
+                "method": "session/update",
+                "params": {
+                    "sessionId": "session-1",
+                    "turnId": "turn-1",
+                    "update": {
+                        "sessionUpdate": "agent_message_chunk",
+                        "phase": "commentary",
+                        "alreadyStreamed": True,
+                        "content": [
+                            {"type": "text", "text": "draft"},
+                            {"type": "output_text", "text": " plan"},
+                        ],
+                    },
+                },
+            }
+        },
+        state,
+    )
+
+    assert len(events) == 1
+    assert isinstance(events[0], RunNotice)
+    assert events[0].kind == "commentary"
+    assert events[0].message == "draft plan"
+    assert events[0].data == {"already_streamed": True}
+    assert state.best_assistant_text() == ""
 
 
 async def test_recover_post_completion_outcome_uses_streamed_output_after_completion() -> (
@@ -1738,7 +1782,7 @@ class TestCrossBackendToolParity:
 class TestCrossBackendCommentaryFiltering:
     """Commentary/reasoning must not leak into final assistant answer."""
 
-    async def test_codex_commentary_agent_message_filtered(self) -> None:
+    async def test_codex_commentary_agent_message_becomes_notice(self) -> None:
         state = RuntimeThreadRunEventState()
 
         events = await normalize_runtime_thread_raw_event(
@@ -1755,7 +1799,10 @@ class TestCrossBackendCommentaryFiltering:
             state,
         )
 
-        assert events == []
+        assert len(events) == 1
+        assert isinstance(events[0], RunNotice)
+        assert events[0].kind == "commentary"
+        assert events[0].message == "thinking about approach"
         assert state.best_assistant_text() == ""
 
     async def test_codex_non_commentary_agent_message_kept(self) -> None:
@@ -1774,7 +1821,7 @@ class TestCrossBackendCommentaryFiltering:
         assert events[0].content == "final answer"
         assert state.best_assistant_text() == "final answer"
 
-    async def test_opencode_commentary_message_completed_filtered(self) -> None:
+    async def test_opencode_commentary_message_completed_becomes_notice(self) -> None:
         state = RuntimeThreadRunEventState()
 
         events = await normalize_runtime_thread_raw_event(
@@ -1791,7 +1838,10 @@ class TestCrossBackendCommentaryFiltering:
             state,
         )
 
-        assert events == []
+        assert len(events) == 1
+        assert isinstance(events[0], RunNotice)
+        assert events[0].kind == "commentary"
+        assert events[0].message == "internal commentary"
         assert state.best_assistant_text() == ""
 
     async def test_opencode_reasoning_part_never_leaks_to_stream(self) -> None:
@@ -1840,7 +1890,9 @@ class TestCrossBackendCommentaryFiltering:
         assert state.best_assistant_text() == "the actual answer"
         assert state.assistant_stream_text == "the actual answer"
 
-    async def test_opencode_assistant_stream_phase_commentary_filtered(self) -> None:
+    async def test_opencode_assistant_stream_phase_commentary_becomes_notice(
+        self,
+    ) -> None:
         state = RuntimeThreadRunEventState()
 
         events = await normalize_runtime_thread_raw_event(
@@ -1851,10 +1903,13 @@ class TestCrossBackendCommentaryFiltering:
             state,
         )
 
-        assert events == []
+        assert len(events) == 1
+        assert isinstance(events[0], RunNotice)
+        assert events[0].kind == "commentary"
+        assert events[0].message == "commentary text"
         assert state.assistant_stream_text == ""
 
-    async def test_prompt_message_commentary_ignored(self) -> None:
+    async def test_prompt_message_commentary_becomes_notice(self) -> None:
         state = RuntimeThreadRunEventState()
 
         events = await normalize_runtime_thread_raw_event(
@@ -1869,8 +1924,10 @@ class TestCrossBackendCommentaryFiltering:
         )
 
         assert len(events) == 1
-        assert isinstance(events[0], OutputDelta)
-        assert events[0].content == "reasoning about the problem"
+        assert isinstance(events[0], RunNotice)
+        assert events[0].kind == "commentary"
+        assert events[0].message == "reasoning about the problem"
+        assert state.best_assistant_text() == ""
 
 
 class TestCrossBackendApprovalParity:

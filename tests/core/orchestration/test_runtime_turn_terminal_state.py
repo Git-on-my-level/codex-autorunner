@@ -22,8 +22,10 @@ def test_runtime_turn_terminal_state_machine_shared_lifecycle_corpus() -> None:
 
         if expected["assistant_text"]:
             assert state.last_assistant_text == expected["assistant_text"]
-        if expected["output_delta"]:
+        if expected["output_delta"] and expected.get("message_phase") != "commentary":
             assert state.last_assistant_text == expected["output_delta"]
+        if expected.get("message_phase") == "commentary":
+            assert state.last_assistant_text == ""
         if expected["error_message"]:
             assert state.failure_cause == expected["error_message"]
         if expected["runtime_terminal_status"] is None:
@@ -124,3 +126,27 @@ def test_runtime_turn_terminal_state_machine_builds_compact_checkpoint() -> None
     assert checkpoint.raw_event_count == 2
     assert checkpoint.projection_event_cursor == 4
     assert checkpoint.terminal_signals[0].status == "ok"
+
+
+def test_runtime_turn_terminal_state_machine_ignores_commentary_stream_for_fallback() -> (
+    None
+):
+    state = RuntimeTurnTerminalStateMachine(
+        backend_thread_id="thread-1",
+        backend_turn_id="turn-1",
+    )
+
+    state.note_raw_event(
+        {
+            "method": "session/update",
+            "params": {
+                "update": {
+                    "sessionUpdate": "agent_message_chunk",
+                    "phase": "commentary",
+                    "content": [{"type": "text", "text": "draft plan"}],
+                }
+            },
+        }
+    )
+
+    assert state.last_assistant_text == ""
