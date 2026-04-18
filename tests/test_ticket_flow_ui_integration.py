@@ -26,7 +26,6 @@ def test_ticket_flow_compact_live_output_falls_back_to_stream_deltas() -> None:
             <div id="ticket-live-output-panel" class="ticket-live-output-panel"></div>
             <div id="ticket-live-output-status"></div>
             <button id="ticket-live-output-panel-toggle" type="button"></button>
-            <button id="ticket-live-output-detail-toggle" type="button"></button>
             <pre id="ticket-live-output-compact"></pre>
             <div id="ticket-live-output-detail" class="hidden"></div>
             <pre id="ticket-live-output-text"></pre>
@@ -106,7 +105,6 @@ def test_ticket_flow_live_output_expands_from_collapsed_bar() -> None:
             <div id="ticket-live-output-panel" class="ticket-live-output-panel collapsed"></div>
             <div id="ticket-live-output-status"></div>
             <button id="ticket-live-output-panel-toggle" type="button" aria-expanded="false"></button>
-            <button id="ticket-live-output-detail-toggle" type="button"></button>
             <span id="ticket-live-output-chevron"></span>
             <pre id="ticket-live-output-compact"></pre>
             <div id="ticket-live-output-detail" class="hidden"></div>
@@ -157,23 +155,21 @@ def test_ticket_flow_live_output_expands_from_collapsed_bar() -> None:
         await new Promise((resolve) => setTimeout(resolve, 20));
 
         const detailWrapper = document.getElementById("ticket-live-output-detail");
+        const compactWrapper = document.getElementById("ticket-live-output-compact");
         const detail = document.getElementById("ticket-live-output-text")?.textContent || "";
         const status = document.getElementById("ticket-live-output-status")?.textContent || "";
         const panelToggle = document.getElementById("ticket-live-output-panel-toggle");
-        const detailToggle = document.getElementById("ticket-live-output-detail-toggle");
 
         assert.equal(detailWrapper?.classList.contains("hidden"), true);
+        assert.equal(compactWrapper?.classList.contains("hidden"), true);
         assert.match(detail, /This is live codex output/);
         assert.equal(status, "Streaming");
 
         panelToggle?.dispatchEvent(new dom.window.MouseEvent("click", {{ bubbles: true }}));
 
         assert.equal(panelToggle?.getAttribute("aria-expanded"), "true");
-        assert.equal(detailWrapper?.classList.contains("hidden"), true);
-
-        detailToggle?.dispatchEvent(new dom.window.MouseEvent("click", {{ bubbles: true }}));
-
         assert.equal(detailWrapper?.classList.contains("hidden"), false);
+        assert.equal(compactWrapper?.classList.contains("hidden"), true);
         """
     )
 
@@ -199,7 +195,6 @@ def test_ticket_flow_compact_live_output_shows_step_progress_when_no_agent_text(
             <div id="ticket-live-output-panel" class="ticket-live-output-panel"></div>
             <div id="ticket-live-output-status"></div>
             <button id="ticket-live-output-panel-toggle" type="button"></button>
-            <button id="ticket-live-output-detail-toggle" type="button"></button>
             <pre id="ticket-live-output-compact"></pre>
             <div id="ticket-live-output-detail" class="hidden"></div>
             <pre id="ticket-live-output-text"></pre>

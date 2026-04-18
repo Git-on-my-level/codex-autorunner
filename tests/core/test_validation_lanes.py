@@ -47,6 +47,27 @@ def test_classify_web_ui_lane_for_root_level_web_test() -> None:
     assert selection.lane == "web-ui"
     assert selection.reason == "single-lane-diff"
     assert selection.lanes_touched == ("web-ui",)
+    assert selection.lane_paths == (("web-ui", ("tests/test_app_server_events.py",)),)
+
+
+def test_classify_web_ui_lane_for_ticket_flow_ui_integration_test() -> None:
+    selection = classify_changed_files(["tests/test_ticket_flow_ui_integration.py"])
+
+    assert selection.lane == "web-ui"
+    assert selection.reason == "single-lane-diff"
+    assert selection.lanes_touched == ("web-ui",)
+    assert selection.lane_paths == (
+        ("web-ui", ("tests/test_ticket_flow_ui_integration.py",)),
+    )
+
+
+def test_classify_web_ui_lane_for_root_level_voice_ui_test() -> None:
+    selection = classify_changed_files(["tests/test_voice_ui.py"])
+
+    assert selection.lane == "web-ui"
+    assert selection.reason == "single-lane-diff"
+    assert selection.lanes_touched == ("web-ui",)
+    assert selection.lane_paths == (("web-ui", ("tests/test_voice_ui.py",)),)
 
 
 def test_shared_risk_paths_force_aggregate() -> None:
@@ -92,6 +113,10 @@ def test_multi_lane_diff_forces_aggregate() -> None:
     assert selection.lane == "aggregate"
     assert selection.reason == "multi-lane-diff"
     assert selection.lanes_touched == ("core", "web-ui")
+    assert selection.lane_paths == (
+        ("core", ("src/codex_autorunner/core/update_targets.py",)),
+        ("web-ui", ("src/codex_autorunner/static_src/updateTargets.ts",)),
+    )
 
 
 def test_classification_is_deterministic_for_same_input_set() -> None:
@@ -142,6 +167,7 @@ def test_payload_and_human_rendering_are_stable() -> None:
             "src/codex_autorunner/core/update_targets.py",
         ],
         "lanes_touched": ["core"],
+        "lane_paths": {"core": ["src/codex_autorunner/core/update_targets.py"]},
         "shared_risk_paths": ["scripts/check.sh"],
         "unknown_paths": [],
     }
@@ -151,6 +177,7 @@ def test_payload_and_human_rendering_are_stable() -> None:
             "reason: shared-risk-path",
             "changed_files: 2",
             "lanes_touched: core",
+            "core_paths: src/codex_autorunner/core/update_targets.py",
             "shared_risk_paths: scripts/check.sh",
         ]
     )

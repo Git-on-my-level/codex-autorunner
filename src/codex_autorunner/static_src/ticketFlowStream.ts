@@ -12,7 +12,6 @@ import {
 } from "./ticketFlowState.js";
 
 let liveOutputPanelExpanded = false;
-let liveOutputDetailExpanded = false;
 let liveOutputBuffer: string[] = [];
 let liveOutputEvents: AgentEvent[] = [];
 let liveOutputEventIndex: Record<string, number> = {};
@@ -80,7 +79,7 @@ function scheduleLiveOutputTextUpdate(): void {
         outputEl.textContent = newText;
       }
       const detailEl = document.getElementById("ticket-live-output-detail");
-      if (detailEl && liveOutputDetailExpanded) {
+      if (detailEl && liveOutputPanelExpanded) {
         detailEl.scrollTop = detailEl.scrollHeight;
       }
     }
@@ -217,7 +216,7 @@ function renderLiveOutputEvents(): void {
     count.textContent = String(liveOutputEvents.length);
   }
 
-  const shouldHide = !hasEvents || !liveOutputDetailExpanded;
+  const shouldHide = !hasEvents || !liveOutputPanelExpanded;
   if (container.classList.contains("hidden") !== shouldHide) {
     container.classList.toggle("hidden", shouldHide);
   }
@@ -312,7 +311,7 @@ function renderLiveOutputCompact(): void {
   const compactEl = document.getElementById("ticket-live-output-compact");
   if (!compactEl) return;
   const text = renderCompactLiveOutputText();
-  const newText = text || "Waiting for agent output...";
+  const newText = text || "";
 
   if (compactEl.textContent !== newText) {
     compactEl.textContent = newText;
@@ -384,40 +383,20 @@ function updateLiveOutputPanelToggle(): void {
   }
 }
 
-function updateLiveOutputDetailToggle(): void {
-  const detailToggle = document.getElementById("ticket-live-output-detail-toggle");
-  if (!detailToggle) return;
-
-  if (liveOutputDetailExpanded) {
-    if (!detailToggle.classList.contains("active")) detailToggle.classList.add("active");
-    if (detailToggle.textContent !== "≡") detailToggle.textContent = "≡";
-    if (detailToggle.title !== "Show summary") detailToggle.title = "Show summary";
-  } else {
-    if (detailToggle.classList.contains("active")) detailToggle.classList.remove("active");
-    if (detailToggle.textContent !== "⋯") detailToggle.textContent = "⋯";
-    if (detailToggle.title !== "Show full output") detailToggle.title = "Show full output";
-  }
-}
-
 export function renderLiveOutputView(): void {
   const compactEl = document.getElementById("ticket-live-output-compact");
   const detailEl = document.getElementById("ticket-live-output-detail");
-  const eventsEl = document.getElementById("ticket-live-output-events");
 
   if (compactEl) {
-    compactEl.classList.toggle("hidden", liveOutputDetailExpanded || !liveOutputPanelExpanded);
+    compactEl.classList.add("hidden");
   }
   if (detailEl) {
-    detailEl.classList.toggle("hidden", !liveOutputDetailExpanded || !liveOutputPanelExpanded);
-  }
-  if (eventsEl) {
-    eventsEl.classList.toggle("hidden", !liveOutputDetailExpanded || !liveOutputPanelExpanded);
+    detailEl.classList.toggle("hidden", !liveOutputPanelExpanded);
   }
 
   renderLiveOutputCompact();
   renderLiveOutputEvents();
   updateLiveOutputPanelToggle();
-  updateLiveOutputDetailToggle();
 }
 
 export function clearLiveOutput(): void {
@@ -452,15 +431,10 @@ export function setLiveOutputStatus(status: "disconnected" | "connected" | "stre
 
 export function initLiveOutputPanel(): void {
   const panelToggleBtn = document.getElementById("ticket-live-output-panel-toggle");
-  const detailToggleBtn = document.getElementById("ticket-live-output-detail-toggle");
 
   const panel = document.getElementById("ticket-live-output-panel");
   if (panel) {
     liveOutputPanelExpanded = !panel.classList.contains("collapsed");
-  }
-  const detailEl = document.getElementById("ticket-live-output-detail");
-  if (detailEl) {
-    liveOutputDetailExpanded = !detailEl.classList.contains("hidden");
   }
 
   const togglePanel = () => {
@@ -468,19 +442,8 @@ export function initLiveOutputPanel(): void {
     renderLiveOutputView();
   };
 
-  const toggleDetail = () => {
-    liveOutputDetailExpanded = !liveOutputDetailExpanded;
-    renderLiveOutputView();
-  };
-
   if (panelToggleBtn) {
     panelToggleBtn.addEventListener("click", togglePanel);
-  }
-  if (detailToggleBtn) {
-    detailToggleBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      toggleDetail();
-    });
   }
 
   renderLiveOutputView();
@@ -488,7 +451,6 @@ export function initLiveOutputPanel(): void {
 
 export function resetAllStreamState(): void {
   liveOutputPanelExpanded = false;
-  liveOutputDetailExpanded = false;
   flowStartedAt = null;
   lastActivityTime = null;
   lastKnownEventAt = null;

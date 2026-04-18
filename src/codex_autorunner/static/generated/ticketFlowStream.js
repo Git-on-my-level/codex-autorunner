@@ -4,7 +4,6 @@ import { openModal } from "./utils.js";
 import { summarizeEvents, renderCompactSummary, COMPACT_MAX_TEXT_LENGTH } from "./eventSummarizer.js";
 import { MAX_OUTPUT_LINES, LIVE_EVENT_MAX, MAX_REASON_LENGTH, formatElapsed, formatTimeAgo, } from "./ticketFlowState.js";
 let liveOutputPanelExpanded = false;
-let liveOutputDetailExpanded = false;
 let liveOutputBuffer = [];
 let liveOutputEvents = [];
 let liveOutputEventIndex = {};
@@ -61,7 +60,7 @@ function scheduleLiveOutputTextUpdate() {
                 outputEl.textContent = newText;
             }
             const detailEl = document.getElementById("ticket-live-output-detail");
-            if (detailEl && liveOutputDetailExpanded) {
+            if (detailEl && liveOutputPanelExpanded) {
                 detailEl.scrollTop = detailEl.scrollHeight;
             }
         }
@@ -186,7 +185,7 @@ function renderLiveOutputEvents() {
     if (count.textContent !== String(liveOutputEvents.length)) {
         count.textContent = String(liveOutputEvents.length);
     }
-    const shouldHide = !hasEvents || !liveOutputDetailExpanded;
+    const shouldHide = !hasEvents || !liveOutputPanelExpanded;
     if (container.classList.contains("hidden") !== shouldHide) {
         container.classList.toggle("hidden", shouldHide);
     }
@@ -266,7 +265,7 @@ function renderLiveOutputCompact() {
     if (!compactEl)
         return;
     const text = renderCompactLiveOutputText();
-    const newText = text || "Waiting for agent output...";
+    const newText = text || "";
     if (compactEl.textContent !== newText) {
         compactEl.textContent = newText;
     }
@@ -326,44 +325,18 @@ function updateLiveOutputPanelToggle() {
         chevron.textContent = liveOutputPanelExpanded ? "▴" : "▾";
     }
 }
-function updateLiveOutputDetailToggle() {
-    const detailToggle = document.getElementById("ticket-live-output-detail-toggle");
-    if (!detailToggle)
-        return;
-    if (liveOutputDetailExpanded) {
-        if (!detailToggle.classList.contains("active"))
-            detailToggle.classList.add("active");
-        if (detailToggle.textContent !== "≡")
-            detailToggle.textContent = "≡";
-        if (detailToggle.title !== "Show summary")
-            detailToggle.title = "Show summary";
-    }
-    else {
-        if (detailToggle.classList.contains("active"))
-            detailToggle.classList.remove("active");
-        if (detailToggle.textContent !== "⋯")
-            detailToggle.textContent = "⋯";
-        if (detailToggle.title !== "Show full output")
-            detailToggle.title = "Show full output";
-    }
-}
 export function renderLiveOutputView() {
     const compactEl = document.getElementById("ticket-live-output-compact");
     const detailEl = document.getElementById("ticket-live-output-detail");
-    const eventsEl = document.getElementById("ticket-live-output-events");
     if (compactEl) {
-        compactEl.classList.toggle("hidden", liveOutputDetailExpanded || !liveOutputPanelExpanded);
+        compactEl.classList.add("hidden");
     }
     if (detailEl) {
-        detailEl.classList.toggle("hidden", !liveOutputDetailExpanded || !liveOutputPanelExpanded);
-    }
-    if (eventsEl) {
-        eventsEl.classList.toggle("hidden", !liveOutputDetailExpanded || !liveOutputPanelExpanded);
+        detailEl.classList.toggle("hidden", !liveOutputPanelExpanded);
     }
     renderLiveOutputCompact();
     renderLiveOutputEvents();
     updateLiveOutputPanelToggle();
-    updateLiveOutputDetailToggle();
 }
 export function clearLiveOutput() {
     liveOutputBuffer = [];
@@ -396,37 +369,21 @@ export function setLiveOutputStatus(status) {
 }
 export function initLiveOutputPanel() {
     const panelToggleBtn = document.getElementById("ticket-live-output-panel-toggle");
-    const detailToggleBtn = document.getElementById("ticket-live-output-detail-toggle");
     const panel = document.getElementById("ticket-live-output-panel");
     if (panel) {
         liveOutputPanelExpanded = !panel.classList.contains("collapsed");
-    }
-    const detailEl = document.getElementById("ticket-live-output-detail");
-    if (detailEl) {
-        liveOutputDetailExpanded = !detailEl.classList.contains("hidden");
     }
     const togglePanel = () => {
         liveOutputPanelExpanded = !liveOutputPanelExpanded;
         renderLiveOutputView();
     };
-    const toggleDetail = () => {
-        liveOutputDetailExpanded = !liveOutputDetailExpanded;
-        renderLiveOutputView();
-    };
     if (panelToggleBtn) {
         panelToggleBtn.addEventListener("click", togglePanel);
-    }
-    if (detailToggleBtn) {
-        detailToggleBtn.addEventListener("click", (e) => {
-            e.stopPropagation();
-            toggleDetail();
-        });
     }
     renderLiveOutputView();
 }
 export function resetAllStreamState() {
     liveOutputPanelExpanded = false;
-    liveOutputDetailExpanded = false;
     flowStartedAt = null;
     lastActivityTime = null;
     lastKnownEventAt = null;

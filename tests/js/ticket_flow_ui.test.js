@@ -9,7 +9,6 @@ const dom = new JSDOM(
       <div id="ticket-live-output-compact" class="hidden"></div>
       <div id="ticket-live-output-detail" class="hidden"></div>
       <div id="ticket-live-output-events" class="hidden"></div>
-      <button id="ticket-live-output-detail-toggle" type="button"></button>
     </div>
     <div id="ticket-live-output-text"></div>
     <div id="ticket-last-activity"></div>

@@ -31,6 +31,7 @@ def test_select_validation_lane_script_json_output() -> None:
         "reason": "single-lane-diff",
         "paths": ["src/codex_autorunner/core/update_targets.py"],
         "lanes_touched": ["core"],
+        "lane_paths": {"core": ["src/codex_autorunner/core/update_targets.py"]},
         "shared_risk_paths": [],
         "unknown_paths": [],
     }
