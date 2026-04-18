@@ -5,6 +5,7 @@ import pytest
 from .harness import (
     DiscordSurfaceHarness,
     FakeDiscordRest,
+    FakeTelegramBot,
     HermesFixtureRuntime,
     TelegramSurfaceHarness,
     patch_hermes_runtime,
@@ -323,6 +324,34 @@ async def test_discord_hermes_pma_characterizes_stale_preview_when_delivery_clea
             and record.get("execution_id") == rest.execution_id
             for record in rest.log_records
         )
+    finally:
+        await harness.close()
+        await runtime.close()
+
+
+@pytest.mark.anyio
+async def test_telegram_hermes_pma_characterizes_stale_preview_when_delivery_cleanup_fails(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = HermesFixtureRuntime("official")
+    patch_hermes_runtime(monkeypatch, runtime)
+    harness = TelegramSurfaceHarness(tmp_path / "telegram")
+    await harness.setup(agent="hermes")
+    try:
+        bot = await harness.run_message(
+            "echo hello world",
+            bot_client=FakeTelegramBot(fail_delete_message_ids={1}),
+        )
+
+        assert bot.execution_status == "ok"
+        assert bot.background_tasks_drained is True
+        assert bot.placeholder_message_id == 1
+        assert bot.placeholder_deleted is False
+        sent_texts = [str(item["text"]) for item in bot.messages]
+        assert sent_texts[0] == "Working..."
+        assert any("fixture reply" in text for text in sent_texts[1:])
+        assert not any(item.get("message_id") == 1 for item in bot.deleted_messages)
     finally:
         await harness.close()
         await runtime.close()

@@ -42,6 +42,7 @@ from tests.chat_surface_lab.backend_runtime import (
     app_server_fixture_command,
     fake_acp_command,
 )
+from tests.chat_surface_lab.telegram_simulator import TelegramSurfaceSimulator
 
 DEFAULT_DISCORD_CHANNEL_ID = "channel-1"
 DEFAULT_DISCORD_GUILD_ID = "guild-1"
@@ -637,157 +638,13 @@ class DiscordSurfaceHarness:
             self._log_capture = None
 
 
-class FakeTelegramBot:
+class FakeTelegramBot(TelegramSurfaceSimulator):
     def __init__(
         self,
         *,
         fail_delete_message_ids: Optional[set[int]] = None,
     ) -> None:
-        self.messages: list[dict[str, Any]] = []
-        self.edited_messages: list[dict[str, Any]] = []
-        self.documents: list[dict[str, Any]] = []
-        self.deleted_messages: list[dict[str, Any]] = []
-        self.callback_answers: list[dict[str, Any]] = []
-        self.log_records: list[dict[str, Any]] = []
-        self.surface_key: Optional[str] = None
-        self.thread_target_id: Optional[str] = None
-        self.execution_id: Optional[str] = None
-        self.execution_status: Optional[str] = None
-        self.execution_error: Optional[str] = None
-        self.placeholder_message_id: Optional[int] = None
-        self.placeholder_deleted: bool = False
-        self.fail_delete_message_ids = set(fail_delete_message_ids or set())
-
-    async def send_message(
-        self,
-        chat_id: int,
-        text: str,
-        *,
-        message_thread_id: Optional[int] = None,
-        reply_to_message_id: Optional[int] = None,
-        parse_mode: Optional[str] = None,
-        disable_web_page_preview: bool = True,
-        reply_markup: Optional[dict[str, Any]] = None,
-    ) -> dict[str, Any]:
-        _ = parse_mode, disable_web_page_preview
-        self.messages.append(
-            {
-                "chat_id": chat_id,
-                "thread_id": message_thread_id,
-                "reply_to": reply_to_message_id,
-                "text": text,
-                "reply_markup": reply_markup,
-            }
-        )
-        return {"message_id": len(self.messages)}
-
-    async def send_message_chunks(
-        self,
-        chat_id: int,
-        text: str,
-        *,
-        message_thread_id: Optional[int] = None,
-        reply_to_message_id: Optional[int] = None,
-        reply_markup: Optional[dict[str, Any]] = None,
-        parse_mode: Optional[str] = None,
-        disable_web_page_preview: bool = True,
-        max_len: int = 4096,
-    ) -> list[dict[str, Any]]:
-        _ = parse_mode, disable_web_page_preview, max_len
-        self.messages.append(
-            {
-                "chat_id": chat_id,
-                "thread_id": message_thread_id,
-                "reply_to": reply_to_message_id,
-                "text": text,
-                "reply_markup": reply_markup,
-            }
-        )
-        return [{"message_id": len(self.messages)}]
-
-    async def send_document(
-        self,
-        chat_id: int,
-        document: bytes,
-        *,
-        filename: str,
-        message_thread_id: Optional[int] = None,
-        reply_to_message_id: Optional[int] = None,
-        caption: Optional[str] = None,
-        parse_mode: Optional[str] = None,
-    ) -> dict[str, Any]:
-        _ = document, parse_mode
-        self.documents.append(
-            {
-                "chat_id": chat_id,
-                "thread_id": message_thread_id,
-                "reply_to": reply_to_message_id,
-                "filename": filename,
-                "caption": caption,
-            }
-        )
-        return {"message_id": len(self.documents)}
-
-    async def answer_callback_query(
-        self,
-        callback_query_id: str,
-        *,
-        chat_id: Optional[int] = None,
-        thread_id: Optional[int] = None,
-        message_id: Optional[int] = None,
-        text: Optional[str] = None,
-        show_alert: bool = False,
-    ) -> dict[str, Any]:
-        self.callback_answers.append(
-            {
-                "callback_query_id": callback_query_id,
-                "chat_id": chat_id,
-                "thread_id": thread_id,
-                "message_id": message_id,
-                "text": text,
-                "show_alert": show_alert,
-            }
-        )
-        return {}
-
-    async def edit_message_text(
-        self,
-        chat_id: int,
-        message_id: int,
-        text: str,
-        *,
-        reply_markup: Optional[dict[str, Any]] = None,
-        parse_mode: Optional[str] = None,
-        disable_web_page_preview: bool = True,
-    ) -> dict[str, Any]:
-        _ = parse_mode, disable_web_page_preview
-        self.edited_messages.append(
-            {
-                "chat_id": chat_id,
-                "message_id": message_id,
-                "text": text,
-                "reply_markup": reply_markup,
-            }
-        )
-        return {"message_id": message_id}
-
-    async def delete_message(
-        self,
-        chat_id: int,
-        message_id: int,
-        *,
-        message_thread_id: Optional[int] = None,
-    ) -> bool:
-        if message_id in self.fail_delete_message_ids:
-            raise RuntimeError(f"delete failed for {message_id}")
-        self.deleted_messages.append(
-            {
-                "chat_id": chat_id,
-                "thread_id": message_thread_id,
-                "message_id": message_id,
-            }
-        )
-        return True
+        super().__init__(fail_delete_message_ids=fail_delete_message_ids)
 
 
 def make_telegram_config(root: Path) -> TelegramBotConfig:
@@ -809,7 +666,7 @@ def make_telegram_config(root: Path) -> TelegramBotConfig:
 def build_telegram_message(
     text: str,
     *,
-    thread_id: int = DEFAULT_TELEGRAM_THREAD_ID,
+    thread_id: Optional[int] = DEFAULT_TELEGRAM_THREAD_ID,
     message_id: int = 1,
     update_id: int = 1,
 ) -> TelegramMessage:
@@ -821,9 +678,14 @@ def build_telegram_message(
         from_user_id=DEFAULT_TELEGRAM_USER_ID,
         text=text,
         date=0,
-        is_topic_message=True,
+        is_topic_message=thread_id is not None,
         chat_type="supergroup",
     )
+
+
+def _telegram_surface_key(thread_id: Optional[int]) -> str:
+    thread_segment = thread_id if thread_id is not None else "root"
+    return f"{DEFAULT_TELEGRAM_CHAT_ID}:{thread_segment}"
 
 
 async def drain_telegram_spawned_tasks(service: TelegramBotService) -> None:
@@ -849,7 +711,7 @@ class TelegramSurfaceHarness:
         self,
         *,
         agent: str = "hermes",
-        thread_id: int = DEFAULT_TELEGRAM_THREAD_ID,
+        thread_id: Optional[int] = DEFAULT_TELEGRAM_THREAD_ID,
         approval_mode: Optional[str] = None,
     ) -> None:
         self.service = TelegramBotService(
@@ -910,7 +772,7 @@ class TelegramSurfaceHarness:
         self,
         text: str,
         *,
-        thread_id: int = DEFAULT_TELEGRAM_THREAD_ID,
+        thread_id: Optional[int] = DEFAULT_TELEGRAM_THREAD_ID,
         bot_client: Optional[FakeTelegramBot] = None,
     ) -> FakeTelegramBot:
         if self.service is None:
@@ -920,6 +782,7 @@ class TelegramSurfaceHarness:
             self.service._bot = bot_client
         if self.bot is None:
             raise RuntimeError("TelegramSurfaceHarness.setup() must run first")
+        message_start_index = len(self.bot.messages)
         await asyncio.wait_for(
             self.service._handle_message_inner(
                 build_telegram_message(text, thread_id=thread_id)
@@ -930,14 +793,19 @@ class TelegramSurfaceHarness:
             drain_telegram_spawned_tasks(self.service),
             timeout=self.timeout_seconds,
         )
-        self._apply_telegram_runtime_metadata(self.bot, thread_id=thread_id)
+        self.bot.background_tasks_drained = True
+        self._apply_telegram_runtime_metadata(
+            self.bot,
+            thread_id=thread_id,
+            message_start_index=message_start_index,
+        )
         return self.bot
 
     def start_message(
         self,
         text: str,
         *,
-        thread_id: int = DEFAULT_TELEGRAM_THREAD_ID,
+        thread_id: Optional[int] = DEFAULT_TELEGRAM_THREAD_ID,
         bot_client: Optional[FakeTelegramBot] = None,
     ) -> asyncio.Task[FakeTelegramBot]:
         return asyncio.create_task(
@@ -952,7 +820,7 @@ class TelegramSurfaceHarness:
         self,
         text: str,
         *,
-        thread_id: int = DEFAULT_TELEGRAM_THREAD_ID,
+        thread_id: Optional[int] = DEFAULT_TELEGRAM_THREAD_ID,
         bot_client: Optional[FakeTelegramBot] = None,
     ) -> FakeTelegramBot:
         return await self._run_message_inner(
@@ -965,7 +833,7 @@ class TelegramSurfaceHarness:
         self,
         text: str,
         *,
-        thread_id: int = DEFAULT_TELEGRAM_THREAD_ID,
+        thread_id: Optional[int] = DEFAULT_TELEGRAM_THREAD_ID,
         message_id: int = 2,
         update_id: int = 2,
     ) -> None:
@@ -984,7 +852,7 @@ class TelegramSurfaceHarness:
         self,
         text: str,
         *,
-        thread_id: int = DEFAULT_TELEGRAM_THREAD_ID,
+        thread_id: Optional[int] = DEFAULT_TELEGRAM_THREAD_ID,
         message_id: int = 2,
         update_id: int = 2,
     ) -> asyncio.Task[None]:
@@ -1001,13 +869,14 @@ class TelegramSurfaceHarness:
         self,
         bot: FakeTelegramBot,
         *,
-        thread_id: int,
+        thread_id: Optional[int],
+        message_start_index: int = 0,
     ) -> None:
         service = self.service
         if service is None:
             raise RuntimeError("TelegramSurfaceHarness has no active service")
         bot.log_records = list(self._log_capture.records)
-        bot.surface_key = f"{DEFAULT_TELEGRAM_CHAT_ID}:{thread_id}"
+        bot.surface_key = _telegram_surface_key(thread_id)
         orchestration_service = _build_telegram_thread_orchestration_service(service)
         binding = orchestration_service.get_binding(
             surface_kind="telegram",
@@ -1029,20 +898,27 @@ class TelegramSurfaceHarness:
                 bot.execution_error = (
                     str(getattr(execution, "error", "") or "").strip() or None
                 )
-        if bot.messages:
-            bot.placeholder_message_id = 1
+        run_messages = bot.messages[message_start_index:]
+        if run_messages:
+            first_message_id = run_messages[0].get("message_id")
+            bot.placeholder_message_id = (
+                int(first_message_id)
+                if isinstance(first_message_id, int)
+                else bot.placeholder_message_id
+            )
             bot.placeholder_deleted = any(
-                item.get("message_id") == 1 for item in bot.deleted_messages
+                item.get("message_id") == bot.placeholder_message_id
+                for item in bot.deleted_messages
             )
 
     async def wait_for_running_execution(
         self,
         *,
-        thread_id: int = DEFAULT_TELEGRAM_THREAD_ID,
+        thread_id: Optional[int] = DEFAULT_TELEGRAM_THREAD_ID,
         timeout_seconds: float = 2.0,
     ) -> tuple[str, str]:
         deadline = asyncio.get_running_loop().time() + max(timeout_seconds, 0.0)
-        surface_key = f"{DEFAULT_TELEGRAM_CHAT_ID}:{thread_id}"
+        surface_key = _telegram_surface_key(thread_id)
         while True:
             service = self.service
             if service is not None:
@@ -1077,11 +953,11 @@ class TelegramSurfaceHarness:
         self,
         expected_status: str,
         *,
-        thread_id: int = DEFAULT_TELEGRAM_THREAD_ID,
+        thread_id: Optional[int] = DEFAULT_TELEGRAM_THREAD_ID,
         timeout_seconds: float = 2.0,
     ) -> tuple[str, str]:
         deadline = asyncio.get_running_loop().time() + max(timeout_seconds, 0.0)
-        surface_key = f"{DEFAULT_TELEGRAM_CHAT_ID}:{thread_id}"
+        surface_key = _telegram_surface_key(thread_id)
         while True:
             service = self.service
             if service is not None:
@@ -1115,7 +991,7 @@ class TelegramSurfaceHarness:
     async def interrupt_active_turn_via_callback(
         self,
         *,
-        thread_id: int = DEFAULT_TELEGRAM_THREAD_ID,
+        thread_id: Optional[int] = DEFAULT_TELEGRAM_THREAD_ID,
         callback_id: str = "cb-1",
         message_id: int = 1,
     ) -> None:

@@ -22,6 +22,7 @@ from .scenario_models import (
     SurfaceKind,
     TerminalExpectation,
 )
+from .telegram_simulator import TelegramSimulatorFaults, TelegramSurfaceSimulator
 from .transcript_models import (
     TranscriptEvent,
     TranscriptEventKind,
@@ -47,6 +48,8 @@ __all__ = [
     "ScenarioAction",
     "SurfaceKind",
     "TerminalExpectation",
+    "TelegramSimulatorFaults",
+    "TelegramSurfaceSimulator",
     "TranscriptEvent",
     "TranscriptEventKind",
     "TranscriptParty",

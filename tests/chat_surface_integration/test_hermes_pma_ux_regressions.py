@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Callable
 
 import pytest
@@ -7,11 +8,14 @@ import pytest
 from codex_autorunner.integrations.chat.ux_regression_contract import (
     CHAT_UX_LATENCY_BUDGETS,
 )
+from codex_autorunner.integrations.telegram.adapter import TelegramUpdate
 
 from .harness import (
     DiscordSurfaceHarness,
     HermesFixtureRuntime,
     TelegramSurfaceHarness,
+    build_telegram_message,
+    drain_telegram_spawned_tasks,
     patch_hermes_runtime,
 )
 
@@ -165,6 +169,43 @@ async def test_surfaces_make_busy_thread_queue_visible_before_recovery(
 
 
 @pytest.mark.anyio
+async def test_telegram_queue_visibility_before_recovery(
+    tmp_path,
+) -> None:
+    harness = TelegramSurfaceHarness(tmp_path / "telegram-queued", timeout_seconds=15.0)
+    await harness.setup(agent="hermes", approval_mode="yolo")
+    try:
+        assert harness.service is not None
+        assert harness.bot is not None
+        topic_key = await harness.service._router.resolve_key(123, 55)
+        runtime = harness.service._router.runtime_for(topic_key)
+        runtime.current_turn_id = "busy-turn"
+
+        await harness.service._dispatch_update(
+            TelegramUpdate(
+                update_id=2,
+                message=build_telegram_message(
+                    "echo queued after busy",
+                    thread_id=55,
+                    message_id=2,
+                    update_id=2,
+                ),
+                callback=None,
+            )
+        )
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert any(
+            "Queued (waiting for available worker...)" in str(item.get("text") or "")
+            for item in harness.bot.messages
+        )
+        runtime.current_turn_id = None
+        runtime.queue.cancel_pending()
+    finally:
+        await harness.close()
+
+
+@pytest.mark.anyio
 async def test_surfaces_acknowledge_interrupt_controls_before_final_confirmation(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
@@ -224,6 +265,10 @@ async def test_surfaces_acknowledge_interrupt_controls_before_final_confirmation
         await telegram.interrupt_active_turn_via_callback()
         assert telegram.bot is not None
         assert telegram.bot.callback_answers[-1]["text"] == "Stopping..."
+        assert any(
+            event.get("kind") == "callback" and event.get("text") == "Stopping..."
+            for event in telegram.bot.surface_timeline
+        )
         telegram_result = await telegram_task
         assert telegram_result.execution_status == "interrupted"
         telegram_finalized = _latest_event(
@@ -237,4 +282,75 @@ async def test_surfaces_acknowledge_interrupt_controls_before_final_confirmation
     finally:
         await discord.close()
         await telegram.close()
+        await runtime.close()
+
+
+@pytest.mark.anyio
+async def test_telegram_duplicate_updates_are_deduped(
+    tmp_path,
+) -> None:
+    harness = TelegramSurfaceHarness(tmp_path / "telegram-duplicate-updates")
+    await harness.setup(agent="hermes")
+    try:
+        assert harness.service is not None
+        assert harness.bot is not None
+        update = TelegramUpdate(
+            update_id=77,
+            message=build_telegram_message(
+                "/status",
+                thread_id=55,
+                message_id=77,
+                update_id=77,
+            ),
+            callback=None,
+        )
+        harness.bot.enable_duplicate_update(77)
+        for delivered in harness.bot.expand_update_delivery(update):
+            await harness.service._dispatch_update(delivered)
+        await drain_telegram_spawned_tasks(harness.service)
+
+        status_messages = [
+            item
+            for item in harness.bot.messages
+            if "Workspace:" in str(item.get("text") or "")
+        ]
+        assert len(status_messages) == 1
+        duplicate = await harness.wait_for_log_event(
+            "telegram.update.duplicate",
+            timeout_seconds=2.0,
+            predicate=lambda record: record.get("update_id") == 77,
+        )
+        assert duplicate.get("chat_id") == 123
+    finally:
+        await harness.close()
+
+
+@pytest.mark.anyio
+async def test_telegram_topic_and_root_routing_behavior_is_explicit(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = HermesFixtureRuntime("official")
+    patch_hermes_runtime(monkeypatch, runtime)
+    harness = TelegramSurfaceHarness(tmp_path / "telegram-topic-root")
+    await harness.setup(agent="hermes")
+    try:
+        topic_bot = await harness.run_message("echo topic route", thread_id=55)
+        topic_message_count = len(topic_bot.messages)
+
+        root_bot = await harness.run_message("echo root route", thread_id=None)
+        assert root_bot.thread_target_id is None
+        assert root_bot.surface_key == "123:root"
+        assert len(root_bot.messages) == topic_message_count
+        root_policy = await harness.wait_for_log_event(
+            "telegram.collaboration_policy.evaluated",
+            timeout_seconds=2.0,
+            predicate=lambda record: (
+                record.get("thread_id") is None
+                and record.get("policy_outcome") == "command_only_destination"
+            ),
+        )
+        assert root_policy.get("policy_command_allowed") is True
+    finally:
+        await harness.close()
         await runtime.close()
