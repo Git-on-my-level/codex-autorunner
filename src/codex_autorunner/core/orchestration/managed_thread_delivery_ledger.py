@@ -30,6 +30,7 @@ from .managed_thread_delivery import (
     ManagedThreadDeliveryIntent,
     ManagedThreadDeliveryOutcome,
     ManagedThreadDeliveryRecord,
+    ManagedThreadDeliveryRecoverySweepResult,
     ManagedThreadDeliveryRegistration,
     ManagedThreadDeliveryState,
     ManagedThreadDeliveryTarget,
@@ -45,6 +46,8 @@ _UNSET = object()
 _DEFAULT_CLAIM_TTL = timedelta(minutes=5)
 _DEFAULT_RETRY_BACKOFF = timedelta(minutes=1)
 _DEFAULT_MAX_ATTEMPTS = 5
+_DEFAULT_BACKOFF_MULTIPLIER = 2.0
+_DEFAULT_MAX_BACKOFF = timedelta(minutes=30)
 
 
 class SQLiteManagedThreadDeliveryLedger:
@@ -186,6 +189,73 @@ class SQLiteManagedThreadDeliveryLedger:
             ).fetchall()
         return [_record_from_row(row) for row in rows]
 
+    def list_records_with_expired_claims(
+        self,
+        *,
+        adapter_key: Optional[str] = None,
+        now: Optional[str] = None,
+        limit: int = 200,
+    ) -> list[ManagedThreadDeliveryRecord]:
+        params: list[Any] = []
+        clauses = [
+            "state IN (?, ?)",
+            "claim_expires_at IS NOT NULL",
+            "claim_expires_at <= ?",
+        ]
+        params.extend(
+            [
+                ManagedThreadDeliveryState.CLAIMED.value,
+                ManagedThreadDeliveryState.DELIVERING.value,
+            ]
+        )
+        now_ts = now or now_iso()
+        params.append(now_ts)
+        if adapter_key is not None:
+            clauses.append("adapter_key = ?")
+            params.append(str(adapter_key or "").strip())
+        params.append(max(1, int(limit)))
+        with open_orchestration_sqlite(
+            self._hub_root, durable=self._durable, migrate=True
+        ) as conn:
+            rows = conn.execute(
+                f"""
+                SELECT *
+                  FROM orch_managed_thread_deliveries
+                 WHERE {" AND ".join(clauses)}
+                 ORDER BY claim_expires_at ASC, created_at ASC
+                 LIMIT ?
+                """,
+                tuple(params),
+            ).fetchall()
+        return [_record_from_row(row) for row in rows]
+
+    def list_all_non_terminal_records(
+        self,
+        *,
+        adapter_key: Optional[str] = None,
+        limit: int = 500,
+    ) -> list[ManagedThreadDeliveryRecord]:
+        params: list[Any] = [s.value for s in MANAGED_THREAD_DELIVERY_TERMINAL_STATES]
+        clauses = ["state NOT IN (?, ?, ?, ?)"]
+        if adapter_key is not None:
+            clauses.append("adapter_key = ?")
+            params.append(str(adapter_key or "").strip())
+        params.append(max(1, int(limit)))
+        with open_orchestration_sqlite(
+            self._hub_root, durable=self._durable, migrate=True
+        ) as conn:
+            rows = conn.execute(
+                f"""
+                SELECT *
+                  FROM orch_managed_thread_deliveries
+                 WHERE {" AND ".join(clauses)}
+                 ORDER BY created_at ASC, delivery_id ASC
+                 LIMIT ?
+                """,
+                tuple(params),
+            ).fetchall()
+        return [_record_from_row(row) for row in rows]
+
     def _upsert_record(self, record: ManagedThreadDeliveryRecord) -> None:
         with open_orchestration_sqlite(
             self._hub_root, durable=self._durable, migrate=True
@@ -275,11 +345,15 @@ class SQLiteManagedThreadDeliveryEngine:
         claim_ttl: timedelta = _DEFAULT_CLAIM_TTL,
         retry_backoff: timedelta = _DEFAULT_RETRY_BACKOFF,
         max_attempts: int = _DEFAULT_MAX_ATTEMPTS,
+        backoff_multiplier: float = _DEFAULT_BACKOFF_MULTIPLIER,
+        max_backoff: Optional[timedelta] = _DEFAULT_MAX_BACKOFF,
     ) -> None:
         self._ledger = SQLiteManagedThreadDeliveryLedger(hub_root, durable=durable)
         self._claim_ttl = claim_ttl
         self._retry_backoff = retry_backoff
         self._max_attempts = max_attempts
+        self._backoff_multiplier = backoff_multiplier
+        self._max_backoff = max_backoff
 
     def create_intent(
         self, intent: ManagedThreadDeliveryIntent
@@ -401,7 +475,10 @@ class SQLiteManagedThreadDeliveryEngine:
             )
         if outcome == ManagedThreadDeliveryOutcome.RETRY:
             next_attempt_at = _compute_next_attempt_at(
-                record.attempt_count, self._retry_backoff
+                record.attempt_count,
+                self._retry_backoff,
+                backoff_multiplier=self._backoff_multiplier,
+                max_backoff=self._max_backoff,
             )
             return self._ledger.patch_delivery(
                 delivery_id,
@@ -420,7 +497,10 @@ class SQLiteManagedThreadDeliveryEngine:
                     claim_token=None,
                 )
             next_attempt_at = _compute_next_attempt_at(
-                record.attempt_count, self._retry_backoff
+                record.attempt_count,
+                self._retry_backoff,
+                backoff_multiplier=self._backoff_multiplier,
+                max_backoff=self._max_backoff,
             )
             return self._ledger.patch_delivery(
                 delivery_id,
@@ -449,6 +529,73 @@ class SQLiteManagedThreadDeliveryEngine:
             claim_token=None,
         )
 
+    def recovery_sweep(
+        self,
+        *,
+        adapter_key: Optional[str] = None,
+        now: Optional[datetime] = None,
+    ) -> ManagedThreadDeliveryRecoverySweepResult:
+        current_at = now or datetime.now(timezone.utc)
+        now_iso_str = current_at.isoformat()
+        recovered_claims = 0
+        abandoned_exhausted = 0
+        due_pending = 0
+        due_retries = 0
+
+        expired_claims = self._ledger.list_records_with_expired_claims(
+            adapter_key=adapter_key,
+            now=now_iso_str,
+        )
+        for record in expired_claims:
+            decision = plan_managed_thread_delivery_recovery(
+                record,
+                now=current_at,
+                claim_ttl=self._claim_ttl,
+                max_attempts=self._max_attempts,
+            )
+            if decision.action.value == "abandon":
+                self._ledger.patch_delivery(
+                    record.delivery_id,
+                    state=ManagedThreadDeliveryState.ABANDONED,
+                    last_error=decision.reason,
+                    claim_token=None,
+                )
+                abandoned_exhausted += 1
+            elif decision.action.value == "retry":
+                next_attempt_at = _compute_next_attempt_at(
+                    record.attempt_count,
+                    self._retry_backoff,
+                    backoff_multiplier=self._backoff_multiplier,
+                    max_backoff=self._max_backoff,
+                )
+                self._ledger.patch_delivery(
+                    record.delivery_id,
+                    state=ManagedThreadDeliveryState.RETRY_SCHEDULED,
+                    next_attempt_at=next_attempt_at,
+                    last_error=decision.reason,
+                    claim_token=None,
+                )
+                recovered_claims += 1
+
+        due_records = self._ledger.list_due_deliveries(
+            adapter_key=adapter_key,
+            now=now_iso_str,
+        )
+        for record in due_records:
+            if record.state == ManagedThreadDeliveryState.PENDING:
+                due_pending += 1
+            elif record.state == ManagedThreadDeliveryState.RETRY_SCHEDULED:
+                due_retries += 1
+
+        total_scanned = len(expired_claims) + len(due_records)
+        return ManagedThreadDeliveryRecoverySweepResult(
+            recovered_claims=recovered_claims,
+            abandoned_exhausted=abandoned_exhausted,
+            due_pending=due_pending,
+            due_retries=due_retries,
+            total_scanned=total_scanned,
+        )
+
     def _claim_record(
         self,
         record: ManagedThreadDeliveryRecord,
@@ -475,8 +622,18 @@ class SQLiteManagedThreadDeliveryEngine:
         )
 
 
-def _compute_next_attempt_at(attempt_count: int, backoff: timedelta) -> str:
-    delay = backoff * max(1, attempt_count)
+def _compute_next_attempt_at(
+    attempt_count: int,
+    backoff: timedelta,
+    *,
+    backoff_multiplier: float = _DEFAULT_BACKOFF_MULTIPLIER,
+    max_backoff: Optional[timedelta] = _DEFAULT_MAX_BACKOFF,
+) -> str:
+    exponent = max(0, attempt_count - 1)
+    delay_seconds = backoff.total_seconds() * (backoff_multiplier**exponent)
+    if max_backoff is not None:
+        delay_seconds = min(delay_seconds, max_backoff.total_seconds())
+    delay = timedelta(seconds=max(0.0, delay_seconds))
     return (datetime.now(timezone.utc) + delay).isoformat()
 
 

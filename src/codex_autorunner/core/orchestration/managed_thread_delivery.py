@@ -272,6 +272,17 @@ class ManagedThreadDeliveryLedger(Protocol):
         """Return records due for claim or retry work."""
 
 
+@dataclass(frozen=True)
+class ManagedThreadDeliveryRecoverySweepResult:
+    """Summary of one recovery sweep pass over non-terminal delivery records."""
+
+    recovered_claims: int
+    abandoned_exhausted: int
+    due_pending: int
+    due_retries: int
+    total_scanned: int
+
+
 @runtime_checkable
 class ManagedThreadDeliveryEngine(Protocol):
     """Engine-owned orchestration entrypoints for durable final delivery."""
@@ -310,6 +321,14 @@ class ManagedThreadDeliveryEngine(Protocol):
         self, delivery_id: str, *, detail: Optional[str] = None
     ) -> Optional[ManagedThreadDeliveryRecord]:
         """Mark a delivery as intentionally abandoned by policy."""
+
+    def recovery_sweep(
+        self,
+        *,
+        adapter_key: Optional[str] = None,
+        now: Optional[datetime] = None,
+    ) -> ManagedThreadDeliveryRecoverySweepResult:
+        """Scan non-terminal records and recover expired claims or abandoned budgets."""
 
 
 def is_valid_managed_thread_delivery_transition(
@@ -552,6 +571,7 @@ __all__ = [
     "ManagedThreadDeliveryRecoveryAction",
     "ManagedThreadDeliveryRecoveryDecision",
     "ManagedThreadDeliveryRegistration",
+    "ManagedThreadDeliveryRecoverySweepResult",
     "ManagedThreadDeliveryState",
     "ManagedThreadDeliveryTarget",
     "build_managed_thread_delivery_id",
