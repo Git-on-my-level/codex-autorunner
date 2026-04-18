@@ -74,13 +74,10 @@ def test_ticket_flow_compact_live_output_falls_back_to_stream_deltas() -> None:
 
         await new Promise((resolve) => setTimeout(resolve, 20));
 
-        const compact = document.getElementById("ticket-live-output-compact")?.textContent || "";
         const detail = document.getElementById("ticket-live-output-text")?.textContent || "";
         const status = document.getElementById("ticket-live-output-status")?.textContent || "";
 
         assert.match(detail, /This is live codex output/);
-        assert.match(compact, /This is live codex output/);
-        assert.doesNotMatch(compact, /Waiting for agent output/);
         assert.equal(status, "Streaming");
         """
     )
@@ -238,12 +235,9 @@ def test_ticket_flow_compact_live_output_shows_step_progress_when_no_agent_text(
 
         await new Promise((resolve) => setTimeout(resolve, 20));
 
-        const compact = document.getElementById("ticket-live-output-compact")?.textContent || "";
         const detail = document.getElementById("ticket-live-output-text")?.textContent || "";
 
         assert.match(detail, /--- Step: ticket_turn ---/);
-        assert.match(compact, /--- Step: ticket_turn ---/);
-        assert.doesNotMatch(compact, /Waiting for agent output/);
         """
     )
 

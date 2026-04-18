@@ -1,6 +1,5 @@
 import { parseAppServerEvent, resetOpenCodeEventState, type AgentEvent, type ParsedAgentEvent } from "./agentEvents.js";
 import { openModal } from "./utils.js";
-import { summarizeEvents, renderCompactSummary, COMPACT_MAX_TEXT_LENGTH } from "./eventSummarizer.js";
 import {
   type FlowEvent,
   type FlowRun,
@@ -307,64 +306,6 @@ function renderLiveOutputEvents(): void {
   list.scrollTop = list.scrollHeight;
 }
 
-function renderLiveOutputCompact(): void {
-  const compactEl = document.getElementById("ticket-live-output-compact");
-  if (!compactEl) return;
-  const text = renderCompactLiveOutputText();
-  const newText = text || "";
-
-  if (compactEl.textContent !== newText) {
-    compactEl.textContent = newText;
-  }
-}
-
-function renderCompactLiveOutputText(): string {
-  if (liveOutputEvents.length) {
-    const summary = summarizeEvents(liveOutputEvents, {
-      maxActions: 1,
-      maxTextLength: COMPACT_MAX_TEXT_LENGTH,
-      startTime: flowStartedAt?.getTime(),
-    });
-    return renderCompactSummary(summary);
-  }
-
-  const fallbackText = compactLiveOutputBufferText();
-  if (!fallbackText) return "";
-
-  const summary = summarizeEvents(
-    [
-      {
-        id: "ticket-live-output-fallback",
-        title: "Output",
-        summary: fallbackText,
-        detail: "",
-        kind: "output",
-        isSignificant: true,
-        time: flowStartedAt?.getTime() || Date.now(),
-        itemId: null,
-        method: "agent_stream_delta",
-      },
-    ],
-    {
-      maxActions: 1,
-      maxTextLength: COMPACT_MAX_TEXT_LENGTH,
-      startTime: flowStartedAt?.getTime(),
-    }
-  );
-  return renderCompactSummary(summary);
-}
-
-function compactLiveOutputBufferText(): string {
-  const recentLines = liveOutputBuffer
-    .map((line) => line.trim())
-    .filter((line) => line);
-  if (!recentLines.length) return "";
-
-  const nonStepLines = recentLines.filter((line) => !/^--- Step: .* ---$/.test(line));
-  const compactLines = nonStepLines.length ? nonStepLines : recentLines;
-  return compactLines.slice(-3).join(" ").replace(/\s+/g, " ").trim();
-}
-
 function updateLiveOutputPanelToggle(): void {
   const panelToggle = document.getElementById("ticket-live-output-panel-toggle");
   const panel = document.getElementById("ticket-live-output-panel");
@@ -394,7 +335,6 @@ export function renderLiveOutputView(): void {
     detailEl.classList.toggle("hidden", !liveOutputPanelExpanded);
   }
 
-  renderLiveOutputCompact();
   renderLiveOutputEvents();
   updateLiveOutputPanelToggle();
 }

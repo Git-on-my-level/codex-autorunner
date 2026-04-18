@@ -215,15 +215,6 @@ def _is_shared_risk_path(path: str) -> bool:
     return any(_matches_prefix(path, prefix) for prefix in _SHARED_RISK_PREFIXES)
 
 
-def _classify_scoped_lane(path: str) -> ScopedValidationLane | None:
-    matches = _matching_scoped_lanes(path)
-    if len(matches) == 1:
-        return matches[0]
-    if not matches and fnmatch(path, "tests/test_*.py"):
-        return "core"
-    return None
-
-
 def _matching_scoped_lanes(path: str) -> tuple[ScopedValidationLane, ...]:
     matches: list[ScopedValidationLane] = []
     for lane in _SCOPED_LANES:
