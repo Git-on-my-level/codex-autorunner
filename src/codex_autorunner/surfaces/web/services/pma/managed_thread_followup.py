@@ -33,6 +33,8 @@ def build_managed_thread_terminal_notify_payload(
     lane_id: Optional[str],
     notify_once: bool,
     idempotency_key: Optional[str],
+    origin_thread_id: Optional[str],
+    origin_lane_id: Optional[str],
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "event_types": [
@@ -47,6 +49,10 @@ def build_managed_thread_terminal_notify_payload(
     }
     if idempotency_key:
         payload["idempotency_key"] = idempotency_key
+    if origin_thread_id:
+        payload["origin_thread_id"] = origin_thread_id
+    if origin_lane_id:
+        payload["origin_lane_id"] = origin_lane_id
     return payload
 
 
@@ -107,6 +113,9 @@ class ManagedThreadAutomationClient:
         required: bool,
     ) -> Optional[dict[str, Any]]:
         runtime_state = self._get_runtime_state() if self._get_runtime_state else None
+        origin_thread_id, origin_lane_id = _resolve_origin_followup_context(
+            runtime_state
+        )
         try:
             store = await get_automation_store(
                 self._request,
@@ -126,6 +135,8 @@ class ManagedThreadAutomationClient:
                     lane_id=lane_id,
                     notify_once=notify_once,
                     idempotency_key=idempotency_key,
+                    origin_thread_id=origin_thread_id,
+                    origin_lane_id=origin_lane_id,
                 ),
             )
         except HTTPException as exc:
@@ -150,3 +161,20 @@ class ManagedThreadAutomationClient:
         if isinstance(created, dict) and "subscription" in created:
             return {"mode": "terminal", **created}
         return {"mode": "terminal", "subscription": created}
+
+
+def _resolve_origin_followup_context(
+    runtime_state: Any,
+) -> tuple[Optional[str], Optional[str]]:
+    if runtime_state is None:
+        return None, None
+
+    current = getattr(runtime_state, "pma_current", None)
+    if not isinstance(current, dict):
+        return None, None
+
+    origin_thread_id = normalize_optional_text(current.get("thread_id"))
+    origin_lane_id = normalize_optional_text(current.get("lane_id"))
+    if origin_thread_id or origin_lane_id:
+        return origin_thread_id, origin_lane_id
+    return None, None

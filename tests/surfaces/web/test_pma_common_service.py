@@ -293,3 +293,95 @@ async def test_managed_thread_automation_client_downgrades_optional_missing_thre
     )
 
     assert created is None
+
+
+@pytest.mark.asyncio
+async def test_managed_thread_automation_client_forwards_origin_thread_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
+    runtime_state = SimpleNamespace(
+        pma_current={
+            "thread_id": "pma-thread-1",
+            "lane_id": "discord",
+        }
+    )
+    client = ManagedThreadAutomationClient(request, lambda: runtime_state)
+    captured: dict[str, object] = {}
+
+    async def _fake_get_store(_request, _runtime_state, *, required):
+        assert required is False
+        assert _runtime_state is runtime_state
+        return object()
+
+    async def _fake_create(_store, _method_names, payload):
+        captured.update(payload)
+        return {"subscription": {"subscription_id": "sub-1"}}
+
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.web.services.pma.managed_thread_followup.get_automation_store",
+        _fake_get_store,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.web.services.pma.managed_thread_followup.call_store_create_with_payload",
+        _fake_create,
+    )
+
+    created = await client.create_terminal_followup(
+        managed_thread_id="thread-1",
+        lane_id=None,
+        notify_once=True,
+        idempotency_key="managed-thread-notify:thread-1",
+        required=False,
+    )
+
+    assert created == {
+        "mode": "terminal",
+        "subscription": {"subscription_id": "sub-1"},
+    }
+    assert captured["origin_thread_id"] == "pma-thread-1"
+    assert captured["origin_lane_id"] == "discord"
+
+
+@pytest.mark.asyncio
+async def test_managed_thread_automation_client_ignores_stale_last_result_origin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
+    runtime_state = SimpleNamespace(
+        pma_current=None,
+        pma_last_result={
+            "thread_id": "stale-thread",
+            "lane_id": "discord",
+        },
+    )
+    client = ManagedThreadAutomationClient(request, lambda: runtime_state)
+    captured: dict[str, object] = {}
+
+    async def _fake_get_store(_request, _runtime_state, *, required):
+        assert required is False
+        return object()
+
+    async def _fake_create(_store, _method_names, payload):
+        captured.update(payload)
+        return {"subscription": {"subscription_id": "sub-1"}}
+
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.web.services.pma.managed_thread_followup.get_automation_store",
+        _fake_get_store,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.web.services.pma.managed_thread_followup.call_store_create_with_payload",
+        _fake_create,
+    )
+
+    await client.create_terminal_followup(
+        managed_thread_id="thread-1",
+        lane_id=None,
+        notify_once=True,
+        idempotency_key="managed-thread-notify:thread-1",
+        required=False,
+    )
+
+    assert "origin_thread_id" not in captured
+    assert "origin_lane_id" not in captured
