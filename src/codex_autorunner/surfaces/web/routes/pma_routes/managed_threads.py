@@ -33,6 +33,7 @@ from ...schemas import (
 from ...services.pma.managed_thread_followup import (
     ManagedThreadAutomationClient,
     ManagedThreadAutomationUnavailable,
+    resolve_origin_followup_context,
 )
 from .automation_adapter import (
     call_store_action_with_id,
@@ -70,6 +71,13 @@ def _load_chat_binding_metadata_by_thread(hub_root):
             "Could not load PMA chat-binding metadata for thread response: %s", exc
         )
         return {}
+
+
+def _subscription_request_has_explicit_routing(payload: dict[str, Any]) -> bool:
+    return any(
+        normalize_optional_text(payload.get(field)) is not None
+        for field in ("thread_id", "lane_id")
+    )
 
 
 def build_managed_thread_orchestration_service(request: Request):
@@ -131,9 +139,18 @@ def build_automation_routes(
     async def create_automation_subscription(
         request: Request, payload: PmaAutomationSubscriptionCreateRequest
     ) -> dict[str, Any]:
-        store = await get_automation_store(request, get_runtime_state())
+        runtime_state = get_runtime_state()
+        store = await get_automation_store(request, runtime_state)
         try:
             normalized_payload = payload.normalized_payload()
+            if not _subscription_request_has_explicit_routing(normalized_payload):
+                origin_thread_id, origin_lane_id = resolve_origin_followup_context(
+                    runtime_state
+                )
+                if origin_thread_id:
+                    normalized_payload.setdefault("origin_thread_id", origin_thread_id)
+                if origin_lane_id:
+                    normalized_payload.setdefault("origin_lane_id", origin_lane_id)
             created = await call_store_create_with_payload(
                 store,
                 (

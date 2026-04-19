@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from codex_autorunner.agents.registry import AgentDescriptor
@@ -18,6 +19,9 @@ from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes.pma_routes import (
     managed_threads,
+)
+from codex_autorunner.surfaces.web.routes.pma_routes.managed_threads import (
+    build_automation_routes,
 )
 from tests.conftest import write_test_config
 
@@ -40,6 +44,18 @@ def _set_default_terminal_followup(hub_root: Path, enabled: bool) -> None:
 
 def _repo_owner(hub_env) -> dict[str, str]:
     return {"resource_kind": "repo", "resource_id": hub_env.repo_id}
+
+
+def _build_automation_route_client(
+    hub_root: Path,
+    *,
+    runtime_state: object,
+) -> TestClient:
+    app = FastAPI()
+    app.state.config = SimpleNamespace(root=hub_root, raw={"pma": {"enabled": True}})
+    router = app.router
+    build_automation_routes(router, lambda: runtime_state)
+    return TestClient(app)
 
 
 def test_create_managed_thread_with_repo_owner(hub_env) -> None:
@@ -847,6 +863,111 @@ def test_create_subscription_auto_resolves_lane_from_bound_thread(hub_env) -> No
     subscription = subscription_resp.json()["subscription"]
     assert subscription["thread_id"] == thread_id
     assert subscription["lane_id"] == "discord"
+
+
+def test_create_subscription_defaults_to_current_runtime_chat_thread(hub_env) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", **_repo_owner(hub_env)},
+        )
+        assert create_resp.status_code == 200
+        origin_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+    OrchestrationBindingStore(hub_env.hub_root).upsert_binding(
+        surface_kind="discord",
+        surface_key="discord:subscription-default-thread",
+        thread_target_id=origin_thread_id,
+    )
+    runtime_state = SimpleNamespace(
+        pma_current={
+            "thread_id": origin_thread_id,
+            "lane_id": "discord",
+        }
+    )
+
+    with _build_automation_route_client(
+        hub_env.hub_root,
+        runtime_state=runtime_state,
+    ) as client:
+        subscription_resp = client.post(
+            "/subscriptions",
+            json={
+                "event_type": "flow_completed",
+                "repo_id": hub_env.repo_id,
+                "run_id": "run-subscription-default",
+            },
+        )
+
+    assert subscription_resp.status_code == 200
+    subscription = subscription_resp.json()["subscription"]
+    assert subscription["repo_id"] == hub_env.repo_id
+    assert subscription["run_id"] == "run-subscription-default"
+    assert subscription["lane_id"] == "discord"
+    assert subscription["metadata"]["delivery_target"] == {
+        "surface_kind": "discord",
+        "surface_key": "discord:subscription-default-thread",
+    }
+
+
+def test_create_subscription_keeps_explicit_thread_target(hub_env) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        origin_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", **_repo_owner(hub_env)},
+        )
+        assert origin_resp.status_code == 200
+        origin_thread_id = origin_resp.json()["thread"]["managed_thread_id"]
+
+        explicit_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", **_repo_owner(hub_env)},
+        )
+        assert explicit_resp.status_code == 200
+        explicit_thread_id = explicit_resp.json()["thread"]["managed_thread_id"]
+
+    bindings = OrchestrationBindingStore(hub_env.hub_root)
+    bindings.upsert_binding(
+        surface_kind="discord",
+        surface_key="discord:subscription-origin-thread",
+        thread_target_id=origin_thread_id,
+    )
+    bindings.upsert_binding(
+        surface_kind="telegram",
+        surface_key="telegram:subscription-explicit-thread",
+        thread_target_id=explicit_thread_id,
+    )
+    runtime_state = SimpleNamespace(
+        pma_current={
+            "thread_id": origin_thread_id,
+            "lane_id": "discord",
+        }
+    )
+
+    with _build_automation_route_client(
+        hub_env.hub_root,
+        runtime_state=runtime_state,
+    ) as client:
+        subscription_resp = client.post(
+            "/subscriptions",
+            json={
+                "event_type": "flow_completed",
+                "thread_id": explicit_thread_id,
+            },
+        )
+
+    assert subscription_resp.status_code == 200
+    subscription = subscription_resp.json()["subscription"]
+    assert subscription["thread_id"] == explicit_thread_id
+    assert subscription["lane_id"] == "telegram"
+    assert subscription["metadata"]["delivery_target"] == {
+        "surface_kind": "telegram",
+        "surface_key": "telegram:subscription-explicit-thread",
+    }
 
 
 def test_create_subscription_warns_when_active_auto_subscription_covers_scope(
