@@ -912,6 +912,64 @@ def test_create_subscription_defaults_to_current_runtime_chat_thread(hub_env) ->
     }
 
 
+def test_create_subscription_keeps_explicit_thread_target(hub_env) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        origin_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", **_repo_owner(hub_env)},
+        )
+        assert origin_resp.status_code == 200
+        origin_thread_id = origin_resp.json()["thread"]["managed_thread_id"]
+
+        explicit_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", **_repo_owner(hub_env)},
+        )
+        assert explicit_resp.status_code == 200
+        explicit_thread_id = explicit_resp.json()["thread"]["managed_thread_id"]
+
+    bindings = OrchestrationBindingStore(hub_env.hub_root)
+    bindings.upsert_binding(
+        surface_kind="discord",
+        surface_key="discord:subscription-origin-thread",
+        thread_target_id=origin_thread_id,
+    )
+    bindings.upsert_binding(
+        surface_kind="telegram",
+        surface_key="telegram:subscription-explicit-thread",
+        thread_target_id=explicit_thread_id,
+    )
+    runtime_state = SimpleNamespace(
+        pma_current={
+            "thread_id": origin_thread_id,
+            "lane_id": "discord",
+        }
+    )
+
+    with _build_automation_route_client(
+        hub_env.hub_root,
+        runtime_state=runtime_state,
+    ) as client:
+        subscription_resp = client.post(
+            "/subscriptions",
+            json={
+                "event_type": "flow_completed",
+                "thread_id": explicit_thread_id,
+            },
+        )
+
+    assert subscription_resp.status_code == 200
+    subscription = subscription_resp.json()["subscription"]
+    assert subscription["thread_id"] == explicit_thread_id
+    assert subscription["lane_id"] == "telegram"
+    assert subscription["metadata"]["delivery_target"] == {
+        "surface_kind": "telegram",
+        "surface_key": "telegram:subscription-explicit-thread",
+    }
+
+
 def test_create_subscription_warns_when_active_auto_subscription_covers_scope(
     hub_env,
 ) -> None:

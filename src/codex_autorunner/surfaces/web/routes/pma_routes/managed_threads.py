@@ -73,6 +73,13 @@ def _load_chat_binding_metadata_by_thread(hub_root):
         return {}
 
 
+def _subscription_request_has_explicit_routing(payload: dict[str, Any]) -> bool:
+    return any(
+        normalize_optional_text(payload.get(field)) is not None
+        for field in ("thread_id", "lane_id")
+    )
+
+
 def build_managed_thread_orchestration_service(request: Request):
     try:
         descriptors = get_registered_agents(request.app.state)
@@ -136,13 +143,14 @@ def build_automation_routes(
         store = await get_automation_store(request, runtime_state)
         try:
             normalized_payload = payload.normalized_payload()
-            origin_thread_id, origin_lane_id = resolve_origin_followup_context(
-                runtime_state
-            )
-            if origin_thread_id:
-                normalized_payload.setdefault("origin_thread_id", origin_thread_id)
-            if origin_lane_id:
-                normalized_payload.setdefault("origin_lane_id", origin_lane_id)
+            if not _subscription_request_has_explicit_routing(normalized_payload):
+                origin_thread_id, origin_lane_id = resolve_origin_followup_context(
+                    runtime_state
+                )
+                if origin_thread_id:
+                    normalized_payload.setdefault("origin_thread_id", origin_thread_id)
+                if origin_lane_id:
+                    normalized_payload.setdefault("origin_lane_id", origin_lane_id)
             created = await call_store_create_with_payload(
                 store,
                 (
