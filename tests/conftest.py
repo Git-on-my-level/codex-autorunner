@@ -23,12 +23,30 @@ import yaml
 
 from tests.support.hermetic_roots import HermeticTestRoots
 
-DEFAULT_NON_INTEGRATION_TIMEOUT_SECONDS = 30
-DEFAULT_INTEGRATION_TIMEOUT_SECONDS = 30
+_TIMEOUT_FAST_SECONDS = 30
+_TIMEOUT_INTEGRATION_SECONDS = 60
+_TIMEOUT_SLOW_SECONDS = 120
 _OPENCODE_PROCESS_KIND = "opencode"
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-_HERMETIC_ROOTS = HermeticTestRoots.from_repo_root(_REPO_ROOT)
+_HERMETIC_ROOTS: HermeticTestRoots | None = None
 os.environ.setdefault("CODEX_DISABLE_APP_SERVER_AUTORESTART_FOR_TESTS", "1")
+
+
+def _get_hermetic_roots() -> HermeticTestRoots:
+    global _HERMETIC_ROOTS
+    if _HERMETIC_ROOTS is None:
+        _HERMETIC_ROOTS = HermeticTestRoots.from_repo_root(_REPO_ROOT)
+    return _HERMETIC_ROOTS
+
+
+_STUB_HANDSHAKE_PATH_SEGMENTS = (
+    "discord",
+    "telegram",
+    "chat_surface_harness",
+    "chat_surface_integration",
+    "chat_surface_lab",
+    os.sep + "integrations" + os.sep + "chat" + os.sep,
+)
 
 
 def _format_temp_processes(processes: tuple[object, ...]) -> str:
@@ -45,12 +63,6 @@ def _format_temp_processes(processes: tuple[object, ...]) -> str:
     if remaining > 0:
         parts.append(f"... plus {remaining} more")
     return "; ".join(parts)
-
-
-_HERMETIC_ROOTS.prepare_process_environment()
-_HERMETIC_ROOTS.prune_inactive_pytest_temp_runs(min_age_seconds=300.0)
-_HERMETIC_ROOTS.prune_inactive_repo_temp_roots(min_age_seconds=300.0)
-_HERMETIC_ROOTS.prune_old_opencode_state_runs(max_age_seconds=86400)
 
 
 _ORIGINAL_UNRAISABLE_HOOK = sys.unraisablehook
@@ -75,7 +87,15 @@ def write_test_config(path: Path, data: dict) -> None:
 
 @pytest.fixture(scope="session")
 def hermetic_roots() -> HermeticTestRoots:
-    return _HERMETIC_ROOTS
+    return _get_hermetic_roots()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _init_hermetic_environment(hermetic_roots: HermeticTestRoots) -> None:
+    hermetic_roots.prepare_process_environment()
+    hermetic_roots.prune_inactive_pytest_temp_runs(min_age_seconds=300.0)
+    hermetic_roots.prune_inactive_repo_temp_roots(min_age_seconds=300.0)
+    hermetic_roots.prune_old_opencode_state_runs(max_age_seconds=86400)
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -93,22 +113,28 @@ def pytest_configure(config: pytest.Config) -> None:
 def pytest_collection_modifyitems(
     session: pytest.Session, config: pytest.Config, items: list[pytest.Item]
 ) -> None:
-    """
-    Apply a default per-test timeout to all tests.
+    """Apply per-test timeouts using a three-tier policy.
 
-    This relies on `pytest-timeout` when installed; if it isn't installed, the
-    marker is inert but still documents the intent.
+    Tier 1 (default): tests with no marker get the fast budget.
+    Tier 2 (``@pytest.mark.integration``): higher budget for tests that
+        touch external services or heavier I/O.
+    Tier 3 (``@pytest.mark.slow``): highest budget for lifecycle or
+        end-to-end tests.
+
+    Tests that already carry an explicit ``@pytest.mark.timeout(N)`` are
+    left untouched.  Requires ``pytest-timeout``; without it the markers
+    are inert but still document the intent.
     """
     _ = session, config
     for item in items:
         if item.get_closest_marker("timeout") is not None:
             continue
-        if item.get_closest_marker("integration") is not None:
-            item.add_marker(pytest.mark.timeout(DEFAULT_INTEGRATION_TIMEOUT_SECONDS))
+        if item.get_closest_marker("slow") is not None:
+            item.add_marker(pytest.mark.timeout(_TIMEOUT_SLOW_SECONDS))
+        elif item.get_closest_marker("integration") is not None:
+            item.add_marker(pytest.mark.timeout(_TIMEOUT_INTEGRATION_SECONDS))
         else:
-            item.add_marker(
-                pytest.mark.timeout(DEFAULT_NON_INTEGRATION_TIMEOUT_SECONDS)
-            )
+            item.add_marker(pytest.mark.timeout(_TIMEOUT_FAST_SECONDS))
 
 
 @pytest.fixture(autouse=True)
@@ -117,6 +143,9 @@ def _stub_surface_startup_handshakes_for_non_handshake_tests(
 ) -> None:
     path = Path(str(request.node.fspath))
     if path.name in {"test_discord_hub_handshake.py", "test_telegram_hub_handshake.py"}:
+        return
+    path_str = str(path)
+    if not any(seg in path_str for seg in _STUB_HANDSHAKE_PATH_SEGMENTS):
         return
 
     from codex_autorunner.core.hub_control_plane import HubSharedStateService
@@ -571,7 +600,9 @@ def _cleanup_opencode_processes_session(
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _cleanup_pytest_temp_runs_session(hermetic_roots: HermeticTestRoots) -> None:
+def _cleanup_pytest_temp_runs_session(
+    _init_hermetic_environment, hermetic_roots: HermeticTestRoots
+) -> None:
     yield
     cleanup_module = hermetic_roots.load_pytest_temp_cleanup_module()
     env_root = hermetic_roots.pytest_process_root
