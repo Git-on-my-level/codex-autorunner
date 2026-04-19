@@ -236,6 +236,8 @@ export function createDocChat(config: ChatConfig): DocChatInstance {
     state.events = [];
     state.totalEvents = 0;
     state.eventItemIndex = {};
+    _prevMessageSnapshot = "";
+    _streamingEl = null;
     resetOpenCodeEventState();
   }
 
@@ -387,13 +389,191 @@ export function createDocChat(config: ChatConfig): DocChatInstance {
     eventsList.appendChild(wrapper);
   }
 
+  let _prevMessageSnapshot = "";
+  let _streamingEl: HTMLElement | null = null;
+
+  function isNearBottom(el: HTMLElement | null): boolean {
+    if (!el) return true;
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  }
+
+  function scrollToBottom(el: HTMLElement | null): void {
+    if (el) el.scrollTop = el.scrollHeight;
+  }
+
+  function buildMessageEl(msg: ChatMessage): HTMLElement {
+    const wrapper = document.createElement("div");
+    const roleClass = msg.role === "user" ? config.styling.messageUserClass : config.styling.messageAssistantClass;
+    const finalClass = msg.role === "assistant"
+      ? (msg.isFinal ? config.styling.messageAssistantFinalClass : config.styling.messageAssistantThinkingClass)
+      : "";
+    wrapper.className = [config.styling.messagesClass, roleClass, finalClass].filter(Boolean).join(" ").trim();
+
+    const roleLabel = document.createElement("div");
+    roleLabel.className = config.styling.messageRoleClass;
+    if (msg.role === "user") {
+      roleLabel.textContent = "You";
+    } else {
+      roleLabel.textContent = msg.isFinal ? "Response" : "Thinking";
+    }
+    wrapper.appendChild(roleLabel);
+
+    const content = document.createElement("div");
+    content.className = `${config.styling.messageContentClass} messages-markdown`;
+      const shouldRenderMarkdown = true;
+    if (shouldRenderMarkdown) {
+      content.innerHTML = renderMarkdown(msg.content);
+      decorateFileLinks(content);
+    } else {
+      content.textContent = msg.content;
+    }
+    wrapper.appendChild(content);
+
+    const meta = document.createElement("div");
+    meta.className = config.styling.messageMetaClass;
+    const time = msg.time ? new Date(msg.time) : new Date();
+    let metaText = time.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+    if (msg.meta) {
+      const parts = [];
+      if (msg.meta.steps) parts.push(`${msg.meta.steps} steps`);
+      if (msg.meta.duration) parts.push(`${msg.meta.duration.toFixed(1)}s`);
+      if (msg.meta.tag) parts.push(String(msg.meta.tag));
+      if (state.contextUsagePercent !== null && msg.isFinal) {
+        parts.push(`ctx left ${state.contextUsagePercent}%`);
+      }
+      if (parts.length) metaText += ` · ${parts.join(" · ")}`;
+    }
+
+    meta.textContent = metaText;
+    wrapper.appendChild(meta);
+
+    return wrapper;
+  }
+
+  function buildStreamingEl(): HTMLElement {
+    const streaming = document.createElement("div");
+    streaming.className = [
+      config.styling.messagesClass,
+      config.styling.messageAssistantClass,
+      config.styling.messageAssistantThinkingClass || "",
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+
+    const roleLabel = document.createElement("div");
+    roleLabel.className = config.styling.messageRoleClass;
+    roleLabel.textContent = "Thinking";
+    streaming.appendChild(roleLabel);
+
+    const content = document.createElement("div");
+    content.className = `${config.styling.messageContentClass} messages-markdown`;
+
+    if (state.streamText) {
+      content.innerHTML = renderMarkdown(state.streamText);
+      decorateFileLinks(content);
+    } else {
+      const stepCount = state.totalEvents || state.events.length;
+      const statusText = (state.statusText || "").trim();
+      const isNoiseEvent = (evt: ChatEvent): boolean => {
+        const title = (evt.title || "").toLowerCase();
+        const method = (evt.method || "").toLowerCase();
+        if (title === "delta") return true;
+        if (method.includes("delta")) return true;
+        return false;
+      };
+
+      const meaningfulEvents = state.events.filter((evt) => !isNoiseEvent(evt));
+      const lastMeaningful = meaningfulEvents[meaningfulEvents.length - 1];
+      const headline = lastMeaningful
+        ? (lastMeaningful.title || lastMeaningful.summary || statusText || "Working...")
+        : (statusText || "Thinking...");
+
+      content.innerHTML = "";
+
+      const header = document.createElement("div");
+      header.className = "chat-thinking-inline";
+
+      const spinner = document.createElement("span");
+      spinner.className = "chat-thinking-spinner";
+      header.appendChild(spinner);
+
+      const headlineSpan = document.createElement("span");
+      headlineSpan.textContent = String(headline);
+      header.appendChild(headlineSpan);
+
+      if (stepCount > 0) {
+        const steps = document.createElement("span");
+        steps.className = "chat-thinking-steps";
+        steps.textContent = `(${stepCount} steps)`;
+        header.appendChild(steps);
+
+        if (state.contextUsagePercent !== null) {
+          const context = document.createElement("span");
+          context.className = "chat-thinking-steps";
+          context.textContent = ` · ctx left ${state.contextUsagePercent}%`;
+          header.appendChild(context);
+        }
+
+        if (meaningfulEvents.length > 2) {
+          const toggle = document.createElement("button");
+          toggle.type = "button";
+          toggle.className = "ghost sm chat-thinking-details-btn";
+          toggle.textContent = state.eventsExpanded ? "Hide details" : "Show details";
+          toggle.addEventListener("click", (e) => {
+            e.preventDefault();
+            state.eventsExpanded = !state.eventsExpanded;
+            _prevMessageSnapshot = "";
+            renderMessages();
+          });
+          header.appendChild(toggle);
+        }
+      }
+
+      content.appendChild(header);
+
+      const maxRecent = state.eventsExpanded
+        ? Math.min(meaningfulEvents.length, config.limits.eventVisible || 20)
+        : 3;
+      const recentEvents = meaningfulEvents.slice(-maxRecent);
+      if (recentEvents.length) {
+        const list = document.createElement("ul");
+        list.className = "chat-thinking-steps-list";
+        for (const evt of recentEvents) {
+          const li = document.createElement("li");
+
+          const title = document.createElement("span");
+          title.className = "chat-thinking-step-title";
+          title.textContent = (evt.title || evt.kind || evt.method || "step").trim();
+          li.appendChild(title);
+
+          const summaryText = (evt.summary || "").trim();
+          if (summaryText) {
+            const summary = document.createElement("span");
+            summary.className = "chat-thinking-step-summary";
+            summary.textContent = ` — ${summaryText}`;
+            li.appendChild(summary);
+          }
+
+          list.appendChild(li);
+        }
+        content.appendChild(list);
+      }
+    }
+
+    streaming.appendChild(content);
+
+    return streaming;
+  }
+
   function renderMessages(): void {
     const { messagesEl, historyHeader } = elements;
     if (!messagesEl) return;
-    messagesEl.innerHTML = "";
 
     const hasMessages = state.messages.length > 0;
     const hasStream = !!state.streamText;
+    const isStreaming = hasStream || state.status === "running";
 
     if (historyHeader) {
       historyHeader.classList.toggle("hidden", !(hasMessages || hasStream));
@@ -401,193 +581,61 @@ export function createDocChat(config: ChatConfig): DocChatInstance {
     messagesEl.classList.toggle("chat-history-empty", !(hasMessages || hasStream));
 
     if (!hasMessages && !hasStream) {
+      if (messagesEl.innerHTML !== "") {
+        messagesEl.innerHTML = "";
+        _prevMessageSnapshot = "";
+        _streamingEl = null;
+      }
       return;
     }
 
-    state.messages.forEach((msg) => {
-      const wrapper = document.createElement("div");
-      const roleClass = msg.role === "user" ? config.styling.messageUserClass : config.styling.messageAssistantClass;
-      const finalClass = msg.role === "assistant"
-        ? (msg.isFinal ? config.styling.messageAssistantFinalClass : config.styling.messageAssistantThinkingClass)
-        : "";
-      wrapper.className = [config.styling.messagesClass, roleClass, finalClass].filter(Boolean).join(" ").trim();
+    const snapshot = state.messages.map((m) => m.id).join(",");
+    const messagesChanged = snapshot !== _prevMessageSnapshot;
 
-      const roleLabel = document.createElement("div");
-      roleLabel.className = config.styling.messageRoleClass;
-      if (msg.role === "user") {
-        roleLabel.textContent = "You";
-      } else {
-        roleLabel.textContent = msg.isFinal ? "Response" : "Thinking";
+    if (messagesChanged) {
+      const wasNearBottom = isNearBottom(messagesEl);
+
+      messagesEl.innerHTML = "";
+      _prevMessageSnapshot = snapshot;
+      _streamingEl = null;
+
+      state.messages.forEach((msg) => {
+        messagesEl.appendChild(buildMessageEl(msg));
+      });
+
+      if (isStreaming) {
+        _streamingEl = buildStreamingEl();
+        messagesEl.appendChild(_streamingEl);
       }
-      wrapper.appendChild(roleLabel);
 
-      const content = document.createElement("div");
-      content.className = `${config.styling.messageContentClass} messages-markdown`;
-      // Use markdown rendering for assistant messages.
-      // For user messages, keep plain text unless the message includes PMA file links
-      // (used for "uploaded file" pills).
-      const shouldRenderMarkdown =
-        msg.role === "assistant" ||
-        msg.content.includes("/hub/pma/files/") ||
-        msg.content.includes("/api/filebox/") ||
-        msg.content.includes("/hub/filebox/");
-      if (shouldRenderMarkdown) {
-        content.innerHTML = renderMarkdown(msg.content);
-        decorateFileLinks(content);
-      } else {
-        content.textContent = msg.content;
+      if (wasNearBottom) {
+        scrollToBottom(messagesEl);
+        scrollToBottom(elements.streamEl);
       }
-      wrapper.appendChild(content);
-
-      const meta = document.createElement("div");
-      meta.className = config.styling.messageMetaClass;
-      const time = msg.time ? new Date(msg.time) : new Date();
-      let metaText = time.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      
-      if (msg.meta) {
-        const parts = [];
-        if (msg.meta.steps) parts.push(`${msg.meta.steps} steps`);
-        if (msg.meta.duration) parts.push(`${msg.meta.duration.toFixed(1)}s`);
-        if (msg.meta.tag) parts.push(String(msg.meta.tag));
-        if (state.contextUsagePercent !== null && msg.isFinal) {
-          parts.push(`ctx left ${state.contextUsagePercent}%`);
-        }
-        if (parts.length) metaText += ` · ${parts.join(" · ")}`;
-      }
-      
-      meta.textContent = metaText;
-      wrapper.appendChild(meta);
-
-      messagesEl.appendChild(wrapper);
-    });
-
-    // While running, show an inline "Thinking" bubble at the bottom where the
-    // final assistant message will appear (even if we don't have streamed text yet).
-    if (hasStream || state.status === "running") {
-      const streaming = document.createElement("div");
-      streaming.className = [
-        config.styling.messagesClass,
-        config.styling.messageAssistantClass,
-        config.styling.messageAssistantThinkingClass || "",
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .trim();
-
-      const roleLabel = document.createElement("div");
-      roleLabel.className = config.styling.messageRoleClass;
-      roleLabel.textContent = "Thinking";
-      streaming.appendChild(roleLabel);
-
-      const content = document.createElement("div");
-      content.className = `${config.styling.messageContentClass} messages-markdown`;
-
-      // If we have streamed text, show it. Otherwise show a compact "working" summary
-      // based on the most recent event/tool-call.
-      if (state.streamText) {
-        content.innerHTML = renderMarkdown(state.streamText);
-        decorateFileLinks(content);
-      } else {
-        const stepCount = state.totalEvents || state.events.length;
-        const statusText = (state.statusText || "").trim();
-        const isNoiseEvent = (evt: ChatEvent): boolean => {
-          const title = (evt.title || "").toLowerCase();
-          const method = (evt.method || "").toLowerCase();
-          // Hide token/partial deltas; they are too granular for the UI.
-          if (title === "delta") return true;
-          if (method.includes("delta")) return true;
-          return false;
-        };
-
-        const meaningfulEvents = state.events.filter((evt) => !isNoiseEvent(evt));
-        const lastMeaningful = meaningfulEvents[meaningfulEvents.length - 1];
-        const headline = lastMeaningful
-          ? (lastMeaningful.title || lastMeaningful.summary || statusText || "Working...")
-          : (statusText || "Thinking...");
-
-        // Build DOM so we can attach a "Show details" toggle inside the Thinking bubble.
-        content.innerHTML = "";
-
-        const header = document.createElement("div");
-        header.className = "chat-thinking-inline";
-
-        const spinner = document.createElement("span");
-        spinner.className = "chat-thinking-spinner";
-        header.appendChild(spinner);
-
-        const headlineSpan = document.createElement("span");
-        headlineSpan.textContent = String(headline);
-        header.appendChild(headlineSpan);
-
-        if (stepCount > 0) {
-          const steps = document.createElement("span");
-          steps.className = "chat-thinking-steps";
-          steps.textContent = `(${stepCount} steps)`;
-          header.appendChild(steps);
-
-          if (state.contextUsagePercent !== null) {
-            const context = document.createElement("span");
-            context.className = "chat-thinking-steps";
-            context.textContent = ` · ctx left ${state.contextUsagePercent}%`;
-            header.appendChild(context);
+    } else {
+      if (isStreaming) {
+        if (state.streamText && _streamingEl && messagesEl.contains(_streamingEl)) {
+          const contentEl = _streamingEl.querySelector(`.${config.styling.messageContentClass}`) as HTMLElement | null;
+          if (contentEl) {
+            contentEl.innerHTML = renderMarkdown(state.streamText);
+            decorateFileLinks(contentEl);
           }
-
-          // Only show the toggle if we have more than a couple steps.
-          if (meaningfulEvents.length > 2) {
-            const toggle = document.createElement("button");
-            toggle.type = "button";
-            toggle.className = "ghost sm chat-thinking-details-btn";
-            toggle.textContent = state.eventsExpanded ? "Hide details" : "Show details";
-            toggle.addEventListener("click", (e) => {
-              e.preventDefault();
-              state.eventsExpanded = !state.eventsExpanded;
-              renderMessages();
-            });
-            header.appendChild(toggle);
+        } else {
+          if (_streamingEl && messagesEl.contains(_streamingEl)) {
+            _streamingEl.remove();
           }
+          _streamingEl = buildStreamingEl();
+          messagesEl.appendChild(_streamingEl);
         }
-
-        content.appendChild(header);
-
-        const maxRecent = state.eventsExpanded
-          ? Math.min(meaningfulEvents.length, config.limits.eventVisible || 20)
-          : 3;
-        const recentEvents = meaningfulEvents.slice(-maxRecent);
-        if (recentEvents.length) {
-          const list = document.createElement("ul");
-          list.className = "chat-thinking-steps-list";
-          for (const evt of recentEvents) {
-            const li = document.createElement("li");
-
-            const title = document.createElement("span");
-            title.className = "chat-thinking-step-title";
-            title.textContent = (evt.title || evt.kind || evt.method || "step").trim();
-            li.appendChild(title);
-
-            const summaryText = (evt.summary || "").trim();
-            if (summaryText) {
-              const summary = document.createElement("span");
-              summary.className = "chat-thinking-step-summary";
-              summary.textContent = ` — ${summaryText}`;
-              li.appendChild(summary);
-            }
-
-            list.appendChild(li);
-          }
-          content.appendChild(list);
-        }
+      } else if (_streamingEl && messagesEl.contains(_streamingEl)) {
+        _streamingEl.remove();
+        _streamingEl = null;
       }
-      
-      streaming.appendChild(content);
 
-      messagesEl.appendChild(streaming);
-    }
-
-    messagesEl.scrollTop = messagesEl.scrollHeight;
-    
-    // Also scroll the parent container if it exists
-    if (elements.streamEl) {
-        elements.streamEl.scrollTop = elements.streamEl.scrollHeight;
+      if (isNearBottom(messagesEl)) {
+        scrollToBottom(messagesEl);
+        scrollToBottom(elements.streamEl);
+      }
     }
   }
 
@@ -631,8 +679,6 @@ export function createDocChat(config: ChatConfig): DocChatInstance {
         !!state.streamText ||
         state.status === "running";
       streamEl.classList.toggle("hidden", !hasContent);
-      // Auto-scroll to bottom when new content appears
-      streamEl.scrollTop = streamEl.scrollHeight;
     }
 
     // Important: renderMessages handles the "Thinking" bubble creation
