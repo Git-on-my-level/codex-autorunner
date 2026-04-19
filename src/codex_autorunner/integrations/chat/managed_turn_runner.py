@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Generic, Mapping, Optional, TypeVar, cast
 
@@ -17,7 +18,10 @@ from .managed_thread_turns import (
     SpawnTask,
     coerce_managed_thread_finalization_result,
     complete_managed_thread_execution,
+    handoff_managed_thread_final_delivery,
 )
+
+_runner_logger = logging.getLogger(__name__)
 
 SurfaceResultT = TypeVar("SurfaceResultT")
 
@@ -183,6 +187,26 @@ async def run_managed_surface_turn(
         finalized = coerce_managed_thread_finalization_result(finalized_flow.finalized)
         if finalized is None:
             raise RuntimeError("Managed-thread turn finalized without a result")
+        durable_delivery_performed = False
+        if config.hooks.durable_delivery is not None:
+            try:
+                await handoff_managed_thread_final_delivery(
+                    finalized,
+                    delivery=config.hooks.durable_delivery,
+                    logger=_runner_logger,
+                )
+                durable_delivery_performed = True
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                pass
+        if durable_delivery_performed:
+            finalized_flow = ManagedThreadExecutionFlowResult(
+                started_execution=finalized_flow.started_execution,
+                queued=finalized_flow.queued,
+                finalized=finalized_flow.finalized,
+                durable_delivery_performed=True,
+            )
         if config.on_finalized is None:
             raise RuntimeError("Managed-surface turn requires on_finalized")
         return cast(

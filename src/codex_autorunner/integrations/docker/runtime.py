@@ -620,11 +620,12 @@ class DockerRuntime:
         *,
         remove: bool = True,
         timeout_seconds: int = 10,
+        command_timeout_seconds: float = 30,
     ) -> bool:
         inspect_proc = self._run(
             ["inspect", "--format", "{{.State.Running}}", container_name],
             check=False,
-            timeout_seconds=15,
+            timeout_seconds=min(15, command_timeout_seconds),
         )
         if inspect_proc.returncode != 0:
             details = (inspect_proc.stderr or inspect_proc.stdout or "").lower()
@@ -637,14 +638,16 @@ class DockerRuntime:
 
         running = (inspect_proc.stdout or "").strip().lower() == "true"
         if running:
+            stop_budget = max(10, float(timeout_seconds) + 5)
+            stop_timeout = max(stop_budget, float(command_timeout_seconds))
             self._run(
                 ["stop", "-t", str(timeout_seconds), container_name],
-                timeout_seconds=max(10, timeout_seconds + 5),
+                timeout_seconds=stop_timeout,
             )
         if remove:
             self._run(
                 ["rm", "-f", container_name],
-                timeout_seconds=30,
+                timeout_seconds=command_timeout_seconds,
             )
         return True
 
@@ -653,11 +656,12 @@ class DockerRuntime:
         container_name: str,
         *,
         force: bool = False,
+        command_timeout_seconds: float = 30,
     ) -> bool:
         inspect_proc = self._run(
             ["inspect", "--format", "{{.Id}}", container_name],
             check=False,
-            timeout_seconds=15,
+            timeout_seconds=min(15, command_timeout_seconds),
         )
         if inspect_proc.returncode != 0:
             details = (inspect_proc.stderr or inspect_proc.stdout or "").lower()
@@ -672,7 +676,7 @@ class DockerRuntime:
         if force:
             cmd.append("-f")
         cmd.append(container_name)
-        self._run(cmd, timeout_seconds=30)
+        self._run(cmd, timeout_seconds=command_timeout_seconds)
         return True
 
     def list_container_names(
@@ -680,6 +684,7 @@ class DockerRuntime:
         *,
         all_containers: bool = False,
         filters: Sequence[str] = (),
+        command_timeout_seconds: float = 30,
     ) -> tuple[str, ...]:
         args: list[str] = ["ps"]
         if all_containers:
@@ -690,17 +695,22 @@ class DockerRuntime:
                 continue
             args.extend(["--filter", value])
         args.extend(["--format", "{{.Names}}"])
-        proc = self._run(args, timeout_seconds=30)
+        proc = self._run(args, timeout_seconds=command_timeout_seconds)
         names = [
             line.strip() for line in (proc.stdout or "").splitlines() if line.strip()
         ]
         return tuple(names)
 
-    def inspect_container(self, container_name: str) -> Optional[DockerContainerInfo]:
+    def inspect_container(
+        self,
+        container_name: str,
+        *,
+        command_timeout_seconds: float = 30,
+    ) -> Optional[DockerContainerInfo]:
         proc = self._run(
             ["inspect", container_name],
             check=False,
-            timeout_seconds=30,
+            timeout_seconds=command_timeout_seconds,
         )
         if proc.returncode != 0:
             details = (proc.stderr or proc.stdout or "").lower()
@@ -762,10 +772,12 @@ class DockerRuntime:
         ttl_seconds: int,
         now: Optional[dt.datetime] = None,
         label: str = "ca.managed=true",
+        command_timeout_seconds: float = 30,
     ) -> DockerManagedContainerReapResult:
         names = self.list_container_names(
             all_containers=True,
             filters=[f"label={label}"],
+            command_timeout_seconds=command_timeout_seconds,
         )
         if ttl_seconds <= 0 and not names:
             return DockerManagedContainerReapResult(
@@ -783,7 +795,10 @@ class DockerRuntime:
         errors: list[str] = []
         for name in names:
             try:
-                info = self.inspect_container(name)
+                info = self.inspect_container(
+                    name,
+                    command_timeout_seconds=command_timeout_seconds,
+                )
             except DockerRuntimeError as exc:
                 errors.append(str(exc))
                 continue
@@ -814,9 +829,17 @@ class DockerRuntime:
             eligible_count += 1
             try:
                 if info.running:
-                    self.stop_container(name, remove=True)
+                    self.stop_container(
+                        name,
+                        remove=True,
+                        command_timeout_seconds=command_timeout_seconds,
+                    )
                 else:
-                    self.remove_container(name, force=True)
+                    self.remove_container(
+                        name,
+                        force=True,
+                        command_timeout_seconds=command_timeout_seconds,
+                    )
             except DockerRuntimeError as exc:
                 errors.append(str(exc))
                 continue

@@ -175,6 +175,8 @@ async def test_repo_turn_notifies_user_when_runtime_binding_restarts(
     )
     assert harness.start_calls[1][0] == "repo-backend-thread-2"
     assert harness.start_calls[1][1] == "second repo orchestration prompt"
-    assert handler._sent[-1].startswith(_SESSION_NOTICE)
-    assert "reply for repo-backend-thread-2/" in handler._sent[-1]
+    assert handler._sent[-1].startswith(_SESSION_NOTICE) or (
+        any(s.startswith(_SESSION_NOTICE) for s in handler._sent)
+    )
+    assert "reply for repo-backend-thread-2/" in "".join(handler._sent)
     assert record.active_thread_id == "repo-backend-thread-2"

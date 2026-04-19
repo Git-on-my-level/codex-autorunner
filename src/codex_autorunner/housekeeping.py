@@ -187,6 +187,7 @@ def reap_managed_docker_containers(
     logger: Optional[logging.Logger] = None,
     docker_runtime: Optional[DockerRuntime] = None,
     ttl_seconds: int = DEFAULT_MANAGED_DOCKER_CONTAINER_TTL_SECONDS,
+    command_timeout_seconds: float = 5.0,
     now: Optional[dt.datetime] = None,
 ) -> HousekeepingRuleResult:
     start = time.monotonic()
@@ -199,6 +200,7 @@ def reap_managed_docker_containers(
         summary: DockerManagedContainerReapResult = runtime.reap_managed_containers(
             ttl_seconds=ttl_seconds,
             now=now,
+            command_timeout_seconds=command_timeout_seconds,
         )
     except (DockerUnavailableError, DockerRuntimeError) as exc:
         result.errors = 1

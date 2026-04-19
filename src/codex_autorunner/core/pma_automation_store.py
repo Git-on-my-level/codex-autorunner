@@ -2069,12 +2069,14 @@ class PmaAutomationStore:
                     )
                 )
                 created += 1
-                if entry.max_matches is not None:
-                    entry.match_count = max(0, int(entry.match_count)) + 1
-                    entry.updated_at = _iso_now()
-                    changed = True
-                    if entry.match_count >= entry.max_matches:
-                        entry.state = "cancelled"
+                entry.match_count = max(0, int(entry.match_count)) + 1
+                entry.updated_at = _iso_now()
+                changed = True
+                if (
+                    entry.max_matches is not None
+                    and entry.match_count >= entry.max_matches
+                ):
+                    entry.state = "cancelled"
 
             if created > 0 or changed:
                 self._save_structured_unlocked(state, subscriptions, timers, wakeups)
