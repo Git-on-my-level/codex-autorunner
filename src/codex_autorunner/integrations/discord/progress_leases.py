@@ -466,7 +466,7 @@ async def _retire_discord_progress_message(
     except DiscordPermanentError as exc:
         if is_unknown_message_error(exc):
             return True
-        return False
+        raise
     except (DiscordTransientError, RuntimeError, ConnectionError, OSError):
         return False
     return True
