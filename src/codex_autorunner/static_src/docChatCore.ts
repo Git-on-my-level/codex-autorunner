@@ -401,6 +401,13 @@ export function createDocChat(config: ChatConfig): DocChatInstance {
     if (el) el.scrollTop = el.scrollHeight;
   }
 
+  function userMessageUsesMarkdownFeatures(body: string): boolean {
+    if (body.includes("/hub/pma/files/")) return true;
+    if (body.includes("```") || body.includes("`") || body.includes("**")) return true;
+    if (/^\s*[-*]\s/m.test(body)) return true;
+    return /\[[^\]]+\]\([^)]+\)/.test(body);
+  }
+
   function buildMessageEl(msg: ChatMessage): HTMLElement {
     const wrapper = document.createElement("div");
     const roleClass = msg.role === "user" ? config.styling.messageUserClass : config.styling.messageAssistantClass;
@@ -420,7 +427,8 @@ export function createDocChat(config: ChatConfig): DocChatInstance {
 
     const content = document.createElement("div");
     content.className = `${config.styling.messageContentClass} messages-markdown`;
-      const shouldRenderMarkdown = true;
+    const shouldRenderMarkdown =
+      msg.role === "assistant" || (msg.role === "user" && userMessageUsesMarkdownFeatures(msg.content));
     if (shouldRenderMarkdown) {
       content.innerHTML = renderMarkdown(msg.content);
       decorateFileLinks(content);
@@ -576,11 +584,11 @@ export function createDocChat(config: ChatConfig): DocChatInstance {
     const isStreaming = hasStream || state.status === "running";
 
     if (historyHeader) {
-      historyHeader.classList.toggle("hidden", !(hasMessages || hasStream));
+      historyHeader.classList.toggle("hidden", !(hasMessages || isStreaming));
     }
-    messagesEl.classList.toggle("chat-history-empty", !(hasMessages || hasStream));
+    messagesEl.classList.toggle("chat-history-empty", !(hasMessages || isStreaming));
 
-    if (!hasMessages && !hasStream) {
+    if (!hasMessages && !isStreaming) {
       if (messagesEl.innerHTML !== "") {
         messagesEl.innerHTML = "";
         _prevMessageSnapshot = "";
