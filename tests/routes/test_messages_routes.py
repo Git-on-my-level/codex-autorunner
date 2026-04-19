@@ -2,13 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from tests.support.web_test_helpers import build_messages_app
 
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
-from codex_autorunner.surfaces.web.routes import flows as flows_routes
-from codex_autorunner.surfaces.web.routes import messages as messages_routes
 
 
 def _write_dispatch_history(repo_root: Path, run_id: str, seq: int = 1) -> None:
@@ -52,13 +50,7 @@ def test_messages_active_and_reply_archive(tmp_path, monkeypatch):
     _seed_paused_run(repo_root, run_id)
     _write_dispatch_history(repo_root, run_id, seq=1)
 
-    monkeypatch.setattr(messages_routes, "find_repo_root", lambda: repo_root)
-    monkeypatch.setattr(flows_routes, "find_repo_root", lambda: repo_root)
-
-    app = FastAPI()
-    app.state.repo_id = "repo"
-    app.include_router(messages_routes.build_messages_routes())
-    app.include_router(flows_routes.build_flow_routes())
+    app = build_messages_app(repo_root, monkeypatch)
 
     with TestClient(app) as client:
         active = client.get("/api/messages/active")
@@ -115,13 +107,7 @@ def test_reply_archive_rejects_relative_workspace_root(tmp_path, monkeypatch):
     store.update_flow_run_status(run_id, FlowRunStatus.PAUSED)
     _write_dispatch_history(repo_root, run_id, seq=1)
 
-    monkeypatch.setattr(messages_routes, "find_repo_root", lambda: repo_root)
-    monkeypatch.setattr(flows_routes, "find_repo_root", lambda: repo_root)
-
-    app = FastAPI()
-    app.state.repo_id = "repo"
-    app.include_router(messages_routes.build_messages_routes())
-    app.include_router(flows_routes.build_flow_routes())
+    app = build_messages_app(repo_root, monkeypatch)
 
     with TestClient(app) as client:
         resp = client.post(
@@ -135,13 +121,7 @@ def test_reply_archive_rejects_relative_workspace_root(tmp_path, monkeypatch):
 def test_messages_active_returns_false_when_no_active_run(tmp_path, monkeypatch):
     repo_root = Path(tmp_path)
 
-    monkeypatch.setattr(messages_routes, "find_repo_root", lambda: repo_root)
-    monkeypatch.setattr(flows_routes, "find_repo_root", lambda: repo_root)
-
-    app = FastAPI()
-    app.state.repo_id = "repo"
-    app.include_router(messages_routes.build_messages_routes())
-    app.include_router(flows_routes.build_flow_routes())
+    app = build_messages_app(repo_root, monkeypatch)
 
     with TestClient(app) as client:
         active = client.get("/api/messages/active")
@@ -153,13 +133,7 @@ def test_messages_active_returns_false_when_no_active_run(tmp_path, monkeypatch)
 def test_messages_threads_returns_empty_list_when_no_runs(tmp_path, monkeypatch):
     repo_root = Path(tmp_path)
 
-    monkeypatch.setattr(messages_routes, "find_repo_root", lambda: repo_root)
-    monkeypatch.setattr(flows_routes, "find_repo_root", lambda: repo_root)
-
-    app = FastAPI()
-    app.state.repo_id = "repo"
-    app.include_router(messages_routes.build_messages_routes())
-    app.include_router(flows_routes.build_flow_routes())
+    app = build_messages_app(repo_root, monkeypatch)
 
     with TestClient(app) as client:
         threads = client.get("/api/messages/threads")
@@ -174,13 +148,7 @@ def test_reply_archive_preserves_file_url_within_workspace(tmp_path, monkeypatch
     _seed_paused_run(repo_root, run_id)
     _write_dispatch_history(repo_root, run_id, seq=1)
 
-    monkeypatch.setattr(messages_routes, "find_repo_root", lambda: repo_root)
-    monkeypatch.setattr(flows_routes, "find_repo_root", lambda: repo_root)
-
-    app = FastAPI()
-    app.state.repo_id = "repo"
-    app.include_router(messages_routes.build_messages_routes())
-    app.include_router(flows_routes.build_flow_routes())
+    app = build_messages_app(repo_root, monkeypatch)
 
     with TestClient(app) as client:
         resp = client.post(
@@ -204,13 +172,7 @@ def test_reply_archive_preserves_file_url_within_workspace(tmp_path, monkeypatch
 def test_reply_archive_rejects_reply_to_unknown_run(tmp_path, monkeypatch):
     repo_root = Path(tmp_path)
 
-    monkeypatch.setattr(messages_routes, "find_repo_root", lambda: repo_root)
-    monkeypatch.setattr(flows_routes, "find_repo_root", lambda: repo_root)
-
-    app = FastAPI()
-    app.state.repo_id = "repo"
-    app.include_router(messages_routes.build_messages_routes())
-    app.include_router(flows_routes.build_flow_routes())
+    app = build_messages_app(repo_root, monkeypatch)
 
     with TestClient(app) as client:
         resp = client.post(
