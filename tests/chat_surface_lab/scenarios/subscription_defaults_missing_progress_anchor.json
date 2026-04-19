@@ -1,0 +1,145 @@
+{
+  "schema_version": 1,
+  "scenario_id": "subscription_defaults_missing_progress_anchor",
+  "description": "Subscriptions created from an active Discord chat still bind to the current thread, and the turn completes even if the progress anchor disappears before Discord can edit it.",
+  "surfaces": [
+    "discord"
+  ],
+  "runtime_fixture": {
+    "kind": "hermes",
+    "scenario": "official"
+  },
+  "actions": [
+    {
+      "kind": "send_message",
+      "actor": "user",
+      "payload": {
+        "text": "echo hello world"
+      }
+    },
+    {
+      "kind": "create_automation_subscription",
+      "actor": "user",
+      "payload": {
+        "event_type": "flow_completed",
+        "repo_id": "repo-1",
+        "run_id": "run-subscription-default"
+      }
+    },
+    {
+      "kind": "emit_automation_transition",
+      "actor": "system",
+      "payload": {
+        "event_type": "flow_completed",
+        "repo_id": "repo-1",
+        "run_id": "run-subscription-default",
+        "from_state": "running",
+        "to_state": "completed",
+        "reason": "surface-lab"
+      }
+    }
+  ],
+  "faults": [
+    {
+      "kind": "fail_progress_edit_unknown_message",
+      "target": "surface",
+      "surfaces": [
+        "discord"
+      ],
+      "parameters": {
+        "message_id": "msg-1"
+      }
+    }
+  ],
+  "expected_terminal": {
+    "status": "ok"
+  },
+  "transcript_invariants": [
+    {
+      "kind": "contains_text",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "text": "Received. Preparing turn..."
+      }
+    },
+    {
+      "kind": "contains_text",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "text": "fixture reply"
+      }
+    },
+    {
+      "kind": "event_kind_at_least",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "event_kind": "error",
+        "min_count": 1
+      }
+    },
+    {
+      "kind": "surface_attr_equals",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "attr": "subscription_lane_id",
+        "value": "discord"
+      }
+    },
+    {
+      "kind": "surface_attr_equals",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "attr": "subscription_delivery_surface_key",
+        "value": "channel-1"
+      }
+    },
+    {
+      "kind": "surface_attr_equals",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "attr": "transition_created_wakeups",
+        "value": 1
+      }
+    },
+    {
+      "kind": "surface_attr_equals",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "attr": "wakeup_lane_id",
+        "value": "discord"
+      }
+    },
+    {
+      "kind": "surface_attr_equals",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "attr": "wakeup_delivery_surface_key",
+        "value": "channel-1"
+      }
+    }
+  ],
+  "tags": [
+    "automation",
+    "discord",
+    "subscriptions",
+    "fault",
+    "pma"
+  ],
+  "notes": "Models the production-style Discord 10008 path where the progress anchor vanishes before an edit lands, without regressing subscription routing to the active chat thread."
+}

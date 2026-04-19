@@ -232,6 +232,40 @@ async def test_runner_executes_subscription_defaults_to_current_thread(
 
 
 @pytest.mark.anyio
+async def test_runner_executes_subscription_defaults_with_missing_progress_anchor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scenario = load_scenario_by_id("subscription_defaults_missing_progress_anchor")
+    runner = ChatSurfaceScenarioRunner(
+        output_root=tmp_path / "scenario-runs",
+        apply_runtime_patch=lambda runtime: patch_hermes_runtime(monkeypatch, runtime),
+    )
+
+    result = await runner.run_scenario(scenario)
+    assert result.skipped is False
+    assert len(result.surface_results) == 1
+    discord = result.surface_results[0]
+    assert discord.surface.value == "discord"
+    assert discord.execution_status == "ok"
+    assert discord.transcript.metadata["subscription_lane_id"] == "discord"
+    assert (
+        discord.transcript.metadata["subscription_delivery_surface_key"] == "channel-1"
+    )
+    assert discord.transcript.metadata["wakeup_lane_id"] == "discord"
+    assert discord.transcript.metadata["wakeup_delivery_surface_key"] == "channel-1"
+    assert any(
+        event.metadata.get("fault") == "unknown_message"
+        and event.metadata.get("operation") == "edit_channel_message"
+        for event in discord.transcript.events
+    )
+    assert not any(
+        record.get("event") == "chat.managed_thread.queue_worker_execution_failed"
+        for record in discord.log_records
+    )
+
+
+@pytest.mark.anyio
 async def test_runner_executes_restart_window_duplicate_delivery(
     tmp_path: Path,
 ) -> None:

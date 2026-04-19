@@ -7,7 +7,10 @@ from pathlib import Path
 from typing import Any, Optional
 
 from codex_autorunner.browser.runtime import BrowserRuntime
-from codex_autorunner.integrations.discord.errors import DiscordTransientError
+from codex_autorunner.integrations.discord.errors import (
+    DiscordPermanentError,
+    DiscordTransientError,
+)
 
 from .artifact_manifests import ArtifactManifest
 from .evidence_artifacts import write_surface_evidence_artifacts
@@ -24,6 +27,7 @@ class DiscordSimulatorFaults:
     """Fault injection knobs for Discord simulator operations."""
 
     fail_delete_message_ids: set[str] = field(default_factory=set)
+    fail_unknown_message_edit_ids: set[str] = field(default_factory=set)
     retry_after_schedule: dict[str, list[int]] = field(default_factory=dict)
     duplicate_interaction_ids: set[str] = field(default_factory=set)
 
@@ -44,11 +48,17 @@ class DiscordSurfaceSimulator:
             for value in base_faults.fail_delete_message_ids
             if str(value).strip()
         }
+        merged_unknown_edit_ids = {
+            str(value).strip()
+            for value in base_faults.fail_unknown_message_edit_ids
+            if str(value).strip()
+        }
         if fail_delete_message_ids:
             merged_fail_ids.update(
                 str(value).strip() for value in fail_delete_message_ids if str(value)
             )
         base_faults.fail_delete_message_ids = merged_fail_ids
+        base_faults.fail_unknown_message_edit_ids = merged_unknown_edit_ids
         self._faults = base_faults
         self.attachment_data_by_url: dict[str, bytes] = {
             str(url): bytes(data)
@@ -260,6 +270,24 @@ class DiscordSurfaceSimulator:
             operation="edit_channel_message",
             metadata={"channel_id": channel_id, "message_id": message_id},
         )
+        if message_id in self._faults.fail_unknown_message_edit_ids:
+            error = DiscordPermanentError(
+                "Discord API request failed for "
+                f"PATCH /channels/{channel_id}/messages/{message_id}: "
+                'status=404 body=\'{"message": "Unknown Message", "code": 10008}\''
+            )
+            self._record_event(
+                kind="error",
+                party=TranscriptParty.PLATFORM,
+                text=str(error),
+                metadata={
+                    "operation": "edit_channel_message",
+                    "fault": "unknown_message",
+                    "channel_id": channel_id,
+                    "message_id": message_id,
+                },
+            )
+            raise error
         payload_copy = dict(payload)
         self.edited_channel_messages.append(
             {

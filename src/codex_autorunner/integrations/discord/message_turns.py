@@ -92,7 +92,11 @@ from .components import (
     build_cancel_turn_custom_id,
     build_queued_turn_progress_buttons,
 )
-from .errors import DiscordTransientError
+from .errors import (
+    DiscordPermanentError,
+    DiscordTransientError,
+    is_unknown_message_error,
+)
 from .managed_thread_routing import (
     _build_discord_managed_thread_coordinator,
     _build_discord_queue_worker_hooks,
@@ -1769,6 +1773,7 @@ async def _run_discord_orchestrated_turn_for_message(
         remove_components: bool = False,
         render_mode: str = "live",
     ) -> None:
+        nonlocal progress_message_id
         if not progress_message_id:
             return
         now = time.monotonic()
@@ -1812,6 +1817,20 @@ async def _run_discord_orchestrated_turn_for_message(
                 message_id=progress_message_id,
                 payload=payload,
             )
+        except DiscordPermanentError as exc:
+            if not is_unknown_message_error(exc):
+                raise
+            _logger.info(
+                "Discord progress anchor disappeared for channel=%s message=%s",
+                channel_id,
+                progress_message_id,
+            )
+            projector.note_render_attempt(now=now)
+            await _delete_progress_lease()
+            progress_message_id = None
+            if supervision is not None:
+                supervision.clear_progress_tracking()
+            return
         except (DiscordTransientError, RuntimeError, ConnectionError, OSError):
             _logger.debug(
                 "Discord progress edit failed for message=%s",

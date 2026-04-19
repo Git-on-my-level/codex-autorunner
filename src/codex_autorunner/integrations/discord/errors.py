@@ -45,3 +45,10 @@ def is_unknown_interaction_error(error: BaseException | str | None) -> bool:
         return False
     normalized = str(error).lower()
     return "unknown interaction" in normalized or "10062" in normalized
+
+
+def is_unknown_message_error(error: BaseException | str | None) -> bool:
+    if error is None:
+        return False
+    normalized = str(error).lower()
+    return "unknown message" in normalized or "10008" in normalized
