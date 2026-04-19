@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 /**
  * Ticket Chat Stream - handles SSE streaming for ticket chat
  */

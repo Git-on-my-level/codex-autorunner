@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 const textEncoder = new TextEncoder();
 const ALT_SCREEN_ENTER = "\x1b[?1049h";
 const ALT_SCREEN_ENTER_BYTES = textEncoder.encode(ALT_SCREEN_ENTER);

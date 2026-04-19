@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 import { loadPendingTurn, clearPendingTurn, createTurnRecoveryTracker, DEFAULT_RECOVERY_MAX_ATTEMPTS, } from "./turnResume.js";
 import { streamTurnEvents } from "./fileChat.js";
 export function createTurnEventsController() {

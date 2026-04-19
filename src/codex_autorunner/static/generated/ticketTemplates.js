@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 /**
  * Ticket Templates - Template picker for creating tickets from templates
  */

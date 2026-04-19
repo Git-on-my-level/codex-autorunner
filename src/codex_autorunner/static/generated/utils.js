@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 import { CONSTANTS } from "./constants.js";
 import { BASE_PATH } from "./env.js";
 const toast = document.getElementById("toast");

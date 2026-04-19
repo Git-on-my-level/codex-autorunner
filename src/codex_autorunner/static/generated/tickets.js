@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 import { api, confirmModal, flash, getUrlParams, statusPill, getAuthToken, openModal, inputModal, setButtonLoading, } from "./utils.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";

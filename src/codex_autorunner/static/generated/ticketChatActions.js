@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 /**
  * Ticket Chat Actions - handles sending messages, applying/discarding patches
  */

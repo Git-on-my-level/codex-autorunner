@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 import { api, flash } from "./utils.js";
 import { normalizePinnedParentRepoIds } from "./hubFilters.js";
 export const HUB_JOB_POLL_INTERVAL_MS = 1200;

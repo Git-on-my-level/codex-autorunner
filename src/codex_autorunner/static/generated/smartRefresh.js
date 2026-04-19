@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 /**
  * Create a signature-aware refresh helper that only calls render when data changes.
  *

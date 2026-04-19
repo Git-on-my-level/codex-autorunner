@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 import { api } from "./utils.js";
 import { ensureAgentCatalog, getRegisteredAgents, getRegisteredAgentProfiles, } from "./agentControls.js";
 export const DEFAULT_FRONTMATTER = {

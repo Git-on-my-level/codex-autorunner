@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 import { api, confirmModal, escapeHtml, flash, inputModal, openModal, resolvePath } from "./utils.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
 const HUB_HINT_SCOPE_STORAGE_KEY = "car.hub.hint-scope";

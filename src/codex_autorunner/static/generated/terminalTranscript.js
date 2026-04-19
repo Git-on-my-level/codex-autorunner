@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 import { CONSTANTS } from "./constants.js";
 import { REPO_ID, BASE_PATH } from "./env.js";
 const XTERM_COLOR_MODE_DEFAULT = 0;

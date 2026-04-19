@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 import { parseAppServerEvent, resetOpenCodeEventState } from "./agentEvents.js";
 import { openModal } from "./utils.js";
 import { MAX_OUTPUT_LINES, LIVE_EVENT_MAX, MAX_REASON_LENGTH, formatElapsed, formatTimeAgo, } from "./ticketFlowState.js";

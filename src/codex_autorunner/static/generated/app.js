@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 import { REPO_ID, HUB_BASE } from "./env.js";
 import { flash, getAuthToken, repairModalBackgroundIfStuck, resolvePath, updateUrlParams, } from "./utils.js";
 let pmaInitialized = false;

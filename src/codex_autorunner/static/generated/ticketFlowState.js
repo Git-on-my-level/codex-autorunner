@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 export const DISPATCH_PANEL_COLLAPSED_KEY = "car-dispatch-panel-collapsed";
 export const LAST_SEEN_SEQ_KEY_PREFIX = "car-ticket-flow-last-seq:";
 export const EVENT_STREAM_RETRY_DELAYS_MS = [500, 1000, 2000, 5000, 10000];

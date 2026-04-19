@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 export function renderDiff(patch, container) {
     if (!container)
         return;
