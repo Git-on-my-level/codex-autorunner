@@ -277,7 +277,8 @@ def _resolve_archive_thread_ids(
         )
 
     if managed_thread_id is not None:
-        resolved_ids = _parse_thread_id_list(managed_thread_id)
+        single_id = managed_thread_id.strip()
+        resolved_ids = [single_id] if single_id else []
     elif managed_thread_ids is not None:
         resolved_ids = _parse_thread_id_list(managed_thread_ids)
     else:

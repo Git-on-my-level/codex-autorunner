@@ -2272,6 +2272,67 @@ def test_pma_cli_thread_archive_bulk_uses_bulk_route(
     ]
 
 
+def test_pma_cli_thread_archive_id_is_single_value_not_split_on_commas(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """--id must name one thread id; commas are not list separators (use --ids)."""
+    calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+    monkeypatch.setattr(
+        pma_cli,
+        "load_hub_config",
+        lambda hub_root: SimpleNamespace(
+            server_base_path="",
+            server_host="127.0.0.1",
+            server_port=4321,
+            server_auth_token_env=None,
+        ),
+    )
+
+    def _fake_request_json(
+        method: str,
+        url: str,
+        payload=None,
+        token_env=None,
+        params=None,
+    ):
+        _ = token_env, params
+        calls.append((method, url, payload))
+        if url.endswith("/hub/pma/threads/a,b/archive"):
+            return {
+                "thread": {
+                    "managed_thread_id": "a,b",
+                    "name": "comma id",
+                    "status": "archived",
+                }
+            }
+        raise AssertionError(f"unexpected url: {url}")
+
+    monkeypatch.setattr(pma_cli, "_request_json", _fake_request_json)
+
+    result = CliRunner().invoke(
+        pma_app,
+        [
+            "thread",
+            "archive",
+            "--id",
+            "a,b",
+            "--path",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Archived a,b (comma id)" in result.stdout
+    assert calls == [
+        (
+            "POST",
+            "http://127.0.0.1:4321/hub/pma/threads/a,b/archive",
+            None,
+        )
+    ]
+
+
 def test_pma_cli_thread_archive_reads_ids_from_stdin(
     monkeypatch, tmp_path: Path
 ) -> None:
