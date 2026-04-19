@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "scenario_id": "queued_attachment_visibility",
+  "description": "A queued Discord submission with attachments shows the attachment-aware busy placeholder while another turn is active.",
+  "surfaces": [
+    "discord"
+  ],
+  "runtime_fixture": {
+    "kind": "hermes",
+    "scenario": "official_prompt_hang"
+  },
+  "harness_timeouts": {
+    "discord": 15.0
+  },
+  "approval_mode": "yolo",
+  "actions": [
+    {
+      "kind": "start_message",
+      "actor": "user",
+      "payload": {
+        "text": "cancel me"
+      }
+    },
+    {
+      "kind": "wait_for_running_execution",
+      "actor": "system",
+      "payload": {
+        "timeout_seconds": 2.0
+      }
+    },
+    {
+      "kind": "submit_active_message",
+      "actor": "user",
+      "payload": {
+        "text": "see attached",
+        "message_id": "m-2",
+        "attachments": [
+          {
+            "id": "att-1",
+            "filename": "image.png",
+            "content_type": "image/png",
+            "kind": "image",
+            "body_text": "fake png payload"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "wait_for_log_event",
+      "actor": "system",
+      "payload": {
+        "event_name": "discord.turn.managed_thread_submission",
+        "field": "queued",
+        "equals": true,
+        "timeout_seconds": 2.0
+      }
+    },
+    {
+      "kind": "stop_active_thread",
+      "actor": "system",
+      "payload": {}
+    },
+    {
+      "kind": "await_active_message",
+      "actor": "system",
+      "payload": {}
+    }
+  ],
+  "expected_terminal": {
+    "status": "interrupted"
+  },
+  "transcript_invariants": [
+    {
+      "kind": "contains_text",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "text": "Busy. Preparing attachments while the current turn finishes..."
+      }
+    },
+    {
+      "kind": "log_event_exists",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "event_name": "discord.turn.managed_thread_submission"
+      }
+    }
+  ],
+  "tags": [
+    "ux",
+    "queue",
+    "attachments",
+    "discord",
+    "hermes",
+    "pma"
+  ],
+  "notes": "Characterizes the attachment-specific busy placeholder branch so the lab can reproduce queued attachment ingress."
+}

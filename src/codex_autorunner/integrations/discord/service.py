@@ -3808,10 +3808,10 @@ class DiscordBotService:
         payload: dict[str, Any],
         *,
         record_id: Optional[str] = None,
-    ) -> None:
+    ) -> bool:
         from .channel_messaging import send_channel_message_safe as _impl
 
-        await _impl(
+        return await _impl(
             self._store,
             self._rest,
             self._logger,

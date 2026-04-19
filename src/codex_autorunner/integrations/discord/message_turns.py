@@ -1197,69 +1197,113 @@ async def _deliver_discord_turn_result(
     )
 
     preview_message_deleted = False
-    if isinstance(preview_message_id, str) and preview_message_id:
-        preview_message_deleted = await dispatch.service._delete_channel_message_safe(
+    visible_terminal_delivery = not send_final_message
+    visible_failure_notice = False
+    if send_final_message:
+        visible_terminal_delivery = await _send_discord_turn_section(
+            dispatch.service,
             channel_id=dispatch.channel_id,
-            message_id=preview_message_id,
-            record_id=(
-                f"turn:delete_progress:{dispatch.session_key}:{uuid.uuid4().hex[:8]}"
-            ),
+            text=response_text or "(No response text returned.)",
+            record_prefix=f"turn:final:{dispatch.session_key}",
+            attachment_filename="final-response.md",
+            attachment_caption="Final response too long; attached as final-response.md.",
         )
-        if preview_message_deleted:
-            if current_lease_id:
-                await _delete_discord_progress_lease(
-                    dispatch.service,
-                    lease_id=current_lease_id,
-                )
-            elif (
-                isinstance(execution_id, str)
-                and execution_id
-                and not preserve_progress_lease
-            ):
-                for lease in await _list_discord_progress_leases(
-                    dispatch.service,
-                    execution_id=execution_id,
-                ):
-                    orphaned_lease_id = _execution_field(lease, "lease_id")
-                    if orphaned_lease_id:
-                        await _delete_discord_progress_lease(
-                            dispatch.service,
-                            lease_id=orphaned_lease_id,
-                        )
-            if supervision is not None:
-                supervision.clear_progress_tracking()
-    elif isinstance(execution_id, str) and execution_id and not preserve_progress_lease:
-        for lease in await _list_discord_progress_leases(
-            dispatch.service,
-            execution_id=execution_id,
-        ):
-            current_lease_id = _execution_field(lease, "lease_id")
-            if current_lease_id:
-                await _delete_discord_progress_lease(
-                    dispatch.service,
-                    lease_id=current_lease_id,
-                )
-        if supervision is not None:
-            supervision.set_lease_id(None)
-    try:
-        if send_final_message:
-            await _send_discord_turn_section(
-                dispatch.service,
+    if visible_terminal_delivery:
+        if isinstance(preview_message_id, str) and preview_message_id:
+            preview_message_deleted = await dispatch.service._delete_channel_message_safe(
                 channel_id=dispatch.channel_id,
-                text=response_text or "(No response text returned.)",
-                record_prefix=f"turn:final:{dispatch.session_key}",
-                attachment_filename="final-response.md",
-                attachment_caption="Final response too long; attached as final-response.md.",
+                message_id=preview_message_id,
+                record_id=(
+                    f"turn:delete_progress:{dispatch.session_key}:{uuid.uuid4().hex[:8]}"
+                ),
             )
-    finally:
-        await _reconcile_other_discord_turn_progress_leases(
-            dispatch.service,
-            managed_thread_id=managed_thread_id,
-            keep_lease_id=current_lease_id if preserve_progress_lease else None,
-            keep_message_id=current_message_id if preserve_progress_lease else None,
-            terminal_message_id=current_message_id,
-            terminal_created_at=current_lease_created_at,
+            if preview_message_deleted:
+                if current_lease_id:
+                    await _delete_discord_progress_lease(
+                        dispatch.service,
+                        lease_id=current_lease_id,
+                    )
+                elif (
+                    isinstance(execution_id, str)
+                    and execution_id
+                    and not preserve_progress_lease
+                ):
+                    for lease in await _list_discord_progress_leases(
+                        dispatch.service,
+                        execution_id=execution_id,
+                    ):
+                        orphaned_lease_id = _execution_field(lease, "lease_id")
+                        if orphaned_lease_id:
+                            await _delete_discord_progress_lease(
+                                dispatch.service,
+                                lease_id=orphaned_lease_id,
+                            )
+                if supervision is not None:
+                    supervision.clear_progress_tracking()
+        elif (
+            isinstance(execution_id, str)
+            and execution_id
+            and not preserve_progress_lease
+        ):
+            for lease in await _list_discord_progress_leases(
+                dispatch.service,
+                execution_id=execution_id,
+            ):
+                current_lease_id = _execution_field(lease, "lease_id")
+                if current_lease_id:
+                    await _delete_discord_progress_lease(
+                        dispatch.service,
+                        lease_id=current_lease_id,
+                    )
+            if supervision is not None:
+                supervision.set_lease_id(None)
+    elif isinstance(preview_message_id, str) and preview_message_id:
+        failure_note = (
+            "Status: this turn finished, but Discord failed before the final reply "
+            "was delivered. Please retry if needed."
         )
+        try:
+            await dispatch.service._rest.edit_channel_message(
+                channel_id=dispatch.channel_id,
+                message_id=preview_message_id,
+                payload={
+                    "content": failure_note,
+                    "components": [],
+                },
+            )
+            visible_failure_notice = True
+            if current_lease_id:
+                await _update_discord_progress_lease(
+                    dispatch.service,
+                    lease_id=current_lease_id,
+                    state="retiring",
+                    progress_label="failed",
+                )
+        except (DiscordTransientError, RuntimeError, ConnectionError, OSError):
+            _logger.debug(
+                "Discord delivery failure note edit failed for message=%s",
+                preview_message_id,
+                exc_info=True,
+            )
+    keep_failed_delivery_anchor = bool(
+        current_lease_id and not visible_terminal_delivery and visible_failure_notice
+    )
+    await _reconcile_other_discord_turn_progress_leases(
+        dispatch.service,
+        managed_thread_id=managed_thread_id,
+        keep_lease_id=(
+            current_lease_id
+            if (preserve_progress_lease or keep_failed_delivery_anchor)
+            else None
+        ),
+        keep_message_id=(
+            current_message_id
+            if (preserve_progress_lease or keep_failed_delivery_anchor)
+            else None
+        ),
+        terminal_message_id=current_message_id,
+        terminal_created_at=current_lease_created_at,
+    )
     try:
         if dispatch.pending_compact_seed is not None:
             await dispatch.service._store.clear_pending_compact_seed(
@@ -1295,13 +1339,18 @@ async def _deliver_discord_turn_result(
         execution_id=execution_id,
         background_task_owner="discord.turn.delivery",
         preview_message_deleted=preview_message_deleted,
+        visible_terminal_delivery=visible_terminal_delivery,
+        visible_failure_notice=visible_failure_notice,
         send_final_message=send_final_message,
         response_chars=len(response_text or ""),
         flushed_outbox_files=send_final_message,
         agent=dispatch.agent,
     )
     _dispatch_snapshot = getattr(dispatch, "chat_ux_snapshot", None)
-    if isinstance(_dispatch_snapshot, ChatUxTimingSnapshot):
+    if (
+        isinstance(_dispatch_snapshot, ChatUxTimingSnapshot)
+        and visible_terminal_delivery
+    ):
         _dispatch_snapshot.record(ChatUxMilestone.TERMINAL_DELIVERY)
         emit_chat_ux_timing(
             dispatch.service._logger,
@@ -2220,7 +2269,7 @@ async def _send_discord_turn_section(
     record_prefix: str,
     attachment_filename: str,
     attachment_caption: str,
-) -> None:
+) -> bool:
     chunks = chunk_discord_message(
         text,
         max_len=service._config.max_message_length,
@@ -2238,19 +2287,22 @@ async def _send_discord_turn_section(
                 filename=attachment_filename,
                 caption=attachment_caption,
             )
-            return
+            return True
         except (ConnectionError, OSError, TimeoutError):
             _logger.debug(
                 "attachment upload failed, falling back to chunks", exc_info=True
             )
     if not chunks:
         chunks = ["(No response text returned.)"]
+    delivered = True
     for idx, chunk in enumerate(chunks, 1):
-        await service._send_channel_message_safe(
+        chunk_delivered = await service._send_channel_message_safe(
             channel_id,
             {"content": chunk},
             record_id=f"{record_prefix}:{idx}:{uuid.uuid4().hex[:8]}",
         )
+        delivered = delivered and chunk_delivered
+    return delivered
 
 
 async def run_managed_thread_turn_for_message(

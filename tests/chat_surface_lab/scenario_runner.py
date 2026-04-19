@@ -401,12 +401,14 @@ class ChatSurfaceScenarioRunner:
                 message_id = str(fault.parameters.get("message_id") or "msg-1")
                 fail_ids.add(message_id)
             retry_after_schedule = _collect_retry_after_schedule(active_faults)
-            if fail_ids or retry_after_schedule:
+            attachment_data_by_url = _collect_discord_attachment_data(scenario.actions)
+            if fail_ids or retry_after_schedule or attachment_data_by_url:
                 context.rest_client = FakeDiscordRest(
+                    attachment_data_by_url=attachment_data_by_url,
                     faults=DiscordSimulatorFaults(
                         fail_delete_message_ids=fail_ids,
                         retry_after_schedule=retry_after_schedule,
-                    )
+                    ),
                 )
             return
         fail_ids_int: set[int] = set()
@@ -442,8 +444,12 @@ class ChatSurfaceScenarioRunner:
                 raise AssertionError("send_message requires payload.text")
             if context.surface == SurfaceKind.DISCORD:
                 assert isinstance(context.harness, DiscordSurfaceHarness)
+                attachments = _build_discord_attachment_payloads(
+                    action.payload.get("attachments")
+                )
                 context.result = await context.harness.run_message(
                     text,
+                    attachments=attachments,
                     rest_client=context.rest_client,
                 )
                 return
@@ -461,8 +467,12 @@ class ChatSurfaceScenarioRunner:
                 raise AssertionError("start_message requires payload.text")
             if context.surface == SurfaceKind.DISCORD:
                 assert isinstance(context.harness, DiscordSurfaceHarness)
+                attachments = _build_discord_attachment_payloads(
+                    action.payload.get("attachments")
+                )
                 context.active_task = context.harness.start_message(
                     text,
+                    attachments=attachments,
                     rest_client=context.rest_client,
                 )
                 return
@@ -503,8 +513,12 @@ class ChatSurfaceScenarioRunner:
                 raise AssertionError("submit_active_message requires payload.text")
             if context.surface == SurfaceKind.DISCORD:
                 assert isinstance(context.harness, DiscordSurfaceHarness)
+                attachments = _build_discord_attachment_payloads(
+                    action.payload.get("attachments")
+                )
                 await context.harness.submit_active_message(
                     text,
+                    attachments=attachments,
                     message_id=str(action.payload.get("message_id") or "m-2"),
                 )
                 return
@@ -576,6 +590,29 @@ class ChatSurfaceScenarioRunner:
             assert isinstance(context.harness, TelegramSurfaceHarness)
             await context.harness.interrupt_active_turn_via_callback(
                 thread_id=_optional_int(action.payload.get("thread_id"), default=55),
+            )
+            return
+
+        if action.kind == "queue_interrupt_send":
+            if context.surface != SurfaceKind.DISCORD:
+                return
+            assert isinstance(context.harness, DiscordSurfaceHarness)
+            await context.harness.queue_interrupt_send_via_component(
+                source_message_id=str(action.payload.get("source_message_id") or "m-2"),
+                interaction_id=str(
+                    action.payload.get("interaction_id") or "queue-interrupt-1"
+                ),
+                interaction_token=str(
+                    action.payload.get("interaction_token") or "queue-interrupt-token-1"
+                ),
+                user_id=str(action.payload.get("user_id") or "user-1"),
+                message_id=self._normalize_optional_text(
+                    action.payload.get("message_id")
+                ),
+                timeout_seconds=_optional_float(
+                    action.payload.get("timeout_seconds"),
+                    default=2.0,
+                ),
             )
             return
 
@@ -1238,6 +1275,66 @@ def _collect_retry_after_schedule(
     return schedule
 
 
+def _collect_discord_attachment_data(
+    actions: Sequence[ScenarioActionSpec],
+) -> dict[str, bytes]:
+    data_by_url: dict[str, bytes] = {}
+    for action in actions:
+        attachments = _build_discord_attachment_payloads(
+            action.payload.get("attachments")
+        )
+        for index, payload in enumerate(attachments, start=1):
+            url = str(payload.get("url") or "").strip()
+            if not url:
+                continue
+            body = payload.get("_fixture_body_bytes")
+            if isinstance(body, bytes):
+                data_by_url[url] = body
+                continue
+            data_by_url[url] = f"attachment-{index}".encode("utf-8")
+    return data_by_url
+
+
+def _build_discord_attachment_payloads(raw: Any) -> list[dict[str, Any]]:
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise AssertionError("discord attachment payloads must be a list")
+    payloads: list[dict[str, Any]] = []
+    for index, item in enumerate(raw, start=1):
+        if not isinstance(item, dict):
+            raise AssertionError("each discord attachment payload must be an object")
+        attachment_id = str(item.get("id") or f"att-{index}").strip()
+        filename = str(item.get("filename") or f"upload-{index}.txt").strip()
+        content_type = str(
+            item.get("content_type")
+            or item.get("mime_type")
+            or "application/octet-stream"
+        ).strip()
+        url = str(
+            item.get("url")
+            or f"https://cdn.discordapp.com/attachments/{attachment_id}/{filename}"
+        ).strip()
+        body_text = str(
+            item.get("body_text")
+            or item.get("text")
+            or f"attachment fixture {attachment_id}"
+        )
+        body_bytes = body_text.encode("utf-8")
+        payloads.append(
+            {
+                "id": attachment_id,
+                "filename": filename,
+                "content_type": content_type,
+                "size": int(item.get("size") or len(body_bytes)),
+                "url": url,
+                "kind": str(item.get("kind") or "document"),
+                "_fixture_body_bytes": body_bytes,
+            }
+        )
+    return payloads
+
+
 def _normalize_retry_after_values(raw: Any) -> list[int]:
     if isinstance(raw, list):
         source = raw
@@ -1249,7 +1346,7 @@ def _normalize_retry_after_values(raw: Any) -> list[int]:
     normalized: list[int] = []
     for item in source:
         seconds = _optional_int(item, default=None)
-        if seconds is None or seconds <= 0:
+        if seconds is None or seconds < 0:
             continue
         normalized.append(seconds)
     return normalized

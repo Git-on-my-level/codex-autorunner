@@ -62,10 +62,10 @@ async def send_channel_message_safe(
     payload: dict[str, Any],
     *,
     record_id: Optional[str] = None,
-) -> None:
+) -> bool:
     try:
         await send_fn(channel_id, payload)
-        return
+        return True
     except (DiscordAPIError, OSError, RuntimeError) as exc:
         outbox_record_id = record_id or f"retry:{channel_id}:{uuid.uuid4().hex[:12]}"
         log_event(
@@ -95,6 +95,7 @@ async def send_channel_message_safe(
                 record_id=outbox_record_id,
                 exc=enqueue_exc,
             )
+    return False
 
 
 async def delete_channel_message_safe(

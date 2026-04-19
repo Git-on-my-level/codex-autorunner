@@ -36,6 +36,7 @@ class DiscordSurfaceSimulator:
         *,
         fail_delete_message_ids: Optional[set[str]] = None,
         faults: Optional[DiscordSimulatorFaults] = None,
+        attachment_data_by_url: Optional[dict[str, bytes]] = None,
     ) -> None:
         base_faults = faults or DiscordSimulatorFaults()
         merged_fail_ids = {
@@ -49,6 +50,11 @@ class DiscordSurfaceSimulator:
             )
         base_faults.fail_delete_message_ids = merged_fail_ids
         self._faults = base_faults
+        self.attachment_data_by_url: dict[str, bytes] = {
+            str(url): bytes(data)
+            for url, data in (attachment_data_by_url or {}).items()
+            if str(url)
+        }
 
         # Back-compat fields consumed by existing integration tests.
         self.interaction_responses: list[dict[str, Any]] = []
@@ -321,6 +327,29 @@ class DiscordSurfaceSimulator:
                 "message_id": message_id,
             },
         )
+
+    async def download_attachment(
+        self, *, url: str, max_size_bytes: Optional[int] = None
+    ) -> bytes:
+        normalized_url = str(url or "").strip()
+        if normalized_url not in self.attachment_data_by_url:
+            raise RuntimeError(f"no attachment fixture for {normalized_url}")
+        data = self.attachment_data_by_url[normalized_url]
+        if max_size_bytes is not None and len(data) > max_size_bytes:
+            raise RuntimeError(
+                f"attachment exceeds max size ({len(data)} > {max_size_bytes})"
+            )
+        self._record_event(
+            kind="status",
+            party=TranscriptParty.PLATFORM,
+            text="download_attachment",
+            metadata={
+                "operation": "download_attachment",
+                "url": normalized_url,
+                "size_bytes": len(data),
+            },
+        )
+        return data
 
     async def trigger_typing(self, *, channel_id: str) -> None:
         self._raise_if_faulted(

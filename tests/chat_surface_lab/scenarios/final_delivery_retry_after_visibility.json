@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "scenario_id": "final_delivery_retry_after_visibility",
+  "description": "Discord keeps a visible terminal failure note when the final reply send is rate-limited after turn finalization.",
+  "surfaces": [
+    "discord"
+  ],
+  "runtime_fixture": {
+    "kind": "hermes",
+    "scenario": "official"
+  },
+  "harness_timeouts": {
+    "discord": 8.0
+  },
+  "actions": [
+    {
+      "kind": "send_message",
+      "actor": "user",
+      "payload": {
+        "text": "echo hello world"
+      }
+    }
+  ],
+  "faults": [
+    {
+      "kind": "retry_after",
+      "target": "surface",
+      "surfaces": [
+        "discord"
+      ],
+      "parameters": {
+        "operation": "create_channel_message",
+        "seconds": [
+          0,
+          1
+        ]
+      }
+    }
+  ],
+  "expected_terminal": {
+    "status": "ok"
+  },
+  "transcript_invariants": [
+    {
+      "kind": "contains_text",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "text": "Received. Preparing turn..."
+      }
+    },
+    {
+      "kind": "contains_text",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "text": "Status: this turn finished, but Discord failed before the final reply was delivered. Please retry if needed."
+      }
+    },
+    {
+      "kind": "log_event_exists",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "event_name": "discord.channel_message.send_failed"
+      }
+    },
+    {
+      "kind": "surface_attr_equals",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "attr": "has_delete_event",
+        "value": false
+      }
+    },
+    {
+      "kind": "surface_attr_equals",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "attr": "has_edit_event",
+        "value": true
+      }
+    }
+  ],
+  "tags": [
+    "ux",
+    "discord",
+    "delivery",
+    "hermes",
+    "pma"
+  ],
+  "notes": "Characterizes the case where final Discord delivery falls back to the outbox after the turn has already finalized."
+}

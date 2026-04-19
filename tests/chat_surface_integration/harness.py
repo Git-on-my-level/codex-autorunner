@@ -10,6 +10,7 @@ from typing import Any, Callable, Optional
 from codex_autorunner.agents.registry import AgentDescriptor
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.integrations.chat.models import (
+    ChatAttachment,
     ChatMessageEvent,
     ChatMessageRef,
     ChatThreadRef,
@@ -99,10 +100,12 @@ class FakeDiscordRest(DiscordSurfaceSimulator):
         *,
         fail_delete_message_ids: Optional[set[str]] = None,
         faults: Optional[DiscordSimulatorFaults] = None,
+        attachment_data_by_url: Optional[dict[str, bytes]] = None,
     ) -> None:
         super().__init__(
             fail_delete_message_ids=fail_delete_message_ids,
             faults=faults,
+            attachment_data_by_url=attachment_data_by_url,
         )
 
 
@@ -168,6 +171,7 @@ def build_discord_message_create(
     message_id: str = "m-1",
     guild_id: str = DEFAULT_DISCORD_GUILD_ID,
     channel_id: str = DEFAULT_DISCORD_CHANNEL_ID,
+    attachments: Optional[list[dict[str, Any]]] = None,
 ) -> dict[str, Any]:
     return {
         "id": message_id,
@@ -175,7 +179,7 @@ def build_discord_message_create(
         "guild_id": guild_id,
         "content": text,
         "author": {"id": "user-1", "bot": False},
-        "attachments": [],
+        "attachments": list(attachments or []),
     }
 
 
@@ -253,6 +257,7 @@ class DiscordSurfaceHarness:
         text: str,
         *,
         message_id: str = "m-2",
+        attachments: Optional[list[dict[str, Any]]] = None,
     ) -> None:
         if self.service is None:
             raise RuntimeError("DiscordSurfaceHarness has no active service")
@@ -267,6 +272,29 @@ class DiscordSurfaceHarness:
             message=ChatMessageRef(thread=thread, message_id=message_id),
             from_user_id="user-1",
             text=text,
+            attachments=tuple(
+                ChatAttachment(
+                    kind=str(item.get("kind") or "document"),
+                    file_id=str(item.get("id") or f"att-{index}"),
+                    file_name=(
+                        str(item.get("filename"))
+                        if item.get("filename") is not None
+                        else None
+                    ),
+                    mime_type=(
+                        str(item.get("content_type"))
+                        if item.get("content_type") is not None
+                        else None
+                    ),
+                    size_bytes=(
+                        int(item.get("size")) if item.get("size") is not None else None
+                    ),
+                    source_url=(
+                        str(item.get("url")) if item.get("url") is not None else None
+                    ),
+                )
+                for index, item in enumerate(attachments or [], start=1)
+            ),
         )
         self.service._command_runner.submit_event(event)
 
@@ -275,9 +303,14 @@ class DiscordSurfaceHarness:
         text: str,
         *,
         message_id: str = "m-2",
+        attachments: Optional[list[dict[str, Any]]] = None,
     ) -> asyncio.Task[None]:
         return asyncio.create_task(
-            self.submit_active_message(text, message_id=message_id)
+            self.submit_active_message(
+                text,
+                message_id=message_id,
+                attachments=attachments,
+            )
         )
 
     async def _run_gateway_events_inner(
@@ -315,9 +348,18 @@ class DiscordSurfaceHarness:
         text: str,
         *,
         rest_client: Optional[FakeDiscordRest] = None,
+        attachments: Optional[list[dict[str, Any]]] = None,
     ) -> FakeDiscordRest:
         return await self._run_gateway_events_inner(
-            [("MESSAGE_CREATE", build_discord_message_create(text))],
+            [
+                (
+                    "MESSAGE_CREATE",
+                    build_discord_message_create(
+                        text,
+                        attachments=attachments,
+                    ),
+                )
+            ],
             rest_client=rest_client,
         )
 
@@ -326,9 +368,14 @@ class DiscordSurfaceHarness:
         text: str,
         *,
         rest_client: Optional[FakeDiscordRest] = None,
+        attachments: Optional[list[dict[str, Any]]] = None,
     ) -> asyncio.Task[FakeDiscordRest]:
         return asyncio.create_task(
-            self._run_message_inner(text, rest_client=rest_client)
+            self._run_message_inner(
+                text,
+                rest_client=rest_client,
+                attachments=attachments,
+            )
         )
 
     async def run_message(
@@ -336,8 +383,13 @@ class DiscordSurfaceHarness:
         text: str,
         *,
         rest_client: Optional[FakeDiscordRest] = None,
+        attachments: Optional[list[dict[str, Any]]] = None,
     ) -> FakeDiscordRest:
-        return await self._run_message_inner(text, rest_client=rest_client)
+        return await self._run_message_inner(
+            text,
+            rest_client=rest_client,
+            attachments=attachments,
+        )
 
     async def run_gateway_events(
         self,
@@ -508,6 +560,71 @@ class DiscordSurfaceHarness:
                 thread_target_id=thread_target_id,
                 execution_id=execution_id,
             ),
+        )
+
+    async def queue_interrupt_send_via_component(
+        self,
+        *,
+        source_message_id: str = "m-2",
+        interaction_id: str = "queue-interrupt-1",
+        interaction_token: str = "queue-interrupt-token-1",
+        user_id: str = "user-1",
+        message_id: Optional[str] = None,
+        timeout_seconds: float = 2.0,
+    ) -> None:
+        if self.service is None:
+            raise RuntimeError("DiscordSurfaceHarness has no active service")
+        if self.rest is None:
+            raise RuntimeError("DiscordSurfaceHarness has no active rest client")
+        if message_id is None:
+            target_custom_id = f"queue_interrupt_send:{source_message_id}"
+            deadline = asyncio.get_running_loop().time() + max(timeout_seconds, 0.0)
+            while message_id is None:
+                for op in reversed(self.rest.message_ops):
+                    payload = op.get("payload")
+                    if not isinstance(payload, dict):
+                        continue
+                    components = payload.get("components")
+                    if not isinstance(components, list):
+                        continue
+                    found = False
+                    for row in components:
+                        row_components = (
+                            row.get("components") if isinstance(row, dict) else None
+                        )
+                        if not isinstance(row_components, list):
+                            continue
+                        for button in row_components:
+                            if (
+                                isinstance(button, dict)
+                                and str(button.get("custom_id") or "")
+                                == target_custom_id
+                            ):
+                                found = True
+                                break
+                        if found:
+                            break
+                    if not found:
+                        continue
+                    candidate = op.get("message_id")
+                    if isinstance(candidate, str) and candidate.strip():
+                        message_id = candidate
+                        break
+                if message_id is not None:
+                    break
+                if asyncio.get_running_loop().time() >= deadline:
+                    raise TimeoutError(
+                        "DiscordSurfaceHarness could not find queue interrupt button"
+                    )
+                await asyncio.sleep(0.01)
+        await self.service._handle_queue_interrupt_send_button(
+            interaction_id,
+            interaction_token,
+            channel_id=DEFAULT_DISCORD_CHANNEL_ID,
+            custom_id=f"queue_interrupt_send:{source_message_id}",
+            guild_id=DEFAULT_DISCORD_GUILD_ID,
+            user_id=user_id,
+            message_id=message_id,
         )
 
     async def close(self) -> None:
