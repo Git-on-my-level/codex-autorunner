@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import uuid
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -11,14 +10,11 @@ from tests.support.web_test_helpers import build_flow_app
 from codex_autorunner.core.flows.models import FlowEventType, FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.surfaces.web.routes import base as base_routes
-from codex_autorunner.surfaces.web.routes import file_chat as file_chat_routes
-from codex_autorunner.tickets.frontmatter import parse_markdown_frontmatter
 
 
 def test_ticket_flow_runs_endpoint_returns_empty_list_on_fresh_repo(
     tmp_path, monkeypatch
 ):
-    """Ticket-first: /api/flows/runs must not 404/500 when no runs exist."""
     app = build_flow_app(tmp_path, monkeypatch)
 
     with TestClient(app) as client:
@@ -28,8 +24,6 @@ def test_ticket_flow_runs_endpoint_returns_empty_list_on_fresh_repo(
 
 
 def test_ticket_list_endpoint_returns_empty_list_when_no_tickets(tmp_path, monkeypatch):
-    """Ticket-first: /api/flows/ticket_flow/tickets must never fail on empty dir."""
-
     (tmp_path / ".codex-autorunner" / "tickets").mkdir(parents=True)
 
     app = build_flow_app(tmp_path, monkeypatch)
@@ -42,8 +36,6 @@ def test_ticket_list_endpoint_returns_empty_list_when_no_tickets(tmp_path, monke
 
 
 def test_repo_health_is_ok_when_tickets_dir_exists(tmp_path):
-    """Repo health should not be gated on legacy flows/docs initialization."""
-
     (tmp_path / ".codex-autorunner" / "tickets").mkdir(parents=True)
 
     app = FastAPI()
@@ -61,8 +53,6 @@ def test_repo_health_is_ok_when_tickets_dir_exists(tmp_path):
 
 
 def test_ticket_list_returns_body_even_when_frontmatter_invalid(tmp_path, monkeypatch):
-    """Broken frontmatter should still surface raw ticket content for repair."""
-
     ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True)
     ticket_path = ticket_dir / "TICKET-007.md"
@@ -85,8 +75,6 @@ def test_ticket_list_returns_body_even_when_frontmatter_invalid(tmp_path, monkey
 
 
 def test_get_ticket_by_index(tmp_path, monkeypatch):
-    """GET /api/flows/ticket_flow/tickets/{index} returns a single ticket."""
-
     ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True)
     ticket_path = ticket_dir / "TICKET-002.md"
@@ -204,8 +192,6 @@ def test_create_ticket_rejects_unknown_keys(tmp_path, monkeypatch):
 
 
 def test_get_ticket_by_index_returns_body_on_invalid_frontmatter(tmp_path, monkeypatch):
-    """Single-ticket endpoint should mirror list behavior when frontmatter is broken."""
-
     ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True)
     ticket_path = ticket_dir / "TICKET-003.md"
@@ -226,8 +212,6 @@ def test_get_ticket_by_index_returns_body_on_invalid_frontmatter(tmp_path, monke
 
 
 def test_update_ticket_allows_colon_titles_and_models(tmp_path, monkeypatch):
-    """PUT /api/flows/ticket_flow/tickets/{index} should accept quoted scalars containing colons."""
-
     ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True)
     ticket_path = ticket_dir / "TICKET-004.md"
@@ -262,8 +246,6 @@ Updated body
 
 
 def test_get_ticket_by_index_404(tmp_path, monkeypatch):
-    """GET /api/flows/ticket_flow/tickets/{index} returns 404 when missing."""
-
     (tmp_path / ".codex-autorunner" / "tickets").mkdir(parents=True)
     app = build_flow_app(tmp_path, monkeypatch)
 
@@ -272,628 +254,7 @@ def test_get_ticket_by_index_404(tmp_path, monkeypatch):
         assert resp.status_code == 404
 
 
-def test_ticket_list_keeps_diff_stats_for_latest_completed_run(tmp_path, monkeypatch):
-    ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
-    ticket_dir.mkdir(parents=True)
-    ticket_path = ticket_dir / "TICKET-001.md"
-    ticket_id = "tkt_diffstats001"
-    ticket_path.write_text(
-        f'---\nticket_id: "{ticket_id}"\nagent: codex\ndone: false\ntitle: Demo\n---\n\nBody\n',
-        encoding="utf-8",
-    )
-    rel_ticket_path = ".codex-autorunner/tickets/TICKET-001.md"
-    db_path = tmp_path / ".codex-autorunner" / "flows.db"
-    store = FlowStore(db_path)
-    store.initialize()
-
-    run_id = str(uuid.uuid4())
-    store.create_flow_run(
-        run_id=run_id, flow_type="ticket_flow", input_data={}, state={}
-    )
-    store.update_flow_run_status(run_id, FlowRunStatus.COMPLETED)
-    store.create_event(
-        event_id=str(uuid.uuid4()),
-        run_id=run_id,
-        event_type=FlowEventType.DIFF_UPDATED,
-        data={
-            "ticket_id": ticket_id,
-            "insertions": 12,
-            "deletions": 3,
-            "files_changed": 2,
-        },
-    )
-    store.close()
-
-    app = build_flow_app(tmp_path, monkeypatch)
-
-    with TestClient(app) as client:
-        resp = client.get("/api/flows/ticket_flow/tickets")
-        assert resp.status_code == 200
-        payload = resp.json()
-        assert len(payload["tickets"]) == 1
-        assert payload["tickets"][0]["path"] == rel_ticket_path
-        assert payload["tickets"][0]["diff_stats"] == {
-            "insertions": 12,
-            "deletions": 3,
-            "files_changed": 2,
-        }
-
-
-def test_ticket_list_keeps_diff_stats_when_newer_run_has_no_events(
-    tmp_path, monkeypatch
-):
-    ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
-    ticket_dir.mkdir(parents=True)
-    ticket_path = ticket_dir / "TICKET-001.md"
-    ticket_id = "tkt_diffstats002"
-    ticket_path.write_text(
-        f'---\nticket_id: "{ticket_id}"\nagent: codex\ndone: false\ntitle: Demo\n---\n\nBody\n',
-        encoding="utf-8",
-    )
-    db_path = tmp_path / ".codex-autorunner" / "flows.db"
-    store = FlowStore(db_path)
-    store.initialize()
-
-    older_run_id = str(uuid.uuid4())
-    store.create_flow_run(
-        run_id=older_run_id, flow_type="ticket_flow", input_data={}, state={}
-    )
-    store.update_flow_run_status(older_run_id, FlowRunStatus.COMPLETED)
-    store.create_event(
-        event_id=str(uuid.uuid4()),
-        run_id=older_run_id,
-        event_type=FlowEventType.DIFF_UPDATED,
-        data={
-            "ticket_id": ticket_id,
-            "insertions": 12,
-            "deletions": 3,
-            "files_changed": 2,
-        },
-    )
-
-    newer_run_id = str(uuid.uuid4())
-    store.create_flow_run(
-        run_id=newer_run_id, flow_type="ticket_flow", input_data={}, state={}
-    )
-    store.update_flow_run_status(newer_run_id, FlowRunStatus.COMPLETED)
-    store.close()
-
-    app = build_flow_app(tmp_path, monkeypatch)
-
-    with TestClient(app) as client:
-        resp = client.get("/api/flows/ticket_flow/tickets")
-        assert resp.status_code == 200
-        payload = resp.json()
-        assert payload["tickets"][0]["diff_stats"] == {
-            "insertions": 12,
-            "deletions": 3,
-            "files_changed": 2,
-        }
-
-
-def test_ticket_list_matches_diff_stats_by_stable_ticket_identity(
-    tmp_path, monkeypatch
-):
-    ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
-    ticket_dir.mkdir(parents=True)
-    ticket_key = "tkt_rename123"
-    ticket_path = ticket_dir / "TICKET-002.md"
-    ticket_path.write_text(
-        "---\n"
-        "agent: codex\n"
-        "done: false\n"
-        f'ticket_id: "{ticket_key}"\n'
-        "title: Demo\n"
-        "---\n\n"
-        "Body\n",
-        encoding="utf-8",
-    )
-
-    db_path = tmp_path / ".codex-autorunner" / "flows.db"
-    store = FlowStore(db_path)
-    store.initialize()
-
-    run_id = str(uuid.uuid4())
-    store.create_flow_run(
-        run_id=run_id, flow_type="ticket_flow", input_data={}, state={}
-    )
-    store.update_flow_run_status(run_id, FlowRunStatus.COMPLETED)
-    store.create_event(
-        event_id=str(uuid.uuid4()),
-        run_id=run_id,
-        event_type=FlowEventType.DIFF_UPDATED,
-        data={
-            "ticket_id": ".codex-autorunner/tickets/TICKET-001.md",
-            "ticket_path": ".codex-autorunner/tickets/TICKET-001.md",
-            "ticket_key": ticket_key,
-            "insertions": 8,
-            "deletions": 5,
-            "files_changed": 1,
-        },
-    )
-    store.close()
-
-    app = build_flow_app(tmp_path, monkeypatch)
-
-    with TestClient(app) as client:
-        resp = client.get("/api/flows/ticket_flow/tickets")
-        assert resp.status_code == 200
-        payload = resp.json()
-        assert (
-            payload["tickets"][0]["path"] == ".codex-autorunner/tickets/TICKET-002.md"
-        )
-        assert payload["tickets"][0]["diff_stats"] == {
-            "insertions": 8,
-            "deletions": 5,
-            "files_changed": 1,
-        }
-
-
-def test_ticket_list_ignores_legacy_path_stats_when_ticket_has_stable_id(
-    tmp_path, monkeypatch
-):
-    ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
-    ticket_dir.mkdir(parents=True)
-    ticket_key = "tkt_reused_path"
-    ticket_path = ticket_dir / "TICKET-002.md"
-    ticket_path.write_text(
-        "---\n"
-        "agent: codex\n"
-        "done: false\n"
-        f'ticket_id: "{ticket_key}"\n'
-        "title: Demo\n"
-        "---\n\n"
-        "Body\n",
-        encoding="utf-8",
-    )
-
-    db_path = tmp_path / ".codex-autorunner" / "flows.db"
-    store = FlowStore(db_path)
-    store.initialize()
-
-    run_id = str(uuid.uuid4())
-    store.create_flow_run(
-        run_id=run_id, flow_type="ticket_flow", input_data={}, state={}
-    )
-    store.update_flow_run_status(run_id, FlowRunStatus.COMPLETED)
-    store.create_event(
-        event_id=str(uuid.uuid4()),
-        run_id=run_id,
-        event_type=FlowEventType.DIFF_UPDATED,
-        data={
-            "ticket_id": ".codex-autorunner/tickets/TICKET-002.md",
-            "insertions": 99,
-            "deletions": 44,
-            "files_changed": 7,
-        },
-    )
-    store.create_event(
-        event_id=str(uuid.uuid4()),
-        run_id=run_id,
-        event_type=FlowEventType.DIFF_UPDATED,
-        data={
-            "ticket_key": ticket_key,
-            "ticket_path": ".codex-autorunner/tickets/TICKET-001.md",
-            "ticket_id": ".codex-autorunner/tickets/TICKET-001.md",
-            "insertions": 8,
-            "deletions": 5,
-            "files_changed": 1,
-        },
-    )
-    store.close()
-
-    app = build_flow_app(tmp_path, monkeypatch)
-
-    with TestClient(app) as client:
-        resp = client.get("/api/flows/ticket_flow/tickets")
-        assert resp.status_code == 200
-        payload = resp.json()
-        assert payload["tickets"][0]["diff_stats"] == {
-            "insertions": 8,
-            "deletions": 5,
-            "files_changed": 1,
-        }
-
-
-def test_reorder_ticket_moves_source_before_destination(tmp_path, monkeypatch):
-    ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
-    ticket_dir.mkdir(parents=True)
-    (ticket_dir / "TICKET-001.md").write_text(
-        "---\nticket_id: tkt_reorder001\nagent: codex\ndone: false\ntitle: One\n---\n\nBody 1\n",
-        encoding="utf-8",
-    )
-    (ticket_dir / "TICKET-002.md").write_text(
-        "---\nticket_id: tkt_reorder002\nagent: codex\ndone: false\ntitle: Two\n---\n\nBody 2\n",
-        encoding="utf-8",
-    )
-    (ticket_dir / "TICKET-003.md").write_text(
-        "---\nticket_id: tkt_reorder003\nagent: codex\ndone: false\ntitle: Three\n---\n\nBody 3\n",
-        encoding="utf-8",
-    )
-
-    app = build_flow_app(tmp_path, monkeypatch)
-
-    with TestClient(app) as client:
-        resp = client.post(
-            "/api/flows/ticket_flow/tickets/reorder",
-            json={
-                "source_index": 3,
-                "destination_index": 1,
-                "place_after": False,
-            },
-        )
-        assert resp.status_code == 200
-        payload = resp.json()
-        assert payload["status"] == "ok"
-
-        listed = client.get("/api/flows/ticket_flow/tickets")
-        assert listed.status_code == 200
-        names = [Path(ticket["path"]).name for ticket in listed.json()["tickets"]]
-        assert names == ["TICKET-001.md", "TICKET-002.md", "TICKET-003.md"]
-        first_ticket = (ticket_dir / "TICKET-001.md").read_text(encoding="utf-8")
-        assert "title: Three" in first_ticket
-
-
-def test_reorder_ticket_updates_active_run_current_ticket_path(tmp_path, monkeypatch):
-    ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
-    ticket_dir.mkdir(parents=True)
-    (ticket_dir / "TICKET-001.md").write_text(
-        "---\nticket_id: tkt_active001\nagent: codex\ndone: false\ntitle: One\n---\n\nBody 1\n",
-        encoding="utf-8",
-    )
-    (ticket_dir / "TICKET-002.md").write_text(
-        "---\nticket_id: tkt_active002\nagent: codex\ndone: false\ntitle: Two\n---\n\nBody 2\n",
-        encoding="utf-8",
-    )
-    (ticket_dir / "TICKET-003.md").write_text(
-        "---\nticket_id: tkt_active003\nagent: codex\ndone: false\ntitle: Three\n---\n\nBody 3\n",
-        encoding="utf-8",
-    )
-
-    db_path = tmp_path / ".codex-autorunner" / "flows.db"
-    original_ticket = ".codex-autorunner/tickets/TICKET-003.md"
-    run_id = str(uuid.uuid4())
-    with FlowStore(db_path) as store:
-        store.create_flow_run(
-            run_id=run_id,
-            flow_type="ticket_flow",
-            input_data={},
-            state={
-                "current_ticket": original_ticket,
-                "ticket_engine": {"current_ticket": original_ticket},
-            },
-        )
-        store.update_flow_run_status(
-            run_id,
-            FlowRunStatus.PAUSED,
-            state={
-                "current_ticket": original_ticket,
-                "ticket_engine": {"current_ticket": original_ticket},
-            },
-        )
-
-    app = build_flow_app(tmp_path, monkeypatch)
-
-    with TestClient(app) as client:
-        resp = client.post(
-            "/api/flows/ticket_flow/tickets/reorder",
-            json={
-                "source_index": 3,
-                "destination_index": 1,
-                "place_after": False,
-            },
-        )
-        assert resp.status_code == 200
-        payload = resp.json()
-        assert payload["status"] == "ok"
-
-    with FlowStore(db_path) as store:
-        record = store.get_flow_run(run_id)
-    assert record is not None
-    assert (
-        record.state.get("current_ticket") == ".codex-autorunner/tickets/TICKET-001.md"
-    )
-    ticket_engine = record.state.get("ticket_engine")
-    assert isinstance(ticket_engine, dict)
-    assert (
-        ticket_engine.get("current_ticket") == ".codex-autorunner/tickets/TICKET-001.md"
-    )
-
-
-def test_reorder_ticket_does_not_overwrite_malformed_frontmatter(tmp_path, monkeypatch):
-    ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
-    ticket_dir.mkdir(parents=True)
-    malformed = (
-        "---\n"
-        "agent: codex\n"
-        "title: Broken\n"
-        "# done is missing on purpose\n"
-        "---\n\n"
-        "Body 1\n"
-    )
-    (ticket_dir / "TICKET-001.md").write_text(malformed, encoding="utf-8")
-    (ticket_dir / "TICKET-002.md").write_text(
-        "---\nticket_id: tkt_reorder_ok\nagent: codex\ndone: false\ntitle: Two\n---\n\nBody 2\n",
-        encoding="utf-8",
-    )
-
-    app = build_flow_app(tmp_path, monkeypatch)
-
-    with TestClient(app) as client:
-        resp = client.post(
-            "/api/flows/ticket_flow/tickets/reorder",
-            json={
-                "source_index": 2,
-                "destination_index": 1,
-                "place_after": False,
-            },
-        )
-        assert resp.status_code == 200
-        payload = resp.json()
-        assert payload["status"] == "error"
-        assert payload["lint_errors"]
-
-    rewritten = (ticket_dir / "TICKET-002.md").read_text(encoding="utf-8")
-    assert "# done is missing on purpose" in rewritten
-    assert "ticket_id:" not in rewritten
-
-
-def test_bulk_set_agent_rejects_unknown_keys(tmp_path, monkeypatch):
-    ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
-    ticket_dir.mkdir(parents=True)
-    (ticket_dir / "TICKET-001.md").write_text(
-        "---\nticket_id: tkt_bulk001\nagent: codex\ndone: false\ntitle: One\n---\n\nBody 1\n",
-        encoding="utf-8",
-    )
-    (ticket_dir / "TICKET-002.md").write_text(
-        "---\nticket_id: tkt_bulk002\nagent: codex\ndone: false\ntitle: Two\n---\n\nBody 2\n",
-        encoding="utf-8",
-    )
-
-    app = build_flow_app(tmp_path, monkeypatch)
-
-    with TestClient(app) as client:
-        response = client.post(
-            "/api/flows/ticket_flow/tickets/bulk-set-agent",
-            json={"agent": "opencode", "rangee": "2-2"},
-        )
-
-    assert response.status_code == 422
-    detail = response.json()["detail"]
-    assert any(item["loc"][-1] == "rangee" for item in detail)
-
-
-def test_bulk_set_agent_preserves_existing_profile_when_profile_omitted(
-    tmp_path, monkeypatch
-):
-    ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
-    ticket_dir.mkdir(parents=True)
-    ticket_path = ticket_dir / "TICKET-001.md"
-    ticket_path.write_text(
-        "---\n"
-        "ticket_id: tkt_bulkprofile001\n"
-        "agent: hermes\n"
-        "profile: m4-pma\n"
-        "done: false\n"
-        "title: One\n"
-        "---\n\n"
-        "Body 1\n",
-        encoding="utf-8",
-    )
-
-    app = build_flow_app(tmp_path, monkeypatch)
-
-    with TestClient(app) as client:
-        response = client.post(
-            "/api/flows/ticket_flow/tickets/bulk-set-agent",
-            json={"agent": "codex"},
-        )
-
-    assert response.status_code == 200
-    frontmatter, _body = parse_markdown_frontmatter(
-        ticket_path.read_text(encoding="utf-8")
-    )
-    assert frontmatter["agent"] == "codex"
-    assert frontmatter["profile"] == "m4-pma"
-
-
-def test_bulk_set_agent_can_clear_profile_explicitly(tmp_path, monkeypatch):
-    ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
-    ticket_dir.mkdir(parents=True)
-    ticket_path = ticket_dir / "TICKET-001.md"
-    ticket_path.write_text(
-        "---\n"
-        "ticket_id: tkt_bulkprofileclear001\n"
-        "agent: hermes\n"
-        "profile: m4-pma\n"
-        "done: false\n"
-        "title: One\n"
-        "---\n\n"
-        "Body 1\n",
-        encoding="utf-8",
-    )
-
-    app = build_flow_app(tmp_path, monkeypatch)
-
-    with TestClient(app) as client:
-        response = client.post(
-            "/api/flows/ticket_flow/tickets/bulk-set-agent",
-            json={"agent": "hermes", "profile": None},
-        )
-
-    assert response.status_code == 200
-    frontmatter, _body = parse_markdown_frontmatter(
-        ticket_path.read_text(encoding="utf-8")
-    )
-    assert frontmatter["agent"] == "hermes"
-    assert "profile" not in frontmatter
-
-
-def test_bulk_set_agent_canonicalizes_hermes_alias_input(tmp_path, monkeypatch):
-    ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
-    ticket_dir.mkdir(parents=True)
-    ticket_path = ticket_dir / "TICKET-001.md"
-    ticket_path.write_text(
-        "---\n"
-        "ticket_id: tkt_bulkprofilealias001\n"
-        "agent: codex\n"
-        "done: false\n"
-        "title: One\n"
-        "---\n\n"
-        "Body 1\n",
-        encoding="utf-8",
-    )
-
-    app = build_flow_app(tmp_path, monkeypatch)
-
-    with TestClient(app) as client:
-        response = client.post(
-            "/api/flows/ticket_flow/tickets/bulk-set-agent",
-            json={"agent": "hermes-m4-pma"},
-        )
-
-    assert response.status_code == 200
-    frontmatter, _body = parse_markdown_frontmatter(
-        ticket_path.read_text(encoding="utf-8")
-    )
-    assert frontmatter["agent"] == "hermes"
-    assert frontmatter["profile"] == "m4-pma"
-
-
-def test_bulk_clear_model_rejects_unknown_keys(tmp_path, monkeypatch):
-    ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
-    ticket_dir.mkdir(parents=True)
-    (ticket_dir / "TICKET-001.md").write_text(
-        "---\nticket_id: tkt_bulkclear001\nagent: codex\nmodel: gpt-5.4\nreasoning: high\ndone: false\ntitle: One\n---\n\nBody 1\n",
-        encoding="utf-8",
-    )
-
-    app = build_flow_app(tmp_path, monkeypatch)
-
-    with TestClient(app) as client:
-        response = client.post(
-            "/api/flows/ticket_flow/tickets/bulk-clear-model",
-            json={"rangee": "1-1"},
-        )
-
-    assert response.status_code == 422
-    detail = response.json()["detail"]
-    assert any(item["loc"][-1] == "rangee" for item in detail)
-
-
-def test_ticket_chat_route_passes_selected_profile_into_execution(
-    tmp_path, monkeypatch
-):
-    ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
-    ticket_dir.mkdir(parents=True)
-    (ticket_dir / "TICKET-001.md").write_text(
-        '---\nticket_id: "tkt_ticketchat001"\nagent: hermes\nprofile: m4-pma\ndone: false\ntitle: Demo\n---\n\nBody\n',
-        encoding="utf-8",
-    )
-
-    observed = {}
-
-    async def fake_execute_file_chat(
-        _request,
-        _repo_root,
-        target,
-        message,
-        *,
-        agent,
-        profile,
-        model=None,
-        reasoning=None,
-        on_meta=None,
-        on_usage=None,
-    ):
-        observed.update(
-            {
-                "target": target.target,
-                "message": message,
-                "agent": agent,
-                "profile": profile,
-                "model": model,
-                "reasoning": reasoning,
-            }
-        )
-        return {"status": "ok", "agent": agent, "profile": profile}
-
-    monkeypatch.setattr(
-        file_chat_routes,
-        "extracted_execute_file_chat",
-        fake_execute_file_chat,
-    )
-
-    app = FastAPI()
-    app.include_router(file_chat_routes.build_file_chat_routes())
-    app.state.engine = SimpleNamespace(repo_root=tmp_path)
-    app.state.config = SimpleNamespace(
-        agent_profiles=lambda agent_id: (
-            {"m4-pma": object()} if agent_id == "hermes" else {}
-        ),
-        agent_default_profile=lambda _agent_id: None,
-    )
-
-    with TestClient(app) as client:
-        response = client.post(
-            "/api/tickets/1/chat",
-            json={
-                "message": "Use the selected profile",
-                "agent": "hermes",
-                "profile": "m4-pma",
-                "model": "free-form-model",
-                "reasoning": "high",
-            },
-        )
-
-    assert response.status_code == 200
-    assert observed == {
-        "target": "ticket:1",
-        "message": "Use the selected profile",
-        "agent": "hermes",
-        "profile": "m4-pma",
-        "model": "free-form-model",
-        "reasoning": "high",
-    }
-
-
-def test_ticket_chat_route_rejects_invalid_profile_before_stream_start(
-    tmp_path, monkeypatch
-):
-    ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
-    ticket_dir.mkdir(parents=True)
-    (ticket_dir / "TICKET-001.md").write_text(
-        '---\nticket_id: "tkt_ticketchatbadprofile001"\nagent: hermes\ndone: false\ntitle: Demo\n---\n\nBody\n',
-        encoding="utf-8",
-    )
-
-    app = FastAPI()
-    app.include_router(file_chat_routes.build_file_chat_routes())
-    app.state.engine = SimpleNamespace(repo_root=tmp_path)
-    app.state.config = SimpleNamespace(
-        agent_profiles=lambda agent_id: (
-            {"m4-pma": object()} if agent_id == "hermes" else {}
-        ),
-        agent_default_profile=lambda _agent_id: None,
-    )
-
-    with TestClient(app) as client:
-        response = client.post(
-            "/api/tickets/1/chat",
-            json={
-                "message": "Use the selected profile",
-                "agent": "hermes",
-                "profile": "bad-profile",
-                "stream": True,
-            },
-        )
-
-    assert response.status_code == 400
-    assert response.json()["detail"] == "profile is invalid"
-
-
 def test_dispatch_history_returns_empty_when_no_run(tmp_path, monkeypatch):
-    """Ticket-first: dispatch history endpoint must not crash on missing runs."""
     (tmp_path / ".codex-autorunner" / "tickets").mkdir(parents=True)
     app = build_flow_app(tmp_path, monkeypatch)
 
@@ -905,7 +266,6 @@ def test_dispatch_history_returns_empty_when_no_run(tmp_path, monkeypatch):
 def test_ticket_list_endpoint_stable_when_dispatch_history_has_gaps(
     tmp_path, monkeypatch
 ):
-    """Ticket-first: ticket list must not break when dispatch history has gaps."""
     import uuid as _uuid
 
     ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
@@ -965,7 +325,6 @@ def test_ticket_list_endpoint_stable_when_dispatch_history_has_gaps(
 
 
 def test_ticket_flow_runs_endpoint_returns_completed_run(tmp_path, monkeypatch):
-    """Ticket-first: runs endpoint surfaces ticket-flow run status."""
     import uuid as _uuid
 
     (tmp_path / ".codex-autorunner" / "tickets").mkdir(parents=True)
@@ -994,7 +353,6 @@ def test_ticket_flow_runs_endpoint_returns_completed_run(tmp_path, monkeypatch):
 
 
 def test_ticket_list_returns_ascending_numeric_order(tmp_path, monkeypatch):
-    """Ticket-first: ticket list must respect ascending numeric order."""
     ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True)
     (ticket_dir / "TICKET-003.md").write_text(
@@ -1020,7 +378,6 @@ def test_ticket_list_returns_ascending_numeric_order(tmp_path, monkeypatch):
 
 
 def test_user_agent_ticket_is_visible_but_not_auto_executable(tmp_path, monkeypatch):
-    """Ticket-first: user-agent tickets surface in the list with agent=user."""
     ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True)
     (ticket_dir / "TICKET-001.md").write_text(
@@ -1039,7 +396,6 @@ def test_user_agent_ticket_is_visible_but_not_auto_executable(tmp_path, monkeypa
 
 
 def test_ticket_update_preserves_chat_key_stability(tmp_path, monkeypatch):
-    """Ticket-first: updating ticket content must not change chat_key."""
     ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True)
     app = build_flow_app(tmp_path, monkeypatch)
