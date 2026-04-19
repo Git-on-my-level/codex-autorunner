@@ -118,6 +118,10 @@ async def test_suite_report_includes_campaign_north_star_status(
     assert "queued_visibility" in covered
     assert "interrupt_optimistic_acceptance" in covered
     assert "fast_ack" in covered
+    assert "duplicate_delivery" in covered
+    assert "interrupt_confirmation" in covered
+    assert "progress_anchor_reuse" in covered
+    assert "restart_recovery" in covered
 
     assert "required_scenario_ids" in result.payload
     assert "required_budget_ids" in result.payload

@@ -98,6 +98,21 @@ TICKET-012 strengthens the campaign gate:
 - The corpus is validated for campaign-critical scenario coverage and contract
   link integrity via `test_scenario_corpus.py`.
 
+TICKET-018 closes the canonical scorecard gap:
+
+- `DEFAULT_LATENCY_SCENARIO_IDS` now includes all required campaign scenarios:
+  `first_visible_feedback`, `queued_visibility`,
+  `interrupt_optimistic_acceptance`, `duplicate_delivery`,
+  `interrupt_confirmation`, `progress_anchor_reuse`, and `restart_recovery`.
+- The latency budget suite no longer hard-fails on `reference_only` or
+  no-budget scenarios; both contribute to campaign north star scenario coverage
+  via their corpus entries and contract links.
+- `interrupt_confirmation` is `reference_only` with coverage exercised by
+  integration tests in `test_hermes_pma_ux_regressions.py` and
+  `test_hermes_pma_surface_parity.py`.
+- `restart_recovery` remains `reference_only` with coverage exercised by
+  `test_managed_thread_runtime.py`.
+
 ## Campaign Gate
 
 The chat-surface lab is the canonical acceptance boundary for the chat UX

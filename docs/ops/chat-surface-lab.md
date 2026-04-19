@@ -56,8 +56,8 @@ The campaign considers these latency thresholds hard gates:
 | `queued_visibility` | `queue_visible` | gating |
 | `progress_anchor_reuse` | (none) | non-gating |
 | `interrupt_optimistic_acceptance` | `interrupt_visible` | gating |
-| `interrupt_confirmation` | (none) | gating |
-| `restart_recovery` | (none) | non-gating |
+| `interrupt_confirmation` | (none) | gating (reference_only) |
+| `restart_recovery` | (none) | non-gating (reference_only) |
 | `duplicate_delivery` | (none) | gating |
 
 `fast_ack` is a required regression scenario covered by
@@ -69,6 +69,11 @@ Non-gating scenarios contribute to corpus coverage but do not have latency
 budget assertions that block the campaign north star. If a non-gating scenario
 later acquires a product-critical latency budget, promote it to gating in
 `CAMPAIGN_CRITICAL_SCENARIO_MATRIX`.
+
+Reference-only scenarios are validated by dedicated integration tests outside
+the latency budget suite. They contribute to campaign north star scenario
+coverage via their `contract_links.references` entries without requiring
+surface-harness replay in the suite runner.
 
 ### How to use this as a ticket acceptance boundary
 

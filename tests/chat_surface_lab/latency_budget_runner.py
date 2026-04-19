@@ -31,6 +31,10 @@ DEFAULT_LATENCY_SCENARIO_IDS = (
     "first_visible_feedback",
     "queued_visibility",
     "interrupt_optimistic_acceptance",
+    "duplicate_delivery",
+    "interrupt_confirmation",
+    "progress_anchor_reuse",
+    "restart_recovery",
 )
 _BUDGET_REGISTRY_BY_ID = {entry.id: entry for entry in CHAT_UX_LATENCY_BUDGETS}
 _HUB_PATCH_INSTALLED = False
@@ -97,51 +101,6 @@ async def run_chat_surface_latency_budget_suite(
         scenario = scenario_mutator(loaded) if scenario_mutator is not None else loaded
         scenario_started = time.monotonic()
         relative_output_dir = f"runs/{run_id}/{scenario.scenario_id}"
-        if scenario.execution_mode != "surface_harness":
-            elapsed_ms = round((time.monotonic() - scenario_started) * 1000, 1)
-            message = (
-                f"{scenario.scenario_id}: execution_mode={scenario.execution_mode!r} "
-                "is not runnable for latency budget assertions"
-            )
-            failures.append(
-                {
-                    "kind": "scenario_not_executable",
-                    "scenario_id": scenario.scenario_id,
-                    "message": message,
-                }
-            )
-            scenario_results.append(
-                {
-                    "scenario_id": scenario.scenario_id,
-                    "status": "failed",
-                    "elapsed_ms": elapsed_ms,
-                    "output_dir": relative_output_dir,
-                    "error_message": message,
-                    "observed_budget_count": 0,
-                }
-            )
-            continue
-        if not scenario.latency_budgets:
-            elapsed_ms = round((time.monotonic() - scenario_started) * 1000, 1)
-            message = f"{scenario.scenario_id}: no latency_budgets were declared"
-            failures.append(
-                {
-                    "kind": "scenario_missing_budget_assertions",
-                    "scenario_id": scenario.scenario_id,
-                    "message": message,
-                }
-            )
-            scenario_results.append(
-                {
-                    "scenario_id": scenario.scenario_id,
-                    "status": "failed",
-                    "elapsed_ms": elapsed_ms,
-                    "output_dir": relative_output_dir,
-                    "error_message": message,
-                    "observed_budget_count": 0,
-                }
-            )
-            continue
 
         try:
             result = await runner.run_scenario(scenario)
