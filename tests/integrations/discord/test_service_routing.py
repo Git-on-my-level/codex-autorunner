@@ -7243,6 +7243,7 @@ async def test_dispatch_deferred_slash_commands_ack_before_prior_handler_finishe
     )
 
     started: list[str] = []
+    first_started = asyncio.Event()
     release_first = asyncio.Event()
 
     async def _fake_handle_newt(
@@ -7255,6 +7256,7 @@ async def test_dispatch_deferred_slash_commands_ack_before_prior_handler_finishe
         _ = interaction_token, channel_id, guild_id
         started.append(interaction_id)
         if interaction_id == "inter-1":
+            first_started.set()
             await release_first.wait()
 
     service._handle_car_newt = _fake_handle_newt  # type: ignore[assignment]
@@ -7274,6 +7276,7 @@ async def test_dispatch_deferred_slash_commands_ack_before_prior_handler_finishe
             5,
             5,
         ]
+        await asyncio.wait_for(first_started.wait(), timeout=1.0)
         assert started == ["inter-1"]
 
         release_first.set()
@@ -10786,6 +10789,7 @@ async def test_run_agent_turn_for_message_wraps_typing_indicator(
         reasoning_effort: str | None,
         session_key: str,
         orchestrator_channel_key: str,
+        suppress_managed_thread_delivery: bool = False,
         max_actions: int,
         min_edit_interval_seconds: float,
         heartbeat_interval_seconds: float,
@@ -10802,6 +10806,7 @@ async def test_run_agent_turn_for_message_wraps_typing_indicator(
             reasoning_effort,
             session_key,
             orchestrator_channel_key,
+            suppress_managed_thread_delivery,
             max_actions,
             min_edit_interval_seconds,
             heartbeat_interval_seconds,
@@ -10884,6 +10889,53 @@ async def test_run_agent_turn_for_message_forwards_managed_thread_delivery_suppr
             reasoning_effort=None,
             session_key="session-1",
             orchestrator_channel_key="pma:channel-1",
+            suppress_managed_thread_delivery=True,
+        )
+        assert result.final_message == "ok"
+        assert captured["suppress_managed_thread_delivery"] is True
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_run_agent_turn_for_message_forwards_repo_delivery_suppression(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=_FakeRest(),
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    captured: dict[str, Any] = {}
+
+    async def _fake_run_agent_turn_for_message(
+        _service: Any,
+        **kwargs: Any,
+    ) -> DiscordMessageTurnResult:
+        captured.update(kwargs)
+        return DiscordMessageTurnResult(final_message="ok")
+
+    monkeypatch.setattr(
+        discord_service_module,
+        "run_agent_turn_for_message",
+        _fake_run_agent_turn_for_message,
+    )
+
+    try:
+        result = await service._run_agent_turn_for_message(
+            workspace_root=tmp_path,
+            prompt_text="hello",
+            agent="codex",
+            model_override=None,
+            reasoning_effort=None,
+            session_key="session-1",
+            orchestrator_channel_key="channel-1",
             suppress_managed_thread_delivery=True,
         )
         assert result.final_message == "ok"

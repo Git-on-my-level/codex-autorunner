@@ -3677,6 +3677,7 @@ class DiscordBotService:
                 reasoning_effort=reasoning_effort,
                 session_key=session_key,
                 orchestrator_channel_key=orchestrator_channel_key,
+                suppress_managed_thread_delivery=suppress_managed_thread_delivery,
                 max_actions=DISCORD_TURN_PROGRESS_MAX_ACTIONS,
                 min_edit_interval_seconds=DISCORD_TURN_PROGRESS_MIN_EDIT_INTERVAL_SECONDS,
                 heartbeat_interval_seconds=DISCORD_TURN_PROGRESS_HEARTBEAT_INTERVAL_SECONDS,
