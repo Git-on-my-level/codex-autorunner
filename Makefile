@@ -89,7 +89,10 @@ test-chat-platform-contract:
 test-chat-surface-lab:
 	$(PYTHON) -m pytest -q \
 		tests/chat_surface_lab/test_scenario_corpus.py \
-		tests/chat_surface_lab/test_artifact_manifest.py
+		tests/chat_surface_lab/test_artifact_manifest.py \
+		tests/chat_surface_lab/test_latency_budgets.py \
+		tests/chat_surface_lab/test_seeded_exploration.py \
+		tests/chat_surface_lab/test_incident_replay.py
 	$(PYTHON) scripts/chat_surface_latency_budgets.py --profile check-chat-surface-lab
 
 test-managed-thread-cutover:

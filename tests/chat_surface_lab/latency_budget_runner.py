@@ -14,6 +14,8 @@ from codex_autorunner.core.utils import atomic_write
 from codex_autorunner.integrations.chat.ux_regression_contract import (
     CHAT_UX_LATENCY_BUDGETS,
     REQUIRED_CHAT_UX_LATENCY_BUDGET_IDS,
+    REQUIRED_CHAT_UX_REGRESSION_SCENARIO_IDS,
+    campaign_north_star_status,
 )
 from tests.chat_surface_lab.scenario_runner import (
     ChatSurfaceScenarioRunner,
@@ -228,6 +230,13 @@ async def run_chat_surface_latency_budget_suite(
             f"{len(selected_scenarios)} scenarios"
         )
 
+    north_star = campaign_north_star_status(
+        observed_budgets=observed_budgets,
+        observed_scenario_ids=[
+            r["scenario_id"] for r in scenario_results if r["status"] == "passed"
+        ],
+    )
+
     payload: dict[str, Any] = {
         "version": 1,
         "suite": "chat_surface_latency_budgets",
@@ -241,6 +250,22 @@ async def run_chat_surface_latency_budget_suite(
         "scenario_ids": list(selected_scenarios),
         "enforce_required_coverage": coverage_required,
         "required_budget_ids": list(REQUIRED_CHAT_UX_LATENCY_BUDGET_IDS),
+        "required_scenario_ids": list(REQUIRED_CHAT_UX_REGRESSION_SCENARIO_IDS),
+        "campaign_north_star": {
+            "green": north_star.green,
+            "budget_statuses": [
+                {
+                    "budget_id": bs.budget_id,
+                    "threshold_ms": bs.threshold_ms,
+                    "observed_ms": bs.observed_ms,
+                    "passed": bs.passed,
+                    "observed": bs.observed,
+                }
+                for bs in north_star.budget_statuses
+            ],
+            "covered_scenario_ids": list(north_star.covered_scenario_ids),
+            "missing_scenario_ids": list(north_star.missing_scenario_ids),
+        },
         "budget_registry": [
             {
                 "id": entry.id,
@@ -279,6 +304,7 @@ async def run_chat_surface_latency_budget_suite(
 def format_suite_summary(result: LatencyBudgetSuiteResult) -> str:
     payload = result.payload
     signoff = payload.get("signoff", {})
+    north_star = payload.get("campaign_north_star", {})
     lines = [
         "CHAT SURFACE LATENCY BUDGET SUITE",
         f"run_id={result.run_id}",
@@ -291,7 +317,55 @@ def format_suite_summary(result: LatencyBudgetSuiteResult) -> str:
         ),
         f"latest={result.latest_path}",
         f"history={result.history_path}",
+        "",
     ]
+    lines.append("scenario results:")
+    for sr in payload.get("scenario_results", []):
+        sid = sr.get("scenario_id", "?")
+        status = sr.get("status", "?")
+        output_dir = sr.get("output_dir", "")
+        budget_count = sr.get("observed_budget_count", 0)
+        summary_path = sr.get("summary_path")
+        lines.append(f"  {sid}: {status} (budgets={budget_count}, output={output_dir})")
+        for obs in sr.get("observed_budgets", []):
+            budget_id = obs.get("budget_id", "?")
+            observed_ms = obs.get("observed_ms", 0)
+            max_ms = obs.get("max_ms", 0)
+            lines.append(f"    {budget_id}: {observed_ms:.1f}ms / {max_ms:.0f}ms")
+        if summary_path:
+            lines.append(f"    summary: {summary_path}")
+        error_msg = sr.get("error_message")
+        if error_msg:
+            lines.append(f"    error: {error_msg}")
+    failures = payload.get("failures", [])
+    if failures:
+        lines.append("")
+        lines.append("failures:")
+        for fail in failures:
+            kind = fail.get("kind", "?")
+            sid = fail.get("scenario_id") or fail.get("budget_id", "?")
+            msg = fail.get("message", "")
+            lines.append(f"  [{kind}] {sid}: {msg}")
+    lines.append("")
+    lines.append(
+        f"campaign north star: {'GREEN' if north_star.get('green') else 'RED'}"
+    )
+    for bs in north_star.get("budget_statuses", []):
+        if not bs.get("observed"):
+            lines.append(
+                f"  {bs['budget_id']}: NO_OBSERVATION (threshold <= {bs['threshold_ms']:.0f} ms)"
+            )
+        elif bs.get("passed"):
+            lines.append(
+                f"  {bs['budget_id']}: PASS ({bs['observed_ms']:.1f} ms <= {bs['threshold_ms']:.0f} ms)"
+            )
+        else:
+            lines.append(
+                f"  {bs['budget_id']}: FAIL ({bs['observed_ms']:.1f} ms > {bs['threshold_ms']:.0f} ms)"
+            )
+    missing = north_star.get("missing_scenario_ids", [])
+    if missing:
+        lines.append(f"  missing scenarios: {', '.join(missing)}")
     return "\n".join(lines)
 
 

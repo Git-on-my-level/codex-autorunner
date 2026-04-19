@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from codex_autorunner.integrations.chat.ux_regression_contract import (
+    CAMPAIGN_CRITICAL_SCENARIO_MATRIX,
+    CAMPAIGN_NORTH_STAR_LATENCY_THRESHOLDS,
     REQUIRED_CHAT_UX_LATENCY_BUDGET_IDS,
     REQUIRED_CHAT_UX_REGRESSION_SCENARIO_IDS,
 )
@@ -76,3 +78,56 @@ def test_scenario_corpus_files_live_under_expected_root() -> None:
     assert files
     for path in files:
         assert SCENARIO_CORPUS_ROOT in path.parents
+
+
+def test_corpus_covers_all_campaign_critical_scenarios() -> None:
+    corpus = load_scenario_corpus()
+    corpus_ids = {s.scenario_id for s in corpus}
+    campaign_ids = {row[0] for row in CAMPAIGN_CRITICAL_SCENARIO_MATRIX}
+    missing = campaign_ids.difference(corpus_ids)
+    assert not missing, f"campaign-critical scenarios missing from corpus: {missing}"
+
+
+def test_campaign_gating_scenarios_have_contract_links() -> None:
+    corpus = load_scenario_corpus()
+    by_id = {s.scenario_id: s for s in corpus}
+    gating_ids = {row[0] for row in CAMPAIGN_CRITICAL_SCENARIO_MATRIX if row[2]}
+    for scenario_id in gating_ids:
+        scenario = by_id.get(scenario_id)
+        assert scenario is not None, f"gating scenario {scenario_id} not in corpus"
+        has_regression = bool(scenario.contract_links.regression_ids)
+        has_budget = bool(scenario.contract_links.latency_budget_ids)
+        has_references = bool(scenario.contract_links.references)
+        assert (
+            has_regression or has_budget or has_references
+        ), f"gating scenario {scenario_id} has no contract_links"
+
+
+def test_campaign_north_star_latency_budgets_are_observed_in_corpus() -> None:
+    corpus = load_scenario_corpus()
+    corpus_budget_ids: set[str] = set()
+    for scenario in corpus:
+        for budget in scenario.latency_budgets:
+            corpus_budget_ids.add(budget.budget_id)
+    required_budget_ids = {bid for bid, _ in CAMPAIGN_NORTH_STAR_LATENCY_THRESHOLDS}
+    missing = required_budget_ids.difference(corpus_budget_ids)
+    assert (
+        not missing
+    ), f"campaign north star budget IDs not observed in corpus scenarios: {missing}"
+
+
+def test_non_gating_scenarios_are_clearly_marked() -> None:
+    corpus = load_scenario_corpus()
+    by_id = {s.scenario_id: s for s in corpus}
+    non_gating_rows = [row for row in CAMPAIGN_CRITICAL_SCENARIO_MATRIX if not row[2]]
+    for scenario_id, budget_id, _gating in non_gating_rows:
+        scenario = by_id.get(scenario_id)
+        assert scenario is not None, f"non-gating scenario {scenario_id} not in corpus"
+        if budget_id is None:
+            assert (
+                not scenario.latency_budgets
+                or scenario.execution_mode == "reference_only"
+            ), (
+                f"non-gating scenario {scenario_id} has latency budgets but is not gating; "
+                "add contract_links.latency_budget_ids or document why it remains non-gating"
+            )
