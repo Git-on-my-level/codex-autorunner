@@ -14,6 +14,7 @@ from codex_autorunner.integrations.telegram.adapter import TelegramUpdate
 from .harness import (
     DiscordSurfaceHarness,
     FakeDiscordRest,
+    FakeTelegramBot,
     HermesFixtureRuntime,
     TelegramSurfaceHarness,
     build_telegram_message,
@@ -442,4 +443,73 @@ async def test_telegram_topic_and_root_routing_behavior_is_explicit(
         assert root_policy.get("policy_command_allowed") is True
     finally:
         await harness.close()
+        await runtime.close()
+
+
+@pytest.mark.anyio
+async def test_terminal_error_retires_progress_on_both_surfaces(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = HermesFixtureRuntime("official_failed_before_return")
+    patch_hermes_runtime(monkeypatch, runtime)
+
+    discord = DiscordSurfaceHarness(tmp_path / "discord-terminal-error")
+    telegram = TelegramSurfaceHarness(tmp_path / "telegram-terminal-error")
+    await discord.setup(agent="hermes")
+    await telegram.setup(agent="hermes")
+    try:
+        discord_rest = await discord.run_message("echo hello world")
+        assert discord_rest.execution_status == "error"
+        assert discord_rest.preview_deleted is True
+
+        telegram_bot = await telegram.run_message("echo hello world")
+        assert telegram_bot.execution_status == "error"
+        assert telegram_bot.placeholder_deleted is True
+
+        discord_finalized = _latest_event(
+            discord_rest.log_records,
+            "chat.managed_thread.turn_finalized",
+        )
+        telegram_finalized = _latest_event(
+            telegram_bot.log_records,
+            "chat.managed_thread.turn_finalized",
+        )
+        assert discord_finalized.get("status") == "error"
+        assert telegram_finalized.get("status") == "error"
+        assert discord_finalized.get("completion_source") == telegram_finalized.get(
+            "completion_source"
+        )
+    finally:
+        await discord.close()
+        await telegram.close()
+        await runtime.close()
+
+
+@pytest.mark.anyio
+async def test_terminal_error_keeps_progress_visible_when_delete_fails(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = HermesFixtureRuntime("official_failed_before_return")
+    patch_hermes_runtime(monkeypatch, runtime)
+
+    telegram = TelegramSurfaceHarness(tmp_path / "telegram-delete-fails-error")
+    await telegram.setup(agent="hermes")
+    try:
+        bot = await telegram.run_message(
+            "echo hello world",
+            bot_client=FakeTelegramBot(fail_delete_message_ids={1}),
+        )
+        assert bot.execution_status == "error"
+        assert bot.placeholder_deleted is False
+
+        finalized = _latest_event(
+            bot.log_records,
+            "chat.managed_thread.turn_finalized",
+        )
+        assert finalized.get("status") == "error"
+        assert "permission denied" in str(finalized.get("detail") or "")
+    finally:
+        await telegram.close()
         await runtime.close()
