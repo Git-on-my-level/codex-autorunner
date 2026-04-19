@@ -213,51 +213,104 @@ def _build_scenario_from_symptoms(incident: dict[str, Any]) -> dict[str, Any]:
                 }
             )
     if "queued_submission" in symptoms:
-        actions.extend(
-            [
-                {
-                    "kind": "start_message",
-                    "actor": "user",
-                    "surfaces": ["discord"],
-                    "payload": {"text": "cancel me"},
-                },
-                {
-                    "kind": "wait_for_running_execution",
-                    "actor": "system",
-                    "surfaces": ["discord"],
-                    "payload": {"timeout_seconds": 2.0},
-                },
-                {
-                    "kind": "submit_active_message",
-                    "actor": "user",
-                    "surfaces": ["discord"],
-                    "payload": {"text": "echo queued after busy", "message_id": "m-2"},
-                },
-                {
-                    "kind": "wait_for_log_event",
-                    "actor": "system",
-                    "surfaces": ["discord"],
-                    "payload": {
-                        "event_name": "discord.turn.managed_thread_submission",
-                        "field": "queued",
-                        "equals": True,
-                        "timeout_seconds": 2.0,
+        if "discord" in surfaces:
+            actions.extend(
+                [
+                    {
+                        "kind": "start_message",
+                        "actor": "user",
+                        "surfaces": ["discord"],
+                        "payload": {"text": "cancel me"},
                     },
-                },
-                {
-                    "kind": "stop_active_thread",
-                    "actor": "system",
-                    "surfaces": ["discord"],
-                    "payload": {},
-                },
-                {
-                    "kind": "await_active_message",
-                    "actor": "system",
-                    "surfaces": ["discord"],
-                    "payload": {},
-                },
-            ]
-        )
+                    {
+                        "kind": "wait_for_running_execution",
+                        "actor": "system",
+                        "surfaces": ["discord"],
+                        "payload": {"timeout_seconds": 2.0},
+                    },
+                    {
+                        "kind": "submit_active_message",
+                        "actor": "user",
+                        "surfaces": ["discord"],
+                        "payload": {
+                            "text": "echo queued after busy",
+                            "message_id": "m-2",
+                        },
+                    },
+                    {
+                        "kind": "wait_for_log_event",
+                        "actor": "system",
+                        "surfaces": ["discord"],
+                        "payload": {
+                            "event_name": "discord.turn.managed_thread_submission",
+                            "field": "queued",
+                            "equals": True,
+                            "timeout_seconds": 2.0,
+                        },
+                    },
+                    {
+                        "kind": "stop_active_thread",
+                        "actor": "system",
+                        "surfaces": ["discord"],
+                        "payload": {},
+                    },
+                    {
+                        "kind": "await_active_message",
+                        "actor": "system",
+                        "surfaces": ["discord"],
+                        "payload": {},
+                    },
+                ]
+            )
+        if "telegram" in surfaces:
+            actions.extend(
+                [
+                    {
+                        "kind": "start_message",
+                        "actor": "user",
+                        "surfaces": ["telegram"],
+                        "payload": {"text": "cancel me"},
+                    },
+                    {
+                        "kind": "wait_for_running_execution",
+                        "actor": "system",
+                        "surfaces": ["telegram"],
+                        "payload": {"timeout_seconds": 2.0},
+                    },
+                    {
+                        "kind": "submit_active_message",
+                        "actor": "user",
+                        "surfaces": ["telegram"],
+                        "payload": {
+                            "text": "echo queued after busy",
+                            "thread_id": 55,
+                            "message_id": 2,
+                            "update_id": 2,
+                        },
+                    },
+                    {
+                        "kind": "wait_for_log_event",
+                        "actor": "system",
+                        "surfaces": ["telegram"],
+                        "payload": {
+                            "event_name": "telegram.turn.queued",
+                            "timeout_seconds": 2.0,
+                        },
+                    },
+                    {
+                        "kind": "stop_active_thread",
+                        "actor": "system",
+                        "surfaces": ["telegram"],
+                        "payload": {},
+                    },
+                    {
+                        "kind": "await_active_message",
+                        "actor": "system",
+                        "surfaces": ["telegram"],
+                        "payload": {},
+                    },
+                ]
+            )
     if not actions:
         actions.append(
             {
