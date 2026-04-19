@@ -547,6 +547,17 @@ function formatOutboxAttachments(listing: FileBoxListing | null, names: string[]
   return lines.length ? `**Outbox files (download):**\n${lines.join("\n")}` : "";
 }
 
+function buildOutboxAttachmentSummary(
+  listing: FileBoxListing | null,
+  baseline: ReadonlySet<string> | null
+): string {
+  if (!listing || !baseline) return "";
+  const added = (listing.outbox || [])
+    .map((entry) => entry.name)
+    .filter((name) => !baseline.has(name));
+  return formatOutboxAttachments(listing, added);
+}
+
 function normalizeDeliveryStatus(value: unknown): PMADeliveryStatus | null {
   if (typeof value !== "string") return null;
   const normalized = value.trim().toLowerCase();
@@ -613,6 +624,9 @@ async function finalizePMAResponse(
   if (!pmaChat) return;
 
   const deliverySummary = options.deliverySummary ?? pendingDeliverySummary;
+  const outboxBaseline = currentOutboxBaseline
+    ? new Set(currentOutboxBaseline)
+    : null;
 
   currentOutboxBaseline = null;
   clearPMAPendingTurn();
@@ -648,11 +662,7 @@ async function finalizePMAResponse(
     try {
       if (fileBoxCtrl) {
         const current = await fileBoxCtrl.refresh();
-        if (currentOutboxBaseline) {
-          const baseline = currentOutboxBaseline;
-          const added = (current.outbox || []).map((e) => e.name).filter((name) => !baseline.has(name));
-          attachments = formatOutboxAttachments(current, added);
-        }
+        attachments = buildOutboxAttachmentSummary(current, outboxBaseline);
       }
     } catch {
       attachments = "";
@@ -1589,4 +1599,8 @@ function attachHandlers(): void {
   }
 }
 
-export { initPMA };
+const __pmaTest = {
+  buildOutboxAttachmentSummary,
+};
+
+export { __pmaTest, initPMA };

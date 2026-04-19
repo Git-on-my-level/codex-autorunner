@@ -449,6 +449,14 @@ function formatOutboxAttachments(listing, names) {
     });
     return lines.length ? `**Outbox files (download):**\n${lines.join("\n")}` : "";
 }
+function buildOutboxAttachmentSummary(listing, baseline) {
+    if (!listing || !baseline)
+        return "";
+    const added = (listing.outbox || [])
+        .map((entry) => entry.name)
+        .filter((name) => !baseline.has(name));
+    return formatOutboxAttachments(listing, added);
+}
 function normalizeDeliveryStatus(value) {
     if (typeof value !== "string")
         return null;
@@ -509,6 +517,9 @@ async function finalizePMAResponse(responseText, options = {}) {
     if (!pmaChat)
         return;
     const deliverySummary = options.deliverySummary ?? pendingDeliverySummary;
+    const outboxBaseline = currentOutboxBaseline
+        ? new Set(currentOutboxBaseline)
+        : null;
     currentOutboxBaseline = null;
     clearPMAPendingTurn();
     turnEventsCtrl.abort();
@@ -539,11 +550,7 @@ async function finalizePMAResponse(responseText, options = {}) {
         try {
             if (fileBoxCtrl) {
                 const current = await fileBoxCtrl.refresh();
-                if (currentOutboxBaseline) {
-                    const baseline = currentOutboxBaseline;
-                    const added = (current.outbox || []).map((e) => e.name).filter((name) => !baseline.has(name));
-                    attachments = formatOutboxAttachments(current, added);
-                }
+                attachments = buildOutboxAttachmentSummary(current, outboxBaseline);
             }
         }
         catch {
@@ -1386,4 +1393,7 @@ function attachHandlers() {
         });
     }
 }
-export { initPMA };
+const __pmaTest = {
+    buildOutboxAttachmentSummary,
+};
+export { __pmaTest, initPMA };
