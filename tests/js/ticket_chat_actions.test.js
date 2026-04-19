@@ -131,3 +131,32 @@ test("ticket chat can recover a pending turn even after the current selection ch
     }
   );
 });
+
+test("ticket chat applyTicketChatResult sets isStale from backend is_stale signal", () => {
+  const state = __ticketChatActionsTest.getTicketChatState();
+  __ticketChatActionsTest.applyTicketChatResult({
+    status: "ok",
+    has_draft: true,
+    content: "updated content",
+    patch: "--- a\n+++ b\n",
+    agent_message: "done",
+    created_at: "2025-01-01T00:00:00Z",
+    base_hash: "abc123",
+    is_stale: true,
+  });
+  assert.equal(state.draft.isStale, true);
+  assert.equal(state.draft.content, "updated content");
+
+  __ticketChatActionsTest.applyTicketChatResult({
+    status: "ok",
+    has_draft: true,
+    content: "fresh content",
+    patch: "",
+    agent_message: "fresh",
+    created_at: "2025-01-01T00:00:00Z",
+    base_hash: "def456",
+    is_stale: false,
+  });
+  assert.equal(state.draft.isStale, false);
+  assert.equal(state.draft.content, "fresh content");
+});

@@ -14,6 +14,23 @@ const IMAGE_MIME_EXT: Record<string, string> = {
 type UploadBox = FileBoxBox;
 type InsertStyle = "markdown" | "path" | "both";
 
+export type AttachmentStatus = "uploading" | "uploaded" | "failed";
+
+export type AttachmentEntry = {
+  name: string;
+  url: string;
+  status: AttachmentStatus;
+  error?: string;
+};
+
+export type AttachmentTracker = {
+  getAttachments(): AttachmentEntry[];
+  getPendingCount(): number;
+  getSummaryText(): string;
+  _add(entry: AttachmentEntry): void;
+  _update(name: string, status: AttachmentStatus, error?: string): void;
+};
+
 type PasteUploadOptions = {
   textarea: HTMLTextAreaElement | null;
   basePath: string;
@@ -21,6 +38,7 @@ type PasteUploadOptions = {
   insertStyle?: InsertStyle;
   pathPrefix?: string;
   onUploaded?: (entries: Array<{ name: string; url: string }>) => void;
+  onAttachmentStateChange?: (tracker: AttachmentTracker) => void;
 };
 
 function escapeMarkdownLinkText(text: string): string {
@@ -125,9 +143,44 @@ function insertTextAtCursor(
   textarea.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
-export function initChatPasteUpload(options: PasteUploadOptions): void {
+export function createAttachmentTracker(): AttachmentTracker {
+  const attachments: AttachmentEntry[] = [];
+  return {
+    getAttachments() {
+      return [...attachments];
+    },
+    getPendingCount() {
+      return attachments.filter((a) => a.status === "uploading").length;
+    },
+    getSummaryText() {
+      if (!attachments.length) return "";
+      const uploaded = attachments.filter((a) => a.status === "uploaded");
+      const pending = attachments.filter((a) => a.status === "uploading");
+      const failed = attachments.filter((a) => a.status === "failed");
+      const parts: string[] = [];
+      if (uploaded.length) parts.push(`${uploaded.length} uploaded`);
+      if (pending.length) parts.push(`${pending.length} uploading`);
+      if (failed.length) parts.push(`${failed.length} failed`);
+      const names = uploaded.map((a) => a.name).join(", ");
+      return `Attachments: ${parts.join(", ")}${names ? ` (${names})` : ""}`;
+    },
+    _add(entry: AttachmentEntry) {
+      attachments.push(entry);
+    },
+    _update(name: string, status: AttachmentStatus, error?: string) {
+      const entry = attachments.find((a) => a.name === name);
+      if (entry) {
+        entry.status = status;
+        if (error) entry.error = error;
+      }
+    },
+  };
+}
+
+export function initChatPasteUpload(options: PasteUploadOptions): AttachmentTracker {
+  const tracker = createAttachmentTracker();
   const { textarea } = options;
-  if (!textarea) return;
+  if (!textarea) return tracker;
 
   textarea.addEventListener("paste", async (event) => {
     const files = extractImageFilesFromClipboard(event);
@@ -136,8 +189,23 @@ export function initChatPasteUpload(options: PasteUploadOptions): void {
 
     const box = options.box || DEFAULT_FILEBOX_BOX;
     const insertStyle = options.insertStyle || "markdown";
+
+    const used = new Set<string>();
+    files.forEach((file, index) => {
+      const name = normalizeFilename(file, index, used);
+      tracker._add({ name, url: "", status: "uploading" });
+    });
+    options.onAttachmentStateChange?.(tracker);
+
     try {
       const entries = await uploadImages(options.basePath, box, files, options.pathPrefix);
+      for (const entry of entries) {
+        tracker._update(entry.name, "uploaded");
+        const tracked = tracker.getAttachments().find((a) => a.name === entry.name);
+        if (tracked) tracked.url = entry.url;
+      }
+      options.onAttachmentStateChange?.(tracker);
+
       const lines = entries.flatMap((entry) => {
         const label = escapeMarkdownLinkText(entry.name);
         const linkLine = `[${label}](${entry.url})`;
@@ -152,7 +220,12 @@ export function initChatPasteUpload(options: PasteUploadOptions): void {
       options.onUploaded?.(entries.map((entry) => ({ name: entry.name, url: entry.url })));
     } catch (err) {
       const message = (err as Error).message || "Image upload failed";
+      for (const a of tracker.getAttachments()) {
+        if (a.status === "uploading") tracker._update(a.name, "failed", message);
+      }
+      options.onAttachmentStateChange?.(tracker);
       flash(message, "error");
     }
   });
+  return tracker;
 }

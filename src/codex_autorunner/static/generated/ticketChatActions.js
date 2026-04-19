@@ -278,6 +278,7 @@ export function applyTicketChatResult(payload) {
             agentMessage: result.agent_message || result.agentMessage || "",
             createdAt: result.created_at || result.createdAt || "",
             baseHash: result.base_hash || result.baseHash || "",
+            isStale: result.is_stale ?? result.isStale ?? false,
         };
     }
     // Add assistant message from response
@@ -370,7 +371,13 @@ export function renderTicketChat() {
                 renderDiff(ticketChatState.draft.patch || "(no changes)", els.patchBody);
             }
             if (els.patchStatus) {
-                els.patchStatus.textContent = ticketChatState.draft.agentMessage || "";
+                const draft = ticketChatState.draft;
+                const staleNotice = draft.isStale
+                    ? "⚠ File changed since this draft was created. Applying may overwrite newer changes."
+                    : "";
+                els.patchStatus.textContent = staleNotice || draft.agentMessage || "";
+                els.patchStatus.classList.toggle("pill-warn", draft.isStale);
+                els.patchStatus.classList.toggle("muted", !draft.isStale);
             }
         }
     }
@@ -483,6 +490,8 @@ export const __ticketChatActionsTest = {
     pendingKeyForTicket,
     parseScopedTicketChatTarget,
     resolveTicketChatModel,
+    applyTicketChatResult,
+    getTicketChatState: () => ticketChatState,
 };
 export async function cancelTicketChat() {
     if (ticketChatState.status !== "running")
@@ -629,8 +638,13 @@ export async function applyTicketPatch() {
         flash("No draft to apply", "error");
         return;
     }
+    if (ticketChatState.draft.isStale) {
+        const confirmed = await confirmModal("This draft is stale — the underlying file has changed since it was created. Apply anyway?");
+        if (!confirmed)
+            return;
+    }
     try {
-        const res = await api(`/api/tickets/${ticketChatState.ticketIndex}/chat/apply`, { method: "POST" });
+        const res = await api(`/api/tickets/${ticketChatState.ticketIndex}/chat/apply`, { method: "POST", body: { force: ticketChatState.draft.isStale } });
         ticketChatState.draft = null;
         flash("Draft applied");
         // Notify that tickets changed
@@ -686,6 +700,7 @@ export async function loadTicketPending(index, silent = false) {
             agentMessage: res.agent_message || "",
             createdAt: res.created_at || "",
             baseHash: res.base_hash || "",
+            isStale: res.is_stale ?? false,
         };
         if (!silent) {
             flash("Loaded pending draft");
