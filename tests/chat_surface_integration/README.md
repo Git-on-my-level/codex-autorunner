@@ -72,7 +72,7 @@ entrypoints. Later tickets may migrate common declarations into the lab
 package, but this ticket does not change the existing integration behavior.
 
 Operator and agent workflow details live in
-`docs/ops/chat-surface-lab-runbook.md`.
+`docs/ops/chat-surface-lab.md`.
 
 ## Adding a new scenario
 

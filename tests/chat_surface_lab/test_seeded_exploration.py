@@ -5,10 +5,17 @@ from pathlib import Path
 
 import pytest
 
+from tests.chat_surface_lab.scenario_models import RuntimeFixtureKind, SurfaceKind
+from tests.chat_surface_lab.scenario_runner import (
+    ScenarioContractLinks,
+    ScenarioDefinition,
+    ScenarioRuntimeSpec,
+)
 from tests.chat_surface_lab.seeded_exploration import (
     available_seeded_perturbations,
     replay_preserved_failure_seed,
     run_seeded_exploration_campaign,
+    scenario_definition_to_payload,
 )
 
 
@@ -22,6 +29,28 @@ def test_seeded_exploration_catalog_covers_required_failure_classes() -> None:
         "queued_submission",
     }
     assert set(available_seeded_perturbations()) == expected
+
+
+def test_seeded_exploration_payload_preserves_latency_only_contract_links() -> None:
+    scenario = ScenarioDefinition(
+        scenario_id="latency-only-links",
+        description="latency-only contract link regression guard",
+        surfaces=(SurfaceKind.DISCORD,),
+        runtime=ScenarioRuntimeSpec(
+            kind=RuntimeFixtureKind.HERMES,
+            scenario="official",
+        ),
+        contract_links=ScenarioContractLinks(
+            latency_budget_ids=("queue_visible",),
+        ),
+    )
+
+    payload = scenario_definition_to_payload(scenario)
+
+    contract_links = payload.get("contract_links")
+    assert isinstance(contract_links, dict)
+    assert contract_links["regression_ids"] == []
+    assert contract_links["latency_budget_ids"] == ["queue_visible"]
 
 
 @pytest.mark.anyio

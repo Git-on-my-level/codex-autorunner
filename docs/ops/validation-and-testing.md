@@ -122,4 +122,4 @@ The following modules were migrated from timing-based sync to deterministic wait
 - [CONTRIBUTING.md](../../CONTRIBUTING.md) — Developer setup and contribution guide
 - [running-in-a-vm.md](running-in-a-vm.md) — VM/cloud agent environment notes
 - [state-cleanup.md](state-cleanup.md) — CAR state retention and cleanup
-- [chat-surface-lab-runbook.md](chat-surface-lab-runbook.md) — Operator and agent runbook for lab execution and scenario authoring
+- [chat-surface-lab.md](chat-surface-lab.md) — Operator and agent runbook for lab execution and scenario authoring

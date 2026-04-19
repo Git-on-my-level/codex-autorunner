@@ -305,7 +305,11 @@ def scenario_definition_to_payload(scenario: ScenarioDefinition) -> dict[str, An
         ]
     if scenario.expected_terminal.status is not None:
         payload["expected_terminal"] = {"status": scenario.expected_terminal.status}
-    if scenario.contract_links.regression_ids or scenario.contract_links.references:
+    if (
+        scenario.contract_links.regression_ids
+        or scenario.contract_links.latency_budget_ids
+        or scenario.contract_links.references
+    ):
         payload["contract_links"] = {
             "regression_ids": list(scenario.contract_links.regression_ids),
             "latency_budget_ids": list(scenario.contract_links.latency_budget_ids),

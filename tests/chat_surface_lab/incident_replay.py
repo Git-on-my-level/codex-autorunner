@@ -193,7 +193,7 @@ def _build_scenario_from_symptoms(incident: dict[str, Any]) -> dict[str, Any]:
                     },
                 ]
             )
-    elif "duplicate_delivery" in symptoms:
+    if "duplicate_delivery" in symptoms:
         if "discord" in surfaces:
             actions.append(
                 {
@@ -212,7 +212,7 @@ def _build_scenario_from_symptoms(incident: dict[str, Any]) -> dict[str, Any]:
                     "payload": {"update_id": 92, "thread_id": 55},
                 }
             )
-    elif "queued_submission" in symptoms:
+    if "queued_submission" in symptoms:
         actions.extend(
             [
                 {
@@ -258,7 +258,7 @@ def _build_scenario_from_symptoms(incident: dict[str, Any]) -> dict[str, Any]:
                 },
             ]
         )
-    else:
+    if not actions:
         actions.append(
             {
                 "kind": "send_message",
