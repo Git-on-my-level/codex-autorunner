@@ -119,6 +119,35 @@ async def test_runner_executes_queued_attachment_visibility(
 
 
 @pytest.mark.anyio
+async def test_runner_executes_interrupt_hung_turn_prefers_interrupted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scenario = load_scenario_by_id("interrupt_hung_turn_prefers_interrupted")
+    runner = ChatSurfaceScenarioRunner(
+        output_root=tmp_path / "scenario-runs",
+        apply_runtime_patch=lambda runtime: patch_hermes_runtime(monkeypatch, runtime),
+    )
+
+    result = await runner.run_scenario(scenario)
+    assert result.skipped is False
+    assert len(result.surface_results) == 1
+    discord = result.surface_results[0]
+    assert discord.surface.value == "discord"
+    assert discord.execution_status == "interrupted"
+    assert any(
+        record.get("event") == "discord.interrupt.completed"
+        and record.get("interrupt_state") == "confirmed"
+        for record in discord.log_records
+    )
+    assert any(
+        record.get("event") == "chat.managed_thread.turn_finalized"
+        and record.get("status") == "interrupted"
+        for record in discord.log_records
+    )
+
+
+@pytest.mark.anyio
 async def test_runner_executes_attachment_download_visibility(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

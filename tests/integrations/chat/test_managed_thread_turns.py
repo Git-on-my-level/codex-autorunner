@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from pathlib import Path
 from types import SimpleNamespace
@@ -1698,6 +1699,102 @@ async def test_finalize_managed_thread_execution_logs_timeout_source(
     assert fake_hub_client.trace_requests[0].backend_turn_id == "turn-1"
     assert fake_hub_client.transcript_requests == []
     assert fake_hub_client.activity_requests == []
+
+
+@pytest.mark.anyio
+async def test_finalize_managed_thread_execution_prefers_recorded_interrupt_over_runtime_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = _started_execution_with_backend_ids(tmp_path)
+    fake_hub_client = _FakeHubPersistenceClient()
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "harness_supports_progress_event_stream",
+        lambda _harness: False,
+    )
+
+    outcome_wait_started = asyncio.Event()
+    execution_status = {"value": "running"}
+    record_execution_result_calls: list[Any] = []
+    record_execution_interrupted_calls: list[Any] = []
+
+    async def _slow_timeout_outcome(*args: Any, **kwargs: Any) -> RuntimeThreadOutcome:
+        _ = args, kwargs
+        outcome_wait_started.set()
+        await asyncio.sleep(10)
+        return RuntimeThreadOutcome(
+            status="error",
+            assistant_text="",
+            error=RUNTIME_THREAD_TIMEOUT_ERROR,
+            backend_thread_id="session-1",
+            backend_turn_id="turn-1",
+        )
+
+    async def _mark_interrupted() -> None:
+        await outcome_wait_started.wait()
+        await asyncio.sleep(0.05)
+        execution_status["value"] = "interrupted"
+
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "await_runtime_thread_outcome",
+        _slow_timeout_outcome,
+    )
+
+    orchestration_service = SimpleNamespace(
+        get_thread_target=lambda managed_thread_id: SimpleNamespace(
+            backend_thread_id="session-1"
+        ),
+        get_thread_runtime_binding=lambda managed_thread_id: SimpleNamespace(
+            backend_thread_id="session-1"
+        ),
+        get_execution=lambda managed_thread_id, managed_turn_id: SimpleNamespace(
+            status=execution_status["value"],
+            error=None,
+        ),
+        record_execution_result=lambda *args, **kwargs: record_execution_result_calls.append(
+            (args, kwargs)
+        ),
+        record_execution_interrupted=lambda *args, **kwargs: (
+            record_execution_interrupted_calls.append((args, kwargs))
+            or SimpleNamespace(status="interrupted", error=None)
+        ),
+    )
+
+    marker_task = asyncio.create_task(_mark_interrupted())
+    try:
+        result = await asyncio.wait_for(
+            managed_thread_turns_module.finalize_managed_thread_execution(
+                orchestration_service=orchestration_service,
+                started=started,
+                state_root=tmp_path,
+                hub_client=fake_hub_client,
+                surface=managed_thread_turns_module.ManagedThreadSurfaceInfo(
+                    log_label="Discord",
+                    surface_kind="discord",
+                    surface_key="discord:chan-1:msg-1",
+                ),
+                errors=managed_thread_turns_module.ManagedThreadErrorMessages(
+                    public_execution_error="Discord PMA execution failed",
+                    timeout_error="Discord PMA turn timed out",
+                    interrupted_error="Discord PMA turn interrupted",
+                    timeout_seconds=5,
+                ),
+                logger=logging.getLogger("test.managed_thread.recorded_interrupt"),
+                turn_preview="preview",
+            ),
+            timeout=1.0,
+        )
+    finally:
+        marker_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await marker_task
+
+    assert result.status == "interrupted"
+    assert result.error == "Discord PMA turn interrupted"
+    assert record_execution_result_calls == []
+    assert len(record_execution_interrupted_calls) == 1
 
 
 @pytest.mark.anyio

@@ -369,6 +369,9 @@ class FakeACPServer:
                 },
             }
         )
+        if self._scenario == "official_progress_hang_ignore_cancel":
+            while True:
+                time.sleep(0.05)
         if self._scenario == "official_prompt_hang":
             return
         if self._scenario == "official_cancelled_before_return":
