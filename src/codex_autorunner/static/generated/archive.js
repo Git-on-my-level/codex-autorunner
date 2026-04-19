@@ -1,4 +1,3 @@
-// GENERATED FILE - do not edit directly. Source: static_src/
 import { subscribe } from "./bus.js";
 import { downloadArchiveFile, downloadLocalArchiveFile, fetchArchiveSnapshot, listArchiveSnapshots, listArchiveTree, listLocalArchiveTree, listLocalRunArchives, readArchiveFile, readLocalArchiveFile, } from "./archiveApi.js";
 import { escapeHtml, flash, statusPill, setButtonLoading } from "./utils.js";

@@ -1,4 +1,3 @@
-// GENERATED FILE - do not edit directly. Source: static_src/
 import { publish } from "./bus.js";
 import { escapeHtml, getUrlParams, updateUrlParams } from "./utils.js";
 const tabs = [];

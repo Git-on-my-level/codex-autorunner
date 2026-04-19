@@ -1,4 +1,3 @@
-// GENERATED FILE - do not edit directly. Source: static_src/
 export function formatTokensCompact(val) {
     if (val === null || val === undefined)
         return "–";

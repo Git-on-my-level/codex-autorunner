@@ -1,4 +1,3 @@
-// GENERATED FILE - do not edit directly. Source: static_src/
 /**
  * Shared parsing helpers for agent (app-server) events.
  * Used by ticket chat and live agent output to render rich activity.

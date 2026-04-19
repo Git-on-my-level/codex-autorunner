@@ -1,4 +1,3 @@
-// GENERATED FILE - do not edit directly. Source: static_src/
 import { HUB_BASE } from "./env.js";
 export function nonPmaChatBoundThreadCount(repo) {
     if (repo.non_pma_chat_bound_thread_count != null) {

@@ -36,6 +36,10 @@ import { CONSTANTS } from "./constants.js";
 import {
   createTurnEventsController,
   type PendingTurn,
+  cancelActiveTurnSync,
+  scheduleRecoveryRetry,
+  createTurnRecoveryTracker,
+  ACTIVE_TURN_RECOVERY_STALE_MESSAGE,
 } from "./sharedTurnLifecycle.js";
 import {
   loadPendingTurn,
@@ -953,8 +957,17 @@ async function sendMessage(): Promise<void> {
   if (!message) return;
 
   if (currentController) {
-    void cancelRequest({ clearPending: true, interruptServer: true });
-    return;
+    cancelActiveTurnSync({
+      abortController() {
+        if (currentController) {
+          currentController.abort();
+          currentController = null;
+        }
+      },
+      turnEventsCtrl,
+      interruptServer: () => interruptActiveTurn(),
+      clearPending: clearPMAPendingTurn,
+    });
   }
 
   // Ensure prior turn event streams are cleared so we don't render stale actions.
@@ -1214,6 +1227,18 @@ async function resumePendingTurn(): Promise<void> {
   pmaChat.render();
   pmaChat.renderMessages();
 
+  const tracker = createTurnRecoveryTracker();
+
+  const onStale = (): void => {
+    if (!pmaChat) return;
+    pmaChat.state.status = "error";
+    pmaChat.state.error = ACTIVE_TURN_RECOVERY_STALE_MESSAGE;
+    clearPMAPendingTurn();
+    turnEventsCtrl.abort();
+    pmaChat.render();
+    pmaChat.renderMessages();
+  };
+
   const poll = async (): Promise<void> => {
     try {
       const payload = (await api(
@@ -1266,15 +1291,13 @@ async function resumePendingTurn(): Promise<void> {
         return;
       }
 
-      // Still running; keep polling.
+      // Still running; schedule bounded retry.
       pmaChat.state.status = "running";
       pmaChat.state.statusText = "Recovering previous turn…";
       pmaChat.render();
-      window.setTimeout(() => void poll(), 1000);
+      scheduleRecoveryRetry({ tracker, retryFn: poll, onStale });
     } catch {
-      // If recovery fails, don't spam errors; just stop trying.
-      pmaChat.state.statusText = "Recovering previous turn…";
-      pmaChat.render();
+      scheduleRecoveryRetry({ tracker, retryFn: poll, onStale });
     }
   };
 

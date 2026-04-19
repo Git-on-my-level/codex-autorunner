@@ -1,4 +1,3 @@
-// GENERATED FILE - do not edit directly. Source: static_src/
 import { isMobileViewport } from "./utils.js";
 import { getBufferSnapshot, snapshotBufferLines, isAltBufferActive, clearAltScrollbackState, updateAltScrollback, } from "./terminalTranscript.js";
 const textEncoder = new TextEncoder();

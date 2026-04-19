@@ -1,4 +1,3 @@
-// GENERATED FILE - do not edit directly. Source: static_src/
 import { api, flash, resolvePath } from "./utils.js";
 import { DEFAULT_FILEBOX_BOX } from "./fileboxCatalog.js";
 const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "gif", "webp", "heic", "heif"];

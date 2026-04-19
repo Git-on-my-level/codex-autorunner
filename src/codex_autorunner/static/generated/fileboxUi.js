@@ -1,4 +1,3 @@
-// GENERATED FILE - do not edit directly. Source: static_src/
 import { api, confirmModal, escapeHtml, flash, resolvePath } from "./utils.js";
 import { DEFAULT_FILEBOX_BOX, FILEBOX_BOXES, } from "./fileboxCatalog.js";
 function formatBytes(size) {

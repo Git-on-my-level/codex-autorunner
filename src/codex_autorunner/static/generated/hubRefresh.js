@@ -1,4 +1,3 @@
-// GENERATED FILE - do not edit directly. Source: static_src/
 import { api, flash, confirmModal } from "./utils.js";
 import { HUB_CACHE_TTL_MS, HUB_USAGE_CACHE_KEY, saveSessionCache, loadSessionCache, loadHubBootstrapCache, saveHubBootstrapCache, indexHubUsage, } from "./hubCache.js";
 import { registerAutoRefresh } from "./autoRefresh.js";

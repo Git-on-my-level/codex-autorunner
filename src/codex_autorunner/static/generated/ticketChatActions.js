@@ -1,4 +1,3 @@
-// GENERATED FILE - do not edit directly. Source: static_src/
 /**
  * Ticket Chat Actions - handles sending messages, applying/discarding patches
  */
@@ -12,7 +11,7 @@ import { renderDiff } from "./diffRenderer.js";
 import { newClientTurnId } from "./fileChat.js";
 import { loadPendingTurn, savePendingTurn } from "./turnResume.js";
 import { resumeFileChatTurn } from "./turnEvents.js";
-import { createTurnEventsController, startTurnEventsStream as sharedStartTurnEventsStream, clearManagedTurn, } from "./sharedTurnLifecycle.js";
+import { createTurnEventsController, startTurnEventsStream as sharedStartTurnEventsStream, clearManagedTurn, cancelActiveTurnSync, scheduleRecoveryRetry, createTurnRecoveryTracker, ACTIVE_TURN_RECOVERY_STALE_MESSAGE, } from "./sharedTurnLifecycle.js";
 import { getSelectedAgent, getSelectedProfile, getSelectedModel, getSelectedReasoning, setSelectedAgentProfile, } from "./agentControls.js";
 // Limits for events display
 export const TICKET_CHAT_EVENT_LIMIT = 8;
@@ -384,10 +383,28 @@ export async function sendTicketChat() {
         return;
     }
     if (ticketChatState.status === "running") {
-        ticketChatState.error = "Ticket chat already running.";
-        renderTicketChat();
-        flash("Ticket chat already running", "error");
-        return;
+        cancelActiveTurnSync({
+            abortController() {
+                if (ticketChatState.controller) {
+                    ticketChatState.controller.abort();
+                    ticketChatState.controller = null;
+                }
+            },
+            turnEventsCtrl,
+            interruptServer: async () => {
+                if (ticketChatState.ticketIndex != null) {
+                    await api(`/api/tickets/${ticketChatState.ticketIndex}/chat/interrupt`, {
+                        method: "POST",
+                    });
+                }
+            },
+            clearPending: () => {
+                if (ticketChatState.activePendingKey) {
+                    clearPendingTurnState(ticketChatState.activePendingKey);
+                }
+                clearActiveTurnScope();
+            },
+        });
     }
     if (ticketChatState.ticketIndex == null) {
         ticketChatState.error = "No ticket selected.";
@@ -532,7 +549,7 @@ export async function resumeTicketPendingTurn(index, ticketChatKey = null) {
     const pendingMatch = findPendingTicketTurn(index, ticketChatKey);
     if (!pendingMatch)
         return;
-    const { pendingKey, pending, target } = pendingMatch;
+    const { pendingKey, target } = pendingMatch;
     const parsedTarget = parseScopedTicketChatTarget(target);
     await setSelectedAgentProfile(parsedTarget.agent, parsedTarget.profile || "");
     setActiveTurnScope(target, pendingKey);
@@ -544,6 +561,18 @@ export async function resumeTicketPendingTurn(index, ticketChatKey = null) {
     chatState.statusText = "Recovering previous turn…";
     ticketChat.render();
     ticketChat.renderMessages();
+    await doResumeTicketTurn(pendingMatch, createTurnRecoveryTracker());
+}
+async function doResumeTicketTurn(pendingMatch, tracker) {
+    const { pendingKey, pending } = pendingMatch;
+    const chatState = ticketChatState;
+    const onStale = () => {
+        chatState.status = "error";
+        chatState.error = ACTIVE_TURN_RECOVERY_STALE_MESSAGE;
+        clearPendingTurnState(pendingKey);
+        clearActiveTurnScope();
+        renderTicketChat();
+    };
     try {
         const outcome = await resumeFileChatTurn(pending.clientTurnId, {
             onEvent: (event) => {
@@ -572,13 +601,22 @@ export async function resumeTicketPendingTurn(index, ticketChatKey = null) {
             return;
         }
         if (!outcome.controller) {
-            window.setTimeout(() => void resumeTicketPendingTurn(index, ticketChatKey), 1000);
+            scheduleRecoveryRetry({
+                tracker,
+                retryFn: () => doResumeTicketTurn(pendingMatch, tracker),
+                onStale,
+            });
         }
     }
     catch (err) {
         const msg = err.message || "Failed to resume turn";
         chatState.statusText = msg;
         renderTicketChat();
+        scheduleRecoveryRetry({
+            tracker,
+            retryFn: () => doResumeTicketTurn(pendingMatch, tracker),
+            onStale,
+        });
     }
 }
 export async function applyTicketPatch() {

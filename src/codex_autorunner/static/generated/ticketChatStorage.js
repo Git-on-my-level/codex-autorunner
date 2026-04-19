@@ -1,4 +1,3 @@
-// GENERATED FILE - do not edit directly. Source: static_src/
 import { clearChatHistory, loadChatHistory, saveChatHistory, } from "./docChatStorage.js";
 const STORAGE_CONFIG = {
     keyPrefix: "car-ticket-chat-",

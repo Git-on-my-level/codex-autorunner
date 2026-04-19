@@ -1,4 +1,3 @@
-// GENERATED FILE - do not edit directly. Source: static_src/
 import { api } from "./utils.js";
 export async function fetchContextspace() {
     return (await api("/api/contextspace"));

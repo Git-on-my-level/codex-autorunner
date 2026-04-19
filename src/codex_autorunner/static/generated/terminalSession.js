@@ -1,4 +1,3 @@
-// GENERATED FILE - do not edit directly. Source: static_src/
 import { buildWsUrl, getAuthToken } from "./utils.js";
 import { CONSTANTS } from "./constants.js";
 const SESSION_STORAGE_PREFIX = "codex_terminal_session_id:";

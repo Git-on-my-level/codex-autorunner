@@ -32,12 +32,17 @@ import { renderDiff } from "./diffRenderer.js";
 import { subscribe } from "./bus.js";
 import { DEFAULT_FILEBOX_BOX } from "./fileboxCatalog.js";
 import { isRepoHealthy } from "./health.js";
-import { loadPendingTurn, savePendingTurn } from "./turnResume.js";
+import { loadPendingTurn, savePendingTurn, type PendingTurn } from "./turnResume.js";
 import { resumeFileChatTurn } from "./turnEvents.js";
 import {
   createTurnEventsController,
   startTurnEventsStream as sharedStartTurnEventsStream,
   clearManagedTurn,
+  cancelActiveTurnSync,
+  scheduleRecoveryRetry,
+  createTurnRecoveryTracker,
+  ACTIVE_TURN_RECOVERY_STALE_MESSAGE,
+  type TurnRecoveryTracker,
 } from "./sharedTurnLifecycle.js";
 
 type ContextspaceDoc = {
@@ -573,6 +578,23 @@ async function resumePendingWorkspaceTurn(): Promise<void> {
   workspaceChat.render();
   workspaceChat.renderMessages();
 
+  await doResumeWorkspaceTurn(pending, createTurnRecoveryTracker());
+}
+
+async function doResumeWorkspaceTurn(
+  pending: PendingTurn,
+  tracker: TurnRecoveryTracker
+): Promise<void> {
+  const chatState = workspaceChat.state as ChatState;
+
+  const onStale = (): void => {
+    chatState.status = "error";
+    chatState.error = ACTIVE_TURN_RECOVERY_STALE_MESSAGE;
+    clearPendingTurnState();
+    workspaceChat.render();
+    workspaceChat.renderMessages();
+  };
+
   try {
     const clientTurnId = typeof pending.clientTurnId === "string" ? pending.clientTurnId : "";
     const outcome = await resumeFileChatTurn(clientTurnId, {
@@ -593,14 +615,21 @@ async function resumePendingWorkspaceTurn(): Promise<void> {
       return;
     }
     if (!outcome.controller) {
-      window.setTimeout(() => {
-        void resumePendingWorkspaceTurn();
-      }, 1000);
+      scheduleRecoveryRetry({
+        tracker,
+        retryFn: () => doResumeWorkspaceTurn(pending, tracker),
+        onStale,
+      });
     }
   } catch (err) {
     const message = (err as Error).message || "Failed to resume turn";
     chatState.statusText = message;
     workspaceChat.render();
+    scheduleRecoveryRetry({
+      tracker,
+      retryFn: () => doResumeWorkspaceTurn(pending, tracker),
+      onStale,
+    });
   }
 }
 
@@ -611,7 +640,17 @@ async function sendChat(): Promise<void> {
 
   const chatState = workspaceChat.state as ChatState;
   if (chatState.controller) {
-    chatState.controller.abort();
+    cancelActiveTurnSync({
+      abortController() {
+        if (chatState.controller) {
+          chatState.controller.abort();
+          chatState.controller = null;
+        }
+      },
+      turnEventsCtrl,
+      interruptServer: () => interruptFileChat(currentTarget()),
+      clearPending: clearPendingTurnState,
+    });
   }
 
   chatState.controller = new AbortController();

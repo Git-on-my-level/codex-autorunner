@@ -1,4 +1,3 @@
-// GENERATED FILE - do not edit directly. Source: static_src/
 import { escapeHtml } from "./utils.js";
 function isSafeHref(url) {
     const trimmed = (url || "").trim();

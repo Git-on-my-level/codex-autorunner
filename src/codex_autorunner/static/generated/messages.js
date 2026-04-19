@@ -1,4 +1,3 @@
-// GENERATED FILE - do not edit directly. Source: static_src/
 import { api, escapeHtml, flash, getUrlParams, resolvePath, updateUrlParams, } from "./utils.js";
 import { subscribe } from "./bus.js";
 import { isRepoHealthy } from "./health.js";

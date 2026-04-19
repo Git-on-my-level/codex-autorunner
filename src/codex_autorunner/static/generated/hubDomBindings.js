@@ -1,4 +1,3 @@
-// GENERATED FILE - do not edit directly. Source: static_src/
 import { api, flash, inputModal, confirmModal } from "./utils.js";
 import { normalizePinnedParentRepoIds, isCleanupBlockedByChatBinding, unboundManagedThreadCount, saveHubOpenPanel, saveHubViewPrefs, hubViewPrefs, loadHubViewPrefs, loadHubOpenPanel, } from "./hubFilters.js";
 import { initNotificationBell } from "./notificationBell.js";

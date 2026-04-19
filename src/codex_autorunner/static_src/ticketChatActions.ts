@@ -15,6 +15,11 @@ import {
   createTurnEventsController,
   startTurnEventsStream as sharedStartTurnEventsStream,
   clearManagedTurn,
+  cancelActiveTurnSync,
+  scheduleRecoveryRetry,
+  createTurnRecoveryTracker,
+  ACTIVE_TURN_RECOVERY_STALE_MESSAGE,
+  type TurnRecoveryTracker,
 } from "./sharedTurnLifecycle.js";
 import {
   getSelectedAgent,
@@ -491,10 +496,28 @@ export async function sendTicketChat(): Promise<void> {
   }
 
   if (ticketChatState.status === "running") {
-    ticketChatState.error = "Ticket chat already running.";
-    renderTicketChat();
-    flash("Ticket chat already running", "error");
-    return;
+    cancelActiveTurnSync({
+      abortController() {
+        if (ticketChatState.controller) {
+          ticketChatState.controller.abort();
+          ticketChatState.controller = null;
+        }
+      },
+      turnEventsCtrl,
+      interruptServer: async () => {
+        if (ticketChatState.ticketIndex != null) {
+          await api(`/api/tickets/${ticketChatState.ticketIndex}/chat/interrupt`, {
+            method: "POST",
+          });
+        }
+      },
+      clearPending: () => {
+        if (ticketChatState.activePendingKey) {
+          clearPendingTurnState(ticketChatState.activePendingKey);
+        }
+        clearActiveTurnScope();
+      },
+    });
   }
 
   if (ticketChatState.ticketIndex == null) {
@@ -664,7 +687,7 @@ export async function resumeTicketPendingTurn(
   if (index == null) return;
   const pendingMatch = findPendingTicketTurn(index, ticketChatKey);
   if (!pendingMatch) return;
-  const { pendingKey, pending, target } = pendingMatch;
+  const { pendingKey, target } = pendingMatch;
   const parsedTarget = parseScopedTicketChatTarget(target);
   await setSelectedAgentProfile(parsedTarget.agent, parsedTarget.profile || "");
   setActiveTurnScope(target, pendingKey);
@@ -676,6 +699,24 @@ export async function resumeTicketPendingTurn(
   chatState.statusText = "Recovering previous turn…";
   ticketChat.render();
   ticketChat.renderMessages();
+
+  await doResumeTicketTurn(pendingMatch, createTurnRecoveryTracker());
+}
+
+async function doResumeTicketTurn(
+  pendingMatch: { pendingKey: string; pending: NonNullable<ReturnType<typeof loadPendingTurn>>; target: string },
+  tracker: TurnRecoveryTracker
+): Promise<void> {
+  const { pendingKey, pending } = pendingMatch;
+  const chatState = ticketChatState as ChatState;
+
+  const onStale = (): void => {
+    chatState.status = "error";
+    chatState.error = ACTIVE_TURN_RECOVERY_STALE_MESSAGE;
+    clearPendingTurnState(pendingKey);
+    clearActiveTurnScope();
+    renderTicketChat();
+  };
 
   try {
     const outcome = await resumeFileChatTurn(pending.clientTurnId, {
@@ -705,15 +746,21 @@ export async function resumeTicketPendingTurn(
       return;
     }
     if (!outcome.controller) {
-      window.setTimeout(
-        () => void resumeTicketPendingTurn(index, ticketChatKey),
-        1000
-      );
+      scheduleRecoveryRetry({
+        tracker,
+        retryFn: () => doResumeTicketTurn(pendingMatch, tracker),
+        onStale,
+      });
     }
   } catch (err) {
     const msg = (err as Error).message || "Failed to resume turn";
     chatState.statusText = msg;
     renderTicketChat();
+    scheduleRecoveryRetry({
+      tracker,
+      retryFn: () => doResumeTicketTurn(pendingMatch, tracker),
+      onStale,
+    });
   }
 }
 

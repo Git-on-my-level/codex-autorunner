@@ -1,4 +1,3 @@
-// GENERATED FILE - do not edit directly. Source: static_src/
 import { HUB_BASE } from "./env.js";
 export const HUB_CACHE_TTL_MS = 30000;
 export const HUB_PERSISTENT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;

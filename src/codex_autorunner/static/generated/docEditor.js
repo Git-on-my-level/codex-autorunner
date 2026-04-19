@@ -1,4 +1,3 @@
-// GENERATED FILE - do not edit directly. Source: static_src/
 export class DocEditor {
     constructor(config) {
         this.saveTimer = null;

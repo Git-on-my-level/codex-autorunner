@@ -1,4 +1,3 @@
-// GENERATED FILE - do not edit directly. Source: static_src/
 import { api, flash } from "./utils.js";
 import { renderMarkdown } from "./markdown.js";
 import { resolvePath } from "./utils.js";

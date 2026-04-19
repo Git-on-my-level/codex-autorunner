@@ -1,4 +1,3 @@
-// GENERATED FILE - do not edit directly. Source: static_src/
 export function formatTimestamp(ts) {
     if (!ts)
         return "\u2013";

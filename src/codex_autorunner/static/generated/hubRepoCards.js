@@ -1,4 +1,3 @@
-// GENERATED FILE - do not edit directly. Source: static_src/
 import { escapeHtml, statusPill, resolvePath } from "./utils.js";
 import { preserveScroll } from "./preserve.js";
 import { formatTokensCompact, getRepoUsage, getHubUsageUnmatched } from "./hubCache.js";

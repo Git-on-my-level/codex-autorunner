@@ -1,4 +1,3 @@
-// GENERATED FILE - do not edit directly. Source: static_src/
 import { api, flash, confirmModal, inputModal, openModal, } from "./utils.js";
 import { setCleanupAllInFlight, renderSummary } from "./hubRepoCards.js";
 import { getHubData, startHubJob, } from "./hubActions.js";

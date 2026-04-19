@@ -1,4 +1,3 @@
-// GENERATED FILE - do not edit directly. Source: static_src/
 import { api } from "./utils.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";

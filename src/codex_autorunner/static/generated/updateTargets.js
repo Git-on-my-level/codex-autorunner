@@ -1,4 +1,3 @@
-// GENERATED FILE - do not edit directly. Source: static_src/
 const DEFAULT_UPDATE_TARGET = "all";
 const UPDATE_TARGET_ALIASES = new Map([
     ["all", "all"],

@@ -1,4 +1,3 @@
-// GENERATED FILE - do not edit directly. Source: static_src/
 "use strict";
 (() => {
     const windowExt = window;

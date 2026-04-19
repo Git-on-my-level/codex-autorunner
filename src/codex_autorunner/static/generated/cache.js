@@ -1,4 +1,3 @@
-// GENERATED FILE - do not edit directly. Source: static_src/
 import { BASE_PATH, REPO_ID } from "./env.js";
 function cachePrefix() {
     const scope = REPO_ID ? `repo:${REPO_ID}` : `base:${BASE_PATH || ""}`;

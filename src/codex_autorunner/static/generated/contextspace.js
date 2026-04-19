@@ -1,4 +1,3 @@
-// GENERATED FILE - do not edit directly. Source: static_src/
 import { api, flash, setButtonLoading } from "./utils.js";
 import { initAgentControls, getSelectedAgent, getSelectedProfile, getSelectedModel, getSelectedReasoning, } from "./agentControls.js";
 import { fetchContextspace, ingestSpecToTickets, listTickets, writeContextspace, } from "./contextspaceApi.js";
@@ -13,7 +12,7 @@ import { DEFAULT_FILEBOX_BOX } from "./fileboxCatalog.js";
 import { isRepoHealthy } from "./health.js";
 import { loadPendingTurn, savePendingTurn } from "./turnResume.js";
 import { resumeFileChatTurn } from "./turnEvents.js";
-import { createTurnEventsController, startTurnEventsStream as sharedStartTurnEventsStream, clearManagedTurn, } from "./sharedTurnLifecycle.js";
+import { createTurnEventsController, startTurnEventsStream as sharedStartTurnEventsStream, clearManagedTurn, cancelActiveTurnSync, scheduleRecoveryRetry, createTurnRecoveryTracker, ACTIVE_TURN_RECOVERY_STALE_MESSAGE, } from "./sharedTurnLifecycle.js";
 const CONTEXTSPACE_CHAT_EVENT_LIMIT = 8;
 const CONTEXTSPACE_CHAT_EVENT_MAX = 50;
 const CONTEXTSPACE_PENDING_KEY = "car.contextspace.pendingTurn";
@@ -502,6 +501,17 @@ async function resumePendingWorkspaceTurn() {
     chatState.statusText = "Recovering previous turn…";
     workspaceChat.render();
     workspaceChat.renderMessages();
+    await doResumeWorkspaceTurn(pending, createTurnRecoveryTracker());
+}
+async function doResumeWorkspaceTurn(pending, tracker) {
+    const chatState = workspaceChat.state;
+    const onStale = () => {
+        chatState.status = "error";
+        chatState.error = ACTIVE_TURN_RECOVERY_STALE_MESSAGE;
+        clearPendingTurnState();
+        workspaceChat.render();
+        workspaceChat.renderMessages();
+    };
     try {
         const clientTurnId = typeof pending.clientTurnId === "string" ? pending.clientTurnId : "";
         const outcome = await resumeFileChatTurn(clientTurnId, {
@@ -522,15 +532,22 @@ async function resumePendingWorkspaceTurn() {
             return;
         }
         if (!outcome.controller) {
-            window.setTimeout(() => {
-                void resumePendingWorkspaceTurn();
-            }, 1000);
+            scheduleRecoveryRetry({
+                tracker,
+                retryFn: () => doResumeWorkspaceTurn(pending, tracker),
+                onStale,
+            });
         }
     }
     catch (err) {
         const message = err.message || "Failed to resume turn";
         chatState.statusText = message;
         workspaceChat.render();
+        scheduleRecoveryRetry({
+            tracker,
+            retryFn: () => doResumeWorkspaceTurn(pending, tracker),
+            onStale,
+        });
     }
 }
 async function sendChat() {
@@ -540,7 +557,17 @@ async function sendChat() {
         return;
     const chatState = workspaceChat.state;
     if (chatState.controller) {
-        chatState.controller.abort();
+        cancelActiveTurnSync({
+            abortController() {
+                if (chatState.controller) {
+                    chatState.controller.abort();
+                    chatState.controller = null;
+                }
+            },
+            turnEventsCtrl,
+            interruptServer: () => interruptFileChat(currentTarget()),
+            clearPending: clearPendingTurnState,
+        });
     }
     chatState.controller = new AbortController();
     chatState.status = "running";
