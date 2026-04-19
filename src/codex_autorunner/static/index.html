@@ -180,6 +180,7 @@
             <div class="pma-thread-info-header">
               <span class="pma-thread-info-label">Thread</span>
               <span class="pill pill-small pill-idle" id="pma-thread-info-status">idle</span>
+              <span class="pma-thread-info-phase muted small hidden" id="pma-thread-info-phase"></span>
             </div>
             <div class="pma-thread-info-details">
               <div class="pma-thread-info-row">
@@ -194,7 +195,17 @@
                 <span class="pma-thread-info-key muted">Turn ID</span>
                 <span class="pma-thread-info-value" id="pma-thread-info-turn-id" title="Click to copy">–</span>
               </div>
+              <div class="pma-thread-info-row hidden" id="pma-thread-info-queue-row">
+                <span class="pma-thread-info-key muted">Queue</span>
+                <span class="pma-thread-info-value" id="pma-thread-info-queue">–</span>
+              </div>
+              <div class="pma-thread-info-row hidden" id="pma-thread-info-elapsed-row">
+                <span class="pma-thread-info-key muted">Elapsed</span>
+                <span class="pma-thread-info-value" id="pma-thread-info-elapsed">–</span>
+              </div>
             </div>
+            <div class="pma-thread-info-guidance hidden" id="pma-thread-info-guidance"></div>
+            <div class="pma-thread-info-queue-list hidden" id="pma-thread-info-queue-list"></div>
           </div>
           <div class="pma-history-header" id="pma-chat-history-header">
             <span class="pma-history-label">History</span>
