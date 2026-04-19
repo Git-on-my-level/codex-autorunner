@@ -21,7 +21,7 @@ PIPX_ROOT ?= $(HOME)/.local/pipx
 PIPX_VENV ?= $(PIPX_ROOT)/venvs/codex-autorunner
 PIPX_PYTHON ?= $(PIPX_VENV)/bin/python
 
-.PHONY: install dev hooks build test test-chat-platform-contract test-chat-surface-lab test-managed-thread-cutover check check-full check-extended preflight-hub-startup format serve serve-dev launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts lint-html dom-check frontend-check _inject-static-banners agent-compatibility-check agent-compatibility-refresh protocol-schemas-check protocol-schemas-refresh typecheck-strict perf-idle-cpu perf-chat-latency-budgets perf-chat-seeded-exploration
+.PHONY: install dev hooks build test test-fast test-full test-chat-platform-contract test-chat-surface-lab test-managed-thread-cutover check check-full check-extended preflight-hub-startup format serve serve-dev launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts lint-html dom-check frontend-check _inject-static-banners agent-compatibility-check agent-compatibility-refresh protocol-schemas-check protocol-schemas-refresh typecheck-strict perf-idle-cpu perf-chat-latency-budgets perf-chat-seeded-exploration
 
 _inject-static-banners:
 	pnpm run postbuild
@@ -70,7 +70,12 @@ node_modules/.installed: package.json pnpm-lock.yaml
 hooks:
 	git config core.hooksPath .githooks
 
-test:
+test: test-fast
+
+test-fast:
+	$(PYTHON) -m pytest -m "not integration and not slow"
+
+test-full:
 	$(PYTHON) -m pytest -m "not integration"
 
 # Cross-platform chat contract/shape guardrails.

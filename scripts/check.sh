@@ -80,6 +80,11 @@ fi
 need_cmd "$PYTHON_BIN"
 need_cmd make
 
+# Keep the fast lane selector centralized here; budget failures stay report-only
+# unless the caller opts in with CODEX_FAST_TEST_ENFORCE_BUDGET=1.
+FAST_TEST_MARKERS='not integration and not slow'
+FAST_TEST_ENFORCE_BUDGET="${CODEX_FAST_TEST_ENFORCE_BUDGET:-0}"
+
 # --- Lane detection (if not explicitly set) ----------------------------------
 if [[ -z "$LANE" ]]; then
   STAGED_FILES="$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null || true)"
@@ -195,7 +200,7 @@ if [[ "$RUN_CORE" == true ]]; then
       rm -f "$FAST_TEST_JUNIT" "${FAST_TEST_SELECTED:-}"
     }
     trap cleanup_fast_test_artifacts EXIT
-    "$PYTHON_BIN" -m pytest -m "not integration and not slow" -n auto -o junit_duration_report=call --junitxml "$FAST_TEST_JUNIT"
+    "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" -n auto -o junit_duration_report=call --junitxml "$FAST_TEST_JUNIT"
     FAST_TEST_REPORT_ARGS=(
       "$FAST_TEST_JUNIT"
       --repo-root "$REPO_ROOT"
@@ -204,15 +209,47 @@ if [[ "$RUN_CORE" == true ]]; then
     )
     if [[ "${CODEX_FAST_TEST_VERIFY_NODEIDS:-0}" == "1" ]]; then
       FAST_TEST_SELECTED="$(mktemp)"
-      "$PYTHON_BIN" -m pytest -m "not integration and not slow" --collect-only -q > "$FAST_TEST_SELECTED"
+      "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" --collect-only -q > "$FAST_TEST_SELECTED"
       FAST_TEST_REPORT_ARGS+=(
         --selected-nodeids "$FAST_TEST_SELECTED"
         --verify-nodeids
       )
     fi
+    if [[ "$FAST_TEST_ENFORCE_BUDGET" == "1" ]]; then
+      FAST_TEST_REPORT_ARGS+=(--fail-on-violation)
+      echo "Enforcing fast-test budget (CODEX_FAST_TEST_ENFORCE_BUDGET=1)."
+    else
+      echo "Reporting fast-test budget only; set CODEX_FAST_TEST_ENFORCE_BUDGET=1 to fail on violations."
+    fi
     "$PYTHON_BIN" scripts/report_fast_test_budget.py "${FAST_TEST_REPORT_ARGS[@]}"
   else
-    "$PYTHON_BIN" -m pytest -m "not integration and not slow" -n auto
+    if [[ "$FAST_TEST_ENFORCE_BUDGET" == "1" ]]; then
+      FAST_TEST_JUNIT="$(mktemp)"
+      cleanup_fast_test_artifacts() {
+        rm -f "$FAST_TEST_JUNIT" "${FAST_TEST_SELECTED:-}"
+      }
+      trap cleanup_fast_test_artifacts EXIT
+      "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" -n auto -o junit_duration_report=call --junitxml "$FAST_TEST_JUNIT"
+      FAST_TEST_REPORT_ARGS=(
+        "$FAST_TEST_JUNIT"
+        --repo-root "$REPO_ROOT"
+        --max-duration "${CODEX_FAST_TEST_MAX_DURATION_SECONDS:-1.0}"
+        --max-report "${CODEX_FAST_TEST_REPORT_LIMIT:-20}"
+        --fail-on-violation
+      )
+      if [[ "${CODEX_FAST_TEST_VERIFY_NODEIDS:-0}" == "1" ]]; then
+        FAST_TEST_SELECTED="$(mktemp)"
+        "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" --collect-only -q > "$FAST_TEST_SELECTED"
+        FAST_TEST_REPORT_ARGS+=(
+          --selected-nodeids "$FAST_TEST_SELECTED"
+          --verify-nodeids
+        )
+      fi
+      echo "Enforcing fast-test budget (CODEX_FAST_TEST_ENFORCE_BUDGET=1)."
+      "$PYTHON_BIN" scripts/report_fast_test_budget.py "${FAST_TEST_REPORT_ARGS[@]}"
+    else
+      "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" -n auto
+    fi
   fi
 
   if [ -n "${CI:-}" ] || [[ "${CODEX_LOCAL_CHECK_INCLUDE_DEADCODE:-0}" == "1" ]]; then
