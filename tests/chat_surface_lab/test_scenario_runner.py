@@ -64,6 +64,27 @@ async def test_runner_executes_queued_visibility_matrix(
 
 
 @pytest.mark.anyio
+async def test_runner_executes_interrupt_optimistic_acceptance_matrix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scenario = load_scenario_by_id("interrupt_optimistic_acceptance")
+    runner = ChatSurfaceScenarioRunner(
+        output_root=tmp_path / "scenario-runs",
+        apply_runtime_patch=lambda runtime: patch_hermes_runtime(monkeypatch, runtime),
+    )
+
+    result = await runner.run_scenario(scenario)
+    assert result.skipped is False
+    assert len(result.surface_results) == 2
+    for surface in result.surface_results:
+        assert surface.execution_status == "interrupted"
+    assert any(
+        budget.budget_id == "interrupt_visible" for budget in result.observed_budgets
+    )
+
+
+@pytest.mark.anyio
 async def test_runner_keeps_visible_failure_note_when_final_delivery_is_outboxed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

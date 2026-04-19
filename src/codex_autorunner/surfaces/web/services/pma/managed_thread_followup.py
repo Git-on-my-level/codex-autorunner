@@ -169,17 +169,12 @@ def _resolve_origin_followup_context(
     if runtime_state is None:
         return None, None
 
-    candidates = []
     current = getattr(runtime_state, "pma_current", None)
-    if isinstance(current, dict):
-        candidates.append(current)
-    last_result = getattr(runtime_state, "pma_last_result", None)
-    if isinstance(last_result, dict):
-        candidates.append(last_result)
+    if not isinstance(current, dict):
+        return None, None
 
-    for candidate in candidates:
-        origin_thread_id = normalize_optional_text(candidate.get("thread_id"))
-        origin_lane_id = normalize_optional_text(candidate.get("lane_id"))
-        if origin_thread_id or origin_lane_id:
-            return origin_thread_id, origin_lane_id
+    origin_thread_id = normalize_optional_text(current.get("thread_id"))
+    origin_lane_id = normalize_optional_text(current.get("lane_id"))
+    if origin_thread_id or origin_lane_id:
+        return origin_thread_id, origin_lane_id
     return None, None

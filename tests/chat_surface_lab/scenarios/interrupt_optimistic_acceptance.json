@@ -8,11 +8,11 @@
   ],
   "runtime_fixture": {
     "kind": "hermes",
-    "scenario": "official"
+    "scenario": "official_prompt_hang"
   },
   "harness_timeouts": {
-    "discord": 8.0,
-    "telegram": 8.0
+    "discord": 15.0,
+    "telegram": 15.0
   },
   "approval_mode": "yolo",
   "actions": [
