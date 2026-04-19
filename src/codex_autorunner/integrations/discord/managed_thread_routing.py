@@ -13,20 +13,17 @@ from ...core.hub_control_plane import (
     RemoteThreadExecutionStore,
 )
 from ...core.orchestration import (
-    SQLiteManagedThreadDeliveryEngine,
     build_harness_backed_orchestration_service,
 )
 from ...core.orchestration.bindings import OrchestrationBindingStore
 from ...integrations.chat.agents import resolve_chat_runtime_agent
 from ..chat.managed_thread_turns import (
     ManagedThreadCoordinatorHooks,
-    ManagedThreadDurableDeliveryHooks,
     ManagedThreadErrorMessages,
     ManagedThreadFinalizationResult,
     ManagedThreadSurfaceInfo,
     ManagedThreadTargetRequest,
     ManagedThreadTurnCoordinator,
-    build_managed_thread_delivery_intent,
     render_managed_thread_response_text,
 )
 from ..chat.managed_thread_turns import (
@@ -35,7 +32,7 @@ from ..chat.managed_thread_turns import (
 from ..chat.managed_thread_turns import (
     resolve_managed_thread_target as _shared_resolve_managed_thread_target,
 )
-from .managed_thread_delivery import deliver_discord_managed_thread_record
+from .managed_thread_delivery import build_discord_managed_thread_durable_delivery_hooks
 from .rendering import (
     DISCORD_MAX_MESSAGE_LENGTH,
     chunk_discord_message,
@@ -441,44 +438,11 @@ def _build_discord_runner_hooks(
             started_execution=started_execution
         )
 
-    state_root = Path(getattr(getattr(service, "_config", None), "root", Path.cwd()))
-    engine = SQLiteManagedThreadDeliveryEngine(state_root)
-
-    class _DiscordManagedThreadDeliveryAdapter:
-        @property
-        def adapter_key(self) -> str:
-            return "discord"
-
-        async def deliver_managed_thread_record(
-            self, record: Any, *, claim: Any
-        ) -> Any:
-            return await deliver_discord_managed_thread_record(
-                service,
-                record,
-                claim=claim,
-                channel_id_fallback=channel_id,
-                base_record_label="discord-queued",
-                error_record_label="discord-queued-error",
-                default_execution_error=public_execution_error,
-            )
-
-    durable_delivery = ManagedThreadDurableDeliveryHooks(
-        engine=engine,
-        adapter=_DiscordManagedThreadDeliveryAdapter(),
-        build_delivery_intent=lambda finalized: (
-            None
-            if finalized.status == "interrupted"
-            else build_managed_thread_delivery_intent(
-                finalized,
-                surface=ManagedThreadSurfaceInfo(
-                    log_label="Discord",
-                    surface_kind="discord",
-                    surface_key=channel_id,
-                ),
-                transport_target={"channel_id": channel_id},
-                metadata={"managed_thread_id": managed_thread_id},
-            )
-        ),
+    durable_delivery = build_discord_managed_thread_durable_delivery_hooks(
+        service,
+        channel_id=channel_id,
+        managed_thread_id=managed_thread_id,
+        public_execution_error=public_execution_error,
     )
 
     async def _deliver_result(finalized: ManagedThreadFinalizationResult) -> None:

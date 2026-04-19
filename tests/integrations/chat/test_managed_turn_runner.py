@@ -664,3 +664,80 @@ async def test_direct_turn_durable_delivery_failure_does_not_block_on_finalized(
     assert result == "recovered"
     assert len(delivery_hooks.engine.intents) == 1
     assert on_finalized_calls == ["ok"]
+
+
+@pytest.mark.anyio
+async def test_direct_turn_retry_scheduled_delivery_does_not_mark_delivery_performed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = _build_started_execution(tmp_path)
+    finalized_result = ManagedThreadFinalizationResult(
+        status="ok",
+        assistant_text="agent response",
+        error=None,
+        managed_thread_id="thread-1",
+        managed_turn_id="exec-1",
+        backend_thread_id="backend-thread-1",
+    )
+    observed_flags: list[bool] = []
+
+    async def _submit_execution(
+        *args: Any, **kwargs: Any
+    ) -> ManagedThreadSubmissionResult:
+        _ = args, kwargs
+        return ManagedThreadSubmissionResult(started_execution=started, queued=False)
+
+    async def _fake_complete(
+        coordinator: Any,
+        submission: ManagedThreadSubmissionResult,
+        **kwargs: Any,
+    ) -> ManagedThreadExecutionFlowResult:
+        _ = coordinator, submission, kwargs
+        return ManagedThreadExecutionFlowResult(
+            started_execution=started,
+            queued=False,
+            finalized=finalized_result,
+        )
+
+    async def _retry_scheduled_handoff(*args: Any, **kwargs: Any) -> Any:
+        _ = args, kwargs
+        return SimpleNamespace(state=ManagedThreadDeliveryState.RETRY_SCHEDULED)
+
+    monkeypatch.setattr(
+        managed_turn_runner_module,
+        "complete_managed_thread_execution",
+        _fake_complete,
+    )
+    monkeypatch.setattr(
+        managed_turn_runner_module,
+        "handoff_managed_thread_final_delivery",
+        _retry_scheduled_handoff,
+    )
+
+    result = await managed_turn_runner_module.run_managed_surface_turn(
+        started.request,
+        config=managed_turn_runner_module.ManagedSurfaceRunnerConfig[str](
+            coordinator=SimpleNamespace(
+                submit_execution=_submit_execution,
+                ensure_queue_worker=lambda **kwargs: None,
+            ),
+            client_request_id="req-1",
+            sandbox_policy=None,
+            hooks=ManagedThreadCoordinatorHooks(
+                durable_delivery=SimpleNamespace(),
+            ),
+            on_finalized=lambda flow, finalized: (
+                observed_flags.append(
+                    (
+                        flow.durable_delivery_performed,
+                        flow.durable_delivery_pending,
+                    )
+                ),
+                finalized.assistant_text,
+            )[1],
+        ),
+    )
+
+    assert result == "agent response"
+    assert observed_flags == [(False, True)]

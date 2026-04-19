@@ -56,9 +56,11 @@ class _DiscordServiceStub:
         *,
         state_root: Path,
         send_side_effect: Optional[BaseException] = None,
+        send_safe_result: bool = True,
     ) -> None:
         self._config = SimpleNamespace(root=str(state_root))
         self._send_side_effect = send_side_effect
+        self._send_safe_result = send_safe_result
         self.sent_messages: list[dict[str, Any]] = []
 
     async def _send_channel_message_safe(
@@ -67,9 +69,11 @@ class _DiscordServiceStub:
         payload: dict[str, Any],
         *,
         record_id: str,
-    ) -> None:
+    ) -> bool:
         if self._send_side_effect is not None:
             raise self._send_side_effect
+        if not self._send_safe_result:
+            return False
         self.sent_messages.append(
             {
                 "channel_id": channel_id,
@@ -77,6 +81,7 @@ class _DiscordServiceStub:
                 "record_id": record_id,
             }
         )
+        return True
 
     def _register_discord_turn_approval_context(self, **_kwargs: Any) -> None:
         pass
@@ -195,6 +200,30 @@ async def test_discord_adapter_transport_failure_leaves_record_replayable(
     assert record.next_attempt_at is not None
     assert record.last_error is not None
     assert "network timeout" in record.last_error
+
+
+@pytest.mark.anyio
+async def test_discord_adapter_safe_send_false_leaves_record_replayable(
+    tmp_path: Path,
+) -> None:
+    service = _DiscordServiceStub(
+        state_root=tmp_path,
+        send_safe_result=False,
+    )
+    delivery = _build_hooks(tmp_path, service=service)
+    finalized = _finalized_ok()
+
+    record = await handoff_managed_thread_final_delivery(
+        finalized,
+        delivery=delivery,
+        logger=logging.getLogger("test"),
+    )
+
+    assert record is not None
+    assert record.state is ManagedThreadDeliveryState.RETRY_SCHEDULED
+    assert record.next_attempt_at is not None
+    assert record.last_error == "discord_send_deferred:discord-queued:thread-1:turn-1"
+    assert service.sent_messages == []
 
 
 @pytest.mark.anyio
@@ -344,11 +373,12 @@ async def test_discord_adapter_partial_chunk_failure_is_retryable(
             payload: dict[str, Any],
             *,
             record_id: str,
-        ) -> None:
+        ) -> bool:
             nonlocal send_call_count
             send_call_count += 1
             if send_call_count > 1:
                 raise RuntimeError("chunk 2 failed")
+            return True
 
     service = _PartialFailService(state_root=tmp_path)
     delivery = _build_hooks(tmp_path, service=service)

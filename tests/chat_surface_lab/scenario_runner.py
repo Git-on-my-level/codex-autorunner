@@ -17,6 +17,7 @@ from codex_autorunner.integrations.telegram.handlers.commands import (
     execution as telegram_execution,
 )
 from tests.chat_surface_integration.harness import (
+    DEFAULT_TELEGRAM_THREAD_ID,
     DiscordSurfaceHarness,
     FakeDiscordRest,
     FakeTelegramBot,
@@ -153,6 +154,7 @@ class _SurfaceRunContext:
     result: Optional[Any] = None
     thread_target_id: Optional[str] = None
     execution_id: Optional[str] = None
+    telegram_thread_id: Optional[int] = DEFAULT_TELEGRAM_THREAD_ID
 
 
 class ChatSurfaceScenarioRunner:
@@ -312,12 +314,12 @@ class ChatSurfaceScenarioRunner:
                 )
 
             if context.result is None and context.active_task is not None:
-                context.result = await context.active_task
-            if context.result is None:
-                if surface == SurfaceKind.DISCORD:
-                    context.result = context.harness.rest
-                else:
-                    context.result = context.harness.bot
+                try:
+                    context.result = await context.active_task
+                except asyncio.CancelledError:
+                    context.result = None
+            await self._await_surface_settled(context)
+            context.result = self._refresh_surface_result_metadata(context)
             if context.result is None:
                 raise AssertionError(
                     f"scenario {scenario.scenario_id} produced no surface result for {surface.value}"
@@ -381,6 +383,51 @@ class ChatSurfaceScenarioRunner:
             agent="hermes",
             approval_mode=scenario.approval_mode,
         )
+
+    async def _await_surface_settled(self, context: _SurfaceRunContext) -> None:
+        if context.surface != SurfaceKind.DISCORD:
+            return
+        assert isinstance(context.harness, DiscordSurfaceHarness)
+        service = context.harness.service
+        if service is None:
+            return
+        deadline = asyncio.get_running_loop().time() + context.harness.timeout_seconds
+        while service._background_tasks:
+            if asyncio.get_running_loop().time() >= deadline:
+                raise TimeoutError(
+                    "DiscordSurfaceHarness background tasks did not drain"
+                )
+            await asyncio.sleep(0.01)
+
+    def _refresh_surface_result_metadata(
+        self,
+        context: _SurfaceRunContext,
+    ) -> FakeDiscordRest | FakeTelegramBot | None:
+        if context.surface == SurfaceKind.DISCORD:
+            assert isinstance(context.harness, DiscordSurfaceHarness)
+            rest = context.harness.rest
+            if rest is None:
+                if isinstance(context.result, FakeDiscordRest):
+                    rest = context.result
+                    context.harness.rest = rest
+                else:
+                    return None
+            context.harness._apply_discord_runtime_metadata(rest)
+            return rest
+        assert isinstance(context.harness, TelegramSurfaceHarness)
+        bot = context.harness.bot
+        if bot is None:
+            if isinstance(context.result, FakeTelegramBot):
+                bot = context.result
+                context.harness.bot = bot
+            else:
+                return None
+        context.harness._apply_telegram_runtime_metadata(
+            bot,
+            thread_id=context.telegram_thread_id,
+            message_start_index=0,
+        )
+        return bot
 
     def _configure_fault_clients(
         self,
@@ -454,9 +501,13 @@ class ChatSurfaceScenarioRunner:
                 )
                 return
             assert isinstance(context.harness, TelegramSurfaceHarness)
+            context.telegram_thread_id = _optional_int(
+                action.payload.get("thread_id"),
+                default=DEFAULT_TELEGRAM_THREAD_ID,
+            )
             context.result = await context.harness.run_message(
                 text,
-                thread_id=_optional_int(action.payload.get("thread_id"), default=55),
+                thread_id=context.telegram_thread_id,
                 bot_client=context.bot_client,
             )
             return
@@ -477,9 +528,13 @@ class ChatSurfaceScenarioRunner:
                 )
                 return
             assert isinstance(context.harness, TelegramSurfaceHarness)
+            context.telegram_thread_id = _optional_int(
+                action.payload.get("thread_id"),
+                default=DEFAULT_TELEGRAM_THREAD_ID,
+            )
             context.active_task = context.harness.start_message(
                 text,
-                thread_id=_optional_int(action.payload.get("thread_id"), default=55),
+                thread_id=context.telegram_thread_id,
                 bot_client=context.bot_client,
             )
             return
@@ -523,9 +578,13 @@ class ChatSurfaceScenarioRunner:
                 )
                 return
             assert isinstance(context.harness, TelegramSurfaceHarness)
+            context.telegram_thread_id = _optional_int(
+                action.payload.get("thread_id"),
+                default=DEFAULT_TELEGRAM_THREAD_ID,
+            )
             await context.harness.submit_active_message(
                 text,
-                thread_id=_optional_int(action.payload.get("thread_id"), default=55),
+                thread_id=context.telegram_thread_id,
                 message_id=_optional_int(action.payload.get("message_id"), default=2),
                 update_id=_optional_int(action.payload.get("update_id"), default=2),
             )
@@ -588,8 +647,12 @@ class ChatSurfaceScenarioRunner:
                 )
                 return
             assert isinstance(context.harness, TelegramSurfaceHarness)
+            context.telegram_thread_id = _optional_int(
+                action.payload.get("thread_id"),
+                default=DEFAULT_TELEGRAM_THREAD_ID,
+            )
             await context.harness.interrupt_active_turn_via_callback(
-                thread_id=_optional_int(action.payload.get("thread_id"), default=55),
+                thread_id=context.telegram_thread_id,
             )
             return
 
@@ -619,7 +682,10 @@ class ChatSurfaceScenarioRunner:
         if action.kind == "await_active_message":
             if context.active_task is None:
                 raise AssertionError("await_active_message requires an active task")
-            context.result = await context.active_task
+            try:
+                context.result = await context.active_task
+            except asyncio.CancelledError:
+                context.result = self._refresh_surface_result_metadata(context)
             return
 
         if action.kind == "restart_surface_harness":
@@ -680,7 +746,11 @@ class ChatSurfaceScenarioRunner:
             if context.harness.service is None or context.harness.bot is None:
                 raise AssertionError("Telegram harness is not initialized")
             update_id = _optional_int(action.payload.get("update_id"), default=77)
-            thread_id = _optional_int(action.payload.get("thread_id"), default=55)
+            thread_id = _optional_int(
+                action.payload.get("thread_id"),
+                default=DEFAULT_TELEGRAM_THREAD_ID,
+            )
+            context.telegram_thread_id = thread_id
             update = TelegramUpdate(
                 update_id=update_id,
                 message=build_telegram_message(
@@ -708,7 +778,11 @@ class ChatSurfaceScenarioRunner:
             if context.harness.service is None or context.harness.bot is None:
                 raise AssertionError("Telegram harness is not initialized")
             update_id = _optional_int(action.payload.get("update_id"), default=77)
-            thread_id = _optional_int(action.payload.get("thread_id"), default=55)
+            thread_id = _optional_int(
+                action.payload.get("thread_id"),
+                default=DEFAULT_TELEGRAM_THREAD_ID,
+            )
+            context.telegram_thread_id = thread_id
             update = TelegramUpdate(
                 update_id=update_id,
                 message=build_telegram_message(

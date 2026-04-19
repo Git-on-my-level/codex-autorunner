@@ -254,6 +254,7 @@ class ManagedThreadExecutionFlowResult:
     queued: bool
     finalized: Optional[ManagedThreadFinalizationResult] = None
     durable_delivery_performed: bool = False
+    durable_delivery_pending: bool = False
 
 
 @dataclass(frozen=True)

@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any, Optional
 
 from ...core.orchestration import (
     ManagedThreadDeliveryAttemptResult,
     ManagedThreadDeliveryOutcome,
+    SQLiteManagedThreadDeliveryEngine,
 )
 from ...integrations.chat.managed_thread_turns import (
+    ManagedThreadDurableDeliveryHooks,
+    ManagedThreadSurfaceInfo,
+    build_managed_thread_delivery_intent,
     render_managed_thread_delivery_record_text,
 )
 from .constants import DISCORD_MAX_MESSAGE_LENGTH
@@ -60,11 +65,16 @@ async def deliver_discord_managed_thread_record(
                     if len(chunks) > 1
                     else base_record_id
                 )
-                await service._send_channel_message_safe(
+                delivered = await service._send_channel_message_safe(
                     target_channel_id,
                     {"content": chunk},
                     record_id=record_id,
                 )
+                if not delivered:
+                    return ManagedThreadDeliveryAttemptResult(
+                        outcome=ManagedThreadDeliveryOutcome.FAILED,
+                        error=f"discord_send_deferred:{record_id}",
+                    )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -82,7 +92,7 @@ async def deliver_discord_managed_thread_record(
             error="interrupted_turn_has_no_terminal_delivery",
         )
     try:
-        await service._send_channel_message_safe(
+        delivered = await service._send_channel_message_safe(
             target_channel_id,
             {
                 "content": (
@@ -93,6 +103,11 @@ async def deliver_discord_managed_thread_record(
                 f"{error_record_label}:{record.managed_thread_id}:{record.managed_turn_id}"
             ),
         )
+        if not delivered:
+            return ManagedThreadDeliveryAttemptResult(
+                outcome=ManagedThreadDeliveryOutcome.FAILED,
+                error="discord_error_notice_deferred",
+            )
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -110,3 +125,51 @@ def _resolve_delivery_channel_id(record: Any, *, fallback: Optional[str]) -> str
     if fallback is not None:
         return str(tt.get("channel_id") or fallback).strip()
     return str(tt.get("channel_id", "")).strip()
+
+
+def build_discord_managed_thread_durable_delivery_hooks(
+    service: Any,
+    *,
+    channel_id: str,
+    managed_thread_id: str,
+    public_execution_error: str,
+) -> ManagedThreadDurableDeliveryHooks:
+    state_root = Path(getattr(getattr(service, "_config", None), "root", Path.cwd()))
+    engine = SQLiteManagedThreadDeliveryEngine(state_root)
+
+    class _DiscordManagedThreadDeliveryAdapter:
+        @property
+        def adapter_key(self) -> str:
+            return "discord"
+
+        async def deliver_managed_thread_record(
+            self, record: Any, *, claim: Any
+        ) -> Any:
+            return await deliver_discord_managed_thread_record(
+                service,
+                record,
+                claim=claim,
+                channel_id_fallback=channel_id,
+                base_record_label="discord-queued",
+                error_record_label="discord-queued-error",
+                default_execution_error=public_execution_error,
+            )
+
+    return ManagedThreadDurableDeliveryHooks(
+        engine=engine,
+        adapter=_DiscordManagedThreadDeliveryAdapter(),
+        build_delivery_intent=lambda finalized: (
+            None
+            if finalized.status == "interrupted"
+            else build_managed_thread_delivery_intent(
+                finalized,
+                surface=ManagedThreadSurfaceInfo(
+                    log_label="Discord",
+                    surface_kind="discord",
+                    surface_key=channel_id,
+                ),
+                transport_target={"channel_id": channel_id},
+                metadata={"managed_thread_id": managed_thread_id},
+            )
+        ),
+    )

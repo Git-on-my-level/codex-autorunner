@@ -171,6 +171,7 @@ class DiscordMessageTurnResult:
     token_usage: Optional[dict[str, Any]] = None
     elapsed_seconds: Optional[float] = None
     send_final_message: bool = True
+    delivery_visibility_pending: bool = False
     deferred_delivery: bool = False
     preserve_progress_lease: bool = False
 
@@ -1132,6 +1133,7 @@ async def _deliver_discord_turn_result(
         preview_message_id = turn_result.preview_message_id
         execution_id = turn_result.execution_id
         send_final_message = turn_result.send_final_message
+        delivery_visibility_pending = turn_result.delivery_visibility_pending
         preserve_progress_lease = turn_result.preserve_progress_lease
         intermediate_text = (
             turn_result.intermediate_message.strip()
@@ -1151,6 +1153,7 @@ async def _deliver_discord_turn_result(
         preview_message_id = None
         execution_id = None
         send_final_message = True
+        delivery_visibility_pending = False
         preserve_progress_lease = False
 
     managed_thread_id = None
@@ -1199,7 +1202,9 @@ async def _deliver_discord_turn_result(
     )
 
     preview_message_deleted = False
-    visible_terminal_delivery = not send_final_message
+    visible_terminal_delivery = (
+        not send_final_message and not delivery_visibility_pending
+    )
     visible_failure_notice = False
     if send_final_message:
         visible_terminal_delivery = await _send_discord_turn_section(
@@ -2206,7 +2211,15 @@ async def _run_discord_orchestrated_turn_for_message(
             intermediate_message=intermediate_message,
             token_usage=finalized.token_usage,
             elapsed_seconds=max(0.0, time.monotonic() - tracker.started_at),
-            send_final_message=not getattr(_flow, "durable_delivery_performed", False),
+            send_final_message=not (
+                getattr(_flow, "durable_delivery_performed", False)
+                or getattr(_flow, "durable_delivery_pending", False)
+            ),
+            delivery_visibility_pending=getattr(
+                _flow,
+                "durable_delivery_pending",
+                False,
+            ),
         )
 
     async def _after_completion(_flow: Any) -> None:
