@@ -978,6 +978,29 @@ class PmaManagedThreadResumeRequest(Payload):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
 
+class PmaManagedThreadBulkArchiveRequest(Payload):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    thread_ids: List[str] = Field(
+        validation_alias=AliasChoices("thread_ids", "threadIds")
+    )
+
+    @field_validator("thread_ids")
+    @classmethod
+    def _normalize_thread_ids(cls, value: List[str]) -> List[str]:
+        normalized: List[str] = []
+        seen: set[str] = set()
+        for item in value:
+            thread_id = _normalize_text(item)
+            if not thread_id or thread_id in seen:
+                continue
+            normalized.append(thread_id)
+            seen.add(thread_id)
+        if not normalized:
+            raise ValueError("thread_ids must include at least one managed thread id")
+        return normalized
+
+
 class PmaManagedThreadForkRequest(Payload):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 

@@ -123,6 +123,16 @@ def test_pma_cli_thread_fork_help_shows_json_option():
     assert "--name" in output
 
 
+def test_pma_cli_thread_archive_help_shows_bulk_options() -> None:
+    runner = CliRunner()
+    result = runner.invoke(pma_app, ["thread", "archive", "--help"])
+    assert result.exit_code == 0
+    output = result.stdout
+    assert "--id" in output
+    assert "--ids" in output
+    assert "--ids-stdin" in output
+
+
 def test_pma_chat_help_shows_json_option():
     """Verify PMA chat command supports JSON output mode."""
     runner = CliRunner()
@@ -2104,7 +2114,13 @@ def test_pma_cli_thread_control_commands_use_orchestration_routes(
                 }
             }
         if url.endswith("/archive"):
-            return {"thread": {"managed_thread_id": "thread-1", "status": "archived"}}
+            return {
+                "thread": {
+                    "managed_thread_id": "thread-1",
+                    "name": "CLI thread",
+                    "status": "archived",
+                }
+            }
         raise AssertionError(f"unexpected url: {url}")
 
     monkeypatch.setattr(pma_cli, "_request_json", _fake_request_json)
@@ -2151,7 +2167,7 @@ def test_pma_cli_thread_control_commands_use_orchestration_routes(
     assert resume_result.exit_code == 0
     assert "Resumed thread-1" in resume_result.stdout
     assert archive_result.exit_code == 0
-    assert "Archived thread-1" in archive_result.stdout
+    assert "Archived thread-1 (CLI thread)" in archive_result.stdout
 
     assert calls == [
         (
@@ -2181,6 +2197,196 @@ def test_pma_cli_thread_control_commands_use_orchestration_routes(
             None,
         ),
     ]
+
+
+def test_pma_cli_thread_archive_bulk_uses_bulk_route(
+    monkeypatch, tmp_path: Path
+) -> None:
+    calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+    monkeypatch.setattr(
+        pma_cli,
+        "load_hub_config",
+        lambda hub_root: SimpleNamespace(
+            server_base_path="",
+            server_host="127.0.0.1",
+            server_port=4321,
+            server_auth_token_env=None,
+        ),
+    )
+
+    def _fake_request_json(
+        method: str,
+        url: str,
+        payload=None,
+        token_env=None,
+        params=None,
+    ):
+        _ = token_env, params
+        calls.append((method, url, payload))
+        if url.endswith("/hub/pma/threads/archive"):
+            return {
+                "threads": [
+                    {
+                        "managed_thread_id": "thread-1",
+                        "name": "Thread One",
+                        "status": "archived",
+                    },
+                    {
+                        "managed_thread_id": "thread-2",
+                        "name": "Thread Two",
+                        "status": "archived",
+                    },
+                ],
+                "archived_count": 2,
+                "requested_count": 2,
+                "errors": [],
+                "error_count": 0,
+            }
+        raise AssertionError(f"unexpected url: {url}")
+
+    monkeypatch.setattr(pma_cli, "_request_json", _fake_request_json)
+
+    result = CliRunner().invoke(
+        pma_app,
+        [
+            "thread",
+            "archive",
+            "--ids",
+            "thread-1,thread-2",
+            "--path",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Archived thread-1 (Thread One)" in result.stdout
+    assert "Archived thread-2 (Thread Two)" in result.stdout
+    assert "Archived 2 managed threads." in result.stdout
+    assert calls == [
+        (
+            "POST",
+            "http://127.0.0.1:4321/hub/pma/threads/archive",
+            {"thread_ids": ["thread-1", "thread-2"]},
+        )
+    ]
+
+
+def test_pma_cli_thread_archive_reads_ids_from_stdin(
+    monkeypatch, tmp_path: Path
+) -> None:
+    calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+    monkeypatch.setattr(
+        pma_cli,
+        "load_hub_config",
+        lambda hub_root: SimpleNamespace(
+            server_base_path="",
+            server_host="127.0.0.1",
+            server_port=4321,
+            server_auth_token_env=None,
+        ),
+    )
+
+    def _fake_request_json(
+        method: str,
+        url: str,
+        payload=None,
+        token_env=None,
+        params=None,
+    ):
+        _ = token_env, params
+        calls.append((method, url, payload))
+        if url.endswith("/hub/pma/threads/archive"):
+            return {
+                "threads": [
+                    {"managed_thread_id": "thread-1", "status": "archived"},
+                    {"managed_thread_id": "thread-2", "status": "archived"},
+                ],
+                "archived_count": 2,
+                "requested_count": 2,
+                "errors": [],
+                "error_count": 0,
+            }
+        raise AssertionError(f"unexpected url: {url}")
+
+    monkeypatch.setattr(pma_cli, "_request_json", _fake_request_json)
+
+    result = CliRunner().invoke(
+        pma_app,
+        [
+            "thread",
+            "archive",
+            "--ids-stdin",
+            "--path",
+            str(tmp_path),
+        ],
+        input="thread-1\nthread-2\nthread-1\n",
+    )
+
+    assert result.exit_code == 0
+    assert calls == [
+        (
+            "POST",
+            "http://127.0.0.1:4321/hub/pma/threads/archive",
+            {"thread_ids": ["thread-1", "thread-2"]},
+        )
+    ]
+
+
+def test_pma_cli_thread_archive_bulk_json_exits_nonzero_on_errors(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        pma_cli,
+        "load_hub_config",
+        lambda hub_root: SimpleNamespace(
+            server_base_path="",
+            server_host="127.0.0.1",
+            server_port=4321,
+            server_auth_token_env=None,
+        ),
+    )
+
+    def _fake_request_json(
+        method: str,
+        url: str,
+        payload=None,
+        token_env=None,
+        params=None,
+    ):
+        _ = method, payload, token_env, params
+        if not url.endswith("/hub/pma/threads/archive"):
+            raise AssertionError(f"unexpected url: {url}")
+        return {
+            "threads": [{"managed_thread_id": "thread-1", "status": "archived"}],
+            "archived_count": 1,
+            "requested_count": 2,
+            "errors": [
+                {"thread_id": "missing-thread", "detail": "Managed thread not found"}
+            ],
+            "error_count": 1,
+        }
+
+    monkeypatch.setattr(pma_cli, "_request_json", _fake_request_json)
+
+    result = CliRunner().invoke(
+        pma_app,
+        [
+            "thread",
+            "archive",
+            "--ids",
+            "thread-1,missing-thread",
+            "--json",
+            "--path",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["archived_count"] == 1
+    assert payload["error_count"] == 1
 
 
 def test_pma_cli_thread_create_rejects_backend_id_option(tmp_path: Path) -> None:

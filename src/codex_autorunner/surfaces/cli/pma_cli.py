@@ -242,6 +242,55 @@ def _resolve_message_body(
     return raw_message
 
 
+def _parse_thread_id_list(raw: str) -> list[str]:
+    thread_ids: list[str] = []
+    seen: set[str] = set()
+    for line in raw.replace(",", "\n").splitlines():
+        for token in line.split():
+            thread_id = token.strip()
+            if not thread_id or thread_id in seen:
+                continue
+            thread_ids.append(thread_id)
+            seen.add(thread_id)
+    return thread_ids
+
+
+def _resolve_archive_thread_ids(
+    *,
+    managed_thread_id: Optional[str],
+    managed_thread_ids: Optional[str],
+    managed_thread_ids_stdin: bool,
+) -> list[str]:
+    selected_inputs = sum(
+        1
+        for selected in (
+            managed_thread_id is not None,
+            managed_thread_ids is not None,
+            managed_thread_ids_stdin,
+        )
+        if selected
+    )
+    if selected_inputs != 1:
+        raise typer.BadParameter(
+            "Provide exactly one of --id, --ids, or --ids-stdin.",
+            param_hint="--id / --ids / --ids-stdin",
+        )
+
+    if managed_thread_id is not None:
+        resolved_ids = _parse_thread_id_list(managed_thread_id)
+    elif managed_thread_ids is not None:
+        resolved_ids = _parse_thread_id_list(managed_thread_ids)
+    else:
+        resolved_ids = _parse_thread_id_list(sys.stdin.read())
+
+    if not resolved_ids:
+        raise typer.BadParameter(
+            "Provide at least one managed thread id.",
+            param_hint="--id / --ids / --ids-stdin",
+        )
+    return resolved_ids
+
+
 def _echo_delivered_message(message: str) -> None:
     typer.echo("delivered message:")
     typer.echo(message, nl=False)
@@ -257,6 +306,18 @@ def _is_json_response_error(data: dict) -> Optional[str]:
     if data.get("error"):
         return str(data["error"])
     return None
+
+
+def _format_archived_thread_line(thread: dict[str, Any]) -> str:
+    managed_thread_id = str(thread.get("managed_thread_id") or "").strip()
+    name = str(thread.get("name") or "").strip()
+    if managed_thread_id and name:
+        return f"Archived {managed_thread_id} ({name})"
+    if managed_thread_id:
+        return f"Archived {managed_thread_id}"
+    if name:
+        return f"Archived managed thread ({name})"
+    return "Archived managed thread"
 
 
 def _extract_compact_summary_items(content: str, *, limit: int) -> list[str]:
@@ -2408,26 +2469,55 @@ def pma_thread_fork(
 
 @thread_app.command("archive")
 def pma_thread_archive(
-    managed_thread_id: str = typer.Option(
-        ..., "--id", help="Managed PMA thread id", show_default=False
+    managed_thread_id: Optional[str] = typer.Option(
+        None, "--id", help="Managed PMA thread id", show_default=False
+    ),
+    managed_thread_ids: Optional[str] = typer.Option(
+        None,
+        "--ids",
+        help="Comma- or whitespace-separated managed PMA thread ids",
+        show_default=False,
+    ),
+    managed_thread_ids_stdin: bool = typer.Option(
+        False,
+        "--ids-stdin",
+        help="Read managed PMA thread ids from stdin (comma- or whitespace-separated)",
     ),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     path: Optional[Path] = hub_root_path_option(),
 ):
     """Archive a managed PMA thread."""
     hub_root = _resolve_hub_path(path)
+    thread_ids = _resolve_archive_thread_ids(
+        managed_thread_id=managed_thread_id,
+        managed_thread_ids=managed_thread_ids,
+        managed_thread_ids_stdin=managed_thread_ids_stdin,
+    )
     try:
         config = load_hub_config(hub_root)
-        archive_url = _build_pma_url(config, f"/threads/{managed_thread_id}/archive")
-        data = _request_json(
-            "POST",
-            archive_url,
-            token_env=config.server_auth_token_env,
-        )
+        if len(thread_ids) == 1:
+            archive_url = _build_pma_url(config, f"/threads/{thread_ids[0]}/archive")
+            data = _request_json(
+                "POST",
+                archive_url,
+                token_env=config.server_auth_token_env,
+            )
+        else:
+            archive_url = _build_pma_url(config, "/threads/archive")
+            data = _request_json(
+                "POST",
+                archive_url,
+                {"thread_ids": thread_ids},
+                token_env=config.server_auth_token_env,
+            )
     except httpx.HTTPError as exc:
         typer.echo(
             format_hub_request_error(
-                action=f"Failed to archive managed PMA thread {managed_thread_id}.",
+                action=(
+                    f"Failed to archive managed PMA thread {thread_ids[0]}."
+                    if len(thread_ids) == 1
+                    else "Failed to archive managed PMA threads."
+                ),
                 url=archive_url,
                 exc=exc,
             ),
@@ -2440,8 +2530,40 @@ def pma_thread_archive(
 
     if output_json:
         typer.echo(json.dumps(data, indent=2))
-    else:
-        typer.echo(f"Archived {managed_thread_id}")
+        if len(thread_ids) > 1 and isinstance(data, dict) and data.get("errors"):
+            raise typer.Exit(code=1) from None
+        return
+
+    if len(thread_ids) == 1:
+        thread = data.get("thread", {}) if isinstance(data, dict) else {}
+        if isinstance(thread, dict) and thread:
+            typer.echo(_format_archived_thread_line(thread))
+        else:
+            typer.echo(f"Archived {thread_ids[0]}")
+        return
+
+    threads = data.get("threads", []) if isinstance(data, dict) else []
+    errors = data.get("errors", []) if isinstance(data, dict) else []
+    archived_count = len(threads) if isinstance(threads, list) else 0
+
+    if isinstance(threads, list):
+        for thread in threads:
+            if isinstance(thread, dict):
+                typer.echo(_format_archived_thread_line(thread))
+
+    if isinstance(errors, list):
+        for error in errors:
+            if not isinstance(error, dict):
+                continue
+            thread_id = str(error.get("thread_id") or "unknown").strip()
+            detail = str(error.get("detail") or "Archive failed").strip()
+            typer.echo(f"Failed to archive {thread_id}: {detail}", err=True)
+
+    typer.echo(
+        f"Archived {archived_count} managed thread{'s' if archived_count != 1 else ''}."
+    )
+    if errors:
+        raise typer.Exit(code=1) from None
 
 
 @thread_app.command("interrupt")

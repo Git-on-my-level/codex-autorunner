@@ -1221,6 +1221,59 @@ def test_resume_managed_thread_without_backend_binding_reactivates_thread(
     assert resumed_thread["backend_thread_id"] is None
 
 
+def test_archive_managed_threads_bulk_route_archives_multiple_threads(
+    hub_env,
+) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        first_resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                **_repo_owner(hub_env),
+                "name": "First thread",
+            },
+        )
+        second_resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                **_repo_owner(hub_env),
+                "name": "Second thread",
+            },
+        )
+        assert first_resp.status_code == 200
+        assert second_resp.status_code == 200
+
+        first_id = first_resp.json()["thread"]["managed_thread_id"]
+        second_id = second_resp.json()["thread"]["managed_thread_id"]
+
+        archive_resp = client.post(
+            "/hub/pma/threads/archive",
+            json={
+                "thread_ids": [first_id, second_id, "missing-thread", first_id],
+            },
+        )
+
+    assert archive_resp.status_code == 200
+    payload = archive_resp.json()
+    assert payload["requested_count"] == 3
+    assert payload["archived_count"] == 2
+    assert payload["error_count"] == 1
+    assert [thread["managed_thread_id"] for thread in payload["threads"]] == [
+        first_id,
+        second_id,
+    ]
+    assert payload["errors"] == [
+        {"thread_id": "missing-thread", "detail": "Managed thread not found"}
+    ]
+
+    store = PmaThreadStore(hub_env.hub_root)
+    assert store.get_thread(first_id)["lifecycle_status"] == "archived"
+    assert store.get_thread(second_id)["lifecycle_status"] == "archived"
+
+
 def test_managed_thread_crud_routes_use_orchestration_service(
     hub_env, monkeypatch
 ) -> None:

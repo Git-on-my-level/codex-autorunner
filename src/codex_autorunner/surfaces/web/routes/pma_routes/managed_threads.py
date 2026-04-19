@@ -24,6 +24,7 @@ from ...schemas import (
     PmaAutomationTimerCancelRequest,
     PmaAutomationTimerCreateRequest,
     PmaAutomationTimerTouchRequest,
+    PmaManagedThreadBulkArchiveRequest,
     PmaManagedThreadCompactRequest,
     PmaManagedThreadCreateRequest,
     PmaManagedThreadForkRequest,
@@ -679,6 +680,52 @@ def build_managed_thread_crud_routes(
                 updated,
                 binding_metadata_by_thread=binding_metadata,
             )
+        }
+
+    @router.post("/threads/archive")
+    def archive_managed_threads(
+        payload: PmaManagedThreadBulkArchiveRequest, request: Request
+    ) -> dict[str, Any]:
+        service = build_managed_thread_orchestration_service(request)
+        store = PmaThreadStore(request.app.state.config.root)
+        archived_threads: list[Any] = []
+        errors: list[dict[str, str]] = []
+
+        for managed_thread_id in payload.thread_ids:
+            thread = service.get_thread_target(managed_thread_id)
+            if thread is None:
+                errors.append(
+                    {
+                        "thread_id": managed_thread_id,
+                        "detail": "Managed thread not found",
+                    }
+                )
+                continue
+
+            old_status = normalize_optional_text(thread.lifecycle_status)
+            updated = service.archive_thread_target(managed_thread_id)
+            store.append_action(
+                "managed_thread_archive",
+                managed_thread_id=managed_thread_id,
+                payload_json=json.dumps({"old_status": old_status}, ensure_ascii=True),
+            )
+            archived_threads.append(updated)
+
+        binding_metadata = _load_chat_binding_metadata_by_thread(
+            request.app.state.config.root
+        )
+        return {
+            "threads": [
+                _serialize_thread_target(
+                    thread,
+                    binding_metadata_by_thread=binding_metadata,
+                )
+                for thread in archived_threads
+            ],
+            "archived_count": len(archived_threads),
+            "requested_count": len(payload.thread_ids),
+            "errors": errors,
+            "error_count": len(errors),
         }
 
     @router.get("/threads/{managed_thread_id}/turns")
