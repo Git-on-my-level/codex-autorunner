@@ -6,7 +6,11 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Optional, cast
 
-from .errors import DiscordTransientError
+from .errors import (
+    DiscordPermanentError,
+    DiscordTransientError,
+    is_unknown_message_error,
+)
 from .rendering import (
     format_discord_message,
     truncate_for_discord,
@@ -459,6 +463,10 @@ async def _retire_discord_progress_message(
                 "components": [],
             },
         )
+    except DiscordPermanentError as exc:
+        if is_unknown_message_error(exc):
+            return True
+        return False
     except (DiscordTransientError, RuntimeError, ConnectionError, OSError):
         return False
     return True
@@ -759,6 +767,10 @@ async def _acknowledge_discord_progress_reuse(
                 "components": [],
             },
         )
+    except DiscordPermanentError as exc:
+        if is_unknown_message_error(exc):
+            return False
+        raise
     except (DiscordTransientError, RuntimeError, ConnectionError, OSError):
         return False
     return True

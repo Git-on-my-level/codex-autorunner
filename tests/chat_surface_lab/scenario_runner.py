@@ -477,19 +477,28 @@ class ChatSurfaceScenarioRunner:
             if not fault.surfaces or context.surface in fault.surfaces
         ]
         if context.surface == SurfaceKind.DISCORD:
-            fail_ids: set[str] = set()
+            fail_delete_ids: set[str] = set()
+            fail_unknown_edit_ids: set[str] = set()
             for fault in active_faults:
-                if fault.kind != "fail_progress_delete":
-                    continue
                 message_id = str(fault.parameters.get("message_id") or "msg-1")
-                fail_ids.add(message_id)
+                if fault.kind == "fail_progress_delete":
+                    fail_delete_ids.add(message_id)
+                    continue
+                if fault.kind == "fail_progress_edit_unknown_message":
+                    fail_unknown_edit_ids.add(message_id)
             retry_after_schedule = _collect_retry_after_schedule(active_faults)
             attachment_data_by_url = _collect_discord_attachment_data(scenario.actions)
-            if fail_ids or retry_after_schedule or attachment_data_by_url:
+            if (
+                fail_delete_ids
+                or fail_unknown_edit_ids
+                or retry_after_schedule
+                or attachment_data_by_url
+            ):
                 context.rest_client = FakeDiscordRest(
                     attachment_data_by_url=attachment_data_by_url,
                     faults=DiscordSimulatorFaults(
-                        fail_delete_message_ids=fail_ids,
+                        fail_delete_message_ids=fail_delete_ids,
+                        fail_unknown_message_edit_ids=fail_unknown_edit_ids,
                         retry_after_schedule=retry_after_schedule,
                     ),
                 )

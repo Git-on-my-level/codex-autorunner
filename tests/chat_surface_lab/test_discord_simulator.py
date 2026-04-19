@@ -4,7 +4,10 @@ from pathlib import Path
 
 import pytest
 
-from codex_autorunner.integrations.discord.errors import DiscordTransientError
+from codex_autorunner.integrations.discord.errors import (
+    DiscordPermanentError,
+    DiscordTransientError,
+)
 from tests.chat_surface_lab.artifact_manifests import ArtifactKind
 from tests.chat_surface_lab.discord_simulator import (
     DiscordSimulatorFaults,
@@ -156,6 +159,33 @@ async def test_simulator_injects_retry_after_and_delete_failure() -> None:
         event.get("kind") == "error"
         and event.get("metadata", {}).get("fault") == "delete_failed"
         for event in timeline
+    )
+
+
+@pytest.mark.anyio
+async def test_simulator_injects_unknown_message_edit_failure() -> None:
+    simulator = DiscordSurfaceSimulator(
+        faults=DiscordSimulatorFaults(
+            fail_unknown_message_edit_ids={"msg-1"},
+        )
+    )
+
+    await simulator.create_channel_message(
+        channel_id="channel-1",
+        payload={"content": "preview"},
+    )
+    with pytest.raises(DiscordPermanentError, match="Unknown Message"):
+        await simulator.edit_channel_message(
+            channel_id="channel-1",
+            message_id="msg-1",
+            payload={"content": "updated"},
+        )
+
+    assert any(
+        event.get("kind") == "error"
+        and event.get("metadata", {}).get("fault") == "unknown_message"
+        and event.get("metadata", {}).get("operation") == "edit_channel_message"
+        for event in simulator.surface_timeline
     )
 
 
