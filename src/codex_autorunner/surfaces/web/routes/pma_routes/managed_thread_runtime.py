@@ -970,7 +970,10 @@ def build_managed_thread_runtime_routes(
 
         notification: Optional[dict[str, Any]] = None
         if options.notify_on == "terminal":
-            automation_client = ManagedThreadAutomationClient(request, lambda: None)
+            automation_client = ManagedThreadAutomationClient(
+                request,
+                get_runtime_state,
+            )
             try:
                 notification = await automation_client.create_terminal_followup(
                     managed_thread_id=managed_thread_id,

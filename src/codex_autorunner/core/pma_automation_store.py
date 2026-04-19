@@ -1117,14 +1117,38 @@ class PmaAutomationStore:
         *,
         thread_id: Optional[str],
         lane_id: Optional[str],
+        origin_thread_id: Optional[str] = None,
+        origin_lane_id: Optional[str] = None,
     ) -> str:
         normalized_thread_id = _normalize_text(thread_id)
         normalized_lane_id = _normalize_text(lane_id)
-        if normalized_thread_id is None or normalized_lane_id is not None:
+        normalized_origin_thread_id = _normalize_text(origin_thread_id)
+        normalized_origin_lane_id = _normalize_text(origin_lane_id)
+        if normalized_lane_id is not None:
             return _normalize_lane_id(normalized_lane_id)
 
-        resolved_lane_id = self._resolve_thread_lane_id(thread_id=normalized_thread_id)
-        return resolved_lane_id
+        if normalized_origin_thread_id is not None:
+            try:
+                resolved_origin_lane_id = self._resolve_thread_lane_id(
+                    thread_id=normalized_origin_thread_id
+                )
+            except PmaAutomationThreadNotFoundError:
+                resolved_origin_lane_id = DEFAULT_PMA_LANE_ID
+            if resolved_origin_lane_id != DEFAULT_PMA_LANE_ID:
+                return resolved_origin_lane_id
+
+        if normalized_thread_id is not None:
+            resolved_lane_id = self._resolve_thread_lane_id(
+                thread_id=normalized_thread_id
+            )
+            if resolved_lane_id != DEFAULT_PMA_LANE_ID:
+                return resolved_lane_id
+
+        if normalized_origin_lane_id is not None:
+            return _normalize_lane_id(normalized_origin_lane_id)
+        if normalized_thread_id is None:
+            return DEFAULT_PMA_LANE_ID
+        return DEFAULT_PMA_LANE_ID
 
     @staticmethod
     def _is_auto_subscription_key(idempotency_key: Optional[str]) -> bool:
@@ -1211,12 +1235,21 @@ class PmaAutomationStore:
         *,
         thread_id: Optional[str],
         metadata: Optional[dict[str, Any]],
+        origin_thread_id: Optional[str] = None,
     ) -> dict[str, Any]:
         resolved_metadata = dict(metadata or {})
         delivery_target = _normalize_delivery_target(
             resolved_metadata.get("delivery_target")
         )
         normalized_thread_id = _normalize_text(thread_id)
+        normalized_origin_thread_id = _normalize_text(origin_thread_id)
+        if delivery_target is None and normalized_origin_thread_id is not None:
+            try:
+                delivery_target = self._resolve_thread_delivery_target(
+                    thread_id=normalized_origin_thread_id
+                )
+            except PmaAutomationThreadNotFoundError:
+                delivery_target = None
         if delivery_target is None and normalized_thread_id is not None:
             try:
                 delivery_target = self._resolve_thread_delivery_target(
@@ -1245,6 +1278,8 @@ class PmaAutomationStore:
         notify_once: Optional[bool] = None,
         max_matches: Optional[int] = None,
         metadata: Optional[dict[str, Any]] = None,
+        origin_thread_id: Optional[str] = None,
+        origin_lane_id: Optional[str] = None,
     ) -> tuple[PmaLifecycleSubscription, bool]:
         key = _normalize_text(idempotency_key)
         normalized_event_types = self._normalize_subscription_event_types(event_types)
@@ -1252,10 +1287,13 @@ class PmaAutomationStore:
         resolved_lane_id = self._resolve_subscription_lane_id(
             thread_id=normalized_thread_id,
             lane_id=lane_id,
+            origin_thread_id=origin_thread_id,
+            origin_lane_id=origin_lane_id,
         )
         resolved_metadata = self._resolve_subscription_metadata(
             thread_id=normalized_thread_id,
             metadata=metadata,
+            origin_thread_id=origin_thread_id,
         )
         if not normalized_event_types:
             logger.warning(
@@ -1300,10 +1338,13 @@ class PmaAutomationStore:
         normalized_from_state = _normalize_text(data.get("from_state"))
         normalized_to_state = _normalize_text(data.get("to_state"))
         normalized_idempotency_key = _normalize_text(data.get("idempotency_key"))
+        normalized_origin_thread_id = _normalize_text(data.get("origin_thread_id"))
+        normalized_origin_lane_id = _normalize_text(data.get("origin_lane_id"))
         confirm_duplicate = _normalize_bool(data.get("confirm"), fallback=False)
-        if not confirm_duplicate and not self._is_auto_subscription_key(
+        is_auto_subscription = self._is_auto_subscription_key(
             normalized_idempotency_key
-        ):
+        )
+        if not confirm_duplicate:
             existing_auto = self._find_covering_auto_subscription(
                 event_types=normalized_event_types,
                 repo_id=normalized_repo_id,
@@ -1313,6 +1354,11 @@ class PmaAutomationStore:
                 to_state=normalized_to_state,
             )
             if existing_auto is not None:
+                if is_auto_subscription:
+                    return {
+                        "subscription": existing_auto.to_dict(),
+                        "deduped": True,
+                    }
                 scope_label = "this scope"
                 if normalized_thread_id is not None:
                     scope_label = "this thread"
@@ -1350,6 +1396,8 @@ class PmaAutomationStore:
             metadata=(
                 data.get("metadata") if isinstance(data.get("metadata"), dict) else None
             ),
+            origin_thread_id=normalized_origin_thread_id,
+            origin_lane_id=normalized_origin_lane_id,
         )
         return {"subscription": created.to_dict(), "deduped": deduped}
 

@@ -366,6 +366,70 @@ def test_create_subscription_auto_resolves_lane_from_thread_binding(tmp_path) ->
     }
 
 
+def test_create_subscription_prefers_origin_thread_binding_for_defaults(
+    tmp_path,
+) -> None:
+    store = PmaAutomationStore(tmp_path)
+    managed_thread_id = _create_managed_thread(tmp_path)
+    origin_thread_id = _create_managed_thread(tmp_path, surface_kind="discord")
+
+    subscription = store.create_subscription(
+        {
+            "event_type": "managed_thread_completed",
+            "thread_id": managed_thread_id,
+            "origin_thread_id": origin_thread_id,
+        }
+    )["subscription"]
+
+    assert subscription["thread_id"] == managed_thread_id
+    assert subscription["lane_id"] == "discord"
+    assert subscription["metadata"]["delivery_target"] == {
+        "surface_kind": "discord",
+        "surface_key": "discord:binding-1",
+    }
+
+
+def test_create_subscription_reuses_covering_auto_subscription_for_auto_keys(
+    tmp_path,
+) -> None:
+    store = PmaAutomationStore(tmp_path)
+    thread_id = _create_managed_thread(tmp_path)
+
+    first = store.create_subscription(
+        {
+            "event_types": [
+                "managed_thread_completed",
+                "managed_thread_failed",
+                "managed_thread_interrupted",
+            ],
+            "thread_id": thread_id,
+            "idempotency_key": f"managed-thread-notify:{thread_id}",
+            "notify_once": True,
+        }
+    )
+    second = store.create_subscription(
+        {
+            "event_types": [
+                "managed_thread_completed",
+                "managed_thread_failed",
+                "managed_thread_interrupted",
+            ],
+            "thread_id": thread_id,
+            "idempotency_key": "managed-thread-send-notify:turn-1",
+            "notify_once": True,
+        }
+    )
+
+    assert first["deduped"] is False
+    assert second["deduped"] is True
+    assert (
+        second["subscription"]["subscription_id"]
+        == first["subscription"]["subscription_id"]
+    )
+    subscriptions = store.list_subscriptions(thread_id=thread_id)
+    assert len(subscriptions) == 1
+
+
 def test_notify_transition_copies_subscription_delivery_target_into_wakeup(
     tmp_path,
 ) -> None:
