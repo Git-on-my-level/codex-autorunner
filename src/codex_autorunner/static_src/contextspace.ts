@@ -32,12 +32,18 @@ import { renderDiff } from "./diffRenderer.js";
 import { subscribe } from "./bus.js";
 import { DEFAULT_FILEBOX_BOX } from "./fileboxCatalog.js";
 import { isRepoHealthy } from "./health.js";
-import { loadPendingTurn, savePendingTurn } from "./turnResume.js";
+import { loadPendingTurn, savePendingTurn, type PendingTurn } from "./turnResume.js";
 import { resumeFileChatTurn } from "./turnEvents.js";
 import {
   createTurnEventsController,
   startTurnEventsStream as sharedStartTurnEventsStream,
   clearManagedTurn,
+  cancelActiveTurnSync,
+  pendingTurnMatches,
+  scheduleRecoveryRetry,
+  createTurnRecoveryTracker,
+  ACTIVE_TURN_RECOVERY_STALE_MESSAGE,
+  type TurnRecoveryTracker,
 } from "./sharedTurnLifecycle.js";
 
 type ContextspaceDoc = {
@@ -573,34 +579,95 @@ async function resumePendingWorkspaceTurn(): Promise<void> {
   workspaceChat.render();
   workspaceChat.renderMessages();
 
+  await doResumeWorkspaceTurn(pending, createTurnRecoveryTracker());
+}
+
+function loadOwnedPendingWorkspaceTurn(expected: PendingTurn): PendingTurn | null {
+  const current = loadPendingTurn(CONTEXTSPACE_PENDING_KEY);
+  return pendingTurnMatches(expected, current) ? current : null;
+}
+
+async function doResumeWorkspaceTurn(
+  pending: PendingTurn,
+  tracker: TurnRecoveryTracker
+): Promise<void> {
+  const chatState = workspaceChat.state as ChatState;
+  const stillOwned = (): boolean => loadOwnedPendingWorkspaceTurn(pending) !== null;
+  const scheduleOwnedRetry = (): void => {
+    scheduleRecoveryRetry({
+      tracker,
+      retryFn: async () => {
+        const nextPending = loadOwnedPendingWorkspaceTurn(pending);
+        if (!nextPending) {
+          return;
+        }
+        await doResumeWorkspaceTurn(nextPending, tracker);
+      },
+      onStale,
+    });
+  };
+
+  const onStale = (): void => {
+    if (!stillOwned()) {
+      return;
+    }
+    chatState.status = "error";
+    chatState.error = ACTIVE_TURN_RECOVERY_STALE_MESSAGE;
+    clearPendingTurnState();
+    workspaceChat.render();
+    workspaceChat.renderMessages();
+  };
+
+  const activePending = loadOwnedPendingWorkspaceTurn(pending);
+  if (!activePending) {
+    return;
+  }
+
   try {
-    const clientTurnId = typeof pending.clientTurnId === "string" ? pending.clientTurnId : "";
+    const clientTurnId =
+      typeof activePending.clientTurnId === "string" ? activePending.clientTurnId : "";
     const outcome = await resumeFileChatTurn(clientTurnId, {
       onEvent: (event) => {
+        if (!stillOwned()) {
+          return;
+        }
         workspaceChat.applyAppEvent(event);
         workspaceChat.renderEvents();
         workspaceChat.render();
       },
-      onResult: (result) => applyFinalResult(result as Record<string, unknown>),
+      onResult: (result) => {
+        if (!stillOwned()) {
+          return;
+        }
+        applyFinalResult(result as Record<string, unknown>);
+      },
       onError: (message) => {
+        if (!stillOwned()) {
+          return;
+        }
         chatState.statusText = message;
         workspaceChat.render();
       },
     });
+    if (!stillOwned()) {
+      return;
+    }
     turnEventsCtrl.current = outcome.controller;
     if (outcome.lastResult && (outcome.lastResult as Record<string, unknown>).status) {
       applyFinalResult(outcome.lastResult as Record<string, unknown>);
       return;
     }
     if (!outcome.controller) {
-      window.setTimeout(() => {
-        void resumePendingWorkspaceTurn();
-      }, 1000);
+      scheduleOwnedRetry();
     }
   } catch (err) {
+    if (!stillOwned()) {
+      return;
+    }
     const message = (err as Error).message || "Failed to resume turn";
     chatState.statusText = message;
     workspaceChat.render();
+    scheduleOwnedRetry();
   }
 }
 
@@ -611,7 +678,17 @@ async function sendChat(): Promise<void> {
 
   const chatState = workspaceChat.state as ChatState;
   if (chatState.controller) {
-    chatState.controller.abort();
+    cancelActiveTurnSync({
+      abortController() {
+        if (chatState.controller) {
+          chatState.controller.abort();
+          chatState.controller = null;
+        }
+      },
+      turnEventsCtrl,
+      interruptServer: () => interruptFileChat(currentTarget()),
+      clearPending: clearPendingTurnState,
+    });
   }
 
   chatState.controller = new AbortController();

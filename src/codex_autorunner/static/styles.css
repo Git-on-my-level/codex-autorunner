@@ -14170,6 +14170,59 @@ button.filebox-delete:hover {
   color: var(--accent);
 }
 
+.pma-thread-info-phase {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pma-thread-info-guidance {
+  font-size: 10px;
+  color: var(--muted);
+  padding: 2px 0 0;
+  line-height: 1.4;
+  max-width: 400px;
+}
+
+.pma-thread-info-queue-list {
+  font-size: 10px;
+  color: var(--muted);
+  padding: 2px 0 0;
+  line-height: 1.4;
+}
+
+.pma-thread-info-queue-list-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 0;
+}
+
+.pill-queued {
+  border-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.12);
+  color: #f59e0b;
+}
+
+.pill-accepted {
+  border-color: var(--accent);
+  background: rgba(108, 245, 216, 0.08);
+  color: var(--accent);
+}
+
+.pill-completed {
+  border-color: #4ade80;
+  background: rgba(74, 222, 128, 0.12);
+  color: #4ade80;
+}
+
+.pill-stalled {
+  border-color: #ff5566;
+  background: rgba(255, 85, 102, 0.12);
+  color: #ff8899;
+}
+
 .pma-repo-actions {
   display: flex;
   gap: 8px;

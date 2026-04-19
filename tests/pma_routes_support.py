@@ -3840,3 +3840,120 @@ def test_pma_orchestration_service_integration_for_thread_operations(
     assert any(
         call.startswith("get_thread_target:thread-1") for call in fake_service.calls
     )
+
+
+def test_pma_active_status_distinguishes_running_from_idle(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    _install_fake_successful_chat_supervisor(
+        app,
+        turn_id="turn-active-1",
+        message="active response",
+    )
+    app.state.app_server_events = object()
+
+    client = TestClient(app)
+
+    idle_resp = client.get("/hub/pma/active")
+    assert idle_resp.status_code == 200
+    idle_payload = idle_resp.json()
+    assert idle_payload["active"] is False
+    assert idle_payload.get("current") == {} or not idle_payload.get("current", {}).get(
+        "thread_id"
+    )
+
+
+def test_pma_active_status_surfaces_last_result_on_completion(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    _install_fake_successful_chat_supervisor(
+        app,
+        turn_id="turn-result-1",
+        message="completed response text",
+    )
+    app.state.app_server_events = object()
+
+    client = TestClient(app)
+    chat_resp = client.post(
+        "/hub/pma/chat",
+        json={
+            "message": "hello",
+            "stream": False,
+            "client_turn_id": "cturn-result-1",
+        },
+    )
+    assert chat_resp.status_code == 200
+
+    active_resp = client.get("/hub/pma/active")
+    assert active_resp.status_code == 200
+    active_payload = active_resp.json()
+    assert active_payload["active"] is False
+    last = active_payload.get("last_result", {})
+    assert last.get("status") == "ok"
+    assert last.get("message") == "completed response text"
+
+
+@pytest.mark.anyio
+async def test_pma_queue_endpoint_provides_lane_items_for_thread_info(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    queue = PmaQueue(hub_env.hub_root)
+    lane_id = "pma:default"
+
+    for i in range(3):
+        await queue.enqueue(
+            lane_id,
+            f"pma:default:queue-info-{i}",
+            {"message": f"turn {i}", "agent": "codex"},
+        )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        lane_resp = await client.get(f"/hub/pma/queue/{lane_id}")
+        summary_resp = await client.get("/hub/pma/queue")
+
+    assert lane_resp.status_code == 200
+    lane_payload = lane_resp.json()
+    pending_items = [
+        item for item in lane_payload["items"] if item["state"] == "pending"
+    ]
+    assert len(pending_items) == 3
+    for item in pending_items:
+        assert item["enqueued_at"] is not None
+
+    assert summary_resp.status_code == 200
+    summary_payload = summary_resp.json()
+    assert summary_payload["lanes"][lane_id]["by_state"]["pending"] == 3
+
+
+def test_pma_managed_thread_status_includes_phase_and_guidance(hub_env) -> None:
+    _enable_pma(hub_root=hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                "resource_kind": "repo",
+                "resource_id": hub_env.repo_id,
+            },
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+    store = PmaThreadStore(hub_env.hub_root)
+    store.create_turn(managed_thread_id, prompt="test phase")
+
+    client = TestClient(app)
+    resp = client.get(f"/hub/pma/threads/{managed_thread_id}/status")
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    turn = payload.get("turn", {})
+    assert "phase" in turn
+    assert "guidance" in turn
+    assert "elapsed_seconds" in turn
+    assert "activity" in turn

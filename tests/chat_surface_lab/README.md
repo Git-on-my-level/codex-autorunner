@@ -83,6 +83,60 @@ TICKET-170 adds seeded exploration and incident replay tooling:
 - `test_incident_replay.py` validates trace-to-scenario conversion and
   sanitization
 
+TICKET-012 strengthens the campaign gate:
+
+- The campaign north star is formalized in
+  `src/codex_autorunner/integrations/chat/ux_regression_contract.py` via
+  `CAMPAIGN_NORTH_STAR_LATENCY_THRESHOLDS`,
+  `CAMPAIGN_CRITICAL_SCENARIO_MATRIX`, `campaign_north_star_status()`, and
+  `format_campaign_scorecard()`.
+- The latency budget suite report now includes a `campaign_north_star` section
+  that names budget IDs, thresholds, observed values, pass/fail status, and
+  covered/missing scenario IDs.
+- `make test-chat-surface-lab` runs the full lab test suite including latency
+  budget tests, seeded exploration tests, and incident replay tests.
+- The corpus is validated for campaign-critical scenario coverage and contract
+  link integrity via `test_scenario_corpus.py`.
+
+TICKET-018 closes the canonical scorecard gap:
+
+- `DEFAULT_LATENCY_SCENARIO_IDS` now includes all required campaign scenarios:
+  `first_visible_feedback`, `queued_visibility`,
+  `interrupt_optimistic_acceptance`, `duplicate_delivery`,
+  `interrupt_confirmation`, `progress_anchor_reuse`, and `restart_recovery`.
+- The latency budget suite no longer hard-fails on `reference_only` or
+  no-budget scenarios; both contribute to campaign north star scenario coverage
+  via their corpus entries and contract links.
+- `interrupt_confirmation` is `reference_only` with coverage exercised by
+  integration tests in `test_hermes_pma_ux_regressions.py` and
+  `test_hermes_pma_surface_parity.py`.
+- `restart_recovery` remains `reference_only` with coverage exercised by
+  `test_managed_thread_runtime.py`.
+
+## Campaign Gate
+
+The chat-surface lab is the canonical acceptance boundary for the chat UX
+campaign. Campaign tickets should:
+
+1. Run `make test-chat-surface-lab` before closing.
+2. Check the `campaign_north_star.green` field in the suite report. If it is
+   `true`, all required latency budgets and scenario IDs are covered.
+3. Cite the suite report path (e.g.
+   `.codex-autorunner/diagnostics/chat-latency-budgets/latest.json`) as
+   evidence in the ticket.
+
+The campaign north star thresholds are:
+
+- `first_visible_feedback <= 1500 ms`
+- `queue_visible <= 1500 ms`
+- `first_semantic_progress <= 5000 ms`
+- `interrupt_visible <= 1500 ms`
+
+These are defined in `CAMPAIGN_NORTH_STAR_LATENCY_THRESHOLDS` in the regression
+contract. If a budget cannot be hard-gated yet, it should be documented in
+`CAMPAIGN_CRITICAL_SCENARIO_MATRIX` with `gating=False` and a note explaining
+why it remains non-gating.
+
 ## Relationship to nearby packages
 
 - `tests.chat_surface_lab`

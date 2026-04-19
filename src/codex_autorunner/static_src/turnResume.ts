@@ -49,3 +49,42 @@ export function clearPendingTurn(key: string): void {
     // ignore
   }
 }
+
+export type TurnRecoveryPhase = "recovering" | "stale";
+
+export interface TurnRecoveryTracker {
+  readonly phase: TurnRecoveryPhase;
+  readonly attempts: number;
+  readonly maxAttempts: number;
+  tick(): boolean;
+}
+
+export const DEFAULT_RECOVERY_MAX_ATTEMPTS = 30;
+
+export function createTurnRecoveryTracker(
+  maxAttempts?: number
+): TurnRecoveryTracker {
+  let phase: TurnRecoveryPhase = "recovering";
+  let attempts = 0;
+  const max = maxAttempts ?? DEFAULT_RECOVERY_MAX_ATTEMPTS;
+  return {
+    get phase() {
+      return phase;
+    },
+    get attempts() {
+      return attempts;
+    },
+    get maxAttempts() {
+      return max;
+    },
+    tick() {
+      if (phase !== "recovering") return false;
+      attempts += 1;
+      if (attempts >= max) {
+        phase = "stale";
+        return false;
+      }
+      return true;
+    },
+  };
+}

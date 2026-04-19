@@ -15,6 +15,11 @@ import {
   createTurnEventsController,
   startTurnEventsStream as sharedStartTurnEventsStream,
   clearManagedTurn,
+  cancelActiveTurnSync,
+  scheduleRecoveryRetry,
+  createTurnRecoveryTracker,
+  ACTIVE_TURN_RECOVERY_STALE_MESSAGE,
+  type TurnRecoveryTracker,
 } from "./sharedTurnLifecycle.js";
 import {
   getSelectedAgent,
@@ -32,6 +37,7 @@ export interface TicketDraft {
   agentMessage: string;
   createdAt: string;
   baseHash: string;
+  isStale: boolean;
 }
 
 export interface TicketChatState extends ChatState {
@@ -368,6 +374,7 @@ export function applyTicketChatResult(payload: unknown): void {
         (result.agent_message as string) || (result.agentMessage as string) || "",
       createdAt: (result.created_at as string) || (result.createdAt as string) || "",
       baseHash: (result.base_hash as string) || (result.baseHash as string) || "",
+      isStale: (result.is_stale as boolean) ?? (result.isStale as boolean) ?? false,
     };
   }
 
@@ -474,7 +481,13 @@ export function renderTicketChat(): void {
         renderDiff(ticketChatState.draft!.patch || "(no changes)", els.patchBody);
       }
       if (els.patchStatus) {
-        els.patchStatus.textContent = ticketChatState.draft!.agentMessage || "";
+        const draft = ticketChatState.draft!;
+        const staleNotice = draft.isStale
+          ? "⚠ File changed since this draft was created. Applying may overwrite newer changes."
+          : "";
+        els.patchStatus.textContent = staleNotice || draft.agentMessage || "";
+        els.patchStatus.classList.toggle("pill-warn", draft.isStale);
+        els.patchStatus.classList.toggle("muted", !draft.isStale);
       }
     }
   }
@@ -491,10 +504,28 @@ export async function sendTicketChat(): Promise<void> {
   }
 
   if (ticketChatState.status === "running") {
-    ticketChatState.error = "Ticket chat already running.";
-    renderTicketChat();
-    flash("Ticket chat already running", "error");
-    return;
+    cancelActiveTurnSync({
+      abortController() {
+        if (ticketChatState.controller) {
+          ticketChatState.controller.abort();
+          ticketChatState.controller = null;
+        }
+      },
+      turnEventsCtrl,
+      interruptServer: async () => {
+        if (ticketChatState.ticketIndex != null) {
+          await api(`/api/tickets/${ticketChatState.ticketIndex}/chat/interrupt`, {
+            method: "POST",
+          });
+        }
+      },
+      clearPending: () => {
+        if (ticketChatState.activePendingKey) {
+          clearPendingTurnState(ticketChatState.activePendingKey);
+        }
+        clearActiveTurnScope();
+      },
+    });
   }
 
   if (ticketChatState.ticketIndex == null) {
@@ -592,6 +623,8 @@ export const __ticketChatActionsTest = {
   pendingKeyForTicket,
   parseScopedTicketChatTarget,
   resolveTicketChatModel,
+  applyTicketChatResult,
+  getTicketChatState: () => ticketChatState,
 };
 
 export async function cancelTicketChat(): Promise<void> {
@@ -664,7 +697,7 @@ export async function resumeTicketPendingTurn(
   if (index == null) return;
   const pendingMatch = findPendingTicketTurn(index, ticketChatKey);
   if (!pendingMatch) return;
-  const { pendingKey, pending, target } = pendingMatch;
+  const { pendingKey, target } = pendingMatch;
   const parsedTarget = parseScopedTicketChatTarget(target);
   await setSelectedAgentProfile(parsedTarget.agent, parsedTarget.profile || "");
   setActiveTurnScope(target, pendingKey);
@@ -676,6 +709,24 @@ export async function resumeTicketPendingTurn(
   chatState.statusText = "Recovering previous turn…";
   ticketChat.render();
   ticketChat.renderMessages();
+
+  await doResumeTicketTurn(pendingMatch, createTurnRecoveryTracker());
+}
+
+async function doResumeTicketTurn(
+  pendingMatch: { pendingKey: string; pending: NonNullable<ReturnType<typeof loadPendingTurn>>; target: string },
+  tracker: TurnRecoveryTracker
+): Promise<void> {
+  const { pendingKey, pending } = pendingMatch;
+  const chatState = ticketChatState as ChatState;
+
+  const onStale = (): void => {
+    chatState.status = "error";
+    chatState.error = ACTIVE_TURN_RECOVERY_STALE_MESSAGE;
+    clearPendingTurnState(pendingKey);
+    clearActiveTurnScope();
+    renderTicketChat();
+  };
 
   try {
     const outcome = await resumeFileChatTurn(pending.clientTurnId, {
@@ -705,15 +756,21 @@ export async function resumeTicketPendingTurn(
       return;
     }
     if (!outcome.controller) {
-      window.setTimeout(
-        () => void resumeTicketPendingTurn(index, ticketChatKey),
-        1000
-      );
+      scheduleRecoveryRetry({
+        tracker,
+        retryFn: () => doResumeTicketTurn(pendingMatch, tracker),
+        onStale,
+      });
     }
   } catch (err) {
     const msg = (err as Error).message || "Failed to resume turn";
     chatState.statusText = msg;
     renderTicketChat();
+    scheduleRecoveryRetry({
+      tracker,
+      retryFn: () => doResumeTicketTurn(pendingMatch, tracker),
+      onStale,
+    });
   }
 }
 
@@ -728,10 +785,17 @@ export async function applyTicketPatch(): Promise<void> {
     return;
   }
 
+  if (ticketChatState.draft.isStale) {
+    const confirmed = await confirmModal(
+      "This draft is stale — the underlying file has changed since it was created. Apply anyway?"
+    );
+    if (!confirmed) return;
+  }
+
   try {
     const res = await api(
       `/api/tickets/${ticketChatState.ticketIndex}/chat/apply`,
-      { method: "POST" }
+      { method: "POST", body: { force: ticketChatState.draft.isStale } }
     ) as { content?: string };
 
     ticketChatState.draft = null;
@@ -792,6 +856,7 @@ export async function loadTicketPending(index: number, silent = false): Promise<
       agent_message?: string;
       created_at?: string;
       base_hash?: string;
+      is_stale?: boolean;
     };
 
     ticketChatState.draft = {
@@ -800,6 +865,7 @@ export async function loadTicketPending(index: number, silent = false): Promise<
       agentMessage: res.agent_message || "",
       createdAt: res.created_at || "",
       baseHash: res.base_hash || "",
+      isStale: res.is_stale ?? false,
     };
 
     if (!silent) {

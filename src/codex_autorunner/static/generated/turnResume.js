@@ -31,3 +31,30 @@ export function clearPendingTurn(key) {
         // ignore
     }
 }
+export const DEFAULT_RECOVERY_MAX_ATTEMPTS = 30;
+export function createTurnRecoveryTracker(maxAttempts) {
+    let phase = "recovering";
+    let attempts = 0;
+    const max = maxAttempts ?? DEFAULT_RECOVERY_MAX_ATTEMPTS;
+    return {
+        get phase() {
+            return phase;
+        },
+        get attempts() {
+            return attempts;
+        },
+        get maxAttempts() {
+            return max;
+        },
+        tick() {
+            if (phase !== "recovering")
+                return false;
+            attempts += 1;
+            if (attempts >= max) {
+                phase = "stale";
+                return false;
+            }
+            return true;
+        },
+    };
+}

@@ -1278,6 +1278,12 @@ async def _run_telegram_managed_thread_turn(
                     placeholder_id=prepared_placeholder_id,
                     response=failure_message,
                 )
+            elif send_failure_response and prepared_placeholder_id is not None:
+                await handlers._delete_message(
+                    message.chat_id,
+                    prepared_placeholder_id,
+                    thread_id=message.thread_id,
+                )
             if interrupt_status_fallback_text:
                 await handlers._clear_interrupt_status_message(
                     chat_id=message.chat_id,

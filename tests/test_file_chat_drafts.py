@@ -212,3 +212,26 @@ def test_ticket_new_thread_resets_instance_scoped_registry_key(
     assert payload["key"] == thread_key
     assert payload["cleared"] is True
     assert thread_key not in threads_file.read_text(encoding="utf-8")
+
+
+def test_ticket_pending_returns_stale_flag_when_file_changed(
+    client: TestClient, hub_env, repo: Path
+):
+    repo_root = repo
+    ticket_path = repo_root / ".codex-autorunner" / "tickets" / "TICKET-002.md"
+    before = "---\ntitle: T2\nagent: codex\ndone: false\n---\n\noriginal\n"
+    after = "---\ntitle: T2\nagent: codex\ndone: false\n---\n\nchanged\n"
+    _write_file(ticket_path, before)
+    _seed_draft(repo_root, "ticket:2", before, after)
+
+    pending_fresh = client.get(f"/repos/{hub_env.repo_id}/api/tickets/2/chat/pending")
+    assert pending_fresh.status_code == 200
+    assert pending_fresh.json()["is_stale"] is False
+
+    _write_file(ticket_path, "external modification\n")
+
+    pending_stale = client.get(f"/repos/{hub_env.repo_id}/api/tickets/2/chat/pending")
+    assert pending_stale.status_code == 200
+    data = pending_stale.json()
+    assert data["is_stale"] is True
+    assert data["base_hash"] != data["current_hash"]

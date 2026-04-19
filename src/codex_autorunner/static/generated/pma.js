@@ -13,7 +13,7 @@ import { newClientTurnId as newFileChatTurnId } from "./fileChat.js";
 import { initNotificationBell } from "./notificationBell.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
-import { createTurnEventsController, } from "./sharedTurnLifecycle.js";
+import { createTurnEventsController, cancelActiveTurnAndWait, scheduleRecoveryRetry, createTurnRecoveryTracker, ACTIVE_TURN_RECOVERY_STALE_MESSAGE, } from "./sharedTurnLifecycle.js";
 import { loadPendingTurn, savePendingTurn, clearPendingTurn, } from "./turnResume.js";
 const pmaStyling = {
     eventClass: "chat-event",
@@ -61,6 +61,17 @@ let activeContextAutoPrune = null;
 let pendingDeliverySummary = null;
 let pmaRefreshCleanup = null;
 const turnEventsCtrl = createTurnEventsController();
+let latestPhase = null;
+let latestGuidance = null;
+let latestElapsed = null;
+let currentPMATurnToken = 0;
+function advancePMATurnToken() {
+    currentPMATurnToken += 1;
+    return currentPMATurnToken;
+}
+function shouldAppendAsyncOutboxSummary(finalizedTurnToken, currentTurnToken, chatStatus) {
+    return finalizedTurnToken === currentTurnToken && (chatStatus || "") === "done";
+}
 function loadPMAPendingTurn() {
     return loadPendingTurn(PMA_PENDING_TURN_KEY);
 }
@@ -446,6 +457,14 @@ function formatOutboxAttachments(listing, names) {
     });
     return lines.length ? `**Outbox files (download):**\n${lines.join("\n")}` : "";
 }
+function buildOutboxAttachmentSummary(listing, baseline) {
+    if (!listing || !baseline)
+        return "";
+    const added = (listing.outbox || [])
+        .map((entry) => entry.name)
+        .filter((name) => !baseline.has(name));
+    return formatOutboxAttachments(listing, added);
+}
 function normalizeDeliveryStatus(value) {
     if (typeof value !== "string")
         return null;
@@ -506,29 +525,18 @@ async function finalizePMAResponse(responseText, options = {}) {
     if (!pmaChat)
         return;
     const deliverySummary = options.deliverySummary ?? pendingDeliverySummary;
-    let attachments = "";
-    try {
-        if (fileBoxCtrl) {
-            const current = await fileBoxCtrl.refresh();
-            if (currentOutboxBaseline) {
-                const baseline = currentOutboxBaseline;
-                const added = (current.outbox || []).map((e) => e.name).filter((name) => !baseline.has(name));
-                attachments = formatOutboxAttachments(current, added);
-            }
-        }
-    }
-    catch {
-        attachments = "";
-    }
-    finally {
-        currentOutboxBaseline = null;
-        clearPMAPendingTurn();
-        turnEventsCtrl.abort();
-    }
+    const finalizedTurnToken = currentPMATurnToken;
+    const outboxBaseline = currentOutboxBaseline
+        ? new Set(currentOutboxBaseline)
+        : null;
+    currentOutboxBaseline = null;
+    clearPMAPendingTurn();
+    turnEventsCtrl.abort();
+    latestPhase = null;
+    latestGuidance = null;
+    latestElapsed = null;
     const trimmed = (responseText || "").trim();
-    const content = trimmed
-        ? (attachments ? `${trimmed}\n\n---\n\n${attachments}` : trimmed)
-        : attachments;
+    const content = trimmed;
     const startTime = pmaChat.state.startTime;
     const duration = startTime ? (Date.now() - startTime) / 1000 : undefined;
     const steps = pmaChat.state.totalEvents || pmaChat.state.events.length;
@@ -546,7 +554,25 @@ async function finalizePMAResponse(responseText, options = {}) {
     pmaChat.renderMessages();
     pmaChat.renderEvents();
     pendingDeliverySummary = null;
-    void fileBoxCtrl?.refresh();
+    void (async () => {
+        let attachments = "";
+        try {
+            if (fileBoxCtrl) {
+                const current = await fileBoxCtrl.refresh();
+                attachments = buildOutboxAttachmentSummary(current, outboxBaseline);
+            }
+        }
+        catch {
+            attachments = "";
+        }
+        if (attachments &&
+            pmaChat &&
+            shouldAppendAsyncOutboxSummary(finalizedTurnToken, currentPMATurnToken, pmaChat.state.status)) {
+            pmaChat.addAssistantMessage(attachments, true);
+            pmaChat.renderMessages();
+        }
+        void fileBoxCtrl?.refresh();
+    })();
 }
 async function initPMA() {
     const elements = getElements();
@@ -636,6 +662,31 @@ export function setPMARefreshActive(active) {
         stopPMARefreshLoop();
     }
 }
+function deriveThreadPillState(active, currentStatus, queuePending) {
+    const status = currentStatus.trim().toLowerCase();
+    if (status === "running" && active)
+        return { label: "running", pillClass: "pill-running" };
+    if (status === "interrupted")
+        return { label: "interrupted", pillClass: "pill-warn" };
+    if (status === "error" || status === "failed")
+        return { label: "failed", pillClass: "pill-error" };
+    if (status === "ok" || status === "completed")
+        return { label: "completed", pillClass: "pill-completed" };
+    if (active && queuePending > 0)
+        return { label: "queued", pillClass: "pill-queued" };
+    if (active)
+        return { label: "accepted", pillClass: "pill-accepted" };
+    if (status === "stalled")
+        return { label: "stalled", pillClass: "pill-stalled" };
+    return { label: "idle", pillClass: "pill-idle" };
+}
+function formatElapsedSeconds(seconds) {
+    if (seconds < 60)
+        return `${seconds}s`;
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m}m ${s}s`;
+}
 async function loadPMAThreadInfo() {
     const elements = getElements();
     if (!elements.threadInfo)
@@ -649,6 +700,19 @@ async function loadPMAThreadInfo() {
             elements.threadInfo.classList.add("hidden");
             return;
         }
+        let queuePending = 0;
+        let queuedItems = [];
+        try {
+            const queuePayload = (await api("/hub/pma/queue/pma:default", {
+                method: "GET",
+            }));
+            queuedItems = (queuePayload.items || []).filter((item) => item.state === "pending" || item.state === "running");
+            queuePending = queuedItems.filter((item) => item.state === "pending").length;
+        }
+        catch {
+            // queue endpoint may not be available
+        }
+        const turnStatus = String(info.status || (payload.active ? "running" : (last.status || "idle")));
         if (elements.threadInfoAgent) {
             elements.threadInfoAgent.textContent = String(info.agent || "unknown");
         }
@@ -662,16 +726,71 @@ async function loadPMAThreadInfo() {
             elements.threadInfoTurnId.textContent = turnId.slice(0, 12);
             elements.threadInfoTurnId.title = turnId;
         }
+        const { label, pillClass } = deriveThreadPillState(!!payload.active, turnStatus, queuePending);
         if (elements.threadInfoStatus) {
-            const status = String(info.status || (payload.active ? "active" : "idle"));
-            elements.threadInfoStatus.textContent = status;
-            if (payload.active) {
-                elements.threadInfoStatus.classList.add("pill-warn");
-                elements.threadInfoStatus.classList.remove("pill-idle");
+            elements.threadInfoStatus.textContent = label;
+            elements.threadInfoStatus.className = `pill pill-small ${pillClass}`;
+        }
+        const phaseEl = document.getElementById("pma-thread-info-phase");
+        if (phaseEl) {
+            const phase = latestPhase || String(info.phase || "");
+            if (phase && payload.active) {
+                phaseEl.textContent = phase;
+                phaseEl.classList.remove("hidden");
             }
             else {
-                elements.threadInfoStatus.classList.add("pill-idle");
-                elements.threadInfoStatus.classList.remove("pill-warn");
+                phaseEl.classList.add("hidden");
+            }
+        }
+        const queueRow = document.getElementById("pma-thread-info-queue-row");
+        const queueValue = document.getElementById("pma-thread-info-queue");
+        if (queueRow && queueValue) {
+            if (queuePending > 0 || queuedItems.length > 0) {
+                queueValue.textContent =
+                    queuePending > 0
+                        ? `${queuePending} waiting`
+                        : `${queuedItems.length} active`;
+                queueRow.classList.remove("hidden");
+            }
+            else {
+                queueRow.classList.add("hidden");
+            }
+        }
+        const elapsedRow = document.getElementById("pma-thread-info-elapsed-row");
+        const elapsedValue = document.getElementById("pma-thread-info-elapsed");
+        if (elapsedRow && elapsedValue) {
+            const elapsed = latestElapsed;
+            if (elapsed != null && elapsed > 0 && payload.active) {
+                elapsedValue.textContent = formatElapsedSeconds(elapsed);
+                elapsedRow.classList.remove("hidden");
+            }
+            else {
+                elapsedRow.classList.add("hidden");
+            }
+        }
+        const guidanceEl = document.getElementById("pma-thread-info-guidance");
+        if (guidanceEl) {
+            const guidance = latestGuidance || String(info.guidance || "");
+            if (guidance && payload.active) {
+                guidanceEl.textContent = guidance;
+                guidanceEl.classList.remove("hidden");
+            }
+            else {
+                guidanceEl.classList.add("hidden");
+            }
+        }
+        const queueListEl = document.getElementById("pma-thread-info-queue-list");
+        if (queueListEl) {
+            const pendingItems = queuedItems.filter((item) => item.state === "pending");
+            if (pendingItems.length > 0) {
+                queueListEl.innerHTML = pendingItems
+                    .slice(0, 3)
+                    .map((item) => `<div class="pma-thread-info-queue-list-item"><span class="pill pill-small pill-queued">${escapeHtml(item.state)}</span><span class="muted small">${escapeHtml(item.enqueued_at || "")}</span></div>`)
+                    .join("");
+                queueListEl.classList.remove("hidden");
+            }
+            else {
+                queueListEl.classList.add("hidden");
             }
         }
         elements.threadInfo.classList.remove("hidden");
@@ -709,13 +828,27 @@ async function sendMessage() {
     const message = elements.input.value?.trim() || "";
     if (!message)
         return;
+    advancePMATurnToken();
     if (currentController) {
-        void cancelRequest({ clearPending: true, interruptServer: true });
-        return;
+        await cancelActiveTurnAndWait({
+            abortController() {
+                if (currentController) {
+                    currentController.abort();
+                    currentController = null;
+                }
+                pmaChat.state.controller = null;
+            },
+            turnEventsCtrl,
+            interruptServer: () => interruptActiveTurn(),
+            clearPending: clearPMAPendingTurn,
+        });
     }
     // Ensure prior turn event streams are cleared so we don't render stale actions.
     turnEventsCtrl.abort();
     pendingDeliverySummary = null;
+    latestPhase = null;
+    latestGuidance = null;
+    latestElapsed = null;
     elements.input.value = "";
     elements.input.style.height = "auto";
     const agent = elements.agentSelect?.value || getSelectedAgent();
@@ -840,6 +973,7 @@ async function readPMAStream(res, finalizeOnClose = false) {
 const pmaStreamHandlers = {
     onStatus(status) {
         pmaChat.state.statusText = status;
+        latestPhase = status;
         pmaChat.render();
         pmaChat.renderEvents();
     },
@@ -847,9 +981,13 @@ const pmaStreamHandlers = {
         pmaChat.state.streamText = (pmaChat.state.streamText || "") + token;
         if (!pmaChat.state.statusText || pmaChat.state.statusText === "starting") {
             pmaChat.state.statusText = "responding";
+            latestPhase = "responding";
         }
         if (pmaChat.state.status !== "running") {
             pmaChat.state.status = "running";
+        }
+        if (pmaChat.state.startTime) {
+            latestElapsed = Math.round((Date.now() - pmaChat.state.startTime) / 1000);
         }
         pmaChat.render();
     },
@@ -865,6 +1003,17 @@ const pmaStreamHandlers = {
         }
         if (payload.message) {
             pmaChat.state.streamText = payload.message;
+        }
+        if (payload.phase && typeof payload.phase === "string") {
+            latestPhase = payload.phase;
+        }
+        if (payload.guidance && typeof payload.guidance === "string") {
+            latestGuidance = payload.guidance;
+        }
+        if (payload.elapsed_seconds != null) {
+            latestElapsed = typeof payload.elapsed_seconds === "number"
+                ? payload.elapsed_seconds
+                : null;
         }
         const summary = deriveDeliverySummary(payload);
         if (summary) {
@@ -884,9 +1033,23 @@ const pmaStreamHandlers = {
             pmaChat.renderEvents();
             pmaChat.render();
         }
+        if (event && typeof event === "object") {
+            const evt = event;
+            const title = String(evt.title || evt.kind || "");
+            const summary = String(evt.summary || "");
+            if (title || summary) {
+                latestPhase = title || latestPhase;
+                if (!latestGuidance || summary) {
+                    latestGuidance = summary || latestGuidance;
+                }
+            }
+        }
     },
     onError(message) {
         pendingDeliverySummary = null;
+        latestPhase = null;
+        latestGuidance = null;
+        latestElapsed = null;
         pmaChat.state.status = "error";
         pmaChat.state.error = message;
         pmaChat.addAssistantMessage(`Error: ${message}`, true);
@@ -896,6 +1059,9 @@ const pmaStreamHandlers = {
     },
     onInterrupted(message) {
         pendingDeliverySummary = null;
+        latestPhase = null;
+        latestGuidance = null;
+        latestElapsed = null;
         pmaChat.state.status = "interrupted";
         pmaChat.state.error = "";
         pmaChat.state.statusText = message;
@@ -916,6 +1082,17 @@ async function resumePendingTurn() {
     pmaChat.state.statusText = "Recovering previous turn…";
     pmaChat.render();
     pmaChat.renderMessages();
+    const tracker = createTurnRecoveryTracker();
+    const onStale = () => {
+        if (!pmaChat)
+            return;
+        pmaChat.state.status = "error";
+        pmaChat.state.error = ACTIVE_TURN_RECOVERY_STALE_MESSAGE;
+        clearPMAPendingTurn();
+        turnEventsCtrl.abort();
+        pmaChat.render();
+        pmaChat.renderMessages();
+    };
     const poll = async () => {
         try {
             const payload = (await api(`/hub/pma/active?client_turn_id=${encodeURIComponent(pending.clientTurnId)}`, { method: "GET" }));
@@ -960,16 +1137,14 @@ async function resumePendingTurn() {
                 turnEventsCtrl.abort();
                 return;
             }
-            // Still running; keep polling.
+            // Still running; schedule bounded retry.
             pmaChat.state.status = "running";
             pmaChat.state.statusText = "Recovering previous turn…";
             pmaChat.render();
-            window.setTimeout(() => void poll(), 1000);
+            scheduleRecoveryRetry({ tracker, retryFn: poll, onStale });
         }
         catch {
-            // If recovery fails, don't spam errors; just stop trying.
-            pmaChat.state.statusText = "Recovering previous turn…";
-            pmaChat.render();
+            scheduleRecoveryRetry({ tracker, retryFn: poll, onStale });
         }
     };
     await poll();
@@ -1022,12 +1197,16 @@ async function interruptActiveTurn(options = {}) {
 }
 async function cancelRequest(options = {}) {
     const { clearPending = false, interruptServer = false, stopLane = false, statusText } = options;
+    advancePMATurnToken();
     if (currentController) {
         currentController.abort();
         currentController = null;
     }
     pendingDeliverySummary = null;
     turnEventsCtrl.abort();
+    latestPhase = null;
+    latestGuidance = null;
+    latestElapsed = null;
     if (interruptServer || stopLane) {
         await interruptActiveTurn({ stopLane });
     }
@@ -1043,9 +1222,13 @@ async function cancelRequest(options = {}) {
     }
 }
 function resetThread() {
+    advancePMATurnToken();
     clearPMAPendingTurn();
     pendingDeliverySummary = null;
     turnEventsCtrl.abort();
+    latestPhase = null;
+    latestGuidance = null;
+    latestElapsed = null;
     if (pmaChat) {
         pmaChat.state.messages = [];
         pmaChat.state.events = [];
@@ -1225,4 +1408,8 @@ function attachHandlers() {
         });
     }
 }
-export { initPMA };
+const __pmaTest = {
+    buildOutboxAttachmentSummary,
+    shouldAppendAsyncOutboxSummary,
+};
+export { __pmaTest, initPMA };

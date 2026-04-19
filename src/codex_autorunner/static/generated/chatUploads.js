@@ -102,10 +102,49 @@ function insertTextAtCursor(textarea, text, options = {}) {
     textarea.setSelectionRange(cursor, cursor);
     textarea.dispatchEvent(new Event("input", { bubbles: true }));
 }
+export function createAttachmentTracker() {
+    const attachments = [];
+    return {
+        getAttachments() {
+            return [...attachments];
+        },
+        getPendingCount() {
+            return attachments.filter((a) => a.status === "uploading").length;
+        },
+        getSummaryText() {
+            if (!attachments.length)
+                return "";
+            const uploaded = attachments.filter((a) => a.status === "uploaded");
+            const pending = attachments.filter((a) => a.status === "uploading");
+            const failed = attachments.filter((a) => a.status === "failed");
+            const parts = [];
+            if (uploaded.length)
+                parts.push(`${uploaded.length} uploaded`);
+            if (pending.length)
+                parts.push(`${pending.length} uploading`);
+            if (failed.length)
+                parts.push(`${failed.length} failed`);
+            const names = uploaded.map((a) => a.name).join(", ");
+            return `Attachments: ${parts.join(", ")}${names ? ` (${names})` : ""}`;
+        },
+        _add(entry) {
+            attachments.push(entry);
+        },
+        _update(name, status, error) {
+            const entry = attachments.find((a) => a.name === name);
+            if (entry) {
+                entry.status = status;
+                if (error)
+                    entry.error = error;
+            }
+        },
+    };
+}
 export function initChatPasteUpload(options) {
+    const tracker = createAttachmentTracker();
     const { textarea } = options;
     if (!textarea)
-        return;
+        return tracker;
     textarea.addEventListener("paste", async (event) => {
         const files = extractImageFilesFromClipboard(event);
         if (!files.length)
@@ -113,8 +152,21 @@ export function initChatPasteUpload(options) {
         event.preventDefault();
         const box = options.box || DEFAULT_FILEBOX_BOX;
         const insertStyle = options.insertStyle || "markdown";
+        const used = new Set();
+        files.forEach((file, index) => {
+            const name = normalizeFilename(file, index, used);
+            tracker._add({ name, url: "", status: "uploading" });
+        });
+        options.onAttachmentStateChange?.(tracker);
         try {
             const entries = await uploadImages(options.basePath, box, files, options.pathPrefix);
+            for (const entry of entries) {
+                tracker._update(entry.name, "uploaded");
+                const tracked = tracker.getAttachments().find((a) => a.name === entry.name);
+                if (tracked)
+                    tracked.url = entry.url;
+            }
+            options.onAttachmentStateChange?.(tracker);
             const lines = entries.flatMap((entry) => {
                 const label = escapeMarkdownLinkText(entry.name);
                 const linkLine = `[${label}](${entry.url})`;
@@ -132,7 +184,13 @@ export function initChatPasteUpload(options) {
         }
         catch (err) {
             const message = err.message || "Image upload failed";
+            for (const a of tracker.getAttachments()) {
+                if (a.status === "uploading")
+                    tracker._update(a.name, "failed", message);
+            }
+            options.onAttachmentStateChange?.(tracker);
             flash(message, "error");
         }
     });
+    return tracker;
 }
