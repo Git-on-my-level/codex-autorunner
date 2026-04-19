@@ -482,8 +482,12 @@ async def _wait_for_runner_idle(
     attempts: int = 100,
     delay_seconds: float = 0.01,
 ) -> None:
+    saw_active = False
     for _ in range(attempts):
-        if runner.active_task_count == 0:
+        count = runner.active_task_count
+        if count > 0:
+            saw_active = True
+        if saw_active and count == 0:
             return
         await asyncio.sleep(delay_seconds)
     pytest.fail(f"runner did not become idle within {attempts * delay_seconds:.2f}s")
@@ -531,8 +535,10 @@ async def test_gateway_not_blocked_by_slow_handler() -> None:
     must return immediately (gateway is not blocked)."""
     service = _FakeService()
     slow_done = asyncio.Event()
+    slow_started = asyncio.Event()
 
     async def slow_handler(*args: Any, **kwargs: Any) -> None:
+        slow_started.set()
         await slow_done.wait()
 
     service._handle_car_command.side_effect = slow_handler
@@ -545,7 +551,7 @@ async def test_gateway_not_blocked_by_slow_handler() -> None:
 
     ctx1, payload1 = _make_ctx_with_timing(interaction_id="slow-1")
     runner.submit(ctx1, payload1)
-    await asyncio.sleep(0.02)
+    await asyncio.wait_for(slow_started.wait(), timeout=1.0)
 
     submit_start = asyncio.get_event_loop().time()
     ctx2, payload2 = _make_ctx_with_timing(interaction_id="fast-1")
@@ -557,8 +563,7 @@ async def test_gateway_not_blocked_by_slow_handler() -> None:
     ), f"submit() took {submit_elapsed:.3f}s -- gateway would be blocked"
 
     slow_done.set()
-    await asyncio.sleep(0.05)
-    assert runner.active_task_count == 0
+    await _wait_for_runner_idle(runner)
 
 
 @pytest.mark.anyio
@@ -567,14 +572,17 @@ async def test_timeout_enforcement_cancels_handler() -> None:
     notified."""
     service = _FakeService()
     handler_cancelled = False
+    handler_done = asyncio.Event()
 
     async def hung_handler(*args: Any, **kwargs: Any) -> None:
         nonlocal handler_cancelled
         try:
-            await asyncio.sleep(300)
+            await asyncio.Event().wait()
         except asyncio.CancelledError:
             handler_cancelled = True
             raise
+        finally:
+            handler_done.set()
 
     service._handle_car_command.side_effect = hung_handler
 
@@ -585,7 +593,8 @@ async def test_timeout_enforcement_cancels_handler() -> None:
     )
     ctx, payload = _make_ctx_with_timing()
     runner.submit(ctx, payload)
-    await asyncio.sleep(0.3)
+    await _wait_for_runner_idle(runner)
+    await asyncio.wait_for(handler_done.wait(), timeout=1.0)
 
     assert handler_cancelled, "Handler was not cancelled on timeout"
     service._send_or_respond_ephemeral.assert_awaited()
@@ -596,9 +605,15 @@ async def test_timeout_enforcement_cancels_handler() -> None:
 async def test_timeout_followup_text_mentions_timeout() -> None:
     """The timeout followup message must indicate the command timed out."""
     service = _FakeService()
+    handler_done = asyncio.Event()
 
     async def slow_handler(*args: Any, **kwargs: Any) -> None:
-        await asyncio.sleep(300)
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            raise
+        finally:
+            handler_done.set()
 
     service._handle_car_command.side_effect = slow_handler
 
@@ -609,7 +624,8 @@ async def test_timeout_followup_text_mentions_timeout() -> None:
     )
     ctx, payload = _make_ctx_with_timing()
     runner.submit(ctx, payload)
-    await asyncio.sleep(0.3)
+    await _wait_for_runner_idle(runner)
+    await asyncio.wait_for(handler_done.wait(), timeout=1.0)
 
     service._send_or_respond_ephemeral.assert_awaited_once()
     call_kwargs = service._send_or_respond_ephemeral.call_args[1]
@@ -695,7 +711,10 @@ async def test_degraded_followup_does_not_crash_runner() -> None:
     )
     ctx, payload = _make_ctx_with_timing()
     runner.submit(ctx, payload)
-    await asyncio.sleep(0.1)
+    for _ in range(50):
+        if runner.active_task_count == 0:
+            break
+        await asyncio.sleep(0.01)
 
     assert runner.active_task_count == 0
 
@@ -705,9 +724,15 @@ async def test_degraded_timeout_followup_does_not_crash_runner() -> None:
     """If sending the timeout followup itself fails, the runner must not
     crash."""
     service = _FakeService()
+    handler_done = asyncio.Event()
 
     async def slow_handler(*args: Any, **kwargs: Any) -> None:
-        await asyncio.sleep(300)
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            raise
+        finally:
+            handler_done.set()
 
     service._handle_car_command.side_effect = slow_handler
     service._send_or_respond_ephemeral.side_effect = RuntimeError(
@@ -721,7 +746,8 @@ async def test_degraded_timeout_followup_does_not_crash_runner() -> None:
     )
     ctx, payload = _make_ctx_with_timing()
     runner.submit(ctx, payload)
-    await asyncio.sleep(0.3)
+    await _wait_for_runner_idle(runner)
+    await asyncio.wait_for(handler_done.wait(), timeout=1.0)
 
     assert runner.active_task_count == 0
 
@@ -817,7 +843,7 @@ async def test_stall_warning_fires_for_slow_handler() -> None:
     service = _FakeService()
 
     async def slow_handler(*args: Any, **kwargs: Any) -> None:
-        await asyncio.sleep(10)
+        await asyncio.Event().wait()
 
     service._handle_car_command.side_effect = slow_handler
 
@@ -843,7 +869,10 @@ async def test_stall_warning_fires_for_slow_handler() -> None:
 
     ctx, payload = _make_ctx_with_timing()
     runner.submit(ctx, payload)
-    await asyncio.sleep(0.15)
+    for _ in range(50):
+        if stall_events:
+            break
+        await asyncio.sleep(0.01)
 
     assert len(stall_events) >= 1, "No stall warning was emitted"
     event = stall_events[0]
@@ -864,7 +893,10 @@ async def test_timeout_followup_failure_is_logged() -> None:
     )
 
     async def forever_handler(*args: Any, **kwargs: Any) -> None:
-        await asyncio.sleep(300)
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            raise
 
     service._handle_car_command.side_effect = forever_handler
 
@@ -884,7 +916,7 @@ async def test_timeout_followup_failure_is_logged() -> None:
 
     ctx, payload = _make_ctx_with_timing()
     runner.submit(ctx, payload)
-    await asyncio.sleep(0.05)
+    await _wait_for_runner_idle(runner)
 
     assert followup_events
     assert followup_events[0]["interaction_id"] == "inter-timed"
@@ -1002,9 +1034,19 @@ async def test_multiple_timeouts_in_sequence() -> None:
     """Multiple sequential timeouts must all be handled without leaking
     tasks."""
     service = _FakeService()
+    handler_done_count = 0
+    all_handlers_done = asyncio.Event()
 
     async def forever_handler(*args: Any, **kwargs: Any) -> None:
-        await asyncio.sleep(300)
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            raise
+        finally:
+            nonlocal handler_done_count
+            handler_done_count += 1
+            if handler_done_count == 5:
+                all_handlers_done.set()
 
     service._handle_car_command.side_effect = forever_handler
 
@@ -1021,7 +1063,8 @@ async def test_multiple_timeouts_in_sequence() -> None:
         )
         runner.submit(ctx, payload)
 
-    await asyncio.sleep(0.5)
+    await _wait_for_runner_idle(runner)
+    await asyncio.wait_for(all_handlers_done.wait(), timeout=1.0)
     assert runner.active_task_count == 0
     assert service._send_or_respond_ephemeral.await_count == 5
 
@@ -1032,14 +1075,20 @@ async def test_shutdown_cancels_all_in_flight_handlers() -> None:
     tasks."""
     service = _FakeService()
     cancel_count = 0
+    handlers_started = asyncio.Event()
+    all_handlers_done = asyncio.Event()
 
     async def tracked_handler(*args: Any, **kwargs: Any) -> None:
         nonlocal cancel_count
+        handlers_started.set()
         try:
-            await asyncio.sleep(300)
+            await asyncio.Event().wait()
         except asyncio.CancelledError:
             cancel_count += 1
             raise
+        finally:
+            if cancel_count == 3:
+                all_handlers_done.set()
 
     service._handle_car_command.side_effect = tracked_handler
 
@@ -1056,10 +1105,11 @@ async def test_shutdown_cancels_all_in_flight_handlers() -> None:
         )
         runner.submit(ctx, payload)
 
-    await asyncio.sleep(0.05)
+    await asyncio.wait_for(handlers_started.wait(), timeout=1.0)
     assert runner.active_task_count == 3
 
     await runner.shutdown(grace_seconds=0.1)
+    await asyncio.wait_for(all_handlers_done.wait(), timeout=1.0)
     assert runner.active_task_count == 0
     assert cancel_count == 3
 
@@ -1128,7 +1178,7 @@ async def test_ack_budget_expiry_stops_execution_and_logs_expired_before_ack(
     service._load_interaction_ack_mode = AsyncMock(return_value=None)
 
     async def _slow_defer(**_kwargs: Any) -> bool:
-        await asyncio.sleep(0.05)
+        await asyncio.Event().wait()
         return True
 
     service._defer_ephemeral = _slow_defer  # type: ignore[assignment]
@@ -1200,7 +1250,6 @@ async def test_ack_succeeds_within_budget_and_records_latency() -> None:
     service._load_interaction_ack_mode = AsyncMock(return_value=None)
 
     async def _fast_defer(**_kwargs: Any) -> bool:
-        await asyncio.sleep(0.01)
         return True
 
     service._defer_ephemeral = _fast_defer  # type: ignore[assignment]
@@ -1697,7 +1746,11 @@ async def test_runner_skips_duplicate_execution_for_same_interaction_id(
 
         runner.submit(ctx, payload)
         runner.submit(ctx, payload)
-        await asyncio.sleep(0.1)
+        for _ in range(100):
+            record = await store.get_interaction("dup-runner")
+            if record is not None and record.execution_status == "completed":
+                break
+            await asyncio.sleep(0.01)
 
         service._handle_car_command.assert_awaited_once()
         record = await store.get_interaction("dup-runner")
@@ -1713,6 +1766,7 @@ async def test_queue_wait_ack_happens_while_handler_slots_are_exhausted() -> Non
     first_started = asyncio.Event()
     release_first = asyncio.Event()
     queue_wait_acked = asyncio.Event()
+    busy_detected = asyncio.Event()
     ack_calls: list[tuple[str, str]] = []
 
     async def blocking_handler(*args: Any, **_kwargs: Any) -> None:
@@ -1777,9 +1831,10 @@ async def test_queue_wait_ack_happens_while_handler_slots_are_exhausted() -> Non
 
     for _ in range(100):
         if runner.is_busy(conversation_id):
+            busy_detected.set()
             break
         await asyncio.sleep(0.01)
-    assert runner.is_busy(conversation_id)
+    assert busy_detected.is_set()
 
     queued_ctx = _make_ctx(
         interaction_id="queue-wait-2",
@@ -2203,7 +2258,7 @@ async def test_concurrent_submit_and_shutdown() -> None:
         runner.submit_event({"label": f"e-{i}"})
 
     shutdown_task = asyncio.create_task(runner.shutdown(grace_seconds=5.0))
-    await asyncio.sleep(0.01)
+    await asyncio.sleep(0)
 
     runner.submit_event({"label": "late-event"})
     await shutdown_task

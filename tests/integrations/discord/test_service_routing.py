@@ -90,6 +90,11 @@ class _FakeRest:
         self.typing_calls: list[str] = []
         self.command_sync_calls: list[dict[str, Any]] = []
         self.fetched_channel_messages: dict[tuple[str, str], dict[str, Any]] = {}
+        self._typing_event: asyncio.Event | None = None
+
+    def _new_typing_event(self) -> asyncio.Event:
+        self._typing_event = asyncio.Event()
+        return self._typing_event
 
     async def create_interaction_response(
         self,
@@ -143,6 +148,8 @@ class _FakeRest:
 
     async def trigger_typing(self, *, channel_id: str) -> None:
         self.typing_calls.append(channel_id)
+        if self._typing_event is not None:
+            self._typing_event.set()
 
     async def create_followup_message(
         self,
@@ -5126,7 +5133,7 @@ async def test_service_routes_slash_command_timeout_followup_through_runner(
     )
 
     async def _slow_handle_car_command(*_args: Any, **_kwargs: Any) -> None:
-        await asyncio.sleep(60)
+        await asyncio.Event().wait()
 
     service._handle_car_command = _slow_handle_car_command  # type: ignore[assignment]
 
@@ -7411,10 +7418,7 @@ async def test_message_turn_waits_for_ingressed_slash_command_to_finish(
 
         release_newt.set()
 
-        for _ in range(100):
-            if message_turn_started.is_set():
-                break
-            await asyncio.sleep(0.01)
+        await asyncio.wait_for(message_turn_started.wait(), timeout=2.0)
 
         assert observed == ["newt:start", "newt:end", "message:please continue"]
         assert any(
@@ -10604,6 +10608,7 @@ async def test_handle_chat_event_message_starts_and_stops_typing_indicator(
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
     await store.initialize()
     rest = _FakeRest()
+    typing_event = rest._new_typing_event()
     service = DiscordBotService(
         _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
         logger=logging.getLogger("test"),
@@ -10640,10 +10645,7 @@ async def test_handle_chat_event_message_starts_and_stops_typing_indicator(
     task = asyncio.create_task(service._handle_chat_event(event, context))
     try:
         await started.wait()
-        for _ in range(100):
-            if rest.typing_calls:
-                break
-            await asyncio.sleep(0.01)
+        await asyncio.wait_for(typing_event.wait(), timeout=1.0)
         assert rest.typing_calls == ["channel-1"]
         release.set()
         await task
@@ -10762,6 +10764,7 @@ async def test_run_agent_turn_for_message_wraps_typing_indicator(
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
     await store.initialize()
     rest = _FakeRest()
+    typing_event = rest._new_typing_event()
     service = DiscordBotService(
         _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
         logger=logging.getLogger("test"),
@@ -10831,10 +10834,7 @@ async def test_run_agent_turn_for_message_wraps_typing_indicator(
     )
     try:
         await started.wait()
-        for _ in range(100):
-            if rest.typing_calls:
-                break
-            await asyncio.sleep(0.01)
+        await asyncio.wait_for(typing_event.wait(), timeout=1.0)
         assert rest.typing_calls == ["channel-1"]
         release.set()
         result = await task
