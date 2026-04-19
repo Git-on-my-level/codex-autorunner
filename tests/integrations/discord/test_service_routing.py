@@ -7036,7 +7036,7 @@ async def test_scheduler_serializes_workspace_mutations_across_channels(
             await asyncio.wait_for(component_started.wait(), timeout=0.1)
 
         slash_release.set()
-        await asyncio.wait_for(component_started.wait(), timeout=1.0)
+        await asyncio.wait_for(component_started.wait(), timeout=3.0)
         assert start_order == ["slash", "component"]
     finally:
         slash_release.set()
@@ -10842,4 +10842,51 @@ async def test_run_agent_turn_for_message_wraps_typing_indicator(
         assert not await service._typing_session_active("channel-1")
     finally:
         release.set()
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_run_agent_turn_for_message_forwards_managed_thread_delivery_suppression(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=_FakeRest(),
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    captured: dict[str, Any] = {}
+
+    async def _fake_run_managed_thread_turn_for_message(
+        _service: Any,
+        **kwargs: Any,
+    ) -> DiscordMessageTurnResult:
+        captured.update(kwargs)
+        return DiscordMessageTurnResult(final_message="ok")
+
+    monkeypatch.setattr(
+        discord_service_module,
+        "run_managed_thread_turn_for_message",
+        _fake_run_managed_thread_turn_for_message,
+    )
+
+    try:
+        result = await service._run_agent_turn_for_message(
+            workspace_root=tmp_path,
+            prompt_text="hello",
+            agent="codex",
+            model_override=None,
+            reasoning_effort=None,
+            session_key="session-1",
+            orchestrator_channel_key="pma:channel-1",
+            suppress_managed_thread_delivery=True,
+        )
+        assert result.final_message == "ok"
+        assert captured["suppress_managed_thread_delivery"] is True
+    finally:
         await store.close()

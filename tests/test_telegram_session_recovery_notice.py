@@ -11,9 +11,7 @@ from codex_autorunner.core.orchestration.runtime_bindings import (
 )
 from tests import telegram_pma_routing_support as support
 
-_SESSION_NOTICE = (
-    "Notice: the previous live session was unavailable, so I started a new " "session."
-)
+_SESSION_NOTICE = "Notice: I started a new live session for this conversation."
 
 
 @pytest.mark.anyio

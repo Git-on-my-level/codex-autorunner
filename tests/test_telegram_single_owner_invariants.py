@@ -887,10 +887,7 @@ class TestSessionRecoveryInvariants:
         )
         from tests import telegram_pma_routing_support as support
 
-        _SESSION_NOTICE = (
-            "Notice: the previous live session was unavailable, "
-            "so I started a new session."
-        )
+        _SESSION_NOTICE = "Notice: I started a new live session for this conversation."
 
         record = support.TelegramTopicRecord(
             pma_enabled=False,
@@ -1046,10 +1043,7 @@ class TestSessionRecoveryInvariants:
         from codex_autorunner.agents.registry import AgentDescriptor
         from tests import telegram_pma_routing_support as support
 
-        _SESSION_NOTICE = (
-            "Notice: the previous live session was unavailable, "
-            "so I started a new session."
-        )
+        _SESSION_NOTICE = "Notice: I started a new live session for this conversation."
 
         record = support.TelegramTopicRecord(
             pma_enabled=False,

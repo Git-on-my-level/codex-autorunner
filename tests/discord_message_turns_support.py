@@ -1854,6 +1854,7 @@ async def test_message_create_personal_bound_channel_runs_without_collaboration_
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
+        suppress_managed_thread_delivery: bool = False,
         chat_ux_snapshot: Any = None,
     ) -> DiscordMessageTurnResult:
         captured.append(
@@ -1952,6 +1953,7 @@ async def test_car_session_compact_finishes_interaction_when_finalize_fails(
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
+        suppress_managed_thread_delivery: bool = False,
         chat_ux_snapshot: Any = None,
     ) -> DiscordMessageTurnResult:
         _ = (
@@ -1963,6 +1965,7 @@ async def test_car_session_compact_finishes_interaction_when_finalize_fails(
             session_key,
             orchestrator_channel_key,
         )
+        assert suppress_managed_thread_delivery is True
         return DiscordMessageTurnResult(
             final_message="summary text",
             preview_message_id=None,
@@ -2053,8 +2056,7 @@ async def test_car_session_compact_restores_previous_thread_when_seed_save_fails
         session_key: str,
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
-        managed_thread_surface_key: Optional[str] = None,
-        chat_ux_snapshot: Any = None,
+        **_kwargs: Any,
     ) -> DiscordMessageTurnResult:
         _ = (
             workspace_root,
@@ -2178,8 +2180,7 @@ async def test_car_session_compact_keeps_previous_thread_when_summary_is_blank(
         session_key: str,
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
-        managed_thread_surface_key: Optional[str] = None,
-        chat_ux_snapshot: Any = None,
+        **_kwargs: Any,
     ) -> DiscordMessageTurnResult:
         _ = (
             workspace_root,
@@ -2296,8 +2297,7 @@ async def test_car_session_compact_uses_transcript_fallback_when_summary_is_blan
         session_key: str,
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
-        managed_thread_surface_key: Optional[str] = None,
-        chat_ux_snapshot: Any = None,
+        **_kwargs: Any,
     ) -> DiscordMessageTurnResult:
         _ = (
             workspace_root,
@@ -2505,6 +2505,7 @@ async def test_message_create_after_compact_uses_pending_seed_and_clears_it(
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
+        suppress_managed_thread_delivery: bool = False,
         chat_ux_snapshot: Any = None,
     ) -> str:
         _ = (
@@ -9169,6 +9170,7 @@ async def test_car_review_single_chunk_deletes_preview_and_sends_chunk_when_flus
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
+        suppress_managed_thread_delivery: bool = False,
         chat_ux_snapshot: Any = None,
     ) -> DiscordMessageTurnResult:
         _ = (
@@ -9297,8 +9299,7 @@ async def test_car_session_compact_reuses_preview_without_part_numbering(
         session_key: str,
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
-        managed_thread_surface_key: Optional[str] = None,
-        chat_ux_snapshot: Any = None,
+        **_kwargs: Any,
     ) -> DiscordMessageTurnResult:
         _ = (
             workspace_root,
@@ -9491,8 +9492,7 @@ async def test_car_session_compact_places_continue_button_on_last_chunk_without_
         session_key: str,
         orchestrator_channel_key: str,
         source_message_id: Optional[str] = None,
-        managed_thread_surface_key: Optional[str] = None,
-        chat_ux_snapshot: Any = None,
+        **_kwargs: Any,
     ) -> DiscordMessageTurnResult:
         _ = (
             workspace_root,

@@ -3644,6 +3644,7 @@ class DiscordBotService:
         session_key: str,
         orchestrator_channel_key: str,
         managed_thread_surface_key: Optional[str] = None,
+        suppress_managed_thread_delivery: bool = False,
         supervision: Optional[Any] = None,
         chat_ux_snapshot: Optional[Any] = None,
     ) -> DiscordMessageTurnResult:
@@ -3661,6 +3662,7 @@ class DiscordBotService:
                     session_key=session_key,
                     orchestrator_channel_key=orchestrator_channel_key,
                     managed_thread_surface_key=managed_thread_surface_key,
+                    suppress_managed_thread_delivery=suppress_managed_thread_delivery,
                     supervision=supervision,
                     chat_ux_snapshot=chat_ux_snapshot,
                 )

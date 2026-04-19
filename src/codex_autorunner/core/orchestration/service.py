@@ -62,11 +62,11 @@ _RECOVERABLE_BACKEND_MARKERS = _MISSING_THREAD_MARKERS + ("event loop is closed"
 _REHYDRATION_TRANSCRIPT_LIMIT = 3
 _REHYDRATION_TEXT_LIMIT = 4_000
 _FRESH_BACKEND_SESSION_NOTICE = (
-    "Notice: the previous live session was unavailable, so I started a new session."
+    "Notice: I started a new live session for this conversation."
 )
 _FRESH_BACKEND_SESSION_REHYDRATED_NOTICE = (
-    "Notice: the previous live session was unavailable, so I started a new "
-    "session and recovered context from durable history."
+    "Notice: I started a new live session for this conversation and recovered "
+    "context from durable history."
 )
 logger = logging.getLogger(__name__)
 
