@@ -8,9 +8,8 @@ from typing import Any, Optional
 
 import pytest
 from fastapi.testclient import TestClient
-from tests.conftest import write_test_config
+from tests.support.web_test_helpers import build_pma_hub_app
 
-from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.orchestration import (
     ColdTraceStore,
     OrchestrationBindingStore,
@@ -29,27 +28,9 @@ from codex_autorunner.core.scm_polling_watches import ScmPollingWatchStore
 from codex_autorunner.integrations.github import (
     managed_thread_pr_binding as managed_thread_pr_binding_module,
 )
-from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes.pma_routes import managed_thread_runtime
 
 pytestmark = pytest.mark.slow
-
-
-def _enable_pma(hub_root: Path, *, enable_github_polling: bool = False) -> None:
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    cfg.setdefault("pma", {})
-    cfg["pma"]["enabled"] = True
-    if enable_github_polling:
-        repo_defaults = cfg.setdefault("repo_defaults", {})
-        if isinstance(repo_defaults, dict):
-            github = repo_defaults.setdefault("github", {})
-            if isinstance(github, dict):
-                automation = github.setdefault("automation", {})
-                if isinstance(automation, dict):
-                    polling = automation.setdefault("polling", {})
-                    if isinstance(polling, dict):
-                        polling["enabled"] = True
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
 
 @pytest.mark.anyio
@@ -57,8 +38,7 @@ async def test_restart_managed_thread_queue_workers_restores_pending_threads(
     hub_env,
     monkeypatch,
 ) -> None:
-    _enable_pma(hub_env.hub_root)
-    app = create_hub_app(hub_env.hub_root)
+    app = build_pma_hub_app(hub_env.hub_root)
     store = PmaThreadStore(hub_env.hub_root)
     created = store.create_thread(
         "codex",
@@ -90,8 +70,7 @@ async def test_restart_managed_thread_queue_workers_restores_pending_threads(
 async def test_recover_orphaned_managed_thread_executions_unblocks_restart_queue(
     hub_env,
 ) -> None:
-    _enable_pma(hub_env.hub_root)
-    app = create_hub_app(hub_env.hub_root)
+    app = build_pma_hub_app(hub_env.hub_root)
     store = PmaThreadStore(hub_env.hub_root)
     created = store.create_thread(
         "codex",
@@ -135,8 +114,7 @@ async def test_recover_orphaned_managed_thread_executions_unblocks_restart_queue
 async def test_recover_orphaned_managed_thread_executions_restores_backend_ids_from_checkpoint(
     hub_env,
 ) -> None:
-    _enable_pma(hub_env.hub_root)
-    app = create_hub_app(hub_env.hub_root)
+    app = build_pma_hub_app(hub_env.hub_root)
     store = PmaThreadStore(hub_env.hub_root)
     created = store.create_thread(
         "codex",
@@ -178,8 +156,7 @@ async def test_recover_orphaned_managed_thread_executions_restores_backend_ids_f
 async def test_recover_orphaned_managed_thread_executions_skips_chat_bound_threads(
     hub_env,
 ) -> None:
-    _enable_pma(hub_env.hub_root)
-    app = create_hub_app(hub_env.hub_root)
+    app = build_pma_hub_app(hub_env.hub_root)
     store = PmaThreadStore(hub_env.hub_root)
     bindings = OrchestrationBindingStore(hub_env.hub_root)
     created = store.create_thread(
@@ -223,8 +200,7 @@ async def test_recover_orphaned_managed_thread_executions_skips_chat_bound_threa
 
 
 def test_managed_thread_list_route_filters_by_status(hub_env) -> None:
-    _enable_pma(hub_env.hub_root)
-    app = create_hub_app(hub_env.hub_root)
+    app = build_pma_hub_app(hub_env.hub_root)
     store = PmaThreadStore(hub_env.hub_root)
 
     active = store.create_thread(
@@ -266,8 +242,7 @@ async def test_recover_orphaned_managed_thread_executions_recovers_pma_runs_on_c
     surface_kind: str,
     surface_key: str,
 ) -> None:
-    _enable_pma(hub_env.hub_root)
-    app = create_hub_app(hub_env.hub_root)
+    app = build_pma_hub_app(hub_env.hub_root)
     store = PmaThreadStore(hub_env.hub_root)
     bindings = OrchestrationBindingStore(hub_env.hub_root)
     created = store.create_thread(
@@ -319,8 +294,7 @@ def test_managed_thread_message_route_uses_orchestration_service_seam(
     hub_env,
     monkeypatch,
 ) -> None:
-    _enable_pma(hub_env.hub_root)
-    app = create_hub_app(hub_env.hub_root)
+    app = build_pma_hub_app(hub_env.hub_root)
     store = PmaThreadStore(hub_env.hub_root)
     created = store.create_thread(
         "codex", hub_env.repo_root.resolve(), repo_id=hub_env.repo_id
@@ -448,8 +422,7 @@ def test_managed_thread_message_route_honors_explicit_core_context_profile(
     hub_env,
     monkeypatch,
 ) -> None:
-    _enable_pma(hub_env.hub_root)
-    app = create_hub_app(hub_env.hub_root)
+    app = build_pma_hub_app(hub_env.hub_root)
     store = PmaThreadStore(hub_env.hub_root)
     created = store.create_thread(
         "codex",
@@ -555,8 +528,7 @@ def test_managed_thread_message_route_self_claims_existing_pr_binding(
     hub_env,
     monkeypatch,
 ) -> None:
-    _enable_pma(hub_env.hub_root, enable_github_polling=True)
-    app = create_hub_app(hub_env.hub_root)
+    app = build_pma_hub_app(hub_env.hub_root, enable_github_polling=True)
     store = PmaThreadStore(hub_env.hub_root)
     created = store.create_thread(
         "codex",
@@ -659,8 +631,7 @@ def test_managed_thread_message_route_self_claims_discovered_pr_binding(
     hub_env,
     monkeypatch,
 ) -> None:
-    _enable_pma(hub_env.hub_root, enable_github_polling=True)
-    app = create_hub_app(hub_env.hub_root)
+    app = build_pma_hub_app(hub_env.hub_root, enable_github_polling=True)
     store = PmaThreadStore(hub_env.hub_root)
     created = store.create_thread(
         "codex",
@@ -802,8 +773,7 @@ def test_managed_thread_message_route_honors_explicit_approval_override(
     hub_env,
     monkeypatch,
 ) -> None:
-    _enable_pma(hub_env.hub_root)
-    app = create_hub_app(hub_env.hub_root)
+    app = build_pma_hub_app(hub_env.hub_root)
     captured: dict[str, Any] = {}
 
     class FakeService:
@@ -909,8 +879,7 @@ def test_managed_thread_message_route_injects_core_context_when_profile_is_core(
     hub_env,
     monkeypatch,
 ) -> None:
-    _enable_pma(hub_env.hub_root)
-    app = create_hub_app(hub_env.hub_root)
+    app = build_pma_hub_app(hub_env.hub_root)
     store = PmaThreadStore(hub_env.hub_root)
     created = store.create_thread(
         "codex",
@@ -996,8 +965,7 @@ def test_managed_thread_message_route_uses_live_runtime_binding_for_compact_seed
     hub_env,
     monkeypatch,
 ) -> None:
-    _enable_pma(hub_env.hub_root)
-    app = create_hub_app(hub_env.hub_root)
+    app = build_pma_hub_app(hub_env.hub_root)
     store = PmaThreadStore(hub_env.hub_root)
     created = store.create_thread(
         "codex",
@@ -1086,8 +1054,7 @@ def test_managed_thread_message_route_preserves_literal_message_whitespace(
     hub_env,
     monkeypatch,
 ) -> None:
-    _enable_pma(hub_env.hub_root)
-    app = create_hub_app(hub_env.hub_root)
+    app = build_pma_hub_app(hub_env.hub_root)
     store = PmaThreadStore(hub_env.hub_root)
     created = store.create_thread(
         "codex", hub_env.repo_root.resolve(), repo_id=hub_env.repo_id
@@ -1171,8 +1138,7 @@ def test_managed_thread_message_persists_full_timeline_from_raw_events(
     hub_env,
     monkeypatch,
 ) -> None:
-    _enable_pma(hub_env.hub_root)
-    app = create_hub_app(hub_env.hub_root)
+    app = build_pma_hub_app(hub_env.hub_root)
     store = PmaThreadStore(hub_env.hub_root)
     created = store.create_thread(
         "codex", hub_env.repo_root.resolve(), repo_id=hub_env.repo_id
@@ -1311,8 +1277,7 @@ def test_zeroclaw_managed_thread_projects_compat_agents_file_for_core_profile(
     hub_env,
     monkeypatch,
 ) -> None:
-    _enable_pma(hub_env.hub_root)
-    app = create_hub_app(hub_env.hub_root)
+    app = build_pma_hub_app(hub_env.hub_root)
     workspace_root = (
         hub_env.hub_root / ".codex-autorunner" / "runtimes" / "zeroclaw" / "zc-main"
     )
@@ -1398,8 +1363,7 @@ def test_managed_thread_interrupt_route_uses_orchestration_service_seam(
     hub_env,
     monkeypatch,
 ) -> None:
-    _enable_pma(hub_env.hub_root)
-    app = create_hub_app(hub_env.hub_root)
+    app = build_pma_hub_app(hub_env.hub_root)
     store = PmaThreadStore(hub_env.hub_root)
     created = store.create_thread(
         "codex", hub_env.repo_root.resolve(), repo_id=hub_env.repo_id
@@ -1474,8 +1438,7 @@ def test_interrupt_fails_for_agent_without_interrupt_capability(
 ) -> None:
     from unittest.mock import MagicMock
 
-    _enable_pma(hub_env.hub_root)
-    app = create_hub_app(hub_env.hub_root)
+    app = build_pma_hub_app(hub_env.hub_root)
     store = PmaThreadStore(hub_env.hub_root)
     created = store.create_thread(
         "codex", hub_env.repo_root.resolve(), repo_id=hub_env.repo_id

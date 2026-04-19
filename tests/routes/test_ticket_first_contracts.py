@@ -6,12 +6,12 @@ from types import SimpleNamespace
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from tests.support.web_test_helpers import build_flow_app
 
 from codex_autorunner.core.flows.models import FlowEventType, FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.surfaces.web.routes import base as base_routes
 from codex_autorunner.surfaces.web.routes import file_chat as file_chat_routes
-from codex_autorunner.surfaces.web.routes import flows as flow_routes
 from codex_autorunner.tickets.frontmatter import parse_markdown_frontmatter
 
 
@@ -19,10 +19,7 @@ def test_ticket_flow_runs_endpoint_returns_empty_list_on_fresh_repo(
     tmp_path, monkeypatch
 ):
     """Ticket-first: /api/flows/runs must not 404/500 when no runs exist."""
-    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
-
-    app = FastAPI()
-    app.include_router(flow_routes.build_flow_routes())
+    app = build_flow_app(tmp_path, monkeypatch)
 
     with TestClient(app) as client:
         resp = client.get("/api/flows/runs?flow_type=ticket_flow")
@@ -35,10 +32,7 @@ def test_ticket_list_endpoint_returns_empty_list_when_no_tickets(tmp_path, monke
 
     (tmp_path / ".codex-autorunner" / "tickets").mkdir(parents=True)
 
-    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
-
-    app = FastAPI()
-    app.include_router(flow_routes.build_flow_routes())
+    app = build_flow_app(tmp_path, monkeypatch)
 
     with TestClient(app) as client:
         resp = client.get("/api/flows/ticket_flow/tickets")
@@ -53,11 +47,9 @@ def test_repo_health_is_ok_when_tickets_dir_exists(tmp_path):
     (tmp_path / ".codex-autorunner" / "tickets").mkdir(parents=True)
 
     app = FastAPI()
-    # Minimal app state for repo_health.
     app.state.config = object()
     app.state.engine = SimpleNamespace(repo_root=Path(tmp_path))
 
-    # build_base_routes requires a static_dir, but /api/repo/health does not use it.
     app.include_router(base_routes.build_base_routes(static_dir=Path(tmp_path)))
 
     with TestClient(app) as client:
@@ -79,10 +71,7 @@ def test_ticket_list_returns_body_even_when_frontmatter_invalid(tmp_path, monkey
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
-
-    app = FastAPI()
-    app.include_router(flow_routes.build_flow_routes())
+    app = build_flow_app(tmp_path, monkeypatch)
 
     with TestClient(app) as client:
         resp = client.get("/api/flows/ticket_flow/tickets")
@@ -90,11 +79,8 @@ def test_ticket_list_returns_body_even_when_frontmatter_invalid(tmp_path, monkey
         payload = resp.json()
         assert len(payload["tickets"]) == 1
         ticket = payload["tickets"][0]
-        # Index is derived from filename even when lint fails.
         assert ticket["index"] == 7
-        # Body should be present so the UI can show/repair it.
         assert "Describe the task details here" in (ticket["body"] or "")
-        # Errors surface frontmatter problems.
         assert ticket["errors"]
 
 
@@ -109,10 +95,7 @@ def test_get_ticket_by_index(tmp_path, monkeypatch):
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
-
-    app = FastAPI()
-    app.include_router(flow_routes.build_flow_routes())
+    app = build_flow_app(tmp_path, monkeypatch)
 
     with TestClient(app) as client:
         resp = client.get("/api/flows/ticket_flow/tickets/2")
@@ -128,10 +111,7 @@ def test_get_ticket_by_index(tmp_path, monkeypatch):
 def test_create_ticket_sets_ticket_id_and_stable_chat_key(tmp_path, monkeypatch):
     ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True)
-    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
-
-    app = FastAPI()
-    app.include_router(flow_routes.build_flow_routes())
+    app = build_flow_app(tmp_path, monkeypatch)
 
     with TestClient(app) as client:
         created = client.post(
@@ -178,10 +158,7 @@ def test_create_ticket_appends_after_highest_index_when_gaps_exist(
         '---\nticket_id: "tkt_gap003"\nagent: codex\ndone: false\n---\n\nThree\n',
         encoding="utf-8",
     )
-    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
-
-    app = FastAPI()
-    app.include_router(flow_routes.build_flow_routes())
+    app = build_flow_app(tmp_path, monkeypatch)
 
     with TestClient(app) as client:
         created = client.post(
@@ -198,10 +175,7 @@ def test_create_ticket_appends_after_highest_index_when_gaps_exist(
 def test_create_ticket_canonicalizes_hermes_alias_input(tmp_path, monkeypatch):
     ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True)
-    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
-
-    app = FastAPI()
-    app.include_router(flow_routes.build_flow_routes())
+    app = build_flow_app(tmp_path, monkeypatch)
 
     with TestClient(app) as client:
         created = client.post(
@@ -217,10 +191,7 @@ def test_create_ticket_canonicalizes_hermes_alias_input(tmp_path, monkeypatch):
 def test_create_ticket_rejects_unknown_keys(tmp_path, monkeypatch):
     ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True)
-    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
-
-    app = FastAPI()
-    app.include_router(flow_routes.build_flow_routes())
+    app = build_flow_app(tmp_path, monkeypatch)
 
     with TestClient(app) as client:
         created = client.post(
@@ -243,17 +214,13 @@ def test_get_ticket_by_index_returns_body_on_invalid_frontmatter(tmp_path, monke
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
-
-    app = FastAPI()
-    app.include_router(flow_routes.build_flow_routes())
+    app = build_flow_app(tmp_path, monkeypatch)
 
     with TestClient(app) as client:
         resp = client.get("/api/flows/ticket_flow/tickets/3")
         assert resp.status_code == 200
         payload = resp.json()
         assert payload["index"] == 3
-        # Invalid frontmatter should not block access; parsed fields may be partial.
         assert payload["frontmatter"].get("agent") == "codex"
         assert "Still show body" in (payload["body"] or "")
 
@@ -269,10 +236,7 @@ def test_update_ticket_allows_colon_titles_and_models(tmp_path, monkeypatch):
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
-
-    app = FastAPI()
-    app.include_router(flow_routes.build_flow_routes())
+    app = build_flow_app(tmp_path, monkeypatch)
 
     content = """---
 ticket_id: "tkt_update004"
@@ -301,10 +265,7 @@ def test_get_ticket_by_index_404(tmp_path, monkeypatch):
     """GET /api/flows/ticket_flow/tickets/{index} returns 404 when missing."""
 
     (tmp_path / ".codex-autorunner" / "tickets").mkdir(parents=True)
-    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
-
-    app = FastAPI()
-    app.include_router(flow_routes.build_flow_routes())
+    app = build_flow_app(tmp_path, monkeypatch)
 
     with TestClient(app) as client:
         resp = client.get("/api/flows/ticket_flow/tickets/99")
@@ -343,10 +304,7 @@ def test_ticket_list_keeps_diff_stats_for_latest_completed_run(tmp_path, monkeyp
     )
     store.close()
 
-    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
-
-    app = FastAPI()
-    app.include_router(flow_routes.build_flow_routes())
+    app = build_flow_app(tmp_path, monkeypatch)
 
     with TestClient(app) as client:
         resp = client.get("/api/flows/ticket_flow/tickets")
@@ -400,10 +358,7 @@ def test_ticket_list_keeps_diff_stats_when_newer_run_has_no_events(
     store.update_flow_run_status(newer_run_id, FlowRunStatus.COMPLETED)
     store.close()
 
-    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
-
-    app = FastAPI()
-    app.include_router(flow_routes.build_flow_routes())
+    app = build_flow_app(tmp_path, monkeypatch)
 
     with TestClient(app) as client:
         resp = client.get("/api/flows/ticket_flow/tickets")
@@ -458,10 +413,7 @@ def test_ticket_list_matches_diff_stats_by_stable_ticket_identity(
     )
     store.close()
 
-    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
-
-    app = FastAPI()
-    app.include_router(flow_routes.build_flow_routes())
+    app = build_flow_app(tmp_path, monkeypatch)
 
     with TestClient(app) as client:
         resp = client.get("/api/flows/ticket_flow/tickets")
@@ -530,10 +482,7 @@ def test_ticket_list_ignores_legacy_path_stats_when_ticket_has_stable_id(
     )
     store.close()
 
-    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
-
-    app = FastAPI()
-    app.include_router(flow_routes.build_flow_routes())
+    app = build_flow_app(tmp_path, monkeypatch)
 
     with TestClient(app) as client:
         resp = client.get("/api/flows/ticket_flow/tickets")
@@ -562,9 +511,7 @@ def test_reorder_ticket_moves_source_before_destination(tmp_path, monkeypatch):
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
-    app = FastAPI()
-    app.include_router(flow_routes.build_flow_routes())
+    app = build_flow_app(tmp_path, monkeypatch)
 
     with TestClient(app) as client:
         resp = client.post(
@@ -625,9 +572,7 @@ def test_reorder_ticket_updates_active_run_current_ticket_path(tmp_path, monkeyp
             },
         )
 
-    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
-    app = FastAPI()
-    app.include_router(flow_routes.build_flow_routes())
+    app = build_flow_app(tmp_path, monkeypatch)
 
     with TestClient(app) as client:
         resp = client.post(
@@ -672,9 +617,7 @@ def test_reorder_ticket_does_not_overwrite_malformed_frontmatter(tmp_path, monke
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
-    app = FastAPI()
-    app.include_router(flow_routes.build_flow_routes())
+    app = build_flow_app(tmp_path, monkeypatch)
 
     with TestClient(app) as client:
         resp = client.post(
@@ -707,9 +650,7 @@ def test_bulk_set_agent_rejects_unknown_keys(tmp_path, monkeypatch):
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
-    app = FastAPI()
-    app.include_router(flow_routes.build_flow_routes())
+    app = build_flow_app(tmp_path, monkeypatch)
 
     with TestClient(app) as client:
         response = client.post(
@@ -740,9 +681,7 @@ def test_bulk_set_agent_preserves_existing_profile_when_profile_omitted(
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
-    app = FastAPI()
-    app.include_router(flow_routes.build_flow_routes())
+    app = build_flow_app(tmp_path, monkeypatch)
 
     with TestClient(app) as client:
         response = client.post(
@@ -774,9 +713,7 @@ def test_bulk_set_agent_can_clear_profile_explicitly(tmp_path, monkeypatch):
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
-    app = FastAPI()
-    app.include_router(flow_routes.build_flow_routes())
+    app = build_flow_app(tmp_path, monkeypatch)
 
     with TestClient(app) as client:
         response = client.post(
@@ -807,9 +744,7 @@ def test_bulk_set_agent_canonicalizes_hermes_alias_input(tmp_path, monkeypatch):
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
-    app = FastAPI()
-    app.include_router(flow_routes.build_flow_routes())
+    app = build_flow_app(tmp_path, monkeypatch)
 
     with TestClient(app) as client:
         response = client.post(
@@ -833,9 +768,7 @@ def test_bulk_clear_model_rejects_unknown_keys(tmp_path, monkeypatch):
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
-    app = FastAPI()
-    app.include_router(flow_routes.build_flow_routes())
+    app = build_flow_app(tmp_path, monkeypatch)
 
     with TestClient(app) as client:
         response = client.post(
@@ -962,10 +895,7 @@ def test_ticket_chat_route_rejects_invalid_profile_before_stream_start(
 def test_dispatch_history_returns_empty_when_no_run(tmp_path, monkeypatch):
     """Ticket-first: dispatch history endpoint must not crash on missing runs."""
     (tmp_path / ".codex-autorunner" / "tickets").mkdir(parents=True)
-    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
-
-    app = FastAPI()
-    app.include_router(flow_routes.build_flow_routes())
+    app = build_flow_app(tmp_path, monkeypatch)
 
     with TestClient(app) as client:
         resp = client.get("/api/flows/runs/run-nonexistent/dispatch_history")
@@ -1021,10 +951,7 @@ def test_ticket_list_endpoint_stable_when_dispatch_history_has_gaps(
     )
     store.close()
 
-    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
-
-    app = FastAPI()
-    app.include_router(flow_routes.build_flow_routes())
+    app = build_flow_app(tmp_path, monkeypatch)
 
     with TestClient(app) as client:
         resp = client.get("/api/flows/ticket_flow/tickets")
@@ -1053,10 +980,7 @@ def test_ticket_flow_runs_endpoint_returns_completed_run(tmp_path, monkeypatch):
     store.update_flow_run_status(run_id, FlowRunStatus.COMPLETED)
     store.close()
 
-    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
-
-    app = FastAPI()
-    app.include_router(flow_routes.build_flow_routes())
+    app = build_flow_app(tmp_path, monkeypatch)
 
     with TestClient(app) as client:
         resp = client.get("/api/flows/runs?flow_type=ticket_flow")
@@ -1086,10 +1010,7 @@ def test_ticket_list_returns_ascending_numeric_order(tmp_path, monkeypatch):
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
-
-    app = FastAPI()
-    app.include_router(flow_routes.build_flow_routes())
+    app = build_flow_app(tmp_path, monkeypatch)
 
     with TestClient(app) as client:
         resp = client.get("/api/flows/ticket_flow/tickets")
@@ -1107,10 +1028,7 @@ def test_user_agent_ticket_is_visible_but_not_auto_executable(tmp_path, monkeypa
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
-
-    app = FastAPI()
-    app.include_router(flow_routes.build_flow_routes())
+    app = build_flow_app(tmp_path, monkeypatch)
 
     with TestClient(app) as client:
         resp = client.get("/api/flows/ticket_flow/tickets")
@@ -1124,10 +1042,7 @@ def test_ticket_update_preserves_chat_key_stability(tmp_path, monkeypatch):
     """Ticket-first: updating ticket content must not change chat_key."""
     ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True)
-    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
-
-    app = FastAPI()
-    app.include_router(flow_routes.build_flow_routes())
+    app = build_flow_app(tmp_path, monkeypatch)
 
     with TestClient(app) as client:
         created = client.post(

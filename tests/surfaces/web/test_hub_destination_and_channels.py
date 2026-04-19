@@ -6,29 +6,17 @@ from typing import Optional
 
 import pytest
 from fastapi.testclient import TestClient
-from tests.conftest import write_test_config
+from tests.support.web_test_helpers import create_test_hub_supervisor
 
-from codex_autorunner.core.config import (
-    CONFIG_FILENAME,
-    DEFAULT_HUB_CONFIG,
-    load_hub_config,
-)
+from codex_autorunner.core.config import DEFAULT_HUB_CONFIG
 from codex_autorunner.core.flows import FlowEventType, FlowRunStatus, FlowStore
 from codex_autorunner.core.git_utils import run_git
-from codex_autorunner.core.hub import HubSupervisor
 from codex_autorunner.core.orchestration.bindings import OrchestrationBindingStore
 from codex_autorunner.core.orchestration.sqlite import (
     resolve_orchestration_sqlite_path,
 )
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.state import RunnerState, save_state
-from codex_autorunner.integrations.agents.backend_orchestrator import (
-    build_backend_orchestrator,
-)
-from codex_autorunner.integrations.agents.wiring import (
-    build_agent_backend_factory,
-    build_app_server_supervisor_factory,
-)
 from codex_autorunner.integrations.app_server.threads import (
     FILE_CHAT_PREFIX,
     PMA_KEY,
@@ -63,21 +51,6 @@ def _init_git_repo(path: Path) -> None:
         ],
         path,
         check=True,
-    )
-
-
-def _create_hub_supervisor(hub_root: Path) -> HubSupervisor:
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    return _create_hub_supervisor_with_config(hub_root, cfg)
-
-
-def _create_hub_supervisor_with_config(hub_root: Path, cfg: dict) -> HubSupervisor:
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    return HubSupervisor(
-        load_hub_config(hub_root),
-        backend_factory_builder=build_agent_backend_factory,
-        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
-        backend_orchestrator_builder=build_backend_orchestrator,
     )
 
 
@@ -310,7 +283,7 @@ def test_hub_repo_list_includes_ticket_flow_summary_and_run_state(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
-    supervisor = _create_hub_supervisor(hub_root)
+    supervisor = create_test_hub_supervisor(hub_root)
     repo = supervisor.create_repo("base")
 
     tickets_dir = repo.path / ".codex-autorunner" / "tickets"
@@ -358,7 +331,7 @@ def test_hub_repo_list_includes_ticket_flow_summary_and_run_state(
 
 def test_hub_scan_reuses_repo_summary_enrichment(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    supervisor = _create_hub_supervisor(hub_root)
+    supervisor = create_test_hub_supervisor(hub_root)
     repo = supervisor.create_repo("base")
 
     tickets_dir = repo.path / ".codex-autorunner" / "tickets"
@@ -404,7 +377,7 @@ def test_hub_repo_list_rewrites_stale_runner_last_run_to_authoritative_flow_run(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
-    supervisor = _create_hub_supervisor(hub_root)
+    supervisor = create_test_hub_supervisor(hub_root)
     repo = supervisor.create_repo("base")
 
     tickets_dir = repo.path / ".codex-autorunner" / "tickets"
@@ -450,7 +423,7 @@ def test_hub_repo_list_rewrites_stale_runner_last_run_to_authoritative_flow_run(
 
 def test_hub_destination_routes_show_set_and_persist(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    supervisor = _create_hub_supervisor(hub_root)
+    supervisor = create_test_hub_supervisor(hub_root)
     supervisor.create_repo("base")
 
     app = create_hub_app(hub_root)
@@ -505,7 +478,7 @@ def test_hub_destination_show_route_includes_manifest_parse_issues(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
-    supervisor = _create_hub_supervisor(hub_root)
+    supervisor = create_test_hub_supervisor(hub_root)
     supervisor.create_repo("base")
     manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
     manifest = load_manifest(manifest_path, hub_root)
@@ -526,7 +499,7 @@ def test_hub_destination_set_route_supports_extended_docker_fields(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
-    supervisor = _create_hub_supervisor(hub_root)
+    supervisor = create_test_hub_supervisor(hub_root)
     supervisor.create_repo("base")
 
     app = create_hub_app(hub_root)
@@ -615,7 +588,7 @@ def test_hub_destination_set_route_accepts_legacy_env_list_alias(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
-    supervisor = _create_hub_supervisor(hub_root)
+    supervisor = create_test_hub_supervisor(hub_root)
     supervisor.create_repo("base")
 
     client = TestClient(create_hub_app(hub_root))
@@ -638,7 +611,7 @@ def test_hub_destination_set_route_accepts_legacy_env_list_alias(
 
 def test_hub_destination_set_route_rejects_invalid_input(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    supervisor = _create_hub_supervisor(hub_root)
+    supervisor = create_test_hub_supervisor(hub_root)
     supervisor.create_repo("base")
     client = TestClient(create_hub_app(hub_root))
 
@@ -702,7 +675,7 @@ def test_hub_destination_set_route_rejects_unknown_top_level_keys(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
-    supervisor = _create_hub_supervisor(hub_root)
+    supervisor = create_test_hub_supervisor(hub_root)
     supervisor.create_repo("base")
     client = TestClient(create_hub_app(hub_root))
 
@@ -722,7 +695,7 @@ def test_hub_destination_set_route_rejects_unknown_top_level_keys(
 
 def test_hub_destination_set_route_rejects_unknown_mount_keys(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    supervisor = _create_hub_supervisor(hub_root)
+    supervisor = create_test_hub_supervisor(hub_root)
     supervisor.create_repo("base")
     client = TestClient(create_hub_app(hub_root))
 
@@ -757,7 +730,7 @@ def test_hub_destination_web_mutation_preserves_inheritance_and_worktree_overrid
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
-    supervisor = _create_hub_supervisor(hub_root)
+    supervisor = create_test_hub_supervisor(hub_root)
     base = supervisor.create_repo("base")
     _init_git_repo(base.path)
     worktree = supervisor.create_worktree(
@@ -811,7 +784,7 @@ def test_hub_destination_web_mutation_preserves_inheritance_and_worktree_overrid
 
 def test_hub_channel_directory_route_lists_and_filters(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    _create_hub_supervisor(hub_root)
+    create_test_hub_supervisor(hub_root)
     store = ChannelDirectoryStore(hub_root)
     store.record_seen(
         "discord",
@@ -862,7 +835,7 @@ def test_hub_channel_directory_route_enriches_entries_best_effort(
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
     cfg["telegram_bot"]["require_topics"] = True
-    supervisor = _create_hub_supervisor_with_config(hub_root, cfg)
+    supervisor = create_test_hub_supervisor(hub_root, cfg=cfg)
     repo_work = supervisor.create_repo("work")
     repo_final = supervisor.create_repo("final")
     _init_git_repo(repo_work.path)
@@ -1139,7 +1112,7 @@ def test_hub_channel_directory_route_uses_managed_thread_id_for_pma_usage(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
-    supervisor = _create_hub_supervisor(hub_root)
+    supervisor = create_test_hub_supervisor(hub_root)
     repo = supervisor.create_repo("work")
 
     store = ChannelDirectoryStore(hub_root)
@@ -1236,7 +1209,7 @@ def test_hub_channel_directory_route_surfaces_agent_workspace_binding_metadata(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
-    supervisor = _create_hub_supervisor(hub_root)
+    supervisor = create_test_hub_supervisor(hub_root)
     workspace = supervisor.create_agent_workspace(
         workspace_id="zc-main",
         runtime="zeroclaw",
@@ -1284,7 +1257,7 @@ def test_hub_channel_directory_route_includes_pma_managed_threads(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
-    supervisor = _create_hub_supervisor(hub_root)
+    supervisor = create_test_hub_supervisor(hub_root)
     base = supervisor.create_repo("base")
     _init_git_repo(base.path)
     worktree = supervisor.create_worktree(
@@ -1338,7 +1311,7 @@ def test_hub_channel_directory_route_ignores_repo_mode_binding_for_pma_rows(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
-    supervisor = _create_hub_supervisor(hub_root)
+    supervisor = create_test_hub_supervisor(hub_root)
     repo = supervisor.create_repo("work")
 
     store = ChannelDirectoryStore(hub_root)
@@ -1430,7 +1403,7 @@ def test_hub_channel_directory_route_keeps_standalone_pending_pma_thread(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
-    supervisor = _create_hub_supervisor(hub_root)
+    supervisor = create_test_hub_supervisor(hub_root)
     repo = supervisor.create_repo("work")
 
     store = ChannelDirectoryStore(hub_root)
@@ -1492,7 +1465,7 @@ def test_hub_channel_directory_route_uses_profiled_pma_registry_key(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
-    supervisor = _create_hub_supervisor(hub_root)
+    supervisor = create_test_hub_supervisor(hub_root)
     repo = supervisor.create_repo("work")
 
     store = ChannelDirectoryStore(hub_root)
@@ -1550,7 +1523,7 @@ def test_hub_channel_directory_route_falls_back_unknown_agents_to_codex_pma_key(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
-    supervisor = _create_hub_supervisor(hub_root)
+    supervisor = create_test_hub_supervisor(hub_root)
     repo = supervisor.create_repo("work")
 
     store = ChannelDirectoryStore(hub_root)
@@ -1654,7 +1627,7 @@ def test_hub_ui_exposes_destination_and_channel_directory_controls() -> None:
 
 def test_hub_repo_list_includes_last_run_duration_seconds(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    supervisor = _create_hub_supervisor(hub_root)
+    supervisor = create_test_hub_supervisor(hub_root)
     repo = supervisor.create_repo("base")
 
     tickets_dir = repo.path / ".codex-autorunner" / "tickets"
