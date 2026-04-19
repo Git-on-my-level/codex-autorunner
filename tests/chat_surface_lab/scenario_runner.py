@@ -5,9 +5,14 @@ import contextlib
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable, Optional, Sequence
 
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
 from codex_autorunner.browser.runtime import BrowserRuntime
+from codex_autorunner.core.pma_automation_store import PmaAutomationStore
 from codex_autorunner.integrations.chat.ux_regression_contract import (
     CHAT_UX_LATENCY_BUDGETS,
 )
@@ -16,7 +21,11 @@ from codex_autorunner.integrations.telegram.adapter import TelegramUpdate
 from codex_autorunner.integrations.telegram.handlers.commands import (
     execution as telegram_execution,
 )
+from codex_autorunner.surfaces.web.routes.pma_routes.managed_threads import (
+    build_automation_routes,
+)
 from tests.chat_surface_integration.harness import (
+    DEFAULT_DISCORD_CHANNEL_ID,
     DEFAULT_TELEGRAM_THREAD_ID,
     DiscordSurfaceHarness,
     FakeDiscordRest,
@@ -155,6 +164,7 @@ class _SurfaceRunContext:
     thread_target_id: Optional[str] = None
     execution_id: Optional[str] = None
     telegram_thread_id: Optional[int] = DEFAULT_TELEGRAM_THREAD_ID
+    surface_metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class ChatSurfaceScenarioRunner:
@@ -326,7 +336,8 @@ class ChatSurfaceScenarioRunner:
                 )
 
             transcript = context.result.to_normalized_transcript(
-                scenario_id=scenario.scenario_id
+                scenario_id=scenario.scenario_id,
+                metadata=context.surface_metadata,
             )
             artifact_manifest = context.result.write_artifacts(
                 output_dir=output_dir / "artifacts",
@@ -383,6 +394,31 @@ class ChatSurfaceScenarioRunner:
             agent="hermes",
             approval_mode=scenario.approval_mode,
         )
+
+    def _resolve_current_thread_target_id(
+        self,
+        context: _SurfaceRunContext,
+    ) -> Optional[str]:
+        if context.thread_target_id:
+            return context.thread_target_id
+        if context.surface == SurfaceKind.DISCORD:
+            assert isinstance(context.harness, DiscordSurfaceHarness)
+            binding = context.harness.orchestration_service().get_binding(
+                surface_kind="discord",
+                surface_key=DEFAULT_DISCORD_CHANNEL_ID,
+            )
+        else:
+            assert isinstance(context.harness, TelegramSurfaceHarness)
+            binding = context.harness.orchestration_service().get_binding(
+                surface_kind="telegram",
+                surface_key=f"chat-1:{context.telegram_thread_id or DEFAULT_TELEGRAM_THREAD_ID}",
+            )
+        thread_target_id = (
+            str(getattr(binding, "thread_target_id", "") or "").strip() or None
+        )
+        if thread_target_id:
+            context.thread_target_id = thread_target_id
+        return thread_target_id
 
     async def _await_surface_settled(self, context: _SurfaceRunContext) -> None:
         if context.surface != SurfaceKind.DISCORD:
@@ -622,6 +658,99 @@ class ChatSurfaceScenarioRunner:
                         else lambda record: record.get(field_name) == expected_value
                     ),
                 )
+            return
+
+        if action.kind == "create_automation_subscription":
+            origin_thread_id = self._resolve_current_thread_target_id(context)
+            if origin_thread_id is None:
+                raise AssertionError(
+                    "create_automation_subscription requires an active surface thread"
+                )
+            runtime_state = SimpleNamespace(
+                pma_current={
+                    "thread_id": origin_thread_id,
+                    "lane_id": context.surface.value,
+                }
+            )
+            with _build_automation_route_client(
+                context.harness.root,
+                runtime_state=runtime_state,
+            ) as client:
+                response = client.post(
+                    "/subscriptions",
+                    json=dict(action.payload),
+                )
+            assert (
+                response.status_code == 200
+            ), f"create_automation_subscription failed: {response.status_code} {response.text}"
+            payload = response.json()
+            subscription = payload.get("subscription") or {}
+            delivery_target = (
+                subscription.get("metadata", {}).get("delivery_target")
+                if isinstance(subscription.get("metadata"), dict)
+                else None
+            ) or {}
+            context.surface_metadata["subscription_lane_id"] = subscription.get(
+                "lane_id"
+            )
+            context.surface_metadata["subscription_delivery_surface_kind"] = (
+                delivery_target.get("surface_kind")
+            )
+            context.surface_metadata["subscription_delivery_surface_key"] = (
+                delivery_target.get("surface_key")
+            )
+            context.surface_metadata["subscription_deduped"] = payload.get("deduped")
+            return
+
+        if action.kind == "emit_automation_transition":
+            store = PmaAutomationStore(context.harness.root)
+            payload = dict(action.payload)
+            result = store.notify_transition(payload)
+            pending = store.list_pending_wakeups(limit=10)
+            event_type = self._normalize_optional_text(payload.get("event_type"))
+            repo_id = self._normalize_optional_text(payload.get("repo_id"))
+            run_id = self._normalize_optional_text(payload.get("run_id"))
+            matching_wakeup = next(
+                (
+                    wakeup
+                    for wakeup in reversed(pending)
+                    if (
+                        event_type is None
+                        or self._normalize_optional_text(wakeup.get("event_type"))
+                        == event_type
+                    )
+                    and (
+                        repo_id is None
+                        or self._normalize_optional_text(wakeup.get("repo_id"))
+                        == repo_id
+                    )
+                    and (
+                        run_id is None
+                        or self._normalize_optional_text(wakeup.get("run_id")) == run_id
+                    )
+                ),
+                None,
+            )
+            if matching_wakeup is None:
+                raise AssertionError(
+                    f"emit_automation_transition created no pending wakeup for {payload!r}"
+                )
+            wakeup_metadata = matching_wakeup.get("metadata")
+            delivery_target = (
+                wakeup_metadata.get("delivery_target")
+                if isinstance(wakeup_metadata, dict)
+                else None
+            ) or {}
+            context.surface_metadata["transition_created_wakeups"] = result.get(
+                "created"
+            )
+            context.surface_metadata["wakeup_lane_id"] = matching_wakeup.get("lane_id")
+            context.surface_metadata["wakeup_delivery_surface_kind"] = (
+                delivery_target.get("surface_kind")
+            )
+            context.surface_metadata["wakeup_delivery_surface_key"] = (
+                delivery_target.get("surface_key")
+            )
             return
 
         if action.kind == "stop_active_thread":
@@ -1501,7 +1630,21 @@ def _lookup_surface_attr(
             event.kind == TranscriptEventKind.CALLBACK
             for event in surface_result.transcript.events
         )
+    if attr in surface_result.transcript.metadata:
+        return surface_result.transcript.metadata.get(attr)
     raise AssertionError(f"unsupported surface attribute assertion: {attr}")
+
+
+def _build_automation_route_client(
+    hub_root: Path,
+    *,
+    runtime_state: object,
+) -> TestClient:
+    app = FastAPI()
+    app.state.config = SimpleNamespace(root=hub_root, raw={"pma": {"enabled": True}})
+    router = app.router
+    build_automation_routes(router, lambda: runtime_state)
+    return TestClient(app)
 
 
 def _discord_status_interaction(interaction_id: str) -> dict[str, Any]:

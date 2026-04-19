@@ -207,6 +207,31 @@ async def test_runner_handles_reference_only_scenarios_without_surface_execution
 
 
 @pytest.mark.anyio
+async def test_runner_executes_subscription_defaults_to_current_thread(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scenario = load_scenario_by_id("subscription_defaults_to_current_thread")
+    runner = ChatSurfaceScenarioRunner(
+        output_root=tmp_path / "scenario-runs",
+        apply_runtime_patch=lambda runtime: patch_hermes_runtime(monkeypatch, runtime),
+    )
+
+    result = await runner.run_scenario(scenario)
+    assert result.skipped is False
+    assert len(result.surface_results) == 1
+    discord = result.surface_results[0]
+    assert discord.surface.value == "discord"
+    assert discord.execution_status == "ok"
+    assert discord.transcript.metadata["subscription_lane_id"] == "discord"
+    assert (
+        discord.transcript.metadata["subscription_delivery_surface_key"] == "channel-1"
+    )
+    assert discord.transcript.metadata["wakeup_lane_id"] == "discord"
+    assert discord.transcript.metadata["wakeup_delivery_surface_key"] == "channel-1"
+
+
+@pytest.mark.anyio
 async def test_runner_executes_restart_window_duplicate_delivery(
     tmp_path: Path,
 ) -> None:

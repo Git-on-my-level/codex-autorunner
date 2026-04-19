@@ -113,7 +113,7 @@ class ManagedThreadAutomationClient:
         required: bool,
     ) -> Optional[dict[str, Any]]:
         runtime_state = self._get_runtime_state() if self._get_runtime_state else None
-        origin_thread_id, origin_lane_id = _resolve_origin_followup_context(
+        origin_thread_id, origin_lane_id = resolve_origin_followup_context(
             runtime_state
         )
         try:
@@ -163,7 +163,7 @@ class ManagedThreadAutomationClient:
         return {"mode": "terminal", "subscription": created}
 
 
-def _resolve_origin_followup_context(
+def resolve_origin_followup_context(
     runtime_state: Any,
 ) -> tuple[Optional[str], Optional[str]]:
     if runtime_state is None:

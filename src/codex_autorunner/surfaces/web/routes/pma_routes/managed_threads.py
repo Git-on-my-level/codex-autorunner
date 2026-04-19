@@ -33,6 +33,7 @@ from ...schemas import (
 from ...services.pma.managed_thread_followup import (
     ManagedThreadAutomationClient,
     ManagedThreadAutomationUnavailable,
+    resolve_origin_followup_context,
 )
 from .automation_adapter import (
     call_store_action_with_id,
@@ -131,9 +132,17 @@ def build_automation_routes(
     async def create_automation_subscription(
         request: Request, payload: PmaAutomationSubscriptionCreateRequest
     ) -> dict[str, Any]:
-        store = await get_automation_store(request, get_runtime_state())
+        runtime_state = get_runtime_state()
+        store = await get_automation_store(request, runtime_state)
         try:
             normalized_payload = payload.normalized_payload()
+            origin_thread_id, origin_lane_id = resolve_origin_followup_context(
+                runtime_state
+            )
+            if origin_thread_id:
+                normalized_payload.setdefault("origin_thread_id", origin_thread_id)
+            if origin_lane_id:
+                normalized_payload.setdefault("origin_lane_id", origin_lane_id)
             created = await call_store_create_with_payload(
                 store,
                 (
