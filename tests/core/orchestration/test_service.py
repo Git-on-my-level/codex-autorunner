@@ -984,8 +984,8 @@ async def test_send_message_rehydrates_from_transcripts_after_runtime_binding_re
     assert request.metadata["fresh_backend_session_reason"] == "missing_backend_binding"
     assert (
         request.metadata["fresh_backend_session_notice"]
-        == "Notice: the previous live session was unavailable, so I started a new "
-        "session and recovered context from durable history."
+        == "Notice: I started a new live session for this conversation and "
+        "recovered context from durable history."
     )
 
 

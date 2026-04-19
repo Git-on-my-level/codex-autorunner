@@ -1806,8 +1806,8 @@ async def test_finalize_managed_thread_execution_propagates_session_recovery_met
     started.request.metadata["fresh_backend_session_started"] = True
     started.request.metadata["fresh_backend_session_reason"] = "missing_backend_binding"
     started.request.metadata["fresh_backend_session_notice"] = (
-        "Notice: the previous live session was unavailable, so I started a new "
-        "session and recovered context from durable history."
+        "Notice: I started a new live session for this conversation and "
+        "recovered context from durable history."
     )
     fake_hub_client = _FakeHubPersistenceClient()
     monkeypatch.setattr(
@@ -1867,8 +1867,8 @@ async def test_finalize_managed_thread_execution_propagates_session_recovery_met
     assert result.status == "ok"
     assert (
         result.session_notice
-        == "Notice: the previous live session was unavailable, so I started a new "
-        "session and recovered context from durable history."
+        == "Notice: I started a new live session for this conversation and "
+        "recovered context from durable history."
     )
     assert result.fresh_backend_session_reason == "missing_backend_binding"
     assert len(fake_hub_client.timeline_requests) == 1

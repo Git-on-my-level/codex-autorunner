@@ -1536,6 +1536,7 @@ async def run_agent_turn_for_message(
     reasoning_effort: Optional[str],
     session_key: str,
     orchestrator_channel_key: str,
+    suppress_managed_thread_delivery: bool = False,
     max_actions: int,
     min_edit_interval_seconds: float,
     heartbeat_interval_seconds: float,
@@ -1566,6 +1567,7 @@ async def run_agent_turn_for_message(
         reasoning_effort=reasoning_effort,
         session_key=session_key,
         orchestrator_channel_key=orchestrator_channel_key,
+        suppress_managed_thread_delivery=suppress_managed_thread_delivery,
         mode="repo",
         pma_enabled=False,
         execution_prompt=prompt_text,
@@ -1594,6 +1596,7 @@ async def _run_discord_orchestrated_turn_for_message(
     session_key: str,
     orchestrator_channel_key: str,
     managed_thread_surface_key: Optional[str],
+    suppress_managed_thread_delivery: bool = False,
     mode: str,
     pma_enabled: bool,
     execution_prompt: str,
@@ -1955,12 +1958,27 @@ async def _run_discord_orchestrated_turn_for_message(
             _first_progress_recorded = True
             chat_ux_snapshot.record(ChatUxMilestone.FIRST_SEMANTIC_PROGRESS)
 
+    async def _suppress_managed_thread_delivery(
+        _finalized: ManagedThreadFinalizationResult,
+    ) -> None:
+        # Compaction uses the PMA execution path to generate the summary, but the
+        # compact command itself owns the single visible summary post.
+        return None
+
     runner_hooks = ManagedThreadCoordinatorHooks(
         on_execution_started=runner_hooks.on_execution_started,
         on_execution_finished=runner_hooks.on_execution_finished,
         on_progress_event=_handle_progress_event,
-        durable_delivery=queue_worker_hooks.durable_delivery,
-        deliver_result=queue_worker_hooks.deliver_result,
+        durable_delivery=(
+            None
+            if suppress_managed_thread_delivery
+            else queue_worker_hooks.durable_delivery
+        ),
+        deliver_result=(
+            _suppress_managed_thread_delivery
+            if suppress_managed_thread_delivery
+            else queue_worker_hooks.deliver_result
+        ),
         run_with_indicator=queue_worker_hooks.run_with_indicator,
     )
     progress_backend_turn_id: Optional[str] = None
@@ -2335,6 +2353,7 @@ async def run_managed_thread_turn_for_message(
     session_key: str,
     orchestrator_channel_key: str,
     managed_thread_surface_key: Optional[str] = None,
+    suppress_managed_thread_delivery: bool = False,
     supervision: Optional[_DiscordTurnExecutionSupervision] = None,
     chat_ux_snapshot: Optional[ChatUxTimingSnapshot] = None,
 ) -> DiscordMessageTurnResult:
@@ -2363,6 +2382,7 @@ async def run_managed_thread_turn_for_message(
         session_key=session_key,
         orchestrator_channel_key=orchestrator_channel_key,
         managed_thread_surface_key=managed_thread_surface_key,
+        suppress_managed_thread_delivery=suppress_managed_thread_delivery,
         mode="pma",
         pma_enabled=True,
         execution_prompt=execution_prompt,

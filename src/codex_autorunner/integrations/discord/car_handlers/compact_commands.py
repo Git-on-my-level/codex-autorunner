@@ -153,6 +153,7 @@ async def handle_car_compact(
                 orchestrator_channel_key=(
                     channel_id if not pma_enabled else f"pma:{channel_id}"
                 ),
+                suppress_managed_thread_delivery=True,
             )
         except Exception as exc:  # intentional: agent turn failures are unpredictable
             log_event(
