@@ -42,6 +42,7 @@ from .rendering import (
 _logger = logging.getLogger(__name__)
 
 _DEFAULT_DISCORD_PMA_TIMEOUT_SECONDS = 7200
+_DEFAULT_DISCORD_PMA_STALL_TIMEOUT_SECONDS = 1800
 
 
 def _build_managed_thread_input_items(
@@ -331,6 +332,14 @@ def _build_discord_managed_thread_coordinator(
         if pma_enabled
         else float(_DEFAULT_DISCORD_PMA_TIMEOUT_SECONDS)
     )
+    stall_timeout_seconds = (
+        _load_discord_pma_turn_stall_timeout_seconds(
+            service,
+            timeout_seconds=timeout_seconds,
+        )
+        if pma_enabled
+        else None
+    )
     return ManagedThreadTurnCoordinator(
         orchestration_service=orchestration_service,
         state_root=service._config.root,
@@ -350,6 +359,7 @@ def _build_discord_managed_thread_coordinator(
             timeout_error=timeout_error,
             interrupted_error=interrupted_error,
             timeout_seconds=timeout_seconds,
+            stall_timeout_seconds=stall_timeout_seconds,
         ),
         logger=getattr(service, "_logger", _logger),
         turn_preview="",
@@ -382,6 +392,22 @@ def _load_discord_pma_turn_timeout_seconds(service: Any) -> float:
     if configured_timeout is None:
         return float(_DEFAULT_DISCORD_PMA_TIMEOUT_SECONDS)
     return float(configured_timeout)
+
+
+def _load_discord_pma_turn_stall_timeout_seconds(
+    service: Any,
+    *,
+    timeout_seconds: float,
+) -> float:
+    from . import message_turns as _mt
+
+    overridden_timeout = getattr(
+        _mt,
+        "DISCORD_PMA_STALL_TIMEOUT_SECONDS",
+        _DEFAULT_DISCORD_PMA_STALL_TIMEOUT_SECONDS,
+    )
+    resolved_timeout = float(overridden_timeout)
+    return min(max(resolved_timeout, 0.0), float(timeout_seconds))
 
 
 def _build_discord_runner_hooks(

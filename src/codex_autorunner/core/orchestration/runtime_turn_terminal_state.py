@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass, field
 from typing import Any, Literal, Optional
 
@@ -95,6 +96,7 @@ class RuntimeTurnTerminalStateMachine:
     transport_errors: tuple[str, ...] = ()
     transport_request_return_timestamp: Optional[str] = None
     last_progress_timestamp: Optional[str] = None
+    last_progress_monotonic: Optional[float] = None
     failure_cause: Optional[str] = None
     token_usage: Optional[dict[str, Any]] = None
     last_runtime_method: Optional[str] = None
@@ -119,6 +121,7 @@ class RuntimeTurnTerminalStateMachine:
         event_timestamp = timestamp or now_iso()
         self.raw_events.append(raw_event)
         self.last_progress_timestamp = event_timestamp
+        self.last_progress_monotonic = time.monotonic()
         inspection = _inspect_raw_event(raw_event, timestamp=event_timestamp)
         if inspection.runtime_method:
             self.last_runtime_method = inspection.runtime_method

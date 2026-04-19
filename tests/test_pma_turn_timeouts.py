@@ -114,6 +114,7 @@ class TestPmaTimeoutIsolationInvariants:
             pma_enabled=True,
         )
         assert coordinator.errors.timeout_seconds == 42.0
+        assert coordinator.errors.stall_timeout_seconds == 42.0
 
     def test_telegram_pma_surface_uses_hub_config_timeout(self, tmp_path: Path) -> None:
         _write_hub_config(tmp_path, timeout_seconds=55)
@@ -150,6 +151,28 @@ class TestPmaTimeoutIsolationInvariants:
             pma_enabled=False,
         )
         assert coordinator.errors.timeout_seconds == 7200.0
+
+    def test_discord_pma_surface_stall_timeout_caps_at_total_timeout(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        _write_hub_config(tmp_path, timeout_seconds=42)
+        service = SimpleNamespace(_config=SimpleNamespace(root=tmp_path))
+        monkeypatch.setattr(
+            discord_message_turns,
+            "DISCORD_PMA_STALL_TIMEOUT_SECONDS",
+            90.0,
+        )
+        coordinator = discord_message_turns._build_discord_managed_thread_coordinator(
+            service=service,
+            orchestration_service=SimpleNamespace(),
+            channel_id="channel-1",
+            public_execution_error="e",
+            timeout_error="t",
+            interrupted_error="i",
+            pma_enabled=True,
+        )
+        assert coordinator.errors.timeout_seconds == 42.0
+        assert coordinator.errors.stall_timeout_seconds == 42.0
 
     def test_telegram_repo_surface_always_uses_legacy_7200_regardless_of_config(
         self, tmp_path: Path
