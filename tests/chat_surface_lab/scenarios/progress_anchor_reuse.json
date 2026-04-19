@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "scenario_id": "progress_anchor_reuse",
+  "description": "Progress updates stay anchored to one visible placeholder per surface.",
+  "surfaces": [
+    "discord",
+    "telegram"
+  ],
+  "runtime_fixture": {
+    "kind": "hermes",
+    "scenario": "official"
+  },
+  "harness_timeouts": {
+    "discord": 8.0,
+    "telegram": 8.0
+  },
+  "actions": [
+    {
+      "kind": "send_message",
+      "actor": "user",
+      "payload": {
+        "text": "echo hello world"
+      }
+    }
+  ],
+  "expected_terminal": {
+    "status": "ok"
+  },
+  "transcript_invariants": [
+    {
+      "kind": "event_kind_at_least",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "event_kind": "edit",
+        "min_count": 2
+      }
+    },
+    {
+      "kind": "event_kind_at_least",
+      "surfaces": [
+        "discord",
+        "telegram"
+      ],
+      "params": {
+        "event_kind": "delete",
+        "min_count": 1
+      }
+    },
+    {
+      "kind": "text_count_equals",
+      "surfaces": [
+        "telegram"
+      ],
+      "params": {
+        "text": "Working...",
+        "count": 1
+      }
+    },
+    {
+      "kind": "surface_attr_equals",
+      "surfaces": [
+        "telegram"
+      ],
+      "params": {
+        "attr": "has_edit_event",
+        "value": false
+      }
+    },
+    {
+      "kind": "contains_text",
+      "surfaces": [
+        "discord",
+        "telegram"
+      ],
+      "params": {
+        "text": "fixture reply"
+      }
+    }
+  ],
+  "contract_links": {
+    "regression_ids": [
+      "progress_anchor_reuse"
+    ]
+  },
+  "tags": [
+    "ux",
+    "placeholder",
+    "hermes",
+    "pma"
+  ],
+  "notes": "Protects against regressions that spawn duplicate progress messages instead of reusing the existing anchor."
+}

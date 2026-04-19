@@ -13,20 +13,17 @@ from ...core.hub_control_plane import (
     RemoteThreadExecutionStore,
 )
 from ...core.orchestration import (
-    SQLiteManagedThreadDeliveryEngine,
     build_harness_backed_orchestration_service,
 )
 from ...core.orchestration.bindings import OrchestrationBindingStore
 from ...integrations.chat.agents import resolve_chat_runtime_agent
 from ..chat.managed_thread_turns import (
     ManagedThreadCoordinatorHooks,
-    ManagedThreadDurableDeliveryHooks,
     ManagedThreadErrorMessages,
     ManagedThreadFinalizationResult,
     ManagedThreadSurfaceInfo,
     ManagedThreadTargetRequest,
     ManagedThreadTurnCoordinator,
-    build_managed_thread_delivery_intent,
     render_managed_thread_response_text,
 )
 from ..chat.managed_thread_turns import (
@@ -35,7 +32,7 @@ from ..chat.managed_thread_turns import (
 from ..chat.managed_thread_turns import (
     resolve_managed_thread_target as _shared_resolve_managed_thread_target,
 )
-from .managed_thread_delivery import deliver_discord_managed_thread_record
+from .managed_thread_delivery import build_discord_managed_thread_durable_delivery_hooks
 from .rendering import (
     DISCORD_MAX_MESSAGE_LENGTH,
     chunk_discord_message,
@@ -46,6 +43,7 @@ from .rendering import (
 _logger = logging.getLogger(__name__)
 
 _DEFAULT_DISCORD_PMA_TIMEOUT_SECONDS = 7200
+_DEFAULT_DISCORD_PMA_STALL_TIMEOUT_SECONDS = 1800
 
 
 def _build_managed_thread_input_items(
@@ -335,6 +333,14 @@ def _build_discord_managed_thread_coordinator(
         if pma_enabled
         else float(_DEFAULT_DISCORD_PMA_TIMEOUT_SECONDS)
     )
+    stall_timeout_seconds = (
+        _load_discord_pma_turn_stall_timeout_seconds(
+            service,
+            timeout_seconds=timeout_seconds,
+        )
+        if pma_enabled
+        else None
+    )
     return ManagedThreadTurnCoordinator(
         orchestration_service=orchestration_service,
         state_root=service._config.root,
@@ -354,6 +360,7 @@ def _build_discord_managed_thread_coordinator(
             timeout_error=timeout_error,
             interrupted_error=interrupted_error,
             timeout_seconds=timeout_seconds,
+            stall_timeout_seconds=stall_timeout_seconds,
         ),
         logger=getattr(service, "_logger", _logger),
         turn_preview="",
@@ -388,6 +395,22 @@ def _load_discord_pma_turn_timeout_seconds(service: Any) -> float:
     return float(configured_timeout)
 
 
+def _load_discord_pma_turn_stall_timeout_seconds(
+    service: Any,
+    *,
+    timeout_seconds: float,
+) -> float:
+    from . import message_turns as _mt
+
+    overridden_timeout = getattr(
+        _mt,
+        "DISCORD_PMA_STALL_TIMEOUT_SECONDS",
+        _DEFAULT_DISCORD_PMA_STALL_TIMEOUT_SECONDS,
+    )
+    resolved_timeout = float(overridden_timeout)
+    return min(max(resolved_timeout, 0.0), float(timeout_seconds))
+
+
 def _build_discord_runner_hooks(
     service: Any,
     *,
@@ -415,44 +438,11 @@ def _build_discord_runner_hooks(
             started_execution=started_execution
         )
 
-    state_root = Path(getattr(getattr(service, "_config", None), "root", Path.cwd()))
-    engine = SQLiteManagedThreadDeliveryEngine(state_root)
-
-    class _DiscordManagedThreadDeliveryAdapter:
-        @property
-        def adapter_key(self) -> str:
-            return "discord"
-
-        async def deliver_managed_thread_record(
-            self, record: Any, *, claim: Any
-        ) -> Any:
-            return await deliver_discord_managed_thread_record(
-                service,
-                record,
-                claim=claim,
-                channel_id_fallback=channel_id,
-                base_record_label="discord-queued",
-                error_record_label="discord-queued-error",
-                default_execution_error=public_execution_error,
-            )
-
-    durable_delivery = ManagedThreadDurableDeliveryHooks(
-        engine=engine,
-        adapter=_DiscordManagedThreadDeliveryAdapter(),
-        build_delivery_intent=lambda finalized: (
-            None
-            if finalized.status == "interrupted"
-            else build_managed_thread_delivery_intent(
-                finalized,
-                surface=ManagedThreadSurfaceInfo(
-                    log_label="Discord",
-                    surface_kind="discord",
-                    surface_key=channel_id,
-                ),
-                transport_target={"channel_id": channel_id},
-                metadata={"managed_thread_id": managed_thread_id},
-            )
-        ),
+    durable_delivery = build_discord_managed_thread_durable_delivery_hooks(
+        service,
+        channel_id=channel_id,
+        managed_thread_id=managed_thread_id,
+        public_execution_error=public_execution_error,
     )
 
     async def _deliver_result(finalized: ManagedThreadFinalizationResult) -> None:

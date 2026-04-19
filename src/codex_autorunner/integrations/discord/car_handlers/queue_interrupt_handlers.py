@@ -62,7 +62,7 @@ async def handle_cancel_turn_button(
     cancel_snapshot.record(ChatUxMilestone.RAW_EVENT_RECEIVED)
     cancel_snapshot.record(ChatUxMilestone.INTERRUPT_REQUESTED_VISIBLE)
     log_event(
-        _logger,
+        getattr(service, "_logger", _logger),
         logging.INFO,
         "discord.turn.cancel_acknowledged",
         channel_id=channel_id,

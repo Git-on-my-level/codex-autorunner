@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "scenario_id": "attachment_download_visibility",
+  "description": "A Discord message with attachments exercises the real attachment download path before the turn completes.",
+  "surfaces": [
+    "discord"
+  ],
+  "runtime_fixture": {
+    "kind": "hermes",
+    "scenario": "official"
+  },
+  "harness_timeouts": {
+    "discord": 8.0
+  },
+  "approval_mode": "yolo",
+  "actions": [
+    {
+      "kind": "send_message",
+      "actor": "user",
+      "payload": {
+        "text": "summarize the attachment",
+        "attachments": [
+          {
+            "id": "att-1",
+            "filename": "image.png",
+            "content_type": "image/png",
+            "kind": "image",
+            "body_text": "fake png payload"
+          }
+        ]
+      }
+    }
+  ],
+  "expected_terminal": {
+    "status": "ok"
+  },
+  "transcript_invariants": [
+    {
+      "kind": "contains_text",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "text": "Preparing attachments..."
+      }
+    }
+  ],
+  "tags": [
+    "ux",
+    "attachments",
+    "discord",
+    "hermes",
+    "pma"
+  ],
+  "notes": "Uses attachment fixtures so the lab can exercise actual Discord attachment download and inbox staging."
+}

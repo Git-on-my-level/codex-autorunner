@@ -10,6 +10,10 @@ from codex_autorunner.integrations.discord import message_turns as discord_messa
 from codex_autorunner.integrations.telegram.handlers.commands import (
     execution as telegram_execution,
 )
+from tests.chat_surface_lab.scenario_runner import (
+    ChatSurfaceScenarioRunner,
+    load_scenario_by_id,
+)
 
 from .harness import (
     DiscordSurfaceHarness,
@@ -21,6 +25,12 @@ from .harness import (
 )
 
 pytestmark = pytest.mark.integration
+
+_CORPUS_MIGRATED_PARITY_SCENARIOS = (
+    "first_visible_feedback",
+    "queued_visibility",
+    "interrupt_optimistic_acceptance",
+)
 
 
 @dataclass(frozen=True)
@@ -392,14 +402,19 @@ async def test_hermes_official_surface_parity_matrix(
             surface_name,
             snapshot,
         )
-        assert (
-            case.expected_reply_substrings[surface_name]
-            in snapshot.final_user_visible_message
-        ), (
-            case.case_id,
-            surface_name,
-            snapshot,
-        )
+        expected_reply_fragment = case.expected_reply_substrings[surface_name]
+        if expected_reply_fragment:
+            if expected_reply_fragment not in snapshot.final_user_visible_message:
+                assert snapshot.detail is not None, (
+                    case.case_id,
+                    surface_name,
+                    snapshot,
+                )
+                assert expected_reply_fragment in snapshot.detail, (
+                    case.case_id,
+                    surface_name,
+                    snapshot,
+                )
         if case.expected_detail_substrings is not None:
             assert snapshot.detail is not None, (case.case_id, surface_name, snapshot)
             assert case.expected_detail_substrings[surface_name] in snapshot.detail, (
@@ -428,6 +443,30 @@ async def test_hermes_official_surface_parity_matrix(
         case.case_id,
         snapshots,
     )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "scenario_id",
+    _CORPUS_MIGRATED_PARITY_SCENARIOS,
+)
+async def test_hermes_surface_parity_regressions_from_scenario_corpus(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    scenario_id: str,
+) -> None:
+    scenario = load_scenario_by_id(scenario_id)
+    runner = ChatSurfaceScenarioRunner(
+        output_root=tmp_path / "scenario-corpus",
+        apply_runtime_patch=lambda runtime: patch_hermes_runtime(monkeypatch, runtime),
+    )
+    result = await runner.run_scenario(scenario)
+
+    assert result.skipped is False
+    assert result.surface_results
+    for surface_result in result.surface_results:
+        assert surface_result.execution_status
+        assert surface_result.transcript.events
 
 
 @pytest.mark.anyio

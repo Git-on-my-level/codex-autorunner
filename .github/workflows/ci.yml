@@ -178,6 +178,14 @@ jobs:
       - name: Run chat-apps lane checks
         run: ./scripts/check.sh --lane chat-apps
 
+      - name: Upload chat-surface lab diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chat-surface-lab-chat-apps
+          path: .codex-autorunner/diagnostics/chat-latency-budgets/
+          if-no-files-found: ignore
+
   aggregate:
     name: aggregate
     needs: route
@@ -231,6 +239,14 @@ jobs:
 
       - name: Run aggregate full checks
         run: ./scripts/check.sh --full
+
+      - name: Upload chat-surface lab diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chat-surface-lab-aggregate
+          path: .codex-autorunner/diagnostics/chat-latency-budgets/
+          if-no-files-found: ignore
 
   check:
     name: check

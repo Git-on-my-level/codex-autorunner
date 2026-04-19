@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
@@ -14,6 +15,7 @@ from .runtime_turn_terminal_state import (
 from .service import HarnessBackedOrchestrationService
 
 _INTERRUPT_POLL_INTERVAL_SECONDS = 0.05
+_STALL_POLL_INTERVAL_SECONDS = 0.25
 RUNTIME_THREAD_TIMEOUT_ERROR = "Runtime thread timed out"
 RUNTIME_THREAD_INTERRUPTED_ERROR = "Runtime thread interrupted"
 RUNTIME_THREAD_MISSING_BACKEND_IDS_ERROR = (
@@ -142,6 +144,7 @@ async def await_runtime_thread_outcome(
     *,
     interrupt_event: Optional[asyncio.Event],
     timeout_seconds: float,
+    stall_timeout_seconds: Optional[float] = None,
     execution_error_message: str,
     terminal_state: Optional[RuntimeTurnTerminalStateMachine] = None,
     observe_progress_events: bool = True,
@@ -172,14 +175,16 @@ async def await_runtime_thread_outcome(
         if interrupt_event is not None
         else None
     )
-    stream_terminal_task = None
+    terminal_wait_task = asyncio.create_task(state.terminal_signal_waiter().wait())
+    stall_task = (
+        asyncio.create_task(_wait_for_progress_stall(state, stall_timeout_seconds))
+        if stall_timeout_seconds is not None and float(stall_timeout_seconds) > 0.0
+        else None
+    )
     stream_task = None
     if observe_progress_events and _harness_supports_progress_event_stream(
         execution.harness
     ):
-        stream_terminal_task = asyncio.create_task(
-            state.terminal_signal_waiter().wait()
-        )
         stream_task = asyncio.create_task(
             _observe_runtime_terminal_state(execution, state)
         )
@@ -188,8 +193,9 @@ async def await_runtime_thread_outcome(
         wait_tasks = {collector_task, timeout_task}
         if interrupt_task is not None:
             wait_tasks.add(interrupt_task)
-        if stream_terminal_task is not None:
-            wait_tasks.add(stream_terminal_task)
+        wait_tasks.add(terminal_wait_task)
+        if stall_task is not None:
+            wait_tasks.add(stall_task)
         while True:
             done, _ = await asyncio.wait(
                 wait_tasks,
@@ -199,7 +205,7 @@ async def await_runtime_thread_outcome(
                 result = await collector_task
                 state.note_transport_result(result)
                 return state.build_outcome(execution_error_message)
-            if stream_terminal_task is not None and stream_terminal_task in done:
+            if terminal_wait_task in done:
                 return state.build_outcome(execution_error_message)
             if interrupt_task is not None and interrupt_task in done:
                 await execution.harness.interrupt(
@@ -215,19 +221,26 @@ async def await_runtime_thread_outcome(
                     backend_turn_id,
                 )
                 return state.build_timeout_outcome(RUNTIME_THREAD_TIMEOUT_ERROR)
+            if stall_task is not None and stall_task in done:
+                await execution.harness.interrupt(
+                    execution.workspace_root,
+                    backend_thread_id,
+                    backend_turn_id,
+                )
+                return state.build_timeout_outcome(RUNTIME_THREAD_TIMEOUT_ERROR)
     except Exception as exc:  # intentional: harness runtime errors are unpredictable
         detail = str(exc or "").strip()
         return state.build_transport_exception_outcome(
             detail or execution_error_message
         )
     finally:
-        cleanup_tasks: list[asyncio.Task[Any]] = [timeout_task]
+        cleanup_tasks: list[asyncio.Task[Any]] = [timeout_task, terminal_wait_task]
         if not collector_task.done():
             cleanup_tasks.append(collector_task)
         if interrupt_task is not None:
             cleanup_tasks.append(interrupt_task)
-        if stream_terminal_task is not None:
-            cleanup_tasks.append(stream_terminal_task)
+        if stall_task is not None:
+            cleanup_tasks.append(stall_task)
         if stream_task is not None:
             cleanup_tasks.append(stream_task)
         for task in cleanup_tasks:
@@ -239,6 +252,22 @@ async def await_runtime_thread_outcome(
 async def _wait_for_interrupt(interrupt_event: asyncio.Event) -> None:
     while not interrupt_event.is_set():
         await asyncio.sleep(_INTERRUPT_POLL_INTERVAL_SECONDS)
+
+
+async def _wait_for_progress_stall(
+    state: RuntimeTurnTerminalStateMachine,
+    stall_timeout_seconds: float,
+) -> None:
+    timeout_seconds = max(float(stall_timeout_seconds), 0.0)
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        last_progress = state.last_progress_monotonic
+        if last_progress is not None:
+            deadline = max(deadline, last_progress + timeout_seconds)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        await asyncio.sleep(min(remaining, _STALL_POLL_INTERVAL_SECONDS))
 
 
 async def _observe_runtime_terminal_state(

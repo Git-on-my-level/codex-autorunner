@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "scenario_id": "timeout_when_terminal_missing",
+  "description": "When the backend never returns a terminal or request result, both surfaces time out explicitly.",
+  "surfaces": [
+    "discord",
+    "telegram"
+  ],
+  "runtime_fixture": {
+    "kind": "hermes",
+    "scenario": "official_prompt_hang"
+  },
+  "harness_timeouts": {
+    "discord": 8.0,
+    "telegram": 8.0
+  },
+  "faults": [
+    {
+      "kind": "set_surface_timeout",
+      "target": "surface",
+      "surfaces": [
+        "discord",
+        "telegram"
+      ],
+      "parameters": {
+        "seconds": 0.05
+      }
+    }
+  ],
+  "actions": [
+    {
+      "kind": "send_message",
+      "actor": "user",
+      "payload": {
+        "text": "echo hello world"
+      }
+    }
+  ],
+  "expected_terminal": {
+    "status": "error"
+  },
+  "transcript_invariants": [
+    {
+      "kind": "contains_text",
+      "surfaces": [
+        "discord",
+        "telegram"
+      ],
+      "params": {
+        "text": "timed out"
+      }
+    },
+    {
+      "kind": "log_event_exists",
+      "surfaces": [
+        "discord",
+        "telegram"
+      ],
+      "params": {
+        "event_name": "chat.managed_thread.turn_finalized",
+        "field": "status",
+        "value": "error"
+      }
+    }
+  ],
+  "tags": [
+    "timeout",
+    "fault",
+    "hermes",
+    "pma"
+  ],
+  "notes": "This scenario is intentionally outside the current UX regression contract matrix but remains high-signal for production outages."
+}

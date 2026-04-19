@@ -6,6 +6,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Generic, Mapping, Optional, TypeVar, cast
 
+from ...core.orchestration.managed_thread_delivery import ManagedThreadDeliveryState
 from ...core.orchestration.runtime_thread_events import RuntimeThreadRunEventState
 from .managed_thread_turns import (
     ManagedThreadCoordinatorHooks,
@@ -188,24 +189,39 @@ async def run_managed_surface_turn(
         if finalized is None:
             raise RuntimeError("Managed-thread turn finalized without a result")
         durable_delivery_performed = False
+        durable_delivery_pending = False
         if config.hooks.durable_delivery is not None:
             try:
-                await handoff_managed_thread_final_delivery(
+                delivery_record = await handoff_managed_thread_final_delivery(
                     finalized,
                     delivery=config.hooks.durable_delivery,
                     logger=_runner_logger,
                 )
-                durable_delivery_performed = True
+                durable_delivery_performed = (
+                    delivery_record is not None
+                    and delivery_record.state is ManagedThreadDeliveryState.DELIVERED
+                )
+                durable_delivery_pending = (
+                    delivery_record is not None
+                    and delivery_record.state
+                    in {
+                        ManagedThreadDeliveryState.PENDING,
+                        ManagedThreadDeliveryState.CLAIMED,
+                        ManagedThreadDeliveryState.DELIVERING,
+                        ManagedThreadDeliveryState.RETRY_SCHEDULED,
+                    }
+                )
             except asyncio.CancelledError:
                 raise
             except Exception:
                 pass
-        if durable_delivery_performed:
+        if durable_delivery_performed or durable_delivery_pending:
             finalized_flow = ManagedThreadExecutionFlowResult(
                 started_execution=finalized_flow.started_execution,
                 queued=finalized_flow.queued,
                 finalized=finalized_flow.finalized,
-                durable_delivery_performed=True,
+                durable_delivery_performed=durable_delivery_performed,
+                durable_delivery_pending=durable_delivery_pending,
             )
         if config.on_finalized is None:
             raise RuntimeError("Managed-surface turn requires on_finalized")

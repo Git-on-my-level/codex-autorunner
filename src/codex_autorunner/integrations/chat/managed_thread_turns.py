@@ -231,6 +231,7 @@ class ManagedThreadErrorMessages:
     timeout_error: str
     interrupted_error: str
     timeout_seconds: float
+    stall_timeout_seconds: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -253,6 +254,7 @@ class ManagedThreadExecutionFlowResult:
     queued: bool
     finalized: Optional[ManagedThreadFinalizationResult] = None
     durable_delivery_performed: bool = False
+    durable_delivery_pending: bool = False
 
 
 @dataclass(frozen=True)
@@ -2287,6 +2289,7 @@ async def finalize_managed_thread_execution(
                 started,
                 interrupt_event=None,
                 timeout_seconds=errors.timeout_seconds,
+                stall_timeout_seconds=errors.stall_timeout_seconds,
                 execution_error_message=errors.public_execution_error,
                 terminal_state=terminal_state,
                 observe_progress_events=False,

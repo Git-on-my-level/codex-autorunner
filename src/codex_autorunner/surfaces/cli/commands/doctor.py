@@ -33,6 +33,7 @@ from ....core.utils import (
 )
 from ....integrations.chat.doctor import (
     chat_doctor_checks,
+    chat_surface_lab_doctor_checks,
     chat_ux_timing_diagnostic_checks,
 )
 from ....integrations.discord.doctor import discord_doctor_checks
@@ -315,6 +316,9 @@ def register_doctor_commands(
             hub_worktree_checks = hub_worktree_doctor_checks(hub_config)
             hub_destination_checks = hub_destination_doctor_checks(hub_config)
             chat_checks = chat_doctor_checks(repo_root=repo_root) if dev else []
+            chat_lab_checks = (
+                chat_surface_lab_doctor_checks(repo_root=repo_root) if dev else []
+            )
             timing_checks = chat_ux_timing_diagnostic_checks() if dev else []
 
             report = DoctorReport(
@@ -327,6 +331,7 @@ def register_doctor_commands(
                 + zeroclaw_doctor_checks(hub_config)
                 + hermes_doctor_checks(hub_config)
                 + chat_checks
+                + chat_lab_checks
                 + timing_checks
             )
         except ConfigError as exc:

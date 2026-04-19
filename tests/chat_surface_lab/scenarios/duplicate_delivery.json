@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "scenario_id": "duplicate_delivery",
+  "description": "Duplicate Telegram updates and Discord interactions are deduped to one user-visible status response.",
+  "surfaces": [
+    "discord",
+    "telegram"
+  ],
+  "runtime_fixture": {
+    "kind": "hermes",
+    "scenario": "official"
+  },
+  "harness_timeouts": {
+    "discord": 8.0,
+    "telegram": 8.0
+  },
+  "actions": [
+    {
+      "kind": "run_duplicate_status_interaction",
+      "actor": "user",
+      "surfaces": [
+        "discord"
+      ],
+      "payload": {
+        "interaction_id": "inter-dup-1"
+      }
+    },
+    {
+      "kind": "run_duplicate_status_update",
+      "actor": "user",
+      "surfaces": [
+        "telegram"
+      ],
+      "payload": {
+        "update_id": 77,
+        "thread_id": 55
+      }
+    }
+  ],
+  "transcript_invariants": [
+    {
+      "kind": "text_count_equals",
+      "surfaces": [
+        "discord",
+        "telegram"
+      ],
+      "params": {
+        "text": "Workspace:",
+        "count": 1
+      }
+    },
+    {
+      "kind": "log_event_exists",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "event_name": "discord.interaction.duplicate_resuming",
+        "field": "interaction_id",
+        "value": "inter-dup-1"
+      }
+    },
+    {
+      "kind": "log_event_exists",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "event_name": "discord.interaction.ack.reused",
+        "field": "interaction_id",
+        "value": "inter-dup-1"
+      }
+    },
+    {
+      "kind": "log_event_exists",
+      "surfaces": [
+        "telegram"
+      ],
+      "params": {
+        "event_name": "telegram.update.duplicate",
+        "field": "update_id",
+        "value": 77
+      }
+    }
+  ],
+  "contract_links": {
+    "regression_ids": [
+      "duplicate_delivery"
+    ]
+  },
+  "tags": [
+    "dedupe",
+    "reliability",
+    "telegram",
+    "discord"
+  ]
+}
