@@ -13,7 +13,7 @@ import { newClientTurnId as newFileChatTurnId } from "./fileChat.js";
 import { initNotificationBell } from "./notificationBell.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
-import { createTurnEventsController, cancelActiveTurnSync, scheduleRecoveryRetry, createTurnRecoveryTracker, ACTIVE_TURN_RECOVERY_STALE_MESSAGE, } from "./sharedTurnLifecycle.js";
+import { createTurnEventsController, cancelActiveTurnAndWait, scheduleRecoveryRetry, createTurnRecoveryTracker, ACTIVE_TURN_RECOVERY_STALE_MESSAGE, } from "./sharedTurnLifecycle.js";
 import { loadPendingTurn, savePendingTurn, clearPendingTurn, } from "./turnResume.js";
 const pmaStyling = {
     eventClass: "chat-event",
@@ -64,6 +64,14 @@ const turnEventsCtrl = createTurnEventsController();
 let latestPhase = null;
 let latestGuidance = null;
 let latestElapsed = null;
+let currentPMATurnToken = 0;
+function advancePMATurnToken() {
+    currentPMATurnToken += 1;
+    return currentPMATurnToken;
+}
+function shouldAppendAsyncOutboxSummary(finalizedTurnToken, currentTurnToken, chatStatus) {
+    return finalizedTurnToken === currentTurnToken && (chatStatus || "") === "done";
+}
 function loadPMAPendingTurn() {
     return loadPendingTurn(PMA_PENDING_TURN_KEY);
 }
@@ -517,6 +525,7 @@ async function finalizePMAResponse(responseText, options = {}) {
     if (!pmaChat)
         return;
     const deliverySummary = options.deliverySummary ?? pendingDeliverySummary;
+    const finalizedTurnToken = currentPMATurnToken;
     const outboxBaseline = currentOutboxBaseline
         ? new Set(currentOutboxBaseline)
         : null;
@@ -556,7 +565,9 @@ async function finalizePMAResponse(responseText, options = {}) {
         catch {
             attachments = "";
         }
-        if (attachments && pmaChat) {
+        if (attachments &&
+            pmaChat &&
+            shouldAppendAsyncOutboxSummary(finalizedTurnToken, currentPMATurnToken, pmaChat.state.status)) {
             pmaChat.addAssistantMessage(attachments, true);
             pmaChat.renderMessages();
         }
@@ -817,13 +828,15 @@ async function sendMessage() {
     const message = elements.input.value?.trim() || "";
     if (!message)
         return;
+    advancePMATurnToken();
     if (currentController) {
-        cancelActiveTurnSync({
+        await cancelActiveTurnAndWait({
             abortController() {
                 if (currentController) {
                     currentController.abort();
                     currentController = null;
                 }
+                pmaChat.state.controller = null;
             },
             turnEventsCtrl,
             interruptServer: () => interruptActiveTurn(),
@@ -1184,6 +1197,7 @@ async function interruptActiveTurn(options = {}) {
 }
 async function cancelRequest(options = {}) {
     const { clearPending = false, interruptServer = false, stopLane = false, statusText } = options;
+    advancePMATurnToken();
     if (currentController) {
         currentController.abort();
         currentController = null;
@@ -1208,6 +1222,7 @@ async function cancelRequest(options = {}) {
     }
 }
 function resetThread() {
+    advancePMATurnToken();
     clearPMAPendingTurn();
     pendingDeliverySummary = null;
     turnEventsCtrl.abort();
@@ -1395,5 +1410,6 @@ function attachHandlers() {
 }
 const __pmaTest = {
     buildOutboxAttachmentSummary,
+    shouldAppendAsyncOutboxSummary,
 };
 export { __pmaTest, initPMA };

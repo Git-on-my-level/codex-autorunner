@@ -115,6 +115,36 @@ export function cancelActiveTurnSync(options: CancelActiveTurnOptions): void {
   }
 }
 
+export async function cancelActiveTurnAndWait(
+  options: CancelActiveTurnOptions
+): Promise<void> {
+  options.abortController();
+  options.turnEventsCtrl.abort();
+  options.clearPending?.();
+  if (!options.interruptServer) {
+    return;
+  }
+  try {
+    await options.interruptServer();
+  } catch {
+    // ignore
+  }
+}
+
+export function pendingTurnMatches(
+  expected: PendingTurn | null | undefined,
+  actual: PendingTurn | null | undefined
+): boolean {
+  if (!expected || !actual) {
+    return false;
+  }
+  return (
+    expected.clientTurnId === actual.clientTurnId &&
+    expected.startedAtMs === actual.startedAtMs &&
+    (expected.target || "") === (actual.target || "")
+  );
+}
+
 export interface ScheduleRecoveryRetryOptions {
   tracker: TurnRecoveryTracker;
   retryFn: () => Promise<void>;
@@ -135,6 +165,8 @@ export function scheduleRecoveryRetry(opts: ScheduleRecoveryRetryOptions): void 
 export const __turnRecoveryPolicyTest = {
   createTurnRecoveryTracker,
   cancelActiveTurnSync,
+  cancelActiveTurnAndWait,
+  pendingTurnMatches,
   scheduleRecoveryRetry,
   ACTIVE_TURN_RECOVERY_STALE_MESSAGE,
   DEFAULT_RECOVERY_MAX_ATTEMPTS,

@@ -70,6 +70,28 @@ export function cancelActiveTurnSync(options) {
         void options.interruptServer().catch(() => { });
     }
 }
+export async function cancelActiveTurnAndWait(options) {
+    options.abortController();
+    options.turnEventsCtrl.abort();
+    options.clearPending?.();
+    if (!options.interruptServer) {
+        return;
+    }
+    try {
+        await options.interruptServer();
+    }
+    catch {
+        // ignore
+    }
+}
+export function pendingTurnMatches(expected, actual) {
+    if (!expected || !actual) {
+        return false;
+    }
+    return (expected.clientTurnId === actual.clientTurnId &&
+        expected.startedAtMs === actual.startedAtMs &&
+        (expected.target || "") === (actual.target || ""));
+}
 export function scheduleRecoveryRetry(opts) {
     const { tracker, retryFn, onStale, intervalMs = 1000 } = opts;
     if (tracker.phase !== "recovering")
@@ -83,6 +105,8 @@ export function scheduleRecoveryRetry(opts) {
 export const __turnRecoveryPolicyTest = {
     createTurnRecoveryTracker,
     cancelActiveTurnSync,
+    cancelActiveTurnAndWait,
+    pendingTurnMatches,
     scheduleRecoveryRetry,
     ACTIVE_TURN_RECOVERY_STALE_MESSAGE,
     DEFAULT_RECOVERY_MAX_ATTEMPTS,

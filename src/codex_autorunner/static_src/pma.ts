@@ -36,7 +36,7 @@ import { CONSTANTS } from "./constants.js";
 import {
   createTurnEventsController,
   type PendingTurn,
-  cancelActiveTurnSync,
+  cancelActiveTurnAndWait,
   scheduleRecoveryRetry,
   createTurnRecoveryTracker,
   ACTIVE_TURN_RECOVERY_STALE_MESSAGE,
@@ -127,7 +127,21 @@ const turnEventsCtrl = createTurnEventsController();
 let latestPhase: string | null = null;
 let latestGuidance: string | null = null;
 let latestElapsed: number | null = null;
+let currentPMATurnToken = 0;
 type PMAView = "chat" | "memory";
+
+function advancePMATurnToken(): number {
+  currentPMATurnToken += 1;
+  return currentPMATurnToken;
+}
+
+function shouldAppendAsyncOutboxSummary(
+  finalizedTurnToken: number,
+  currentTurnToken: number,
+  chatStatus: string | null | undefined
+): boolean {
+  return finalizedTurnToken === currentTurnToken && (chatStatus || "") === "done";
+}
 
 function loadPMAPendingTurn(): PendingTurn | null {
   return loadPendingTurn(PMA_PENDING_TURN_KEY);
@@ -624,6 +638,7 @@ async function finalizePMAResponse(
   if (!pmaChat) return;
 
   const deliverySummary = options.deliverySummary ?? pendingDeliverySummary;
+  const finalizedTurnToken = currentPMATurnToken;
   const outboxBaseline = currentOutboxBaseline
     ? new Set(currentOutboxBaseline)
     : null;
@@ -667,7 +682,15 @@ async function finalizePMAResponse(
     } catch {
       attachments = "";
     }
-    if (attachments && pmaChat) {
+    if (
+      attachments &&
+      pmaChat &&
+      shouldAppendAsyncOutboxSummary(
+        finalizedTurnToken,
+        currentPMATurnToken,
+        pmaChat.state.status
+      )
+    ) {
       pmaChat.addAssistantMessage(attachments, true);
       pmaChat.renderMessages();
     }
@@ -966,13 +989,16 @@ async function sendMessage(): Promise<void> {
   const message = elements.input.value?.trim() || "";
   if (!message) return;
 
+  advancePMATurnToken();
+
   if (currentController) {
-    cancelActiveTurnSync({
+    await cancelActiveTurnAndWait({
       abortController() {
         if (currentController) {
           currentController.abort();
           currentController = null;
         }
+        pmaChat!.state.controller = null;
       },
       turnEventsCtrl,
       interruptServer: () => interruptActiveTurn(),
@@ -1374,6 +1400,7 @@ async function interruptActiveTurn(options: { stopLane?: boolean } = {}): Promis
 
 async function cancelRequest(options: CancelRequestOptions = {}): Promise<void> {
   const { clearPending = false, interruptServer = false, stopLane = false, statusText } = options;
+  advancePMATurnToken();
   if (currentController) {
     currentController.abort();
     currentController = null;
@@ -1399,6 +1426,7 @@ async function cancelRequest(options: CancelRequestOptions = {}): Promise<void> 
 }
 
 function resetThread(): void {
+  advancePMATurnToken();
   clearPMAPendingTurn();
   pendingDeliverySummary = null;
   turnEventsCtrl.abort();
@@ -1601,6 +1629,7 @@ function attachHandlers(): void {
 
 const __pmaTest = {
   buildOutboxAttachmentSummary,
+  shouldAppendAsyncOutboxSummary,
 };
 
 export { __pmaTest, initPMA };

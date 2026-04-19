@@ -23,6 +23,8 @@ globalThis.localStorage = dom.window.localStorage;
 const {
   createTurnRecoveryTracker,
   cancelActiveTurnSync,
+  cancelActiveTurnAndWait,
+  pendingTurnMatches,
   scheduleRecoveryRetry,
   ACTIVE_TURN_RECOVERY_STALE_MESSAGE,
   DEFAULT_RECOVERY_MAX_ATTEMPTS,
@@ -138,6 +140,78 @@ test("cancelActiveTurnSync swallows interrupt rejections", async () => {
 
   await new Promise((r) => setTimeout(r, 10));
   assert.equal(controllerAborted, true);
+});
+
+test("cancelActiveTurnAndWait resolves after interrupt completion", async () => {
+  const events = [];
+  let releaseInterrupt;
+  const interruptDone = new Promise((resolve) => {
+    releaseInterrupt = resolve;
+  });
+
+  const cancelPromise = cancelActiveTurnAndWait({
+    abortController() {
+      events.push("abort-controller");
+    },
+    turnEventsCtrl: {
+      abort() {
+        events.push("abort-events");
+      },
+    },
+    clearPending() {
+      events.push("clear-pending");
+    },
+    interruptServer() {
+      events.push("interrupt-start");
+      return interruptDone.then(() => {
+        events.push("interrupt-finish");
+      });
+    },
+  });
+
+  events.push("after-call");
+  await Promise.resolve();
+  assert.deepEqual(events, [
+    "abort-controller",
+    "abort-events",
+    "clear-pending",
+    "interrupt-start",
+    "after-call",
+  ]);
+
+  releaseInterrupt();
+  await cancelPromise;
+  assert.deepEqual(events, [
+    "abort-controller",
+    "abort-events",
+    "clear-pending",
+    "interrupt-start",
+    "after-call",
+    "interrupt-finish",
+  ]);
+});
+
+test("pendingTurnMatches requires same turn identity and target", () => {
+  const expected = {
+    clientTurnId: "turn-1",
+    message: "hello",
+    startedAtMs: 123,
+    target: "contextspace:active_context",
+  };
+  assert.equal(pendingTurnMatches(expected, { ...expected }), true);
+  assert.equal(
+    pendingTurnMatches(expected, { ...expected, clientTurnId: "turn-2" }),
+    false
+  );
+  assert.equal(
+    pendingTurnMatches(expected, { ...expected, startedAtMs: 124 }),
+    false
+  );
+  assert.equal(
+    pendingTurnMatches(expected, { ...expected, target: "contextspace:spec" }),
+    false
+  );
+  assert.equal(pendingTurnMatches(expected, null), false);
 });
 
 test("ACTIVE_TURN_RECOVERY_STALE_MESSAGE is a non-empty guidance string", () => {

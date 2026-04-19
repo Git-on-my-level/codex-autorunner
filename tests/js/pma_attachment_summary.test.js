@@ -57,3 +57,10 @@ test("outbox attachment summary is empty when there are no new files", () => {
 
   assert.equal(summary, "");
 });
+
+test("async outbox summary append only applies to the finalized done turn", () => {
+  assert.equal(__pmaTest.shouldAppendAsyncOutboxSummary(4, 4, "done"), true);
+  assert.equal(__pmaTest.shouldAppendAsyncOutboxSummary(4, 5, "done"), false);
+  assert.equal(__pmaTest.shouldAppendAsyncOutboxSummary(4, 4, "running"), false);
+  assert.equal(__pmaTest.shouldAppendAsyncOutboxSummary(4, 4, "interrupted"), false);
+});

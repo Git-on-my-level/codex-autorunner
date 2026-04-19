@@ -39,6 +39,7 @@ import {
   startTurnEventsStream as sharedStartTurnEventsStream,
   clearManagedTurn,
   cancelActiveTurnSync,
+  pendingTurnMatches,
   scheduleRecoveryRetry,
   createTurnRecoveryTracker,
   ACTIVE_TURN_RECOVERY_STALE_MESSAGE,
@@ -581,13 +582,35 @@ async function resumePendingWorkspaceTurn(): Promise<void> {
   await doResumeWorkspaceTurn(pending, createTurnRecoveryTracker());
 }
 
+function loadOwnedPendingWorkspaceTurn(expected: PendingTurn): PendingTurn | null {
+  const current = loadPendingTurn(CONTEXTSPACE_PENDING_KEY);
+  return pendingTurnMatches(expected, current) ? current : null;
+}
+
 async function doResumeWorkspaceTurn(
   pending: PendingTurn,
   tracker: TurnRecoveryTracker
 ): Promise<void> {
   const chatState = workspaceChat.state as ChatState;
+  const stillOwned = (): boolean => loadOwnedPendingWorkspaceTurn(pending) !== null;
+  const scheduleOwnedRetry = (): void => {
+    scheduleRecoveryRetry({
+      tracker,
+      retryFn: async () => {
+        const nextPending = loadOwnedPendingWorkspaceTurn(pending);
+        if (!nextPending) {
+          return;
+        }
+        await doResumeWorkspaceTurn(nextPending, tracker);
+      },
+      onStale,
+    });
+  };
 
   const onStale = (): void => {
+    if (!stillOwned()) {
+      return;
+    }
     chatState.status = "error";
     chatState.error = ACTIVE_TURN_RECOVERY_STALE_MESSAGE;
     clearPendingTurnState();
@@ -595,41 +618,56 @@ async function doResumeWorkspaceTurn(
     workspaceChat.renderMessages();
   };
 
+  const activePending = loadOwnedPendingWorkspaceTurn(pending);
+  if (!activePending) {
+    return;
+  }
+
   try {
-    const clientTurnId = typeof pending.clientTurnId === "string" ? pending.clientTurnId : "";
+    const clientTurnId =
+      typeof activePending.clientTurnId === "string" ? activePending.clientTurnId : "";
     const outcome = await resumeFileChatTurn(clientTurnId, {
       onEvent: (event) => {
+        if (!stillOwned()) {
+          return;
+        }
         workspaceChat.applyAppEvent(event);
         workspaceChat.renderEvents();
         workspaceChat.render();
       },
-      onResult: (result) => applyFinalResult(result as Record<string, unknown>),
+      onResult: (result) => {
+        if (!stillOwned()) {
+          return;
+        }
+        applyFinalResult(result as Record<string, unknown>);
+      },
       onError: (message) => {
+        if (!stillOwned()) {
+          return;
+        }
         chatState.statusText = message;
         workspaceChat.render();
       },
     });
+    if (!stillOwned()) {
+      return;
+    }
     turnEventsCtrl.current = outcome.controller;
     if (outcome.lastResult && (outcome.lastResult as Record<string, unknown>).status) {
       applyFinalResult(outcome.lastResult as Record<string, unknown>);
       return;
     }
     if (!outcome.controller) {
-      scheduleRecoveryRetry({
-        tracker,
-        retryFn: () => doResumeWorkspaceTurn(pending, tracker),
-        onStale,
-      });
+      scheduleOwnedRetry();
     }
   } catch (err) {
+    if (!stillOwned()) {
+      return;
+    }
     const message = (err as Error).message || "Failed to resume turn";
     chatState.statusText = message;
     workspaceChat.render();
-    scheduleRecoveryRetry({
-      tracker,
-      retryFn: () => doResumeWorkspaceTurn(pending, tracker),
-      onStale,
-    });
+    scheduleOwnedRetry();
   }
 }
 
