@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "scenario_id": "interrupt_hung_turn_prefers_interrupted",
+  "description": "If Hermes emits progress but ignores cancel and never returns a terminal, an already-confirmed interrupt still wins over a later timeout.",
+  "surfaces": [
+    "discord"
+  ],
+  "runtime_fixture": {
+    "kind": "hermes",
+    "scenario": "official_progress_hang_ignore_cancel"
+  },
+  "harness_timeouts": {
+    "discord": 8.0
+  },
+  "faults": [
+    {
+      "kind": "set_surface_timeout",
+      "target": "surface",
+      "surfaces": [
+        "discord"
+      ],
+      "parameters": {
+        "seconds": 1.0
+      }
+    }
+  ],
+  "actions": [
+    {
+      "kind": "start_message",
+      "actor": "user",
+      "payload": {
+        "text": "echo hang after progress"
+      }
+    },
+    {
+      "kind": "wait_for_running_execution",
+      "actor": "system",
+      "payload": {
+        "timeout_seconds": 2.0
+      }
+    },
+    {
+      "kind": "interrupt_active_turn",
+      "actor": "user",
+      "payload": {}
+    },
+    {
+      "kind": "await_active_message",
+      "actor": "system",
+      "payload": {}
+    }
+  ],
+  "expected_terminal": {
+    "status": "interrupted"
+  },
+  "transcript_invariants": [
+    {
+      "kind": "log_event_exists",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "event_name": "discord.interrupt.completed",
+        "field": "interrupt_state",
+        "value": "confirmed"
+      }
+    },
+    {
+      "kind": "log_event_exists",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "event_name": "chat.managed_thread.turn_finalized",
+        "field": "status",
+        "value": "interrupted"
+      }
+    }
+  ],
+  "tags": [
+    "interrupt",
+    "timeout",
+    "discord",
+    "hermes",
+    "pma"
+  ],
+  "notes": "Models the production pattern where ACP progress arrives, the operator interrupt is acknowledged, but the backend ignores cancel and never returns a terminal."
+}

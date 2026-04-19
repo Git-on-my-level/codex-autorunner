@@ -177,6 +177,7 @@ _DIRECT_RUN_EVENT_TYPES = (
 # from other threads.
 _LIVE_TIMELINE_BATCH_MAX_EVENTS = 25
 _LIVE_TIMELINE_BATCH_MAX_DELAY_SECONDS = 5.0
+_RECORDED_INTERRUPT_POLL_INTERVAL_SECONDS = 0.05
 
 
 def _runtime_raw_event_message(raw_event: Any) -> dict[str, Any]:
@@ -223,6 +224,30 @@ def _runtime_raw_event_content_summary(raw_event: Any) -> dict[str, Any]:
         "content_part_count": len(content) if isinstance(content, list) else None,
         "content_part_types": tuple(part_types),
     }
+
+
+async def _wait_for_recorded_execution_interrupt(
+    orchestration_service: Any,
+    *,
+    managed_thread_id: str,
+    managed_turn_id: str,
+) -> bool:
+    get_execution = getattr(orchestration_service, "get_execution", None)
+    if not callable(get_execution):
+        return False
+    while True:
+        try:
+            execution = get_execution(managed_thread_id, managed_turn_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            return False
+        status = str(getattr(execution, "status", "") or "").strip().lower()
+        if status == "interrupted":
+            return True
+        if status and status != "running":
+            return False
+        await asyncio.sleep(_RECORDED_INTERRUPT_POLL_INTERVAL_SECONDS)
 
 
 @dataclass(frozen=True)
@@ -2285,15 +2310,66 @@ async def finalize_managed_thread_execution(
                 backend_turn_id=started.execution.backend_id,
             )
         else:
-            outcome = await await_runtime_thread_outcome(
-                started,
-                interrupt_event=None,
-                timeout_seconds=errors.timeout_seconds,
-                stall_timeout_seconds=errors.stall_timeout_seconds,
-                execution_error_message=errors.public_execution_error,
-                terminal_state=terminal_state,
-                observe_progress_events=False,
+            outcome_task = asyncio.create_task(
+                await_runtime_thread_outcome(
+                    started,
+                    interrupt_event=None,
+                    timeout_seconds=errors.timeout_seconds,
+                    stall_timeout_seconds=errors.stall_timeout_seconds,
+                    execution_error_message=errors.public_execution_error,
+                    terminal_state=terminal_state,
+                    observe_progress_events=False,
+                )
             )
+            recorded_interrupt_task = asyncio.create_task(
+                _wait_for_recorded_execution_interrupt(
+                    orchestration_service,
+                    managed_thread_id=managed_thread_id,
+                    managed_turn_id=managed_turn_id,
+                )
+            )
+            try:
+                done, _ = await asyncio.wait(
+                    {outcome_task, recorded_interrupt_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if recorded_interrupt_task in done and recorded_interrupt_task.result():
+                    outcome_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await outcome_task
+                    log_event(
+                        logger,
+                        logging.INFO,
+                        "chat.managed_thread.recorded_interrupt_preempted_runtime_wait",
+                        **_managed_thread_trace_fields(
+                            managed_thread_id=managed_thread_id,
+                            managed_turn_id=managed_turn_id,
+                            backend_thread_id=current_backend_thread_id or None,
+                            backend_turn_id=started.execution.backend_id,
+                            surface=surface,
+                        ),
+                        **_managed_thread_runtime_trace_fields(event_state),
+                    )
+                    outcome = RuntimeThreadOutcome(
+                        status="interrupted",
+                        assistant_text="",
+                        error=errors.interrupted_error,
+                        backend_thread_id=current_backend_thread_id,
+                        backend_turn_id=started.execution.backend_id,
+                        raw_events=tuple(terminal_state.raw_events),
+                        completion_source="interrupt",
+                        transport_request_return_timestamp=(
+                            terminal_state.transport_request_return_timestamp
+                        ),
+                        last_progress_timestamp=terminal_state.last_progress_timestamp,
+                        failure_cause=errors.interrupted_error,
+                    )
+                else:
+                    outcome = await outcome_task
+            finally:
+                recorded_interrupt_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await recorded_interrupt_task
     except asyncio.CancelledError:
         log_event(
             logger,
