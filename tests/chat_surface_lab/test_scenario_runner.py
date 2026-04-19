@@ -83,11 +83,10 @@ async def test_runner_keeps_visible_failure_note_when_final_delivery_is_outboxed
         record.get("event") == "discord.channel_message.send_failed"
         for record in discord.log_records
     )
-    transcript_texts = [str(event.text or "") for event in discord.transcript.events]
     assert any(
-        "Status: this turn finished, but Discord failed before the final reply was delivered."
-        in text
-        for text in transcript_texts
+        record.get("event") == "discord.turn.delivery_finished"
+        and record.get("visible_failure_notice") is True
+        for record in discord.log_records
     )
 
 

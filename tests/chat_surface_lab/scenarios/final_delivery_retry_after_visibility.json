@@ -51,12 +51,14 @@
       }
     },
     {
-      "kind": "contains_text",
+      "kind": "log_event_exists",
       "surfaces": [
         "discord"
       ],
       "params": {
-        "text": "Status: this turn finished, but Discord failed before the final reply was delivered. Please retry if needed."
+        "event_name": "discord.turn.delivery_finished",
+        "field": "visible_failure_notice",
+        "value": true
       }
     },
     {
