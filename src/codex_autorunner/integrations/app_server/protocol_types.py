@@ -100,6 +100,18 @@ class ApprovalRequest:
     context: Optional[dict[str, Any]] = None
 
 
+@dataclass(frozen=True)
+class UserInputRequest:
+    """Structured user-input request payload."""
+
+    method: str
+    item_id: Optional[str] = None
+    turn_id: Optional[str] = None
+    thread_id: Optional[str] = None
+    questions: tuple[dict[str, Any], ...] = ()
+    context: Optional[dict[str, Any]] = None
+
+
 NotificationResult = Union[
     OutputDeltaNotification,
     ReasoningSummaryDeltaNotification,
@@ -109,5 +121,6 @@ NotificationResult = Union[
     TurnCompletedNotification,
     ErrorNotification,
     ApprovalRequest,
+    UserInputRequest,
     None,
 ]

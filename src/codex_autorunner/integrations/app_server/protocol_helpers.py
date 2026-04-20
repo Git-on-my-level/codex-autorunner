@@ -6,7 +6,7 @@ from typing import Any, Awaitable, Callable, Optional
 
 from .event_decoder import APPROVAL_METHODS, decode_notification
 from .ids import extract_turn_id
-from .protocol_types import ApprovalRequest, NotificationResult
+from .protocol_types import ApprovalRequest, NotificationResult, UserInputRequest
 
 
 @dataclass(frozen=True)
@@ -35,6 +35,15 @@ class ApprovalRequestEnvelope:
     method: str
     params: dict[str, Any]
     request: ApprovalRequest
+    raw_message: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class UserInputRequestEnvelope:
+    request_id: Any
+    method: str
+    params: dict[str, Any]
+    request: UserInputRequest
     raw_message: dict[str, Any]
 
 
@@ -108,6 +117,43 @@ def normalize_approval_request(
     )
 
 
+def normalize_user_input_request(
+    message: dict[str, Any],
+) -> Optional[UserInputRequestEnvelope]:
+    normalized = normalize_server_request(message)
+    if normalized is None or normalized.method != "item/tool/requestUserInput":
+        return None
+    params = normalized.params
+    questions_raw = params.get("questions")
+    questions = (
+        tuple(question for question in questions_raw if isinstance(question, dict))
+        if isinstance(questions_raw, list)
+        else ()
+    )
+    return UserInputRequestEnvelope(
+        request_id=normalized.request_id,
+        method=normalized.method,
+        params=params,
+        request=UserInputRequest(
+            method=normalized.method,
+            item_id=(
+                str(params.get("itemId")).strip()
+                if isinstance(params.get("itemId"), str) and params.get("itemId")
+                else None
+            ),
+            turn_id=extract_turn_id(params),
+            thread_id=(
+                str(params.get("threadId")).strip()
+                if isinstance(params.get("threadId"), str) and params.get("threadId")
+                else None
+            ),
+            questions=questions,
+            context=params,
+        ),
+        raw_message=message,
+    )
+
+
 def normalize_notification_envelope(
     message: dict[str, Any],
 ) -> Optional[NotificationEnvelope]:
@@ -136,6 +182,25 @@ class RawApprovalRequestAdapter:
         if self._handler is None:
             return self._default_decision
         return await _maybe_await(self._handler(envelope.raw_message))
+
+
+class RawUserInputRequestAdapter:
+    def __init__(
+        self,
+        handler: Optional[Callable[[dict[str, Any]], Awaitable[Any]]],
+        *,
+        default_result_factory: Callable[[UserInputRequestEnvelope], dict[str, Any]],
+    ) -> None:
+        self._handler = handler
+        self._default_result_factory = default_result_factory
+
+    async def decide(self, envelope: UserInputRequestEnvelope) -> Any:
+        if self._handler is None:
+            return self._default_result_factory(envelope)
+        result = await _maybe_await(self._handler(envelope.raw_message))
+        if result is None:
+            return self._default_result_factory(envelope)
+        return result
 
 
 class RawNotificationAdapter:

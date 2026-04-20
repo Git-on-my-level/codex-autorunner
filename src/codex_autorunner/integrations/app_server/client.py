@@ -43,10 +43,12 @@ from .ids import extract_thread_id, extract_thread_id_for_turn, extract_turn_id
 from .protocol_helpers import (
     RawApprovalRequestAdapter,
     RawNotificationAdapter,
+    RawUserInputRequestAdapter,
     _maybe_await,
     normalize_approval_request,
     normalize_notification_envelope,
     normalize_response,
+    normalize_user_input_request,
 )
 from .recovery import RecoveryConfig, TurnRecoveryCoordinator
 from .transport import AppServerReadBuffer, build_message
@@ -60,6 +62,8 @@ from .turn_state import (
 
 ApprovalDecision = Union[str, Dict[str, Any]]
 ApprovalHandler = Callable[[Dict[str, Any]], Awaitable[ApprovalDecision]]
+UserInputResponse = Dict[str, Any]
+UserInputHandler = Callable[[Dict[str, Any]], Awaitable[UserInputResponse]]
 NotificationHandler = Callable[[Dict[str, Any]], Awaitable[None]]
 _TurnState = TurnState
 
@@ -112,6 +116,7 @@ class CodexAppServerClient:
         cwd: Optional[Path] = None,
         env: Optional[Dict[str, str]] = None,
         approval_handler: Optional[ApprovalHandler] = None,
+        question_handler: Optional[UserInputHandler] = None,
         default_approval_decision: str = "cancel",
         auto_restart: Optional[bool] = None,
         request_timeout: Optional[float] = None,
@@ -139,6 +144,7 @@ class CodexAppServerClient:
         self._cwd = str(cwd) if cwd is not None else None
         self._env = env
         self._approval_handler = approval_handler
+        self._question_handler = question_handler
         self._default_approval_decision = default_approval_decision
         disable_restart_env = os.environ.get(
             "CODEX_DISABLE_APP_SERVER_AUTORESTART_FOR_TESTS"
@@ -213,6 +219,10 @@ class CodexAppServerClient:
         self._approval_adapter = RawApprovalRequestAdapter(
             approval_handler,
             default_decision=default_approval_decision,
+        )
+        self._user_input_adapter = RawUserInputRequestAdapter(
+            question_handler,
+            default_result_factory=self._default_user_input_result,
         )
         self._notification_adapter = RawNotificationAdapter(notification_handler)
         self._next_id: str = str(uuid.uuid4())
@@ -988,6 +998,7 @@ class CodexAppServerClient:
 
     async def _handle_server_request(self, message: Dict[str, Any]) -> None:
         approval = normalize_approval_request(message)
+        user_input = normalize_user_input_request(message)
         method = message.get("method")
         req_id = message.get("id")
         if approval is not None:
@@ -1046,6 +1057,66 @@ class CodexAppServerClient:
             )
             await self._send_message(self._build_message(req_id=req_id, result=result))
             return
+        if user_input is not None:
+            method = user_input.method
+            req_id = user_input.request_id
+            log_event(
+                self._logger,
+                logging.INFO,
+                "app_server.user_input.requested",
+                request_id=req_id,
+                method=method,
+                turn_id=user_input.request.turn_id or user_input.params.get("turnId"),
+                question_count=len(user_input.request.questions),
+            )
+            try:
+                result = await self._user_input_adapter.decide(user_input)
+            except (
+                RuntimeError,
+                ValueError,
+                TypeError,
+                KeyError,
+                AttributeError,
+                OSError,
+                ConnectionError,
+            ) as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "app_server.user_input.failed",
+                    request_id=req_id,
+                    method=method,
+                    exc=exc,
+                )
+                await self._send_message(
+                    self._build_message(
+                        req_id=req_id,
+                        error={
+                            "code": -32002,
+                            "message": "user input handler failed",
+                        },
+                    )
+                )
+                return
+            result = self._normalize_user_input_result(result, user_input)
+            log_event(
+                self._logger,
+                logging.INFO,
+                "app_server.user_input.responded",
+                request_id=req_id,
+                method=method,
+                answer_keys=sorted(
+                    str(key)
+                    for key in (
+                        (result.get("answers") or {})
+                        if isinstance(result, dict)
+                        else {}
+                    )
+                    if isinstance(key, str) and key
+                ),
+            )
+            await self._send_message(self._build_message(req_id=req_id, result=result))
+            return
         if req_id is None or not isinstance(method, str):
             return
         await self._send_message(
@@ -1054,6 +1125,50 @@ class CodexAppServerClient:
                 error={"code": -32601, "message": f"Unsupported method: {method}"},
             )
         )
+
+    def _default_user_input_result(self, envelope: Any) -> dict[str, Any]:
+        return self._normalize_user_input_result({}, envelope)
+
+    def _normalize_user_input_result(
+        self, result: Any, envelope: Any
+    ) -> dict[str, Any]:
+        params = (
+            envelope.params
+            if hasattr(envelope, "params") and isinstance(envelope.params, dict)
+            else {}
+        )
+        questions_raw = params.get("questions")
+        answers: dict[str, dict[str, list[str]]] = {}
+        answers_raw = result.get("answers") if isinstance(result, dict) else None
+        if isinstance(questions_raw, list):
+            for question in questions_raw:
+                if not isinstance(question, dict):
+                    continue
+                question_id = question.get("id")
+                if not isinstance(question_id, str) or not question_id.strip():
+                    continue
+                normalized_id = question_id.strip()
+                raw_entry = (
+                    answers_raw.get(normalized_id)
+                    if isinstance(answers_raw, dict)
+                    else None
+                )
+                if isinstance(raw_entry, dict):
+                    raw_values = raw_entry.get("answers")
+                else:
+                    raw_values = raw_entry
+                if isinstance(raw_values, list):
+                    values = [
+                        str(value)
+                        for value in raw_values
+                        if isinstance(value, str) and value
+                    ]
+                elif isinstance(raw_values, str) and raw_values:
+                    values = [raw_values]
+                else:
+                    values = []
+                answers[normalized_id] = {"answers": values}
+        return {"answers": answers}
 
     async def _handle_notification(self, message: Dict[str, Any]) -> None:
         envelope = normalize_notification_envelope(message)
