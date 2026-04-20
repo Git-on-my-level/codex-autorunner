@@ -60,12 +60,15 @@ from ...core.orchestration.managed_thread_delivery import (
 from ...core.orchestration.models import MessageRequest
 from ...core.orchestration.runtime_thread_events import (
     RuntimeThreadRunEventState,
-    normalize_runtime_thread_raw_event,
+    completion_source_from_outcome,
+    normalize_runtime_progress_event,
+    raw_event_content_summary,
+    raw_event_method,
     recover_post_completion_outcome,
+    runtime_trace_fields,
     terminal_run_event_from_outcome,
 )
 from ...core.orchestration.runtime_threads import (
-    RUNTIME_THREAD_TIMEOUT_ERROR,
     RuntimeThreadExecution,
     RuntimeThreadOutcome,
     RuntimeTurnTerminalStateMachine,
@@ -73,19 +76,6 @@ from ...core.orchestration.runtime_threads import (
     begin_next_queued_runtime_thread_execution,
     begin_runtime_thread_execution,
 )
-from ...core.ports.run_event import (
-    RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
-    RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
-    ApprovalRequested,
-    Completed,
-    Failed,
-    OutputDelta,
-    RunNotice,
-    Started,
-    TokenUsage,
-    ToolCall,
-)
-from ...core.time_utils import now_iso
 from ..github.managed_thread_pr_binding import self_claim_and_arm_pr_binding
 from .managed_thread_delivery import ManagedThreadDeliveryAdapter
 from .runtime_thread_errors import resolve_runtime_thread_error_detail
@@ -163,68 +153,11 @@ class ManagedThreadDurableDeliveryHooks:
 _QUEUE_WORKER_FAILURE_ERROR = "Queue worker terminated unexpectedly"
 logger = logging.getLogger(__name__)
 
-_DIRECT_RUN_EVENT_TYPES = (
-    OutputDelta,
-    ToolCall,
-    ApprovalRequested,
-    RunNotice,
-    TokenUsage,
-    Completed,
-    Failed,
-    Started,
-)
-
 # Bound live timeline write pressure so one busy thread cannot starve hub requests
 # from other threads.
 _LIVE_TIMELINE_BATCH_MAX_EVENTS = 25
 _LIVE_TIMELINE_BATCH_MAX_DELAY_SECONDS = 5.0
 _RECORDED_INTERRUPT_POLL_INTERVAL_SECONDS = 0.05
-
-
-def _runtime_raw_event_message(raw_event: Any) -> dict[str, Any]:
-    if not isinstance(raw_event, dict):
-        return {}
-    message = raw_event.get("message")
-    if isinstance(message, dict):
-        return message
-    return raw_event
-
-
-def _runtime_raw_event_method(raw_event: Any) -> str:
-    message = _runtime_raw_event_message(raw_event)
-    return str(message.get("method") or "").strip()
-
-
-def _runtime_raw_event_session_update(raw_event: Any) -> dict[str, Any]:
-    message = _runtime_raw_event_message(raw_event)
-    params = message.get("params")
-    if not isinstance(params, dict):
-        return {}
-    update = params.get("update")
-    if isinstance(update, dict):
-        return update
-    return {}
-
-
-def _runtime_raw_event_content_summary(raw_event: Any) -> dict[str, Any]:
-    update = _runtime_raw_event_session_update(raw_event)
-    content = update.get("content")
-    part_types: list[str] = []
-    if isinstance(content, list):
-        for item in content:
-            if not isinstance(item, dict):
-                continue
-            item_type = str(item.get("type") or "").strip()
-            if item_type:
-                part_types.append(item_type)
-    return {
-        "session_update_kind": str(
-            update.get("sessionUpdate") or update.get("session_update") or ""
-        ).strip(),
-        "content_kind": type(content).__name__ if content is not None else "missing",
-        "content_part_count": len(content) if isinstance(content, list) else None,
-        "content_part_types": tuple(part_types),
-    }
 
 
 async def _wait_for_recorded_execution_interrupt(
@@ -1641,55 +1574,6 @@ def ensure_managed_thread_queue_worker(
     task_map[managed_thread_id] = worker_task
 
 
-def _note_runtime_event_state(
-    event_state: RuntimeThreadRunEventState,
-    run_event: Any,
-) -> None:
-    event_state.note_runtime_progress(
-        type(run_event).__name__,
-        timestamp=now_iso(),
-    )
-    if isinstance(run_event, OutputDelta):
-        if run_event.delta_type == RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM:
-            event_state.note_stream_text(str(run_event.content or ""))
-            return
-        if run_event.delta_type == RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE:
-            event_state.note_message_text(str(run_event.content or ""))
-            return
-        return
-    if isinstance(run_event, TokenUsage) and isinstance(run_event.usage, dict):
-        event_state.token_usage = dict(run_event.usage)
-        return
-    if isinstance(run_event, Completed):
-        event_state.completed_seen = True
-        if isinstance(run_event.final_message, str):
-            event_state.note_message_text(run_event.final_message)
-        return
-    if isinstance(run_event, Failed):
-        error_message = str(run_event.error_message or "").strip()
-        if error_message:
-            event_state.last_error_message = error_message
-
-
-async def _normalize_runtime_progress_event(
-    raw_event: Any,
-    event_state: RuntimeThreadRunEventState,
-) -> list[Any]:
-    if isinstance(raw_event, _DIRECT_RUN_EVENT_TYPES):
-        _note_runtime_event_state(event_state, raw_event)
-        return [raw_event]
-    return await normalize_runtime_thread_raw_event(raw_event, event_state)
-
-
-def _managed_thread_runtime_trace_fields(
-    event_state: RuntimeThreadRunEventState,
-) -> dict[str, Any]:
-    return {
-        "last_runtime_method": event_state.last_runtime_method,
-        "last_progress_at": event_state.last_progress_at,
-    }
-
-
 def _surface_metadata(
     started: RuntimeThreadExecution,
     surface: ManagedThreadSurfaceInfo,
@@ -1781,22 +1665,6 @@ def _queue_worker_trace_fields(
             None,
         ),
     }
-
-
-def _managed_thread_completion_source(
-    outcome: RuntimeThreadOutcome,
-    *,
-    recovered_after_completion: bool,
-) -> str:
-    if recovered_after_completion and outcome.completion_source == "prompt_return":
-        return "post_completion_recovery"
-    if outcome.status == "interrupted":
-        return "interrupt"
-    if str(outcome.error or "").strip() == RUNTIME_THREAD_TIMEOUT_ERROR:
-        return "timeout"
-    if outcome.completion_source:
-        return outcome.completion_source
-    return "prompt_return"
 
 
 async def finalize_managed_thread_execution(
@@ -2195,13 +2063,13 @@ async def finalize_managed_thread_execution(
                 ):
                     raw_events_received += 1
                     terminal_state.note_raw_event(raw_event)
-                    run_events = await _normalize_runtime_progress_event(
+                    run_events = await normalize_runtime_progress_event(
                         raw_event,
                         event_state,
                     )
-                    raw_method = _runtime_raw_event_method(raw_event)
+                    raw_method = raw_event_method(raw_event)
                     if not run_events and raw_method == "session/update":
-                        content_summary = _runtime_raw_event_content_summary(raw_event)
+                        content_summary = raw_event_content_summary(raw_event)
                         summary_kind = (
                             str(
                                 content_summary.get("session_update_kind") or "unknown"
@@ -2232,7 +2100,7 @@ async def finalize_managed_thread_execution(
                                 event_state_best_assistant_chars=len(
                                     event_state.best_assistant_text()
                                 ),
-                                **_managed_thread_runtime_trace_fields(event_state),
+                                **runtime_trace_fields(event_state),
                                 content_summary=content_summary,
                             )
                     timeline_events.extend(run_events)
@@ -2272,7 +2140,7 @@ async def finalize_managed_thread_execution(
                     ),
                     raw_events_received=raw_events_received,
                     run_events_dispatched=run_events_dispatched,
-                    **_managed_thread_runtime_trace_fields(event_state),
+                    **runtime_trace_fields(event_state),
                     exc=exc,
                 )
             finally:
@@ -2299,7 +2167,7 @@ async def finalize_managed_thread_execution(
                     run_events_dispatched=run_events_dispatched,
                     empty_session_update_events=empty_session_update_events,
                     empty_session_update_kinds=empty_session_update_kinds,
-                    **_managed_thread_runtime_trace_fields(event_state),
+                    **runtime_trace_fields(event_state),
                 )
 
         stream_task = asyncio.create_task(_pump_runtime_events())
@@ -2360,7 +2228,7 @@ async def finalize_managed_thread_execution(
                             backend_turn_id=started.execution.backend_id,
                             surface=surface,
                         ),
-                        **_managed_thread_runtime_trace_fields(event_state),
+                        **runtime_trace_fields(event_state),
                     )
                     outcome = RuntimeThreadOutcome(
                         status="interrupted",
@@ -2395,7 +2263,7 @@ async def finalize_managed_thread_execution(
                 surface=surface,
             ),
             phase="await_runtime_thread_outcome",
-            **_managed_thread_runtime_trace_fields(event_state),
+            **runtime_trace_fields(event_state),
         )
         raise
     except (
@@ -2448,7 +2316,7 @@ async def finalize_managed_thread_execution(
                             backend_turn_id=stream_backend_turn_id or None,
                             surface=surface,
                         ),
-                        **_managed_thread_runtime_trace_fields(event_state),
+                        **runtime_trace_fields(event_state),
                     )
                 else:
                     raise exc
@@ -2468,7 +2336,7 @@ async def finalize_managed_thread_execution(
                 surface=surface,
             ),
             phase="flush_live_timeline_buffer",
-            **_managed_thread_runtime_trace_fields(event_state),
+            **runtime_trace_fields(event_state),
         )
         raise
 
@@ -2494,7 +2362,7 @@ async def finalize_managed_thread_execution(
                 surface=surface,
             ),
             original_error=outcome.error,
-            **_managed_thread_runtime_trace_fields(event_state),
+            **runtime_trace_fields(event_state),
         )
         outcome = recovered_outcome
 
@@ -2550,7 +2418,7 @@ async def finalize_managed_thread_execution(
         fresh_backend_session_started,
     ) = managed_thread_session_metadata(started.request)
     resolved_backend_thread_id = finalized_state.backend_thread_id
-    completion_source = _managed_thread_completion_source(
+    completion_source = completion_source_from_outcome(
         outcome,
         recovered_after_completion=recovered_after_completion,
     )
@@ -2637,7 +2505,7 @@ async def finalize_managed_thread_execution(
                     surface=surface,
                 ),
                 assistant_chars=len(resolved_assistant_text),
-                **_managed_thread_runtime_trace_fields(event_state),
+                **runtime_trace_fields(event_state),
             )
         except Exception as exc:
             log_event(
@@ -2653,7 +2521,7 @@ async def finalize_managed_thread_execution(
                     surface=surface,
                 ),
                 assistant_chars=len(resolved_assistant_text),
-                **_managed_thread_runtime_trace_fields(event_state),
+                **runtime_trace_fields(event_state),
                 exc=exc,
             )
         finalized_execution: Any = None
@@ -2692,7 +2560,7 @@ async def finalize_managed_thread_execution(
                 ),
                 status="ok",
                 transcript_turn_id=transcript_turn_id,
-                **_managed_thread_runtime_trace_fields(event_state),
+                **runtime_trace_fields(event_state),
             )
         except Exception as exc:
             execution_record_failed = True
@@ -2710,7 +2578,7 @@ async def finalize_managed_thread_execution(
                 ),
                 status="ok",
                 transcript_turn_id=transcript_turn_id,
-                **_managed_thread_runtime_trace_fields(event_state),
+                **runtime_trace_fields(event_state),
                 exc=exc,
             )
             get_execution = getattr(orchestration_service, "get_execution", None)
@@ -2770,7 +2638,7 @@ async def finalize_managed_thread_execution(
                 event_error=event_state.last_error_message,
                 fresh_backend_session_started=fresh_backend_session_started,
                 fresh_backend_session_reason=fresh_backend_session_reason,
-                **_managed_thread_runtime_trace_fields(event_state),
+                **runtime_trace_fields(event_state),
             )
             return _build_finalization_result(
                 status="error",
@@ -2804,7 +2672,7 @@ async def finalize_managed_thread_execution(
             token_usage=event_state.token_usage,
             fresh_backend_session_started=fresh_backend_session_started,
             fresh_backend_session_reason=fresh_backend_session_reason,
-            **_managed_thread_runtime_trace_fields(event_state),
+            **runtime_trace_fields(event_state),
         )
         # Hub control-plane: thread activity record (best-effort, ok outcomes only).
         try:
@@ -2910,7 +2778,7 @@ async def finalize_managed_thread_execution(
             token_usage=event_state.token_usage,
             fresh_backend_session_started=fresh_backend_session_started,
             fresh_backend_session_reason=fresh_backend_session_reason,
-            **_managed_thread_runtime_trace_fields(event_state),
+            **runtime_trace_fields(event_state),
         )
         return _build_finalization_result(
             status="interrupted",
@@ -2991,7 +2859,7 @@ async def finalize_managed_thread_execution(
         token_usage=event_state.token_usage,
         fresh_backend_session_started=fresh_backend_session_started,
         fresh_backend_session_reason=fresh_backend_session_reason,
-        **_managed_thread_runtime_trace_fields(event_state),
+        **runtime_trace_fields(event_state),
     )
     return _build_finalization_result(
         status="error",
