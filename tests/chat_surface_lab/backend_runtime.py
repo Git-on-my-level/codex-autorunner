@@ -513,9 +513,10 @@ class ACPFixtureRuntime(BaseBackendFixtureRuntime):
             payload=event.payload,
         )
         decision = await self._wait_for_control(control_id)
-        if decision == "approve":
+        normalized = _normalize_decision(decision if isinstance(decision, str) else "")
+        if normalized == "approve":
             return "allow"
-        if decision == "deny":
+        if normalized == "deny":
             return "deny"
         return "cancel"
 
