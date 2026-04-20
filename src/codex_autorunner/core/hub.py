@@ -89,6 +89,9 @@ class _HubWorktreeBridge:
     def snapshot_for_repo(self, repo_id: str) -> "RepoSnapshot":
         return self._supervisor._snapshot_for_repo(repo_id)
 
+    def list_repos(self, *, use_cache: bool = True) -> list["RepoSnapshot"]:
+        return self._supervisor.list_repos(use_cache=use_cache)
+
     def stop_runner(
         self,
         *,
@@ -741,19 +744,7 @@ class HubSupervisor:
     def set_worktree_setup_commands(
         self, repo_id: str, commands: List[str]
     ) -> RepoSnapshot:
-        self._invalidate_list_cache()
-        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
-        entry = manifest.get(repo_id)
-        if not entry:
-            raise ValueError(f"Repo not found: {repo_id}")
-        if entry.kind != "base":
-            raise ValueError(
-                "Worktree setup commands can only be configured on base repos"
-            )
-        normalized = [str(cmd).strip() for cmd in commands if str(cmd).strip()]
-        entry.worktree_setup_commands = normalized or None
-        save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
-        return self._snapshot_for_repo(repo_id)
+        return self._worktree_manager.set_worktree_setup_commands(repo_id, commands)
 
     def run_setup_commands_for_workspace(
         self,
@@ -761,60 +752,10 @@ class HubSupervisor:
         *,
         repo_id_hint: Optional[str] = None,
     ) -> int:
-        """Run configured setup commands for a hub-tracked workspace.
-
-        Returns the number of setup commands executed. If the workspace is not
-        tracked by the hub manifest or no setup commands are configured, returns 0.
-        """
-        workspace_root = workspace_path.expanduser().resolve()
-        snapshots = self.list_repos(use_cache=False)
-        snapshots_by_id = {snapshot.id: snapshot for snapshot in snapshots}
-        target: Optional[RepoSnapshot] = None
-
-        for snapshot in snapshots:
-            try:
-                if snapshot.path.expanduser().resolve() == workspace_root:
-                    target = snapshot
-                    break
-            except OSError:
-                continue
-
-        if target is None:
-            hint = (repo_id_hint or "").strip()
-            if hint:
-                target = snapshots_by_id.get(hint)
-
-        if target is None:
-            return 0
-
-        try:
-            execution_root = target.path.expanduser().resolve()
-        except OSError:
-            return 0
-
-        base_snapshot: Optional[RepoSnapshot] = target
-        if target.kind == "worktree":
-            base_id = (target.worktree_of or "").strip()
-            if not base_id:
-                return 0
-            base_snapshot = snapshots_by_id.get(base_id)
-        if base_snapshot is None or base_snapshot.kind != "base":
-            return 0
-
-        commands = [
-            str(cmd).strip()
-            for cmd in (base_snapshot.worktree_setup_commands or [])
-            if str(cmd).strip()
-        ]
-        if not commands:
-            return 0
-
-        self._worktree_manager._run_worktree_setup_commands(
-            execution_root,
-            commands,
-            base_repo_id=base_snapshot.id,
+        return self._worktree_manager.run_setup_commands_for_workspace(
+            workspace_path,
+            repo_id_hint=repo_id_hint,
         )
-        return len(commands)
 
     def _archive_bound_pma_threads(
         self,
