@@ -610,6 +610,7 @@ async def test_discord_managed_thread_delivery_uses_unique_record_ids_per_chunk(
         _ServiceStub(),
         channel_id="channel-1",
         managed_thread_id="thread-1",
+        workspace_root=Path.cwd(),
         public_execution_error="Discord turn failed",
     )
     content = ("a" * 1500) + "\n" + ("b" * 1500)
@@ -677,6 +678,7 @@ async def test_discord_managed_thread_delivery_includes_token_usage_footer() -> 
         _ServiceStub(),
         channel_id="channel-1",
         managed_thread_id="thread-1",
+        workspace_root=Path.cwd(),
         public_execution_error="Discord turn failed",
     )
 

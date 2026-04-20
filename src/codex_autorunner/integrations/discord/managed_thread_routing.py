@@ -417,6 +417,7 @@ def _build_discord_runner_hooks(
     *,
     channel_id: str,
     managed_thread_id: str,
+    workspace_root: Path,
     public_execution_error: str,
 ) -> ManagedThreadCoordinatorHooks:
     async def _run_with_discord_typing_indicator(work: Any) -> None:
@@ -443,6 +444,7 @@ def _build_discord_runner_hooks(
         service,
         channel_id=channel_id,
         managed_thread_id=managed_thread_id,
+        workspace_root=workspace_root,
         public_execution_error=public_execution_error,
     )
 
@@ -508,11 +510,13 @@ def _build_discord_queue_worker_hooks(
     *,
     channel_id: str,
     managed_thread_id: str,
+    workspace_root: Path,
     public_execution_error: str,
 ) -> Any:
     return _build_discord_runner_hooks(
         service,
         channel_id=channel_id,
         managed_thread_id=managed_thread_id,
+        workspace_root=workspace_root,
         public_execution_error=public_execution_error,
     ).queue_worker_hooks()

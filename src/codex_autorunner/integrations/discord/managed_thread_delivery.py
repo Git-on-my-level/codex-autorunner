@@ -36,6 +36,7 @@ async def deliver_discord_managed_thread_record(
     target_channel_id = _resolve_delivery_channel_id(
         record, fallback=channel_id_fallback
     )
+    workspace_root = _resolve_delivery_workspace_root(record)
     if not target_channel_id:
         return ManagedThreadDeliveryAttemptResult(
             outcome=ManagedThreadDeliveryOutcome.ABANDONED,
@@ -82,6 +83,11 @@ async def deliver_discord_managed_thread_record(
                 outcome=ManagedThreadDeliveryOutcome.FAILED,
                 error=str(exc) or exc.__class__.__name__,
             )
+        await _flush_delivery_outbox_files(
+            service,
+            workspace_root=workspace_root,
+            channel_id=target_channel_id,
+        )
         return ManagedThreadDeliveryAttemptResult(
             outcome=ManagedThreadDeliveryOutcome.DELIVERED,
             adapter_cursor={"chunk_count": len(chunks)},
@@ -115,6 +121,11 @@ async def deliver_discord_managed_thread_record(
             outcome=ManagedThreadDeliveryOutcome.FAILED,
             error=str(exc) or exc.__class__.__name__,
         )
+    await _flush_delivery_outbox_files(
+        service,
+        workspace_root=workspace_root,
+        channel_id=target_channel_id,
+    )
     return ManagedThreadDeliveryAttemptResult(
         outcome=ManagedThreadDeliveryOutcome.DELIVERED
     )
@@ -127,11 +138,36 @@ def _resolve_delivery_channel_id(record: Any, *, fallback: Optional[str]) -> str
     return str(tt.get("channel_id", "")).strip()
 
 
+def _resolve_delivery_workspace_root(record: Any) -> Optional[Path]:
+    metadata = getattr(record, "metadata", None)
+    if not isinstance(metadata, dict):
+        return None
+    raw_path = metadata.get("workspace_root")
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        return None
+    return Path(raw_path)
+
+
+async def _flush_delivery_outbox_files(
+    service: Any,
+    *,
+    workspace_root: Optional[Path],
+    channel_id: str,
+) -> None:
+    if workspace_root is None:
+        return
+    flush = getattr(service, "_flush_outbox_files", None)
+    if not callable(flush):
+        return
+    await flush(workspace_root=workspace_root, channel_id=channel_id)
+
+
 def build_discord_managed_thread_durable_delivery_hooks(
     service: Any,
     *,
     channel_id: str,
     managed_thread_id: str,
+    workspace_root: Path,
     public_execution_error: str,
 ) -> ManagedThreadDurableDeliveryHooks:
     state_root = Path(getattr(getattr(service, "_config", None), "root", Path.cwd()))
@@ -169,7 +205,10 @@ def build_discord_managed_thread_durable_delivery_hooks(
                     surface_key=channel_id,
                 ),
                 transport_target={"channel_id": channel_id},
-                metadata={"managed_thread_id": managed_thread_id},
+                metadata={
+                    "managed_thread_id": managed_thread_id,
+                    "workspace_root": str(workspace_root),
+                },
             )
         ),
     )

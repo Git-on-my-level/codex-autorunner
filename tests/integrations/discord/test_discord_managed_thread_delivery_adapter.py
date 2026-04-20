@@ -62,6 +62,7 @@ class _DiscordServiceStub:
         self._send_side_effect = send_side_effect
         self._send_safe_result = send_safe_result
         self.sent_messages: list[dict[str, Any]] = []
+        self.flushed_outboxes: list[dict[str, Any]] = []
 
     async def _send_channel_message_safe(
         self,
@@ -89,6 +90,19 @@ class _DiscordServiceStub:
     def _clear_discord_turn_approval_context(self, **_kwargs: Any) -> None:
         pass
 
+    async def _flush_outbox_files(
+        self,
+        *,
+        workspace_root: Path,
+        channel_id: str,
+    ) -> None:
+        self.flushed_outboxes.append(
+            {
+                "workspace_root": workspace_root,
+                "channel_id": channel_id,
+            }
+        )
+
 
 def _build_hooks(
     tmp_path: Path,
@@ -101,6 +115,7 @@ def _build_hooks(
         service,
         channel_id=channel_id,
         managed_thread_id=managed_thread_id,
+        workspace_root=tmp_path,
         public_execution_error="Turn failed",
     )
     assert hooks.durable_delivery is not None
@@ -176,6 +191,9 @@ async def test_discord_adapter_initial_delivery_marks_delivered(
     assert len(service.sent_messages) == 1
     assert service.sent_messages[0]["channel_id"] == "channel-1"
     assert "Hello from the agent" in service.sent_messages[0]["payload"]["content"]
+    assert service.flushed_outboxes == [
+        {"workspace_root": tmp_path, "channel_id": "channel-1"}
+    ]
 
 
 @pytest.mark.anyio
@@ -553,6 +571,7 @@ async def test_discord_direct_turn_intent_before_transport_ordering(
         service,
         channel_id="channel-1",
         managed_thread_id="thread-1",
+        workspace_root=tmp_path,
         public_execution_error="Turn failed",
     )
     assert hooks.durable_delivery is not None
@@ -587,6 +606,7 @@ async def test_discord_direct_turn_error_status_uses_durable_path(
         service,
         channel_id="channel-1",
         managed_thread_id="thread-1",
+        workspace_root=tmp_path,
         public_execution_error="Turn failed",
     )
     assert hooks.durable_delivery is not None
@@ -616,6 +636,7 @@ async def test_discord_direct_turn_cancellation_leaves_durable_record(
         service,
         channel_id="channel-1",
         managed_thread_id="thread-1",
+        workspace_root=tmp_path,
         public_execution_error="Turn failed",
     )
     assert hooks.durable_delivery is not None
