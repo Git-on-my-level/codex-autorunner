@@ -1,16 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
-import re
 from pathlib import Path
 from typing import Any, Optional
 
 from ....core.git_utils import (
     GitError,
     clean_untracked_worktree,
-    describe_newt_reject_reasons,
     reset_worktree_to_head,
 )
 from ....core.utils import canonicalize_path
@@ -18,6 +15,16 @@ from ...chat.interrupt_controller import (
     SharedInterruptState,
     render_managed_thread_interrupt_message,
     request_managed_thread_interrupt,
+)
+from ...chat.newt_support import (
+    NewtSetupCommandsError,
+    build_discord_newt_branch_name,
+    build_newt_reject_lines,
+    build_newt_workspace_token,
+    describe_newt_reject_state,
+    format_newt_submodule_summary,
+    is_newt_dirty_worktree_error,
+    run_newt_branch_reset,
 )
 from ...chat.session_messages import (
     build_fresh_session_started_lines,
@@ -49,15 +56,11 @@ _logger = logging.getLogger(__name__)
 
 
 def _newt_branch_name(channel_id: str, workspace_root: Path) -> str:
-    safe_channel_id = re.sub(r"[^a-zA-Z0-9]+", "-", channel_id).strip("-")
-    if not safe_channel_id:
-        safe_channel_id = "channel"
-    branch_suffix = hashlib.sha256(str(workspace_root).encode("utf-8")).hexdigest()[:10]
-    return f"thread-{safe_channel_id}-{branch_suffix}"
+    return build_discord_newt_branch_name(channel_id, workspace_root)
 
 
 def _newt_workspace_token(workspace_root: Path) -> str:
-    return hashlib.sha256(str(workspace_root).encode("utf-8")).hexdigest()[:12]
+    return build_newt_workspace_token(workspace_root)
 
 
 def _newt_component_custom_id(prefix: str, workspace_root: Path) -> str:
@@ -93,22 +96,46 @@ def _build_newt_reject_components(workspace_root: Path) -> list[dict[str, Any]]:
     ]
 
 
-def _format_newt_reject_message(reasons: list[str]) -> str:
-    lines = [
-        "Can't start a fresh `/car newt` yet.",
-        "",
-        "Why:",
-        *[f"- {reason}" for reason in reasons],
-        "",
-        "Choose **Hard reset** to discard local changes and continue, or **Cancel** to keep them.",
-    ]
+def _format_submodule_summary(
+    submodule_paths: list[str], *, max_examples: int = 3
+) -> str:
+    _ = max_examples
+    return format_newt_submodule_summary("/car newt", submodule_paths)
+
+
+def _format_newt_reject_message(
+    reasons: list[str], *, submodule_paths: Optional[list[str]] = None
+) -> str:
+    lines = build_newt_reject_lines(
+        command_label="/car newt",
+        reasons=reasons,
+        submodule_paths=submodule_paths or (),
+        resolution_hint=(
+            "Choose **Hard reset** to discard local changes in the workspace and submodules, or **Cancel** to keep them."
+            if submodule_paths
+            else "Choose **Hard reset** to discard local changes and continue, or **Cancel** to keep them."
+        ),
+    )
     return format_discord_message("\n".join(lines))
 
 
-def _format_newt_hard_reset_progress_message() -> str:
+def _format_newt_hard_reset_progress_message(submodule_paths: list[str]) -> str:
+    summary = _format_submodule_summary(submodule_paths)
+    if summary:
+        return format_discord_message(
+            "Discarding local changes in this workspace and its submodules before starting a fresh `/car newt`...\n\n"
+            f"{summary}"
+        )
     return format_discord_message(
         "Discarding local changes and starting a fresh `/car newt`..."
     )
+
+
+def _format_submodule_reset_note(submodule_paths: list[str]) -> str:
+    summary = _format_submodule_summary(submodule_paths)
+    if not summary:
+        return ""
+    return f" {summary}"
 
 
 async def _send_newt_response(
@@ -159,56 +186,11 @@ async def _finalize_car_newt(
     pma_enabled: bool,
     branch_name: str,
     default_branch: str,
+    setup_command_count: int,
+    submodule_paths: list[str],
     component_response: bool = False,
 ) -> None:
     from ..service import log_event
-
-    setup_command_count = 0
-    hub_client = getattr(service, "_hub_client", None)
-    if hub_client is not None:
-        repo_id_raw = binding.get("repo_id")
-        repo_id_hint = (
-            repo_id_raw.strip()
-            if isinstance(repo_id_raw, str) and repo_id_raw
-            else None
-        )
-        try:
-            from ....core.hub_control_plane import (
-                WorkspaceSetupCommandRequest as _CPSetupCommandRequest,
-            )
-
-            result = await hub_client.run_workspace_setup_commands(
-                _CPSetupCommandRequest(
-                    workspace_root=str(workspace_root),
-                    repo_id_hint=repo_id_hint,
-                )
-            )
-            setup_command_count = result.setup_command_count
-        except (
-            RuntimeError,
-            OSError,
-        ) as exc:  # intentional: runs arbitrary setup commands with unpredictable failures
-            log_event(
-                service._logger,
-                logging.WARNING,
-                "discord.newt.setup.failed",
-                channel_id=channel_id,
-                workspace_path=str(workspace_root),
-                exc=exc,
-            )
-            text = format_discord_message(
-                f"Reset branch `{branch_name}` to `origin/{default_branch}` but setup commands failed: {exc}"
-            )
-            await _send_newt_response(
-                service,
-                interaction_id,
-                interaction_token,
-                deferred=deferred,
-                text=text,
-                component_response=component_response,
-                components=[] if component_response else None,
-            )
-            return
 
     agent, agent_profile = service._resolve_agent_state(binding)
     resource_kind = (
@@ -257,6 +239,7 @@ async def _finalize_car_newt(
         )
         text = format_discord_message(
             "Branch reset succeeded, but starting a fresh session failed."
+            f"{_format_submodule_reset_note(submodule_paths)}"
         )
         await _send_newt_response(
             service,
@@ -283,6 +266,7 @@ async def _finalize_car_newt(
                     f"Reset branch `{branch_name}` to `origin/{default_branch}` "
                     f"in current workspace and started fresh {mode_label} session "
                     f"for `{actor_label}` ({state_label}).{setup_note}"
+                    f"{_format_submodule_reset_note(submodule_paths)}"
                 ),
                 *build_thread_detail_lines(
                     thread_id=new_thread_id,
@@ -445,7 +429,7 @@ async def handle_car_newt(
     channel_id: str,
     guild_id: Optional[str],
 ) -> None:
-    from ..service import log_event, reset_branch_from_origin_main
+    from ..service import log_event
 
     deferred = await ensure_public_response_deferred(
         service,
@@ -499,10 +483,16 @@ async def handle_car_newt(
     branch_name = _newt_branch_name(channel_id, workspace_root)
 
     try:
-        default_branch = await asyncio.to_thread(
-            reset_branch_from_origin_main,
+        reset_result = await run_newt_branch_reset(
             workspace_root,
             branch_name,
+            repo_id_hint=(
+                str(binding.get("repo_id")).strip()
+                if isinstance(binding.get("repo_id"), str)
+                and str(binding.get("repo_id")).strip()
+                else None
+            ),
+            hub_client=getattr(service, "_hub_client", None),
         )
     except GitError as exc:
         log_event(
@@ -513,8 +503,9 @@ async def handle_car_newt(
             branch=branch_name,
             exc=exc,
         )
-        if "working tree has uncommitted changes" in str(exc):
-            reasons = describe_newt_reject_reasons(workspace_root)
+        if is_newt_dirty_worktree_error(exc):
+            reject_state = describe_newt_reject_state(workspace_root)
+            reasons = list(reject_state.reasons)
             if not reasons:
                 reasons = ["Local git changes are blocking the reset."]
             await _send_newt_response(
@@ -522,7 +513,9 @@ async def handle_car_newt(
                 interaction_id,
                 interaction_token,
                 deferred=deferred,
-                text=_format_newt_reject_message(reasons),
+                text=_format_newt_reject_message(
+                    reasons, submodule_paths=list(reject_state.submodule_paths)
+                ),
                 component_response=False,
                 components=_build_newt_reject_components(workspace_root),
             )
@@ -550,7 +543,9 @@ async def handle_car_newt(
         workspace_root=workspace_root,
         pma_enabled=pma_enabled,
         branch_name=branch_name,
-        default_branch=default_branch,
+        default_branch=reset_result.default_branch,
+        setup_command_count=reset_result.setup_command_count,
+        submodule_paths=list(reset_result.submodule_paths),
     )
 
 
@@ -562,7 +557,7 @@ async def handle_car_newt_hard_reset(
     channel_id: str,
     expected_workspace_token: Optional[str],
 ) -> None:
-    from ..service import log_event, reset_branch_from_origin_main
+    from ..service import log_event
 
     deferred = await ensure_component_response_deferred(
         service,
@@ -637,11 +632,12 @@ async def handle_car_newt_hard_reset(
         )
         return
 
+    submodule_paths = list(describe_newt_reject_state(workspace_root).submodule_paths)
     deferred = await defer_and_update_runtime_component_message(
         service,
         interaction_id,
         interaction_token,
-        _format_newt_hard_reset_progress_message(),
+        _format_newt_hard_reset_progress_message(submodule_paths),
         components=[],
     )
     branch_name = _newt_branch_name(channel_id, workspace_root)
@@ -656,9 +652,14 @@ async def handle_car_newt_hard_reset(
             branch=branch_name,
             exc=exc,
         )
+        detail = (
+            f"{_format_submodule_summary(submodule_paths)}\n\nReason: {exc}"
+            if submodule_paths
+            else f"Reason: {exc}"
+        )
         text = format_discord_message(
             "Hard reset did not complete cleanly before `/car newt` was cancelled.\n\n"
-            f"Reason: {exc}"
+            f"{detail}"
         )
         await _send_newt_response(
             service,
@@ -681,10 +682,15 @@ async def handle_car_newt_hard_reset(
             branch=branch_name,
             exc=exc,
         )
+        detail = (
+            f"{_format_submodule_summary(submodule_paths)}\n\nReason: {exc}"
+            if submodule_paths
+            else f"Reason: {exc}"
+        )
         text = format_discord_message(
             "Tracked changes were discarded, but some untracked paths could not be "
             "removed, so `/car newt` was cancelled.\n\n"
-            f"Reason: {exc}"
+            f"{detail}"
         )
         await _send_newt_response(
             service,
@@ -697,11 +703,43 @@ async def handle_car_newt_hard_reset(
         )
         return
     try:
-        default_branch = await asyncio.to_thread(
-            reset_branch_from_origin_main,
+        reset_result = await run_newt_branch_reset(
             workspace_root,
             branch_name,
+            repo_id_hint=(
+                str(binding.get("repo_id")).strip()
+                if isinstance(binding.get("repo_id"), str)
+                and str(binding.get("repo_id")).strip()
+                else None
+            ),
+            hub_client=getattr(service, "_hub_client", None),
         )
+    except NewtSetupCommandsError as exc:
+        log_event(
+            service._logger,
+            logging.WARNING,
+            "discord.newt.setup.failed",
+            channel_id=channel_id,
+            workspace_path=str(workspace_root),
+            exc=exc,
+        )
+        summary = _format_submodule_summary(list(exc.submodule_paths))
+        detail = f"{summary}\n\n" if summary else ""
+        text = format_discord_message(
+            "Local changes were discarded, but `/car newt` failed while running workspace setup commands.\n\n"
+            f"{detail}Reset branch: `origin/{exc.default_branch}`\n"
+            f"Reason: {exc}"
+        )
+        await _send_newt_response(
+            service,
+            interaction_id,
+            interaction_token,
+            deferred=deferred,
+            text=text,
+            component_response=True,
+            components=[],
+        )
+        return
     except GitError as exc:
         log_event(
             service._logger,
@@ -711,10 +749,12 @@ async def handle_car_newt_hard_reset(
             branch=branch_name,
             exc=exc,
         )
+        summary = _format_submodule_summary(submodule_paths)
+        detail = f"{summary}\n\n" if summary else ""
         text = format_discord_message(
             "Local changes were discarded, but `/car newt` still failed while "
             "resetting the branch from origin.\n\n"
-            f"Reason: {exc}\n\n"
+            f"{detail}Reason: {exc}\n\n"
             "You can retry `/car newt` after fixing the git problem."
         )
         await _send_newt_response(
@@ -738,7 +778,9 @@ async def handle_car_newt_hard_reset(
         workspace_root=workspace_root,
         pma_enabled=pma_enabled,
         branch_name=branch_name,
-        default_branch=default_branch,
+        default_branch=reset_result.default_branch,
+        setup_command_count=reset_result.setup_command_count,
+        submodule_paths=list(reset_result.submodule_paths),
         component_response=True,
     )
 

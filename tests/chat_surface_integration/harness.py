@@ -201,6 +201,7 @@ class DiscordSurfaceHarness:
         *,
         agent: str = "hermes",
         approval_mode: Optional[str] = None,
+        pma_enabled: bool = True,
     ) -> None:
         seed_hub_files(self.root, force=True)
         config_payload = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
@@ -219,7 +220,7 @@ class DiscordSurfaceHarness:
         )
         await self.store.update_pma_state(
             channel_id=DEFAULT_DISCORD_CHANNEL_ID,
-            pma_enabled=True,
+            pma_enabled=pma_enabled,
         )
         await self.store.update_agent_state(
             channel_id=DEFAULT_DISCORD_CHANNEL_ID,
@@ -758,6 +759,7 @@ class TelegramSurfaceHarness:
         agent: str = "hermes",
         thread_id: Optional[int] = DEFAULT_TELEGRAM_THREAD_ID,
         approval_mode: Optional[str] = None,
+        pma_enabled: bool = True,
     ) -> None:
         self.service = TelegramBotService(
             make_telegram_config(self.root),
@@ -772,11 +774,21 @@ class TelegramSurfaceHarness:
         self.service._logger = logger
         self.bot = FakeTelegramBot()
         self.service._bot = self.bot
+        workspace = self.root / "workspace"
+        workspace.mkdir(parents=True, exist_ok=True)
         await self.service._router.ensure_topic(DEFAULT_TELEGRAM_CHAT_ID, thread_id)
         await self.service._router.update_topic(
             DEFAULT_TELEGRAM_CHAT_ID,
             thread_id,
-            lambda record: _configure_telegram_pma_topic(record, agent=agent),
+            lambda record: (
+                _configure_telegram_pma_topic(record, agent=agent)
+                if pma_enabled
+                else _configure_telegram_repo_topic(
+                    record,
+                    agent=agent,
+                    workspace_path=str(workspace),
+                )
+            ),
         )
         if isinstance(approval_mode, str) and approval_mode.strip():
             await self.service._router.set_approval_mode(
@@ -1066,6 +1078,16 @@ class TelegramSurfaceHarness:
 def _configure_telegram_pma_topic(record: Any, *, agent: str) -> None:
     record.pma_enabled = True
     record.workspace_path = None
+    record.repo_id = "repo-1"
+    record.agent = agent
+    record.agent_profile = None
+
+
+def _configure_telegram_repo_topic(
+    record: Any, *, agent: str, workspace_path: str
+) -> None:
+    record.pma_enabled = False
+    record.workspace_path = workspace_path
     record.repo_id = "repo-1"
     record.agent = agent
     record.agent_profile = None

@@ -7242,12 +7242,23 @@ async def test_car_newt_resets_current_workspace_branch_and_session(
 
     branch_calls: list[dict[str, Any]] = []
 
-    def _fake_reset_branch(repo_root: Path, branch_name: str) -> str:
+    async def _fake_reset_branch(
+        repo_root: Path,
+        branch_name: str,
+        *,
+        repo_id_hint: str | None = None,
+        hub_client: Any = None,
+    ) -> SimpleNamespace:
+        _ = repo_id_hint, hub_client
         branch_calls.append({"repo_root": repo_root, "branch_name": branch_name})
-        return "master"
+        return SimpleNamespace(
+            default_branch="master",
+            setup_command_count=0,
+            submodule_paths=(),
+        )
 
     monkeypatch.setattr(
-        discord_service_module, "reset_branch_from_origin_main", _fake_reset_branch
+        discord_session_commands_module, "run_newt_branch_reset", _fake_reset_branch
     )
 
     try:
@@ -7668,11 +7679,32 @@ async def test_car_newt_runs_hub_setup_commands_for_bound_workspace(
         outbox_manager=_FakeOutboxManager(),
     )
 
-    def _fake_reset_branch(_repo_root: Path, _branch_name: str) -> str:
-        return "master"
+    async def _fake_reset_branch(
+        repo_root: Path,
+        branch_name: str,
+        *,
+        repo_id_hint: str | None = None,
+        hub_client: Any = None,
+    ) -> SimpleNamespace:
+        assert repo_root == workspace.resolve()
+        assert branch_name.startswith("thread-channel-1-")
+        setup_command_count = 0
+        if hub_client is not None:
+            setup_result = await hub_client.run_workspace_setup_commands(
+                SimpleNamespace(
+                    workspace_root=str(repo_root),
+                    repo_id_hint=repo_id_hint,
+                )
+            )
+            setup_command_count = setup_result.setup_command_count
+        return SimpleNamespace(
+            default_branch="master",
+            setup_command_count=setup_command_count,
+            submodule_paths=(),
+        )
 
     monkeypatch.setattr(
-        discord_service_module, "reset_branch_from_origin_main", _fake_reset_branch
+        discord_session_commands_module, "run_newt_branch_reset", _fake_reset_branch
     )
 
     async def _fake_reset_thread_binding(**_kwargs: Any) -> tuple[bool, str]:
@@ -7927,11 +7959,18 @@ async def test_car_newt_reports_branch_reset_errors(
         outbox_manager=_FakeOutboxManager(),
     )
 
-    def _fail_reset_branch(_repo_root: Path, _branch_name: str) -> None:
+    async def _fail_reset_branch(
+        _repo_root: Path,
+        _branch_name: str,
+        *,
+        repo_id_hint: str | None = None,
+        hub_client: Any = None,
+    ) -> None:
+        _ = repo_id_hint, hub_client
         raise discord_service_module.GitError("simulated failure")
 
     monkeypatch.setattr(
-        discord_service_module, "reset_branch_from_origin_main", _fail_reset_branch
+        discord_session_commands_module, "run_newt_branch_reset", _fail_reset_branch
     )
 
     try:
@@ -7972,21 +8011,31 @@ async def test_car_newt_dirty_worktree_shows_hard_reset_prompt(
         outbox_manager=_FakeOutboxManager(),
     )
 
-    def _reject_reset_branch(_repo_root: Path, _branch_name: str) -> None:
+    async def _reject_reset_branch(
+        _repo_root: Path,
+        _branch_name: str,
+        *,
+        repo_id_hint: str | None = None,
+        hub_client: Any = None,
+    ) -> None:
+        _ = repo_id_hint, hub_client
         raise discord_service_module.GitError(
             "working tree has uncommitted changes; commit or stash before /newt"
         )
 
     monkeypatch.setattr(
-        discord_service_module, "reset_branch_from_origin_main", _reject_reset_branch
+        discord_session_commands_module, "run_newt_branch_reset", _reject_reset_branch
     )
     monkeypatch.setattr(
         discord_session_commands_module,
-        "describe_newt_reject_reasons",
-        lambda _repo_root: [
-            "1 unstaged tracked change, including `changed.txt`",
-            "1 untracked path, including `.tmp/`",
-        ],
+        "describe_newt_reject_state",
+        lambda _repo_root: SimpleNamespace(
+            reasons=(
+                "1 unstaged tracked change, including `changed.txt`",
+                "1 untracked path, including `.tmp/`",
+            ),
+            submodule_paths=("vendor/sdk",),
+        ),
     )
 
     try:
@@ -7999,6 +8048,8 @@ async def test_car_newt_dirty_worktree_shows_hard_reset_prompt(
         assert "can't start a fresh" in content
         assert "changed.txt" in payload["content"]
         assert ".tmp/" in payload["content"]
+        assert "vendor/sdk" in payload["content"]
+        assert "workspace and submodules" in content
         buttons = payload["components"][0]["components"]
         expected_token = discord_session_commands_module._newt_workspace_token(
             workspace.resolve()
@@ -8056,21 +8107,35 @@ async def test_car_newt_hard_reset_button_discards_changes_and_retries(
     branch_calls: list[dict[str, Any]] = []
     hard_reset_calls: list[Path] = []
 
-    def _reset_branch(repo_root: Path, branch_name: str) -> str:
+    async def _reset_branch(
+        repo_root: Path,
+        branch_name: str,
+        *,
+        repo_id_hint: str | None = None,
+        hub_client: Any = None,
+    ) -> SimpleNamespace:
+        _ = repo_id_hint, hub_client
         branch_calls.append({"repo_root": repo_root, "branch_name": branch_name})
         if len(branch_calls) == 1:
             raise discord_service_module.GitError(
                 "working tree has uncommitted changes; commit or stash before /newt"
             )
-        return "master"
+        return SimpleNamespace(
+            default_branch="master",
+            setup_command_count=0,
+            submodule_paths=("vendor/sdk",),
+        )
 
     monkeypatch.setattr(
-        discord_service_module, "reset_branch_from_origin_main", _reset_branch
+        discord_session_commands_module, "run_newt_branch_reset", _reset_branch
     )
     monkeypatch.setattr(
         discord_session_commands_module,
-        "describe_newt_reject_reasons",
-        lambda _repo_root: ["1 untracked path, including `.tmp/`"],
+        "describe_newt_reject_state",
+        lambda _repo_root: SimpleNamespace(
+            reasons=("1 untracked path, including `.tmp/`",),
+            submodule_paths=("vendor/sdk",),
+        ),
     )
     monkeypatch.setattr(
         discord_session_commands_module,
@@ -8102,10 +8167,12 @@ async def test_car_newt_hard_reset_button_discards_changes_and_retries(
         assert len(rest.edited_original_interaction_responses) == 3
         progress_payload = rest.edited_original_interaction_responses[1]["payload"]
         assert "discarding local changes" in progress_payload["content"].lower()
+        assert "vendor/sdk" in progress_payload["content"]
         assert progress_payload["components"] == []
         edited_payload = rest.edited_original_interaction_responses[-1]["payload"]
         assert "reset branch" in edited_payload["content"].lower()
         assert "origin/master" in edited_payload["content"].lower()
+        assert "vendor/sdk" in edited_payload["content"]
         assert edited_payload["components"] == []
     finally:
         await store.close()
@@ -8150,19 +8217,29 @@ async def test_car_newt_cancel_button_keeps_local_changes(
 
     branch_calls: list[dict[str, Any]] = []
 
-    def _reset_branch(repo_root: Path, branch_name: str) -> str:
+    async def _reset_branch(
+        repo_root: Path,
+        branch_name: str,
+        *,
+        repo_id_hint: str | None = None,
+        hub_client: Any = None,
+    ) -> None:
+        _ = repo_id_hint, hub_client
         branch_calls.append({"repo_root": repo_root, "branch_name": branch_name})
         raise discord_service_module.GitError(
             "working tree has uncommitted changes; commit or stash before /newt"
         )
 
     monkeypatch.setattr(
-        discord_service_module, "reset_branch_from_origin_main", _reset_branch
+        discord_session_commands_module, "run_newt_branch_reset", _reset_branch
     )
     monkeypatch.setattr(
         discord_session_commands_module,
-        "describe_newt_reject_reasons",
-        lambda _repo_root: ["1 untracked path, including `.tmp/`"],
+        "describe_newt_reject_state",
+        lambda _repo_root: SimpleNamespace(
+            reasons=("1 untracked path, including `.tmp/`",),
+            submodule_paths=(),
+        ),
     )
 
     try:
@@ -8222,7 +8299,14 @@ async def test_car_newt_hard_reset_reports_discard_when_retry_reset_fails(
     branch_calls: list[dict[str, Any]] = []
     hard_reset_calls: list[Path] = []
 
-    def _reset_branch(repo_root: Path, branch_name: str) -> str:
+    async def _reset_branch(
+        repo_root: Path,
+        branch_name: str,
+        *,
+        repo_id_hint: str | None = None,
+        hub_client: Any = None,
+    ) -> None:
+        _ = repo_id_hint, hub_client
         branch_calls.append({"repo_root": repo_root, "branch_name": branch_name})
         if len(branch_calls) == 1:
             raise discord_service_module.GitError(
@@ -8231,12 +8315,15 @@ async def test_car_newt_hard_reset_reports_discard_when_retry_reset_fails(
         raise discord_service_module.GitError("git fetch failed: simulated failure")
 
     monkeypatch.setattr(
-        discord_service_module, "reset_branch_from_origin_main", _reset_branch
+        discord_session_commands_module, "run_newt_branch_reset", _reset_branch
     )
     monkeypatch.setattr(
         discord_session_commands_module,
-        "describe_newt_reject_reasons",
-        lambda _repo_root: ["1 untracked path, including `.tmp/`"],
+        "describe_newt_reject_state",
+        lambda _repo_root: SimpleNamespace(
+            reasons=("1 untracked path, including `.tmp/`",),
+            submodule_paths=(),
+        ),
     )
     monkeypatch.setattr(
         discord_session_commands_module,
@@ -8306,19 +8393,29 @@ async def test_car_newt_hard_reset_reports_when_tracked_discard_step_fails(
         outbox_manager=_FakeOutboxManager(),
     )
 
-    def _reset_branch(repo_root: Path, branch_name: str) -> str:
+    async def _reset_branch(
+        repo_root: Path,
+        branch_name: str,
+        *,
+        repo_id_hint: str | None = None,
+        hub_client: Any = None,
+    ) -> None:
+        _ = repo_id_hint, hub_client
         _ = repo_root, branch_name
         raise discord_service_module.GitError(
             "working tree has uncommitted changes; commit or stash before /newt"
         )
 
     monkeypatch.setattr(
-        discord_service_module, "reset_branch_from_origin_main", _reset_branch
+        discord_session_commands_module, "run_newt_branch_reset", _reset_branch
     )
     monkeypatch.setattr(
         discord_session_commands_module,
-        "describe_newt_reject_reasons",
-        lambda _repo_root: ["1 untracked path, including `.tmp/`"],
+        "describe_newt_reject_state",
+        lambda _repo_root: SimpleNamespace(
+            reasons=("1 untracked path, including `.tmp/`",),
+            submodule_paths=(),
+        ),
     )
 
     def _fail_reset_worktree(_repo_root: Path) -> None:
@@ -8384,19 +8481,29 @@ async def test_car_newt_hard_reset_reports_when_untracked_cleanup_fails(
         outbox_manager=_FakeOutboxManager(),
     )
 
-    def _reset_branch(repo_root: Path, branch_name: str) -> str:
+    async def _reset_branch(
+        repo_root: Path,
+        branch_name: str,
+        *,
+        repo_id_hint: str | None = None,
+        hub_client: Any = None,
+    ) -> None:
+        _ = repo_id_hint, hub_client
         _ = repo_root, branch_name
         raise discord_service_module.GitError(
             "working tree has uncommitted changes; commit or stash before /newt"
         )
 
     monkeypatch.setattr(
-        discord_service_module, "reset_branch_from_origin_main", _reset_branch
+        discord_session_commands_module, "run_newt_branch_reset", _reset_branch
     )
     monkeypatch.setattr(
         discord_session_commands_module,
-        "describe_newt_reject_reasons",
-        lambda _repo_root: ["1 untracked path, including `.tmp/`"],
+        "describe_newt_reject_state",
+        lambda _repo_root: SimpleNamespace(
+            reasons=("1 untracked path, including `.tmp/`",),
+            submodule_paths=(),
+        ),
     )
     monkeypatch.setattr(
         discord_session_commands_module,
@@ -8478,12 +8585,23 @@ async def test_car_newt_hard_reset_rejects_stale_workspace_binding(
     reset_calls: list[Path] = []
     clean_calls: list[Path] = []
 
-    def _reset_branch(repo_root: Path, branch_name: str) -> str:
+    async def _reset_branch(
+        repo_root: Path,
+        branch_name: str,
+        *,
+        repo_id_hint: str | None = None,
+        hub_client: Any = None,
+    ) -> SimpleNamespace:
+        _ = repo_id_hint, hub_client
         branch_calls.append({"repo_root": repo_root, "branch_name": branch_name})
-        return "main"
+        return SimpleNamespace(
+            default_branch="main",
+            setup_command_count=0,
+            submodule_paths=(),
+        )
 
     monkeypatch.setattr(
-        discord_service_module, "reset_branch_from_origin_main", _reset_branch
+        discord_session_commands_module, "run_newt_branch_reset", _reset_branch
     )
     monkeypatch.setattr(
         discord_session_commands_module,

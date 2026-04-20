@@ -169,6 +169,40 @@ def git_status_porcelain(repo_root: Path) -> Optional[str]:
     return (proc.stdout or "").strip()
 
 
+def git_submodule_paths(repo_root: Path) -> list[str]:
+    """Return configured submodule paths for the repository."""
+    if not (repo_root / ".gitmodules").exists():
+        return []
+    try:
+        proc = run_git(
+            ["config", "--file", ".gitmodules", "--get-regexp", "path"],
+            repo_root,
+            check=False,
+        )
+    except GitError:
+        return []
+    if proc.returncode != 0:
+        return []
+
+    paths: list[str] = []
+    for raw_line in (proc.stdout or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        parts = line.split(None, 1)
+        if len(parts) != 2:
+            continue
+        path = parts[1].strip()
+        if path:
+            paths.append(path)
+    return paths
+
+
+def git_has_submodules(repo_root: Path) -> bool:
+    """Return True when the repository declares at least one submodule."""
+    return bool(git_submodule_paths(repo_root))
+
+
 def _status_path_from_porcelain_line(line: str) -> str:
     path = line[3:].strip() if len(line) > 3 else ""
     if " -> " in path:
@@ -193,8 +227,10 @@ def describe_newt_reject_reasons(
     if not status.strip():
         return []
 
+    submodule_paths = set(git_submodule_paths(repo_root))
     buckets: list[tuple[str, list[str]]] = [
         ("merge conflict", []),
+        ("submodule change", []),
         ("staged tracked change", []),
         ("unstaged tracked change", []),
         ("untracked path", []),
@@ -208,15 +244,18 @@ def describe_newt_reject_reasons(
         code = line[:2]
         path = _status_path_from_porcelain_line(line)
         if code == "??":
-            buckets[3][1].append(path)
+            buckets[4][1].append(path)
             continue
         if code in conflict_codes:
             buckets[0][1].append(path)
             continue
-        if code[0] not in {" ", "?"}:
+        if path in submodule_paths:
             buckets[1][1].append(path)
-        if code[1] not in {" ", "?"}:
+            continue
+        if code[0] not in {" ", "?"}:
             buckets[2][1].append(path)
+        if code[1] not in {" ", "?"}:
+            buckets[3][1].append(path)
 
     reasons: list[str] = []
     for label, paths in buckets:
@@ -339,17 +378,47 @@ def reset_branch_from_origin_main(repo_root: Path, branch_name: str) -> str:
             timeout_seconds=60,
             check=True,
         )
+        sync_submodules_to_head(repo_root)
     return default_branch
 
 
 def reset_worktree_to_head(repo_root: Path) -> None:
     """Discard tracked changes in the current worktree."""
     run_git(["reset", "--hard", "HEAD"], repo_root, timeout_seconds=60, check=True)
+    if not git_has_submodules(repo_root):
+        return
+    run_git(
+        ["submodule", "foreach", "--recursive", "git reset --hard"],
+        repo_root,
+        timeout_seconds=120,
+        check=True,
+    )
+    sync_submodules_to_head(repo_root)
 
 
 def clean_untracked_worktree(repo_root: Path) -> None:
     """Remove untracked paths, including nested git dirs, from the worktree."""
     run_git(["clean", "-ffd"], repo_root, timeout_seconds=60, check=True)
+    if not git_has_submodules(repo_root):
+        return
+    run_git(
+        ["submodule", "foreach", "--recursive", "git clean -ffd"],
+        repo_root,
+        timeout_seconds=120,
+        check=True,
+    )
+
+
+def sync_submodules_to_head(repo_root: Path) -> None:
+    """Align submodule working trees to the commits recorded in the superproject."""
+    if not git_has_submodules(repo_root):
+        return
+    run_git(
+        ["submodule", "update", "--init", "--recursive", "--checkout", "--force"],
+        repo_root,
+        timeout_seconds=180,
+        check=True,
+    )
 
 
 def git_diff_stats(
