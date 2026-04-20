@@ -791,6 +791,15 @@ class _ThreadExecutionLifecycle:
             runtime_prompt = raw_runtime_prompt
         return runtime_prompt
 
+    @staticmethod
+    def resolve_existing_session_runtime_prompt(
+        request: MessageRequest,
+    ) -> Optional[str]:
+        raw_runtime_prompt = request.metadata.get("existing_session_runtime_prompt")
+        if isinstance(raw_runtime_prompt, str) and raw_runtime_prompt.strip():
+            return raw_runtime_prompt
+        return None
+
     def build_rehydration_prefix(
         self, thread: ThreadTarget, *, include_compact_seed: bool
     ) -> Optional[str]:
@@ -861,7 +870,11 @@ class _ThreadExecutionLifecycle:
         workspace_root: Path,
         sandbox_policy: Optional[Any],
     ) -> ExecutionRecord:
-        runtime_prompt = self.resolve_runtime_prompt(request)
+        new_session_runtime_prompt = self.resolve_runtime_prompt(request)
+        existing_session_runtime_prompt = (
+            self.resolve_existing_session_runtime_prompt(request)
+            or new_session_runtime_prompt
+        )
         fresh_conversation_retry_attempted = False
         rehydrated_runtime_prompt = False
         fresh_backend_session_reason: Optional[str] = None
@@ -890,6 +903,11 @@ class _ThreadExecutionLifecycle:
                 )
             while True:
                 used_existing_conversation = conversation_id is not None
+                attempt_runtime_prompt = (
+                    existing_session_runtime_prompt
+                    if used_existing_conversation
+                    else new_session_runtime_prompt
+                )
                 try:
                     if conversation_id:
                         try:
@@ -952,7 +970,7 @@ class _ThreadExecutionLifecycle:
                             prefix = self.build_rehydration_prefix(
                                 thread,
                                 include_compact_seed="Context summary (from compaction):"
-                                not in runtime_prompt,
+                                not in new_session_runtime_prompt,
                             )
                             should_mark_fresh_backend_session = bool(
                                 previous_backend_thread_id
@@ -987,7 +1005,9 @@ class _ThreadExecutionLifecycle:
                                     rehydrated=bool(prefix),
                                 )
                             if prefix:
-                                runtime_prompt = f"{prefix}\n\n{runtime_prompt}"
+                                attempt_runtime_prompt = (
+                                    f"{prefix}\n\n{new_session_runtime_prompt}"
+                                )
                             rehydrated_runtime_prompt = True
                         conversation = await harness.new_conversation(
                             workspace_root,
@@ -1020,7 +1040,7 @@ class _ThreadExecutionLifecycle:
                         turn = await harness.start_review(
                             workspace_root,
                             conversation_id,
-                            runtime_prompt,
+                            attempt_runtime_prompt,
                             request.model,
                             request.reasoning,
                             approval_mode=request.approval_mode,
@@ -1030,7 +1050,7 @@ class _ThreadExecutionLifecycle:
                         turn = await harness.start_turn(
                             workspace_root,
                             conversation_id,
-                            runtime_prompt,
+                            attempt_runtime_prompt,
                             request.model,
                             request.reasoning,
                             approval_mode=request.approval_mode,
