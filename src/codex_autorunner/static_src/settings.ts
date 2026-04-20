@@ -1,33 +1,180 @@
 import { api, confirmModal, flash, resolvePath, openModal } from "./utils.js";
-import { initTemplateReposSettings, loadTemplateRepos } from "./templateReposSettings.js";
 import {
-  describeUpdateTarget,
-  getUpdateTarget,
-  includesWebUpdateTarget,
-  normalizeUpdateTarget,
-  type UpdateTargetsResponse,
-  updateRestartNotice,
-  updateTargetOptionsFromResponse,
-} from "./updateTargets.js";
+  initTemplateReposSettings,
+  loadTemplateRepos,
+} from "./templateReposSettings.js";
+import {
+  handleSystemUpdate,
+  loadUpdateTargetOptions,
+} from "./systemUpdateUi.js";
 
 const ui = {
-  settingsBtn: document.getElementById("repo-settings"),
+  settingsBtn: document.getElementById("repo-settings") as HTMLButtonElement | null,
   threadList: document.getElementById("thread-tools-list") as HTMLElement | null,
-  threadNew: document.getElementById("thread-new-autorunner") as HTMLButtonElement | null,
-  threadArchive: document.getElementById("thread-archive-autorunner") as HTMLButtonElement | null,
-  threadResetAll: document.getElementById("thread-reset-all") as HTMLButtonElement | null,
-  threadDownload: document.getElementById("thread-backup-download") as HTMLAnchorElement | null,
+  threadNew: document.getElementById(
+    "thread-new-autorunner"
+  ) as HTMLButtonElement | null,
+  threadArchive: document.getElementById(
+    "thread-archive-autorunner"
+  ) as HTMLButtonElement | null,
+  threadResetAll: document.getElementById(
+    "thread-reset-all"
+  ) as HTMLButtonElement | null,
+  threadDownload: document.getElementById(
+    "thread-backup-download"
+  ) as HTMLAnchorElement | null,
+  updateTarget: document.getElementById(
+    "repo-update-target"
+  ) as HTMLSelectElement | null,
+  updateBtn: document.getElementById(
+    "repo-update-btn"
+  ) as HTMLButtonElement | null,
+  closeBtn: document.getElementById("repo-settings-close") as HTMLButtonElement | null,
+  modelSelect: document.getElementById(
+    "autorunner-model-select"
+  ) as HTMLSelectElement | null,
+  effortSelect: document.getElementById(
+    "autorunner-effort-select"
+  ) as HTMLSelectElement | null,
+  approvalSelect: document.getElementById(
+    "autorunner-approval-select"
+  ) as HTMLSelectElement | null,
+  sandboxSelect: document.getElementById(
+    "autorunner-sandbox-select"
+  ) as HTMLSelectElement | null,
+  maxRunsInput: document.getElementById(
+    "autorunner-max-runs-input"
+  ) as HTMLInputElement | null,
+  networkToggle: document.getElementById(
+    "autorunner-network-toggle"
+  ) as HTMLInputElement | null,
+  saveBtn: document.getElementById(
+    "autorunner-settings-save"
+  ) as HTMLButtonElement | null,
+  reloadBtn: document.getElementById(
+    "autorunner-settings-reload"
+  ) as HTMLButtonElement | null,
 };
-
-
 
 interface ThreadToolData {
   autorunner?: string | number;
   file_chat?: string | number;
   file_chat_opencode?: string | number;
   corruption?: Record<string, unknown>;
-  // Allow unknown keys for forwards compatibility.
   [key: string]: unknown;
+}
+
+interface SessionSettingsResponse {
+  autorunner_model_override?: string | null;
+  autorunner_effort_override?: string | null;
+  autorunner_approval_policy?: string | null;
+  autorunner_sandbox_mode?: string | null;
+  autorunner_workspace_write_network?: boolean | null;
+  runner_stop_after_runs?: number | null;
+}
+
+interface SessionSettingsRequest {
+  autorunner_model_override: string | null;
+  autorunner_effort_override: string | null;
+  autorunner_approval_policy: string | null;
+  autorunner_sandbox_mode: string | null;
+  autorunner_workspace_write_network: boolean | null;
+  runner_stop_after_runs: number | null;
+}
+
+interface AgentEntry {
+  id?: string;
+  capabilities?: string[];
+}
+
+interface AgentListResponse {
+  agents?: AgentEntry[];
+  default?: string;
+}
+
+interface ModelCatalogModel {
+  id: string;
+  display_name?: string;
+  supports_reasoning: boolean;
+  reasoning_options: string[];
+}
+
+interface ModelCatalog {
+  default_model: string;
+  models: ModelCatalogModel[];
+}
+
+interface SelectOption {
+  value: string;
+  label: string;
+}
+
+const DEFAULT_OPTION_LABEL = "Default (inherit config)";
+const APPROVAL_OPTIONS: SelectOption[] = [
+  { value: "", label: DEFAULT_OPTION_LABEL },
+  { value: "never", label: "never" },
+  { value: "unlessTrusted", label: "unlessTrusted" },
+];
+const SANDBOX_OPTIONS: SelectOption[] = [
+  { value: "", label: DEFAULT_OPTION_LABEL },
+  { value: "dangerFullAccess", label: "dangerFullAccess" },
+  { value: "workspaceWrite", label: "workspaceWrite" },
+];
+
+let repoSettingsCloseModal: (() => void) | null = null;
+let currentCatalog: ModelCatalog | null = null;
+let currentCatalogAgent = "codex";
+let settingsBusy = false;
+let settingsLoaded = false;
+
+function normalizeOptionalString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const cleaned = value.trim();
+  return cleaned || null;
+}
+
+function normalizeOptionalBoolean(value: unknown): boolean | null {
+  if (typeof value !== "boolean") return null;
+  return value;
+}
+
+function normalizeOptionalInteger(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    return null;
+  }
+  return value;
+}
+
+function normalizeCatalog(raw: unknown): ModelCatalog {
+  if (!raw || typeof raw !== "object") {
+    return { default_model: "", models: [] };
+  }
+  const rawObj = raw as Record<string, unknown>;
+  const models = Array.isArray(rawObj.models) ? rawObj.models : [];
+  const normalized = models
+    .map((entry): ModelCatalogModel | null => {
+      if (!entry || typeof entry !== "object") return null;
+      const entryObj = entry as Record<string, unknown>;
+      const id = normalizeOptionalString(entryObj.id);
+      if (!id) return null;
+      const reasoningOptions = Array.isArray(entryObj.reasoning_options)
+        ? entryObj.reasoning_options.filter(
+            (option): option is string =>
+              typeof option === "string" && option.trim().length > 0
+          )
+        : [];
+      return {
+        id,
+        display_name: normalizeOptionalString(entryObj.display_name) || id,
+        supports_reasoning: Boolean(entryObj.supports_reasoning),
+        reasoning_options: reasoningOptions,
+      };
+    })
+    .filter((model): model is ModelCatalogModel => model !== null);
+  return {
+    default_model: normalizeOptionalString(rawObj.default_model) || "",
+    models: normalized,
+  };
 }
 
 function renderThreadTools(data: ThreadToolData | null): void {
@@ -50,9 +197,12 @@ function renderThreadTools(data: ThreadToolData | null): void {
       value: data.file_chat_opencode || "—",
     });
   }
-  // Render any additional string/number keys to avoid hiding future entries.
   Object.keys(data).forEach((key) => {
-    if (["autorunner", "file_chat", "file_chat_opencode", "corruption"].includes(key)) {
+    if (
+      ["autorunner", "file_chat", "file_chat_opencode", "corruption"].includes(
+        key
+      )
+    ) {
       return;
     }
     const value = data[key];
@@ -71,7 +221,7 @@ function renderThreadTools(data: ThreadToolData | null): void {
       <span class="thread-tool-label">${entry.label}</span>
       <span class="thread-tool-value">${entry.value}</span>
     `;
-    ui.threadList.appendChild(row);
+    ui.threadList?.appendChild(row);
   });
   if (ui.threadArchive) {
     ui.threadArchive.disabled = !data.autorunner;
@@ -80,29 +230,278 @@ function renderThreadTools(data: ThreadToolData | null): void {
 
 async function loadThreadTools(): Promise<ThreadToolData | null> {
   try {
-    const data = await api("/api/app-server/threads");
-    renderThreadTools(data as ThreadToolData);
-    return data as ThreadToolData;
+    const data = (await api("/api/app-server/threads")) as ThreadToolData;
+    renderThreadTools(data);
+    return data;
   } catch (err) {
     renderThreadTools(null);
-    const error = err as Error;
-    flash(error.message || "Failed to load threads", "error");
+    flash((err as Error).message || "Failed to load threads", "error");
     return null;
   }
 }
 
+function setSelectOptions(
+  select: HTMLSelectElement | null,
+  options: SelectOption[],
+  selectedValue: string | null,
+  unknownLabel: string,
+  preserveUnknown: boolean = true
+): void {
+  if (!select) return;
+  const normalizedSelected = normalizeOptionalString(selectedValue) || "";
+  const rendered = [...options];
+  if (
+    preserveUnknown &&
+    normalizedSelected &&
+    !rendered.some((option) => option.value === normalizedSelected)
+  ) {
+    rendered.push({
+      value: normalizedSelected,
+      label: `${normalizedSelected} (${unknownLabel})`,
+    });
+  }
+  select.replaceChildren();
+  rendered.forEach((entry) => {
+    const option = document.createElement("option");
+    option.value = entry.value;
+    option.textContent = entry.label;
+    select.appendChild(option);
+  });
+  select.dataset.optionAvailable =
+    rendered.length <= 1 && rendered[0]?.value === "" ? "0" : "1";
+  select.value = rendered.some((entry) => entry.value === normalizedSelected)
+    ? normalizedSelected
+    : rendered[0]?.value || "";
+}
+
+function modelLabel(model: ModelCatalogModel): string {
+  return model.display_name && model.display_name !== model.id
+    ? `${model.display_name} (${model.id})`
+    : model.id;
+}
+
+function currentEffectiveModelId(): string | null {
+  const selectedModel = normalizeOptionalString(ui.modelSelect?.value || null);
+  if (selectedModel) return selectedModel;
+  if (
+    currentCatalog?.default_model &&
+    currentCatalog.models.some((model) => model.id === currentCatalog.default_model)
+  ) {
+    return currentCatalog.default_model;
+  }
+  return currentCatalog?.models[0]?.id || null;
+}
+
+function currentEffectiveModel(): ModelCatalogModel | null {
+  const modelId = currentEffectiveModelId();
+  if (!modelId || !currentCatalog) return null;
+  return currentCatalog.models.find((model) => model.id === modelId) || null;
+}
+
+function updateReasoningOptions(
+  selectedValue: string | null,
+  preserveUnknown: boolean = true
+): void {
+  const model = currentEffectiveModel();
+  const options: SelectOption[] = [{ value: "", label: DEFAULT_OPTION_LABEL }];
+  if (model?.supports_reasoning) {
+    model.reasoning_options.forEach((optionValue) => {
+      options.push({ value: optionValue, label: optionValue });
+    });
+  }
+  setSelectOptions(
+    ui.effortSelect,
+    options,
+    selectedValue,
+    "current override",
+    preserveUnknown
+  );
+}
+
+function renderAutorunnerSettings(data: SessionSettingsResponse): void {
+  const modelOptions: SelectOption[] = [{ value: "", label: DEFAULT_OPTION_LABEL }];
+  currentCatalog?.models.forEach((model) => {
+    modelOptions.push({ value: model.id, label: modelLabel(model) });
+  });
+  setSelectOptions(
+    ui.modelSelect,
+    modelOptions,
+    normalizeOptionalString(data.autorunner_model_override),
+    "current override"
+  );
+  updateReasoningOptions(
+    normalizeOptionalString(data.autorunner_effort_override),
+    true
+  );
+  setSelectOptions(
+    ui.approvalSelect,
+    APPROVAL_OPTIONS,
+    normalizeOptionalString(data.autorunner_approval_policy),
+    "current override"
+  );
+  setSelectOptions(
+    ui.sandboxSelect,
+    SANDBOX_OPTIONS,
+    normalizeOptionalString(data.autorunner_sandbox_mode),
+    "current override"
+  );
+  if (ui.maxRunsInput) {
+    const maxRuns = normalizeOptionalInteger(data.runner_stop_after_runs);
+    ui.maxRunsInput.value = maxRuns ? String(maxRuns) : "";
+  }
+  if (ui.networkToggle) {
+    const networkSetting = normalizeOptionalBoolean(
+      data.autorunner_workspace_write_network
+    );
+    ui.networkToggle.checked = networkSetting === true;
+    ui.networkToggle.indeterminate = networkSetting === null;
+  }
+  updateAutorunnerFormInteractivity();
+}
+
+async function resolveCatalogAgent(): Promise<string> {
+  try {
+    const data = (await api("/api/agents", {
+      method: "GET",
+    })) as AgentListResponse;
+    const agents = Array.isArray(data.agents) ? data.agents : [];
+    const supportsListing = (agent: AgentEntry | undefined): boolean =>
+      Array.isArray(agent?.capabilities) &&
+      agent.capabilities.includes("model_listing");
+    const defaultAgentId =
+      normalizeOptionalString(data.default) || "codex";
+    const defaultAgent = agents.find((agent) => agent.id === defaultAgentId);
+    if (supportsListing(defaultAgent)) {
+      return defaultAgentId;
+    }
+    const codexAgent = agents.find((agent) => agent.id === "codex");
+    if (supportsListing(codexAgent)) {
+      return "codex";
+    }
+    const firstListed = agents.find((agent) => supportsListing(agent));
+    return normalizeOptionalString(firstListed?.id) || defaultAgentId;
+  } catch (_err) {
+    return "codex";
+  }
+}
+
+async function loadCatalog(agentId: string): Promise<ModelCatalog | null> {
+  try {
+    const data = await api(`/api/agents/${encodeURIComponent(agentId)}/models`, {
+      method: "GET",
+    });
+    return normalizeCatalog(data);
+  } catch (_err) {
+    return null;
+  }
+}
+
+function setAutorunnerBusy(busy: boolean): void {
+  settingsBusy = busy;
+  updateAutorunnerFormInteractivity();
+}
+
+function updateAutorunnerFormInteractivity(): void {
+  const formDisabled = settingsBusy || !settingsLoaded;
+  const applySelectState = (select: HTMLSelectElement | null): void => {
+    if (!select) return;
+    select.disabled =
+      formDisabled || select.dataset.optionAvailable === "0";
+  };
+
+  applySelectState(ui.modelSelect);
+  applySelectState(ui.effortSelect);
+  applySelectState(ui.approvalSelect);
+  applySelectState(ui.sandboxSelect);
+  if (ui.maxRunsInput) ui.maxRunsInput.disabled = formDisabled;
+  if (ui.networkToggle) ui.networkToggle.disabled = formDisabled;
+  if (ui.saveBtn) ui.saveBtn.disabled = settingsBusy || !settingsLoaded;
+  if (ui.reloadBtn) ui.reloadBtn.disabled = settingsBusy;
+}
+
+async function loadAutorunnerSettings(): Promise<void> {
+  settingsLoaded = false;
+  setAutorunnerBusy(true);
+  try {
+    const [settingsPayload, agentId] = await Promise.all([
+      api("/api/session/settings", { method: "GET" }) as Promise<SessionSettingsResponse>,
+      resolveCatalogAgent(),
+    ]);
+    currentCatalogAgent = agentId;
+    currentCatalog = await loadCatalog(agentId);
+    settingsLoaded = true;
+    renderAutorunnerSettings(settingsPayload);
+  } catch (err) {
+    currentCatalog = null;
+    settingsLoaded = false;
+    renderAutorunnerSettings({});
+    flash(
+      (err as Error).message || "Failed to load autorunner settings",
+      "error"
+    );
+  } finally {
+    setAutorunnerBusy(false);
+  }
+}
+
+function collectAutorunnerSettingsPayload(): SessionSettingsRequest {
+  const maxRunsRaw = ui.maxRunsInput?.value.trim() || "";
+  const parsedMaxRuns = maxRunsRaw ? Number.parseInt(maxRunsRaw, 10) : NaN;
+  return {
+    autorunner_model_override: normalizeOptionalString(ui.modelSelect?.value || null),
+    autorunner_effort_override: normalizeOptionalString(
+      ui.effortSelect?.value || null
+    ),
+    autorunner_approval_policy: normalizeOptionalString(
+      ui.approvalSelect?.value || null
+    ),
+    autorunner_sandbox_mode: normalizeOptionalString(
+      ui.sandboxSelect?.value || null
+    ),
+    autorunner_workspace_write_network:
+      ui.networkToggle && !ui.networkToggle.indeterminate
+        ? ui.networkToggle.checked
+        : null,
+    runner_stop_after_runs:
+      Number.isInteger(parsedMaxRuns) && parsedMaxRuns > 0 ? parsedMaxRuns : null,
+  };
+}
+
+async function saveAutorunnerSettings(): Promise<void> {
+  if (settingsBusy || !settingsLoaded) return;
+  setAutorunnerBusy(true);
+  try {
+    const payload = collectAutorunnerSettingsPayload();
+    await api("/api/session/settings", {
+      method: "POST",
+      body: payload,
+    });
+    flash("Autorunner settings saved", "success");
+    await refreshSettings();
+  } catch (err) {
+    flash(
+      (err as Error).message || "Failed to save autorunner settings",
+      "error"
+    );
+  } finally {
+    setAutorunnerBusy(false);
+  }
+}
+
 async function refreshSettings(): Promise<void> {
-  await loadThreadTools();
-  await loadTemplateRepos();
+  await Promise.all([
+    loadThreadTools(),
+    loadTemplateRepos(),
+    loadAutorunnerSettings(),
+  ]);
 }
 
 export function initRepoSettingsPanel(): void {
   window.__CAR_SETTINGS = { loadThreadTools, refreshSettings };
-  
-  // Initialize the modal interaction
+
   initRepoSettingsModal();
   initTemplateReposSettings();
-  
+
   if (ui.threadNew) {
     ui.threadNew.addEventListener("click", async () => {
       try {
@@ -113,8 +512,10 @@ export function initRepoSettingsPanel(): void {
         flash("Started a new autorunner thread", "success");
         await loadThreadTools();
       } catch (err) {
-        const error = err as Error;
-        flash(error.message || "Failed to reset autorunner thread", "error");
+        flash(
+          (err as Error).message || "Failed to reset autorunner thread",
+          "error"
+        );
       }
     });
   }
@@ -142,8 +543,7 @@ export function initRepoSettingsPanel(): void {
         flash("Autorunner thread archived", "success");
         await loadThreadTools();
       } catch (err) {
-        const error = err as Error;
-        flash(error.message || "Failed to archive thread", "error");
+        flash((err as Error).message || "Failed to archive thread", "error");
       }
     });
   }
@@ -159,8 +559,10 @@ export function initRepoSettingsPanel(): void {
         flash("Conversations reset", "success");
         await loadThreadTools();
       } catch (err) {
-        const error = err as Error;
-        flash(error.message || "Failed to reset conversations", "error");
+        flash(
+          (err as Error).message || "Failed to reset conversations",
+          "error"
+        );
       }
     });
   }
@@ -169,135 +571,38 @@ export function initRepoSettingsPanel(): void {
       window.location.href = resolvePath("/api/app-server/threads/backup");
     });
   }
+  if (ui.modelSelect) {
+    ui.modelSelect.addEventListener("change", () => {
+      updateReasoningOptions(
+        normalizeOptionalString(ui.effortSelect?.value || null),
+        false
+      );
+    });
+  }
+  if (ui.networkToggle) {
+    const clearIndeterminate = () => {
+      ui.networkToggle!.indeterminate = false;
+    };
+    ui.networkToggle.addEventListener("change", clearIndeterminate);
+    ui.networkToggle.addEventListener("click", clearIndeterminate);
+  }
+  if (ui.saveBtn) {
+    ui.saveBtn.addEventListener("click", () => {
+      void saveAutorunnerSettings();
+    });
+  }
+  if (ui.reloadBtn) {
+    ui.reloadBtn.addEventListener("click", () => {
+      void refreshSettings();
+    });
+  }
 
-  // Clear cached logs since log loading is no longer available
   try {
     localStorage.removeItem("logs:tail");
   } catch (_err) {
     // ignore
   }
 }
-
-interface UpdateCheckResponse {
-  update_available?: boolean;
-  message?: string;
-}
-
-interface UpdateResponse {
-  message?: string;
-  requires_confirmation?: boolean;
-}
-
-async function loadUpdateTargetOptions(selectId: string | null): Promise<void> {
-  const select = selectId ? document.getElementById(selectId) as HTMLSelectElement | null : null;
-  if (!select) return;
-  const isInitialized = select.dataset.updateTargetsInitialized === "1";
-  let payload: UpdateTargetsResponse | null;
-  try {
-    payload = await api("/system/update/targets", { method: "GET" }) as UpdateTargetsResponse;
-  } catch (_err) {
-    return;
-  }
-  const { options, defaultTarget } = updateTargetOptionsFromResponse(payload);
-  if (!options.length) return;
-
-  const previous = normalizeUpdateTarget(select.value || "all");
-  const hasPrevious = options.some((item) => item.value === previous);
-  const fallback = options.some((item) => item.value === defaultTarget)
-    ? defaultTarget
-    : options[0].value;
-
-  select.replaceChildren();
-  options.forEach((item) => {
-    const option = document.createElement("option");
-    option.value = item.value;
-    option.textContent = item.label;
-    select.appendChild(option);
-  });
-  if (isInitialized) {
-    select.value = hasPrevious ? previous : fallback;
-  } else {
-    select.value = fallback;
-    select.dataset.updateTargetsInitialized = "1";
-  }
-}
-
-async function handleSystemUpdate(btnId: string, targetSelectId: string | null): Promise<void> {
-  const btn = document.getElementById(btnId) as HTMLButtonElement | null;
-  if (!btn) return;
-  
-  const originalText = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = "Checking...";
-  const updateTarget = getUpdateTarget(targetSelectId);
-  const targetLabel = describeUpdateTarget(updateTarget);
-  
-  let check: UpdateCheckResponse | undefined;
-  try {
-    check = await api("/system/update/check") as UpdateCheckResponse;
-  } catch (err) {
-    check = { update_available: true, message: (err as Error).message || "Unable to check for updates." };
-  }
-
-  if (!check?.update_available) {
-    flash(check?.message || "No update available.", "info");
-    btn.disabled = false;
-    btn.textContent = originalText;
-    return;
-  }
-
-  const restartNotice = updateRestartNotice(updateTarget);
-  const confirmed = await confirmModal(
-    `${check?.message || "Update available."} Update Codex Autorunner (${targetLabel})? ${restartNotice}`
-  );
-  if (!confirmed) {
-    btn.disabled = false;
-    btn.textContent = originalText;
-    return;
-  }
-
-  btn.textContent = "Updating...";
-
-  try {
-    let res = await api("/system/update", {
-      method: "POST",
-      body: { target: updateTarget },
-    }) as UpdateResponse;
-    if (res.requires_confirmation) {
-      const forceConfirmed = await confirmModal(
-        res.message || "Active sessions are still running. Update anyway?",
-        { confirmText: "Update anyway", cancelText: "Cancel", danger: true }
-      );
-      if (!forceConfirmed) {
-        btn.disabled = false;
-        btn.textContent = originalText;
-        return;
-      }
-      res = await api("/system/update", {
-        method: "POST",
-        body: { target: updateTarget, force: true },
-      }) as UpdateResponse;
-    }
-    flash(res.message || `Update started (${targetLabel}).`, "success");
-    if (!includesWebUpdateTarget(updateTarget)) {
-      btn.disabled = false;
-      btn.textContent = originalText;
-      return;
-    }
-    document.body.style.pointerEvents = "none";
-    setTimeout(() => {
-      const url = new URL(window.location.href);
-      url.searchParams.set("v", String(Date.now()));
-      window.location.replace(url.toString());
-    }, 8000);
-  } catch (err) {
-    flash((err as Error).message || "Update failed", "error");
-    btn.disabled = false;
-    btn.textContent = originalText;
-  }
-}
-
-let repoSettingsCloseModal: (() => void) | null = null;
 
 function hideRepoSettingsModal(): void {
   if (repoSettingsCloseModal) {
@@ -309,47 +614,55 @@ function hideRepoSettingsModal(): void {
 
 export function openRepoSettings(triggerEl?: HTMLElement | null): void {
   const modal = document.getElementById("repo-settings-modal");
-  const closeBtn = document.getElementById("repo-settings-close");
-  const updateBtn = document.getElementById("repo-update-btn") as HTMLButtonElement | null;
-  const updateTarget = document.getElementById("repo-update-target") as HTMLSelectElement | null;
   if (!modal) return;
 
   hideRepoSettingsModal();
   repoSettingsCloseModal = openModal(modal, {
-    initialFocus: closeBtn || updateBtn || modal,
+    initialFocus: ui.closeBtn || ui.updateBtn || modal,
     returnFocusTo: triggerEl || null,
     onRequestClose: hideRepoSettingsModal,
   });
-  // Trigger settings refresh when modal opens
-  const { refreshSettings } = window.__CAR_SETTINGS || {};
-  if (typeof refreshSettings === "function") {
-    refreshSettings();
-  }
-  void loadUpdateTargetOptions(updateTarget ? updateTarget.id : null);
+  void refreshSettings();
+  void loadUpdateTargetOptions(ui.updateTarget ? ui.updateTarget.id : null);
 }
 
 function initRepoSettingsModal(): void {
-  const settingsBtn = document.getElementById("repo-settings") as HTMLButtonElement | null;
-  const closeBtn = document.getElementById("repo-settings-close");
-  const updateBtn = document.getElementById("repo-update-btn") as HTMLButtonElement | null;
-  const updateTarget = document.getElementById("repo-update-target") as HTMLSelectElement | null;
-  void loadUpdateTargetOptions(updateTarget ? updateTarget.id : null);
+  void loadUpdateTargetOptions(ui.updateTarget ? ui.updateTarget.id : null);
 
-  if (settingsBtn) {
-    settingsBtn.addEventListener("click", () => {
-      openRepoSettings(settingsBtn);
+  if (ui.settingsBtn) {
+    ui.settingsBtn.addEventListener("click", () => {
+      openRepoSettings(ui.settingsBtn);
     });
   }
 
-  if (closeBtn) {
-    closeBtn.addEventListener("click", () => {
+  if (ui.closeBtn) {
+    ui.closeBtn.addEventListener("click", () => {
       hideRepoSettingsModal();
     });
   }
 
-  if (updateBtn) {
-    updateBtn.addEventListener("click", () =>
-      handleSystemUpdate("repo-update-btn", updateTarget ? updateTarget.id : null)
+  if (ui.updateBtn) {
+    ui.updateBtn.addEventListener("click", () =>
+      handleSystemUpdate(
+        "repo-update-btn",
+        ui.updateTarget ? ui.updateTarget.id : null
+      )
     );
   }
 }
+
+export const __settingsTest = {
+  collectAutorunnerSettingsPayload,
+  loadAutorunnerSettings,
+  refreshSettings,
+  reset(): void {
+    currentCatalog = null;
+    currentCatalogAgent = "codex";
+    settingsBusy = false;
+    settingsLoaded = false;
+    hideRepoSettingsModal();
+  },
+  getCurrentCatalogAgent(): string {
+    return currentCatalogAgent;
+  },
+};
