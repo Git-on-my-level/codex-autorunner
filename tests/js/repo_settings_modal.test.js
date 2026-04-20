@@ -56,7 +56,11 @@ globalThis.sessionStorage = dom.window.sessionStorage;
 const settingsModule = await import(
   "../../src/codex_autorunner/static/generated/settings.js"
 );
-const { initRepoSettingsPanel, openRepoSettings, __settingsTest } = settingsModule;
+const {
+  initRepoSettingsPanel,
+  openRepoSettings,
+  __settingsTest,
+} = settingsModule;
 initRepoSettingsPanel();
 
 function jsonResponse(payload, status = 200) {
@@ -131,6 +135,18 @@ function installFetchMock({ sessionSettingsRef, updateTargets, modelCatalog, pos
     throw new Error(`Unexpected fetch: ${method} ${href}`);
   };
 }
+
+test("parsePositiveIntegerRuns accepts whole positive numbers only", () => {
+  const p = __settingsTest.parsePositiveIntegerRuns;
+  assert.equal(p(""), null);
+  assert.equal(p("   "), null);
+  assert.equal(p("7"), 7);
+  assert.equal(p("01"), 1);
+  assert.equal(p("1.5"), undefined);
+  assert.equal(p("1e3"), undefined);
+  assert.equal(p("0"), undefined);
+  assert.equal(p("-2"), undefined);
+});
 
 test("repo settings modal hydrates update targets and autorunner controls", async () => {
   __settingsTest.reset();
@@ -237,6 +253,60 @@ test("repo settings modal hydrates update targets and autorunner controls", asyn
       runner_stop_after_runs: 5,
     },
   ]);
+});
+
+test("repo settings save rejects non-integer max runs without posting", async () => {
+  __settingsTest.reset();
+  localStorage.clear();
+  sessionStorage.clear();
+  resetDomState();
+
+  const posts = [];
+  const sessionSettingsRef = {
+    current: {
+      autorunner_model_override: "gpt-5.4",
+      autorunner_effort_override: "medium",
+      autorunner_approval_policy: "never",
+      autorunner_sandbox_mode: "workspaceWrite",
+      autorunner_workspace_write_network: false,
+      runner_stop_after_runs: 3,
+    },
+  };
+  installFetchMock({
+    sessionSettingsRef,
+    updateTargets: {
+      targets: [{ value: "web", label: "web", description: "Web UI only" }],
+      default_target: "web",
+    },
+    modelCatalog: {
+      default_model: "gpt-5.4",
+      models: [
+        {
+          id: "gpt-5.4",
+          display_name: "GPT-5.4",
+          supports_reasoning: true,
+          reasoning_options: ["medium", "high"],
+        },
+      ],
+    },
+    posts,
+  });
+
+  openRepoSettings(document.getElementById("repo-settings"));
+  await flushUi();
+
+  document.getElementById("autorunner-max-runs-input").value = "1.5";
+
+  document
+    .getElementById("autorunner-settings-save")
+    .dispatchEvent(new Event("click", { bubbles: true }));
+  await flushUi();
+
+  assert.deepEqual(posts, []);
+  assert.match(
+    document.getElementById("toast").textContent || "",
+    /positive whole number/i
+  );
 });
 
 test("repo settings reload refreshes session values and preserves default network state", async () => {

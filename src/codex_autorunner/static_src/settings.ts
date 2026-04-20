@@ -145,6 +145,16 @@ function normalizeOptionalInteger(value: unknown): number | null {
   return value;
 }
 
+/** Whole positive decimal integer string only (avoids parseInt silently truncating "1.5", "1e3", etc.). */
+function parsePositiveIntegerRuns(raw: string): number | null | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (!/^\d+$/.test(trimmed)) return undefined;
+  const n = Number.parseInt(trimmed, 10);
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  return n;
+}
+
 function normalizeCatalog(raw: unknown): ModelCatalog {
   if (!raw || typeof raw !== "object") {
     return { default_model: "", models: [] };
@@ -445,8 +455,8 @@ async function loadAutorunnerSettings(): Promise<void> {
 }
 
 function collectAutorunnerSettingsPayload(): SessionSettingsRequest {
-  const maxRunsRaw = ui.maxRunsInput?.value.trim() || "";
-  const parsedMaxRuns = maxRunsRaw ? Number.parseInt(maxRunsRaw, 10) : NaN;
+  const maxRunsRaw = ui.maxRunsInput?.value ?? "";
+  const runs = parsePositiveIntegerRuns(maxRunsRaw);
   return {
     autorunner_model_override: normalizeOptionalString(ui.modelSelect?.value || null),
     autorunner_effort_override: normalizeOptionalString(
@@ -462,13 +472,20 @@ function collectAutorunnerSettingsPayload(): SessionSettingsRequest {
       ui.networkToggle && !ui.networkToggle.indeterminate
         ? ui.networkToggle.checked
         : null,
-    runner_stop_after_runs:
-      Number.isInteger(parsedMaxRuns) && parsedMaxRuns > 0 ? parsedMaxRuns : null,
+    runner_stop_after_runs: runs === undefined ? null : runs,
   };
 }
 
 async function saveAutorunnerSettings(): Promise<void> {
   if (settingsBusy || !settingsLoaded) return;
+  const maxRunsRaw = ui.maxRunsInput?.value ?? "";
+  if (parsePositiveIntegerRuns(maxRunsRaw) === undefined) {
+    flash(
+      "Stop after runs must be a positive whole number, or leave blank for no limit",
+      "error"
+    );
+    return;
+  }
   setAutorunnerBusy(true);
   try {
     const payload = collectAutorunnerSettingsPayload();
@@ -653,6 +670,7 @@ function initRepoSettingsModal(): void {
 
 export const __settingsTest = {
   collectAutorunnerSettingsPayload,
+  parsePositiveIntegerRuns,
   loadAutorunnerSettings,
   refreshSettings,
   reset(): void {
