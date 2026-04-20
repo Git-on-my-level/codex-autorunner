@@ -968,10 +968,56 @@ class ChatSurfaceScenarioRunner:
             assert isinstance(context.harness, DiscordSurfaceHarness)
             interaction_id = str(action.payload.get("interaction_id") or "inter-1")
             rest_client = context.rest_client or FakeDiscordRest()
+            context.rest_client = rest_client
             payload = _discord_command_interaction(
                 interaction_id=interaction_id,
                 command_name="car",
                 subcommand_name="status",
+            )
+            context.result = await context.harness.run_gateway_events(
+                [("INTERACTION_CREATE", payload)],
+                rest_client=rest_client,
+            )
+            return
+
+        if action.kind == "set_discord_pma_state":
+            if context.surface != SurfaceKind.DISCORD:
+                return
+            assert isinstance(context.harness, DiscordSurfaceHarness)
+            if context.harness.store is None:
+                raise AssertionError("Discord harness store is not initialized")
+            await context.harness.store.update_pma_state(
+                channel_id=DEFAULT_DISCORD_CHANNEL_ID,
+                pma_enabled=bool(action.payload.get("pma_enabled", False)),
+                pma_prev_workspace_path=self._normalize_optional_text(
+                    action.payload.get("pma_prev_workspace_path")
+                ),
+                pma_prev_repo_id=self._normalize_optional_text(
+                    action.payload.get("pma_prev_repo_id")
+                ),
+                pma_prev_resource_kind=self._normalize_optional_text(
+                    action.payload.get("pma_prev_resource_kind")
+                ),
+                pma_prev_resource_id=self._normalize_optional_text(
+                    action.payload.get("pma_prev_resource_id")
+                ),
+            )
+            return
+
+        if action.kind == "run_pma_interaction":
+            if context.surface != SurfaceKind.DISCORD:
+                return
+            assert isinstance(context.harness, DiscordSurfaceHarness)
+            interaction_id = str(action.payload.get("interaction_id") or "inter-pma-1")
+            subcommand = str(action.payload.get("subcommand") or "").strip().lower()
+            if not subcommand:
+                raise AssertionError("run_pma_interaction requires payload.subcommand")
+            rest_client = context.rest_client or FakeDiscordRest()
+            context.rest_client = rest_client
+            payload = _discord_command_interaction(
+                interaction_id=interaction_id,
+                command_name="pma",
+                subcommand_name=subcommand,
             )
             context.result = await context.harness.run_gateway_events(
                 [("INTERACTION_CREATE", payload)],
@@ -985,6 +1031,7 @@ class ChatSurfaceScenarioRunner:
             assert isinstance(context.harness, DiscordSurfaceHarness)
             interaction_id = str(action.payload.get("interaction_id") or "inter-dup-1")
             rest_client = context.rest_client or FakeDiscordRest()
+            context.rest_client = rest_client
             rest_client.enable_duplicate_interaction(interaction_id)
             payload = _discord_command_interaction(
                 interaction_id=interaction_id,
