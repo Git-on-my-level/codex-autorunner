@@ -1436,7 +1436,10 @@ class PmaThreadStore:
                     ),
                 )
                 if queue_cursor.rowcount == 0:
-                    return None
+                    raise RuntimeError(
+                        "Queued turn execution was updated but no matching queue item "
+                        "was found; refusing partial commit"
+                    )
                 row = conn.execute(
                     """
                     SELECT *
