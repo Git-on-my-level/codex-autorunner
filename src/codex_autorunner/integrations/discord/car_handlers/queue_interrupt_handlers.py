@@ -366,6 +366,7 @@ async def handle_queue_interrupt_send_button(
         interaction_token,
         channel_id=channel_id,
         active_turn_text="Message received. Switching to it now...",
+        allow_promoted_no_active_success=True,
         progress_reuse_source_message_id=source_message_id,
         progress_reuse_acknowledgement="Message received. Switching to it now...",
         dispatcher_conversation_id=conversation_id,
