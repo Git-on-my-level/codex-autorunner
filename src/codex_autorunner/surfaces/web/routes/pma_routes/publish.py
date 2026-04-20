@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from .....core.logging_utils import log_event
 from .....core.pma_chat_delivery import deliver_pma_notification
+from .....core.ports.run_event import TokenUsage
+from .....integrations.chat.turn_metrics import format_turn_footer
 
 if TYPE_CHECKING:
     from fastapi import Request
@@ -140,6 +142,7 @@ def build_publish_message(
     wake_up: Optional[dict[str, Any]],
     correlation_id: str,
 ) -> str:
+    token_usage = _extract_result_token_usage(result)
     trigger = (
         normalize_optional_text(lifecycle_event.get("event_type"))
         if isinstance(lifecycle_event, dict)
@@ -188,11 +191,35 @@ def build_publish_message(
 
     if status == "ok":
         lines.append(output or "Turn completed with no assistant output.")
+        footer = format_turn_footer(
+            summary_text=None,
+            token_usage=token_usage,
+            elapsed_seconds=None,
+        )
+        if footer:
+            lines.extend(["", footer])
     else:
         lines.append(f"status: {status}")
         lines.append(f"error: {detail or 'Turn failed without detail.'}")
         lines.append("next_action: run /pma status and inspect PMA history if needed.")
     return "\n".join(lines).strip()
+
+
+def _extract_result_token_usage(result: dict[str, Any]) -> Optional[dict[str, Any]]:
+    token_usage = result.get("token_usage")
+    if isinstance(token_usage, dict):
+        return dict(token_usage)
+    timeline_events = result.get("timeline_events")
+    if not isinstance(timeline_events, list):
+        return None
+    for event in reversed(timeline_events):
+        if isinstance(event, TokenUsage) and isinstance(event.usage, dict):
+            return dict(event.usage)
+        if isinstance(event, dict):
+            usage = event.get("usage")
+            if isinstance(usage, dict):
+                return dict(usage)
+    return None
 
 
 async def enqueue_with_retry(enqueue_call: Any) -> None:

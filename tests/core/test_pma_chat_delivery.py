@@ -323,6 +323,56 @@ async def test_deliver_pma_notification_uses_explicit_delivery_target_for_bound_
 
 
 @pytest.mark.anyio
+async def test_deliver_pma_notification_suppresses_duplicate_notice_for_same_thread(
+    tmp_path: Path,
+) -> None:
+    hub_root = _hub(tmp_path)
+    workspace = (hub_root / "worktrees" / "repo-g").resolve()
+    workspace.mkdir(parents=True, exist_ok=True)
+    _write_manifest(hub_root, "repo-g", workspace)
+
+    discord_store = DiscordStateStore(
+        hub_root / ".codex-autorunner" / "discord_state.sqlite3"
+    )
+    try:
+        await discord_store.upsert_binding(
+            channel_id="repo-g-discord",
+            guild_id="guild-1",
+            workspace_path=str(workspace),
+            repo_id="repo-g",
+        )
+        thread_id = _create_bound_thread(
+            hub_root,
+            workspace,
+            surface_kind="discord",
+            surface_key="repo-g-discord",
+        )
+
+        outcome = await deliver_pma_notification(
+            hub_root=hub_root,
+            repo_id="repo-g",
+            message="Duplicate — repo-g thread already handled. No action.",
+            correlation_id="corr-explicit-duplicate",
+            delivery="auto",
+            source_kind="managed_thread_completed",
+            managed_thread_id=thread_id,
+            delivery_target={
+                "surface_kind": "discord",
+                "surface_key": "repo-g-discord",
+            },
+        )
+
+        assert outcome == {
+            "route": "suppressed_duplicate",
+            "targets": 1,
+            "published": 0,
+        }
+        assert await discord_store.list_outbox() == []
+    finally:
+        await discord_store.close()
+
+
+@pytest.mark.anyio
 async def test_deliver_pma_notification_falls_back_when_explicit_target_binding_changes(
     tmp_path: Path,
 ) -> None:

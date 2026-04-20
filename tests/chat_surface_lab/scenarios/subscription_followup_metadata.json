@@ -1,0 +1,120 @@
+{
+  "schema_version": 1,
+  "scenario_id": "subscription_followup_metadata",
+  "description": "A same-thread managed-thread completion follow-up stays visible in Discord and includes token/context metadata in the published PMA update.",
+  "surfaces": [
+    "discord"
+  ],
+  "runtime_fixture": {
+    "kind": "hermes",
+    "scenario": "official"
+  },
+  "actions": [
+    {
+      "kind": "send_message",
+      "actor": "user",
+      "payload": {
+        "text": "echo hello world"
+      }
+    },
+    {
+      "kind": "create_automation_subscription",
+      "actor": "user",
+      "payload": {
+        "event_type": "managed_thread_completed",
+        "repo_id": "repo-1"
+      }
+    },
+    {
+      "kind": "emit_automation_transition",
+      "actor": "system",
+      "payload": {
+        "event_type": "managed_thread_completed",
+        "repo_id": "repo-1",
+        "reason": "surface-lab"
+      }
+    },
+    {
+      "kind": "publish_latest_wakeup_result",
+      "actor": "system",
+      "payload": {
+        "result": {
+          "status": "ok",
+          "message": "Queued CAR CLI dogfood turn ran in this Discord thread.",
+          "token_usage": {
+            "last": {
+              "totalTokens": 71173,
+              "inputTokens": 400,
+              "outputTokens": 245
+            },
+            "modelContextWindow": 203352
+          }
+        }
+      }
+    },
+    {
+      "kind": "flush_surface_outbox",
+      "actor": "system",
+      "payload": {}
+    }
+  ],
+  "expected_terminal": {
+    "status": "ok"
+  },
+  "transcript_invariants": [
+    {
+      "kind": "contains_text",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "text": "Queued CAR CLI dogfood turn ran in this Discord thread."
+      }
+    },
+    {
+      "kind": "contains_text",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "text": "Token usage: total 71173 input 400 output 245"
+      }
+    },
+    {
+      "kind": "contains_text",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "text": "ctx 65%"
+      }
+    },
+    {
+      "kind": "surface_attr_equals",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "attr": "published_route",
+        "value": "explicit"
+      }
+    },
+    {
+      "kind": "surface_attr_equals",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "attr": "published_count",
+        "value": 1
+      }
+    }
+  ],
+  "tags": [
+    "automation",
+    "discord",
+    "metadata",
+    "subscriptions",
+    "pma"
+  ]
+}

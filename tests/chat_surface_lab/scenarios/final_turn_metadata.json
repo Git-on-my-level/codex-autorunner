@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "scenario_id": "final_turn_metadata",
+  "description": "Regular Discord managed-thread final delivery keeps token-count and context-remaining metadata visible.",
+  "surfaces": [
+    "discord"
+  ],
+  "runtime_fixture": {
+    "kind": "hermes",
+    "scenario": "official_token_usage"
+  },
+  "actions": [
+    {
+      "kind": "send_message",
+      "actor": "user",
+      "payload": {
+        "text": "echo hello world"
+      }
+    }
+  ],
+  "expected_terminal": {
+    "status": "ok"
+  },
+  "transcript_invariants": [
+    {
+      "kind": "contains_text",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "text": "fixture reply"
+      }
+    },
+    {
+      "kind": "contains_text",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "text": "Token usage: total 71173 input 400 output 245"
+      }
+    },
+    {
+      "kind": "contains_text",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "text": "ctx 65%"
+      }
+    }
+  ],
+  "tags": [
+    "discord",
+    "metadata",
+    "managed-thread",
+    "pma"
+  ],
+  "notes": "Exercises the durable final-delivery path with token-usage metadata present so the chat lab asserts the same footer users expect in production."
+}

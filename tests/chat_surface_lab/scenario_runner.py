@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from codex_autorunner.browser.runtime import BrowserRuntime
+from codex_autorunner.core.chat_bindings import active_chat_binding_metadata_by_thread
 from codex_autorunner.core.pma_automation_store import PmaAutomationStore
 from codex_autorunner.integrations.chat.ux_regression_contract import (
     CHAT_UX_LATENCY_BUDGETS,
@@ -23,6 +24,9 @@ from codex_autorunner.integrations.telegram.handlers.commands import (
 )
 from codex_autorunner.surfaces.web.routes.pma_routes.managed_threads import (
     build_automation_routes,
+)
+from codex_autorunner.surfaces.web.routes.pma_routes.publish import (
+    publish_automation_result,
 )
 from tests.chat_surface_integration.harness import (
     DEFAULT_DISCORD_CHANNEL_ID,
@@ -165,6 +169,7 @@ class _SurfaceRunContext:
     execution_id: Optional[str] = None
     telegram_thread_id: Optional[int] = DEFAULT_TELEGRAM_THREAD_ID
     surface_metadata: dict[str, Any] = field(default_factory=dict)
+    latest_wakeup: Optional[dict[str, Any]] = None
 
 
 class ChatSurfaceScenarioRunner:
@@ -714,6 +719,16 @@ class ChatSurfaceScenarioRunner:
         if action.kind == "emit_automation_transition":
             store = PmaAutomationStore(context.harness.root)
             payload = dict(action.payload)
+            if self._normalize_optional_text(
+                payload.get("thread_id")
+            ) is None and self._normalize_optional_text(payload.get("event_type")) in {
+                "managed_thread_completed",
+                "managed_thread_failed",
+                "managed_thread_interrupted",
+            }:
+                current_thread_id = self._resolve_current_thread_target_id(context)
+                if current_thread_id is not None:
+                    payload["thread_id"] = current_thread_id
             result = store.notify_transition(payload)
             pending = store.list_pending_wakeups(limit=10)
             event_type = self._normalize_optional_text(payload.get("event_type"))
@@ -760,6 +775,103 @@ class ChatSurfaceScenarioRunner:
             context.surface_metadata["wakeup_delivery_surface_key"] = (
                 delivery_target.get("surface_key")
             )
+            context.latest_wakeup = dict(matching_wakeup)
+            return
+
+        if action.kind == "publish_latest_wakeup_result":
+            if context.latest_wakeup is None:
+                raise AssertionError(
+                    "publish_latest_wakeup_result requires a prior emit_automation_transition"
+                )
+            request = SimpleNamespace(
+                app=SimpleNamespace(
+                    state=SimpleNamespace(
+                        config=SimpleNamespace(
+                            root=context.harness.root,
+                            raw={
+                                "pma": {"enabled": True},
+                                "discord_bot": {"state_file": "discord_state.sqlite3"},
+                                "telegram_bot": {
+                                    "state_file": "telegram_state.sqlite3"
+                                },
+                            },
+                        )
+                    )
+                )
+            )
+            publish_result = await publish_automation_result(
+                request=request,
+                result=dict(action.payload.get("result") or {}),
+                client_turn_id=action.payload.get("client_turn_id"),
+                lifecycle_event=action.payload.get("lifecycle_event"),
+                wake_up=dict(context.latest_wakeup),
+            )
+            thread_id = self._normalize_optional_text(
+                context.latest_wakeup.get("thread_id")
+            )
+            if thread_id is not None:
+                binding_metadata = active_chat_binding_metadata_by_thread(
+                    hub_root=context.harness.root
+                ).get(thread_id)
+                if isinstance(binding_metadata, dict):
+                    context.surface_metadata["active_binding_surface_kind"] = (
+                        binding_metadata.get("binding_kind")
+                    )
+                    context.surface_metadata["active_binding_surface_key"] = (
+                        binding_metadata.get("binding_id")
+                    )
+            context.surface_metadata["published_delivery_status"] = publish_result.get(
+                "delivery_status"
+            )
+            delivery_outcome = publish_result.get("delivery_outcome")
+            if isinstance(delivery_outcome, dict):
+                context.surface_metadata["published_route"] = delivery_outcome.get(
+                    "route"
+                )
+                context.surface_metadata["published_targets"] = delivery_outcome.get(
+                    "targets"
+                )
+                context.surface_metadata["published_count"] = delivery_outcome.get(
+                    "published"
+                )
+            if context.surface == SurfaceKind.DISCORD:
+                assert isinstance(context.harness, DiscordSurfaceHarness)
+                if context.harness.store is not None:
+                    outbox_records = await context.harness.store.list_outbox()
+                    context.surface_metadata["discord_outbox_count_after_publish"] = (
+                        len(outbox_records)
+                    )
+                    if outbox_records:
+                        context.surface_metadata[
+                            "discord_outbox_preview_after_publish"
+                        ] = outbox_records[-1].payload_json.get("content")
+            return
+
+        if action.kind == "flush_surface_outbox":
+            if context.surface != SurfaceKind.DISCORD:
+                return
+            assert isinstance(context.harness, DiscordSurfaceHarness)
+            if context.harness.store is not None:
+                before_flush = await context.harness.store.list_outbox()
+                context.surface_metadata["discord_outbox_count_before_flush"] = len(
+                    before_flush
+                )
+            rest_client = (
+                context.rest_client
+                or (
+                    context.result
+                    if isinstance(context.result, FakeDiscordRest)
+                    else None
+                )
+                or FakeDiscordRest()
+            )
+            context.rest_client = rest_client
+            context.result = await context.harness.drain_outbox(rest_client=rest_client)
+            if context.harness.store is not None:
+                after_flush = await context.harness.store.list_outbox()
+                context.surface_metadata["discord_outbox_count_after_flush"] = len(
+                    after_flush
+                )
             return
 
         if action.kind == "stop_active_thread":
@@ -1650,7 +1762,14 @@ def _build_automation_route_client(
     runtime_state: object,
 ) -> TestClient:
     app = FastAPI()
-    app.state.config = SimpleNamespace(root=hub_root, raw={"pma": {"enabled": True}})
+    app.state.config = SimpleNamespace(
+        root=hub_root,
+        raw={
+            "pma": {"enabled": True},
+            "discord_bot": {"state_file": "discord_state.sqlite3"},
+            "telegram_bot": {"state_file": "telegram_state.sqlite3"},
+        },
+    )
     router = app.router
     build_automation_routes(router, lambda: runtime_state)
     return TestClient(app)

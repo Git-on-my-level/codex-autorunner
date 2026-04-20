@@ -157,6 +157,29 @@ class TestBuildPublishMessage:
         assert "repo_id: base" in msg
         assert "run_id: run-1" in msg
 
+    def test_ok_status_includes_token_usage_footer_when_present(self) -> None:
+        msg = build_publish_message(
+            result={
+                "status": "ok",
+                "message": "done",
+                "token_usage": {
+                    "last": {
+                        "totalTokens": 71173,
+                        "inputTokens": 400,
+                        "outputTokens": 245,
+                    },
+                    "modelContextWindow": 203352,
+                },
+            },
+            lifecycle_event={"event_type": "managed_thread_completed"},
+            wake_up=None,
+            correlation_id="corr-5",
+        )
+
+        assert "done" in msg
+        assert "Token usage: total 71173 input 400 output 245" in msg
+        assert "ctx 65%" in msg
+
 
 class TestEnqueueWithRetry:
     @pytest.mark.anyio

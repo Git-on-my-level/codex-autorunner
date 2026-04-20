@@ -32,6 +32,13 @@ logger = logging.getLogger(__name__)
 _DISCORD_MESSAGE_MAX_LEN = 1900
 
 
+def _looks_like_duplicate_noop_notice(message: str) -> bool:
+    normalized = " ".join(str(message or "").lower().split())
+    if not normalized:
+        return False
+    return "already handled" in normalized and "no action" in normalized
+
+
 def _notification_context_payload(
     *,
     message: str,
@@ -705,12 +712,19 @@ async def deliver_pma_notification(
     normalized_target = _normalize_pma_delivery_target(delivery_target)
     if normalized_target is not None:
         surface_kind, surface_key = normalized_target
-        if _delivery_target_matches_active_thread_binding(
+        target_matches_active_binding = _delivery_target_matches_active_thread_binding(
             hub_root=hub_root,
             managed_thread_id=managed_thread_id,
             surface_kind=surface_kind,
             surface_key=surface_key,
+        )
+        if (
+            target_matches_active_binding
+            and normalized_source_kind == "managed_thread_completed"
+            and _looks_like_duplicate_noop_notice(text)
         ):
+            return {"route": "suppressed_duplicate", "targets": 1, "published": 0}
+        if target_matches_active_binding:
             if surface_kind == "discord":
                 direct_outcome = await _deliver_direct_discord(
                     hub_root=hub_root,

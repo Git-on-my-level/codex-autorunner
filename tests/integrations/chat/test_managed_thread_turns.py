@@ -10,6 +10,9 @@ from typing import Any, Optional
 import pytest
 
 import codex_autorunner.integrations.chat.managed_thread_turns as managed_thread_turns_module
+from codex_autorunner.core.orchestration.managed_thread_delivery import (
+    ManagedThreadDeliveryState,
+)
 from codex_autorunner.core.orchestration.models import (
     ExecutionRecord,
     MessageRequest,
@@ -92,6 +95,42 @@ def test_render_managed_thread_response_text_prepends_session_notice() -> None:
     )
 
     assert rendered == "Notice: a new session was started.\n\nRecovered answer"
+
+
+def test_render_managed_thread_delivery_record_text_includes_token_usage_footer() -> (
+    None
+):
+    rendered = managed_thread_turns_module.render_managed_thread_delivery_record_text(
+        managed_thread_turns_module.ManagedThreadDeliveryRecord(
+            delivery_id="delivery-1",
+            managed_thread_id="thread-1",
+            managed_turn_id="turn-1",
+            idempotency_key="idem-1",
+            target=managed_thread_turns_module.ManagedThreadDeliveryTarget(
+                surface_kind="discord",
+                adapter_key="discord",
+                surface_key="channel-1",
+            ),
+            envelope=managed_thread_turns_module.ManagedThreadDeliveryEnvelope(
+                envelope_version="managed_thread_delivery.v1",
+                final_status="ok",
+                assistant_text="Recovered answer",
+                token_usage={
+                    "last": {
+                        "totalTokens": 71173,
+                        "inputTokens": 400,
+                        "outputTokens": 245,
+                    },
+                    "modelContextWindow": 203352,
+                },
+            ),
+            state=ManagedThreadDeliveryState.PENDING,
+        )
+    )
+
+    assert "Recovered answer" in rendered
+    assert "Token usage: total 71173 input 400 output 245" in rendered
+    assert "ctx 65%" in rendered
 
 
 @pytest.mark.anyio

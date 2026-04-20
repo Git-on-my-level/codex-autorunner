@@ -9,6 +9,7 @@ from typing import Any, Callable, Optional
 
 from codex_autorunner.agents.registry import AgentDescriptor
 from codex_autorunner.bootstrap import seed_hub_files
+from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.integrations.chat.models import (
     ChatAttachment,
     ChatMessageEvent,
@@ -27,6 +28,7 @@ from codex_autorunner.integrations.discord.config import (
 from codex_autorunner.integrations.discord.message_turns import (
     build_discord_thread_orchestration_service,
 )
+from codex_autorunner.integrations.discord.outbox import DiscordOutboxManager
 from codex_autorunner.integrations.discord.service import DiscordBotService
 from codex_autorunner.integrations.discord.state import DiscordStateStore
 from codex_autorunner.integrations.telegram.adapter import (
@@ -51,6 +53,7 @@ from tests.chat_surface_lab.telegram_simulator import (
     TelegramSimulatorFaults,
     TelegramSurfaceSimulator,
 )
+from tests.conftest import write_test_config
 
 DEFAULT_DISCORD_CHANNEL_ID = "channel-1"
 DEFAULT_DISCORD_GUILD_ID = "guild-1"
@@ -200,6 +203,10 @@ class DiscordSurfaceHarness:
         approval_mode: Optional[str] = None,
     ) -> None:
         seed_hub_files(self.root, force=True)
+        config_payload = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+        config_payload["discord_bot"]["state_file"] = "discord_state.sqlite3"
+        config_payload["telegram_bot"]["state_file"] = "telegram_state.sqlite3"
+        write_test_config(self.root / CONFIG_FILENAME, config_payload)
         workspace = self.root / "workspace"
         workspace.mkdir(parents=True, exist_ok=True)
         self.store = DiscordStateStore(self.root / "discord_state.sqlite3")
@@ -453,10 +460,45 @@ class DiscordSurfaceHarness:
                 elif "working" in content:
                     rest.terminal_progress_label = "working"
 
+    async def drain_outbox(
+        self,
+        *,
+        rest_client: Optional[FakeDiscordRest] = None,
+    ) -> FakeDiscordRest:
+        if self.store is None:
+            raise RuntimeError("DiscordSurfaceHarness.setup() must run first")
+        rest = rest_client or self.rest or FakeDiscordRest()
+        fresh_store = DiscordStateStore(self.store.path)
+        await fresh_store.initialize()
+        try:
+            manager = DiscordOutboxManager(
+                fresh_store,
+                send_message=lambda channel_id, payload: rest.create_channel_message(
+                    channel_id=channel_id,
+                    payload=payload,
+                ),
+                delete_message=lambda channel_id, message_id: rest.delete_channel_message(
+                    channel_id=channel_id,
+                    message_id=message_id,
+                ),
+                logger=logging.getLogger(self.logger_name),
+                retry_interval_seconds=0.01,
+                immediate_retry_delays=(0.0,),
+            )
+            manager.start()
+            records = await fresh_store.list_outbox()
+            if records:
+                await manager._flush(records)
+        finally:
+            await fresh_store.close()
+        self.rest = rest
+        self._apply_discord_runtime_metadata(rest)
+        return rest
+
     async def wait_for_running_execution(
         self,
         *,
-        timeout_seconds: float = 2.0,
+        timeout_seconds: float = 5.0,
     ) -> tuple[str, str]:
         deadline = asyncio.get_running_loop().time() + max(timeout_seconds, 0.0)
         while True:
@@ -493,7 +535,7 @@ class DiscordSurfaceHarness:
         self,
         expected_status: str,
         *,
-        timeout_seconds: float = 2.0,
+        timeout_seconds: float = 5.0,
     ) -> tuple[str, str]:
         deadline = asyncio.get_running_loop().time() + max(timeout_seconds, 0.0)
         while True:

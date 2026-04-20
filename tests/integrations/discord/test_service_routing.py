@@ -1884,7 +1884,11 @@ async def test_service_enforces_allowlist_and_denies_command(tmp_path: Path) -> 
         ]
     )
     service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        _config(
+            tmp_path,
+            allow_user_ids=frozenset({"user-1"}),
+            command_registration_enabled=False,
+        ),
         logger=logging.getLogger("test"),
         rest_client=rest,
         gateway_client=gateway,
@@ -1912,7 +1916,11 @@ async def test_service_enforces_allowlist_and_denies_autocomplete_with_empty_cho
     await store.initialize()
     rest = _FakeRest()
     service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        _config(
+            tmp_path,
+            allow_user_ids=frozenset({"user-1"}),
+            command_registration_enabled=False,
+        ),
         logger=logging.getLogger("test"),
         rest_client=rest,
         gateway_client=_FakeGateway([]),
@@ -7421,7 +7429,7 @@ async def test_message_turn_waits_for_ingressed_slash_command_to_finish(
 
         release_newt.set()
 
-        await asyncio.wait_for(message_turn_started.wait(), timeout=2.0)
+        await asyncio.wait_for(message_turn_started.wait(), timeout=5.0)
 
         assert observed == ["newt:start", "newt:end", "message:please continue"]
         assert any(

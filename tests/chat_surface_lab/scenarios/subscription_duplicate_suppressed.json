@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "scenario_id": "subscription_duplicate_suppressed",
+  "description": "A same-thread managed-thread completion wake-up that resolves to duplicate/no-action is suppressed instead of sending a noisy follow-up into Discord.",
+  "surfaces": [
+    "discord"
+  ],
+  "runtime_fixture": {
+    "kind": "hermes",
+    "scenario": "official"
+  },
+  "actions": [
+    {
+      "kind": "send_message",
+      "actor": "user",
+      "payload": {
+        "text": "echo hello world"
+      }
+    },
+    {
+      "kind": "create_automation_subscription",
+      "actor": "user",
+      "payload": {
+        "event_type": "managed_thread_completed",
+        "repo_id": "repo-1"
+      }
+    },
+    {
+      "kind": "emit_automation_transition",
+      "actor": "system",
+      "payload": {
+        "event_type": "managed_thread_completed",
+        "repo_id": "repo-1",
+        "reason": "surface-lab"
+      }
+    },
+    {
+      "kind": "publish_latest_wakeup_result",
+      "actor": "system",
+      "payload": {
+        "result": {
+          "status": "ok",
+          "message": "Duplicate — discord-1 thread already handled. No action."
+        }
+      }
+    },
+    {
+      "kind": "flush_surface_outbox",
+      "actor": "system",
+      "payload": {}
+    }
+  ],
+  "expected_terminal": {
+    "status": "ok"
+  },
+  "transcript_invariants": [
+    {
+      "kind": "text_count_equals",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "text": "PMA update (managed_thread_completed)",
+        "count": 0
+      }
+    },
+    {
+      "kind": "text_count_equals",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "text": "already handled. No action.",
+        "count": 0
+      }
+    },
+    {
+      "kind": "surface_attr_equals",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "attr": "published_route",
+        "value": "suppressed_duplicate"
+      }
+    },
+    {
+      "kind": "surface_attr_equals",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "attr": "published_count",
+        "value": 0
+      }
+    }
+  ],
+  "tags": [
+    "automation",
+    "discord",
+    "duplicate",
+    "subscriptions",
+    "pma"
+  ]
+}

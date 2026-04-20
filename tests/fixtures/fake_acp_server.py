@@ -369,6 +369,26 @@ class FakeACPServer:
                 },
             }
         )
+        if self._scenario == "official_token_usage":
+            self.send(
+                {
+                    "method": "session/update",
+                    "params": {
+                        "sessionId": session_id,
+                        "update": {
+                            "sessionUpdate": "usage_update",
+                            "usage": {
+                                "last": {
+                                    "totalTokens": 71173,
+                                    "inputTokens": 400,
+                                    "outputTokens": 245,
+                                },
+                                "modelContextWindow": 203352,
+                            },
+                        },
+                    },
+                }
+            )
         if self._scenario == "official_progress_hang_ignore_cancel":
             while True:
                 time.sleep(0.05)

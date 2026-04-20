@@ -266,6 +266,84 @@ async def test_runner_executes_subscription_defaults_with_missing_progress_ancho
 
 
 @pytest.mark.anyio
+async def test_runner_executes_final_turn_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scenario = load_scenario_by_id("final_turn_metadata")
+    runner = ChatSurfaceScenarioRunner(
+        output_root=tmp_path / "scenario-runs",
+        apply_runtime_patch=lambda runtime: patch_hermes_runtime(monkeypatch, runtime),
+    )
+
+    result = await runner.run_scenario(scenario)
+    assert result.skipped is False
+    assert len(result.surface_results) == 1
+    discord = result.surface_results[0]
+    assert discord.surface.value == "discord"
+    assert discord.execution_status == "ok"
+    transcript_texts = [str(event.text or "") for event in discord.transcript.events]
+    assert any(
+        "Token usage: total 71173 input 400 output 245" in text
+        for text in transcript_texts
+    )
+    assert any("ctx 65%" in text for text in transcript_texts)
+
+
+@pytest.mark.anyio
+async def test_runner_executes_subscription_duplicate_suppressed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scenario = load_scenario_by_id("subscription_duplicate_suppressed")
+    runner = ChatSurfaceScenarioRunner(
+        output_root=tmp_path / "scenario-runs",
+        apply_runtime_patch=lambda runtime: patch_hermes_runtime(monkeypatch, runtime),
+    )
+
+    result = await runner.run_scenario(scenario)
+    assert result.skipped is False
+    assert len(result.surface_results) == 1
+    discord = result.surface_results[0]
+    assert discord.surface.value == "discord"
+    assert discord.execution_status == "ok"
+    transcript_texts = [str(event.text or "") for event in discord.transcript.events]
+    assert not any("already handled. No action." in text for text in transcript_texts)
+    assert discord.transcript.metadata["published_route"] == "suppressed_duplicate"
+    assert discord.transcript.metadata["published_count"] == 0
+
+
+@pytest.mark.anyio
+async def test_runner_executes_subscription_followup_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scenario = load_scenario_by_id("subscription_followup_metadata")
+    runner = ChatSurfaceScenarioRunner(
+        output_root=tmp_path / "scenario-runs",
+        apply_runtime_patch=lambda runtime: patch_hermes_runtime(monkeypatch, runtime),
+    )
+
+    result = await runner.run_scenario(scenario)
+    assert result.skipped is False
+    assert len(result.surface_results) == 1
+    discord = result.surface_results[0]
+    assert discord.surface.value == "discord"
+    assert discord.execution_status == "ok"
+    transcript_texts = [str(event.text or "") for event in discord.transcript.events]
+    assert any(
+        "Queued CAR CLI dogfood turn ran in this Discord thread." in text
+        for text in transcript_texts
+    )
+    assert any(
+        "Token usage: total 71173 input 400 output 245" in text
+        for text in transcript_texts
+    )
+    assert discord.transcript.metadata["published_route"] == "explicit"
+    assert discord.transcript.metadata["published_count"] == 1
+
+
+@pytest.mark.anyio
 async def test_runner_executes_restart_window_duplicate_delivery(
     tmp_path: Path,
 ) -> None:

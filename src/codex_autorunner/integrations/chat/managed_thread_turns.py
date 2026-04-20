@@ -89,6 +89,7 @@ from ...core.time_utils import now_iso
 from ..github.managed_thread_pr_binding import self_claim_and_arm_pr_binding
 from .managed_thread_delivery import ManagedThreadDeliveryAdapter
 from .runtime_thread_errors import resolve_runtime_thread_error_detail
+from .turn_metrics import compose_turn_response_with_footer
 
 ProgressEventHandler = Callable[[Any], Awaitable[None]]
 RunWithIndicator = Callable[[Callable[[], Awaitable[None]]], Awaitable[None]]
@@ -749,10 +750,21 @@ def render_managed_thread_delivery_record_text(
     *,
     no_response_fallback: str = "(No response text returned.)",
 ) -> str:
-    return _render_managed_thread_delivery_text(
+    response_text = _render_managed_thread_delivery_text(
         assistant_text=str(record.envelope.assistant_text or "").strip(),
         session_notice=str(record.envelope.session_notice or "").strip(),
         no_response_fallback=no_response_fallback,
+    )
+    return compose_turn_response_with_footer(
+        response_text,
+        summary_text=None,
+        token_usage=(
+            dict(record.envelope.token_usage)
+            if isinstance(record.envelope.token_usage, Mapping)
+            else None
+        ),
+        elapsed_seconds=None,
+        empty_response_text=no_response_fallback,
     )
 
 
