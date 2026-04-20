@@ -152,6 +152,9 @@
       "path": "generated/streamUtils.js"
     },
     {
+      "path": "generated/systemUpdateUi.js"
+    },
+    {
       "path": "generated/tabs.js"
     },
     {
