@@ -16,6 +16,10 @@ from codex_autorunner.integrations.discord.service import DiscordBotService
 from codex_autorunner.integrations.discord.state import DiscordStateStore
 
 
+def _escaped_markdown_path(path: Path) -> str:
+    return str(path).replace("_", "\\_")
+
+
 class _FakeRest:
     def __init__(self) -> None:
         self.interaction_responses: list[dict[str, Any]] = []
@@ -211,7 +215,12 @@ async def test_pma_on_enables_pma_mode(tmp_path: Path) -> None:
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
         payload = rest.interaction_responses[0]["payload"]
-        assert "PMA mode enabled" in payload["data"]["content"]
+        content = payload["data"]["content"]
+        assert "PMA mode enabled. Previous binding saved." in content
+        assert "Started a fresh PMA session for `codex`" in content
+        assert f"Directory: {_escaped_markdown_path(tmp_path)}" in content
+        assert "Agent: codex" in content
+        assert "Thread: `" in content
 
         binding = await store.get_binding(channel_id="channel-1")
         assert binding is not None
@@ -257,8 +266,12 @@ async def test_pma_off_disables_pma_mode_and_restores_binding(tmp_path: Path) ->
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
         payload = rest.interaction_responses[0]["payload"]
-        assert "PMA mode disabled" in payload["data"]["content"]
-        assert "Restored" in payload["data"]["content"]
+        content = payload["data"]["content"]
+        assert "PMA mode disabled." in content
+        assert "Started a fresh repo session for `codex`" in content
+        assert f"Directory: {_escaped_markdown_path(workspace)}" in content
+        assert "Agent: codex" in content
+        assert "Thread: `" in content
 
         binding = await store.get_binding(channel_id="channel-1")
         assert binding is not None
@@ -323,8 +336,11 @@ async def test_pma_on_unbound_channel_auto_binds_for_pma(tmp_path: Path) -> None
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
         payload = rest.interaction_responses[0]["payload"]
-        assert "PMA mode enabled" in payload["data"]["content"]
-        assert "Use /pma off to exit." in payload["data"]["content"]
+        content = payload["data"]["content"]
+        assert "PMA mode enabled." in content
+        assert "Started a fresh PMA session for `codex`" in content
+        assert f"Directory: {_escaped_markdown_path(tmp_path)}" in content
+        assert "Thread: `" in content
 
         binding = await store.get_binding(channel_id="channel-1")
         assert binding is not None
@@ -369,9 +385,10 @@ async def test_pma_off_after_unbound_pma_on_returns_to_unbound(tmp_path: Path) -
         assert len(rest.interaction_responses) == 2
         on_payload = rest.interaction_responses[0]["payload"]["data"]["content"]
         off_payload = rest.interaction_responses[1]["payload"]["data"]["content"]
-        assert "PMA mode enabled" in on_payload
+        assert "PMA mode enabled." in on_payload
+        assert "Started a fresh PMA session for `codex`" in on_payload
         assert "PMA mode disabled" in off_payload
-        assert "Back to repo mode." in off_payload
+        assert "No saved workspace binding was available" in off_payload
 
         binding = await store.get_binding(channel_id="channel-1")
         assert binding is None

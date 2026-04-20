@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "scenario_id": "pma_mode_toggle",
+  "description": "Discord PMA mode toggles emit fresh-session status reports when entering and leaving PMA.",
+  "surfaces": [
+    "discord"
+  ],
+  "runtime_fixture": {
+    "kind": "hermes",
+    "scenario": "official"
+  },
+  "actions": [
+    {
+      "kind": "set_discord_pma_state",
+      "actor": "system",
+      "surfaces": [
+        "discord"
+      ],
+      "payload": {
+        "pma_enabled": false
+      }
+    },
+    {
+      "kind": "run_pma_interaction",
+      "actor": "user",
+      "surfaces": [
+        "discord"
+      ],
+      "payload": {
+        "interaction_id": "inter-pma-on",
+        "subcommand": "on"
+      }
+    },
+    {
+      "kind": "run_pma_interaction",
+      "actor": "user",
+      "surfaces": [
+        "discord"
+      ],
+      "payload": {
+        "interaction_id": "inter-pma-off",
+        "subcommand": "off"
+      }
+    }
+  ],
+  "transcript_invariants": [
+    {
+      "kind": "contains_text",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "text": "PMA mode enabled."
+      }
+    },
+    {
+      "kind": "contains_text",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "text": "Started a fresh PMA session for `hermes`"
+      }
+    },
+    {
+      "kind": "contains_text",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "text": "PMA mode disabled."
+      }
+    },
+    {
+      "kind": "contains_text",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "text": "Started a fresh repo session for `hermes`"
+      }
+    },
+    {
+      "kind": "text_order",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "first_text": "Started a fresh PMA session for `hermes`",
+        "second_text": "Started a fresh repo session for `hermes`"
+      }
+    },
+    {
+      "kind": "text_count_equals",
+      "surfaces": [
+        "discord"
+      ],
+      "params": {
+        "text": "Thread:",
+        "count": 2
+      }
+    }
+  ],
+  "contract_links": {
+    "references": [
+      "tests/integrations/discord/test_pma_commands.py"
+    ]
+  },
+  "tags": [
+    "discord",
+    "pma",
+    "session"
+  ]
+}
