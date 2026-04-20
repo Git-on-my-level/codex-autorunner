@@ -99,8 +99,9 @@ def _build_newt_reject_components(workspace_root: Path) -> list[dict[str, Any]]:
 def _format_submodule_summary(
     submodule_paths: list[str], *, max_examples: int = 3
 ) -> str:
-    _ = max_examples
-    return format_newt_submodule_summary("/car newt", submodule_paths)
+    return format_newt_submodule_summary(
+        "/car newt", submodule_paths, max_examples=max_examples
+    )
 
 
 def _format_newt_reject_message(
@@ -494,6 +495,32 @@ async def handle_car_newt(
             ),
             hub_client=getattr(service, "_hub_client", None),
         )
+    except NewtSetupCommandsError as exc:
+        log_event(
+            service._logger,
+            logging.WARNING,
+            "discord.newt.setup.failed",
+            channel_id=channel_id,
+            workspace_path=str(workspace_root),
+            exc=exc,
+        )
+        summary = _format_submodule_summary(list(exc.submodule_paths))
+        detail = f"{summary}\n\n" if summary else ""
+        text = format_discord_message(
+            "The workspace branch was reset, but `/car newt` failed while running "
+            "workspace setup commands.\n\n"
+            f"{detail}Reset branch: `origin/{exc.default_branch}`\n"
+            f"Reason: {exc}"
+        )
+        await _send_newt_response(
+            service,
+            interaction_id,
+            interaction_token,
+            deferred=deferred,
+            text=text,
+            component_response=False,
+        )
+        return
     except GitError as exc:
         log_event(
             service._logger,
