@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Mapping, Optional
 
@@ -50,6 +51,8 @@ ManagedThreadDeliveryCleanupFn = Callable[
     Awaitable[None],
 ]
 
+_LOGGER = logging.getLogger(__name__)
+
 
 async def deliver_managed_thread_terminal_record(
     record: Any,
@@ -77,7 +80,19 @@ async def deliver_managed_thread_terminal_record(
                 error=send_result.error,
             )
         if cleanup is not None and status in cleanup_statuses:
-            await cleanup(context)
+            try:
+                await cleanup(context)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _LOGGER.warning(
+                    "Post-delivery cleanup failed after terminal send (best-effort; "
+                    "delivery still counted as succeeded): delivery_id=%s thread=%s turn=%s",
+                    context.delivery_id,
+                    context.managed_thread_id,
+                    context.managed_turn_id,
+                    exc_info=True,
+                )
     except asyncio.CancelledError:
         raise
     except Exception as exc:

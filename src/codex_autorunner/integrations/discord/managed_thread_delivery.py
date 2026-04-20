@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 from typing import Any, Optional
 
-from ...core.logging_utils import log_event
 from ...core.orchestration import (
     ManagedThreadDeliveryAttemptResult,
     ManagedThreadDeliveryOutcome,
@@ -114,23 +112,7 @@ async def deliver_discord_managed_thread_record(
         if not callable(flush):
             return
         workspace_root = Path(raw_path)
-        try:
-            await flush(workspace_root=workspace_root, channel_id=target_channel_id)
-        except (
-            Exception
-        ) as exc:  # intentional: do not surface cleanup failures after reply
-            logger = getattr(service, "_logger", None)
-            if logger is not None:
-                log_event(
-                    logger,
-                    logging.WARNING,
-                    "discord.managed_thread.delivery_cleanup_failed",
-                    channel_id=target_channel_id,
-                    workspace_root=str(workspace_root),
-                    managed_thread_id=record.managed_thread_id,
-                    managed_turn_id=record.managed_turn_id,
-                    exc=exc,
-                )
+        await flush(workspace_root=workspace_root, channel_id=target_channel_id)
 
     return await deliver_managed_thread_terminal_record(
         record,
