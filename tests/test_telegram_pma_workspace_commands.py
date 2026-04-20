@@ -1,5 +1,14 @@
 # ruff: noqa: F401
 
+from tests.integrations.telegram.test_newt_workspace_commands import (
+    test_newt_branch_name_includes_chat_identity,
+    test_newt_dirty_worktree_reports_blockers_with_submodule_context,
+    test_newt_infers_base_repo_from_legacy_wt_worktree_id,
+    test_newt_infers_base_repo_from_worktree_id_when_missing_metadata,
+    test_newt_prefers_longest_manifest_base_match_for_worktree_id,
+    test_newt_runs_hub_setup_commands_for_workspace,
+    test_newt_thread_fallback_and_workspace_state_reset,
+)
 from tests.telegram_pma_routing_support import (
     test_apply_compact_summary_preserves_pma_mode_for_replacement_thread,
     test_apply_compact_summary_uses_shared_lifecycle_before_topic_mirror_update,
@@ -7,12 +16,6 @@ from tests.telegram_pma_routing_support import (
     test_archive_without_hub_root_does_not_substitute_workspace_root,
     test_help_text_mentions_pma_mode,
     test_mcp_lists_failure_message_on_app_server_response_error,
-    test_newt_branch_name_includes_chat_identity,
-    test_newt_infers_base_repo_from_legacy_wt_worktree_id,
-    test_newt_infers_base_repo_from_worktree_id_when_missing_metadata,
-    test_newt_prefers_longest_manifest_base_match_for_worktree_id,
-    test_newt_runs_hub_setup_commands_for_workspace,
-    test_newt_thread_fallback_and_workspace_state_reset,
     test_pma_new_resets_managed_binding_when_runtime_threads_enabled,
     test_pma_new_resets_scoped_key_when_require_topics_enabled,
     test_pma_new_resets_session,

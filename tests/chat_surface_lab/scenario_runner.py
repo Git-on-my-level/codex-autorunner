@@ -123,6 +123,7 @@ class ScenarioDefinition:
     execution_mode: str = "surface_harness"
     harness_timeouts: dict[SurfaceKind, float] = field(default_factory=dict)
     approval_mode: Optional[str] = None
+    surface_setup: dict[SurfaceKind, dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -398,6 +399,9 @@ class ChatSurfaceScenarioRunner:
         await context.harness.setup(
             agent="hermes",
             approval_mode=scenario.approval_mode,
+            pma_enabled=bool(
+                scenario.surface_setup.get(context.surface, {}).get("pma_enabled", True)
+            ),
         )
 
     def _resolve_current_thread_target_id(
@@ -965,7 +969,11 @@ class ChatSurfaceScenarioRunner:
             interaction_id = str(action.payload.get("interaction_id") or "inter-1")
             rest_client = context.rest_client or FakeDiscordRest()
             context.rest_client = rest_client
-            payload = _discord_status_interaction(interaction_id)
+            payload = _discord_command_interaction(
+                interaction_id=interaction_id,
+                command_name="car",
+                subcommand_name="status",
+            )
             context.result = await context.harness.run_gateway_events(
                 [("INTERACTION_CREATE", payload)],
                 rest_client=rest_client,
@@ -1007,9 +1015,9 @@ class ChatSurfaceScenarioRunner:
             rest_client = context.rest_client or FakeDiscordRest()
             context.rest_client = rest_client
             payload = _discord_command_interaction(
-                interaction_id,
+                interaction_id=interaction_id,
                 command_name="pma",
-                subcommand=subcommand,
+                subcommand_name=subcommand,
             )
             context.result = await context.harness.run_gateway_events(
                 [("INTERACTION_CREATE", payload)],
@@ -1025,7 +1033,11 @@ class ChatSurfaceScenarioRunner:
             rest_client = context.rest_client or FakeDiscordRest()
             context.rest_client = rest_client
             rest_client.enable_duplicate_interaction(interaction_id)
-            payload = _discord_status_interaction(interaction_id)
+            payload = _discord_command_interaction(
+                interaction_id=interaction_id,
+                command_name="car",
+                subcommand_name="status",
+            )
             events = [
                 ("INTERACTION_CREATE", delivered)
                 for delivered in rest_client.expand_interaction_delivery(payload)
@@ -1093,6 +1105,66 @@ class ChatSurfaceScenarioRunner:
             context.harness.bot.enable_duplicate_update(update_id)
             for delivered in context.harness.bot.expand_update_delivery(update):
                 await context.harness.service._dispatch_update(delivered)
+            await drain_telegram_spawned_tasks(context.harness.service)
+            context.harness._apply_telegram_runtime_metadata(
+                context.harness.bot,
+                thread_id=thread_id,
+                message_start_index=0,
+            )
+            context.result = context.harness.bot
+            return
+
+        if action.kind == "run_command_interaction":
+            if context.surface != SurfaceKind.DISCORD:
+                return
+            assert isinstance(context.harness, DiscordSurfaceHarness)
+            interaction_id = str(action.payload.get("interaction_id") or "inter-1")
+            command_name = str(action.payload.get("command_name") or "").strip()
+            if not command_name:
+                raise AssertionError(
+                    "run_command_interaction requires payload.command_name"
+                )
+            subcommand_name = self._normalize_optional_text(
+                action.payload.get("subcommand_name")
+            )
+            rest_client = context.rest_client or FakeDiscordRest()
+            payload = _discord_command_interaction(
+                interaction_id=interaction_id,
+                command_name=command_name,
+                subcommand_name=subcommand_name,
+            )
+            context.result = await context.harness.run_gateway_events(
+                [("INTERACTION_CREATE", payload)],
+                rest_client=rest_client,
+            )
+            return
+
+        if action.kind == "run_command_update":
+            if context.surface != SurfaceKind.TELEGRAM:
+                return
+            assert isinstance(context.harness, TelegramSurfaceHarness)
+            if context.harness.service is None or context.harness.bot is None:
+                raise AssertionError("Telegram harness is not initialized")
+            text = str(action.payload.get("text") or "").strip()
+            if not text:
+                raise AssertionError("run_command_update requires payload.text")
+            update_id = _optional_int(action.payload.get("update_id"), default=77)
+            thread_id = _optional_int(
+                action.payload.get("thread_id"),
+                default=DEFAULT_TELEGRAM_THREAD_ID,
+            )
+            context.telegram_thread_id = thread_id
+            update = TelegramUpdate(
+                update_id=update_id,
+                message=build_telegram_message(
+                    text,
+                    thread_id=thread_id,
+                    message_id=update_id,
+                    update_id=update_id,
+                ),
+                callback=None,
+            )
+            await context.harness.service._dispatch_update(update)
             await drain_telegram_spawned_tasks(context.harness.service)
             context.harness._apply_telegram_runtime_metadata(
                 context.harness.bot,
@@ -1334,6 +1406,7 @@ def load_scenario(path: Path) -> ScenarioDefinition:
     execution_mode = str(raw.get("execution_mode") or "surface_harness").strip()
     harness_timeouts = _parse_harness_timeouts(raw.get("harness_timeouts"), path=path)
     approval_mode = _normalize_optional_string(raw.get("approval_mode"))
+    surface_setup = _parse_surface_setup(raw.get("surface_setup"), path=path)
 
     return ScenarioDefinition(
         scenario_id=scenario_id,
@@ -1351,6 +1424,7 @@ def load_scenario(path: Path) -> ScenarioDefinition:
         execution_mode=execution_mode,
         harness_timeouts=harness_timeouts,
         approval_mode=approval_mode,
+        surface_setup=surface_setup,
     )
 
 
@@ -1607,6 +1681,23 @@ def _parse_string_tuple(raw: Any) -> tuple[str, ...]:
     return tuple(values)
 
 
+def _parse_surface_setup(raw: Any, *, path: Path) -> dict[SurfaceKind, dict[str, Any]]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError(f"{path}: surface_setup must be an object")
+    parsed: dict[SurfaceKind, dict[str, Any]] = {}
+    for key, value in raw.items():
+        try:
+            surface = SurfaceKind(str(key))
+        except ValueError as exc:
+            raise ValueError(f"{path}: unsupported surface_setup key {key!r}") from exc
+        if not isinstance(value, dict):
+            raise ValueError(f"{path}: surface_setup[{key}] must be an object")
+        parsed[surface] = dict(value)
+    return parsed
+
+
 def _required_string(raw: dict[str, Any], key: str, *, path: Path) -> str:
     value = raw.get(key)
     if not isinstance(value, str):
@@ -1822,20 +1913,17 @@ def _build_automation_route_client(
     return TestClient(app)
 
 
-def _discord_status_interaction(interaction_id: str) -> dict[str, Any]:
-    return _discord_command_interaction(
-        interaction_id,
-        command_name="car",
-        subcommand="status",
-    )
-
-
 def _discord_command_interaction(
-    interaction_id: str,
     *,
+    interaction_id: str,
     command_name: str,
-    subcommand: str,
+    subcommand_name: Optional[str] = None,
 ) -> dict[str, Any]:
+    options: list[dict[str, Any]]
+    if subcommand_name:
+        options = [{"type": 1, "name": subcommand_name, "options": []}]
+    else:
+        options = []
     return {
         "id": interaction_id,
         "token": f"{interaction_id}-token",
@@ -1844,7 +1932,7 @@ def _discord_command_interaction(
         "member": {"user": {"id": "user-1"}},
         "data": {
             "name": command_name,
-            "options": [{"type": 1, "name": subcommand, "options": []}],
+            "options": options,
         },
     }
 
