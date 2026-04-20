@@ -175,7 +175,13 @@ def git_submodule_paths(repo_root: Path) -> list[str]:
         return []
     try:
         proc = run_git(
-            ["config", "--file", ".gitmodules", "--get-regexp", "path"],
+            [
+                "config",
+                "--file",
+                ".gitmodules",
+                "--get-regexp",
+                r"^submodule\..*\.path$",
+            ],
             repo_root,
             check=False,
         )
@@ -414,7 +420,7 @@ def sync_submodules_to_head(repo_root: Path) -> None:
     if not git_has_submodules(repo_root):
         return
     run_git(
-        ["submodule", "update", "--init", "--recursive", "--checkout", "--force"],
+        ["submodule", "update", "--recursive", "--checkout", "--force"],
         repo_root,
         timeout_seconds=180,
         check=True,

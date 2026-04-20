@@ -157,7 +157,6 @@ def test_reset_branch_from_origin_main_syncs_submodules_when_present(
         if args == [
             "submodule",
             "update",
-            "--init",
             "--recursive",
             "--checkout",
             "--force",
@@ -179,7 +178,6 @@ def test_reset_branch_from_origin_main_syncs_submodules_when_present(
             [
                 "submodule",
                 "update",
-                "--init",
                 "--recursive",
                 "--checkout",
                 "--force",
@@ -249,6 +247,20 @@ def test_git_submodule_paths_reads_gitmodules(tmp_path: Path) -> None:
     assert git_utils.git_submodule_paths(repo_root) == ["vendor/sdk", "docs/theme"]
 
 
+def test_git_submodule_paths_matches_only_path_keys_not_urls(tmp_path: Path) -> None:
+    """Submodule names like `path-tools` made a loose `path` regexp match `.url` keys."""
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    (repo_root / ".gitmodules").write_text(
+        '[submodule "path-tools"]\n'
+        "\tpath = vendor/path-tools\n"
+        "\turl = https://example.com/tools.git\n",
+        encoding="utf-8",
+    )
+
+    assert git_utils.git_submodule_paths(repo_root) == ["vendor/path-tools"]
+
+
 def test_reset_worktree_to_head_resets_submodules_when_present(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -282,7 +294,6 @@ def test_reset_worktree_to_head_resets_submodules_when_present(
             [
                 "submodule",
                 "update",
-                "--init",
                 "--recursive",
                 "--checkout",
                 "--force",
