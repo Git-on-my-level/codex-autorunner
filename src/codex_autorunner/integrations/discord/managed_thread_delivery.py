@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import Any, Optional
 
+from ...core.logging_utils import log_event
 from ...core.orchestration import (
     ManagedThreadDeliveryAttemptResult,
     ManagedThreadDeliveryOutcome,
@@ -83,11 +85,29 @@ async def deliver_discord_managed_thread_record(
                 outcome=ManagedThreadDeliveryOutcome.FAILED,
                 error=str(exc) or exc.__class__.__name__,
             )
-        await _flush_delivery_outbox_files(
-            service,
-            workspace_root=workspace_root,
-            channel_id=target_channel_id,
-        )
+        try:
+            await _flush_delivery_outbox_files(
+                service,
+                workspace_root=workspace_root,
+                channel_id=target_channel_id,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # intentional: do not surface cleanup failures after reply
+            logger = getattr(service, "_logger", None)
+            if logger is not None:
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    "discord.managed_thread.delivery_cleanup_failed",
+                    channel_id=target_channel_id,
+                    workspace_root=(
+                        str(workspace_root) if workspace_root is not None else None
+                    ),
+                    managed_thread_id=record.managed_thread_id,
+                    managed_turn_id=record.managed_turn_id,
+                    exc=exc,
+                )
         return ManagedThreadDeliveryAttemptResult(
             outcome=ManagedThreadDeliveryOutcome.DELIVERED,
             adapter_cursor={"chunk_count": len(chunks)},
@@ -121,11 +141,29 @@ async def deliver_discord_managed_thread_record(
             outcome=ManagedThreadDeliveryOutcome.FAILED,
             error=str(exc) or exc.__class__.__name__,
         )
-    await _flush_delivery_outbox_files(
-        service,
-        workspace_root=workspace_root,
-        channel_id=target_channel_id,
-    )
+    try:
+        await _flush_delivery_outbox_files(
+            service,
+            workspace_root=workspace_root,
+            channel_id=target_channel_id,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # intentional: do not surface cleanup failures after reply
+        logger = getattr(service, "_logger", None)
+        if logger is not None:
+            log_event(
+                logger,
+                logging.WARNING,
+                "discord.managed_thread.delivery_cleanup_failed",
+                channel_id=target_channel_id,
+                workspace_root=(
+                    str(workspace_root) if workspace_root is not None else None
+                ),
+                managed_thread_id=record.managed_thread_id,
+                managed_turn_id=record.managed_turn_id,
+                exc=exc,
+            )
     return ManagedThreadDeliveryAttemptResult(
         outcome=ManagedThreadDeliveryOutcome.DELIVERED
     )
