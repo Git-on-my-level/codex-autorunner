@@ -64,22 +64,17 @@ async def test_discord_hermes_pma_uses_official_placeholder_lifecycle(
         )
         assert done_edit["payload"]["components"] == []
 
-        delete_index = next(
-            index
-            for index, op in enumerate(rest.message_ops)
-            if op["op"] == "delete" and str(op["message_id"]) == progress_message_id
+        # Ordering may vary with durable delivery; assert both ops occur.
+        assert any(
+            op["op"] == "delete" and str(op["message_id"]) == progress_message_id
+            for op in rest.message_ops
         )
-        reply_index = next(
-            index
-            for index, op in enumerate(rest.message_ops)
-            if op["op"] == "send"
+        assert any(
+            op["op"] == "send"
             and str(op["message_id"]) != progress_message_id
             and "fixture reply" in str(op["payload"].get("content", ""))
+            for op in rest.message_ops
         )
-
-        # Durable delivery may publish the terminal reply just before the progress
-        # placeholder deletion lands; the user-visible invariant is that both happen.
-        assert delete_index != reply_index
     finally:
         await harness.close()
         await runtime.close()
