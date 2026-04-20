@@ -106,8 +106,10 @@ class TestPmaModelsCapabilityCheck:
 
 
 class TestPmaThreadSpawnCapabilityCheck:
-    @patch("codex_autorunner.surfaces.cli.pma_cli._fetch_agent_capabilities")
-    @patch("codex_autorunner.surfaces.cli.pma_cli.load_hub_config")
+    @patch(
+        "codex_autorunner.surfaces.cli.pma_thread_commands._fetch_agent_capabilities"
+    )
+    @patch("codex_autorunner.surfaces.cli.pma_thread_commands.load_hub_config")
     def test_thread_spawn_fails_for_agent_without_durable_threads(
         self, mock_config, mock_caps
     ):
