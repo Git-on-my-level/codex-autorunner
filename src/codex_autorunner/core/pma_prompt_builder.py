@@ -373,9 +373,12 @@ def render_pma_prompt(
     delta_reason: str,
     prior_sections: Optional[Mapping[str, Any]],
     prior_updated_at: Optional[str],
+    force_full_base_prompt: bool = False,
 ) -> str:
+    # Delta turns omit repeating prompt.md unless we explicitly reinject it (e.g. the
+    # backend opened a fresh runtime conversation mid-session).
     prompt = ""
-    if not use_delta and base_prompt:
+    if base_prompt and (not use_delta or force_full_base_prompt):
         prompt += f"{base_prompt}\n\n"
     if not use_delta:
         prompt += discoverability_text

@@ -74,6 +74,7 @@ def format_pma_prompt(
     *,
     prompt_state_key: Optional[str] = None,
     force_full_context: bool = False,
+    force_full_base_prompt: bool = False,
 ) -> str:
     limits = PmaPromptRenderLimits.from_snapshot(snapshot)
     snapshot_text = _render_hub_snapshot(
@@ -133,6 +134,7 @@ def format_pma_prompt(
         delta_reason=delta_reason,
         prior_sections=prior_sections,
         prior_updated_at=prior_updated_at,
+        force_full_base_prompt=force_full_base_prompt,
     )
 
 

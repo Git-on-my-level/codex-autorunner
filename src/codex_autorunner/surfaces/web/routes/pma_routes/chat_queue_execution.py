@@ -208,21 +208,27 @@ async def execute_queue_item(
 
         snapshot = await snapshot_builder(supervisor, hub_root=hub_root)
         prompt_state_key = pma_base_key(agent_id, profile)
-        prompt = format_pma_prompt(
-            prompt_base,
-            snapshot,
-            message,
-            hub_root=hub_root,
-            prompt_state_key=prompt_state_key,
-        )
-        prompt, _ = await github_context_injector(
-            prompt_text=prompt,
-            link_source_text=message,
-            workspace_root=hub_root,
-            logger=logger,
-            event_prefix="web.pma.github_context",
-            allow_cross_repo=True,
-        )
+
+        async def _rebuild_prompt(force_full_base_prompt: bool) -> str:
+            built = format_pma_prompt(
+                prompt_base,
+                snapshot,
+                message,
+                hub_root=hub_root,
+                prompt_state_key=prompt_state_key,
+                force_full_base_prompt=force_full_base_prompt,
+            )
+            injected, _ = await github_context_injector(
+                prompt_text=built,
+                link_source_text=message,
+                workspace_root=hub_root,
+                logger=logger,
+                event_prefix="web.pma.github_context",
+                allow_cross_repo=True,
+            )
+            return injected
+
+        prompt = await _rebuild_prompt(False)
     except (
         OSError,
         ValueError,
@@ -326,6 +332,7 @@ async def execute_queue_item(
             thread_key=pma_base_key(agent_id, profile),
             on_meta=_meta,
             timeout_seconds=turn_timeout_seconds,
+            rebuild_prompt=_rebuild_prompt,
         )
 
     try:

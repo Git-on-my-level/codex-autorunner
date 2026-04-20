@@ -1944,6 +1944,48 @@ class TestIssue975DeltaPmaPromptAssembly:
         assert "PMA Action Queue:" in result2
         assert "recommended_action=reply_and_resume" in result2
 
+    def test_format_pma_prompt_force_full_base_prompt_reinjects_prompt_md_on_delta_turn(
+        self, tmp_path: Path
+    ) -> None:
+        """Fresh backend conversation during delta should still see prompt.md body."""
+        seed_hub_files(tmp_path, force=True)
+
+        snapshot = {
+            "generated_at": "2026-03-16T00:00:00Z",
+            "action_queue": [],
+            "inbox": [],
+            "repos": [],
+            "pma_files": {"inbox": [], "outbox": []},
+            "pma_files_detail": {"inbox": [], "outbox": []},
+        }
+
+        _ = format_pma_prompt(
+            "Stable prompt.md instructions for PMA.",
+            snapshot,
+            "Turn 1",
+            hub_root=tmp_path,
+            prompt_state_key="pma.test-fresh-base",
+        )
+        delta = format_pma_prompt(
+            "Stable prompt.md instructions for PMA.",
+            snapshot,
+            "Turn 2",
+            hub_root=tmp_path,
+            prompt_state_key="pma.test-fresh-base",
+        )
+        assert "Stable prompt.md instructions for PMA." not in delta
+
+        with_base = format_pma_prompt(
+            "Stable prompt.md instructions for PMA.",
+            snapshot,
+            "Turn 2",
+            hub_root=tmp_path,
+            prompt_state_key="pma.test-fresh-base",
+            force_full_base_prompt=True,
+        )
+        assert "Stable prompt.md instructions for PMA." in with_base
+        assert "<pma_fastpath>" not in with_base
+
     def test_format_pma_prompt_delta_surfaces_only_changed_docs(
         self, tmp_path: Path
     ) -> None:
