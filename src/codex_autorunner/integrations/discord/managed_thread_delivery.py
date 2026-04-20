@@ -12,16 +12,16 @@ from ...core.orchestration import (
     ManagedThreadDeliveryOutcome,
     SQLiteManagedThreadDeliveryEngine,
 )
-from ..chat.managed_thread_delivery_support import (
-    ManagedThreadDeliveryCleanupContext,
-    ManagedThreadDeliverySendResult,
-    deliver_managed_thread_terminal_record,
-)
 from ...integrations.chat.managed_thread_turns import (
     ManagedThreadDurableDeliveryHooks,
     ManagedThreadSurfaceInfo,
     build_managed_thread_delivery_intent,
     render_managed_thread_delivery_record_text,
+)
+from ..chat.managed_thread_delivery_support import (
+    ManagedThreadDeliveryCleanupContext,
+    ManagedThreadDeliverySendResult,
+    deliver_managed_thread_terminal_record,
 )
 from .constants import DISCORD_MAX_MESSAGE_LENGTH
 from .rendering import chunk_discord_message, format_discord_message
