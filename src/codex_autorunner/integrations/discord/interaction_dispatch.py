@@ -1,8 +1,15 @@
-"""Post-admission Discord interaction execution.
+"""Post-admission Discord interaction execution dispatch.
 
-This module assumes the runtime admission path already normalized the payload,
-performed authz checks, and applied any required initial acknowledgement or
-defer policy.
+This module owns the execution dispatch that runs inside the CommandRunner.
+The full lifecycle is:
+
+  1.  Ingress normalizes, authorizes, and resolves command spec  (ingress.py)
+  2.  ``schedule_ingressed_interaction`` acks, persists, and submits the
+      interaction to the CommandRunner                          (interaction_scheduler.py)
+  3.  CommandRunner calls ``execute_ingressed_interaction``     (this file)
+
+The service object is passed as ``Any`` because the protocol surface is large
+and still evolving; the required methods are documented on each function.
 """
 
 from __future__ import annotations
@@ -13,7 +20,10 @@ from typing import Any
 from ...core.logging_utils import log_event
 from .effects import DiscordEffectDeliveryError
 from .errors import DiscordTransientError
-from .ingress import IngressContext, InteractionKind
+from .ingress import (
+    IngressContext,
+    InteractionKind,
+)
 from .interaction_registry import (
     dispatch_component_interaction,
     dispatch_modal_submit,
