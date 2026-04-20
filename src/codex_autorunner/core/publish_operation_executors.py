@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import threading
 from collections.abc import Mapping
 from pathlib import Path
@@ -22,6 +23,8 @@ from .publish_journal import PublishOperation
 from .scm_events import ScmEvent, ScmEventStore
 from .scm_observability import correlation_id_for_operation, correlation_id_from_payload
 from .text_utils import _coerce_int, _normalize_optional_text
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _require_text(value: Any, *, field_name: str) -> str:
@@ -184,6 +187,12 @@ def _active_thread_record(
     if lifecycle_status != "active":
         return None, thread
     return normalized_thread_target_id, thread
+
+
+def _thread_runtime_status(thread: Optional[Mapping[str, Any]]) -> Optional[str]:
+    if not isinstance(thread, Mapping):
+        return None
+    return _normalize_optional_text(thread.get("normalized_status"))
 
 
 def _resolve_manifest_workspace(
@@ -392,10 +401,11 @@ def _repair_scm_thread_binding(
     current_thread_target_id: str,
     request: MessageRequest,
     tracking: Mapping[str, Any],
+    source_status: Optional[str] = None,
 ) -> tuple[str, MessageRequest]:
     binding = _resolve_scm_binding(hub_root, tracking=tracking)
     if binding is None:
-        raise ManagedThreadNotActiveError(current_thread_target_id, None)
+        raise ManagedThreadNotActiveError(current_thread_target_id, source_status)
     source_thread = store.get_thread(current_thread_target_id)
     workspace_root = _resolve_scm_workspace_root(
         hub_root,
@@ -403,7 +413,7 @@ def _repair_scm_thread_binding(
         source_thread=source_thread,
     )
     if workspace_root is None:
-        raise ManagedThreadNotActiveError(current_thread_target_id, None)
+        raise ManagedThreadNotActiveError(current_thread_target_id, source_status)
     try:
         default_agent = load_hub_config(hub_root).pma.default_agent
     except (OSError, ValueError):
@@ -519,6 +529,13 @@ def build_enqueue_managed_turn_executor(*, hub_root: Path) -> PublishActionExecu
                 existed=True,
                 correlation_id=correlation_id,
             )
+        runtime_status = _thread_runtime_status(_active_thread)
+        log_context = (
+            correlation_id,
+            _normalize_optional_text(tracking.get("binding_id")),
+            _normalize_optional_text(tracking.get("repo_slug")),
+            _coerce_int(tracking.get("pr_number")),
+        )
 
         request, sandbox_policy = _managed_turn_request(thread_target_id, payload)
         queue_payload = {
@@ -528,6 +545,15 @@ def build_enqueue_managed_turn_executor(*, hub_root: Path) -> PublishActionExecu
         }
         rebound_from_thread_target_id: Optional[str] = None
         try:
+            if tracking and runtime_status not in {None, "idle"}:
+                _LOGGER.info(
+                    "scm.enqueue_managed_turn.reusing_thread "
+                    "thread_target_id=%s lifecycle_status=active normalized_status=%s "
+                    "correlation_id=%s binding_id=%s repo_slug=%s pr_number=%s",
+                    thread_target_id,
+                    runtime_status,
+                    *log_context,
+                )
             created = store.create_turn(
                 thread_target_id,
                 prompt=request.message_text,
@@ -538,21 +564,38 @@ def build_enqueue_managed_turn_executor(*, hub_root: Path) -> PublishActionExecu
                 client_turn_id=client_request_id,
                 queue_payload=queue_payload,
             )
-        except ManagedThreadNotActiveError:
+        except ManagedThreadNotActiveError as exc:
             if not tracking:
                 raise
             rebound_from_thread_target_id = thread_target_id
+            _LOGGER.info(
+                "scm.enqueue_managed_turn.rebinding_thread "
+                "previous_thread_target_id=%s status=%s "
+                "correlation_id=%s binding_id=%s repo_slug=%s pr_number=%s",
+                thread_target_id,
+                exc.status,
+                *log_context,
+            )
             thread_target_id, request = _repair_scm_thread_binding(
                 hub_root,
                 store,
                 current_thread_target_id=thread_target_id,
                 request=request,
                 tracking=tracking,
+                source_status=exc.status,
             )
             existing = store.get_turn_by_client_turn_id(
                 thread_target_id, client_request_id
             )
             if existing is not None:
+                _LOGGER.info(
+                    "scm.enqueue_managed_turn.rebound_to_existing_turn "
+                    "previous_thread_target_id=%s thread_target_id=%s "
+                    "correlation_id=%s binding_id=%s repo_slug=%s pr_number=%s",
+                    rebound_from_thread_target_id,
+                    thread_target_id,
+                    *log_context,
+                )
                 result = _managed_turn_result(
                     thread_target_id=thread_target_id,
                     client_request_id=client_request_id,
@@ -576,6 +619,14 @@ def build_enqueue_managed_turn_executor(*, hub_root: Path) -> PublishActionExecu
                 reasoning=request.reasoning,
                 client_turn_id=client_request_id,
                 queue_payload=queue_payload,
+            )
+            _LOGGER.info(
+                "scm.enqueue_managed_turn.rebound_thread "
+                "previous_thread_target_id=%s thread_target_id=%s "
+                "correlation_id=%s binding_id=%s repo_slug=%s pr_number=%s",
+                rebound_from_thread_target_id,
+                thread_target_id,
+                *log_context,
             )
         result = _managed_turn_result(
             thread_target_id=thread_target_id,
