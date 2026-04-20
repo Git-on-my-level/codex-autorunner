@@ -1,3 +1,12 @@
+"""Discord message-turn lifecycle orchestration.
+
+Owns: message-turn dispatch, turn execution, turn delivery, flow reply
+handling, managed thread coordination, and the main message event entry point.
+
+Imports and re-exports progress-lease functions from .progress_leases for
+backward compatibility.
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -47,7 +56,6 @@ from ...core.pma_notification_store import (
     build_notification_context_block,
     notification_surface_key,
 )
-from ...core.ports.run_event import TokenUsage
 from ...core.utils import canonicalize_path
 from ...integrations.chat.approval_modes import resolve_approval_mode_policies
 from ...integrations.chat.chat_ux_telemetry import (
@@ -85,7 +93,6 @@ from ..chat.managed_turn_runner import (
 )
 from ..chat.progress_primitives import TurnProgressTracker
 from ..chat.turn_metrics import (
-    _extract_context_usage_percent,
     compose_turn_response_with_footer,
 )
 from .components import (
@@ -110,8 +117,10 @@ from .managed_thread_routing import (
     resolve_discord_thread_target,
 )
 from .progress_leases import (  # noqa: F401  re-export for backward compat
+    _DISCORD_PROGRESS_LIVE_STATES,
     DiscordTurnStartupFailure,
     _acknowledge_discord_progress_reuse,
+    _apply_discord_progress_run_event,
     _claim_discord_reusable_progress_message,
     _delete_discord_progress_lease,
     _DiscordOrchestrationState,
@@ -160,8 +169,6 @@ DISCORD_MANAGED_THREAD_SUBMISSION_TIMEOUT_SECONDS = 45.0
 DISCORD_PMA_PROGRESS_MAX_ACTIONS = 12
 DISCORD_PMA_PROGRESS_MIN_EDIT_INTERVAL_SECONDS = 1.0
 DISCORD_PMA_PROGRESS_HEARTBEAT_INTERVAL_SECONDS = 2.0
-_DISCORD_PROGRESS_LIVE_STATES = frozenset({"pending", "active"})
-_DISCORD_PROGRESS_RECONCILABLE_STATES = frozenset({"pending", "active", "retiring"})
 
 
 _sanitize_runtime_thread_result_error = sanitize_runtime_thread_error
@@ -301,27 +308,6 @@ def _resolve_discord_turn_policies(
         override_sandbox_policy=explicit_sandbox_policy,
     )
     return approval_policy or default_approval_policy, sandbox_policy
-
-
-async def _apply_discord_progress_run_event(
-    projector: ManagedThreadProgressProjector,
-    run_event: Any,
-    *,
-    edit_progress: Any,
-) -> None:
-    if isinstance(run_event, TokenUsage):
-        usage_payload = run_event.usage
-        if isinstance(usage_payload, dict):
-            projector.note_context_usage(_extract_context_usage_percent(usage_payload))
-        return
-    outcome = projector.apply_run_event(run_event)
-    if not outcome.changed:
-        return
-    await edit_progress(
-        force=outcome.force,
-        remove_components=outcome.remove_components,
-        render_mode=outcome.render_mode,
-    )
 
 
 async def resolve_bound_workspace_root(

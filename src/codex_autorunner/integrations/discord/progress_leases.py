@@ -1,3 +1,10 @@
+"""Discord turn progress lease management and reconciliation.
+
+Owns: progress lease CRUD, progress reuse requests, supervision tracking,
+background task spawning, progress message retirement, lease reconciliation,
+and progress run event application.
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -6,6 +13,11 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Optional, cast
 
+from ...core.ports.run_event import TokenUsage
+from ..chat.managed_thread_progress_projector import (
+    ManagedThreadProgressProjector,
+)
+from ..chat.turn_metrics import _extract_context_usage_percent
 from .errors import (
     DiscordPermanentError,
     DiscordTransientError,
@@ -488,6 +500,27 @@ def _shutdown_progress_note() -> str:
     return (
         "Status: this progress message was interrupted during Discord shutdown and "
         "is no longer live. Please retry if needed."
+    )
+
+
+async def _apply_discord_progress_run_event(
+    projector: ManagedThreadProgressProjector,
+    run_event: Any,
+    *,
+    edit_progress: Any,
+) -> None:
+    if isinstance(run_event, TokenUsage):
+        usage_payload = run_event.usage
+        if isinstance(usage_payload, dict):
+            projector.note_context_usage(_extract_context_usage_percent(usage_payload))
+        return
+    outcome = projector.apply_run_event(run_event)
+    if not outcome.changed:
+        return
+    await edit_progress(
+        force=outcome.force,
+        remove_components=outcome.remove_components,
+        render_mode=outcome.render_mode,
     )
 
 
