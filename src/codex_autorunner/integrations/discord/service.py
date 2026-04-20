@@ -3646,6 +3646,7 @@ class DiscordBotService:
         managed_thread_surface_key: Optional[str] = None,
         suppress_managed_thread_delivery: bool = False,
         supervision: Optional[Any] = None,
+        existing_session_prompt_text: Optional[str] = None,
         chat_ux_snapshot: Optional[Any] = None,
     ) -> DiscordMessageTurnResult:
         async def _run_turn() -> DiscordMessageTurnResult:
@@ -3664,6 +3665,7 @@ class DiscordBotService:
                     managed_thread_surface_key=managed_thread_surface_key,
                     suppress_managed_thread_delivery=suppress_managed_thread_delivery,
                     supervision=supervision,
+                    existing_session_prompt_text=existing_session_prompt_text,
                     chat_ux_snapshot=chat_ux_snapshot,
                 )
             return await run_agent_turn_for_message(
