@@ -240,6 +240,50 @@ async def test_opencode_question_runtime_supports_multiple_turns_per_conversatio
 
 
 @pytest.mark.anyio
+async def test_opencode_question_runtime_scopes_overlapping_turn_controls(
+    tmp_path: Path,
+) -> None:
+    runtime = OpenCodeFixtureRuntime(scenario="question")
+    await _start_runtime(runtime, _workspace_root(tmp_path, "opencode-overlap-turns"))
+    try:
+        conversation_id = await runtime.create_conversation()
+
+        first_turn_id = await runtime.start_turn(conversation_id, "first overlap")
+        second_turn_id = await runtime.start_turn(conversation_id, "second overlap")
+        assert second_turn_id != first_turn_id
+
+        first_question = await runtime.wait_for_event(
+            lambda event: event.kind == "control.question_requested"
+            and event.turn_id == first_turn_id,
+            timeout=8.0,
+        )
+        second_question = await runtime.wait_for_event(
+            lambda event: event.kind == "control.question_requested"
+            and event.turn_id == second_turn_id,
+            timeout=8.0,
+        )
+        assert first_question.control_id != second_question.control_id
+
+        await runtime.respond_to_control(first_question.control_id, [["pytest"]])
+        await runtime.respond_to_control(second_question.control_id, [["unittest"]])
+
+        first_terminal = await runtime.wait_for_event(
+            lambda event: event.kind == "turn.terminal"
+            and event.turn_id == first_turn_id,
+            timeout=8.0,
+        )
+        second_terminal = await runtime.wait_for_event(
+            lambda event: event.kind == "turn.terminal"
+            and event.turn_id == second_turn_id,
+            timeout=8.0,
+        )
+        assert first_terminal.status == "completed"
+        assert second_terminal.status == "completed"
+    finally:
+        await _shutdown_runtime(runtime)
+
+
+@pytest.mark.anyio
 async def test_opencode_runtime_smoke_starts_fixture_server(
     tmp_path: Path,
 ) -> None:

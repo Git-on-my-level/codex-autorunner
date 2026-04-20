@@ -170,14 +170,24 @@ class _FakeOpenCodeState:
         for subscriber in subscribers:
             subscriber.put(dict(payload))
 
-    def prompt_async(self, session_id: str, prompt_text: str) -> dict[str, Any]:
+    def prompt_async(
+        self,
+        session_id: str,
+        prompt_text: str,
+        *,
+        turn_id: Optional[str] = None,
+    ) -> dict[str, Any]:
         user_message_id = f"user-{uuid.uuid4().hex[:8]}"
         assistant_message_id = f"assistant-{uuid.uuid4().hex[:8]}"
+        turn_props = (
+            {"turnID": turn_id} if isinstance(turn_id, str) and turn_id.strip() else {}
+        )
         self.emit(
             {
                 "type": "message.updated",
                 "properties": {
                     "sessionID": session_id,
+                    **turn_props,
                     "info": {
                         "id": user_message_id,
                         "role": "user",
@@ -191,6 +201,7 @@ class _FakeOpenCodeState:
                 "type": "message.part.updated",
                 "properties": {
                     "sessionID": session_id,
+                    **turn_props,
                     "part": {
                         "id": f"part-{uuid.uuid4().hex[:8]}",
                         "type": "text",
@@ -206,6 +217,7 @@ class _FakeOpenCodeState:
                 "type": "session.status",
                 "properties": {
                     "sessionID": session_id,
+                    **turn_props,
                     "status": {"type": "busy"},
                 },
             }
@@ -215,6 +227,7 @@ class _FakeOpenCodeState:
                 "type": "message.updated",
                 "properties": {
                     "sessionID": session_id,
+                    **turn_props,
                     "info": {
                         "id": assistant_message_id,
                         "role": "assistant",
@@ -229,6 +242,7 @@ class _FakeOpenCodeState:
                     "type": "message.part.updated",
                     "properties": {
                         "sessionID": session_id,
+                        **turn_props,
                         "part": {
                             "id": f"part-{uuid.uuid4().hex[:8]}",
                             "type": "text",
@@ -244,11 +258,17 @@ class _FakeOpenCodeState:
                     "type": "session.status",
                     "properties": {
                         "sessionID": session_id,
+                        **turn_props,
                         "status": {"type": "idle"},
                     },
                 }
             )
-            self.emit({"type": "session.idle", "properties": {"sessionID": session_id}})
+            self.emit(
+                {
+                    "type": "session.idle",
+                    "properties": {"sessionID": session_id, **turn_props},
+                }
+            )
             return {
                 "info": {
                     "id": assistant_message_id,
@@ -289,6 +309,7 @@ class _FakeOpenCodeState:
                 "type": "message.part.updated",
                 "properties": {
                     "sessionID": session_id,
+                    **turn_props,
                     "part": {
                         "id": tool_part_id,
                         "messageID": assistant_message_id,
@@ -307,6 +328,7 @@ class _FakeOpenCodeState:
                 "properties": {
                     "id": request_id,
                     "sessionID": session_id,
+                    **turn_props,
                     "questions": [question],
                     "tool": {
                         "messageID": assistant_message_id,
@@ -320,6 +342,7 @@ class _FakeOpenCodeState:
                 "type": "message.part.updated",
                 "properties": {
                     "sessionID": session_id,
+                    **turn_props,
                     "part": {
                         "id": tool_part_id,
                         "messageID": assistant_message_id,
@@ -352,6 +375,7 @@ class _FakeOpenCodeState:
                 "type": "question.replied",
                 "properties": {
                     "sessionID": session_id,
+                    **turn_props,
                     "requestID": request_id,
                     "answers": pending.answers or [],
                 },
@@ -362,6 +386,7 @@ class _FakeOpenCodeState:
                 "type": "message.part.updated",
                 "properties": {
                     "sessionID": session_id,
+                    **turn_props,
                     "part": {
                         "id": tool_part_id,
                         "messageID": assistant_message_id,
@@ -396,6 +421,7 @@ class _FakeOpenCodeState:
                 "type": "message.part.updated",
                 "properties": {
                     "sessionID": session_id,
+                    **turn_props,
                     "part": {
                         "id": f"text-{uuid.uuid4().hex[:8]}",
                         "messageID": assistant_message_id,
@@ -411,11 +437,17 @@ class _FakeOpenCodeState:
                 "type": "session.status",
                 "properties": {
                     "sessionID": session_id,
+                    **turn_props,
                     "status": {"type": "idle"},
                 },
             }
         )
-        self.emit({"type": "session.idle", "properties": {"sessionID": session_id}})
+        self.emit(
+            {
+                "type": "session.idle",
+                "properties": {"sessionID": session_id, **turn_props},
+            }
+        )
         return {
             "info": {
                 "id": assistant_message_id,
@@ -530,13 +562,18 @@ class _FakeRequestHandler(http.server.BaseHTTPRequestHandler):
             session_id = prompt_match.group(1)
             prompt_text = ""
             parts_raw = payload.get("parts")
+            turn_id = payload.get("variant")
             if isinstance(parts_raw, list):
                 prompt_text = "".join(
                     part.get("text", "")
                     for part in parts_raw
                     if isinstance(part, dict) and isinstance(part.get("text"), str)
                 )
-            result = state.prompt_async(session_id, prompt_text)
+            result = state.prompt_async(
+                session_id,
+                prompt_text,
+                turn_id=turn_id if isinstance(turn_id, str) else None,
+            )
             self._write_json(HTTPStatus.OK, result)
             return
         reply_match = re.fullmatch(r"/question/([^/]+)/reply", self.path)

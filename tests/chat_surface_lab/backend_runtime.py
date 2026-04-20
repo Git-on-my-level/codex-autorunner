@@ -713,11 +713,12 @@ class OpenCodeFixtureRuntime(BaseBackendFixtureRuntime):
                     payload = json.loads(event.data) if event.data else {}
                 except Exception:
                     payload = {}
+                props = payload.get("properties") if isinstance(payload, dict) else None
+                props = props if isinstance(props, dict) else {}
+                event_turn_id = str(props.get("turnID") or "").strip()
+                if event_turn_id and event_turn_id != turn_id:
+                    continue
                 if event.event == "question.asked":
-                    props = (
-                        payload.get("properties") if isinstance(payload, dict) else None
-                    )
-                    props = props if isinstance(props, dict) else {}
                     request_id = str(props.get("id") or "").strip()
                     questions_raw = props.get("questions")
                     questions = (
@@ -785,7 +786,11 @@ class OpenCodeFixtureRuntime(BaseBackendFixtureRuntime):
         except asyncio.TimeoutError:
             pass
         prompt_task = asyncio.create_task(
-            self._client.prompt_async(conversation_id, message=text)
+            self._client.prompt_async(
+                conversation_id,
+                message=text,
+                variant=turn_id,
+            )
         )
         try:
             await asyncio.gather(prompt_task, stream_task)
