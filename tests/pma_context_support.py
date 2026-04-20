@@ -1924,7 +1924,9 @@ class TestIssue975DeltaPmaPromptAssembly:
 
         assert "# Durable Agent Guidance" in result1
         assert "# Current Context" in result1
+        assert "Base prompt" in result1
         assert "<pma_fastpath>" in result1
+        assert "Base prompt" not in result2
         assert "<pma_workspace_docs>" not in result2
         assert "Ops guide: `.codex-autorunner/pma/docs/ABOUT_CAR.md`." not in result2
         assert "<pma_fastpath>" not in result2
@@ -1995,6 +1997,42 @@ class TestIssue975DeltaPmaPromptAssembly:
         assert "<ACTIVE_CONTEXT_MD>" in result
         assert "Next: wire delta prompt." in result
         assert "Rule 1: Be concise." not in result
+        assert "\n<hub_snapshot>\n" not in result
+
+    def test_format_pma_prompt_delta_surfaces_changed_base_prompt(
+        self, tmp_path: Path
+    ) -> None:
+        """Changed prompt.md content is re-injected while stable prompt text stays cached."""
+        seed_hub_files(tmp_path, force=True)
+
+        snapshot = {
+            "generated_at": "2026-03-16T00:00:00Z",
+            "action_queue": [],
+            "inbox": [],
+            "repos": [],
+            "pma_files": {"inbox": [], "outbox": []},
+            "pma_files_detail": {"inbox": [], "outbox": []},
+        }
+
+        _ = format_pma_prompt(
+            "Base prompt v1",
+            snapshot,
+            "Turn 1",
+            hub_root=tmp_path,
+            prompt_state_key="pma.test-changed-base-prompt",
+        )
+        result = format_pma_prompt(
+            "Base prompt v2",
+            snapshot,
+            "Turn 2",
+            hub_root=tmp_path,
+            prompt_state_key="pma.test-changed-base-prompt",
+        )
+
+        assert "Base prompt v1" not in result
+        assert "<PMA_PROMPT_MD>" in result
+        assert "Base prompt v2" in result
+        assert "<pma_workspace_docs>" not in result
         assert "\n<hub_snapshot>\n" not in result
 
     def test_format_pma_prompt_delta_surfaces_changed_hub_snapshot_without_repeating_stable_blocks(

@@ -374,7 +374,9 @@ def render_pma_prompt(
     prior_sections: Optional[Mapping[str, Any]],
     prior_updated_at: Optional[str],
 ) -> str:
-    prompt = f"{base_prompt}\n\n" if base_prompt else ""
+    prompt = ""
+    if not use_delta and base_prompt:
+        prompt += f"{base_prompt}\n\n"
     if not use_delta:
         prompt += discoverability_text
     if not use_delta and pma_docs:
