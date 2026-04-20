@@ -87,10 +87,10 @@ class TestFetchAgentCapabilities:
 
 
 class TestPmaModelsCapabilityCheck:
-    @patch("codex_autorunner.surfaces.cli.pma_cli._fetch_agent_capabilities")
+    @patch("codex_autorunner.surfaces.cli.pma_cli.fetch_agent_capabilities")
     @patch("codex_autorunner.surfaces.cli.pma_cli.load_hub_config")
-    @patch("codex_autorunner.surfaces.cli.pma_cli._build_pma_url")
-    @patch("codex_autorunner.surfaces.cli.pma_cli._request_json")
+    @patch("codex_autorunner.surfaces.cli.pma_cli.build_pma_url")
+    @patch("codex_autorunner.surfaces.cli.pma_cli.request_json")
     def test_models_command_fails_for_agent_without_model_listing(
         self, mock_request, mock_url, mock_config, mock_caps
     ):

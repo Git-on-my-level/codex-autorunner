@@ -3,52 +3,38 @@
 import json
 import logging
 from contextlib import nullcontext
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
 import httpx
 import typer
 
-from ...bootstrap import ensure_pma_docs, pma_doc_path
 from ...core.config import load_hub_config
-from ...core.config_contract import ConfigError
-from ...core.filebox import BOXES, list_filebox
-from ...core.filebox_lifecycle import (
-    LIFECYCLE_BOXES,
-    consume_inbox_file,
-    dismiss_inbox_file,
-    list_consumed_files,
-    unconsume_inbox_file,
-)
+from ...core.filebox import BOXES
 from ...core.locks import file_lock
 from ...core.pma_hygiene import (
-    _hygiene_lock_path,
     apply_pma_hygiene_report,
     build_pma_hygiene_report,
+    hygiene_lock_path,
     render_pma_hygiene_report,
 )
 from .hub_path_option import hub_root_path_option
+from .pma_binding_commands import register_binding_commands
+from .pma_context_commands import register_context_commands
 from .pma_control_plane import (
-    CAPABILITY_REQUIREMENTS as _CAPABILITY_REQUIREMENTS,
+    CAPABILITY_REQUIREMENTS,
+    build_pma_url,
+    check_capability,
+    fetch_agent_capabilities,
+    request_json,
+    resolve_hub_path,
 )
-from .pma_control_plane import (
-    build_pma_url as _build_pma_url,
-)
-from .pma_control_plane import (
-    check_capability as _check_capability,
-)
-from .pma_control_plane import (
-    fetch_agent_capabilities as _fetch_agent_capabilities,
-)
-from .pma_control_plane import (
-    format_resource_owner_label as _format_resource_owner_label,
-)
-from .pma_control_plane import (
-    normalize_resource_owner_options as _normalize_resource_owner_options,
-)
-from .pma_control_plane import (
-    request_json as _request_json,
+from .pma_docs_commands import register_docs_commands
+from .pma_file_commands import box_choices_text, register_file_commands
+from .pma_status_contracts import (
+    PmaActiveResponse,
+    PmaInterruptResponse,
+    PmaResetResponse,
 )
 from .pma_thread_commands import register_thread_commands
 
@@ -89,119 +75,22 @@ file_app = typer.Typer(
     name="file",
     help="Manage PMA inbox file lifecycle state without deleting recoverable files.",
 )
+
+register_docs_commands(docs_app)
+register_context_commands(context_app)
+register_thread_commands(thread_app)
+register_binding_commands(binding_app)
+register_file_commands(file_app)
+
 pma_app.add_typer(docs_app)
 pma_app.add_typer(context_app)
-register_thread_commands(thread_app)
 pma_app.add_typer(thread_app, name="thread")
 pma_app.add_typer(binding_app, name="binding")
 pma_app.add_typer(file_app, name="file")
 
 
-def _pma_docs_path(hub_root: Path, doc_name: str) -> Path:
-    return pma_doc_path(hub_root, doc_name)
-
-
 def _resolve_hub_path(path: Optional[Path]) -> Path:
-    start = path or Path.cwd()
-    try:
-        return load_hub_config(start).root
-    except (
-        OSError,
-        ValueError,
-        ConfigError,
-        AttributeError,
-    ):  # intentional: config loading fallback
-        candidate = start.resolve()
-        if candidate.is_file():
-            parent = candidate.parent
-            if parent.name == ".codex-autorunner":
-                return parent.parent.resolve()
-            return parent.resolve()
-        return candidate
-
-
-def _pma_file_listings(hub_root: Path) -> dict[str, list[Any]]:
-    listing = list_filebox(hub_root)
-    archived = list_consumed_files(hub_root)
-    for box in LIFECYCLE_BOXES:
-        listing[box] = [entry for entry in archived if entry.box == box]
-    return listing
-
-
-def _emit_pma_file_listing(
-    *,
-    listing: dict[str, list[Any]],
-    boxes: list[str],
-    output_json: bool,
-) -> None:
-    if output_json:
-        payload = {
-            box: [
-                {
-                    "name": entry.name,
-                    "box": entry.box,
-                    "size": entry.size,
-                    "modified_at": entry.modified_at,
-                    "source": entry.source,
-                }
-                for entry in listing.get(box, [])
-            ]
-            for box in boxes
-        }
-        typer.echo(json.dumps(payload, indent=2))
-        return
-
-    for index, box in enumerate(boxes):
-        entries = listing.get(box, [])
-        heading = box.capitalize()
-        prefix = "\n" if index else ""
-        typer.echo(f"{prefix}{heading} ({len(entries)}):")
-        for entry in entries:
-            source_str = f", source={entry.source}" if entry.source else ""
-            typer.echo(
-                f"  - {entry.name} ({entry.size} bytes, {entry.modified_at}{source_str})"
-            )
-
-
-def _extract_compact_summary_items(content: str, *, limit: int) -> list[str]:
-    items: list[str] = []
-    if limit <= 0:
-        return items
-    for raw in (content or "").splitlines():
-        line = raw.strip()
-        if not line:
-            continue
-        lower = line.lower()
-        if lower.startswith("# pma active context"):
-            continue
-        if lower.startswith("use this file for"):
-            continue
-        if lower.startswith("pruning guidance"):
-            continue
-        if lower.startswith("> auto-pruned on"):
-            continue
-        if line.startswith("- "):
-            line = line[2:].strip()
-        elif line.startswith("* "):
-            line = line[2:].strip()
-        elif line[:2].isdigit() and line[2:4] == ". ":
-            line = line[4:].strip()
-        if not line:
-            continue
-        if line in items:
-            continue
-        items.append(line)
-        if len(items) >= limit:
-            break
-    return items
-
-
-def _box_choices_text() -> str:
-    return "|".join(BOXES)
-
-
-def _file_lifecycle_box_choices_text() -> str:
-    return "inbox|consumed|dismissed|all"
+    return resolve_hub_path(path)
 
 
 def _is_json_response_error(data: dict) -> Optional[str]:
@@ -212,43 +101,6 @@ def _is_json_response_error(data: dict) -> Optional[str]:
     if data.get("error"):
         return str(data["error"])
     return None
-
-
-def _render_compacted_active_context(
-    *,
-    timestamp: str,
-    previous_line_count: int,
-    max_lines: int,
-    summary_items: list[str],
-) -> str:
-    base_lines = [
-        "# PMA active context (short-lived)",
-        "",
-        "## Current priorities",
-        "- Keep this section focused on in-flight priorities only.",
-        "",
-        "## Next steps",
-        "- Capture immediate, executable follow-ups for the next PMA turn.",
-        "",
-        "## Open questions",
-        "- Record unresolved blockers requiring explicit answers.",
-        "",
-        "## Compaction metadata",
-        f"- Compacted at: {timestamp}",
-        f"- Previous line count: {previous_line_count}",
-        f"- Active context line budget: {max_lines}",
-        "- Archived snapshot appended to context_log.md.",
-        "",
-        "## Archived context summary",
-    ]
-    remaining = max(max_lines - len(base_lines), 0)
-    summary_lines = [f"- {item}" for item in summary_items[:remaining]]
-    if not summary_lines and max_lines > len(base_lines):
-        summary_lines = ["- No additional archival summary captured."]
-    output_lines = base_lines + summary_lines
-    if max_lines > 0:
-        output_lines = output_lines[:max_lines]
-    return "\n".join(output_lines).rstrip() + "\n"
 
 
 @pma_app.command("chat")
@@ -266,14 +118,14 @@ def pma_chat(
     path: Optional[Path] = hub_root_path_option(),
 ):
     """Send a message to the Project Management Assistant."""
-    hub_root = _resolve_hub_path(path)
+    hub_root = resolve_hub_path(path)
     try:
         config = load_hub_config(hub_root)
     except (OSError, ValueError) as exc:
         typer.echo(f"Failed to load hub config: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
-    url = _build_pma_url(config, "/chat")
+    url = build_pma_url(config, "/chat")
     payload: dict[str, Any] = {"message": message, "stream": stream}
     if agent:
         payload["agent"] = agent
@@ -388,7 +240,7 @@ def pma_chat(
         return
 
     try:
-        data = _request_json(
+        data = request_json(
             "POST", url, payload, token_env=config.server_auth_token_env
         )
     except httpx.HTTPError as exc:
@@ -419,16 +271,16 @@ def pma_interrupt(
     path: Optional[Path] = hub_root_path_option(),
 ):
     """Interrupt a running PMA chat."""
-    hub_root = _resolve_hub_path(path)
+    hub_root = resolve_hub_path(path)
     try:
         config = load_hub_config(hub_root)
     except (OSError, ValueError) as exc:
         typer.echo(f"Failed to load hub config: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
-    active_url = _build_pma_url(config, "/active")
+    active_url = build_pma_url(config, "/active")
     try:
-        active_data = _request_json(
+        active_data = request_json(
             "GET", active_url, token_env=config.server_auth_token_env
         )
     except (httpx.HTTPError, ValueError, OSError):  # best-effort active data fetch
@@ -437,21 +289,19 @@ def pma_interrupt(
     if isinstance(current, dict):
         agent = current.get("agent", "")
         if agent:
-            capabilities = _fetch_agent_capabilities(config, path)
-            required_cap = _CAPABILITY_REQUIREMENTS.get("interrupt")
-            if required_cap and not _check_capability(
-                agent, required_cap, capabilities
-            ):
+            capabilities = fetch_agent_capabilities(config, path)
+            required_cap = CAPABILITY_REQUIREMENTS.get("interrupt")
+            if required_cap and not check_capability(agent, required_cap, capabilities):
                 typer.echo(
                     f"Agent '{agent}' does not support interrupt (missing capability: {required_cap})",
                     err=True,
                 )
                 raise typer.Exit(code=1) from None
 
-    url = _build_pma_url(config, "/interrupt")
+    url = build_pma_url(config, "/interrupt")
 
     try:
-        data = _request_json("POST", url, token_env=config.server_auth_token_env)
+        data = request_json("POST", url, token_env=config.server_auth_token_env)
     except httpx.HTTPError as exc:
         typer.echo(f"HTTP error: {exc}", err=True)
         raise typer.Exit(code=1) from None
@@ -462,15 +312,13 @@ def pma_interrupt(
     if output_json:
         typer.echo(json.dumps(data, indent=2))
     else:
-        interrupted = data.get("interrupted") if isinstance(data, dict) else False
-        detail = data.get("detail") if isinstance(data, dict) else ""
-        agent = data.get("agent") if isinstance(data, dict) else ""
-        if interrupted:
-            typer.echo(f"PMA chat interrupted (agent={agent})")
+        response = PmaInterruptResponse.from_dict(data)
+        if response.interrupted:
+            typer.echo(f"PMA chat interrupted (agent={response.agent})")
         else:
             typer.echo("No active PMA chat to interrupt")
-            if detail:
-                typer.echo(f"Detail: {detail}")
+            if response.detail:
+                typer.echo(f"Detail: {response.detail}")
 
 
 @pma_app.command("reset")
@@ -482,20 +330,20 @@ def pma_reset(
     path: Optional[Path] = hub_root_path_option(),
 ):
     """Reset PMA thread state."""
-    hub_root = _resolve_hub_path(path)
+    hub_root = resolve_hub_path(path)
     try:
         config = load_hub_config(hub_root)
     except (OSError, ValueError) as exc:
         typer.echo(f"Failed to load hub config: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
-    url = _build_pma_url(config, "/thread/reset")
+    url = build_pma_url(config, "/thread/reset")
     payload: dict[str, Any] = {}
     if agent:
         payload["agent"] = agent
 
     try:
-        data = _request_json(
+        data = request_json(
             "POST", url, payload, token_env=config.server_auth_token_env
         )
     except httpx.HTTPError as exc:
@@ -508,9 +356,9 @@ def pma_reset(
     if output_json:
         typer.echo(json.dumps(data, indent=2))
     else:
-        cleared = data.get("cleared") if isinstance(data, dict) else []
-        if cleared:
-            typer.echo(f"Cleared threads: {', '.join(cleared)}")
+        response = PmaResetResponse.from_dict(data)
+        if response.cleared:
+            typer.echo(f"Cleared threads: {', '.join(response.cleared)}")
         else:
             typer.echo("No threads to clear")
 
@@ -524,14 +372,14 @@ def pma_active(
     path: Optional[Path] = hub_root_path_option(),
 ):
     """Show active PMA chat status."""
-    hub_root = _resolve_hub_path(path)
+    hub_root = resolve_hub_path(path)
     try:
         config = load_hub_config(hub_root)
     except (OSError, ValueError) as exc:
         typer.echo(f"Failed to load hub config: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
-    url = _build_pma_url(config, "/active")
+    url = build_pma_url(config, "/active")
     params = {}
     if client_turn_id:
         params["client_turn_id"] = client_turn_id
@@ -550,24 +398,17 @@ def pma_active(
     if output_json:
         typer.echo(json.dumps(data, indent=2))
     else:
-        active = data.get("active") if isinstance(data, dict) else False
-        current = data.get("current") if isinstance(data, dict) else {}
-        last_result = data.get("last_result") if isinstance(data, dict) else {}
-
-        typer.echo(f"Active: {active}")
-        if current:
-            status = current.get("status", "unknown")
-            agent = current.get("agent", "unknown")
-            started = current.get("started_at", "")
+        active_response = PmaActiveResponse.from_dict(data)
+        typer.echo(f"Active: {active_response.active}")
+        if active_response.current:
+            snap = active_response.current
             typer.echo(
-                f"Current turn: status={status}, agent={agent}, started={started}"
+                f"Current turn: status={snap.status}, agent={snap.agent}, started={snap.started_at}"
             )
-        if last_result:
-            status = last_result.get("status", "unknown")
-            agent = last_result.get("agent", "unknown")
-            finished = last_result.get("finished_at", "")
+        if active_response.last_result:
+            snap = active_response.last_result
             typer.echo(
-                f"Last result: status={status}, agent={agent}, finished={finished}"
+                f"Last result: status={snap.status}, agent={snap.agent}, finished={snap.finished_at}"
             )
 
 
@@ -609,10 +450,10 @@ def pma_hygiene(
     path: Optional[Path] = hub_root_path_option(),
 ):
     """Review PMA hygiene candidates and optionally clean only the safe ones."""
-    hub_root = _resolve_hub_path(path)
+    hub_root = resolve_hub_path(path)
     apply_result: Optional[dict[str, Any]] = None
     try:
-        lock_ctx = file_lock(_hygiene_lock_path(hub_root)) if apply else nullcontext()
+        lock_ctx = file_lock(hygiene_lock_path(hub_root)) if apply else nullcontext()
         with lock_ctx:
             report = build_pma_hygiene_report(
                 hub_root,
@@ -672,17 +513,17 @@ def pma_agents(
     path: Optional[Path] = hub_root_path_option(),
 ):
     """List available PMA agents."""
-    hub_root = _resolve_hub_path(path)
+    hub_root = resolve_hub_path(path)
     try:
         config = load_hub_config(hub_root)
     except (OSError, ValueError) as exc:
         typer.echo(f"Failed to load hub config: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
-    url = _build_pma_url(config, "/agents")
+    url = build_pma_url(config, "/agents")
 
     try:
-        data = _request_json("GET", url, token_env=config.server_auth_token_env)
+        data = request_json("GET", url, token_env=config.server_auth_token_env)
     except httpx.HTTPError as exc:
         typer.echo(f"HTTP error: {exc}", err=True)
         raise typer.Exit(code=1) from None
@@ -742,26 +583,26 @@ def pma_models(
     path: Optional[Path] = hub_root_path_option(),
 ):
     """List available models for an agent."""
-    hub_root = _resolve_hub_path(path)
+    hub_root = resolve_hub_path(path)
     try:
         config = load_hub_config(hub_root)
     except (OSError, ValueError) as exc:
         typer.echo(f"Failed to load hub config: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
-    capabilities = _fetch_agent_capabilities(config, path)
-    required_cap = _CAPABILITY_REQUIREMENTS.get("models")
-    if required_cap and not _check_capability(agent, required_cap, capabilities):
+    capabilities = fetch_agent_capabilities(config, path)
+    required_cap = CAPABILITY_REQUIREMENTS.get("models")
+    if required_cap and not check_capability(agent, required_cap, capabilities):
         typer.echo(
             f"Agent '{agent}' does not support model listing (missing capability: {required_cap})",
             err=True,
         )
         raise typer.Exit(code=1) from None
 
-    url = _build_pma_url(config, f"/agents/{agent}/models")
+    url = build_pma_url(config, f"/agents/{agent}/models")
 
     try:
-        data = _request_json("GET", url, token_env=config.server_auth_token_env)
+        data = request_json("GET", url, token_env=config.server_auth_token_env)
     except httpx.HTTPError as exc:
         typer.echo(f"HTTP error: {exc}", err=True)
         raise typer.Exit(code=1) from None
@@ -791,17 +632,17 @@ def pma_files(
     path: Optional[Path] = hub_root_path_option(),
 ):
     """List files in PMA inbox and outbox (FileBox-backed via /hub/pma/files)."""
-    hub_root = _resolve_hub_path(path)
+    hub_root = resolve_hub_path(path)
     try:
         config = load_hub_config(hub_root)
     except (OSError, ValueError) as exc:
         typer.echo(f"Failed to load hub config: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
-    url = _build_pma_url(config, "/files")
+    url = build_pma_url(config, "/files")
 
     try:
-        data = _request_json("GET", url, token_env=config.server_auth_token_env)
+        data = request_json("GET", url, token_env=config.server_auth_token_env)
     except httpx.HTTPError as exc:
         typer.echo(f"HTTP error: {exc}", err=True)
         raise typer.Exit(code=1) from None
@@ -828,106 +669,15 @@ def pma_files(
                 typer.echo(f"  - {name} ({size} bytes, {modified}{source_str})")
 
 
-@file_app.command("consume")
-def pma_file_consume(
-    filename: str = typer.Argument(..., help="Inbox filename to mark as consumed"),
-    path: Optional[Path] = hub_root_path_option(),
-):
-    """Move a PMA inbox file into the recoverable consumed archive."""
-    hub_root = _resolve_hub_path(path)
-    try:
-        entry = consume_inbox_file(hub_root, filename)
-    except ValueError as exc:
-        typer.echo(f"Invalid filename: {exc}", err=True)
-        raise typer.Exit(code=1) from None
-    except FileNotFoundError as exc:
-        typer.echo(str(exc), err=True)
-        raise typer.Exit(code=1) from None
-    except FileExistsError as exc:
-        typer.echo(str(exc), err=True)
-        raise typer.Exit(code=1) from None
-
-    typer.echo(f"Consumed {entry.name} -> {entry.box}")
-
-
-@file_app.command("dismiss")
-def pma_file_dismiss(
-    filename: str = typer.Argument(..., help="Inbox filename to mark as dismissed"),
-    path: Optional[Path] = hub_root_path_option(),
-):
-    """Move a PMA inbox file into the recoverable dismissed archive."""
-    hub_root = _resolve_hub_path(path)
-    try:
-        entry = dismiss_inbox_file(hub_root, filename)
-    except ValueError as exc:
-        typer.echo(f"Invalid filename: {exc}", err=True)
-        raise typer.Exit(code=1) from None
-    except FileNotFoundError as exc:
-        typer.echo(str(exc), err=True)
-        raise typer.Exit(code=1) from None
-    except FileExistsError as exc:
-        typer.echo(str(exc), err=True)
-        raise typer.Exit(code=1) from None
-
-    typer.echo(f"Dismissed {entry.name} -> {entry.box}")
-
-
-@file_app.command("restore")
-def pma_file_restore(
-    filename: str = typer.Argument(..., help="Archived filename to restore to inbox"),
-    path: Optional[Path] = hub_root_path_option(),
-):
-    """Restore a consumed or dismissed PMA file back to the inbox."""
-    hub_root = _resolve_hub_path(path)
-    try:
-        entry = unconsume_inbox_file(hub_root, filename)
-    except ValueError as exc:
-        typer.echo(f"Invalid filename: {exc}", err=True)
-        raise typer.Exit(code=1) from None
-    except FileNotFoundError as exc:
-        typer.echo(str(exc), err=True)
-        raise typer.Exit(code=1) from None
-    except FileExistsError as exc:
-        typer.echo(str(exc), err=True)
-        raise typer.Exit(code=1) from None
-
-    typer.echo(f"Restored {entry.name} -> {entry.box}")
-
-
-@file_app.command("list")
-def pma_file_list(
-    box: str = typer.Option(
-        "all",
-        "--box",
-        help=f"Box to list ({_file_lifecycle_box_choices_text()})",
-    ),
-    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
-    path: Optional[Path] = hub_root_path_option(),
-):
-    """List PMA inbox and archived lifecycle files from the local FileBox."""
-    normalized_box = str(box or "").strip().lower()
-    if normalized_box not in {"inbox", *LIFECYCLE_BOXES, "all"}:
-        typer.echo(
-            f"Box must be one of: {_file_lifecycle_box_choices_text()}",
-            err=True,
-        )
-        raise typer.Exit(code=1) from None
-
-    hub_root = _resolve_hub_path(path)
-    listing = _pma_file_listings(hub_root)
-    boxes = ["inbox", *LIFECYCLE_BOXES] if normalized_box == "all" else [normalized_box]
-    _emit_pma_file_listing(listing=listing, boxes=boxes, output_json=output_json)
-
-
 @pma_app.command("upload")
 def pma_upload(
-    box: str = typer.Argument(..., help=f"Target box ({_box_choices_text()})"),
+    box: str = typer.Argument(..., help=f"Target box ({box_choices_text()})"),
     files: list[Path] = typer.Argument(..., help="Files to upload"),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     path: Optional[Path] = hub_root_path_option(),
 ):
     """Upload files to PMA inbox or outbox (FileBox-backed via /hub/pma/files)."""
-    hub_root = _resolve_hub_path(path)
+    hub_root = resolve_hub_path(path)
     try:
         config = load_hub_config(hub_root)
     except (OSError, ValueError) as exc:
@@ -938,7 +688,7 @@ def pma_upload(
         typer.echo(f"Box must be one of: {', '.join(BOXES)}", err=True)
         raise typer.Exit(code=1) from None
 
-    url = _build_pma_url(config, f"/files/{box}")
+    url = build_pma_url(config, f"/files/{box}")
 
     for file_path in files:
         if not file_path.exists():
@@ -981,7 +731,7 @@ def pma_upload(
 
 @pma_app.command("download")
 def pma_download(
-    box: str = typer.Argument(..., help=f"Source box ({_box_choices_text()})"),
+    box: str = typer.Argument(..., help=f"Source box ({box_choices_text()})"),
     filename: str = typer.Argument(..., help="File to download"),
     output: Optional[Path] = typer.Option(
         None, "--output", "-o", help="Output path (default: current directory)"
@@ -989,7 +739,7 @@ def pma_download(
     path: Optional[Path] = hub_root_path_option(),
 ):
     """Download a file from PMA inbox or outbox (FileBox-backed via /hub/pma/files)."""
-    hub_root = _resolve_hub_path(path)
+    hub_root = resolve_hub_path(path)
     try:
         config = load_hub_config(hub_root)
     except (OSError, ValueError) as exc:
@@ -1000,7 +750,7 @@ def pma_download(
         typer.echo(f"Box must be one of: {', '.join(BOXES)}", err=True)
         raise typer.Exit(code=1) from None
 
-    url = _build_pma_url(config, f"/files/{box}/{filename}")
+    url = build_pma_url(config, f"/files/{box}/{filename}")
 
     try:
         response = httpx.get(url, timeout=30.0)
@@ -1017,7 +767,7 @@ def pma_download(
 @pma_app.command("delete")
 def pma_delete(
     box: Optional[str] = typer.Argument(
-        None, help=f"Target box ({_box_choices_text()})"
+        None, help=f"Target box ({box_choices_text()})"
     ),
     filename: Optional[str] = typer.Argument(None, help="File to delete"),
     all_files: bool = typer.Option(False, "--all", help="Delete all files in the box"),
@@ -1025,7 +775,7 @@ def pma_delete(
     path: Optional[Path] = hub_root_path_option(),
 ):
     """Delete files from PMA inbox or outbox (FileBox-backed via /hub/pma/files)."""
-    hub_root = _resolve_hub_path(path)
+    hub_root = resolve_hub_path(path)
     try:
         config = load_hub_config(hub_root)
     except (OSError, ValueError) as exc:
@@ -1039,7 +789,7 @@ def pma_delete(
                 err=True,
             )
             raise typer.Exit(code=1) from None
-        url = _build_pma_url(config, f"/files/{box}")
+        url = build_pma_url(config, f"/files/{box}")
         method = "DELETE"
         payload = None
     else:
@@ -1049,7 +799,7 @@ def pma_delete(
         if box not in BOXES:
             typer.echo(f"Box must be one of: {', '.join(BOXES)}", err=True)
             raise typer.Exit(code=1) from None
-        url = _build_pma_url(config, f"/files/{box}/{filename}")
+        url = build_pma_url(config, f"/files/{box}/{filename}")
         method = "DELETE"
         payload = None
 
@@ -1071,470 +821,3 @@ def pma_delete(
             typer.echo(f"Deleted all files in {box}")
         else:
             typer.echo(f"Deleted {filename} from {box}")
-
-
-@docs_app.command("show")
-def pma_docs_show(
-    doc_type: str = typer.Argument(..., help="Document type: agents, active, or log"),
-    path: Optional[Path] = hub_root_path_option(),
-):
-    """Show PMA docs content to stdout."""
-    hub_root = _resolve_hub_path(path)
-    try:
-        ensure_pma_docs(hub_root)
-    except OSError as exc:
-        typer.echo(f"Failed to ensure PMA docs: {exc}", err=True)
-        raise typer.Exit(code=1) from None
-
-    if doc_type == "agents":
-        doc_path = _pma_docs_path(hub_root, "AGENTS.md")
-    elif doc_type == "active":
-        doc_path = _pma_docs_path(hub_root, "active_context.md")
-    elif doc_type == "log":
-        doc_path = _pma_docs_path(hub_root, "context_log.md")
-    else:
-        typer.echo("Invalid doc_type. Must be one of: agents, active, log", err=True)
-        raise typer.Exit(code=1) from None
-
-    try:
-        content = doc_path.read_text(encoding="utf-8")
-        typer.echo(content, nl=False)
-    except OSError as exc:
-        typer.echo(f"Failed to read {doc_path}: {exc}", err=True)
-        raise typer.Exit(code=1) from None
-
-
-@context_app.command("reset")
-def pma_context_reset(
-    path: Optional[Path] = hub_root_path_option(),
-):
-    """Reset active_context.md to a minimal header."""
-    hub_root = _resolve_hub_path(path)
-    try:
-        ensure_pma_docs(hub_root)
-    except OSError as exc:
-        typer.echo(f"Failed to ensure PMA docs: {exc}", err=True)
-        raise typer.Exit(code=1) from None
-
-    active_context_path = _pma_docs_path(hub_root, "active_context.md")
-
-    minimal_content = """# PMA active context (short-lived)
-
-Use this file for the current working set: active projects, open questions, links, and immediate next steps.
-
-Pruning guidance:
-- Keep this file compact (prefer bullet points).
-- When it grows too large, summarize older items and move durable guidance to `AGENTS.md`.
-- Before a major prune, append a timestamped snapshot to `context_log.md`.
-"""
-
-    try:
-        active_context_path.write_text(minimal_content, encoding="utf-8")
-        typer.echo(f"Reset active_context.md at {active_context_path}")
-    except OSError as exc:
-        typer.echo(f"Failed to write {active_context_path}: {exc}", err=True)
-        raise typer.Exit(code=1) from None
-
-
-@context_app.command("snapshot")
-def pma_context_snapshot(
-    path: Optional[Path] = hub_root_path_option(),
-):
-    """Snapshot active_context.md into context_log.md with ISO timestamp."""
-    hub_root = _resolve_hub_path(path)
-    try:
-        ensure_pma_docs(hub_root)
-    except OSError as exc:
-        typer.echo(f"Failed to ensure PMA docs: {exc}", err=True)
-        raise typer.Exit(code=1) from None
-
-    active_context_path = _pma_docs_path(hub_root, "active_context.md")
-    context_log_path = _pma_docs_path(hub_root, "context_log.md")
-
-    try:
-        active_content = active_context_path.read_text(encoding="utf-8")
-    except OSError as exc:
-        typer.echo(f"Failed to read {active_context_path}: {exc}", err=True)
-        raise typer.Exit(code=1) from None
-
-    timestamp = datetime.now(timezone.utc).isoformat()
-    snapshot_header = f"\n\n## Snapshot: {timestamp}\n\n"
-    snapshot_content = snapshot_header + active_content
-
-    try:
-        with context_log_path.open("a", encoding="utf-8") as f:
-            f.write(snapshot_content)
-        typer.echo(f"Appended snapshot to {context_log_path}")
-    except OSError as exc:
-        typer.echo(f"Failed to write {context_log_path}: {exc}", err=True)
-        raise typer.Exit(code=1) from None
-
-
-@context_app.command("prune")
-def pma_context_prune(
-    path: Optional[Path] = hub_root_path_option(),
-):
-    """Prune active_context.md if over budget (snapshot first)."""
-    hub_root = _resolve_hub_path(path)
-
-    max_lines = 200
-    try:
-        config = load_hub_config(hub_root)
-        pma_cfg = getattr(config, "pma", None)
-        if pma_cfg is not None:
-            max_lines = int(getattr(pma_cfg, "active_context_max_lines", max_lines))
-    except (OSError, ValueError):  # intentional: config fallback
-        logger.debug(
-            "Failed to read active_context_max_lines from config", exc_info=True
-        )
-
-    try:
-        ensure_pma_docs(hub_root)
-    except OSError as exc:
-        typer.echo(f"Failed to ensure PMA docs: {exc}", err=True)
-        raise typer.Exit(code=1) from None
-
-    active_context_path = _pma_docs_path(hub_root, "active_context.md")
-
-    try:
-        active_content = active_context_path.read_text(encoding="utf-8")
-        line_count = len(active_content.splitlines())
-    except OSError as exc:
-        typer.echo(f"Failed to read {active_context_path}: {exc}", err=True)
-        raise typer.Exit(code=1) from None
-
-    if line_count <= max_lines:
-        typer.echo(
-            f"active_context.md has {line_count} lines (budget: {max_lines}), no prune needed"
-        )
-        return
-
-    typer.echo(
-        f"active_context.md has {line_count} lines (budget: {max_lines}), snapshotting and pruning"
-    )
-
-    timestamp = datetime.now(timezone.utc).isoformat()
-    snapshot_header = f"\n\n## Snapshot: {timestamp}\n\n"
-    snapshot_content = snapshot_header + active_content
-
-    context_log_path = _pma_docs_path(hub_root, "context_log.md")
-    try:
-        with context_log_path.open("a", encoding="utf-8") as f:
-            f.write(snapshot_content)
-    except OSError as exc:
-        typer.echo(f"Failed to write {context_log_path}: {exc}", err=True)
-        raise typer.Exit(code=1) from None
-
-    minimal_content = f"""# PMA active context (short-lived)
-
-Use this file for the current working set: active projects, open questions, links, and immediate next steps.
-
-Pruning guidance:
-- Keep this file compact (prefer bullet points).
-- When it grows too large, summarize older items and move durable guidance to `AGENTS.md`.
-- Before a major prune, append a timestamped snapshot to `context_log.md`.
-
-> Note: This file was pruned on {timestamp} (had {line_count} lines, budget: {max_lines})
-"""
-
-    try:
-        active_context_path.write_text(minimal_content, encoding="utf-8")
-        typer.echo(f"Pruned active_context.md at {active_context_path}")
-    except OSError as exc:
-        typer.echo(f"Failed to write {active_context_path}: {exc}", err=True)
-        raise typer.Exit(code=1) from None
-
-
-@context_app.command("compact")
-def pma_context_compact(
-    max_lines: Optional[int] = typer.Option(
-        None, "--max-lines", help="Target max lines for active_context.md"
-    ),
-    summary_lines: int = typer.Option(
-        12, "--summary-lines", help="Max archived summary lines to keep"
-    ),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Preview only"),
-    path: Optional[Path] = hub_root_path_option(),
-):
-    """Snapshot then compact active_context.md into a deterministic short form."""
-    hub_root = _resolve_hub_path(path)
-
-    resolved_max_lines = 200
-    try:
-        config = load_hub_config(hub_root)
-        pma_cfg = getattr(config, "pma", None)
-        if pma_cfg is not None:
-            resolved_max_lines = int(
-                getattr(pma_cfg, "active_context_max_lines", resolved_max_lines)
-            )
-    except (OSError, ValueError):  # intentional: config fallback
-        logger.debug(
-            "Failed to read active_context_max_lines from config", exc_info=True
-        )
-    if isinstance(max_lines, int):
-        resolved_max_lines = max(1, max_lines)
-    else:
-        resolved_max_lines = max(1, resolved_max_lines)
-
-    resolved_summary_lines = max(0, int(summary_lines))
-
-    try:
-        ensure_pma_docs(hub_root)
-    except OSError as exc:
-        typer.echo(f"Failed to ensure PMA docs: {exc}", err=True)
-        raise typer.Exit(code=1) from None
-
-    active_context_path = _pma_docs_path(hub_root, "active_context.md")
-    context_log_path = _pma_docs_path(hub_root, "context_log.md")
-
-    try:
-        active_content = active_context_path.read_text(encoding="utf-8")
-    except OSError as exc:
-        typer.echo(f"Failed to read {active_context_path}: {exc}", err=True)
-        raise typer.Exit(code=1) from None
-
-    previous_line_count = len(active_content.splitlines())
-    timestamp = datetime.now(timezone.utc).isoformat()
-    summary_items = _extract_compact_summary_items(
-        active_content, limit=resolved_summary_lines
-    )
-    compacted = _render_compacted_active_context(
-        timestamp=timestamp,
-        previous_line_count=previous_line_count,
-        max_lines=resolved_max_lines,
-        summary_items=summary_items,
-    )
-
-    if dry_run:
-        typer.echo(
-            f"Dry run: compact active_context.md (current_lines={previous_line_count}, "
-            f"target_max_lines={resolved_max_lines}, summary_lines={resolved_summary_lines})"
-        )
-        return
-
-    snapshot_header = f"\n\n## Snapshot: {timestamp}\n\n"
-    snapshot_content = snapshot_header + active_content
-    try:
-        with context_log_path.open("a", encoding="utf-8") as f:
-            f.write(snapshot_content)
-    except OSError as exc:
-        typer.echo(f"Failed to write {context_log_path}: {exc}", err=True)
-        raise typer.Exit(code=1) from None
-
-    try:
-        active_context_path.write_text(compacted, encoding="utf-8")
-    except OSError as exc:
-        typer.echo(f"Failed to write {active_context_path}: {exc}", err=True)
-        raise typer.Exit(code=1) from None
-
-    typer.echo(
-        f"Compacted active_context.md at {active_context_path} "
-        f"(lines: {previous_line_count} -> {len(compacted.splitlines())})"
-    )
-
-
-@binding_app.command("list")
-def pma_binding_list(
-    agent: Optional[str] = typer.Option(None, "--agent", help="Filter by agent"),
-    repo_id: Optional[str] = typer.Option(None, "--repo", help="Filter by repo id"),
-    resource_kind: Optional[str] = typer.Option(
-        None, "--resource-kind", help="Filter by managed resource kind"
-    ),
-    resource_id: Optional[str] = typer.Option(
-        None, "--resource-id", help="Filter by managed resource id"
-    ),
-    surface_kind: Optional[str] = typer.Option(
-        None, "--surface", help="Filter by surface kind (discord, telegram, etc.)"
-    ),
-    include_disabled: bool = typer.Option(
-        False, "--include-disabled", help="Include disabled bindings"
-    ),
-    limit: int = typer.Option(200, "--limit", min=1, help="Maximum rows to return"),
-    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
-    path: Optional[Path] = hub_root_path_option(),
-):
-    """List orchestration bindings for threads."""
-    hub_root = _resolve_hub_path(path)
-    (
-        normalized_resource_kind,
-        normalized_resource_id,
-        _normalized_workspace_root,
-    ) = _normalize_resource_owner_options(
-        repo_id=repo_id,
-        resource_kind=resource_kind,
-        resource_id=resource_id,
-    )
-    params = {
-        key: value
-        for key, value in {
-            "agent": agent,
-            "resource_kind": normalized_resource_kind,
-            "resource_id": normalized_resource_id,
-            "surface_kind": surface_kind,
-            "include_disabled": include_disabled,
-            "limit": limit,
-        }.items()
-        if value is not None
-    }
-    try:
-        config = load_hub_config(hub_root)
-        data = _request_json(
-            "GET",
-            _build_pma_url(config, "/bindings"),
-            token_env=config.server_auth_token_env,
-            params=params,
-        )
-    except httpx.HTTPError as exc:
-        typer.echo(f"HTTP error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
-    except (ValueError, OSError) as exc:  # intentional: top-level error handler
-        typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
-
-    if output_json:
-        typer.echo(json.dumps(data, indent=2))
-        return
-
-    bindings = data.get("bindings", []) if isinstance(data, dict) else []
-    if not isinstance(bindings, list) or not bindings:
-        typer.echo("No bindings found")
-        return
-    for binding in bindings:
-        if not isinstance(binding, dict):
-            continue
-        disabled = " (disabled)" if binding.get("disabled_at") else ""
-        typer.echo(
-            " ".join(
-                [
-                    str(binding.get("binding_id") or "")[:12],
-                    f"surface={binding.get('surface_kind') or ''}",
-                    f"key={binding.get('surface_key') or ''}",
-                    f"thread={binding.get('thread_target_id') or ''}"[:20],
-                    f"agent={binding.get('agent_id') or ''}",
-                    _format_resource_owner_label(binding),
-                ]
-            ).strip()
-            + disabled
-        )
-
-
-@binding_app.command("active")
-def pma_binding_active(
-    surface_kind: str = typer.Option(
-        ..., "--surface", help="Surface kind (discord, telegram, etc.)"
-    ),
-    surface_key: str = typer.Option(
-        ..., "--key", help="Surface-specific key (channel id, chat id, etc.)"
-    ),
-    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
-    path: Optional[Path] = hub_root_path_option(),
-):
-    """Get the active thread bound to a surface key."""
-    hub_root = _resolve_hub_path(path)
-    try:
-        config = load_hub_config(hub_root)
-        data = _request_json(
-            "GET",
-            _build_pma_url(
-                config,
-                f"/bindings/active?surface_kind={surface_kind}&surface_key={surface_key}",
-            ),
-            token_env=config.server_auth_token_env,
-        )
-    except httpx.HTTPError as exc:
-        typer.echo(f"HTTP error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
-    except (ValueError, OSError) as exc:  # intentional: top-level error handler
-        typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
-
-    if output_json:
-        typer.echo(json.dumps(data, indent=2))
-        return
-
-    thread_target_id = data.get("thread_target_id")
-    if thread_target_id:
-        typer.echo(f"Active thread: {thread_target_id}")
-    else:
-        typer.echo("No active thread for this surface key")
-
-
-@binding_app.command("work")
-def pma_binding_work(
-    agent: Optional[str] = typer.Option(None, "--agent", help="Filter by agent"),
-    repo_id: Optional[str] = typer.Option(None, "--repo", help="Filter by repo id"),
-    resource_kind: Optional[str] = typer.Option(
-        None, "--resource-kind", help="Filter by managed resource kind"
-    ),
-    resource_id: Optional[str] = typer.Option(
-        None, "--resource-id", help="Filter by managed resource id"
-    ),
-    limit: int = typer.Option(200, "--limit", min=1, help="Maximum rows to return"),
-    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
-    path: Optional[Path] = hub_root_path_option(),
-):
-    """List busy-work summaries (threads with running or queued work)."""
-    hub_root = _resolve_hub_path(path)
-    (
-        normalized_resource_kind,
-        normalized_resource_id,
-        _normalized_workspace_root,
-    ) = _normalize_resource_owner_options(
-        repo_id=repo_id,
-        resource_kind=resource_kind,
-        resource_id=resource_id,
-    )
-    params = {
-        key: value
-        for key, value in {
-            "agent": agent,
-            "resource_kind": normalized_resource_kind,
-            "resource_id": normalized_resource_id,
-            "limit": limit,
-        }.items()
-        if value is not None
-    }
-    try:
-        config = load_hub_config(hub_root)
-        data = _request_json(
-            "GET",
-            _build_pma_url(config, "/bindings/work"),
-            token_env=config.server_auth_token_env,
-            params=params,
-        )
-    except httpx.HTTPError as exc:
-        typer.echo(f"HTTP error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
-    except (ValueError, OSError) as exc:  # intentional: top-level error handler
-        typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
-
-    if output_json:
-        typer.echo(json.dumps(data, indent=2))
-        return
-
-    summaries = data.get("summaries", []) if isinstance(data, dict) else []
-    if not isinstance(summaries, list) or not summaries:
-        typer.echo("No busy work found")
-        return
-    for summary in summaries:
-        if not isinstance(summary, dict):
-            continue
-        thread_id = summary.get("thread_target_id", "")
-        agent_id = summary.get("agent_id", "")
-        owner = _format_resource_owner_label(summary)
-        lifecycle = summary.get("lifecycle_status", "-")
-        runtime = summary.get("runtime_status", "-")
-        exec_status = summary.get("execution_status", "-")
-        bindings = summary.get("binding_count", 0)
-        surfaces = ",".join(summary.get("surface_kinds", []))
-        preview = summary.get("message_preview", "")
-        if preview:
-            preview = preview[:50] + "..." if len(preview) > 50 else preview
-        typer.echo(
-            f"{thread_id[:12]} agent={agent_id} {owner} "
-            f"lifecycle={lifecycle} runtime={runtime} exec={exec_status} "
-            f"bindings={bindings} surfaces={surfaces}"
-        )
-        if preview:
-            typer.echo(f"  preview: {preview}")

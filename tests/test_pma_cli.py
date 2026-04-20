@@ -10,6 +10,7 @@ from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.filebox import BOXES
 from codex_autorunner.surfaces.cli import pma_cli
 from codex_autorunner.surfaces.cli.pma_cli import pma_app
+from codex_autorunner.surfaces.cli.pma_control_plane import resolve_hub_path
 
 
 def test_pma_cli_has_required_commands():
@@ -337,7 +338,7 @@ def test_pma_context_reset(tmp_path: Path):
 
 
 def test_resolve_hub_path_uses_loaded_hub_root_for_worktree_path(hub_env) -> None:
-    resolved = pma_cli._resolve_hub_path(hub_env.repo_root)
+    resolved = resolve_hub_path(hub_env.repo_root)
 
     assert resolved == hub_env.hub_root
 
@@ -387,7 +388,7 @@ def test_pma_cli_agents_renders_session_controls_and_commands(
             ],
         }
 
-    monkeypatch.setattr(pma_cli, "_request_json", _fake_request_json)
+    monkeypatch.setattr(pma_cli, "request_json", _fake_request_json)
 
     runner = CliRunner()
     result = runner.invoke(pma_app, ["agents", "--path", str(tmp_path)])
@@ -401,8 +402,10 @@ def test_pma_cli_agents_renders_session_controls_and_commands(
 def test_pma_cli_binding_work_empty_state_uses_busy_copy(
     monkeypatch, tmp_path: Path
 ) -> None:
+    from codex_autorunner.surfaces.cli import pma_binding_commands
+
     monkeypatch.setattr(
-        pma_cli,
+        pma_binding_commands,
         "load_hub_config",
         lambda hub_root: SimpleNamespace(
             server_base_path="",
@@ -412,8 +415,8 @@ def test_pma_cli_binding_work_empty_state_uses_busy_copy(
         ),
     )
     monkeypatch.setattr(
-        pma_cli,
-        "_request_json",
+        pma_binding_commands,
+        "request_json",
         lambda method, url, payload=None, token_env=None, params=None: {
             "summaries": []
         },

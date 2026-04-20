@@ -1383,7 +1383,7 @@ def pma_thread_tail(
             url,
             params=params,
             headers=headers,
-            timeout=None,
+            timeout=httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=10.0),
         ) as response:
             response.raise_for_status()
             for event_name, data_str, event_id in _iter_sse_events(

@@ -41,7 +41,7 @@ PMA_HYGIENE_CATEGORY_ORDER = ("files", "threads", "automation", "alerts")
 PMA_HYGIENE_LOCK_NAME = "pma_hygiene.lock"
 
 
-def _hygiene_lock_path(hub_root: Path) -> Path:
+def hygiene_lock_path(hub_root: Path) -> Path:
     return hub_root / ".codex-autorunner" / PMA_HYGIENE_LOCK_NAME
 
 
@@ -784,5 +784,6 @@ __all__ = [
     "PMA_HYGIENE_CATEGORY_ALIASES",
     "apply_pma_hygiene_report",
     "build_pma_hygiene_report",
+    "hygiene_lock_path",
     "render_pma_hygiene_report",
 ]
