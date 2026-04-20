@@ -36,6 +36,8 @@ from codex_autorunner.integrations.telegram.dispatch import (
 )
 from codex_autorunner.integrations.telegram.state import (
     TelegramTopicRecord,
+)
+from codex_autorunner.integrations.telegram.topic_router import (
     TopicRouter,
 )
 

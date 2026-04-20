@@ -19,7 +19,8 @@ from ..helpers import (
     _approval_age_seconds,
     _format_approval_prompt,
 )
-from ..state import PendingApprovalRecord, TopicRouter
+from ..state import PendingApprovalRecord
+from ..topic_router import TopicRouter
 from ..types import PendingApproval
 
 _logger = logging.getLogger(__name__)

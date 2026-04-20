@@ -29,9 +29,6 @@ from .state_types import APPROVAL_MODES as APPROVAL_MODES  # noqa: F401
 from .state_types import TOPIC_ROOT as TOPIC_ROOT  # noqa: F401
 from .state_types import ThreadSummary as ThreadSummary  # noqa: F401
 from .state_types import normalize_agent as normalize_agent  # noqa: F401
-from .topic_queue import TopicQueue as TopicQueue  # noqa: F401
-from .topic_queue import TopicRuntime as TopicRuntime  # noqa: F401
-from .topic_router import TopicRouter as TopicRouter  # noqa: F401
 
 logger = logging.getLogger("codex_autorunner.integrations.telegram.state")
 
