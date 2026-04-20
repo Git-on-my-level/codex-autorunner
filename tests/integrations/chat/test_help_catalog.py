@@ -27,16 +27,18 @@ def test_telegram_help_lists_shared_commands_without_discord_only_entries() -> N
     assert "/files clear inbox|outbox|all" in text
     assert "/files send <filename>" in text
     assert "/pma - PMA mode controls (on/off/status)" in text
+    assert "/tickets [search] - Browse tickets" in text
+    assert "/contextspace - Browse contextspace docs" in text
     assert "/mcp -" not in text
     assert "/experimental -" not in text
     assert "/reply <message> (legacy)" in text
-    assert "/tickets" not in text
 
 
 def test_discord_help_lists_session_file_flow_and_admin_sections() -> None:
     text = "\n".join(build_discord_help_lines())
 
-    assert "/car tickets [search] - Browse and edit tickets" in text
+    assert "/car tickets [search] - Browse tickets" in text
+    assert "/car contextspace - Browse contextspace docs" in text
     assert "/car admin help - Show this help" in text
     assert "/car admin ids - Show chat/user IDs for debugging" in text
     assert "/car admin mcp" not in text

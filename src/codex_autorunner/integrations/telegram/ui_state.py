@@ -4,6 +4,7 @@ from typing import Any, Optional
 
 from .types import (
     CompactState,
+    DocumentBrowserState,
     ModelPendingState,
     ModelPickerState,
     PendingQuestion,
@@ -31,6 +32,7 @@ class TelegramUiState:
         self.agent_profile_options: dict[str, SelectionState] = {}
         self.model_options: dict[str, ModelPickerState] = {}
         self.model_pending: dict[str, ModelPendingState] = {}
+        self.document_browser_states: dict[str, DocumentBrowserState] = {}
 
     @staticmethod
     def owner_matches(state: Any, actor_id: Optional[str]) -> bool:
@@ -62,6 +64,7 @@ class TelegramUiState:
         self.pop_if_owned(self.compact_pending, key, actor_id)
         self.pop_if_owned(self.model_options, key, actor_id)
         self.pop_if_owned(self.model_pending, key, actor_id)
+        self.pop_if_owned(self.document_browser_states, key, actor_id)
         review_state = self.pop_if_owned(self.review_commit_options, key, actor_id)
         if review_state is not None:
             self.review_commit_subjects.pop(key, None)
@@ -83,6 +86,7 @@ class TelegramUiState:
         self.pop_if_owned(self.agent_profile_options, key, actor_id)
         self.pop_if_owned(self.model_options, key, actor_id)
         self.pop_if_owned(self.model_pending, key, actor_id)
+        self.pop_if_owned(self.document_browser_states, key, actor_id)
 
     def clear_for_command(
         self, key: str, actor_id: Optional[str], command_name: str
@@ -102,6 +106,8 @@ class TelegramUiState:
         if command_name != "update":
             self.pop_if_owned(self.update_options, key, actor_id)
             self.pop_if_owned(self.update_confirm_options, key, actor_id)
+        if command_name not in {"tickets", "contextspace"}:
+            self.pop_if_owned(self.document_browser_states, key, actor_id)
         self.pop_if_owned(self.compact_pending, key, actor_id)
         if command_name == "review":
             return None
@@ -123,6 +129,7 @@ class TelegramUiState:
         self.pop_if_owned(self.compact_pending, key, actor_id)
         self.pop_if_owned(self.model_options, key, actor_id)
         self.pop_if_owned(self.model_pending, key, actor_id)
+        self.pop_if_owned(self.document_browser_states, key, actor_id)
         review_state = self.pop_if_owned(self.review_commit_options, key, actor_id)
         if review_state is not None:
             self.review_commit_subjects.pop(key, None)
@@ -167,6 +174,9 @@ class TelegramUiState:
             return True
         if cache_name == "model_pending":
             self.model_pending.pop(str(key), None)
+            return True
+        if cache_name == "document_browser_states":
+            self.document_browser_states.pop(str(key), None)
             return True
         if cache_name == "pending_questions":
             self.pending_questions.pop(str(key), None)

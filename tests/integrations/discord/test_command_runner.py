@@ -1160,12 +1160,11 @@ async def test_component_interaction_routes_through_handle_component() -> None:
 @pytest.mark.anyio
 async def test_component_select_with_values_routes_correctly() -> None:
     service = _FakeService()
-    service._handle_ticket_filter_component = AsyncMock()
+    service._handle_ticket_browser_page_component = AsyncMock()
 
     ctx = _make_ctx(
         kind=InteractionKind.COMPONENT,
-        custom_id="tickets_filter_select",
-        values=["open"],
+        custom_id="tickets_page:1",
         deferred=False,
     )
     payload: dict[str, Any] = {
@@ -1173,7 +1172,7 @@ async def test_component_select_with_values_routes_correctly() -> None:
         "token": "token-1",
         "channel_id": "chan-1",
         "type": 3,
-        "data": {"custom_id": "tickets_filter_select", "values": ["open"]},
+        "data": {"custom_id": "tickets_page:1"},
     }
 
     runner = CommandRunner(
@@ -1184,9 +1183,9 @@ async def test_component_select_with_values_routes_correctly() -> None:
     runner.submit(ctx, payload)
     await asyncio.sleep(0.05)
 
-    service._handle_ticket_filter_component.assert_awaited_once()
-    call_kwargs = service._handle_ticket_filter_component.call_args
-    assert call_kwargs[1]["values"] == ["open"]
+    service._handle_ticket_browser_page_component.assert_awaited_once()
+    call_kwargs = service._handle_ticket_browser_page_component.call_args
+    assert call_kwargs[1]["custom_id"] == "tickets_page:1"
 
 
 @pytest.mark.anyio

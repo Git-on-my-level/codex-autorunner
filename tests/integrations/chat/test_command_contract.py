@@ -149,6 +149,8 @@ def test_command_contract_status_and_mapping_invariants() -> None:
     assert stable_missing_surface == []
 
     assert by_id["car.agent"].status == "stable"
+    assert by_id["car.tickets"].status == "stable"
+    assert by_id["car.contextspace"].status == "stable"
     assert by_id["car.flow.status"].status == "partial"
     assert by_id["car.review"].status == "partial"
     assert by_id["car.mcp"].status == "partial"

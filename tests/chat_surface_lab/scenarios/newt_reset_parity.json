@@ -1,0 +1,52 @@
+{
+  "scenario_id": "newt_reset_parity",
+  "description": "Repo-mode /newt resets the branch and starts a fresh thread on both chat surfaces.",
+  "surfaces": ["discord", "telegram"],
+  "runtime_fixture": {
+    "kind": "hermes",
+    "scenario": "official"
+  },
+  "surface_setup": {
+    "discord": {
+      "pma_enabled": false
+    },
+    "telegram": {
+      "pma_enabled": false
+    }
+  },
+  "actions": [
+    {
+      "kind": "run_command_interaction",
+      "actor": "user",
+      "surfaces": ["discord"],
+      "payload": {
+        "interaction_id": "newt-discord-1",
+        "command_name": "car",
+        "subcommand_name": "newt"
+      }
+    },
+    {
+      "kind": "run_command_update",
+      "actor": "user",
+      "surfaces": ["telegram"],
+      "payload": {
+        "text": "/newt",
+        "thread_id": 55,
+        "update_id": 77
+      }
+    }
+  ],
+  "transcript_invariants": [
+    {
+      "kind": "contains_text",
+      "surfaces": ["discord", "telegram"],
+      "params": {
+        "text": "Reset branch"
+      }
+    }
+  ],
+  "contract_links": {
+    "references": ["tests/chat_surface_lab/test_scenario_runner.py"]
+  },
+  "tags": ["repo_mode", "newt"]
+}

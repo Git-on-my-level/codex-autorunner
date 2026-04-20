@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -14,6 +13,15 @@ from .....core.state import now_iso
 from .....core.utils import canonicalize_path
 from ....app_server.client import CodexAppServerError
 from ....chat.constants import APP_SERVER_UNAVAILABLE_MESSAGE, TOPIC_NOT_BOUND_MESSAGE
+from ....chat.newt_support import (
+    NewtSetupCommandsError,
+    build_newt_reject_lines,
+    build_telegram_newt_branch_name,
+    describe_newt_reject_state,
+    format_newt_submodule_summary,
+    is_newt_dirty_worktree_error,
+    run_newt_branch_reset,
+)
 from ....chat.session_messages import (
     build_branch_reset_started_lines,
     build_fresh_session_started_lines,
@@ -615,8 +623,6 @@ class WorkspaceSessionCommandsMixin:
         )
 
     async def _handle_newt(self, message: TelegramMessage) -> None:
-        import re
-
         key = await self._resolve_topic_key(message.chat_id, message.thread_id)
         record = await self._router.get_topic(key)
         pma_enabled = bool(record and record.pma_enabled)
@@ -647,30 +653,48 @@ class WorkspaceSessionCommandsMixin:
             )
             return
 
-        safe_chat_id = re.sub(r"[^a-zA-Z0-9]+", "-", str(message.chat_id)).strip("-")
-        if not safe_chat_id:
-            safe_chat_id = "chat"
-        if message.thread_id is None:
-            thread_identity = f"msg-{message.message_id}-upd-{message.update_id}"
-        else:
-            thread_identity = f"thread-{message.thread_id}"
-        safe_thread_id = re.sub(r"[^a-zA-Z0-9]+", "-", thread_identity).strip("-")
-        if not safe_thread_id:
-            safe_thread_id = "unscoped"
-        branch_suffix = hashlib.sha256(str(workspace_root).encode("utf-8")).hexdigest()[
-            :10
-        ]
-        branch_name = f"thread-chat-{safe_chat_id}-{safe_thread_id}-{branch_suffix}"
+        branch_name = build_telegram_newt_branch_name(
+            chat_id=message.chat_id,
+            workspace_root=workspace_root,
+            thread_id=message.thread_id,
+            message_id=message.message_id,
+            update_id=message.update_id,
+        )
         had_previous = bool(record.active_thread_id)
 
-        from .workspace import reset_branch_from_origin_main as _reset_branch
-
         try:
-            default_branch = await asyncio.to_thread(
-                _reset_branch,
+            reset_result = await run_newt_branch_reset(
                 workspace_root,
                 branch_name,
+                repo_id_hint=(
+                    record.repo_id.strip()
+                    if isinstance(record.repo_id, str) and record.repo_id.strip()
+                    else None
+                ),
+                hub_client=getattr(self, "_hub_client", None),
             )
+        except NewtSetupCommandsError as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.newt.setup.failed",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                workspace_path=str(workspace_root),
+                exc=exc,
+            )
+            detail = format_newt_submodule_summary("/newt", exc.submodule_paths)
+            suffix = f"\n\n{detail}" if detail else ""
+            await self._send_message(
+                message.chat_id,
+                (
+                    f"Reset branch `{branch_name}` to `origin/{exc.default_branch}` "
+                    f"but setup commands failed: {exc}{suffix}"
+                ),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
         except GitError as exc:
             log_event(
                 self._logger,
@@ -681,6 +705,27 @@ class WorkspaceSessionCommandsMixin:
                 branch=branch_name,
                 exc=exc,
             )
+            if is_newt_dirty_worktree_error(exc):
+                reject_state = describe_newt_reject_state(workspace_root)
+                reasons = list(reject_state.reasons)
+                if not reasons:
+                    reasons = ["Local git changes are blocking the reset."]
+                await self._send_message(
+                    message.chat_id,
+                    "\n".join(
+                        build_newt_reject_lines(
+                            command_label="/newt",
+                            reasons=reasons,
+                            submodule_paths=reject_state.submodule_paths,
+                            resolution_hint=(
+                                "Commit or stash local changes, then retry `/newt`."
+                            ),
+                        )
+                    ),
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
             await self._send_message(
                 message.chat_id,
                 f"Failed to reset branch `{branch_name}` from origin default branch: {exc}",
@@ -688,42 +733,6 @@ class WorkspaceSessionCommandsMixin:
                 reply_to=message.message_id,
             )
             return
-
-        setup_command_count = 0
-        hub_client = getattr(self, "_hub_client", None)
-        if hub_client is not None:
-            repo_id_hint = (
-                record.repo_id.strip()
-                if isinstance(record.repo_id, str) and record.repo_id.strip()
-                else None
-            )
-            try:
-                from .....core.hub_control_plane import WorkspaceSetupCommandRequest
-
-                cp_result = await hub_client.run_workspace_setup_commands(
-                    WorkspaceSetupCommandRequest(
-                        workspace_root=str(workspace_root),
-                        repo_id_hint=repo_id_hint,
-                    )
-                )
-                setup_command_count = cp_result.setup_command_count
-            except (OSError, RuntimeError, ValueError) as exc:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "telegram.newt.setup.failed",
-                    chat_id=message.chat_id,
-                    thread_id=message.thread_id,
-                    workspace_path=str(workspace_root),
-                    exc=exc,
-                )
-                await self._send_message(
-                    message.chat_id,
-                    f"Reset branch `{branch_name}` to `origin/{default_branch}` but setup commands failed: {exc}",
-                    thread_id=message.thread_id,
-                    reply_to=message.message_id,
-                )
-                return
 
         def apply(record: "TelegramTopicRecord") -> None:
             record.active_thread_id = None
@@ -907,17 +916,21 @@ class WorkspaceSessionCommandsMixin:
         effort_label = (
             record.effort or "default" if self._agent_supports_effort(agent) else "n/a"
         )
+        submodule_summary = format_newt_submodule_summary(
+            "/newt", reset_result.submodule_paths
+        )
         message_lines = [
             *build_branch_reset_started_lines(
                 branch_name=branch_name,
-                default_branch=default_branch,
+                default_branch=reset_result.default_branch,
                 mode_label="repo",
                 actor_label=self._effective_agent_label(record),
                 state_label=(
                     "cleared previous thread" if had_previous else "new thread ready"
                 ),
-                setup_command_count=setup_command_count or None,
+                setup_command_count=reset_result.setup_command_count or None,
             ),
+            *([submodule_summary] if submodule_summary else []),
             *build_thread_detail_lines(
                 headline=f"Started new thread `{thread_id}`.",
                 workspace_path=str(workspace_root),

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -194,6 +195,31 @@ async def test_runner_executes_attachment_download_visibility(
 
 
 @pytest.mark.anyio
+async def test_runner_executes_pma_mode_toggle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scenario = load_scenario_by_id("pma_mode_toggle")
+    runner = ChatSurfaceScenarioRunner(
+        output_root=tmp_path / "scenario-runs",
+        apply_runtime_patch=lambda runtime: patch_hermes_runtime(monkeypatch, runtime),
+    )
+
+    result = await runner.run_scenario(scenario)
+    assert result.skipped is False
+    assert len(result.surface_results) == 1
+    discord = result.surface_results[0]
+    assert discord.surface.value == "discord"
+    transcript_texts = [str(event.text or "") for event in discord.transcript.events]
+    assert any(
+        "Started a fresh PMA session for `hermes`" in text for text in transcript_texts
+    )
+    assert any(
+        "Started a fresh repo session for `hermes`" in text for text in transcript_texts
+    )
+
+
+@pytest.mark.anyio
 async def test_runner_handles_reference_only_scenarios_without_surface_execution(
     tmp_path: Path,
 ) -> None:
@@ -204,6 +230,52 @@ async def test_runner_handles_reference_only_scenarios_without_surface_execution
     assert result.skipped is True
     assert result.surface_results == ()
     assert result.summary_path is not None and result.summary_path.exists()
+
+
+@pytest.mark.anyio
+async def test_runner_executes_newt_reset_parity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scenario = load_scenario_by_id("newt_reset_parity")
+    runner = ChatSurfaceScenarioRunner(
+        output_root=tmp_path / "scenario-runs",
+        apply_runtime_patch=lambda runtime: patch_hermes_runtime(monkeypatch, runtime),
+    )
+
+    async def _fake_reset(
+        _workspace_root: Path,
+        _branch_name: str,
+        *,
+        repo_id_hint=None,
+        hub_client=None,
+    ):
+        _ = repo_id_hint, hub_client
+        return SimpleNamespace(
+            default_branch="main",
+            setup_command_count=0,
+            submodule_paths=(),
+        )
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.discord.car_handlers.session_commands.run_newt_branch_reset",
+        _fake_reset,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.telegram.handlers.commands.workspace_session_commands.run_newt_branch_reset",
+        _fake_reset,
+    )
+
+    result = await runner.run_scenario(scenario)
+
+    assert result.skipped is False
+    assert len(result.surface_results) == 2
+    for surface in result.surface_results:
+        assert surface.execution_error is None
+        transcript_texts = [
+            str(event.text or "") for event in surface.transcript.events
+        ]
+        assert any("Reset branch" in text for text in transcript_texts)
 
 
 @pytest.mark.anyio

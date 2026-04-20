@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ..chat.status_diagnostics import build_process_monitor_lines_for_root
+from .pma_mode_switch import handle_pma_off_switch, handle_pma_on_switch
 
 
 async def handle_pma_command(
@@ -32,20 +33,28 @@ async def handle_pma_command(
             channel_id=channel_id,
             guild_id=guild_id,
         )
-    elif subcommand == "off":
+        return
+    if subcommand == "off":
         await handle_pma_off(
-            service, interaction_id, interaction_token, channel_id=channel_id
-        )
-    elif subcommand == "status":
-        await handle_pma_status(
-            service, interaction_id, interaction_token, channel_id=channel_id
-        )
-    else:
-        await service.respond_ephemeral(
+            service,
             interaction_id,
             interaction_token,
-            "Unknown PMA subcommand. Use on, off, or status.",
+            channel_id=channel_id,
         )
+        return
+    if subcommand == "status":
+        await handle_pma_status(
+            service,
+            interaction_id,
+            interaction_token,
+            channel_id=channel_id,
+        )
+        return
+    await service.respond_ephemeral(
+        interaction_id,
+        interaction_token,
+        "Unknown PMA subcommand. Use on, off, or status.",
+    )
 
 
 async def handle_pma_command_from_normalized(
@@ -58,6 +67,7 @@ async def handle_pma_command_from_normalized(
     command_path: tuple[str, ...],
     options: dict[str, Any],
 ) -> None:
+    _ = options
     subcommand = command_path[1] if len(command_path) > 1 else "status"
     if subcommand not in ("on", "off", "status"):
         await service.respond_ephemeral(
@@ -73,20 +83,6 @@ async def handle_pma_command_from_normalized(
         channel_id=channel_id,
         guild_id=guild_id,
         command_path=command_path,
-        options=options,
-    )
-
-
-def _previous_binding_fields(
-    binding: Optional[dict[str, Any]],
-) -> tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
-    if binding is None:
-        return None, None, None, None
-    return (
-        binding.get("workspace_path"),
-        binding.get("repo_id"),
-        binding.get("resource_kind"),
-        binding.get("resource_id"),
     )
 
 
@@ -98,47 +94,12 @@ async def handle_pma_on(
     channel_id: str,
     guild_id: Optional[str],
 ) -> None:
-    binding = await service._store.get_binding(channel_id=channel_id)
-    if binding is not None and binding.get("pma_enabled", False):
-        await service.respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            "PMA mode is already enabled for this channel. Use /pma off to exit.",
-        )
-        return
-
-    prev_workspace, prev_repo_id, prev_resource_kind, prev_resource_id = (
-        _previous_binding_fields(binding)
-    )
-
-    if binding is None:
-        await service._store.upsert_binding(
-            channel_id=channel_id,
-            guild_id=guild_id,
-            workspace_path=str(service._config.root),
-            repo_id=None,
-            resource_kind=None,
-            resource_id=None,
-        )
-
-    await service._store.update_pma_state(
-        channel_id=channel_id,
-        pma_enabled=True,
-        pma_prev_workspace_path=prev_workspace,
-        pma_prev_repo_id=prev_repo_id,
-        pma_prev_resource_kind=prev_resource_kind,
-        pma_prev_resource_id=prev_resource_id,
-    )
-    await service._store.clear_pending_compact_seed(channel_id=channel_id)
-
-    await service.respond_ephemeral(
+    await handle_pma_on_switch(
+        service,
         interaction_id,
         interaction_token,
-        (
-            "PMA mode enabled. Use /pma off to exit. Previous binding saved."
-            if prev_workspace
-            else "PMA mode enabled. Use /pma off to exit."
-        ),
+        channel_id=channel_id,
+        guild_id=guild_id,
     )
 
 
@@ -149,48 +110,11 @@ async def handle_pma_off(
     *,
     channel_id: str,
 ) -> None:
-    binding = await service._store.get_binding(channel_id=channel_id)
-    if binding is None:
-        await service.respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            "PMA mode disabled. Back to repo mode.",
-        )
-        return
-
-    prev_workspace = binding.get("pma_prev_workspace_path")
-    prev_repo_id = binding.get("pma_prev_repo_id")
-    prev_resource_kind = binding.get("pma_prev_resource_kind")
-    prev_resource_id = binding.get("pma_prev_resource_id")
-
-    await service._store.update_pma_state(
-        channel_id=channel_id,
-        pma_enabled=False,
-        pma_prev_workspace_path=None,
-        pma_prev_repo_id=None,
-        pma_prev_resource_kind=None,
-        pma_prev_resource_id=None,
-    )
-    await service._store.clear_pending_compact_seed(channel_id=channel_id)
-
-    if prev_workspace:
-        await service._store.upsert_binding(
-            channel_id=channel_id,
-            guild_id=binding.get("guild_id"),
-            workspace_path=prev_workspace,
-            repo_id=prev_repo_id,
-            resource_kind=prev_resource_kind,
-            resource_id=prev_resource_id,
-        )
-        hint = f"Restored binding to {prev_workspace}."
-    else:
-        await service._store.delete_binding(channel_id=channel_id)
-        hint = "Back to repo mode."
-
-    await service.respond_ephemeral(
+    await handle_pma_off_switch(
+        service,
         interaction_id,
         interaction_token,
-        f"PMA mode disabled. {hint}",
+        channel_id=channel_id,
     )
 
 

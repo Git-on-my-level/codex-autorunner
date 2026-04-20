@@ -12,6 +12,7 @@ from ..chat.callbacks import (
     CALLBACK_BIND,
     CALLBACK_CANCEL,
     CALLBACK_COMPACT,
+    CALLBACK_DOCUMENT_BROWSER,
     CALLBACK_EFFORT,
     CALLBACK_FLOW,
     CALLBACK_FLOW_RUN,
@@ -51,6 +52,7 @@ _KIND_TO_ID = {
     "page": CALLBACK_PAGE,
     "flow": CALLBACK_FLOW,
     "flow_run": CALLBACK_FLOW_RUN,
+    "document_browser": CALLBACK_DOCUMENT_BROWSER,
 }
 
 
@@ -152,6 +154,11 @@ def cataloged_telegram_callback_contract_scenarios(
             callback_id=CALLBACK_FLOW_RUN,
             payload={"run_id": "run-1"},
         ),
+        TelegramCallbackContractScenario(
+            label="document_browser",
+            callback_id=CALLBACK_DOCUMENT_BROWSER,
+            payload={"action": "back", "value": None},
+        ),
     ]
     if include_control_variants:
         scenarios.extend(
@@ -234,6 +241,7 @@ def _legacy_constructors() -> dict[str, Callable[..., Any]]:
         BindCallback,
         CancelCallback,
         CompactCallback,
+        DocumentBrowserCallback,
         EffortCallback,
         FlowCallback,
         FlowRunCallback,
@@ -269,6 +277,7 @@ def _legacy_constructors() -> dict[str, Callable[..., Any]]:
         CALLBACK_PAGE: PageCallback,
         CALLBACK_FLOW: FlowCallback,
         CALLBACK_FLOW_RUN: FlowRunCallback,
+        CALLBACK_DOCUMENT_BROWSER: DocumentBrowserCallback,
     }
 
 
@@ -366,6 +375,14 @@ def _encode_flow_run(payload: dict[str, Any]) -> str:
     return f"flow_run:{run_id}"
 
 
+def _encode_document_browser(payload: dict[str, Any]) -> str:
+    action = _required_str(payload, "action")
+    value = _optional_str(payload, "value")
+    if value is None:
+        return f"doc:{action}"
+    return f"doc:{action}:{value}"
+
+
 _ENCODERS: dict[str, Callable[[dict[str, Any]], str]] = {
     CALLBACK_APPROVAL: _encode_approval,
     CALLBACK_QUESTION_OPTION: _encode_question_option,
@@ -386,6 +403,7 @@ _ENCODERS: dict[str, Callable[[dict[str, Any]], str]] = {
     CALLBACK_PAGE: _encode_page,
     CALLBACK_FLOW: _encode_flow,
     CALLBACK_FLOW_RUN: _encode_flow_run,
+    CALLBACK_DOCUMENT_BROWSER: _encode_document_browser,
 }
 
 

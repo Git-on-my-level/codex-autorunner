@@ -331,6 +331,13 @@ def scenario_definition_to_payload(scenario: ScenarioDefinition) -> dict[str, An
         }
     if scenario.approval_mode:
         payload["approval_mode"] = scenario.approval_mode
+    if scenario.surface_setup:
+        payload["surface_setup"] = {
+            surface.value: dict(config)
+            for surface, config in sorted(
+                scenario.surface_setup.items(), key=lambda item: item[0].value
+            )
+        }
     return payload
 
 

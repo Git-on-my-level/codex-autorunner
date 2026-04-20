@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, Optional
 
@@ -161,6 +162,7 @@ async def execute_harness_turn(
     thread_key: Optional[str] = None,
     on_meta: Optional[Any] = None,
     timeout_seconds: Optional[float] = None,
+    rebuild_prompt: Optional[Callable[[bool], Awaitable[str]]] = None,
 ) -> dict[str, Any]:
     await harness.ensure_ready(hub_root)
     resolved_timeout_seconds = float(
@@ -206,17 +208,24 @@ async def execute_harness_turn(
             )
         return fresh_conversation_id
 
+    opened_fresh_backend_conversation = False
     if not conversation_id:
         conversation_id = await _create_fresh_conversation()
+        opened_fresh_backend_conversation = True
 
     if thread_registry is not None and thread_key and conversation_id:
         thread_registry.set_thread_id(thread_key, conversation_id)
+
+    async def _effective_prompt_for_start_turn() -> str:
+        if rebuild_prompt is not None and opened_fresh_backend_conversation:
+            return await rebuild_prompt(True)
+        return prompt
 
     try:
         turn = await harness.start_turn(
             hub_root,
             conversation_id,
-            prompt,
+            await _effective_prompt_for_start_turn(),
             model,
             reasoning,
             approval_mode="on-request",
@@ -235,12 +244,13 @@ async def execute_harness_turn(
                     exc_info=True,
                 )
         conversation_id = await _create_fresh_conversation()
+        opened_fresh_backend_conversation = True
         if thread_registry is not None and thread_key:
             thread_registry.set_thread_id(thread_key, conversation_id)
         turn = await harness.start_turn(
             hub_root,
             conversation_id,
-            prompt,
+            await _effective_prompt_for_start_turn(),
             model,
             reasoning,
             approval_mode="on-request",

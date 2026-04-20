@@ -24,6 +24,7 @@ from codex_autorunner.core.pma_context import (
     PMA_ACTIVE_CONTEXT_MAX_LINES,
     build_hub_snapshot,
     format_pma_prompt,
+    format_pma_prompt_variants,
     get_active_context_auto_prune_meta,
 )
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
@@ -1924,7 +1925,9 @@ class TestIssue975DeltaPmaPromptAssembly:
 
         assert "# Durable Agent Guidance" in result1
         assert "# Current Context" in result1
+        assert "Base prompt" in result1
         assert "<pma_fastpath>" in result1
+        assert "Base prompt" not in result2
         assert "<pma_workspace_docs>" not in result2
         assert "Ops guide: `.codex-autorunner/pma/docs/ABOUT_CAR.md`." not in result2
         assert "<pma_fastpath>" not in result2
@@ -1941,6 +1944,76 @@ class TestIssue975DeltaPmaPromptAssembly:
         assert "- changed=none" in result2
         assert "PMA Action Queue:" in result2
         assert "recommended_action=reply_and_resume" in result2
+
+    def test_format_pma_prompt_force_full_base_prompt_reinjects_prompt_md_on_delta_turn(
+        self, tmp_path: Path
+    ) -> None:
+        """Fresh backend conversation during delta should still see prompt.md body."""
+        seed_hub_files(tmp_path, force=True)
+
+        snapshot = {
+            "generated_at": "2026-03-16T00:00:00Z",
+            "action_queue": [],
+            "inbox": [],
+            "repos": [],
+            "pma_files": {"inbox": [], "outbox": []},
+            "pma_files_detail": {"inbox": [], "outbox": []},
+        }
+
+        _ = format_pma_prompt(
+            "Stable prompt.md instructions for PMA.",
+            snapshot,
+            "Turn 1",
+            hub_root=tmp_path,
+            prompt_state_key="pma.test-fresh-base",
+        )
+        delta = format_pma_prompt(
+            "Stable prompt.md instructions for PMA.",
+            snapshot,
+            "Turn 2",
+            hub_root=tmp_path,
+            prompt_state_key="pma.test-fresh-base",
+        )
+        assert "Stable prompt.md instructions for PMA." not in delta
+
+        with_base = format_pma_prompt(
+            "Stable prompt.md instructions for PMA.",
+            snapshot,
+            "Turn 2",
+            hub_root=tmp_path,
+            prompt_state_key="pma.test-fresh-base",
+            force_full_base_prompt=True,
+        )
+        assert "Stable prompt.md instructions for PMA." in with_base
+        assert "<pma_fastpath>" not in with_base
+
+    def test_format_pma_prompt_variants_preserve_bootstrap_and_existing_session_forms(
+        self, tmp_path: Path
+    ) -> None:
+        seed_hub_files(tmp_path, force=True)
+
+        snapshot = {
+            "generated_at": "2026-03-16T00:00:00Z",
+            "action_queue": [],
+            "inbox": [],
+            "repos": [],
+            "pma_files": {"inbox": [], "outbox": []},
+        }
+
+        variants = format_pma_prompt_variants(
+            "Base prompt",
+            snapshot,
+            "Turn 1",
+            hub_root=tmp_path,
+            prompt_state_key="pma.test-variants",
+        )
+
+        assert "<pma_workspace_docs>" in variants.new_session_prompt
+        assert "<hub_snapshot>" in variants.new_session_prompt
+        assert "<pma_workspace_docs>" not in variants.existing_session_prompt
+        assert "\n<hub_snapshot>\n" not in variants.existing_session_prompt
+        assert "<hub_snapshot_ref " in variants.existing_session_prompt
+        assert "- cached=" in variants.existing_session_prompt
 
     def test_format_pma_prompt_delta_surfaces_only_changed_docs(
         self, tmp_path: Path
@@ -1995,6 +2068,42 @@ class TestIssue975DeltaPmaPromptAssembly:
         assert "<ACTIVE_CONTEXT_MD>" in result
         assert "Next: wire delta prompt." in result
         assert "Rule 1: Be concise." not in result
+        assert "\n<hub_snapshot>\n" not in result
+
+    def test_format_pma_prompt_delta_surfaces_changed_base_prompt(
+        self, tmp_path: Path
+    ) -> None:
+        """Changed prompt.md content is re-injected while stable prompt text stays cached."""
+        seed_hub_files(tmp_path, force=True)
+
+        snapshot = {
+            "generated_at": "2026-03-16T00:00:00Z",
+            "action_queue": [],
+            "inbox": [],
+            "repos": [],
+            "pma_files": {"inbox": [], "outbox": []},
+            "pma_files_detail": {"inbox": [], "outbox": []},
+        }
+
+        _ = format_pma_prompt(
+            "Base prompt v1",
+            snapshot,
+            "Turn 1",
+            hub_root=tmp_path,
+            prompt_state_key="pma.test-changed-base-prompt",
+        )
+        result = format_pma_prompt(
+            "Base prompt v2",
+            snapshot,
+            "Turn 2",
+            hub_root=tmp_path,
+            prompt_state_key="pma.test-changed-base-prompt",
+        )
+
+        assert "Base prompt v1" not in result
+        assert "<PMA_PROMPT_MD>" in result
+        assert "Base prompt v2" in result
+        assert "<pma_workspace_docs>" not in result
         assert "\n<hub_snapshot>\n" not in result
 
     def test_format_pma_prompt_delta_surfaces_changed_hub_snapshot_without_repeating_stable_blocks(
