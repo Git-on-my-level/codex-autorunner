@@ -3764,7 +3764,7 @@ def test_lifecycle_emitter_property(tmp_path: Path) -> None:
     try:
         emitter = supervisor.lifecycle_emitter
         assert emitter is not None
-        assert emitter is supervisor._lifecycle_emitter
+        assert emitter is supervisor._lifecycle_orchestrator.lifecycle_emitter
     finally:
         supervisor.shutdown()
 
@@ -4039,7 +4039,7 @@ def test_process_lifecycle_events_drains_wakeups(
     try:
         drained = []
         monkeypatch.setattr(
-            supervisor._lifecycle_event_processor,
+            supervisor._lifecycle_orchestrator._lifecycle_event_processor,
             "process_events",
             lambda limit=100: None,
         )
@@ -4063,7 +4063,7 @@ def test_process_lifecycle_events_handles_drain_exception(
     supervisor = HubSupervisor(load_hub_config(hub_root))
     try:
         monkeypatch.setattr(
-            supervisor._lifecycle_event_processor,
+            supervisor._lifecycle_orchestrator._lifecycle_event_processor,
             "process_events",
             lambda limit=100: None,
         )

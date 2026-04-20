@@ -17,19 +17,13 @@ from ..manifest import (
     sanitize_repo_id,
     save_manifest,
 )
-from ..tickets.outbox import set_lifecycle_emitter
 from .config import (
     HubConfig,
     RepoConfig,
     derive_repo_config,
     load_hub_config,
 )
-from .hub_lifecycle import (
-    HubLifecycleWorker,
-    LifecycleEventProcessor,
-    LifecycleRetryPolicy,
-)
-from .hub_lifecycle_routing import LifecycleEventRouter
+from .hub_lifecycle import HubLifecycleOrchestrator
 from .hub_repo_manager import RepoManager
 from .hub_runner_orchestrator import RunnerOrchestrator
 from .hub_topology import (
@@ -323,34 +317,25 @@ class HubSupervisor:
         self._list_cache: Optional[List[RepoSnapshot]] = None
         self._startup_repo_state_pending = bool(self.state.repos)
         self._list_lock = threading.Lock()
-        self._lifecycle_emitter = LifecycleEventEmitter(hub_config.root)
-        self._lifecycle_router = LifecycleEventRouter(
-            hub_config=hub_config,
-            lifecycle_store=self.lifecycle_store,
-            list_repos_fn=self.list_repos,
-            ensure_pma_automation_store_fn=self.ensure_pma_automation_store,
-            ensure_pma_safety_checker_fn=self.ensure_pma_safety_checker,
-            run_coroutine_fn=self._run_coroutine,
-            logger=logger,
-        )
-        self._lifecycle_event_processor = LifecycleEventProcessor(
-            store=self.lifecycle_store,
-            process_event=lambda event: self._process_lifecycle_event(event),
-            retry_policy=self._build_lifecycle_retry_policy(),
-            logger=logger,
-        )
-        self._lifecycle_worker = HubLifecycleWorker(
-            process_once=self._process_lifecycle_event_cycle,
-            poll_interval_seconds=5.0,
-            join_timeout_seconds=2.0,
-            thread_name="lifecycle-event-processor",
-            logger=logger,
-        )
         self._pma_safety_checker: Optional[PmaSafetyChecker] = None
         self._pma_automation_store: Optional[PmaAutomationStore] = None
         self._pma_lane_worker_starter: Optional[Callable[[str], None]] = None
         self._scm_poll_processor = scm_poll_processor
         self._invalidation_callbacks: List[Callable[[], None]] = []
+        self._lifecycle_orchestrator = HubLifecycleOrchestrator(
+            hub_config,
+            list_repos_fn=lambda: self.list_repos(),
+            ensure_pma_automation_store_fn=lambda: self.ensure_pma_automation_store(),
+            ensure_pma_safety_checker_fn=lambda: self.ensure_pma_safety_checker(),
+            run_coroutine_fn=self._run_coroutine,
+            process_scm_polls_fn=lambda: self.process_scm_automation_polls(),
+            process_pma_timers_fn=lambda: self.process_pma_automation_timers(),
+            drain_pma_wakeups_fn=lambda: self.drain_pma_automation_wakeups(),
+            logger=logger,
+        )
+        self._lifecycle_orchestrator._process_event_fn = (
+            lambda event: self._process_lifecycle_event(event)
+        )
         self._repo_manager = RepoManager(
             hub_config,
             on_invalidate_cache=self._invalidate_list_cache,
@@ -365,7 +350,7 @@ class HubSupervisor:
             hub_config,
             ctx=self._worktree_bridge,
         )
-        self._wire_outbox_lifecycle()
+        self._lifecycle_orchestrator.wire_outbox_lifecycle()
         self._startup_phase = HUB_STARTUP_RECONCILING
         self._reconcile_startup()
         self._startup_phase = HUB_STARTUP_READY
@@ -958,11 +943,11 @@ class HubSupervisor:
 
     @property
     def lifecycle_emitter(self) -> LifecycleEventEmitter:
-        return self._lifecycle_emitter
+        return self._lifecycle_orchestrator.lifecycle_emitter
 
     @property
     def lifecycle_store(self) -> LifecycleEventStore:
-        return self._lifecycle_emitter._store
+        return self._lifecycle_orchestrator.lifecycle_store
 
     def ensure_pma_automation_store(self) -> PmaAutomationStore:
         if self._pma_automation_store is not None:
@@ -1022,30 +1007,10 @@ class HubSupervisor:
         }
 
     def trigger_pma_from_lifecycle_event(self, event: LifecycleEvent) -> None:
-        self._process_lifecycle_event(event)
-
-    def _process_lifecycle_event_cycle(self) -> bool:
-        productive = False
-        if self.process_lifecycle_events() > 0:
-            productive = True
-        scm_counts = self.process_scm_automation_polls()
-        if scm_counts.get("polled", 0) > 0 or scm_counts.get("events_emitted", 0) > 0:
-            productive = True
-        timer_count = self.process_pma_automation_timers()
-        if timer_count > 0:
-            productive = True
-        wakeup_count = self.drain_pma_automation_wakeups()
-        if wakeup_count > 0:
-            productive = True
-        return productive
+        self._lifecycle_orchestrator.trigger_pma_from_lifecycle_event(event)
 
     def process_lifecycle_events(self) -> int:
-        processed = self._lifecycle_event_processor.process_events(limit=100)
-        try:
-            self.drain_pma_automation_wakeups()
-        except Exception:
-            logger.exception("Failed draining PMA automation wake-ups")
-        return processed
+        return self._lifecycle_orchestrator.process_lifecycle_events()
 
     def process_scm_automation_polls(self, *, limit: int = 20) -> dict[str, int]:
         processor = self._scm_poll_processor
@@ -1085,43 +1050,32 @@ class HubSupervisor:
                 "rate_limited_skipped": 0,
             }
 
-    def _start_lifecycle_event_processor(self) -> None:
-        self._lifecycle_worker.start()
-
-    def _stop_lifecycle_event_processor(self) -> None:
-        self._lifecycle_worker.stop()
-
     @property
     def startup_phase(self) -> HubStartupPhase:
         return self._startup_phase
 
     def startup(self) -> None:
-        self._start_lifecycle_event_processor()
+        self._lifecycle_orchestrator.startup()
         self._startup_phase = HUB_STARTUP_STARTED
 
+    def _stop_lifecycle_event_processor(self) -> None:
+        self._lifecycle_orchestrator.shutdown()
+
+    def _start_lifecycle_event_processor(self) -> None:
+        self._lifecycle_orchestrator.startup()
+
+    def _build_lifecycle_retry_policy(self):
+        return self._lifecycle_orchestrator._build_lifecycle_retry_policy()
+
+    @property
+    def _lifecycle_router(self):
+        return self._lifecycle_orchestrator._lifecycle_router
+
+    def _process_lifecycle_event(self, event: LifecycleEvent) -> None:
+        self._lifecycle_orchestrator._lifecycle_router.route_event(event)
+
     def shutdown(self) -> None:
-        self._stop_lifecycle_event_processor()
-        set_lifecycle_emitter(None)
-
-    def _wire_outbox_lifecycle(self) -> None:
-        if not self.hub_config.pma.enabled:
-            set_lifecycle_emitter(None)
-            return
-
-        def _emit_outbox_event(
-            event_type: str,
-            repo_id: str,
-            run_id: str,
-            data: Dict[str, Any],
-            origin: str,
-        ) -> None:
-            if event_type == "dispatch_created":
-                self._lifecycle_emitter.emit_dispatch_created(
-                    repo_id, run_id, data=data, origin=origin
-                )
-                self._lifecycle_worker.wake()
-
-        set_lifecycle_emitter(_emit_outbox_event)
+        self._lifecycle_orchestrator.shutdown()
 
     def _run_coroutine(self, coro: Any) -> Any:
         try:
@@ -1375,48 +1329,6 @@ class HubSupervisor:
                 drained += 1
         return drained
 
-    def _build_lifecycle_retry_policy(self) -> LifecycleRetryPolicy:
-        raw = getattr(self.hub_config, "raw", {})
-        pma_config = raw.get("pma", {}) if isinstance(raw, dict) else {}
-        if not isinstance(pma_config, dict):
-            pma_config = {}
-
-        def _read_int(key: str, fallback: int, *, minimum: int = 0) -> int:
-            raw_value = pma_config.get(key, fallback)
-            try:
-                value = int(raw_value)
-            except (TypeError, ValueError):
-                return fallback
-            return value if value >= minimum else fallback
-
-        def _read_float(key: str, fallback: float, *, minimum: float = 0.0) -> float:
-            raw_value = pma_config.get(key, fallback)
-            try:
-                value = float(raw_value)
-            except (TypeError, ValueError):
-                return fallback
-            return value if value >= minimum else fallback
-
-        max_attempts = _read_int("lifecycle_retry_max_attempts", 3, minimum=1)
-        initial_backoff_seconds = _read_float(
-            "lifecycle_retry_initial_backoff_seconds",
-            5.0,
-            minimum=0.0,
-        )
-        max_backoff_seconds = _read_float(
-            "lifecycle_retry_max_backoff_seconds",
-            300.0,
-            minimum=0.0,
-        )
-        if max_backoff_seconds < initial_backoff_seconds:
-            max_backoff_seconds = initial_backoff_seconds
-
-        return LifecycleRetryPolicy(
-            max_attempts=max_attempts,
-            initial_backoff_seconds=initial_backoff_seconds,
-            max_backoff_seconds=max_backoff_seconds,
-        )
-
     def ensure_pma_safety_checker(self) -> PmaSafetyChecker:
         if self._pma_safety_checker is not None:
             return self._pma_safety_checker
@@ -1454,6 +1366,3 @@ class HubSupervisor:
 
     def get_pma_safety_checker(self) -> PmaSafetyChecker:
         return self.ensure_pma_safety_checker()
-
-    def _process_lifecycle_event(self, event: LifecycleEvent) -> None:
-        self._lifecycle_router.route_event(event)
