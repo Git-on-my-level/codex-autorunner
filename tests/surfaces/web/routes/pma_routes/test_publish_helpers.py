@@ -134,6 +134,31 @@ class TestBuildPublishMessage:
         assert "timeout" in msg
         assert "next_action" in msg
 
+    def test_error_status_includes_token_usage_footer_when_present(self) -> None:
+        msg = build_publish_message(
+            result={
+                "status": "error",
+                "detail": "timeout",
+                "token_usage": {
+                    "last": {
+                        "totalTokens": 71173,
+                        "inputTokens": 400,
+                        "outputTokens": 245,
+                    },
+                    "modelContextWindow": 203352,
+                },
+            },
+            lifecycle_event={"event_type": "turn_failed"},
+            wake_up=None,
+            correlation_id="corr-2b",
+        )
+
+        assert "error" in msg
+        assert "timeout" in msg
+        assert "next_action" in msg
+        assert "Token usage: total 71173 input 400 output 245" in msg
+        assert "ctx 65%" in msg
+
     def test_wakeup_source_fallback(self) -> None:
         msg = build_publish_message(
             result={"status": "ok", "message": "done"},

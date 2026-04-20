@@ -32,6 +32,7 @@ from ..chat.managed_thread_turns import (
 from ..chat.managed_thread_turns import (
     resolve_managed_thread_target as _shared_resolve_managed_thread_target,
 )
+from ..chat.turn_metrics import compose_turn_response_with_footer
 from .managed_thread_delivery import build_discord_managed_thread_durable_delivery_hooks
 from .rendering import (
     DISCORD_MAX_MESSAGE_LENGTH,
@@ -447,7 +448,15 @@ def _build_discord_runner_hooks(
 
     async def _deliver_result(finalized: ManagedThreadFinalizationResult) -> None:
         if finalized.status == "ok":
-            assistant_text = render_managed_thread_response_text(finalized)
+            assistant_text = compose_turn_response_with_footer(
+                render_managed_thread_response_text(finalized),
+                summary_text=None,
+                token_usage=(
+                    dict(finalized.token_usage) if finalized.token_usage else None
+                ),
+                elapsed_seconds=None,
+                empty_response_text="(No response text returned.)",
+            )
             formatted = (
                 format_discord_message(assistant_text)
                 if assistant_text

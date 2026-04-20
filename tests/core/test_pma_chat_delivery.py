@@ -373,6 +373,58 @@ async def test_deliver_pma_notification_suppresses_duplicate_notice_for_same_thr
 
 
 @pytest.mark.anyio
+async def test_deliver_pma_notification_does_not_suppress_duplicate_notice_without_thread_id(
+    tmp_path: Path,
+) -> None:
+    hub_root = _hub(tmp_path)
+    workspace = (hub_root / "worktrees" / "repo-g2").resolve()
+    workspace.mkdir(parents=True, exist_ok=True)
+    _write_manifest(hub_root, "repo-g2", workspace)
+
+    discord_store = DiscordStateStore(
+        hub_root / ".codex-autorunner" / "discord_state.sqlite3"
+    )
+    try:
+        await discord_store.upsert_binding(
+            channel_id="repo-g2-discord",
+            guild_id="guild-1",
+            workspace_path=str(workspace),
+            repo_id="repo-g2",
+        )
+        await discord_store.update_pma_state(
+            channel_id="repo-g2-discord",
+            pma_enabled=True,
+            pma_prev_workspace_path=str(workspace),
+            pma_prev_repo_id="repo-g2",
+        )
+
+        outcome = await deliver_pma_notification(
+            hub_root=hub_root,
+            repo_id="repo-g2",
+            message="Duplicate — repo-g2 thread already handled. No action.",
+            correlation_id="corr-explicit-duplicate-no-thread",
+            delivery="auto",
+            source_kind="managed_thread_completed",
+            managed_thread_id=None,
+            delivery_target={
+                "surface_kind": "discord",
+                "surface_key": "repo-g2-discord",
+            },
+        )
+
+        assert outcome == {"route": "explicit", "targets": 1, "published": 1}
+        outbox = await discord_store.list_outbox()
+        assert any(
+            record.channel_id == "repo-g2-discord"
+            and record.payload_json.get("content")
+            == "Duplicate — repo-g2 thread already handled. No action."
+            for record in outbox
+        )
+    finally:
+        await discord_store.close()
+
+
+@pytest.mark.anyio
 async def test_deliver_pma_notification_falls_back_when_explicit_target_binding_changes(
     tmp_path: Path,
 ) -> None:

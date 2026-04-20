@@ -719,7 +719,8 @@ async def deliver_pma_notification(
             surface_key=surface_key,
         )
         if (
-            target_matches_active_binding
+            _normalize_optional_text(managed_thread_id) is not None
+            and target_matches_active_binding
             and normalized_source_kind == "managed_thread_completed"
             and _looks_like_duplicate_noop_notice(text)
         ):

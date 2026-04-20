@@ -202,6 +202,13 @@ def build_publish_message(
         lines.append(f"status: {status}")
         lines.append(f"error: {detail or 'Turn failed without detail.'}")
         lines.append("next_action: run /pma status and inspect PMA history if needed.")
+        footer = format_turn_footer(
+            summary_text=None,
+            token_usage=token_usage,
+            elapsed_seconds=None,
+        )
+        if footer:
+            lines.extend(["", footer])
     return "\n".join(lines).strip()
 
 
