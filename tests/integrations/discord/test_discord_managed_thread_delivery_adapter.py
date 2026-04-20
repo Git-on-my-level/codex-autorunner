@@ -14,7 +14,9 @@ from types import SimpleNamespace
 from typing import Any, Optional
 
 import pytest
+from tests.discord_message_turns_support import _FakeRest
 
+from codex_autorunner.core.filebox import outbox_dir, outbox_sent_dir
 from codex_autorunner.core.orchestration import (
     ManagedThreadDeliveryAttemptResult,
     ManagedThreadDeliveryOutcome,
@@ -30,6 +32,7 @@ from codex_autorunner.integrations.chat.managed_thread_turns import (
     handoff_managed_thread_final_delivery,
 )
 from codex_autorunner.integrations.discord import message_turns as discord_message_turns
+from codex_autorunner.integrations.discord.service import DiscordBotService
 
 
 def _make_engine(
@@ -57,12 +60,45 @@ class _DiscordServiceStub:
         state_root: Path,
         send_side_effect: Optional[BaseException] = None,
         send_safe_result: bool = True,
+        real_outbox_flush: bool = False,
     ) -> None:
         self._config = SimpleNamespace(root=str(state_root))
         self._send_side_effect = send_side_effect
         self._send_safe_result = send_safe_result
+        self._logger = logging.getLogger("test.discord.adapter")
+        self._rest = _FakeRest()
         self.sent_messages: list[dict[str, Any]] = []
         self.flushed_outboxes: list[dict[str, Any]] = []
+        if real_outbox_flush:
+            self._list_paths_in_dir = DiscordBotService._list_paths_in_dir.__get__(
+                self, _DiscordServiceStub
+            )
+            self._build_outbox_sent_destination = (
+                DiscordBotService._build_outbox_sent_destination.__get__(
+                    self, _DiscordServiceStub
+                )
+            )
+            self._find_matching_sent_outbox_copy = (
+                DiscordBotService._find_matching_sent_outbox_copy.__get__(
+                    self, _DiscordServiceStub
+                )
+            )
+            self._cleanup_delivered_outbox_source = (
+                DiscordBotService._cleanup_delivered_outbox_source.__get__(
+                    self, _DiscordServiceStub
+                )
+            )
+            self._archive_sent_outbox_file = (
+                DiscordBotService._archive_sent_outbox_file.__get__(
+                    self, _DiscordServiceStub
+                )
+            )
+            self._send_outbox_file = DiscordBotService._send_outbox_file.__get__(
+                self, _DiscordServiceStub
+            )
+            self._flush_outbox_files = DiscordBotService._flush_outbox_files.__get__(
+                self, _DiscordServiceStub
+            )
 
     async def _send_channel_message_safe(
         self,
@@ -194,6 +230,88 @@ async def test_discord_adapter_initial_delivery_marks_delivered(
     assert service.flushed_outboxes == [
         {"workspace_root": tmp_path, "channel_id": "channel-1"}
     ]
+
+
+@pytest.mark.anyio
+async def test_discord_adapter_initial_delivery_flushes_real_outbox_files(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    root_outbox = outbox_dir(workspace)
+    root_outbox.mkdir(parents=True, exist_ok=True)
+    root_file = root_outbox / "result.txt"
+    root_file.write_text("artifact payload\n", encoding="utf-8")
+
+    service = _DiscordServiceStub(state_root=tmp_path, real_outbox_flush=True)
+    delivery = _build_hooks(workspace, service=service)
+    finalized = _finalized_ok()
+
+    record = await handoff_managed_thread_final_delivery(
+        finalized,
+        delivery=delivery,
+        logger=logging.getLogger("test"),
+    )
+
+    assert record is not None
+    assert record.state is ManagedThreadDeliveryState.DELIVERED
+    assert len(service.sent_messages) == 1
+    assert len(service._rest.attachment_messages) == 1
+    assert service._rest.attachment_messages[0]["filename"] == "result.txt"
+    sent_files = list(outbox_sent_dir(workspace).glob("result*.txt"))
+    assert sent_files
+    assert sent_files[0].read_text(encoding="utf-8") == "artifact payload\n"
+    assert not root_file.exists()
+
+
+@pytest.mark.anyio
+async def test_send_outbox_file_skips_duplicate_resend_when_archive_copy_exists(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    root_outbox = outbox_dir(workspace)
+    root_outbox.mkdir(parents=True, exist_ok=True)
+    root_file = root_outbox / "result.txt"
+    root_file.write_text("artifact payload\n", encoding="utf-8")
+
+    service = _DiscordServiceStub(state_root=tmp_path, real_outbox_flush=True)
+    sent_dir = outbox_sent_dir(workspace)
+    original_replace = Path.replace
+    original_unlink = Path.unlink
+
+    def _replace(self: Path, target: Path) -> Path:
+        if self == root_file:
+            raise OSError("simulated move failure")
+        return original_replace(self, target)
+
+    def _unlink(self: Path, missing_ok: bool = False) -> None:
+        if self == root_file:
+            raise OSError("simulated cleanup failure")
+        return original_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "replace", _replace)
+    monkeypatch.setattr(Path, "unlink", _unlink)
+
+    first = await service._send_outbox_file(
+        root_file,
+        sent_dir=sent_dir,
+        channel_id="channel-1",
+    )
+    second = await service._send_outbox_file(
+        root_file,
+        sent_dir=sent_dir,
+        channel_id="channel-1",
+    )
+
+    assert first is True
+    assert second is True
+    assert len(service._rest.attachment_messages) == 1
+    sent_files = list(sent_dir.glob("result*.txt"))
+    assert sent_files
+    assert sent_files[0].read_text(encoding="utf-8") == "artifact payload\n"
+    assert root_file.exists()
 
 
 @pytest.mark.anyio
