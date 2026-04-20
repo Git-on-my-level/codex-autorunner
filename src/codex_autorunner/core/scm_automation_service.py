@@ -9,7 +9,7 @@ import re
 import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional, Protocol
 
@@ -28,6 +28,12 @@ from .scm_escalation import (
     format_failure_escalation_message,
 )
 from .scm_events import ScmEvent, ScmEventStore
+from .scm_feedback_bundle import (
+    apply_feedback_bundle_to_publish_payload,
+    build_feedback_bundle,
+    extract_feedback_bundle,
+    merge_feedback_bundles,
+)
 from .scm_observability import (
     SCM_AUDIT_BINDING_RESOLVED,
     SCM_AUDIT_PUBLISH_CREATED,
@@ -91,6 +97,23 @@ class PublishJournalWriter(Protocol):
         payload: Optional[dict[str, Any]] = None,
         next_attempt_at: Optional[str] = None,
     ) -> tuple[PublishOperation, bool]: ...
+
+    def update_pending_operation(
+        self,
+        operation_id: str,
+        *,
+        payload: Optional[dict[str, Any]] = None,
+        next_attempt_at: Optional[str] = None,
+    ) -> Optional[PublishOperation]: ...
+
+    def list_operations(
+        self,
+        *,
+        state: Optional[str] = None,
+        operation_kind: Optional[str] = None,
+        limit: Optional[int] = None,
+        newest_first: bool = False,
+    ) -> list[PublishOperation]: ...
 
 
 class PublishOperationDrainer(Protocol):
@@ -321,6 +344,15 @@ def _tracking_from_payload(payload: Mapping[str, Any] | None) -> dict[str, Any]:
     return dict(tracking) if isinstance(tracking, Mapping) else {}
 
 
+def _ci_failed_head_sha_from_payload(
+    payload: Mapping[str, Any] | None,
+) -> Optional[str]:
+    bundle = extract_feedback_bundle(payload)
+    if bundle is None:
+        return None
+    return _normalize_text(bundle.get("ci_head_sha"))
+
+
 def _default_binding_resolver(hub_root: Path) -> ScmBindingResolver:
     def resolver(
         event: ScmEvent,
@@ -481,7 +513,7 @@ class ScmAutomationService:
                 self._record_publish_finished_audit_entries(escalation_results)
         except Exception:
             _LOGGER.warning(
-                "Deferred publish drain after review-comment batch window failed",
+                "Deferred publish drain after SCM batch window failed",
                 exc_info=True,
             )
         finally:
@@ -565,6 +597,102 @@ class ScmAutomationService:
                 tz=timezone.utc,
             )
         )
+
+    def _ci_failed_enqueue_next_attempt_at(
+        self,
+        *,
+        event: ScmEvent,
+        bundle: Mapping[str, Any],
+    ) -> Optional[str]:
+        batch_window_seconds = self._reaction_config.ci_failed_batch_window_seconds
+        if batch_window_seconds <= 0:
+            return None
+        event_time = (
+            _parse_iso_datetime(event.received_at)
+            or _parse_iso_datetime(event.occurred_at)
+            or _parse_iso_datetime(event.created_at)
+            or datetime.now(timezone.utc)
+        )
+        next_attempt_at = event_time + timedelta(seconds=batch_window_seconds)
+        max_window_seconds = self._reaction_config.ci_failed_batch_max_window_seconds
+        opened_at = _parse_iso_datetime(bundle.get("opened_at")) or event_time
+        if max_window_seconds > 0:
+            max_attempt_at = opened_at + timedelta(seconds=max_window_seconds)
+            if next_attempt_at > max_attempt_at:
+                next_attempt_at = max_attempt_at
+        return _isoformat_z(next_attempt_at)
+
+    def _build_feedback_payload(
+        self,
+        *,
+        event: ScmEvent,
+        intent: ReactionIntent,
+        binding: Optional[PrBinding],
+        payload: Mapping[str, Any],
+        tracking: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        if intent.operation_kind != "enqueue_managed_turn":
+            return copy.deepcopy(dict(payload))
+        request_payload = payload.get("request")
+        request_mapping = (
+            request_payload if isinstance(request_payload, Mapping) else {}
+        )
+        bundle = build_feedback_bundle(
+            event=event,
+            intent=intent,
+            binding=binding,
+            message_text=_normalize_text(request_mapping.get("message_text")) or "",
+            tracking=tracking,
+        )
+        return apply_feedback_bundle_to_publish_payload(payload, bundle)
+
+    def _find_pending_ci_failed_batch_operation(
+        self,
+        *,
+        binding: PrBinding,
+        head_sha: str,
+    ) -> Optional[PublishOperation]:
+        for operation in self._journal.list_operations(
+            state="pending",
+            operation_kind="enqueue_managed_turn",
+            limit=500,
+            newest_first=True,
+        ):
+            tracking = _tracking_from_payload(operation.payload)
+            if _normalize_text(tracking.get("binding_id")) != binding.binding_id:
+                continue
+            bundle = extract_feedback_bundle(operation.payload)
+            if bundle is None:
+                continue
+            if _normalize_text(bundle.get("batch_mode")) != "ci_failed":
+                continue
+            if _normalize_text(bundle.get("ci_head_sha")) != head_sha:
+                continue
+            return operation
+        return None
+
+    def _merge_pending_feedback_operation(
+        self,
+        *,
+        operation: PublishOperation,
+        incoming_payload: Mapping[str, Any],
+        next_attempt_at: Optional[str] = None,
+    ) -> PublishOperation:
+        existing_bundle = extract_feedback_bundle(operation.payload)
+        incoming_bundle = extract_feedback_bundle(incoming_payload)
+        if existing_bundle is None or incoming_bundle is None:
+            return operation
+        merged_bundle = merge_feedback_bundles(existing_bundle, incoming_bundle)
+        updated_payload = apply_feedback_bundle_to_publish_payload(
+            operation.payload,
+            merged_bundle,
+        )
+        updated = self._journal.update_pending_operation(
+            operation.operation_id,
+            payload=updated_payload,
+            next_attempt_at=next_attempt_at,
+        )
+        return updated or operation
 
     def _review_comment_notice_key(
         self,
@@ -782,21 +910,84 @@ class ScmAutomationService:
             if operation_key in seen_operation_keys:
                 continue
             seen_operation_keys.add(operation_key)
-            payload = with_correlation_id(
-                copy.deepcopy(intent.payload),
-                correlation_id=correlation_id,
+            payload = self._build_feedback_payload(
+                event=event,
+                intent=intent,
+                binding=binding,
+                payload=with_correlation_id(
+                    copy.deepcopy(intent.payload),
+                    correlation_id=correlation_id,
+                ),
+                tracking=tracking,
             )
             if tracking:
                 payload["scm_reaction"] = tracking
-            operation, deduped = self._journal.create_operation(
-                operation_key=operation_key,
-                operation_kind=intent.operation_kind,
-                payload=payload,
-                next_attempt_at=next_attempt_at,
-            )
+            operation: PublishOperation
+            deduped = False
+            if (
+                binding is not None
+                and intent.reaction_kind == "ci_failed"
+                and intent.operation_kind == "enqueue_managed_turn"
+            ):
+                head_sha = _ci_failed_head_sha_from_payload(payload)
+                if head_sha is not None:
+                    existing_ci_batch = self._find_pending_ci_failed_batch_operation(
+                        binding=binding,
+                        head_sha=head_sha,
+                    )
+                    if existing_ci_batch is not None:
+                        next_attempt_at = self._ci_failed_enqueue_next_attempt_at(
+                            event=event,
+                            bundle=merge_feedback_bundles(
+                                extract_feedback_bundle(existing_ci_batch.payload)
+                                or {},
+                                extract_feedback_bundle(payload) or {},
+                            ),
+                        )
+                        operation = self._merge_pending_feedback_operation(
+                            operation=existing_ci_batch,
+                            incoming_payload=payload,
+                            next_attempt_at=next_attempt_at,
+                        )
+                        deduped = True
+                    else:
+                        next_attempt_at = self._ci_failed_enqueue_next_attempt_at(
+                            event=event,
+                            bundle=extract_feedback_bundle(payload) or {},
+                        )
+                        operation, deduped = self._journal.create_operation(
+                            operation_key=operation_key,
+                            operation_kind=intent.operation_kind,
+                            payload=payload,
+                            next_attempt_at=next_attempt_at,
+                        )
+                else:
+                    operation, deduped = self._journal.create_operation(
+                        operation_key=operation_key,
+                        operation_kind=intent.operation_kind,
+                        payload=payload,
+                        next_attempt_at=next_attempt_at,
+                    )
+            else:
+                operation, deduped = self._journal.create_operation(
+                    operation_key=operation_key,
+                    operation_kind=intent.operation_kind,
+                    payload=payload,
+                    next_attempt_at=next_attempt_at,
+                )
+                if (
+                    deduped
+                    and operation.state == "pending"
+                    and intent.operation_kind == "enqueue_managed_turn"
+                    and extract_feedback_bundle(payload) is not None
+                ):
+                    operation = self._merge_pending_feedback_operation(
+                        operation=operation,
+                        incoming_payload=payload,
+                        next_attempt_at=next_attempt_at,
+                    )
             if (
                 next_attempt_at is not None
-                and intent.reaction_kind == "review_comment"
                 and intent.operation_kind == "enqueue_managed_turn"
             ):
                 drain_at = operation.next_attempt_at
@@ -809,7 +1000,7 @@ class ScmAutomationService:
                 binding=binding,
                 intent=intent,
                 operation=operation,
-                payload={"deduped": deduped},
+                payload={"deduped": deduped, "coalesced": deduped},
             )
             if fingerprint is not None and binding_id is not None and rsk is not None:
                 self._reaction_state_store.mark_reaction_emitted(

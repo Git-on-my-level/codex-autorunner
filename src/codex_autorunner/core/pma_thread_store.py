@@ -60,7 +60,7 @@ from .pma_thread_store_rows import (
 from .pma_thread_store_rows import (
     workspace_head_branch as _workspace_head_branch,
 )
-from .text_utils import _json_dumps
+from .text_utils import _json_dumps, _json_loads_object
 from .time_utils import now_iso
 
 _BACKEND_RUNTIME_INSTANCE_ID_KEY = "backend_runtime_instance_id"
@@ -1361,6 +1361,91 @@ class PmaThreadStore:
                 managed_thread_id,
                 limit=limit,
             )
+
+    def get_queued_turn_queue_payload(
+        self, managed_thread_id: str, managed_turn_id: str
+    ) -> Optional[dict[str, Any]]:
+        with self._read_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT q.payload_json
+                  FROM orch_queue_items AS q
+                  JOIN orch_thread_executions AS e
+                    ON e.execution_id = q.source_key
+                 WHERE q.source_kind = 'thread_execution'
+                   AND e.thread_target_id = ?
+                   AND e.execution_id = ?
+                   AND e.status = 'queued'
+                   AND q.lane_id = ?
+                   AND q.state IN ('pending', 'queued', 'waiting')
+                 ORDER BY COALESCE(q.visible_at, q.created_at) ASC, q.rowid ASC
+                 LIMIT 1
+                """,
+                (
+                    managed_thread_id,
+                    managed_turn_id,
+                    thread_queue_lane_id(managed_thread_id),
+                ),
+            ).fetchone()
+        if row is None:
+            return None
+        return _json_loads_object(row["payload_json"])
+
+    def update_queued_turn_request(
+        self,
+        managed_thread_id: str,
+        managed_turn_id: str,
+        *,
+        prompt: str,
+        queue_payload: dict[str, Any],
+    ) -> Optional[dict[str, Any]]:
+        updated_at = now_iso()
+        with self._write_conn() as conn:
+            with conn:
+                execution_cursor = conn.execute(
+                    """
+                    UPDATE orch_thread_executions
+                       SET prompt_text = ?
+                     WHERE execution_id = ?
+                       AND thread_target_id = ?
+                       AND status = 'queued'
+                    """,
+                    (
+                        prompt,
+                        managed_turn_id,
+                        managed_thread_id,
+                    ),
+                )
+                if execution_cursor.rowcount == 0:
+                    return None
+                queue_cursor = conn.execute(
+                    """
+                    UPDATE orch_queue_items
+                       SET payload_json = ?,
+                           updated_at = ?
+                     WHERE source_kind = 'thread_execution'
+                       AND source_key = ?
+                       AND lane_id = ?
+                       AND state IN ('pending', 'queued', 'waiting')
+                    """,
+                    (
+                        _json_dumps(queue_payload),
+                        updated_at,
+                        managed_turn_id,
+                        thread_queue_lane_id(managed_thread_id),
+                    ),
+                )
+                if queue_cursor.rowcount == 0:
+                    return None
+                row = conn.execute(
+                    """
+                    SELECT *
+                      FROM orch_thread_executions
+                     WHERE execution_id = ?
+                    """,
+                    (managed_turn_id,),
+                ).fetchone()
+        return _execution_row_to_record(row) if row is not None else None
 
     def get_queue_depth(self, managed_thread_id: str) -> int:
         with self._read_conn() as conn:

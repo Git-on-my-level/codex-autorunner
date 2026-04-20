@@ -756,6 +756,263 @@ def test_enqueue_managed_turn_executor_queues_on_running_scm_thread(
     )
 
 
+def test_enqueue_managed_turn_executor_merges_into_existing_queued_scm_turn(
+    tmp_path: Path,
+) -> None:
+    hub_root, workspace_root, repo_id = _publish_hub(tmp_path)
+    thread_store = PmaThreadStore(hub_root)
+    thread = thread_store.create_thread(
+        "codex",
+        workspace_root,
+        repo_id=repo_id,
+        metadata={"head_branch": "feature/scm-rebind"},
+    )
+    running_turn = thread_store.create_turn(
+        thread["managed_thread_id"], prompt="already running"
+    )
+    binding = PrBindingStore(hub_root).upsert_binding(
+        provider="github",
+        repo_slug="acme/widgets",
+        repo_id=repo_id,
+        pr_number=42,
+        pr_state="open",
+        head_branch="feature/scm-rebind",
+        base_branch="main",
+        thread_target_id=thread["managed_thread_id"],
+    )
+    journal = PublishJournalStore(hub_root)
+    first = _create_scm_enqueue_operation(
+        journal=journal,
+        thread_target_id=thread["managed_thread_id"],
+        binding_id=binding.binding_id,
+        repo_id=repo_id,
+        operation_key="enqueue:scm:queued-merge-1",
+    )
+    first = replace(
+        first,
+        payload={
+            **first.payload,
+            "request": {
+                **first.payload["request"],
+                "message_text": "New PR review feedback arrived on acme/widgets#42.",
+                "metadata": {
+                    **first.payload["request"]["metadata"],
+                    "scm_feedback_bundle": {
+                        "version": 1,
+                        "subject": "acme/widgets#42",
+                        "binding_id": binding.binding_id,
+                        "thread_target_id": thread["managed_thread_id"],
+                        "repo_slug": "acme/widgets",
+                        "pr_number": 42,
+                        "opened_at": "2026-03-26T00:00:01Z",
+                        "last_event_at": "2026-03-26T00:00:01Z",
+                        "batch_mode": "general",
+                        "items": [
+                            {
+                                "event_id": "github:event-review-comment-1",
+                                "event_type": "pull_request_review_comment",
+                                "reaction_kind": "review_comment",
+                                "message_text": "New PR review feedback arrived on acme/widgets#42.",
+                                "received_at": "2026-03-26T00:00:01Z",
+                            }
+                        ],
+                    },
+                },
+            },
+        },
+    )
+    second = _create_scm_enqueue_operation(
+        journal=journal,
+        thread_target_id=thread["managed_thread_id"],
+        binding_id=binding.binding_id,
+        repo_id=repo_id,
+        operation_key="enqueue:scm:queued-merge-2",
+    )
+    second = replace(
+        second,
+        payload={
+            **second.payload,
+            "request": {
+                **second.payload["request"],
+                "message_text": "CI failed for acme/widgets#42: chat-apps (failure). Inspect the failing check and push a fix.",
+                "metadata": {
+                    **second.payload["request"]["metadata"],
+                    "scm_feedback_bundle": {
+                        "version": 1,
+                        "subject": "acme/widgets#42",
+                        "binding_id": binding.binding_id,
+                        "thread_target_id": thread["managed_thread_id"],
+                        "repo_slug": "acme/widgets",
+                        "pr_number": 42,
+                        "opened_at": "2026-03-26T00:00:15Z",
+                        "last_event_at": "2026-03-26T00:00:15Z",
+                        "batch_mode": "ci_failed",
+                        "ci_head_sha": "abc123",
+                        "items": [
+                            {
+                                "event_id": "github:event-ci-1",
+                                "event_type": "check_run",
+                                "reaction_kind": "ci_failed",
+                                "message_text": "CI failed for acme/widgets#42: chat-apps (failure). Inspect the failing check and push a fix.",
+                                "received_at": "2026-03-26T00:00:15Z",
+                                "check_name": "chat-apps",
+                                "conclusion": "failure",
+                                "head_sha": "abc123",
+                            }
+                        ],
+                    },
+                },
+            },
+        },
+    )
+
+    executor = build_enqueue_managed_turn_executor(hub_root=hub_root)
+    first_result = executor(first)
+    second_result = executor(second)
+
+    assert first_result["queued"] is True
+    assert second_result["queued"] is True
+    assert second_result["deduped"] is True
+    assert first_result["managed_turn_id"] == second_result["managed_turn_id"]
+    assert first_result["client_request_id"] == second_result["client_request_id"]
+
+    turns = thread_store.list_turns(thread["managed_thread_id"], limit=10)
+    assert len(turns) == 2
+    assert {turn["managed_turn_id"] for turn in turns} == {
+        running_turn["managed_turn_id"],
+        first_result["managed_turn_id"],
+    }
+    queued_turn = [
+        turn
+        for turn in turns
+        if turn["managed_turn_id"] == first_result["managed_turn_id"]
+    ][0]
+    assert queued_turn["prompt"].startswith(
+        "Multiple SCM updates arrived for acme/widgets#42:"
+    )
+    assert "New PR review feedback arrived on acme/widgets#42." in queued_turn["prompt"]
+    assert (
+        "CI failed for acme/widgets#42: chat-apps (failure). Inspect the failing check and push a fix."
+        in queued_turn["prompt"]
+    )
+    queued_payload = thread_store.get_queued_turn_queue_payload(
+        thread["managed_thread_id"],
+        queued_turn["managed_turn_id"],
+    )
+    assert queued_payload is not None
+    assert queued_payload["request"]["message_text"] == queued_turn["prompt"]
+
+
+def test_enqueue_managed_turn_executor_rebinds_instead_of_merging_stale_archived_queue(
+    tmp_path: Path,
+) -> None:
+    hub_root, workspace_root, repo_id = _publish_hub(tmp_path)
+    thread_store = PmaThreadStore(hub_root)
+    archived_thread = thread_store.create_thread(
+        "codex",
+        workspace_root,
+        repo_id=repo_id,
+        metadata={"head_branch": "feature/scm-rebind"},
+    )
+    thread_store.create_turn(archived_thread["managed_thread_id"], prompt="running")
+    thread_store.create_turn(
+        archived_thread["managed_thread_id"],
+        prompt="queued stale scm turn",
+        busy_policy="queue",
+    )
+    thread_store.archive_thread(archived_thread["managed_thread_id"])
+
+    binding = PrBindingStore(hub_root).upsert_binding(
+        provider="github",
+        repo_slug="acme/widgets",
+        repo_id=repo_id,
+        pr_number=42,
+        pr_state="open",
+        head_branch="feature/scm-rebind",
+        base_branch="main",
+        thread_target_id=archived_thread["managed_thread_id"],
+    )
+    event = ScmEventStore(hub_root).record_event(
+        provider="github",
+        event_type="check_run",
+        event_id="github:event-archived-ci",
+        occurred_at="2026-03-25T00:00:00Z",
+        received_at="2026-03-25T00:00:01Z",
+        repo_slug="acme/widgets",
+        repo_id=repo_id,
+        pr_number=42,
+        payload={
+            "action": "completed",
+            "status": "completed",
+            "conclusion": "failure",
+            "name": "chat-apps",
+            "head_sha": "abc123",
+        },
+    )
+    operation = _create_scm_enqueue_operation(
+        journal=PublishJournalStore(hub_root),
+        thread_target_id=archived_thread["managed_thread_id"],
+        binding_id=binding.binding_id,
+        repo_id=repo_id,
+        operation_key="enqueue:scm:archived-queued-merge",
+    )
+    operation = replace(
+        operation,
+        payload={
+            **operation.payload,
+            "request": {
+                **operation.payload["request"],
+                "message_text": "CI failed for acme/widgets#42: chat-apps (failure). Inspect the failing check and push a fix.",
+                "metadata": {
+                    "scm": {
+                        **operation.payload["request"]["metadata"]["scm"],
+                        "event_id": event.event_id,
+                    },
+                    "scm_feedback_bundle": {
+                        "version": 1,
+                        "subject": "acme/widgets#42",
+                        "binding_id": binding.binding_id,
+                        "thread_target_id": archived_thread["managed_thread_id"],
+                        "repo_slug": "acme/widgets",
+                        "pr_number": 42,
+                        "opened_at": "2026-03-25T00:00:01Z",
+                        "last_event_at": "2026-03-25T00:00:01Z",
+                        "batch_mode": "ci_failed",
+                        "ci_head_sha": "abc123",
+                        "items": [
+                            {
+                                "event_id": event.event_id,
+                                "event_type": "check_run",
+                                "reaction_kind": "ci_failed",
+                                "message_text": "CI failed for acme/widgets#42: chat-apps (failure). Inspect the failing check and push a fix.",
+                                "received_at": "2026-03-25T00:00:01Z",
+                                "check_name": "chat-apps",
+                                "conclusion": "failure",
+                                "head_sha": "abc123",
+                            }
+                        ],
+                    },
+                },
+            },
+            "scm_reaction": {
+                **operation.payload["scm_reaction"],
+                "event_id": event.event_id,
+            },
+        },
+    )
+
+    result = build_enqueue_managed_turn_executor(hub_root=hub_root)(operation)
+
+    assert result["thread_target_id"] != archived_thread["managed_thread_id"]
+    rebound_binding = PrBindingStore(hub_root).get_binding_by_pr(
+        provider="github",
+        repo_slug="acme/widgets",
+        pr_number=42,
+    )
+    assert rebound_binding is not None
+    assert rebound_binding.thread_target_id == result["thread_target_id"]
+
+
 def test_enqueue_managed_turn_executor_rebinds_archived_scm_thread_with_bootstrap_prompt(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,

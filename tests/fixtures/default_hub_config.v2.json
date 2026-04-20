@@ -307,6 +307,8 @@
           "approved_and_green": true,
           "changes_requested": true,
           "ci_failed": true,
+          "ci_failed_batch_max_window_seconds": 180,
+          "ci_failed_batch_window_seconds": 60,
           "delivery_failure_escalation_threshold": 3,
           "duplicate_escalation_threshold": 3,
           "enabled": true,

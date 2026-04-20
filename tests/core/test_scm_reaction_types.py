@@ -28,6 +28,23 @@ def test_scm_reaction_config_profile_allows_explicit_overrides() -> None:
     assert config.merged is False
 
 
+def test_scm_reaction_config_includes_ci_batch_defaults_and_overrides() -> None:
+    defaults = ScmReactionConfig.from_mapping({})
+    overridden = ScmReactionConfig.from_mapping(
+        {
+            "reactions": {
+                "ci_failed_batch_window_seconds": 90,
+                "ci_failed_batch_max_window_seconds": 240,
+            }
+        }
+    )
+
+    assert defaults.ci_failed_batch_window_seconds == 60
+    assert defaults.ci_failed_batch_max_window_seconds == 180
+    assert overridden.ci_failed_batch_window_seconds == 90
+    assert overridden.ci_failed_batch_max_window_seconds == 240
+
+
 def test_scm_reaction_config_normalizes_and_deduplicates_login_lists() -> None:
     config = ScmReactionConfig.from_mapping(
         {
