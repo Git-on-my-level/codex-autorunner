@@ -16,7 +16,10 @@ from codex_autorunner.agents.opencode import (
 from codex_autorunner.agents.opencode.harness import (
     OpenCodeHarness,
 )
-from codex_autorunner.agents.opencode.protocol_payload import normalize_message_text
+from codex_autorunner.agents.opencode.protocol_payload import (
+    normalize_message_text,
+    parse_message_response,
+)
 from codex_autorunner.agents.opencode.runtime import OpenCodeTurnOutput
 from codex_autorunner.agents.registry import get_registered_agents
 from codex_autorunner.core.orchestration import FreshConversationRequiredError
@@ -2072,8 +2075,12 @@ def test_normalize_message_text_excludes_output_text_type() -> None:
 
 
 def test_collect_terminal_text_filters_reasoning_from_completed_message() -> None:
-    """_collect_terminal_text should produce a completed_message without reasoning.
-    NOTE: _collect_terminal_text was removed during TICKET-026 extraction.
-    This test is kept as an xfail until the function is restored or the
-    test is rewritten against the new progress_synthesis module."""
-    pytest.xfail(reason="_collect_terminal_text removed during TICKET-026 extraction")
+    """parse_message_response should exclude reasoning parts from completed messages."""
+    payload = {
+        "parts": [
+            {"type": "reasoning", "text": "thinking about the answer"},
+            {"type": "text", "text": "the answer is 42"},
+        ],
+    }
+    result = parse_message_response(payload)
+    assert result.text == "the answer is 42"

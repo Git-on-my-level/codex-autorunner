@@ -789,9 +789,6 @@ class TestMirrorFileSyncInvariants:
         assert "key-a" in raw["last_enqueued"]
         assert "key-b" in raw["last_enqueued"]
 
-    @pytest.mark.xfail(
-        reason="PmaThreadStore reactive write does not degrade on OSError", strict=True
-    )
     def test_reactive_canonical_survives_mirror_write_failure(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
