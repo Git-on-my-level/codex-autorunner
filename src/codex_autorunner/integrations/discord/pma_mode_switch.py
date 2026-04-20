@@ -109,6 +109,26 @@ async def _reset_thread_for_mode(
     )
 
 
+async def _rollback_pma_on_attempt(
+    service: Any,
+    *,
+    channel_id: str,
+    had_binding_before: bool,
+) -> None:
+    """Revert PMA-on state when thread reset fails so the user can retry."""
+    if had_binding_before:
+        await service._store.update_pma_state(
+            channel_id=channel_id,
+            pma_enabled=False,
+            pma_prev_workspace_path=None,
+            pma_prev_repo_id=None,
+            pma_prev_resource_kind=None,
+            pma_prev_resource_id=None,
+        )
+    else:
+        await service._store.delete_binding(channel_id=channel_id)
+
+
 async def handle_pma_on_switch(
     service: Any,
     interaction_id: str,
@@ -125,6 +145,7 @@ async def handle_pma_on_switch(
             "PMA mode is already enabled for this channel. Use /pma off to exit.",
         )
         return
+    had_binding_before = binding is not None
     prev_workspace, prev_repo_id, prev_resource_kind, prev_resource_id = (
         _previous_binding_fields(binding)
     )
@@ -147,6 +168,11 @@ async def handle_pma_on_switch(
     )
     binding = await service._store.get_binding(channel_id=channel_id)
     if binding is None:
+        await _rollback_pma_on_attempt(
+            service,
+            channel_id=channel_id,
+            had_binding_before=had_binding_before,
+        )
         await _clear_seed_and_respond(
             service,
             interaction_id,
@@ -165,6 +191,11 @@ async def handle_pma_on_switch(
             pma_enabled=True,
         )
     except (RuntimeError, OSError, ValueError, TypeError):
+        await _rollback_pma_on_attempt(
+            service,
+            channel_id=channel_id,
+            had_binding_before=had_binding_before,
+        )
         await _clear_seed_and_respond(
             service,
             interaction_id,

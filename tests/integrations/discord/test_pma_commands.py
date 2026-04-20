@@ -187,6 +187,97 @@ def _car_processes_interaction(*, user_id: str = "user-1") -> dict[str, Any]:
 
 
 @pytest.mark.anyio
+async def test_pma_on_rolls_back_when_thread_reset_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+
+    async def _boom(*_a: Any, **_k: Any) -> tuple[bool, str]:
+        raise RuntimeError("orchestration unavailable")
+
+    monkeypatch.setattr(
+        DiscordBotService,
+        "_reset_discord_thread_binding",
+        _boom,
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway([_pma_interaction(subcommand="on")])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        payload = rest.interaction_responses[0]["payload"]
+        content = payload["data"]["content"]
+        assert "starting a fresh PMA session failed" in content
+
+        binding = await store.get_binding(channel_id="channel-1")
+        assert binding is not None
+        assert binding.get("pma_enabled") is False
+        assert binding.get("pma_prev_workspace_path") is None
+        assert binding.get("workspace_path") == str(workspace)
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_pma_on_rollback_removes_binding_created_for_unbound_channel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def _boom(*_a: Any, **_k: Any) -> tuple[bool, str]:
+        raise RuntimeError("orchestration unavailable")
+
+    monkeypatch.setattr(
+        DiscordBotService,
+        "_reset_discord_thread_binding",
+        _boom,
+    )
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+
+    rest = _FakeRest()
+    gateway = _FakeGateway([_pma_interaction(subcommand="on")])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        assert "starting a fresh PMA session failed" in content
+
+        binding = await store.get_binding(channel_id="channel-1")
+        assert binding is None
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_pma_on_enables_pma_mode(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
