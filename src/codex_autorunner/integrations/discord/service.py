@@ -96,15 +96,8 @@ from ...core.orchestration.managed_thread_delivery_ledger import (
 )
 from ...core.state import now_iso
 from ...core.state_roots import resolve_global_state_root
-from ...core.update import (  # noqa: F401 - kept for test monkeypatching
-    UpdateInProgressError,
-    _available_update_target_definitions,
-    _format_update_confirmation_warning,
-    _normalize_update_ref,
-    _normalize_update_target,
-    _read_update_status,
-    _spawn_update_process,
-    _update_target_restarts_surface,
+from ...core.update import (
+    UpdateInProgressError,  # noqa: F401 - re-exported for test monkeypatching
 )
 from ...core.update_paths import resolve_update_paths  # noqa: F401
 from ...core.update_targets import (  # noqa: F401
@@ -188,10 +181,6 @@ from ...integrations.chat.run_mirror import ChatRunMirror
 from ...integrations.chat.turn_policy import (
     PlainTextTurnContext,
     should_trigger_plain_text_turn,
-)
-from ...integrations.chat.update_notifier import (  # noqa: F401 - kept for test monkeypatching
-    ChatUpdateStatusNotifier,
-    mark_update_status_notified,
 )
 from ...integrations.github.context_injection import maybe_inject_github_context
 from ...manifest import load_manifest
@@ -409,6 +398,17 @@ from .service_normalization import (
     format_hub_flow_overview_line,
 )
 from .state import DiscordStateStore, InteractionLedgerRecord, OutboxRecord
+from .update_service import (  # noqa: F401 - re-exported for test monkeypatching
+    ChatUpdateStatusNotifier,
+    _available_update_target_definitions,
+    _format_update_confirmation_warning,
+    _normalize_update_ref,
+    _normalize_update_target,
+    _read_update_status,
+    _spawn_update_process,
+    _update_target_restarts_surface,
+    mark_update_status_notified,
+)
 from .workspace_commands import (
     handle_bind,
     handle_bind_page_component,
@@ -6363,16 +6363,12 @@ class DiscordBotService:
 
     @staticmethod
     def _update_thread_blocks_restart_warning(thread: Any) -> bool:
-        from .car_handlers.system_commands import (
-            _update_thread_blocks_restart_warning as update_thread_blocks_restart_warning,
-        )
+        from .update_service import update_thread_blocks_restart_warning
 
         return update_thread_blocks_restart_warning(thread)
 
     def _active_update_session_count(self) -> int:
-        from .car_handlers.system_commands import (
-            _active_update_session_count as active_update_session_count,
-        )
+        from .update_service import active_update_session_count
 
         return active_update_session_count(self)
 
@@ -6424,48 +6420,36 @@ class DiscordBotService:
         *,
         update_target: str,
     ) -> list[dict[str, Any]]:
-        from .car_handlers.system_commands import (
-            _build_update_confirmation_components as build_update_confirmation_components,
-        )
+        from .update_service import build_update_confirmation_components
 
         return build_update_confirmation_components(self, update_target=update_target)
 
     def _update_status_path(self) -> Path:
-        from .car_handlers.system_commands import (
-            _update_status_path as update_status_path,
-        )
+        from .update_service import update_status_path
 
         return update_status_path(self)
 
     def _format_update_status_message(self, status: Optional[dict[str, Any]]) -> str:
-        from .car_handlers.system_commands import (
-            _format_update_status_message as fmt_status_msg,
-        )
+        from .update_service import format_update_status_message
 
-        return fmt_status_msg(self, status)
+        return format_update_status_message(self, status)
 
     def _dynamic_update_target_definitions(self):
-        from .car_handlers.system_commands import (
-            _dynamic_update_target_definitions as dynamic_update_target_definitions,
-        )
+        from .update_service import dynamic_update_target_definitions
 
         return dynamic_update_target_definitions(self)
 
     async def _send_update_status_notice(
         self, notify_context: dict[str, Any], text: str
     ) -> None:
-        from .car_handlers.system_commands import (
-            _send_update_status_notice as send_update_status_notice,
-        )
+        from .update_service import send_update_status_notice
 
         await send_update_status_notice(self, notify_context, text)
 
     def _mark_update_notified(self, status: dict[str, Any]) -> None:
-        from .car_handlers.system_commands import (
-            _mark_update_notified as mark_update_notified,
-        )
+        from .update_service import mark_notified
 
-        mark_update_notified(self, status)
+        mark_notified(self, status)
 
     async def _handle_car_update_status(
         self,
