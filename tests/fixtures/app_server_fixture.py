@@ -24,6 +24,7 @@ class FixtureServer:
         self._next_turn = 1
         self._next_approval = 900
         self._pending_approvals: dict[int, str] = {}
+        self._pending_questions: dict[int, dict[str, str]] = {}
         self._pending_interrupts: set[str] = set()
         self._instance_id = uuid.uuid4().hex[:8]
         self._missing_turns: dict[str, str] = {}
@@ -310,6 +311,42 @@ class FixtureServer:
                     }
                 )
                 return
+            if self._scenario == "question":
+                question_id = self._next_approval
+                self._next_approval += 1
+                self._pending_questions[question_id] = {
+                    "turn_id": turn_id,
+                    "question_id": "framework",
+                }
+                self.send(
+                    {
+                        "id": question_id,
+                        "method": "item/tool/requestUserInput",
+                        "params": {
+                            "itemId": "tool-question-1",
+                            "threadId": params.get("threadId"),
+                            "turnId": turn_id,
+                            "questions": [
+                                {
+                                    "id": "framework",
+                                    "header": "Test Framework",
+                                    "question": "Which test framework should I use?",
+                                    "options": [
+                                        {
+                                            "label": "pytest",
+                                            "description": "Use pytest",
+                                        },
+                                        {
+                                            "label": "unittest",
+                                            "description": "Use unittest",
+                                        },
+                                    ],
+                                }
+                            ],
+                        },
+                    }
+                )
+                return
             if self._scenario == "interrupt":
                 self._pending_interrupts.add(turn_id)
                 return
@@ -515,6 +552,38 @@ class FixtureServer:
             if isinstance(result, dict):
                 decision = result.get("decision")
             self._send_turn_completed(turn_id, approval_decision=decision or "unknown")
+        if req_id in self._pending_questions:
+            pending = self._pending_questions.pop(req_id)
+            turn_id = pending["turn_id"]
+            question_id = pending["question_id"]
+            result = message.get("result") or {}
+            answers = result.get("answers") if isinstance(result, dict) else None
+            selected = "unanswered"
+            if isinstance(answers, dict):
+                entry = answers.get(question_id)
+                raw_answers = entry.get("answers") if isinstance(entry, dict) else None
+                if isinstance(raw_answers, list) and raw_answers:
+                    first = raw_answers[0]
+                    if isinstance(first, str) and first:
+                        selected = first
+            self.send(
+                {
+                    "method": "item/completed",
+                    "params": {
+                        "turnId": turn_id,
+                        "item": {
+                            "type": "agentMessage",
+                            "text": f"Selected framework: {selected}",
+                        },
+                    },
+                }
+            )
+            self.send(
+                {
+                    "method": "turn/completed",
+                    "params": {"turnId": turn_id, "status": "completed"},
+                }
+            )
 
     def _handle_notification(self, message: dict) -> None:
         if message.get("method") == "initialized":
