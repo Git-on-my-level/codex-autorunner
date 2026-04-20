@@ -52,7 +52,7 @@ from .config_types import (
     RepoConfig,
 )
 from .config_validation import _validate_hub_config, _validate_repo_config
-from .destinations import default_local_destination, resolve_effective_repo_destination
+from .destinations import resolve_effective_repo_destination
 from .generated_hub_config import normalize_generated_hub_config
 from .path_utils import ConfigPathError, resolve_config_path
 from .utils import find_repo_root
@@ -179,7 +179,7 @@ def _resolve_repo_effective_destination(
         ) from exc
     repo = manifest.get_by_path(hub.root, repo_root)
     if repo is None:
-        return _parse_destination_config_section(default_local_destination())
+        return _parse_destination_config_section({"kind": "local"})
     repos_by_id = {entry.id: entry for entry in manifest.repos}
     resolution = resolve_effective_repo_destination(repo, repos_by_id)
     return _parse_destination_config_section(resolution.to_dict())

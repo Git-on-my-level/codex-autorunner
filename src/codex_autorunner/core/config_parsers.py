@@ -49,7 +49,6 @@ from .config_types import (
     VoiceConfigSection,
 )
 from .config_validation import _normalize_ticket_flow_approval_mode
-from .destinations import default_local_destination
 from .path_utils import ConfigPathError, resolve_config_path
 from .report_retention import (
     DEFAULT_REPORT_MAX_HISTORY_FILES,
@@ -249,9 +248,12 @@ def _parse_voice_config_section(raw: object) -> VoiceConfigSection:
     return cast(VoiceConfigSection, normalized)
 
 
+_LOCAL_DESTINATION_DICT: DestinationConfigSection = {"kind": "local"}
+
+
 def _parse_destination_config_section(raw: object) -> DestinationConfigSection:
     if not isinstance(raw, dict):
-        return cast(DestinationConfigSection, default_local_destination())
+        return cast(DestinationConfigSection, dict(_LOCAL_DESTINATION_DICT))
     return cast(DestinationConfigSection, dict(raw))
 
 
