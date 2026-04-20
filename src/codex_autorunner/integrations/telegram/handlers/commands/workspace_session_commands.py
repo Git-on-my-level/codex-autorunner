@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 from .....agents.opencode.runtime import extract_session_id
 from .....core.git_utils import GitError
+from .....core.hub_control_plane.errors import is_retryable_hub_control_plane_failure
 from .....core.logging_utils import log_event
 from .....core.pma_context import clear_pma_prompt_state_sessions
 from .....core.state import now_iso
@@ -105,6 +106,23 @@ class WorkspaceSessionCommandsMixin:
                             pma_enabled=True,
                         )
                     except (OSError, RuntimeError, ValueError) as exc:
+                        if is_retryable_hub_control_plane_failure(exc):
+                            log_event(
+                                self._logger,
+                                logging.WARNING,
+                                "telegram.pma.reset.managed_thread_reset_retryable_failure",
+                                topic_key=key,
+                                chat_id=message.chat_id,
+                                thread_id=message.thread_id,
+                                exc=exc,
+                            )
+                            await self._send_message(
+                                message.chat_id,
+                                "PMA thread reset is temporarily unavailable while the hub control plane recovers. Retry `/reset` in a few seconds.",
+                                thread_id=message.thread_id,
+                                reply_to=message.message_id,
+                            )
+                            return
                         log_event(
                             self._logger,
                             logging.WARNING,
@@ -366,6 +384,23 @@ class WorkspaceSessionCommandsMixin:
                             pma_enabled=True,
                         )
                     except (OSError, RuntimeError, ValueError) as exc:
+                        if is_retryable_hub_control_plane_failure(exc):
+                            log_event(
+                                self._logger,
+                                logging.WARNING,
+                                "telegram.pma.new.managed_thread_reset_retryable_failure",
+                                topic_key=key,
+                                chat_id=message.chat_id,
+                                thread_id=message.thread_id,
+                                exc=exc,
+                            )
+                            await self._send_message(
+                                message.chat_id,
+                                "PMA session reset is temporarily unavailable while the hub control plane recovers. Retry `/new` in a few seconds.",
+                                thread_id=message.thread_id,
+                                reply_to=message.message_id,
+                            )
+                            return
                         log_event(
                             self._logger,
                             logging.WARNING,
