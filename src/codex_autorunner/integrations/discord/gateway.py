@@ -29,8 +29,6 @@ else:
 
 
 FATAL_GATEWAY_CLOSE_CODES = {4004, 4010, 4011, 4012, 4013, 4014}
-# Allow one queued dispatch in addition to the active worker item so later
-# frames can start flowing without letting backlog grow unbounded.
 DISCORD_DISPATCH_QUEUE_MAXSIZE = 1
 DISCORD_DISPATCH_CALLBACK_MAX_IN_FLIGHT = 8
 
@@ -112,6 +110,414 @@ def gateway_close_code(exc: BaseException) -> int | None:
     return None
 
 
+@dataclass(frozen=True)
+class GatewayReconnectDecision:
+    should_halt: bool
+    is_fatal: bool
+    fatal_reason: Optional[str] = None
+    cause: str = "unknown"
+    close_code: Optional[int] = None
+
+
+class GatewayReconnectPolicy:
+    def __init__(
+        self,
+        *,
+        logger: logging.Logger,
+        base_seconds: float = 1.0,
+        max_seconds: float = 30.0,
+        rand_float: Callable[[], float] = random.random,
+    ) -> None:
+        self._logger = logger
+        self._base_seconds = base_seconds
+        self._max_seconds = max_seconds
+        self._rand_float = rand_float
+        self._attempt = 0
+
+    @property
+    def current_attempt(self) -> int:
+        return self._attempt
+
+    def classify_connection_closed(
+        self, exc: BaseException
+    ) -> GatewayReconnectDecision:
+        close_code = gateway_close_code(exc)
+        is_fatal = close_code in FATAL_GATEWAY_CLOSE_CODES
+        return GatewayReconnectDecision(
+            should_halt=is_fatal,
+            is_fatal=is_fatal,
+            fatal_reason=f"gateway_close_code={close_code}" if is_fatal else None,
+            cause="connection_closed",
+            close_code=close_code,
+        )
+
+    def classify_permanent_error(
+        self, exc: DiscordPermanentError
+    ) -> GatewayReconnectDecision:
+        return GatewayReconnectDecision(
+            should_halt=True,
+            is_fatal=True,
+            fatal_reason=str(exc),
+            cause="permanent_error",
+        )
+
+    def classify_transient_error(self, exc: BaseException) -> GatewayReconnectDecision:
+        return GatewayReconnectDecision(
+            should_halt=False,
+            is_fatal=False,
+            cause="unexpected_error",
+        )
+
+    def record_successful_connection(
+        self,
+        *,
+        ready_seen: bool = False,
+        established_session: bool = False,
+    ) -> None:
+        if self._attempt > 0:
+            logging_utils.log_event(
+                self._logger,
+                logging.INFO,
+                "discord.gateway.reconnect.success",
+                reconnect_attempt=self._attempt,
+                ready_seen=ready_seen,
+                established_session=established_session,
+            )
+        self._attempt = 0
+
+    def next_backoff(self) -> float:
+        backoff = calculate_reconnect_backoff(
+            self._attempt,
+            base_seconds=self._base_seconds,
+            max_seconds=self._max_seconds,
+            rand_float=self._rand_float,
+        )
+        logging_utils.log_event(
+            self._logger,
+            logging.INFO,
+            "discord.gateway.reconnect.scheduled",
+            reconnect_attempt=self._attempt,
+            backoff_seconds=backoff,
+        )
+        self._attempt += 1
+        return backoff
+
+
+def _is_ignored_expired_interaction_failure(exc: BaseException) -> bool:
+    if isinstance(exc, DiscordEffectDeliveryError) and is_unknown_interaction_error(
+        exc.delivery_error
+    ):
+        return True
+    return is_unknown_interaction_error(exc)
+
+
+class GatewayDispatchWorker:
+    def __init__(
+        self,
+        *,
+        logger: logging.Logger,
+        max_in_flight: int = DISCORD_DISPATCH_CALLBACK_MAX_IN_FLIGHT,
+        queue_maxsize: int = DISCORD_DISPATCH_QUEUE_MAXSIZE,
+    ) -> None:
+        self._logger = logger
+        self._max_in_flight = max_in_flight
+        self._queue_maxsize = queue_maxsize
+        self._queue: Optional[asyncio.Queue[tuple[str, dict[str, Any]]]] = None
+        self._worker_task: Optional[asyncio.Task[None]] = None
+        self._callback_tasks: set[asyncio.Task[None]] = set()
+        self._semaphore: Optional[asyncio.Semaphore] = None
+        self._failure_future: Optional[asyncio.Future[None]] = None
+        self._dispatch_order = 0
+        self._stop_event: Optional[asyncio.Event] = None
+
+    @property
+    def failure_future(self) -> Optional[asyncio.Future[None]]:
+        return self._failure_future
+
+    def start(
+        self,
+        on_dispatch: Callable[[str, dict[str, Any]], Awaitable[None]],
+        stop_event: asyncio.Event,
+    ) -> None:
+        self._stop_event = stop_event
+        self._queue = asyncio.Queue(maxsize=self._queue_maxsize)
+        self._semaphore = asyncio.Semaphore(self._max_in_flight)
+        self._failure_future = asyncio.get_running_loop().create_future()
+        self._worker_task = asyncio.create_task(self._loop(on_dispatch))
+
+    async def _loop(
+        self,
+        on_dispatch: Callable[[str, dict[str, Any]], Awaitable[None]],
+    ) -> None:
+        if self._semaphore is None:
+            self._semaphore = asyncio.Semaphore(self._max_in_flight)
+        if self._failure_future is None:
+            self._failure_future = asyncio.get_running_loop().create_future()
+        queue = self._queue
+        assert queue is not None
+        try:
+            while True:
+                event_type, payload = await queue.get()
+                try:
+                    await self._start_callback(event_type, payload, on_dispatch)
+                finally:
+                    queue.task_done()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            self._drain_queue()
+            raise
+
+    async def _start_callback(
+        self,
+        event_type: str,
+        payload: dict[str, Any],
+        on_dispatch: Callable[[str, dict[str, Any]], Awaitable[None]],
+    ) -> None:
+        semaphore = self._semaphore
+        if semaphore is None:
+            raise RuntimeError("Discord dispatch callback semaphore is not running")
+        await semaphore.acquire()
+        dispatch_payload = dict(payload)
+        if event_type == "INTERACTION_CREATE":
+            self._dispatch_order += 1
+            dispatch_payload["__car_dispatch_order"] = self._dispatch_order
+
+        async def _run_dispatch_callback() -> None:
+            await on_dispatch(event_type, dispatch_payload)
+
+        task: asyncio.Task[None] = asyncio.create_task(_run_dispatch_callback())
+        self._callback_tasks.add(task)
+        task.add_done_callback(self._callback_done)
+
+    def _callback_done(self, task: asyncio.Task[None]) -> None:
+        self._callback_tasks.discard(task)
+        semaphore = self._semaphore
+        if semaphore is not None:
+            semaphore.release()
+        if task.cancelled():
+            return
+        try:
+            exc = task.exception()
+        except asyncio.CancelledError:
+            return
+        if exc is None:
+            return
+        if _is_ignored_expired_interaction_failure(exc):
+            logging_utils.log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.gateway.dispatch.expired_interaction_ignored",
+                interaction_id=getattr(exc, "interaction_id", None),
+                delivery_status=getattr(exc, "delivery_status", None),
+                delivery_error=getattr(exc, "delivery_error", None),
+                error=str(exc),
+            )
+            return
+        failure_future = self._failure_future
+        if failure_future is not None and not failure_future.done():
+            failure_future.set_exception(exc)
+
+    async def enqueue(self, event_type: str, payload: dict[str, Any]) -> bool:
+        worker_task = self._worker_task
+        if worker_task is None:
+            raise RuntimeError("Discord dispatch worker is not running")
+        failure_future = self._failure_future
+
+        queue = self._queue
+        assert queue is not None
+
+        queue_put_task = asyncio.create_task(queue.put((event_type, payload)))
+        try:
+            wait_targets: set[asyncio.Future[Any] | asyncio.Task[Any]] = {
+                queue_put_task,
+                worker_task,
+            }
+            if failure_future is not None:
+                wait_targets.add(failure_future)
+            done, _pending = await asyncio.wait(
+                wait_targets,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        except Exception:
+            queue_put_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await queue_put_task
+            raise
+
+        if worker_task in done:
+            queue_put_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await queue_put_task
+            if self._is_shutdown_cancelled(worker_task):
+                return False
+            self._raise_if_failed(worker_task)
+            raise RuntimeError("Discord dispatch worker exited unexpectedly")
+        if failure_future is not None and failure_future in done:
+            queue_put_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await queue_put_task
+            failure_future.result()
+
+        await queue_put_task
+        return True
+
+    async def recv_while_active(self, websocket_iter: Any) -> Any | None:
+        worker_task = self._worker_task
+        if worker_task is None:
+            raise RuntimeError("Discord dispatch worker is not running")
+        failure_future = self._failure_future
+
+        message_task = asyncio.create_task(websocket_iter.__anext__())
+        try:
+            wait_targets: set[asyncio.Future[Any] | asyncio.Task[Any]] = {
+                message_task,
+                worker_task,
+            }
+            if failure_future is not None:
+                wait_targets.add(failure_future)
+            done, _pending = await asyncio.wait(
+                wait_targets,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        except Exception:
+            message_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await message_task
+            raise
+
+        if worker_task in done:
+            message_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await message_task
+            if self._is_shutdown_cancelled(worker_task):
+                return None
+            self._raise_if_failed(worker_task)
+            raise RuntimeError("Discord dispatch worker exited unexpectedly")
+        if failure_future is not None and failure_future in done:
+            message_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await message_task
+            failure_future.result()
+
+        try:
+            return message_task.result()
+        except StopAsyncIteration:
+            return None
+
+    async def wait_drain(self) -> None:
+        worker_task = self._worker_task
+        if worker_task is None or self._queue is None:
+            return
+        failure_future = self._failure_future
+
+        join_task = asyncio.create_task(self._queue.join())
+        try:
+            wait_targets: set[asyncio.Future[Any] | asyncio.Task[Any]] = {
+                join_task,
+                worker_task,
+            }
+            if failure_future is not None:
+                wait_targets.add(failure_future)
+            done, _pending = await asyncio.wait(
+                wait_targets,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        except Exception:
+            join_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await join_task
+            raise
+
+        if worker_task in done:
+            join_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await join_task
+            if self._is_shutdown_cancelled(worker_task):
+                return
+            self._raise_if_failed(worker_task)
+            raise RuntimeError("Discord dispatch worker exited unexpectedly")
+        if failure_future is not None and failure_future in done:
+            join_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await join_task
+            failure_future.result()
+
+        await join_task
+        self._raise_if_failed(worker_task)
+        await self.wait_callbacks()
+
+    async def wait_callbacks(self) -> None:
+        if not self._callback_tasks:
+            failure_future = self._failure_future
+            if failure_future is not None and failure_future.done():
+                failure_future.result()
+            return
+        results = await asyncio.gather(
+            *tuple(self._callback_tasks),
+            return_exceptions=True,
+        )
+        for result in results:
+            if not isinstance(result, BaseException):
+                continue
+            if _is_ignored_expired_interaction_failure(result):
+                continue
+            raise result
+        await asyncio.sleep(0)
+
+    async def cancel(self) -> None:
+        queue = self._queue
+        if self._worker_task is None:
+            if queue is not None:
+                self._drain_queue()
+            await self._cancel_callbacks()
+            return
+        task = self._worker_task
+        self._worker_task = None
+        if not task.done():
+            task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        if queue is not None:
+            self._drain_queue()
+        await self._cancel_callbacks()
+
+    async def _cancel_callbacks(self) -> None:
+        callbacks = tuple(self._callback_tasks)
+        if not callbacks:
+            return
+        self._callback_tasks.clear()
+        for task in callbacks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*callbacks, return_exceptions=True)
+
+    def _drain_queue(self) -> None:
+        if self._queue is None:
+            return
+        while True:
+            try:
+                self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            else:
+                self._queue.task_done()
+
+    def _is_shutdown_cancelled(self, task: asyncio.Task[None]) -> bool:
+        return (
+            self._stop_event is not None
+            and self._stop_event.is_set()
+            and task.cancelled()
+        )
+
+    def _raise_if_failed(self, task: asyncio.Task[None]) -> None:
+        if not task.done():
+            return
+        if self._is_shutdown_cancelled(task):
+            return
+        task.result()
+
+
 class DiscordGatewayClient:
     def __init__(
         self,
@@ -130,18 +536,16 @@ class DiscordGatewayClient:
         self._ready_in_connection = False
         self._stop_event = asyncio.Event()
         self._heartbeat_task: Optional[asyncio.Task[None]] = None
-        self._dispatch_queue: Optional[asyncio.Queue[tuple[str, dict[str, Any]]]] = None
-        self._dispatch_worker_task: Optional[asyncio.Task[None]] = None
-        self._dispatch_callback_tasks: set[asyncio.Task[None]] = set()
-        self._dispatch_callback_semaphore: Optional[asyncio.Semaphore] = None
-        self._dispatch_failure_future: Optional[asyncio.Future[None]] = None
-        self._dispatch_order = 0
+        self._active_dispatch_worker: Optional[GatewayDispatchWorker] = None
         self._websocket: Any = None
 
     async def stop(self) -> None:
         self._stop_event.set()
         await self._cancel_heartbeat()
-        await self._cancel_dispatch_worker()
+        if self._active_dispatch_worker is not None:
+            worker = self._active_dispatch_worker
+            self._active_dispatch_worker = None
+            await worker.cancel()
         if self._websocket is not None:
             with contextlib.suppress(ConnectionClosed, OSError):
                 await self._websocket.close()
@@ -154,7 +558,7 @@ class DiscordGatewayClient:
                 "Discord gateway requires optional dependency: install with .[discord]"
             )
 
-        reconnect_attempt = 0
+        reconnect_policy = GatewayReconnectPolicy(logger=self._logger)
         while not self._stop_event.is_set():
             established_session = False
             fatal_failure = False
@@ -166,7 +570,7 @@ class DiscordGatewayClient:
                     self._logger,
                     logging.INFO,
                     "discord.gateway.transport.connect.start",
-                    reconnect_attempt=reconnect_attempt,
+                    reconnect_attempt=reconnect_policy.current_attempt,
                     gateway_url=gateway_url,
                 )
                 async with websockets.connect(gateway_url) as websocket:
@@ -175,7 +579,7 @@ class DiscordGatewayClient:
                         self._logger,
                         logging.INFO,
                         "discord.gateway.transport.connect.success",
-                        reconnect_attempt=reconnect_attempt,
+                        reconnect_attempt=reconnect_policy.current_attempt,
                         gateway_url=gateway_url,
                     )
                     established_session = await self._run_connection(
@@ -184,15 +588,16 @@ class DiscordGatewayClient:
             except asyncio.CancelledError:
                 raise
             except DiscordPermanentError as exc:
-                fatal_failure = True
-                fatal_reason = str(exc)
+                decision = reconnect_policy.classify_permanent_error(exc)
+                fatal_failure = decision.is_fatal
+                fatal_reason = decision.fatal_reason
                 logging_utils.log_event(
                     self._logger,
                     logging.ERROR,
                     "discord.gateway.reconnect.failure",
-                    reconnect_attempt=reconnect_attempt,
-                    fatal=True,
-                    cause="permanent_error",
+                    reconnect_attempt=reconnect_policy.current_attempt,
+                    fatal=decision.is_fatal,
+                    cause=decision.cause,
                     error=str(exc),
                 )
                 self._logger.error(
@@ -200,48 +605,51 @@ class DiscordGatewayClient:
                     exc,
                 )
             except ConnectionClosed as exc:
-                close_code = gateway_close_code(exc)
-                if close_code in FATAL_GATEWAY_CLOSE_CODES:
-                    fatal_failure = True
-                    fatal_reason = f"gateway_close_code={close_code}"
+                decision = reconnect_policy.classify_connection_closed(exc)
+                fatal_failure = decision.is_fatal
+                fatal_reason = decision.fatal_reason
                 logging_utils.log_event(
                     self._logger,
                     logging.WARNING,
                     "discord.gateway.reconnect.failure",
-                    reconnect_attempt=reconnect_attempt,
-                    fatal=bool(fatal_failure),
-                    cause="connection_closed",
-                    close_code=close_code,
+                    reconnect_attempt=reconnect_policy.current_attempt,
+                    fatal=decision.is_fatal,
+                    cause=decision.cause,
+                    close_code=decision.close_code,
                 )
-                if close_code in FATAL_GATEWAY_CLOSE_CODES:
+                if decision.should_halt:
                     self._logger.error(
                         "Discord gateway closed with fatal code=%s; halting reconnect loop",
-                        close_code,
+                        decision.close_code,
                     )
                 else:
                     self._logger.info("Discord gateway socket closed; reconnecting")
             except (
                 Exception
             ) as exc:  # intentional: reconnect loop catches all transient failures
+                decision = reconnect_policy.classify_transient_error(exc)
                 logging_utils.log_event(
                     self._logger,
                     logging.WARNING,
                     "discord.gateway.reconnect.failure",
-                    reconnect_attempt=reconnect_attempt,
+                    reconnect_attempt=reconnect_policy.current_attempt,
                     fatal=False,
-                    cause="unexpected_error",
+                    cause=decision.cause,
                     error=str(exc),
                 )
                 self._logger.warning("Discord gateway error; reconnecting: %s", exc)
             finally:
                 self._websocket = None
                 await self._cancel_heartbeat()
-                await self._cancel_dispatch_worker()
+                if self._active_dispatch_worker is not None:
+                    worker = self._active_dispatch_worker
+                    self._active_dispatch_worker = None
+                    await worker.cancel()
                 logging_utils.log_event(
                     self._logger,
                     logging.INFO,
                     "discord.gateway.transport.disconnect",
-                    reconnect_attempt=reconnect_attempt,
+                    reconnect_attempt=reconnect_policy.current_attempt,
                     established_session=established_session,
                     ready_seen=self._ready_in_connection,
                     fatal_failure=fatal_failure,
@@ -258,25 +666,11 @@ class DiscordGatewayClient:
                 await self._stop_event.wait()
                 break
             if established_session or self._ready_in_connection:
-                if reconnect_attempt > 0:
-                    logging_utils.log_event(
-                        self._logger,
-                        logging.INFO,
-                        "discord.gateway.reconnect.success",
-                        reconnect_attempt=reconnect_attempt,
-                        ready_seen=self._ready_in_connection,
-                        established_session=established_session,
-                    )
-                reconnect_attempt = 0
-            backoff = calculate_reconnect_backoff(reconnect_attempt)
-            logging_utils.log_event(
-                self._logger,
-                logging.INFO,
-                "discord.gateway.reconnect.scheduled",
-                reconnect_attempt=reconnect_attempt,
-                backoff_seconds=backoff,
-            )
-            reconnect_attempt += 1
+                reconnect_policy.record_successful_connection(
+                    ready_seen=self._ready_in_connection,
+                    established_session=established_session,
+                )
+            backoff = reconnect_policy.next_backoff()
             await asyncio.sleep(backoff)
 
     async def _resolve_gateway_url(self) -> str:
@@ -316,22 +710,14 @@ class DiscordGatewayClient:
             )
         )
         established_session = False
-        dispatch_queue: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue(
-            maxsize=DISCORD_DISPATCH_QUEUE_MAXSIZE
-        )
-        self._dispatch_queue = dispatch_queue
-        self._dispatch_callback_semaphore = asyncio.Semaphore(
-            DISCORD_DISPATCH_CALLBACK_MAX_IN_FLIGHT
-        )
-        self._dispatch_failure_future = asyncio.get_running_loop().create_future()
-        self._dispatch_worker_task = asyncio.create_task(
-            self._dispatch_loop(dispatch_queue, on_dispatch)
-        )
+        dispatch_worker = GatewayDispatchWorker(logger=self._logger)
+        dispatch_worker.start(on_dispatch, self._stop_event)
+        self._active_dispatch_worker = dispatch_worker
         websocket_iter = websocket.__aiter__()
 
         try:
             while True:
-                raw_message = await self._recv_gateway_message(websocket_iter)
+                raw_message = await dispatch_worker.recv_while_active(websocket_iter)
                 if raw_message is None:
                     break
                 frame = parse_gateway_frame(raw_message)
@@ -343,9 +729,7 @@ class DiscordGatewayClient:
                         established_session = True
                         self._ready_in_connection = True
                     if frame.t and isinstance(frame.d, dict):
-                        enqueued = await self._enqueue_dispatch(
-                            dispatch_queue, frame.t, frame.d
-                        )
+                        enqueued = await dispatch_worker.enqueue(frame.t, frame.d)
                         if not enqueued:
                             return established_session
                     continue
@@ -367,12 +751,10 @@ class DiscordGatewayClient:
             return established_session
         finally:
             try:
-                await self._wait_for_dispatch_queue(dispatch_queue)
+                await dispatch_worker.wait_drain()
             finally:
-                self._dispatch_queue = None
-                self._dispatch_callback_semaphore = None
-                self._dispatch_failure_future = None
-                await self._cancel_dispatch_worker()
+                self._active_dispatch_worker = None
+                await dispatch_worker.cancel()
 
     async def _heartbeat_loop(self, websocket: Any, interval_seconds: float) -> None:
         try:
@@ -396,312 +778,4 @@ class DiscordGatewayClient:
         except (
             Exception
         ) as exc:  # intentional: heartbeat cleanup must not abort reconnect/shutdown
-            # Heartbeat failures can happen after websocket disconnects; do not let
-            # them abort reconnect/shutdown paths.
             self._logger.debug("Discord heartbeat task ended with error: %s", exc)
-
-    async def _dispatch_loop(
-        self,
-        queue: asyncio.Queue[tuple[str, dict[str, Any]]],
-        on_dispatch: Callable[[str, dict[str, Any]], Awaitable[None]],
-    ) -> None:
-        if self._dispatch_callback_semaphore is None:
-            self._dispatch_callback_semaphore = asyncio.Semaphore(
-                DISCORD_DISPATCH_CALLBACK_MAX_IN_FLIGHT
-            )
-        if self._dispatch_failure_future is None:
-            self._dispatch_failure_future = asyncio.get_running_loop().create_future()
-        try:
-            while True:
-                event_type, payload = await queue.get()
-                try:
-                    await self._start_dispatch_callback(
-                        event_type=event_type,
-                        payload=payload,
-                        on_dispatch=on_dispatch,
-                    )
-                finally:
-                    queue.task_done()
-        except asyncio.CancelledError:
-            raise
-        except (
-            Exception
-        ):  # intentional: dispatch callback failures re-raised after queue drain
-            while True:
-                try:
-                    queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    break
-                else:
-                    queue.task_done()
-            raise
-
-    async def _start_dispatch_callback(
-        self,
-        *,
-        event_type: str,
-        payload: dict[str, Any],
-        on_dispatch: Callable[[str, dict[str, Any]], Awaitable[None]],
-    ) -> None:
-        semaphore = self._dispatch_callback_semaphore
-        if semaphore is None:
-            raise RuntimeError("Discord dispatch callback semaphore is not running")
-        await semaphore.acquire()
-        dispatch_payload = dict(payload)
-        if event_type == "INTERACTION_CREATE":
-            self._dispatch_order += 1
-            dispatch_payload["__car_dispatch_order"] = self._dispatch_order
-
-        async def _run_dispatch_callback() -> None:
-            await on_dispatch(event_type, dispatch_payload)
-
-        task: asyncio.Task[None] = asyncio.create_task(_run_dispatch_callback())
-        self._dispatch_callback_tasks.add(task)
-        task.add_done_callback(self._dispatch_callback_done)
-
-    def _dispatch_callback_done(self, task: asyncio.Task[None]) -> None:
-        self._dispatch_callback_tasks.discard(task)
-        semaphore = self._dispatch_callback_semaphore
-        if semaphore is not None:
-            semaphore.release()
-        if task.cancelled():
-            return
-        try:
-            exc = task.exception()
-        except asyncio.CancelledError:
-            return
-        if exc is None:
-            return
-        if self._is_ignored_expired_interaction_failure(exc):
-            logging_utils.log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.gateway.dispatch.expired_interaction_ignored",
-                interaction_id=getattr(exc, "interaction_id", None),
-                delivery_status=getattr(exc, "delivery_status", None),
-                delivery_error=getattr(exc, "delivery_error", None),
-                error=str(exc),
-            )
-            return
-        failure_future = self._dispatch_failure_future
-        if failure_future is not None and not failure_future.done():
-            failure_future.set_exception(exc)
-
-    @staticmethod
-    def _is_ignored_expired_interaction_failure(exc: BaseException) -> bool:
-        if isinstance(exc, DiscordEffectDeliveryError) and is_unknown_interaction_error(
-            exc.delivery_error
-        ):
-            return True
-        return is_unknown_interaction_error(exc)
-
-    async def _recv_gateway_message(self, websocket_iter: Any) -> Any | None:
-        dispatch_task = self._dispatch_worker_task
-        if dispatch_task is None:
-            raise RuntimeError("Discord dispatch worker is not running")
-        failure_future = self._dispatch_failure_future
-
-        message_task = asyncio.create_task(websocket_iter.__anext__())
-        try:
-            wait_targets: set[asyncio.Future[Any] | asyncio.Task[Any]] = {
-                message_task,
-                dispatch_task,
-            }
-            if failure_future is not None:
-                wait_targets.add(failure_future)
-            done, _pending = await asyncio.wait(
-                wait_targets,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-        except (
-            Exception
-        ):  # intentional: asyncio.wait failure, re-raised after task cleanup
-            message_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await message_task
-            raise
-
-        if dispatch_task in done:
-            message_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await message_task
-            if self._dispatch_worker_cancelled_for_shutdown(dispatch_task):
-                return None
-            self._raise_if_dispatch_worker_failed(dispatch_task)
-            raise RuntimeError("Discord dispatch worker exited unexpectedly")
-        if failure_future is not None and failure_future in done:
-            message_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await message_task
-            failure_future.result()
-
-        try:
-            return message_task.result()
-        except StopAsyncIteration:
-            return None
-
-    async def _enqueue_dispatch(
-        self,
-        queue: asyncio.Queue[tuple[str, dict[str, Any]]],
-        event_type: str,
-        payload: dict[str, Any],
-    ) -> bool:
-        dispatch_task = self._dispatch_worker_task
-        if dispatch_task is None:
-            raise RuntimeError("Discord dispatch worker is not running")
-        failure_future = self._dispatch_failure_future
-
-        queue_put_task = asyncio.create_task(queue.put((event_type, payload)))
-        try:
-            wait_targets: set[asyncio.Future[Any] | asyncio.Task[Any]] = {
-                queue_put_task,
-                dispatch_task,
-            }
-            if failure_future is not None:
-                wait_targets.add(failure_future)
-            done, _pending = await asyncio.wait(
-                wait_targets,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-        except (
-            Exception
-        ):  # intentional: asyncio.wait failure, re-raised after task cleanup
-            queue_put_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await queue_put_task
-            raise
-
-        if dispatch_task in done:
-            queue_put_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await queue_put_task
-            if self._dispatch_worker_cancelled_for_shutdown(dispatch_task):
-                return False
-            self._raise_if_dispatch_worker_failed(dispatch_task)
-            raise RuntimeError("Discord dispatch worker exited unexpectedly")
-        if failure_future is not None and failure_future in done:
-            queue_put_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await queue_put_task
-            failure_future.result()
-
-        await queue_put_task
-        return True
-
-    async def _wait_for_dispatch_queue(
-        self,
-        queue: asyncio.Queue[tuple[str, dict[str, Any]]],
-    ) -> None:
-        dispatch_task = self._dispatch_worker_task
-        if dispatch_task is None:
-            return
-        failure_future = self._dispatch_failure_future
-
-        join_task = asyncio.create_task(queue.join())
-        try:
-            wait_targets: set[asyncio.Future[Any] | asyncio.Task[Any]] = {
-                join_task,
-                dispatch_task,
-            }
-            if failure_future is not None:
-                wait_targets.add(failure_future)
-            done, _pending = await asyncio.wait(
-                wait_targets,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-        except (
-            Exception
-        ):  # intentional: asyncio.wait failure, re-raised after task cleanup
-            join_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await join_task
-            raise
-
-        if dispatch_task in done:
-            join_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await join_task
-            if self._dispatch_worker_cancelled_for_shutdown(dispatch_task):
-                return
-            self._raise_if_dispatch_worker_failed(dispatch_task)
-            raise RuntimeError("Discord dispatch worker exited unexpectedly")
-        if failure_future is not None and failure_future in done:
-            join_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await join_task
-            failure_future.result()
-
-        await join_task
-        self._raise_if_dispatch_worker_failed(dispatch_task)
-        await self._wait_for_dispatch_callbacks()
-
-    async def _wait_for_dispatch_callbacks(self) -> None:
-        if not self._dispatch_callback_tasks:
-            failure_future = self._dispatch_failure_future
-            if failure_future is not None and failure_future.done():
-                failure_future.result()
-            return
-        results = await asyncio.gather(
-            *tuple(self._dispatch_callback_tasks),
-            return_exceptions=True,
-        )
-        for result in results:
-            if not isinstance(result, BaseException):
-                continue
-            if self._is_ignored_expired_interaction_failure(result):
-                continue
-            raise result
-        # Task done callbacks (e.g. `_dispatch_callback_done` logging) are
-        # scheduled when the task finishes; they may not run until after
-        # `gather` returns. Yield once so structured logs flush before callers
-        # continue (tests and metrics rely on this ordering).
-        await asyncio.sleep(0)
-
-    async def _cancel_dispatch_worker(self) -> None:
-        queue = self._dispatch_queue
-        if self._dispatch_worker_task is None:
-            if queue is not None:
-                self._drain_dispatch_queue(queue)
-            await self._cancel_dispatch_callbacks()
-            return
-        task = self._dispatch_worker_task
-        self._dispatch_worker_task = None
-        if not task.done():
-            task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
-        if queue is not None:
-            self._drain_dispatch_queue(queue)
-        await self._cancel_dispatch_callbacks()
-
-    async def _cancel_dispatch_callbacks(self) -> None:
-        callbacks = tuple(self._dispatch_callback_tasks)
-        if not callbacks:
-            return
-        self._dispatch_callback_tasks.clear()
-        for task in callbacks:
-            if not task.done():
-                task.cancel()
-        await asyncio.gather(*callbacks, return_exceptions=True)
-
-    @staticmethod
-    def _drain_dispatch_queue(
-        queue: asyncio.Queue[tuple[str, dict[str, Any]]],
-    ) -> None:
-        while True:
-            try:
-                queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-            else:
-                queue.task_done()
-
-    def _dispatch_worker_cancelled_for_shutdown(self, task: asyncio.Task[None]) -> bool:
-        return self._stop_event.is_set() and task.cancelled()
-
-    def _raise_if_dispatch_worker_failed(self, task: asyncio.Task[None]) -> None:
-        if not task.done():
-            return
-        if self._dispatch_worker_cancelled_for_shutdown(task):
-            return
-        task.result()

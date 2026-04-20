@@ -9,6 +9,7 @@ from codex_autorunner.integrations.discord.errors import DiscordPermanentError
 from codex_autorunner.integrations.discord.gateway import (
     DISCORD_DISPATCH_CALLBACK_MAX_IN_FLIGHT,
     DiscordGatewayClient,
+    GatewayDispatchWorker,
     build_identify_payload,
     calculate_reconnect_backoff,
     parse_gateway_frame,
@@ -66,7 +67,7 @@ async def test_run_retries_resolve_failures_without_exiting(
     monkeypatch.setattr(
         gateway_module,
         "calculate_reconnect_backoff",
-        lambda attempt: float(backoff_attempts.append(attempt) or 2.0),
+        lambda attempt, **_kw: float(backoff_attempts.append(attempt) or 2.0),
     )
     sleep_calls: list[float] = []
 
@@ -213,7 +214,7 @@ async def test_run_resets_backoff_only_after_established_session(
     monkeypatch.setattr(
         gateway_module,
         "calculate_reconnect_backoff",
-        lambda attempt: float(attempts.append(attempt) or (attempt + 1)),
+        lambda attempt, **_kw: float(attempts.append(attempt) or (attempt + 1)),
     )
     sleep_calls: list[float] = []
 
@@ -279,7 +280,7 @@ async def test_run_resets_backoff_when_ready_seen_before_socket_close(
     monkeypatch.setattr(
         gateway_module,
         "calculate_reconnect_backoff",
-        lambda attempt: float(attempts.append(attempt) or (attempt + 1)),
+        lambda attempt, **_kw: float(attempts.append(attempt) or (attempt + 1)),
     )
     sleep_calls: list[float] = []
 
@@ -515,7 +516,6 @@ async def test_stop_cancels_outstanding_dispatch_worker() -> None:
         logger=logging.getLogger("test.gateway"),
     )
     cancelled = asyncio.Event()
-    queue: asyncio.Queue[tuple[str, dict[str, object]]] = asyncio.Queue()
 
     async def _dispatch(_event_type: str, _payload: dict[str, object]) -> None:
         try:
@@ -524,19 +524,18 @@ async def test_stop_cancels_outstanding_dispatch_worker() -> None:
             cancelled.set()
             raise
 
-    client._dispatch_worker_task = asyncio.create_task(  # type: ignore[assignment]
-        client._dispatch_loop(
-            queue,  # type: ignore[arg-type]
-            _dispatch,
-        )
+    dispatch_worker = GatewayDispatchWorker(
+        logger=logging.getLogger("test.gateway"),
     )
-    queue.put_nowait(("INTERACTION_CREATE", {"id": "slow"}))
+    dispatch_worker.start(_dispatch, client._stop_event)
+    client._active_dispatch_worker = dispatch_worker
+    await dispatch_worker.enqueue("INTERACTION_CREATE", {"id": "slow"})
     await asyncio.sleep(0)
 
     await client.stop()
 
     assert cancelled.is_set()
-    assert client._dispatch_worker_task is None
+    assert client._active_dispatch_worker is None
 
 
 @pytest.mark.anyio

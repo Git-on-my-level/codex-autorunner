@@ -39,7 +39,11 @@ from codex_autorunner.integrations.discord.errors import (
     DiscordAPIError,
     DiscordPermanentError,
 )
-from codex_autorunner.integrations.discord.gateway import DiscordGatewayClient
+from codex_autorunner.integrations.discord.gateway import (
+    DiscordGatewayClient,
+    GatewayDispatchWorker,
+    GatewayReconnectPolicy,
+)
 from codex_autorunner.integrations.discord.ingress import (
     CommandSpec,
     IngressTiming,
@@ -1550,18 +1554,18 @@ async def test_gateway_emits_reconnect_lifecycle_logs(
 
 @pytest.mark.anyio
 async def test_gateway_ignores_expired_interaction_delivery_failure() -> None:
-    client = DiscordGatewayClient(
-        bot_token="token",
-        intents=1,
+    dispatch_worker = GatewayDispatchWorker(
         logger=logging.getLogger("test.reliability.gateway.expired_interaction"),
-        gateway_url="wss://example.invalid",
     )
-    client._dispatch_callback_semaphore = asyncio.Semaphore(1)
-    client._dispatch_failure_future = asyncio.get_running_loop().create_future()
+    stop_event = asyncio.Event()
+    dispatch_worker.start(
+        on_dispatch=lambda _event_type, _payload: _raise_expired_delivery(),
+        stop_event=stop_event,
+    )
 
     async def _raise_expired_delivery(
-        _event_type: str,
-        _payload: dict[str, Any],
+        _event_type: str = "",
+        _payload: Optional[dict[str, Any]] = None,
     ) -> None:
         raise DiscordEffectDeliveryError(
             effect=DiscordResponseEffect(
@@ -1578,18 +1582,15 @@ async def test_gateway_ignores_expired_interaction_delivery_failure() -> None:
             ),
         )
 
-    await client._start_dispatch_callback(
-        event_type="INTERACTION_CREATE",
-        payload={},
-        on_dispatch=_raise_expired_delivery,
-    )
+    enqueued = await dispatch_worker.enqueue("INTERACTION_CREATE", {})
+    assert enqueued is True
     await asyncio.sleep(0)
-    # Callback exceptions surface here; expired unknown-interaction failures must
-    # not propagate (they are logged from the task done callback asynchronously).
-    await client._wait_for_dispatch_callbacks()
+    await dispatch_worker.wait_callbacks()
 
-    assert client._dispatch_failure_future is not None
-    assert client._dispatch_failure_future.done() is False
+    assert dispatch_worker.failure_future is not None
+    assert dispatch_worker.failure_future.done() is False
+
+    await dispatch_worker.cancel()
 
 
 @pytest.mark.anyio
@@ -2264,3 +2265,265 @@ async def test_concurrent_submit_and_shutdown() -> None:
     await shutdown_task
 
     assert len(dispatched) >= 1
+
+
+# --- GatewayReconnectPolicy tests ---
+
+
+@pytest.mark.anyio
+async def test_reconnect_policy_classifies_permanent_error_as_fatal() -> None:
+    policy = GatewayReconnectPolicy(
+        logger=logging.getLogger("test.reconnect_policy"),
+    )
+    exc = DiscordPermanentError("bad token")
+    decision = policy.classify_permanent_error(exc)
+    assert decision.is_fatal is True
+    assert decision.should_halt is True
+    assert decision.cause == "permanent_error"
+    assert decision.fatal_reason == "bad token"
+
+
+@pytest.mark.anyio
+async def test_reconnect_policy_classifies_fatal_close_code() -> None:
+    policy = GatewayReconnectPolicy(
+        logger=logging.getLogger("test.reconnect_policy"),
+    )
+
+    class _FakeClose(BaseException):
+        code = 4004
+
+    decision = policy.classify_connection_closed(_FakeClose())
+    assert decision.is_fatal is True
+    assert decision.should_halt is True
+    assert decision.close_code == 4004
+    assert decision.cause == "connection_closed"
+
+
+@pytest.mark.anyio
+async def test_reconnect_policy_classifies_non_fatal_close_as_reconnectable() -> None:
+    policy = GatewayReconnectPolicy(
+        logger=logging.getLogger("test.reconnect_policy"),
+    )
+
+    class _FakeClose(BaseException):
+        code = 1000
+
+    decision = policy.classify_connection_closed(_FakeClose())
+    assert decision.is_fatal is False
+    assert decision.should_halt is False
+    assert decision.close_code == 1000
+
+
+@pytest.mark.anyio
+async def test_reconnect_policy_classifies_transient_error() -> None:
+    policy = GatewayReconnectPolicy(
+        logger=logging.getLogger("test.reconnect_policy"),
+    )
+    decision = policy.classify_transient_error(RuntimeError("network glitch"))
+    assert decision.is_fatal is False
+    assert decision.should_halt is False
+    assert decision.cause == "unexpected_error"
+
+
+@pytest.mark.anyio
+async def test_reconnect_policy_backoff_increases_with_attempts() -> None:
+    policy = GatewayReconnectPolicy(
+        logger=logging.getLogger("test.reconnect_policy"),
+        base_seconds=1.0,
+        max_seconds=30.0,
+        rand_float=lambda: 0.5,
+    )
+    assert policy.current_attempt == 0
+    b0 = policy.next_backoff()
+    assert policy.current_attempt == 1
+    b1 = policy.next_backoff()
+    assert policy.current_attempt == 2
+    assert b0 < b1
+
+
+@pytest.mark.anyio
+async def test_reconnect_policy_record_success_resets_counter() -> None:
+    policy = GatewayReconnectPolicy(
+        logger=logging.getLogger("test.reconnect_policy"),
+        rand_float=lambda: 0.5,
+    )
+    policy.next_backoff()
+    policy.next_backoff()
+    assert policy.current_attempt == 2
+    policy.record_successful_connection()
+    assert policy.current_attempt == 0
+
+
+@pytest.mark.anyio
+async def test_reconnect_policy_backoff_caps_at_max() -> None:
+    policy = GatewayReconnectPolicy(
+        logger=logging.getLogger("test.reconnect_policy"),
+        base_seconds=1.0,
+        max_seconds=4.0,
+        rand_float=lambda: 1.0,
+    )
+    for _ in range(20):
+        policy.next_backoff()
+    backoff = policy.next_backoff()
+    assert backoff <= 4.0
+
+
+# --- GatewayDispatchWorker tests ---
+
+
+@pytest.mark.anyio
+async def test_dispatch_worker_enqueue_and_deliver() -> None:
+    dispatched: list[tuple[str, dict[str, Any]]] = []
+
+    async def on_dispatch(event_type: str, payload: dict[str, Any]) -> None:
+        dispatched.append((event_type, payload))
+
+    worker = GatewayDispatchWorker(
+        logger=logging.getLogger("test.dispatch_worker"),
+    )
+    stop_event = asyncio.Event()
+    worker.start(on_dispatch, stop_event)
+    enqueued = await worker.enqueue("READY", {"session_id": "s1"})
+    assert enqueued is True
+    await worker.wait_drain()
+    assert len(dispatched) == 1
+    assert dispatched[0][0] == "READY"
+    await worker.cancel()
+
+
+@pytest.mark.anyio
+async def test_dispatch_worker_suppresses_expired_interaction_failure() -> None:
+    worker = GatewayDispatchWorker(
+        logger=logging.getLogger("test.dispatch_worker.expired"),
+    )
+    stop_event = asyncio.Event()
+    worker.start(
+        on_dispatch=lambda _et, _p: _raise_expired(),
+        stop_event=stop_event,
+    )
+
+    async def _raise_expired() -> None:
+        raise DiscordEffectDeliveryError(
+            effect=DiscordResponseEffect(text="x", ephemeral=True),
+            interaction_id="i1",
+            interaction_token="t1",
+            delivery_status="ack_failed",
+            delivery_error=(
+                "Discord API request failed: status=404 "
+                '\'{"message":"Unknown interaction","code":10062}\''
+            ),
+        )
+
+    await worker.enqueue("INTERACTION_CREATE", {})
+    await worker.wait_drain()
+    await worker.wait_callbacks()
+
+    assert worker.failure_future is not None
+    assert worker.failure_future.done() is False
+    await worker.cancel()
+
+
+@pytest.mark.anyio
+async def test_dispatch_worker_propagates_non_expired_failure() -> None:
+    worker = GatewayDispatchWorker(
+        logger=logging.getLogger("test.dispatch_worker.failure"),
+    )
+    stop_event = asyncio.Event()
+
+    async def _raise_fatal() -> None:
+        raise RuntimeError("dispatch callback crashed")
+
+    worker.start(
+        on_dispatch=lambda _et, _p: _raise_fatal(),
+        stop_event=stop_event,
+    )
+
+    await worker.enqueue("INTERACTION_CREATE", {})
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert worker.failure_future is not None
+    assert worker.failure_future.done() is True
+    with pytest.raises(RuntimeError, match="dispatch callback crashed"):
+        worker.failure_future.result()
+    await worker.cancel()
+
+
+@pytest.mark.anyio
+async def test_dispatch_worker_cancel_is_idempotent() -> None:
+    worker = GatewayDispatchWorker(
+        logger=logging.getLogger("test.dispatch_worker.cancel"),
+    )
+    stop_event = asyncio.Event()
+    worker.start(
+        on_dispatch=lambda _et, _p: asyncio.sleep(0),
+        stop_event=stop_event,
+    )
+    await worker.cancel()
+    await worker.cancel()
+
+
+@pytest.mark.anyio
+async def test_dispatch_worker_enqueue_returns_false_on_shutdown_cancel() -> None:
+    worker = GatewayDispatchWorker(
+        logger=logging.getLogger("test.dispatch_worker.shutdown"),
+        queue_maxsize=1,
+    )
+    stop_event = asyncio.Event()
+    blocked = asyncio.Event()
+
+    async def blocking_dispatch(event_type: str, payload: dict[str, Any]) -> None:
+        blocked.set()
+        await asyncio.Event().wait()
+
+    worker.start(blocking_dispatch, stop_event)
+    await worker.enqueue("READY", {})
+    await asyncio.wait_for(blocked.wait(), timeout=1.0)
+
+    stop_event.set()
+    await worker.cancel()
+
+    worker2 = GatewayDispatchWorker(
+        logger=logging.getLogger("test.dispatch_worker.shutdown"),
+        queue_maxsize=1,
+    )
+    stop_event2 = asyncio.Event()
+    worker2.start(
+        on_dispatch=lambda _et, _p: asyncio.sleep(0),
+        stop_event=stop_event2,
+    )
+    stop_event2.set()
+    await worker2.cancel()
+
+
+@pytest.mark.anyio
+async def test_dispatch_worker_max_in_flight_limits_concurrency() -> None:
+    max_in_flight = 2
+    worker = GatewayDispatchWorker(
+        logger=logging.getLogger("test.dispatch_worker.concurrency"),
+        max_in_flight=max_in_flight,
+        queue_maxsize=10,
+    )
+    stop_event = asyncio.Event()
+    active_count = 0
+    max_active = 0
+    all_done = asyncio.Event()
+    total = 6
+
+    async def tracked_dispatch(event_type: str, payload: dict[str, Any]) -> None:
+        nonlocal active_count, max_active
+        active_count += 1
+        max_active = max(max_active, active_count)
+        await asyncio.sleep(0.02)
+        active_count -= 1
+        if payload.get("idx") == total - 1:
+            all_done.set()
+
+    worker.start(tracked_dispatch, stop_event)
+    for i in range(total):
+        await worker.enqueue("EVENT", {"idx": i})
+
+    await asyncio.wait_for(all_done.wait(), timeout=5.0)
+    await worker.wait_drain()
+    assert max_active <= max_in_flight
+    await worker.cancel()

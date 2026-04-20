@@ -879,7 +879,7 @@ class DiscordBotService:
             record_delivery=self._record_interaction_delivery,
             record_delivery_cursor=self._record_interaction_delivery_cursor,
         )
-        self._effect_sink = DiscordEffectSink(self)
+        self._effect_sink = DiscordEffectSink(self._responder)
         self._queued_notice_messages: dict[tuple[str, str], str] = {}
         self._queued_notice_messages_by_source: dict[
             tuple[str, str], tuple[str, str]

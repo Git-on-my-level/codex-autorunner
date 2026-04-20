@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 from .interaction_session import InteractionSessionKind
+from .response_helpers import DiscordResponder
 
 if TYPE_CHECKING:
     from .service import DiscordBotService
@@ -108,8 +109,8 @@ class DiscordEffectDeliveryError(RuntimeError):
 
 
 class DiscordEffectSink:
-    def __init__(self, service: "DiscordBotService") -> None:
-        self._service = service
+    def __init__(self, responder: DiscordResponder) -> None:
+        self._responder = responder
 
     async def apply_result(
         self,
@@ -135,7 +136,7 @@ class DiscordEffectSink:
         if isinstance(effect, DiscordResponseEffect):
             if effect.prefer_followup:
                 if effect.components:
-                    await self._service._responder.send_or_respond_with_components(
+                    await self._responder.send_or_respond_with_components(
                         interaction_id=interaction_id,
                         interaction_token=interaction_token,
                         deferred=True,
@@ -144,7 +145,7 @@ class DiscordEffectSink:
                         ephemeral=effect.ephemeral,
                     )
                 else:
-                    await self._service._responder.send_or_respond(
+                    await self._responder.send_or_respond(
                         interaction_id=interaction_id,
                         interaction_token=interaction_token,
                         deferred=True,
@@ -153,7 +154,7 @@ class DiscordEffectSink:
                     )
             else:
                 if effect.components:
-                    await self._service._responder.respond_with_components(
+                    await self._responder.respond_with_components(
                         interaction_id,
                         interaction_token,
                         effect.text,
@@ -161,7 +162,7 @@ class DiscordEffectSink:
                         ephemeral=effect.ephemeral,
                     )
                 else:
-                    await self._service._responder.respond(
+                    await self._responder.respond(
                         interaction_id,
                         interaction_token,
                         effect.text,
@@ -175,7 +176,7 @@ class DiscordEffectSink:
             return
 
         if isinstance(effect, DiscordOriginalMessageEditEffect):
-            updated = await self._service._responder.edit_original_component_message(
+            updated = await self._responder.edit_original_component_message(
                 interaction_id=interaction_id,
                 interaction_token=interaction_token,
                 text=effect.text,
@@ -190,7 +191,7 @@ class DiscordEffectSink:
             return
 
         if isinstance(effect, DiscordComponentUpdateEffect):
-            await self._service._responder.update_component_message(
+            await self._responder.update_component_message(
                 interaction_id=interaction_id,
                 interaction_token=interaction_token,
                 text=effect.text,
@@ -205,16 +206,14 @@ class DiscordEffectSink:
 
         if isinstance(effect, DiscordComponentResponseEffect):
             if effect.deferred:
-                updated = (
-                    await self._service._responder.edit_original_component_message(
-                        interaction_token=interaction_token,
-                        text=effect.text,
-                        components=effect.components,
-                    )
+                updated = await self._responder.edit_original_component_message(
+                    interaction_token=interaction_token,
+                    text=effect.text,
+                    components=effect.components,
                 )
                 if updated:
                     return
-                sent = await self._service._responder.send_followup(
+                sent = await self._responder.send_followup(
                     interaction_token=interaction_token,
                     content=effect.text,
                     components=effect.components,
@@ -238,7 +237,7 @@ class DiscordEffectSink:
             return
 
         if isinstance(effect, DiscordModalEffect):
-            await self._service._responder.respond_modal(
+            await self._responder.respond_modal(
                 interaction_id=interaction_id,
                 interaction_token=interaction_token,
                 kind=effect.kind,
@@ -254,7 +253,7 @@ class DiscordEffectSink:
             return
 
         if isinstance(effect, DiscordAutocompleteEffect):
-            await self._service._responder.respond_autocomplete(
+            await self._responder.respond_autocomplete(
                 interaction_id=interaction_id,
                 interaction_token=interaction_token,
                 choices=effect.choices,
@@ -267,7 +266,7 @@ class DiscordEffectSink:
             return
 
         if isinstance(effect, DiscordFollowupEffect):
-            sent = await self._service._responder.send_followup(
+            sent = await self._responder.send_followup(
                 interaction_id=interaction_id,
                 interaction_token=interaction_token,
                 content=effect.content,
@@ -284,19 +283,19 @@ class DiscordEffectSink:
 
         if isinstance(effect, DiscordDeferEffect):
             if effect.mode == "ephemeral":
-                deferred = await self._service._responder.defer(
+                deferred = await self._responder.defer(
                     interaction_id=interaction_id,
                     interaction_token=interaction_token,
                     ephemeral=True,
                 )
             elif effect.mode == "public":
-                deferred = await self._service._responder.defer(
+                deferred = await self._responder.defer(
                     interaction_id=interaction_id,
                     interaction_token=interaction_token,
                     ephemeral=False,
                 )
             elif effect.mode == "component_update":
-                deferred = await self._service._responder.defer_component_update(
+                deferred = await self._responder.defer_component_update(
                     interaction_id=interaction_id,
                     interaction_token=interaction_token,
                 )
@@ -319,7 +318,7 @@ class DiscordEffectSink:
         interaction_token: str,
         effect: DiscordEffect,
     ) -> None:
-        session = self._service._responder.get_session(interaction_token)
+        session = self._responder.get_session(interaction_token)
         delivery_status = session.last_delivery_status if session is not None else None
         delivery_error = session.last_delivery_error if session is not None else None
         if delivery_status and (
