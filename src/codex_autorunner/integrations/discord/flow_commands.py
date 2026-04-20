@@ -658,37 +658,6 @@ def write_user_reply(
         raise
 
 
-async def handle_tickets(
-    service: Any,
-    interaction_id: str,
-    interaction_token: str,
-    *,
-    channel_id: str,
-    workspace_root: Path,
-    options: dict[str, Any],
-) -> None:
-    status_filter = service._pending_ticket_filters.get(channel_id, "all")
-    normalized_filter = status_filter.strip().lower() if status_filter else "all"
-    if normalized_filter not in {"all", "open", "done"}:
-        normalized_filter = "all"
-    service._pending_ticket_filters[channel_id] = normalized_filter
-    search_query = service._normalize_search_query(options.get("search"))
-    if search_query:
-        service._pending_ticket_search_queries[channel_id] = search_query
-    else:
-        service._pending_ticket_search_queries.pop(channel_id, None)
-    await service.respond_ephemeral_with_components(
-        interaction_id,
-        interaction_token,
-        service._ticket_prompt_text(search_query=search_query),
-        service._build_ticket_components(
-            workspace_root,
-            status_filter=normalized_filter,
-            search_query=search_query,
-        ),
-    )
-
-
 async def handle_flow_status(
     service: Any,
     interaction_id: str,

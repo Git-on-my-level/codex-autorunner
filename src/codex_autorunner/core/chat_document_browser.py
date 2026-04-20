@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Sequence, TypeVar, cast
+from typing import Literal, Mapping, Sequence, TypeVar, cast
 
 from ..contextspace.paths import (
     contextspace_doc_catalog,
@@ -95,7 +97,9 @@ def browser_page_slice(
 def _list_ticket_items(repo_root: Path, *, query: str) -> list[DocumentBrowserItem]:
     items: list[DocumentBrowserItem] = []
     ticket_dir = repo_root / ".codex-autorunner" / "tickets"
-    for path in list_ticket_paths(ticket_dir):
+    paths = list_ticket_paths(ticket_dir)
+    index_counts = _ticket_index_counts(paths)
+    for path in paths:
         frontmatter, errors = read_ticket_frontmatter(path)
         title = frontmatter.title.strip() if frontmatter and frontmatter.title else ""
         is_done = bool(frontmatter and not errors and frontmatter.done)
@@ -104,7 +108,7 @@ def _list_ticket_items(repo_root: Path, *, query: str) -> list[DocumentBrowserIt
         description = f"{'done' if is_done else 'open'} - {rel_path}"
         item = DocumentBrowserItem(
             source="tickets",
-            document_id=_ticket_document_id(path),
+            document_id=_ticket_document_id(path, repo_root, index_counts=index_counts),
             label=label,
             description=description,
         )
@@ -158,8 +162,10 @@ def _read_ticket_document(
     if not target_id:
         return None
     ticket_dir = repo_root / ".codex-autorunner" / "tickets"
-    for path in list_ticket_paths(ticket_dir):
-        if _ticket_document_id(path) != target_id:
+    paths = list_ticket_paths(ticket_dir)
+    index_counts = _ticket_index_counts(paths)
+    for path in paths:
+        if _ticket_document_id(path, repo_root, index_counts=index_counts) != target_id:
             continue
         rel_path = safe_relpath(path, repo_root)
         frontmatter, errors = read_ticket_frontmatter(path)
@@ -205,11 +211,37 @@ def _read_contextspace_document(
     )
 
 
-def _ticket_document_id(path: Path) -> str:
+def _ticket_index_counts(paths: Sequence[Path]) -> Mapping[int, int]:
+    counts: Counter[int] = Counter()
+    for path in paths:
+        idx = parse_ticket_index(path.name)
+        if idx is not None:
+            counts[idx] += 1
+    return counts
+
+
+def _ticket_document_id(
+    path: Path,
+    repo_root: Path,
+    *,
+    index_counts: Mapping[int, int],
+) -> str:
+    """Stable id for ticket browser selection.
+
+    Uses the numeric index when it uniquely identifies one file under the ticket
+    directory; when multiple files share the same parsed index (for example
+    ``TICKET-001.md`` and ``TICKET-001-draft.md``), appends a short path hash so
+    each file maps to a distinct id.
+    """
+
     index = parse_ticket_index(path.name)
     if index is None:
         return path.name
-    return str(index)
+    if index_counts.get(index, 0) <= 1:
+        return str(index)
+    rel = safe_relpath(path, repo_root)
+    digest = hashlib.sha256(rel.encode("utf-8")).hexdigest()[:10]
+    return f"{index}-{digest}"
 
 
 def _matches_query(query: str, fields: Sequence[str]) -> bool:

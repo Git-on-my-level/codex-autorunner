@@ -39,6 +39,37 @@ def test_ticket_browser_uses_short_stable_document_ids(tmp_path: Path) -> None:
     assert "Beta body" in document.content
 
 
+def test_ticket_browser_disambiguates_shared_index(tmp_path: Path) -> None:
+    """Same numeric index in two filenames must not collapse to one document_id."""
+    repo_root = tmp_path
+    _write(
+        repo_root / ".codex-autorunner" / "tickets" / "TICKET-001.md",
+        '---\nticket_id: "tkt_one"\nagent: codex\ntitle: One\ndone: false\n---\n\nOne\n',
+    )
+    _write(
+        repo_root / ".codex-autorunner" / "tickets" / "TICKET-001-draft.md",
+        '---\nticket_id: "tkt_draft"\nagent: codex\ntitle: Draft\ndone: false\n---\n\nDraft\n',
+    )
+
+    items = list_document_browser_items(repo_root, "tickets")
+    ids = sorted(item.document_id for item in items)
+    assert len(ids) == 2
+    assert ids[0] != ids[1]
+    assert all(not id_.isdigit() or "-" in id_ for id_ in ids)
+
+    doc_std = read_document_browser_document(repo_root, "tickets", ids[0])
+    doc_draft = read_document_browser_document(repo_root, "tickets", ids[1])
+    assert doc_std is not None and doc_draft is not None
+    assert doc_std.rel_path != doc_draft.rel_path
+    assert "TICKET-001.md" in doc_std.rel_path or "TICKET-001.md" in doc_draft.rel_path
+    assert (
+        "TICKET-001-draft.md" in doc_std.rel_path
+        or "TICKET-001-draft.md" in doc_draft.rel_path
+    )
+    assert "\nOne\n" in doc_std.content or "\nOne\n" in doc_draft.content
+    assert "\nDraft\n" in doc_std.content or "\nDraft\n" in doc_draft.content
+
+
 def test_contextspace_browser_reads_existing_and_missing_docs(tmp_path: Path) -> None:
     repo_root = tmp_path
     _write(
