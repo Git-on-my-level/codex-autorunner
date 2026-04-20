@@ -534,6 +534,7 @@ CHAT_ACTION_UX_CONTRACT: tuple[ChatActionUxContractEntry, ...] = (
     _discord_component_entry("tickets.back"),
     _discord_component_entry("tickets.chunk"),
     _discord_component_entry("contextspace.select"),
+    _discord_component_entry("contextspace.page"),
     _discord_component_entry("contextspace.back"),
     _discord_component_entry("contextspace.chunk"),
     _discord_component_entry("bind.select"),

@@ -35,6 +35,7 @@ CONTEXTSPACE_SELECT_ID, CONTEXTSPACE_BACK_CUSTOM_ID = (
     "contextspace_select",
     "contextspace_back",
 )
+CONTEXTSPACE_PAGE_CUSTOM_ID_PREFIX = "contextspace_page"
 CONTEXTSPACE_CHUNK_CUSTOM_ID_PREFIX = "contextspace_chunk"
 NEWT_HARD_RESET_CUSTOM_ID = "newt_hard_reset"
 NEWT_CANCEL_CUSTOM_ID = "newt_cancel"

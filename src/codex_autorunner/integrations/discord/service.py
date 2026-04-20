@@ -249,6 +249,7 @@ from .document_browser import (
     handle_contextspace_back_component,
     handle_contextspace_browser,
     handle_contextspace_chunk_component,
+    handle_contextspace_page_component,
     handle_contextspace_select_component,
     handle_ticket_back_component,
     handle_ticket_browser,
@@ -4478,6 +4479,24 @@ class DiscordBotService:
             channel_id=channel_id,
             user_id=user_id,
             values=values,
+        )
+
+    async def _handle_contextspace_browser_page_component(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+        user_id: Optional[str],
+        custom_id: str,
+    ) -> None:
+        await handle_contextspace_page_component(
+            self,
+            interaction_id,
+            interaction_token,
+            channel_id=channel_id,
+            user_id=user_id,
+            custom_id=custom_id,
         )
 
     async def _handle_contextspace_back_component(

@@ -35,6 +35,7 @@ from ..chat.action_ux_contract import (
 from .document_browser_component_handlers import (
     _handle_contextspace_back_component,
     _handle_contextspace_chunk_component,
+    _handle_contextspace_page_component,
     _handle_contextspace_select_component,
     _handle_tickets_back_component,
     _handle_tickets_chunk_component,
@@ -57,6 +58,9 @@ from .interaction_component_handlers import (
 )
 from .interaction_component_handlers import (
     CONTEXTSPACE_CHUNK_CUSTOM_ID_PREFIX as CONTEXTSPACE_CHUNK_CUSTOM_ID_PREFIX,
+)
+from .interaction_component_handlers import (
+    CONTEXTSPACE_PAGE_CUSTOM_ID_PREFIX as CONTEXTSPACE_PAGE_CUSTOM_ID_PREFIX,
 )
 from .interaction_component_handlers import (
     CONTEXTSPACE_SELECT_ID as CONTEXTSPACE_SELECT_ID,
@@ -1378,6 +1382,11 @@ _COMPONENT_ROUTES: tuple[ComponentRoute, ...] = (
         id="contextspace.select",
         exact_custom_id=CONTEXTSPACE_SELECT_ID,
         handler=_handle_contextspace_select_component,
+    ),
+    ComponentRoute(
+        id="contextspace.page",
+        custom_id_prefix=f"{CONTEXTSPACE_PAGE_CUSTOM_ID_PREFIX}:",
+        handler=_handle_contextspace_page_component,
     ),
     ComponentRoute(
         id="contextspace.back",

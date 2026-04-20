@@ -232,6 +232,27 @@ async def handle_contextspace_chunk_component(
     )
 
 
+async def handle_contextspace_page_component(
+    service: Any,
+    interaction_id: str,
+    interaction_token: str,
+    *,
+    channel_id: str,
+    user_id: Optional[str],
+    custom_id: str,
+) -> None:
+    await _handle_list_page_component(
+        service,
+        interaction_id,
+        interaction_token,
+        channel_id=channel_id,
+        user_id=user_id,
+        source="contextspace",
+        custom_id=custom_id,
+        prefix="contextspace_page",
+    )
+
+
 async def _handle_select_component(
     service: Any,
     interaction_id: str,
@@ -501,16 +522,19 @@ def _render_list_view(
             ]
         )
     )
-    if total_pages > 1 and state.source == "tickets":
+    if total_pages > 1:
+        page_prefix = (
+            "tickets_page" if state.source == "tickets" else "contextspace_page"
+        )
         buttons = [
             build_button(
                 "Prev",
-                f"tickets_page:{state.list_page - 1}",
+                f"{page_prefix}:{state.list_page - 1}",
                 disabled=state.list_page <= 0,
             ),
             build_button(
                 "Next",
-                f"tickets_page:{state.list_page + 1}",
+                f"{page_prefix}:{state.list_page + 1}",
                 disabled=state.list_page >= (total_pages - 1),
             ),
         ]

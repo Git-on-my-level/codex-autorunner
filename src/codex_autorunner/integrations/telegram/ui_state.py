@@ -76,7 +76,6 @@ class TelegramUiState:
             or self.bind_options.get(key)
             or self.review_commit_options.get(key)
             or self.pending_review_custom.get(key)
-            or self.document_browser_states.get(key)
         )
 
     def clear_for_bang_command(self, key: str, actor_id: Optional[str]) -> None:

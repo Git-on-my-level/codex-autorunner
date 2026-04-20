@@ -135,6 +135,7 @@ def test_registry_matches_high_risk_component_and_modal_patterns() -> None:
     assert component_route_for_custom_id("tickets_back") is not None
     assert component_route_for_custom_id("tickets_chunk:1") is not None
     assert component_route_for_custom_id("contextspace_select") is not None
+    assert component_route_for_custom_id("contextspace_page:1") is not None
     assert component_route_for_custom_id("contextspace_back") is not None
     assert component_route_for_custom_id("contextspace_chunk:1") is not None
     assert modal_route_for_custom_id("tickets_modal:abc123") is not None
