@@ -18,29 +18,11 @@ from ..manifest import (
     save_manifest,
 )
 from ..tickets.outbox import set_lifecycle_emitter
-from .archive import (
-    archive_workspace_for_fresh_start,
-    dirty_car_state_paths,
-)
-from .archive_retention import resolve_worktree_archive_retention_policy
 from .config import (
     HubConfig,
     RepoConfig,
     derive_repo_config,
     load_hub_config,
-)
-from .git_utils import (
-    GitError,
-    git_available,
-    git_branch,
-    git_default_branch,
-    git_failure_detail,
-    git_head_sha,
-    git_is_clean,
-    git_mutation_lock,
-    git_upstream_status,
-    resolve_ref_sha,
-    run_git,
 )
 from .hub_lifecycle import (
     HubLifecycleWorker,
@@ -74,11 +56,9 @@ from .lifecycle_events import (
     LifecycleEventEmitter,
     LifecycleEventStore,
 )
-from .orchestration.sqlite import open_orchestration_sqlite
 from .pma_automation_store import DEFAULT_PMA_LANE_ID, PmaAutomationStore
 from .pma_queue import PmaQueue
 from .pma_safety import PmaSafetyChecker, PmaSafetyConfig
-from .pma_thread_store import PmaThreadStore
 from .ports.backend_orchestrator import (
     BackendOrchestrator as BackendOrchestratorProtocol,
 )
@@ -90,8 +70,6 @@ from .types import AppServerSupervisorFactory, BackendFactory
 
 logger = logging.getLogger("codex_autorunner.hub")
 
-_GIT_FETCH_TIMEOUT_SECONDS = 120
-_GIT_PULL_TIMEOUT_SECONDS = 120
 _LIST_REPOS_CACHE_TTL_SECONDS = 30.0
 
 BackendFactoryBuilder = Callable[[Path, RepoConfig], BackendFactory]
@@ -720,75 +698,7 @@ class HubSupervisor:
         return self._repo_manager.init_repo(repo_id)
 
     def sync_main(self, repo_id: str) -> RepoSnapshot:
-        self._invalidate_list_cache()
-        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
-        repo = manifest.get(repo_id)
-        if not repo:
-            raise ValueError(f"Repo {repo_id} not found in manifest")
-        repo_root = (self.hub_config.root / repo.path).resolve()
-        if not repo_root.exists():
-            raise ValueError(f"Repo {repo_id} missing on disk")
-        if not git_available(repo_root):
-            raise ValueError(f"Repo {repo_id} is not a git repository")
-        if not git_is_clean(repo_root):
-            raise ValueError("Repo has uncommitted changes; commit or stash first")
-
-        with git_mutation_lock(repo_root):
-            try:
-                proc = run_git(
-                    ["fetch", "--prune", "origin"],
-                    repo_root,
-                    check=False,
-                    timeout_seconds=_GIT_FETCH_TIMEOUT_SECONDS,
-                )
-            except GitError as exc:
-                raise ValueError(f"git fetch failed: {exc}") from exc
-            if proc.returncode != 0:
-                raise ValueError(f"git fetch failed: {git_failure_detail(proc)}")
-
-            default_branch = git_default_branch(repo_root)
-            if not default_branch:
-                raise ValueError("Unable to resolve origin default branch")
-
-            try:
-                proc = run_git(["checkout", default_branch], repo_root, check=False)
-            except GitError as exc:
-                raise ValueError(f"git checkout failed: {exc}") from exc
-            if proc.returncode != 0:
-                try:
-                    proc = run_git(
-                        ["checkout", "-B", default_branch, f"origin/{default_branch}"],
-                        repo_root,
-                        check=False,
-                    )
-                except GitError as exc:
-                    raise ValueError(f"git checkout failed: {exc}") from exc
-                if proc.returncode != 0:
-                    raise ValueError(f"git checkout failed: {git_failure_detail(proc)}")
-
-            try:
-                proc = run_git(
-                    ["pull", "--ff-only", "origin", default_branch],
-                    repo_root,
-                    check=False,
-                    timeout_seconds=_GIT_PULL_TIMEOUT_SECONDS,
-                )
-            except GitError as exc:
-                raise ValueError(f"git pull failed: {exc}") from exc
-            if proc.returncode != 0:
-                raise ValueError(f"git pull failed: {git_failure_detail(proc)}")
-            local_sha = git_head_sha(repo_root)
-            if not local_sha:
-                raise ValueError("Unable to resolve local HEAD after sync")
-            origin_ref = f"refs/remotes/origin/{default_branch}"
-            origin_sha = resolve_ref_sha(repo_root, origin_ref)
-            if local_sha != origin_sha:
-                raise ValueError(
-                    "Sync main did not land on origin/%s: local=%s origin=%s. "
-                    "Local branch may contain extra commits; resolve divergence first."
-                    % (default_branch, local_sha[:12], origin_sha[:12])
-                )
-        return self._snapshot_for_repo(repo_id)
+        return self._repo_manager.sync_main(repo_id)
 
     def create_repo(
         self,
@@ -918,83 +828,17 @@ class HubSupervisor:
         )
 
     def _bound_thread_target_ids(self) -> set[str]:
-        try:
-            with open_orchestration_sqlite(self.hub_config.root) as conn:
-                rows = conn.execute(
-                    """
-                    SELECT DISTINCT target_id
-                      FROM orch_bindings
-                     WHERE disabled_at IS NULL
-                       AND target_kind = 'thread'
-                       AND TRIM(COALESCE(target_id, '')) != ''
-                    """
-                ).fetchall()
-        except sqlite3.OperationalError as exc:
-            if "no such table" in str(exc).lower():
-                return set()
-            raise
-        return {
-            str(row["target_id"]).strip()
-            for row in rows
-            if isinstance(row["target_id"], str) and row["target_id"].strip()
-        }
+        return self._repo_manager._bound_thread_target_ids()
 
     def _base_repo_paths(self, manifest: Manifest) -> dict[str, Path]:
-        base_repo_paths: dict[str, Path] = {}
-        for entry in manifest.repos:
-            if entry.kind != "base":
-                continue
-            base_repo_paths[entry.id] = (self.hub_config.root / entry.path).resolve()
-        return base_repo_paths
+        return self._repo_manager._base_repo_paths(manifest)
 
     def _collect_unbound_repo_threads(
         self,
         *,
         manifest: Optional[Manifest] = None,
     ) -> dict[str, list[str]]:
-        if manifest is None:
-            manifest = load_manifest(
-                self.hub_config.manifest_path,
-                self.hub_config.root,
-            )
-        base_repo_paths = self._base_repo_paths(manifest)
-        if not base_repo_paths:
-            return {}
-
-        store = PmaThreadStore(self.hub_config.root)
-        bound_thread_ids = self._bound_thread_target_ids()
-        seen_ids: set[str] = set()
-        workspace_to_repo_id = {
-            str(path): repo_id for repo_id, path in base_repo_paths.items()
-        }
-        thread_ids_by_repo: dict[str, list[str]] = {}
-
-        for thread in store.list_threads(status="active", limit=None):
-            managed_thread_id = str(thread.get("managed_thread_id") or "").strip()
-            if not managed_thread_id or managed_thread_id in seen_ids:
-                continue
-            if managed_thread_id in bound_thread_ids:
-                continue
-
-            thread_repo_id = str(thread.get("repo_id") or "").strip()
-            workspace_root = str(thread.get("workspace_root") or "").strip()
-            matched_repo_id: Optional[str] = None
-            if thread_repo_id in base_repo_paths:
-                matched_repo_id = thread_repo_id
-            if workspace_root:
-                try:
-                    resolved_workspace = str(Path(workspace_root).resolve())
-                except OSError:
-                    resolved_workspace = ""
-                if not matched_repo_id and resolved_workspace:
-                    matched_repo_id = workspace_to_repo_id.get(resolved_workspace)
-            if not matched_repo_id:
-                continue
-
-            thread_ids_by_repo.setdefault(matched_repo_id, []).append(managed_thread_id)
-            seen_ids.add(managed_thread_id)
-
-        return thread_ids_by_repo
+        return self._repo_manager._collect_unbound_repo_threads(manifest=manifest)
 
     def _archive_unbound_repo_threads(
         self,
@@ -1002,27 +846,13 @@ class HubSupervisor:
         repo_id: str,
         unbound_threads_by_repo: Optional[dict[str, list[str]]] = None,
     ) -> list[str]:
-        thread_ids = list((unbound_threads_by_repo or {}).get(repo_id, ()))
-        if not thread_ids:
-            thread_ids = self._collect_unbound_repo_threads().get(repo_id, [])
-        if not thread_ids:
-            return []
-
-        store = PmaThreadStore(self.hub_config.root)
-        archived_thread_ids: list[str] = []
-        for managed_thread_id in thread_ids:
-            store.archive_thread(managed_thread_id)
-            archived_thread_ids.append(managed_thread_id)
-        return archived_thread_ids
+        return self._repo_manager._archive_unbound_repo_threads(
+            repo_id=repo_id,
+            unbound_threads_by_repo=unbound_threads_by_repo,
+        )
 
     def unbound_repo_thread_counts(self) -> dict[str, int]:
-        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
-        thread_ids_by_repo = self._collect_unbound_repo_threads(manifest=manifest)
-        return {
-            repo_id: len(thread_ids)
-            for repo_id, thread_ids in thread_ids_by_repo.items()
-            if thread_ids
-        }
+        return self._repo_manager.unbound_repo_thread_counts()
 
     def cleanup_worktree(
         self,
@@ -1069,65 +899,11 @@ class HubSupervisor:
         archive_note: Optional[str] = None,
         archive_profile: Optional[str] = None,
     ) -> Dict[str, object]:
-        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
-        entry = manifest.get(repo_id)
-        if not entry:
-            raise ValueError(f"Repo not found: {repo_id}")
-
-        repo_path = (self.hub_config.root / entry.path).resolve()
-        if not repo_path.exists():
-            raise ValueError(f"Repo path does not exist: {repo_path}")
-
-        base_path = repo_path
-        base_repo_id = entry.id
-        worktree_of = entry.worktree_of or entry.id
-        if entry.kind == "worktree":
-            if not entry.worktree_of:
-                raise ValueError("Worktree repo is missing worktree_of metadata")
-            base = manifest.get(entry.worktree_of)
-            if not base or base.kind != "base":
-                raise ValueError(f"Base repo not found: {entry.worktree_of}")
-            base_path = (self.hub_config.root / base.path).resolve()
-            base_repo_id = base.id
-
-        has_car_state = bool(dirty_car_state_paths(repo_path))
-        if has_car_state:
-            self._stop_runner_and_wait_for_exit(
-                repo_id=repo_id,
-                repo_path=repo_path,
-            )
-
-        branch_name = entry.branch or git_branch(repo_path) or "unknown"
-        result = archive_workspace_for_fresh_start(
-            hub_root=self.hub_config.root,
-            base_repo_root=base_path,
-            base_repo_id=base_repo_id,
-            worktree_repo_root=repo_path,
-            worktree_repo_id=repo_id,
-            branch=branch_name,
-            worktree_of=worktree_of,
-            note=archive_note,
-            source_path=entry.path,
-            retention_policy=resolve_worktree_archive_retention_policy(
-                self.hub_config.pma
-            ),
+        return self._repo_manager.archive_repo_state(
+            repo_id=repo_id,
+            archive_note=archive_note,
+            archive_profile=archive_profile,
         )
-        return {
-            "snapshot_id": result.snapshot_id,
-            "snapshot_path": (
-                str(result.snapshot_path) if result.snapshot_path else None
-            ),
-            "meta_path": str(result.meta_path) if result.meta_path else None,
-            "status": result.status,
-            "file_count": result.file_count,
-            "total_bytes": result.total_bytes,
-            "flow_run_count": result.flow_run_count,
-            "latest_flow_run_id": result.latest_flow_run_id,
-            "archived_paths": list(result.archived_paths),
-            "reset_paths": list(result.reset_paths),
-            "archived_thread_ids": list(result.archived_thread_ids),
-            "archived_thread_count": len(result.archived_thread_ids),
-        }
 
     def archive_worktree_state(
         self,
@@ -1143,123 +919,16 @@ class HubSupervisor:
         )
 
     def cleanup_repo_threads(self, *, repo_id: str) -> Dict[str, object]:
-        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
-        entry = manifest.get(repo_id)
-        if not entry or entry.kind != "base":
-            raise ValueError(f"Base repo not found: {repo_id}")
-
-        repo_path = (self.hub_config.root / entry.path).resolve()
-        if not repo_path.exists():
-            raise ValueError(f"Repo path does not exist: {repo_path}")
-
-        unbound_threads_by_repo = self._collect_unbound_repo_threads(manifest=manifest)
-        archived_thread_ids = self._archive_unbound_repo_threads(
-            repo_id=repo_id,
-            unbound_threads_by_repo=unbound_threads_by_repo,
-        )
-        archived_count = len(archived_thread_ids)
-        if archived_count == 0:
-            message = f"No stale non-chat-bound threads found for {repo_id}."
-        elif archived_count == 1:
-            message = f"Archived 1 stale non-chat-bound thread for {repo_id}."
-        else:
-            message = (
-                f"Archived {archived_count} stale non-chat-bound threads for {repo_id}."
-            )
-        return {
-            "status": "ok",
-            "repo_id": repo_id,
-            "archived_thread_ids": archived_thread_ids,
-            "archived_count": archived_count,
-            "message": message,
-        }
+        return self._repo_manager.cleanup_repo_threads(repo_id=repo_id)
 
     def cleanup_all_repo_threads(self) -> Dict[str, object]:
-        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
-        base_repo_paths = self._base_repo_paths(manifest)
-        unbound_threads_by_repo = self._collect_unbound_repo_threads(manifest=manifest)
-        dirty_repo_ids: list[str] = []
-        results: list[dict[str, object]] = []
-        total_archived = 0
-
-        for repo_id, repo_path in base_repo_paths.items():
-            is_dirty = False
-            if repo_path.exists() and git_available(repo_path):
-                try:
-                    is_dirty = not git_is_clean(repo_path)
-                except (GitError, OSError):
-                    is_dirty = False
-            if is_dirty:
-                dirty_repo_ids.append(repo_id)
-
-            archived_thread_ids = self._archive_unbound_repo_threads(
-                repo_id=repo_id,
-                unbound_threads_by_repo=unbound_threads_by_repo,
-            )
-            archived_count = len(archived_thread_ids)
-            total_archived += archived_count
-            if archived_count > 0 or is_dirty:
-                results.append(
-                    {
-                        "repo_id": repo_id,
-                        "archived_thread_ids": archived_thread_ids,
-                        "archived_count": archived_count,
-                        "is_dirty": is_dirty,
-                    }
-                )
-
-        cleaned_repo_count = 0
-        for item in results:
-            archived_count_value = item.get("archived_count")
-            if isinstance(archived_count_value, int) and archived_count_value > 0:
-                cleaned_repo_count += 1
-        if total_archived == 0:
-            message = "No stale non-chat-bound threads found across base repos."
-        elif total_archived == 1:
-            message = "Archived 1 stale non-chat-bound thread across base repos."
-        else:
-            message = f"Archived {total_archived} stale non-chat-bound threads across base repos."
-        return {
-            "status": "ok",
-            "archived_count": total_archived,
-            "cleaned_repo_count": cleaned_repo_count,
-            "dirty_repo_ids": dirty_repo_ids,
-            "dirty_repo_count": len(dirty_repo_ids),
-            "results": results,
-            "message": message,
-        }
+        return self._repo_manager.cleanup_all_repo_threads()
 
     def cleanup_all(self, *, dry_run: bool = False) -> Dict[str, object]:
         return self._worktree_manager.cleanup_all(dry_run=dry_run)
 
     def check_repo_removal(self, repo_id: str) -> Dict[str, object]:
-        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
-        repo = manifest.get(repo_id)
-        if not repo:
-            raise ValueError(f"Repo {repo_id} not found in manifest")
-        repo_root = (self.hub_config.root / repo.path).resolve()
-        exists_on_disk = repo_root.exists()
-        clean: Optional[bool] = None
-        upstream = None
-        if exists_on_disk and git_available(repo_root):
-            clean = git_is_clean(repo_root)
-            upstream = git_upstream_status(repo_root)
-        worktrees = []
-        if repo.kind == "base":
-            worktrees = [
-                r.id
-                for r in manifest.repos
-                if r.kind == "worktree" and r.worktree_of == repo_id
-            ]
-        return {
-            "id": repo.id,
-            "path": str(repo_root),
-            "kind": repo.kind,
-            "exists_on_disk": exists_on_disk,
-            "is_clean": clean,
-            "upstream": upstream,
-            "worktrees": worktrees,
-        }
+        return self._repo_manager.check_repo_removal(repo_id)
 
     def remove_repo(
         self,

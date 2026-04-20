@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from starlette.routing import Mount
 
 import codex_autorunner.core.hub as hub_module
+import codex_autorunner.core.hub_repo_manager as repo_manager_module
 import codex_autorunner.core.hub_runner_orchestrator as orch_module
 import codex_autorunner.core.hub_topology as hub_topology_module
 import codex_autorunner.core.hub_worktree_manager as wtm_module
@@ -1333,7 +1334,7 @@ def test_archive_repo_state_waits_for_runner_exit_before_archiving(
         ),
     )
     monkeypatch.setattr(
-        hub_module,
+        repo_manager_module,
         "archive_workspace_for_fresh_start",
         lambda **_kwargs: (
             archived.append(dict(_kwargs))
@@ -3005,7 +3006,7 @@ def test_cleanup_worktree_failure_keeps_bound_pma_threads_active(
     )
     store = PmaThreadStore(hub_root)
     created = store.create_thread("codex", worktree.path, repo_id=worktree.id)
-    original_run_git = hub_module.run_git
+    original_run_git = wtm_module.run_git
 
     def _failing_run_git(args, cwd, **kwargs):
         if list(args[:2]) == ["worktree", "remove"]:
@@ -3017,7 +3018,6 @@ def test_cleanup_worktree_failure_keeps_bound_pma_threads_active(
             )
         return original_run_git(args, cwd, **kwargs)
 
-    monkeypatch.setattr(hub_module, "run_git", _failing_run_git)
     monkeypatch.setattr(wtm_module, "run_git", _failing_run_git)
 
     with pytest.raises(ValueError, match="git worktree remove failed:"):
@@ -4427,26 +4427,28 @@ def test_runtime_preflight_blocks_enable() -> None:
 
 
 def test_git_failure_detail() -> None:
+    from codex_autorunner.core.git_utils import git_failure_detail
+
     class _Proc:
         returncode = 1
         stderr = " err "
         stdout = " out "
 
-    assert hub_module.git_failure_detail(_Proc()) == "err"
+    assert git_failure_detail(_Proc()) == "err"
 
     class _Proc2:
         returncode = 2
         stderr = ""
         stdout = " out "
 
-    assert hub_module.git_failure_detail(_Proc2()) == "out"
+    assert git_failure_detail(_Proc2()) == "out"
 
     class _Proc3:
         returncode = 3
         stderr = None
         stdout = None
 
-    assert hub_module.git_failure_detail(_Proc3()) == "exit 3"
+    assert git_failure_detail(_Proc3()) == "exit 3"
 
 
 def test_get_agent_workspace_runtime_readiness_rejects_missing(tmp_path: Path) -> None:
