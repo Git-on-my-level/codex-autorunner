@@ -305,6 +305,8 @@ CHAT_ACTION_UX_CONTRACT: tuple[ChatActionUxContractEntry, ...] = (
     _telegram_command_entry("diff", allow_during_turn=True),
     _telegram_command_entry("mention", allow_during_turn=True),
     _telegram_command_entry("skills", allow_during_turn=True),
+    _telegram_command_entry("tickets", allow_during_turn=True),
+    _telegram_command_entry("contextspace", allow_during_turn=True),
     _telegram_command_entry("mcp", visibility="hidden", allow_during_turn=True),
     _telegram_command_entry(
         "experimental",
@@ -336,6 +338,12 @@ CHAT_ACTION_UX_CONTRACT: tuple[ChatActionUxContractEntry, ...] = (
     _discord_slash_entry(
         "car.update", ack_class="defer_ephemeral", visibility="public"
     ),
+    _discord_slash_entry(
+        "car.tickets", ack_class="defer_ephemeral", visibility="public"
+    ),
+    _discord_slash_entry(
+        "car.contextspace", ack_class="defer_ephemeral", visibility="public"
+    ),
     _discord_slash_entry("car.help", ack_class="immediate", visibility="operator"),
     _discord_slash_entry(
         "car.debug", ack_class="defer_ephemeral", visibility="operator"
@@ -344,9 +352,6 @@ CHAT_ACTION_UX_CONTRACT: tuple[ChatActionUxContractEntry, ...] = (
     _discord_slash_entry("car.diff", ack_class="defer_ephemeral", visibility="public"),
     _discord_slash_entry(
         "car.skills", ack_class="defer_ephemeral", visibility="public"
-    ),
-    _discord_slash_entry(
-        "car.tickets", ack_class="defer_ephemeral", visibility="public"
     ),
     _discord_slash_entry("car.mcp", ack_class="defer_ephemeral", visibility="operator"),
     _discord_slash_entry(
@@ -514,6 +519,7 @@ CHAT_ACTION_UX_CONTRACT: tuple[ChatActionUxContractEntry, ...] = (
     _telegram_callback_entry("update_confirm"),
     _telegram_callback_entry("review_commit"),
     _telegram_callback_entry("compact", anchor_message_reuse="prefer"),
+    _telegram_callback_entry("document_browser", anchor_message_reuse="prefer"),
     _telegram_callback_entry("flow", anchor_message_reuse="prefer"),
     _telegram_callback_entry("flow_run"),
     _telegram_callback_entry(
@@ -523,8 +529,14 @@ CHAT_ACTION_UX_CONTRACT: tuple[ChatActionUxContractEntry, ...] = (
         anchor_message_reuse="prefer",
     ),
     # Discord components.
-    _discord_component_entry("tickets.filter"),
     _discord_component_entry("tickets.select"),
+    _discord_component_entry("tickets.page"),
+    _discord_component_entry("tickets.back"),
+    _discord_component_entry("tickets.chunk"),
+    _discord_component_entry("contextspace.select"),
+    _discord_component_entry("contextspace.page"),
+    _discord_component_entry("contextspace.back"),
+    _discord_component_entry("contextspace.chunk"),
     _discord_component_entry("bind.select"),
     _discord_component_entry("flow.runs_select"),
     _discord_component_entry("agent.select"),

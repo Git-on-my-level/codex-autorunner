@@ -8,6 +8,7 @@ from typing import Any, Awaitable, Callable, Mapping, Optional, Sequence, cast
 from ...core.flows import FlowRunStatus
 from ...core.logging_utils import log_event
 from ...core.utils import canonicalize_path
+from ...integrations.app_server.errors import CodexAppServerError
 from ...integrations.chat.command_diagnostics import (
     ActiveFlowInfo,
     build_status_text,
@@ -1071,7 +1072,7 @@ async def _read_status_rate_limits(
         return None
     try:
         client = await service._client_for_workspace(workspace_path)
-    except (OSError, ValueError, RuntimeError):
+    except (CodexAppServerError, OSError, ValueError, RuntimeError):
         return None
     if client is None:
         return None
@@ -1080,7 +1081,7 @@ async def _read_status_rate_limits(
     for method in ("account/rateLimits/read", "account/read"):
         try:
             result = await client.request(method, params=None, timeout=5.0)
-        except (OSError, ValueError, RuntimeError):
+        except (CodexAppServerError, OSError, ValueError, RuntimeError):
             continue
         rate_limits = extract_rate_limits(result)
         if rate_limits:

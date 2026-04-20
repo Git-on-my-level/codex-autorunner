@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional, cast
 
@@ -50,6 +51,14 @@ from .pma_workspace_docs import load_pma_prompt, load_pma_workspace_docs
 from .state import now_iso
 
 _logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class PmaPromptVariants:
+    """Prompt variants for new-session bootstrap versus same-session continuation."""
+
+    new_session_prompt: str
+    existing_session_prompt: str
 
 
 def format_pma_discoverability_preamble(
@@ -138,6 +147,46 @@ def format_pma_prompt(
     )
 
 
+def format_pma_prompt_variants(
+    base_prompt: str,
+    snapshot: dict[str, Any],
+    message: str,
+    hub_root: Optional[Path] = None,
+    *,
+    prompt_state_key: Optional[str] = None,
+    force_full_context: bool = False,
+) -> PmaPromptVariants:
+    """Build prompt variants for fresh-session bootstrap and existing sessions.
+
+    The first render intentionally primes prompt-state tracking. A second render
+    with the same state key then produces the compact existing-session variant,
+    which is safe to use when the backend session already has the full PMA
+    bootstrap in context.
+    """
+
+    new_session_prompt = format_pma_prompt(
+        base_prompt,
+        snapshot,
+        message,
+        hub_root=hub_root,
+        prompt_state_key=prompt_state_key,
+        force_full_context=force_full_context,
+    )
+    existing_session_prompt = new_session_prompt
+    if hub_root is not None and prompt_state_key and not force_full_context:
+        existing_session_prompt = format_pma_prompt(
+            base_prompt,
+            snapshot,
+            message,
+            hub_root=hub_root,
+            prompt_state_key=prompt_state_key,
+        )
+    return PmaPromptVariants(
+        new_session_prompt=new_session_prompt,
+        existing_session_prompt=existing_session_prompt,
+    )
+
+
 def build_hub_unavailable_snapshot(
     *,
     detail: str,
@@ -202,6 +251,7 @@ __all__ = [
     "PMA_MAX_REPOS",
     "PMA_MAX_TEMPLATE_FIELD_CHARS",
     "PMA_MAX_TEMPLATE_REPOS",
+    "PmaPromptVariants",
     "PMA_MAX_TEXT",
     "PMA_PROMPT_SECTION_META",
     "TicketFlowRunState",
@@ -233,6 +283,7 @@ __all__ = [
     "enrich_pma_file_inbox_entry",
     "format_pma_discoverability_preamble",
     "format_pma_prompt",
+    "format_pma_prompt_variants",
     "get_active_context_auto_prune_meta",
     "get_latest_ticket_flow_run_state_with_record",
     "list_pma_prompt_state_session_keys",

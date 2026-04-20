@@ -134,6 +134,11 @@ class TelegramCacheManager:
                 "model_pending", cfg.model_pending_ttl_seconds, state=state
             )
             self.evict_expired(
+                "document_browser_states",
+                cfg.selection_state_ttl_seconds,
+                state=state,
+            )
+            self.evict_expired(
                 "pending_approvals", cfg.pending_approval_ttl_seconds, state=state
             )
             self.evict_expired(

@@ -85,6 +85,23 @@ def _parse_flow(rest: str) -> Optional[Tuple[str, CallbackFields]]:
     }
 
 
+def _parse_document_browser(rest: str) -> Optional[Tuple[str, CallbackFields]]:
+    if not rest:
+        return None
+    if rest == "back":
+        return "document_browser", {"action": "back", "value": None}
+    action, sep, value = rest.partition(":")
+    if not action:
+        return None
+    if not sep:
+        return "document_browser", {"action": action, "value": None}
+    normalized_value = value.strip()
+    return "document_browser", {
+        "action": action,
+        "value": normalized_value or None,
+    }
+
+
 _PAYLOAD_PARSERS: dict[str, _CallbackParser] = {
     "appr": _parse_approval,
     "qopt": _parse_question_option,
@@ -107,4 +124,5 @@ _PAYLOAD_PARSERS: dict[str, _CallbackParser] = {
     "page": _parse_page,
     "flow": _parse_flow,
     "flow_run": lambda rest: _parse_tokened_data(rest, "flow_run", "run_id"),
+    "doc": _parse_document_browser,
 }

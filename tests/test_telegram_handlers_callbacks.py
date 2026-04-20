@@ -1,11 +1,13 @@
 import pytest
 
 from codex_autorunner.integrations.telegram.adapter import (
+    DocumentBrowserCallback,
     TelegramCallbackQuery,
     encode_agent_callback,
     encode_agent_profile_callback,
     encode_bind_callback,
     encode_cancel_callback,
+    encode_document_browser_callback,
     encode_effort_callback,
     encode_flow_callback,
     encode_flow_run_callback,
@@ -118,6 +120,11 @@ class _HandlerStub:
     ) -> None:
         self.calls.append(("page", key, parsed))
 
+    async def _handle_document_browser_callback(
+        self, key: str, _callback: TelegramCallbackQuery, parsed: object
+    ) -> None:
+        self.calls.append(("document-browser", key, parsed))
+
     async def _handle_queue_cancel_callback(
         self, _callback: TelegramCallbackQuery, kind: str
     ) -> None:
@@ -221,6 +228,27 @@ async def test_handle_callback_bind_selection_rejects_other_user() -> None:
     )
     await handle_callback(handlers, callback)
     assert handlers.calls == [("answer", "Selection expired")]
+
+
+@pytest.mark.anyio
+async def test_handle_callback_document_browser_dispatches() -> None:
+    handlers = _HandlerStub()
+    callback = TelegramCallbackQuery(
+        update_id=2,
+        callback_id="cb-doc",
+        from_user_id=3,
+        data=encode_document_browser_callback("open", "1"),
+        message_id=4,
+        chat_id=12,
+        thread_id=None,
+    )
+
+    await handle_callback(handlers, callback)
+
+    key = await handlers._resolve_topic_key(12, None)
+    assert handlers.calls == [
+        ("document-browser", key, DocumentBrowserCallback(action="open", value="1"))
+    ]
 
 
 @pytest.mark.anyio

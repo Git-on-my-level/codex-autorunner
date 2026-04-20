@@ -5,6 +5,7 @@ This package contains focused modules for handling different categories of Teleg
 
 from ..commands_spec import CommandSpec, build_command_specs
 from .approvals import ApprovalsCommands
+from .document_browser import DocumentBrowserCommands
 from .execution import ExecutionCommands
 from .files import FilesCommands
 from .flows import FlowCommands
@@ -28,6 +29,7 @@ WorkspaceCommandsMixin = WorkspaceCommands
 __all__ = [
     "ApprovalsCommands",
     "CommandSpec",
+    "DocumentBrowserCommands",
     "ExecutionCommands",
     "FilesCommands",
     "FlowCommands",

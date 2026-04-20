@@ -437,6 +437,7 @@ class TelegramBotService(
         self._review_commit_subjects = self._ui_state.review_commit_subjects
         self._pending_review_custom = self._ui_state.pending_review_custom
         self._compact_pending = self._ui_state.compact_pending
+        self._document_browser_states = self._ui_state.document_browser_states
         self._coalesced_buffers: dict[str, _CoalescedBuffer] = {}
         self._coalesce_locks: dict[str, asyncio.Lock] = {}
         self._media_batch_buffers: dict[str, _MediaBatchBuffer] = {}

@@ -24,6 +24,7 @@ from codex_autorunner.core.pma_context import (
     PMA_ACTIVE_CONTEXT_MAX_LINES,
     build_hub_snapshot,
     format_pma_prompt,
+    format_pma_prompt_variants,
     get_active_context_auto_prune_meta,
 )
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
@@ -1985,6 +1986,34 @@ class TestIssue975DeltaPmaPromptAssembly:
         )
         assert "Stable prompt.md instructions for PMA." in with_base
         assert "<pma_fastpath>" not in with_base
+
+    def test_format_pma_prompt_variants_preserve_bootstrap_and_existing_session_forms(
+        self, tmp_path: Path
+    ) -> None:
+        seed_hub_files(tmp_path, force=True)
+
+        snapshot = {
+            "generated_at": "2026-03-16T00:00:00Z",
+            "action_queue": [],
+            "inbox": [],
+            "repos": [],
+            "pma_files": {"inbox": [], "outbox": []},
+        }
+
+        variants = format_pma_prompt_variants(
+            "Base prompt",
+            snapshot,
+            "Turn 1",
+            hub_root=tmp_path,
+            prompt_state_key="pma.test-variants",
+        )
+
+        assert "<pma_workspace_docs>" in variants.new_session_prompt
+        assert "<hub_snapshot>" in variants.new_session_prompt
+        assert "<pma_workspace_docs>" not in variants.existing_session_prompt
+        assert "\n<hub_snapshot>\n" not in variants.existing_session_prompt
+        assert "<hub_snapshot_ref " in variants.existing_session_prompt
+        assert "- cached=" in variants.existing_session_prompt
 
     def test_format_pma_prompt_delta_surfaces_only_changed_docs(
         self, tmp_path: Path

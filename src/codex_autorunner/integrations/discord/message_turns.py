@@ -39,7 +39,8 @@ from ...core.orchestration.runtime_threads import (
 from ...core.pma_context import (
     build_hub_unavailable_snapshot,
     format_pma_discoverability_preamble,
-    format_pma_prompt,
+    format_pma_prompt,  # noqa: F401  re-export for test monkeypatch compat
+    format_pma_prompt_variants,
     load_pma_prompt,
 )
 from ...core.pma_notification_store import (
@@ -898,6 +899,7 @@ async def _execute_discord_thread_message(
                 message_id=dispatch.event.message.message_id,
             )
 
+    existing_session_prompt_text: Optional[str] = None
     if dispatch.effective_pma_enabled:
         try:
             hub_client = getattr(dispatch.service, "_hub_client", None)
@@ -933,13 +935,15 @@ async def _execute_discord_thread_message(
                     f"{build_notification_context_block(dispatch.notification_reply)}\n\n"
                     f"{prompt_text}"
                 )
-            prompt_text = format_pma_prompt(
+            prompt_variants = format_pma_prompt_variants(
                 prompt_base,
                 snapshot,
                 prompt_text,
                 hub_root=dispatch.service._config.root,
                 prompt_state_key=dispatch.session_key,
             )
+            prompt_text = prompt_variants.new_session_prompt
+            existing_session_prompt_text = prompt_variants.existing_session_prompt
         except (OSError, ValueError, KeyError, TypeError) as exc:
             dispatch.log_event_fn(
                 dispatch.service._logger,
@@ -964,6 +968,15 @@ async def _execute_discord_thread_message(
         link_source_text=dispatch.turn_text,
         allow_cross_repo=dispatch.pma_enabled,
     )
+    if existing_session_prompt_text is not None:
+        existing_session_prompt_text, _ = (
+            await dispatch.service._maybe_inject_github_context(
+                existing_session_prompt_text,
+                request_workspace_root,
+                link_source_text=dispatch.turn_text,
+                allow_cross_repo=dispatch.pma_enabled,
+            )
+        )
     if dispatch.pending_compact_seed:
         prompt_text = f"{dispatch.pending_compact_seed}\n\n{prompt_text}"
 
@@ -1001,6 +1014,8 @@ async def _execute_discord_thread_message(
         run_turn_kwargs["supervision"] = supervision
     if turn_input_items:
         run_turn_kwargs["input_items"] = turn_input_items
+    if existing_session_prompt_text is not None:
+        run_turn_kwargs["existing_session_prompt_text"] = existing_session_prompt_text
     run_turn_kwargs["chat_ux_snapshot"] = dispatch.chat_ux_snapshot
     try:
         try:
@@ -1009,9 +1024,13 @@ async def _execute_discord_thread_message(
                 await dispatch.service._run_agent_turn_for_message(**run_turn_kwargs),
             )
         except TypeError as exc:
-            if "supervision" not in str(exc):
+            error_text = str(exc)
+            if "supervision" in error_text:
+                run_turn_kwargs.pop("supervision", None)
+            elif "existing_session_prompt_text" in error_text:
+                run_turn_kwargs.pop("existing_session_prompt_text", None)
+            else:
                 raise
-            run_turn_kwargs.pop("supervision", None)
             return cast(
                 DiscordMessageTurnResult,
                 await dispatch.service._run_agent_turn_for_message(**run_turn_kwargs),
@@ -1613,6 +1632,7 @@ async def _run_discord_orchestrated_turn_for_message(
     min_edit_interval_seconds: float,
     heartbeat_interval_seconds: float,
     supervision: Optional[_DiscordTurnExecutionSupervision] = None,
+    existing_session_prompt_text: Optional[str] = None,
     chat_ux_snapshot: Optional[ChatUxTimingSnapshot] = None,
 ) -> DiscordMessageTurnResult:
     _ = session_key
@@ -2262,6 +2282,15 @@ async def _run_discord_orchestrated_turn_for_message(
     async def _after_completion(_flow: Any) -> None:
         await _stop_progress_heartbeat()
 
+    metadata = {
+        "runtime_prompt": execution_prompt,
+        "execution_error_message": public_execution_error,
+    }
+    if (
+        isinstance(existing_session_prompt_text, str)
+        and existing_session_prompt_text.strip()
+    ):
+        metadata["existing_session_runtime_prompt"] = existing_session_prompt_text
     return await run_managed_surface_turn(
         MessageRequest(
             target_id=thread.thread_target_id,
@@ -2272,10 +2301,7 @@ async def _run_discord_orchestrated_turn_for_message(
             reasoning=reasoning_effort,
             approval_mode=approval_mode,
             input_items=execution_input_items,
-            metadata={
-                "runtime_prompt": execution_prompt,
-                "execution_error_message": public_execution_error,
-            },
+            metadata=metadata,
         ),
         config=ManagedSurfaceRunnerConfig(
             coordinator=coordinator,
@@ -2374,6 +2400,7 @@ async def run_managed_thread_turn_for_message(
     managed_thread_surface_key: Optional[str] = None,
     suppress_managed_thread_delivery: bool = False,
     supervision: Optional[_DiscordTurnExecutionSupervision] = None,
+    existing_session_prompt_text: Optional[str] = None,
     chat_ux_snapshot: Optional[ChatUxTimingSnapshot] = None,
 ) -> DiscordMessageTurnResult:
 
@@ -2405,6 +2432,7 @@ async def run_managed_thread_turn_for_message(
         mode="pma",
         pma_enabled=True,
         execution_prompt=execution_prompt,
+        existing_session_prompt_text=existing_session_prompt_text,
         public_execution_error=DISCORD_PMA_PUBLIC_EXECUTION_ERROR,
         timeout_error="Discord PMA turn timed out",
         interrupted_error="Discord PMA turn interrupted",

@@ -32,6 +32,15 @@ from ..chat.action_ux_contract import (
     discord_scheduler_ack_strategy_for_entry,
     discord_slash_command_ux_contract_for_id,
 )
+from .document_browser_component_handlers import (
+    _handle_contextspace_back_component,
+    _handle_contextspace_chunk_component,
+    _handle_contextspace_page_component,
+    _handle_contextspace_select_component,
+    _handle_tickets_back_component,
+    _handle_tickets_chunk_component,
+    _handle_tickets_page_component,
+)
 from .interaction_component_handlers import (
     AGENT_PROFILE_SELECT_ID as AGENT_PROFILE_SELECT_ID,
 )
@@ -43,6 +52,18 @@ from .interaction_component_handlers import (
 )
 from .interaction_component_handlers import (
     BIND_SELECT_CUSTOM_ID as BIND_SELECT_CUSTOM_ID,
+)
+from .interaction_component_handlers import (
+    CONTEXTSPACE_BACK_CUSTOM_ID as CONTEXTSPACE_BACK_CUSTOM_ID,
+)
+from .interaction_component_handlers import (
+    CONTEXTSPACE_CHUNK_CUSTOM_ID_PREFIX as CONTEXTSPACE_CHUNK_CUSTOM_ID_PREFIX,
+)
+from .interaction_component_handlers import (
+    CONTEXTSPACE_PAGE_CUSTOM_ID_PREFIX as CONTEXTSPACE_PAGE_CUSTOM_ID_PREFIX,
+)
+from .interaction_component_handlers import (
+    CONTEXTSPACE_SELECT_ID as CONTEXTSPACE_SELECT_ID,
 )
 from .interaction_component_handlers import (
     FLOW_ACTION_SELECT_PREFIX as FLOW_ACTION_SELECT_PREFIX,
@@ -69,10 +90,16 @@ from .interaction_component_handlers import (
     SESSION_RESUME_SELECT_ID as SESSION_RESUME_SELECT_ID,
 )
 from .interaction_component_handlers import (
-    TICKETS_FILTER_SELECT_ID as TICKETS_FILTER_SELECT_ID,
+    TICKETS_BACK_CUSTOM_ID as TICKETS_BACK_CUSTOM_ID,
+)
+from .interaction_component_handlers import (
+    TICKETS_CHUNK_CUSTOM_ID_PREFIX as TICKETS_CHUNK_CUSTOM_ID_PREFIX,
 )
 from .interaction_component_handlers import (
     TICKETS_MODAL_PREFIX as TICKETS_MODAL_PREFIX,
+)
+from .interaction_component_handlers import (
+    TICKETS_PAGE_CUSTOM_ID_PREFIX as TICKETS_PAGE_CUSTOM_ID_PREFIX,
 )
 from .interaction_component_handlers import (
     TICKETS_SELECT_ID as TICKETS_SELECT_ID,
@@ -627,12 +654,13 @@ _SLASH_ROUTES: tuple[SlashCommandRoute, ...] = (
         id="car.tickets",
         canonical_path=("car", "tickets"),
         registered_path=("car", "tickets"),
-        description="Manage tickets via modal",
+        description="Browse tickets",
         handler=lambda *args, **kwargs: _dispatch_service_method(
             *args,
             **kwargs,
             method_name="_handle_tickets",
             include_channel_id=True,
+            include_user_id=True,
             include_options=True,
             workspace_requirement="bound",
         ),
@@ -640,7 +668,23 @@ _SLASH_ROUTES: tuple[SlashCommandRoute, ...] = (
         ack_policy="defer_ephemeral",
         exposure="public",
         requires_workspace=True,
-        required_capabilities=("ticket_flow",),
+    ),
+    SlashCommandRoute(
+        id="car.contextspace",
+        canonical_path=("car", "contextspace"),
+        registered_path=("car", "contextspace"),
+        description="Browse contextspace docs",
+        handler=lambda *args, **kwargs: _dispatch_service_method(
+            *args,
+            **kwargs,
+            method_name="_handle_contextspace",
+            include_channel_id=True,
+            include_user_id=True,
+            workspace_requirement="bound",
+        ),
+        ack_policy="defer_ephemeral",
+        exposure="public",
+        requires_workspace=True,
     ),
     SlashCommandRoute(
         id="car.review",
@@ -1309,24 +1353,50 @@ def _interrupt_component_route(
 
 _COMPONENT_ROUTES: tuple[ComponentRoute, ...] = (
     ComponentRoute(
-        id="tickets.filter",
-        exact_custom_id=TICKETS_FILTER_SELECT_ID,
-        handler=lambda service, ctx: service._handle_ticket_filter_component(
-            ctx.interaction_id,
-            ctx.interaction_token,
-            channel_id=ctx.channel_id,
-            values=ctx.values,
-        ),
-    ),
-    ComponentRoute(
         id="tickets.select",
         exact_custom_id=TICKETS_SELECT_ID,
         handler=lambda service, ctx: service._handle_ticket_select_component(
             ctx.interaction_id,
             ctx.interaction_token,
             channel_id=ctx.channel_id,
+            user_id=ctx.user_id,
             values=ctx.values,
         ),
+    ),
+    ComponentRoute(
+        id="tickets.page",
+        custom_id_prefix=f"{TICKETS_PAGE_CUSTOM_ID_PREFIX}:",
+        handler=_handle_tickets_page_component,
+    ),
+    ComponentRoute(
+        id="tickets.back",
+        exact_custom_id=TICKETS_BACK_CUSTOM_ID,
+        handler=_handle_tickets_back_component,
+    ),
+    ComponentRoute(
+        id="tickets.chunk",
+        custom_id_prefix=f"{TICKETS_CHUNK_CUSTOM_ID_PREFIX}:",
+        handler=_handle_tickets_chunk_component,
+    ),
+    ComponentRoute(
+        id="contextspace.select",
+        exact_custom_id=CONTEXTSPACE_SELECT_ID,
+        handler=_handle_contextspace_select_component,
+    ),
+    ComponentRoute(
+        id="contextspace.page",
+        custom_id_prefix=f"{CONTEXTSPACE_PAGE_CUSTOM_ID_PREFIX}:",
+        handler=_handle_contextspace_page_component,
+    ),
+    ComponentRoute(
+        id="contextspace.back",
+        exact_custom_id=CONTEXTSPACE_BACK_CUSTOM_ID,
+        handler=_handle_contextspace_back_component,
+    ),
+    ComponentRoute(
+        id="contextspace.chunk",
+        custom_id_prefix=f"{CONTEXTSPACE_CHUNK_CUSTOM_ID_PREFIX}:",
+        handler=_handle_contextspace_chunk_component,
     ),
     ComponentRoute(
         id="bind.page",

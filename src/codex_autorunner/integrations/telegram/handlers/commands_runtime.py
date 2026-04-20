@@ -136,6 +136,7 @@ if TYPE_CHECKING:
 
 from .commands import (
     ApprovalsCommands,
+    DocumentBrowserCommands,
     ExecutionCommands,
     FilesCommands,
     FlowCommands,
@@ -186,6 +187,7 @@ _OPENCODE_MODEL_CONTEXT_KEYS = ("context",) + _OPENCODE_CONTEXT_WINDOW_KEYS
 class TelegramCommandHandlers(
     WorkspaceCommands,
     GitHubCommands,
+    DocumentBrowserCommands,
     FlowCommands,
     FilesCommands,
     VoiceCommands,
@@ -228,6 +230,7 @@ class TelegramCommandHandlers(
             self._agent_options.pop(key, None)
             self._model_options.pop(key, None)
             self._model_pending.pop(key, None)
+            self._document_browser_states.pop(key, None)
             if name in ("list", "ls"):
                 await self._send_message(
                     message.chat_id,

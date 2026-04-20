@@ -6282,12 +6282,12 @@ async def test_send_channel_message_safe_collapses_local_file_links(
 
 
 @pytest.mark.anyio
-async def test_car_tickets_returns_ticket_picker_components(tmp_path: Path) -> None:
+async def test_car_tickets_returns_ticket_browser_components(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     ticket_dir = workspace / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True)
     (ticket_dir / "TICKET-001.md").write_text(
-        '---\nticket_id: "tkt_discord_first"\ntitle: First\ndone: false\n---\n\nBody\n',
+        '---\nticket_id: "tkt_discord_first"\nagent: codex\ntitle: First\ndone: false\n---\n\nBody\n',
         encoding="utf-8",
     )
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
@@ -6315,25 +6315,26 @@ async def test_car_tickets_returns_ticket_picker_components(tmp_path: Path) -> N
         assert rest.interaction_responses[0]["payload"]["type"] == 5
         assert len(rest.followup_messages) == 1
         data = rest.followup_messages[0]["payload"]
-        assert data["content"] == "Select a ticket to view or edit."
+        assert data["content"].startswith("Browse tickets")
+        assert "TICKET-001.md - First" in data["content"]
         components = data.get("components") or []
         assert [row["components"][0]["custom_id"] for row in components] == [
-            "tickets_filter_select",
-            "tickets_select",
+            "tickets_select"
         ]
+        options = components[0]["components"][0]["options"]
+        assert [option["value"] for option in options] == ["1"]
     finally:
         await store.close()
 
 
 @pytest.mark.anyio
-async def test_car_tickets_preserves_long_ticket_paths_via_picker_token(
+async def test_car_tickets_uses_short_document_ids_for_long_paths(
     tmp_path: Path,
 ) -> None:
     workspace = tmp_path / "workspace"
     ticket_dir = workspace / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True)
     long_name = f"TICKET-001-{'x' * 120}.md"
-    ticket_rel = f".codex-autorunner/tickets/{long_name}"
     (ticket_dir / long_name).write_text(
         '---\nticket_id: "tkt_discord_long1"\nagent: codex\ntitle: Very long ticket\ndone: false\n---\n\nBody\n',
         encoding="utf-8",
@@ -6362,10 +6363,10 @@ async def test_car_tickets_preserves_long_ticket_paths_via_picker_token(
         assert rest.interaction_responses[0]["payload"]["type"] == 5
         assert len(rest.followup_messages) == 1
         picker_data = rest.followup_messages[0]["payload"]
-        picker_options = picker_data["components"][1]["components"][0]["options"]
+        picker_options = picker_data["components"][0]["components"][0]["options"]
         assert len(picker_options) == 1
         option_value = picker_options[0]["value"]
-        assert option_value.startswith("ticket@")
+        assert option_value == "1"
         assert len(option_value) <= 100
 
         rest.interaction_responses.clear()
@@ -6377,25 +6378,18 @@ async def test_car_tickets_preserves_long_ticket_paths_via_picker_token(
         ]
         await service.run_forever()
 
-        modal_payload = rest.interaction_responses[0]["payload"]
-        assert modal_payload["type"] == 9
-        text_input = modal_payload["data"]["components"][0]["component"]
-        assert text_input["value"] == (
-            '---\nticket_id: "tkt_discord_long1"\nagent: codex\ntitle: Very long ticket\ndone: false\n---\n\nBody\n'
-        )
-        assert (
-            service._resolve_ticket_picker_value(
-                option_value,
-                workspace_root=workspace,
-            )
-            == ticket_rel
-        )
+        assert rest.interaction_responses[0]["payload"]["type"] == 6
+        assert len(rest.edited_original_interaction_responses) == 1
+        browser_payload = rest.edited_original_interaction_responses[0]["payload"]
+        assert long_name in browser_payload["content"]
+        assert "Part 1/1" in browser_payload["content"]
+        assert "Body" in browser_payload["content"]
     finally:
         await store.close()
 
 
 @pytest.mark.anyio
-async def test_car_tickets_search_filters_picker_and_persists_across_filter_changes(
+async def test_car_tickets_search_filters_browser_list_and_selects_document(
     tmp_path: Path,
 ) -> None:
     workspace = tmp_path / "workspace"
@@ -6425,8 +6419,8 @@ async def test_car_tickets_search_filters_picker_and_persists_across_filter_chan
                 options=[{"type": 3, "name": "search", "value": "beta"}],
             ),
             _component_interaction(
-                custom_id="tickets_filter_select",
-                values=["done"],
+                custom_id="tickets_select",
+                values=["2"],
             ),
         ]
     )
@@ -6444,20 +6438,73 @@ async def test_car_tickets_search_filters_picker_and_persists_across_filter_chan
         assert rest.interaction_responses[0]["payload"]["type"] == 5
         assert len(rest.followup_messages) == 1
         initial_data = rest.followup_messages[0]["payload"]
-        initial_options = initial_data["components"][1]["components"][0]["options"]
-        assert [option["value"] for option in initial_options] == [
-            ".codex-autorunner/tickets/TICKET-002.md"
+        assert "Browse tickets matching `beta`" in initial_data["content"]
+        initial_options = initial_data["components"][0]["components"][0]["options"]
+        assert [option["value"] for option in initial_options] == ["2"]
+
+        assert len(rest.interaction_responses) == 2
+        assert rest.interaction_responses[1]["payload"]["type"] == 6
+        assert len(rest.edited_original_interaction_responses) == 1
+        selected_data = rest.edited_original_interaction_responses[0]["payload"]
+        assert "Beta task" in selected_data["content"]
+        assert "Part 1/1" in selected_data["content"]
+        assert "Body" in selected_data["content"]
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_contextspace_lists_and_opens_documents(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    context_dir = workspace / ".codex-autorunner" / "contextspace"
+    context_dir.mkdir(parents=True)
+    (context_dir / "spec.md").write_text("Spec body\n", encoding="utf-8")
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _interaction(name="contextspace", options=[]),
+            _component_interaction(
+                custom_id="contextspace_select",
+                values=["spec"],
+            ),
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        initial_data = rest.followup_messages[0]["payload"]
+        assert initial_data["content"].startswith("Browse contextspace")
+        options = initial_data["components"][0]["components"][0]["options"]
+        assert [option["value"] for option in options] == [
+            "active_context",
+            "decisions",
+            "spec",
         ]
 
         assert len(rest.interaction_responses) == 2
         assert rest.interaction_responses[1]["payload"]["type"] == 6
         assert len(rest.edited_original_interaction_responses) == 1
-        filtered_data = rest.edited_original_interaction_responses[0]["payload"]
-        assert "Search: `beta`" in filtered_data["content"]
-        filtered_options = filtered_data["components"][1]["components"][0]["options"]
-        assert [option["value"] for option in filtered_options] == [
-            ".codex-autorunner/tickets/TICKET-002.md"
-        ]
+        selected_data = rest.edited_original_interaction_responses[0]["payload"]
+        assert "Spec" in selected_data["content"]
+        assert "Spec body" in selected_data["content"]
     finally:
         await store.close()
 
@@ -6530,7 +6577,7 @@ async def test_car_skills_search_filters_results(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
-async def test_ticket_picker_rejects_modal_for_too_large_ticket(tmp_path: Path) -> None:
+async def test_ticket_browser_chunks_large_ticket_content(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     ticket_dir = workspace / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True)
@@ -6548,10 +6595,11 @@ async def test_ticket_picker_rejects_modal_for_too_large_ticket(tmp_path: Path) 
     rest = _FakeRest()
     gateway = _FakeGateway(
         [
+            _interaction(name="tickets", options=[]),
             _component_interaction(
                 custom_id="tickets_select",
-                values=[".codex-autorunner/tickets/TICKET-001.md"],
-            )
+                values=["1"],
+            ),
         ]
     )
     service = DiscordBotService(
@@ -6565,10 +6613,14 @@ async def test_ticket_picker_rejects_modal_for_too_large_ticket(tmp_path: Path) 
 
     try:
         await service.run_forever()
-        assert len(rest.interaction_responses) == 1
-        payload = rest.interaction_responses[0]["payload"]
-        assert payload["data"]["content"].startswith(
-            "`" + ".codex-autorunner/tickets/TICKET-001.md" + "` is too large to edit"
+        assert len(rest.interaction_responses) == 2
+        assert rest.interaction_responses[1]["payload"]["type"] == 6
+        assert len(rest.edited_original_interaction_responses) == 1
+        payload = rest.edited_original_interaction_responses[0]["payload"]
+        assert "Part 1/" in payload["content"]
+        assert payload["components"][0]["components"][0]["custom_id"] == "tickets_back"
+        assert (
+            payload["components"][0]["components"][1]["custom_id"] == "tickets_chunk:1"
         )
         assert ticket_path.read_text(encoding="utf-8") == oversized_body
     finally:

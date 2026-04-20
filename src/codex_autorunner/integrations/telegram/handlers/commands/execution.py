@@ -62,7 +62,7 @@ from .....core.orchestration.runtime_threads import (
 from .....core.pma_context import (
     build_hub_unavailable_snapshot,
     format_pma_discoverability_preamble,
-    format_pma_prompt,
+    format_pma_prompt_variants,
     load_pma_prompt,
 )
 from .....core.state import now_iso
@@ -978,6 +978,7 @@ async def _run_telegram_managed_thread_turn(
     interrupted_error: str = TELEGRAM_PMA_INTERRUPTED_ERROR,
     approval_policy: Optional[str] = None,
     sandbox_policy: Optional[Any] = None,
+    existing_session_prompt_text: Optional[str] = None,
     chat_ux_snapshot: Optional[ChatUxTimingSnapshot] = None,
 ) -> _TurnRunResult | _TurnRunFailure:
     if chat_ux_snapshot is not None:
@@ -1406,6 +1407,15 @@ async def _run_telegram_managed_thread_turn(
             _first_progress_recorded = True
             chat_ux_snapshot.record(ChatUxMilestone.FIRST_SEMANTIC_PROGRESS)
 
+    metadata = {
+        "runtime_prompt": execution_prompt,
+        "execution_error_message": public_execution_error,
+    }
+    if (
+        isinstance(existing_session_prompt_text, str)
+        and existing_session_prompt_text.strip()
+    ):
+        metadata["existing_session_runtime_prompt"] = existing_session_prompt_text
     return await run_managed_surface_turn(
         MessageRequest(
             target_id=thread.thread_target_id,
@@ -1416,10 +1426,7 @@ async def _run_telegram_managed_thread_turn(
             reasoning=record.effort,
             approval_mode=approval_policy,
             input_items=execution_input_items,
-            metadata={
-                "runtime_prompt": execution_prompt,
-                "execution_error_message": public_execution_error,
-            },
+            metadata=metadata,
         ),
         config=ManagedSurfaceRunnerConfig(
             coordinator=coordinator,
@@ -2852,7 +2859,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
         *,
         record: "TelegramTopicRecord",
         message: TelegramMessage,
-    ) -> Optional[str]:
+    ) -> Optional[tuple[str, str]]:
         hub_root = getattr(self, "_hub_root", None)
         if hub_root is None:
             return None
@@ -2888,12 +2895,16 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 )
             base_prompt = load_pma_prompt(hub_root)
             prompt_state_key = self._pma_registry_key(record, message)
-            return format_pma_prompt(
+            prompt_variants = format_pma_prompt_variants(
                 base_prompt,
                 snapshot,
                 message_text,
                 hub_root=hub_root,
                 prompt_state_key=prompt_state_key,
+            )
+            return (
+                prompt_variants.new_session_prompt,
+                prompt_variants.existing_session_prompt,
             )
         except (OSError, ValueError, RuntimeError, ConfigError):
             return None
@@ -3129,18 +3140,19 @@ class ExecutionCommands(TelegramCommandSupportMixin):
         prompt_text = self._prepare_turn_prompt(
             prompt_text, transcript_text=transcript_text
         )
+        existing_session_prompt_text: Optional[str] = None
         if pma_enabled:
             user_message_prompt = prompt_text
             if isinstance(pma_context_prefix, str) and pma_context_prefix.strip():
                 user_message_prompt = (
                     f"{pma_context_prefix.strip()}\n\n{user_message_prompt}"
                 )
-            pma_prompt = await self._prepare_pma_prompt(
+            pma_prompt_variants = await self._prepare_pma_prompt(
                 user_message_prompt,
                 record=record,
                 message=message,
             )
-            if pma_prompt is None:
+            if pma_prompt_variants is None:
                 return await self._maybe_send_failure(
                     message,
                     "PMA unavailable; hub snapshot failed.",
@@ -3149,12 +3161,22 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                     transcript_message_id=transcript_message_id,
                     transcript_text=transcript_text,
                 )
+            pma_prompt, existing_session_prompt_text = pma_prompt_variants
             prompt_text, injected = await self._maybe_inject_github_context(
                 pma_prompt,
                 record,
                 link_source_text=user_message_prompt,
                 allow_cross_repo=True,
             )
+            if existing_session_prompt_text:
+                existing_session_prompt_text, _ = (
+                    await self._maybe_inject_github_context(
+                        existing_session_prompt_text,
+                        record,
+                        link_source_text=user_message_prompt,
+                        allow_cross_repo=True,
+                    )
+                )
             if injected:
                 await self._send_message(
                     message.chat_id,
@@ -3192,6 +3214,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 missing_thread_message=missing_thread_message,
                 approval_policy=approval_policy,
                 sandbox_policy=sandbox_policy,
+                existing_session_prompt_text=existing_session_prompt_text,
                 chat_ux_snapshot=_chat_ux_snapshot,
             )
 

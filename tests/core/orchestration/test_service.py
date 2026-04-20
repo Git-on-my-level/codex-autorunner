@@ -565,6 +565,36 @@ async def test_send_message_persists_canonical_resumed_conversation_id(
     assert binding.backend_thread_id == "backend-canonical-2"
 
 
+async def test_send_message_uses_existing_session_runtime_prompt_for_live_backend(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target(
+        "codex",
+        workspace_root,
+        backend_thread_id="backend-existing-1",
+    )
+
+    await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="raw user message",
+            metadata={
+                "runtime_prompt": "full PMA bootstrap prompt",
+                "existing_session_runtime_prompt": "compact same-session prompt",
+            },
+        )
+    )
+
+    assert harness.resume_conversation_calls == [(workspace_root, "backend-existing-1")]
+    assert harness.start_turn_calls[0]["conversation_id"] == "backend-existing-1"
+    assert harness.start_turn_calls[0]["prompt"] == "compact same-session prompt"
+
+
 async def test_send_message_starts_fresh_when_resume_conversation_is_missing(
     tmp_path: Path,
 ) -> None:
@@ -596,6 +626,37 @@ async def test_send_message_starts_fresh_when_resume_conversation_is_missing(
     binding = _thread_runtime_binding(service, thread.thread_target_id)
     assert binding is not None
     assert binding.backend_thread_id == "backend-conversation-1"
+
+
+async def test_send_message_uses_full_runtime_prompt_after_resume_recovery(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness(resume_conversation_error=RuntimeError("missing thread"))
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target(
+        "codex",
+        workspace_root,
+        backend_thread_id="backend-existing-1",
+    )
+
+    await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="raw user message",
+            metadata={
+                "runtime_prompt": "full PMA bootstrap prompt",
+                "existing_session_runtime_prompt": "compact same-session prompt",
+            },
+        )
+    )
+
+    assert harness.resume_conversation_calls == [(workspace_root, "backend-existing-1")]
+    assert harness.new_conversation_calls == [(workspace_root, None)]
+    assert harness.start_turn_calls[0]["conversation_id"] == "backend-conversation-1"
+    assert harness.start_turn_calls[0]["prompt"] == "full PMA bootstrap prompt"
 
 
 async def test_send_message_reuses_conversation_when_backend_runtime_instance_changes(
@@ -1065,7 +1126,10 @@ async def test_claim_next_queued_execution_context_preserves_typed_request_paylo
                 {"type": "image", "image_url": "https://example.com/diagram.png"},
             ],
             context_profile="car_core",
-            metadata={"runtime_prompt": "Use the saved context first."},
+            metadata={
+                "runtime_prompt": "Use the saved context first.",
+                "existing_session_runtime_prompt": "Use the cached context.",
+            },
         ),
         client_request_id="client-2",
         sandbox_policy={"mode": "workspace-write"},
@@ -1091,7 +1155,8 @@ async def test_claim_next_queued_execution_context_preserves_typed_request_paylo
     ]
     assert claimed.request.context_profile == "car_core"
     assert claimed.request.metadata == {
-        "runtime_prompt": "Use the saved context first."
+        "runtime_prompt": "Use the saved context first.",
+        "existing_session_runtime_prompt": "Use the cached context.",
     }
     assert claimed.client_request_id == "client-2"
     assert claimed.sandbox_policy == {"mode": "workspace-write"}

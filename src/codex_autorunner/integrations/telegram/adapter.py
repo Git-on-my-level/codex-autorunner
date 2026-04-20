@@ -324,6 +324,12 @@ class FlowRunCallback:
     run_id: str
 
 
+@dataclass(frozen=True)
+class DocumentBrowserCallback:
+    action: str
+    value: Optional[str] = None
+
+
 def parse_command(
     text: Optional[str],
     *,
@@ -850,6 +856,19 @@ def encode_flow_run_callback(run_id: str) -> str:
     return data
 
 
+def encode_document_browser_callback(action: str, value: Optional[str] = None) -> str:
+    normalized_action = str(action or "").strip()
+    if not normalized_action:
+        raise ValueError("document browser action required")
+    normalized_value = str(value or "").strip() or None
+    if normalized_value is None:
+        data = f"doc:{normalized_action}"
+    else:
+        data = f"doc:{normalized_action}:{normalized_value}"
+    _validate_callback_data(data)
+    return data
+
+
 def parse_callback_data(
     data: Optional[str],
 ) -> Optional[
@@ -873,6 +892,7 @@ def parse_callback_data(
         FlowCallback,
         FlowRunCallback,
         PageCallback,
+        DocumentBrowserCallback,
     ]
 ]:
     # Keep adapter API stable while delegating parsing through the chat codec.
