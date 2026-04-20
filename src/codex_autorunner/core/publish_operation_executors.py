@@ -517,6 +517,7 @@ def build_enqueue_managed_turn_executor(*, hub_root: Path) -> PublishActionExecu
                 else requested_thread_target_id
             ),
         )
+        active_lifecycle_match_id = thread_target_id
         if thread_target_id is None:
             thread_target_id = requested_thread_target_id
         client_request_id = _operation_digest(operation, prefix="publish-turn")
@@ -545,7 +546,11 @@ def build_enqueue_managed_turn_executor(*, hub_root: Path) -> PublishActionExecu
         }
         rebound_from_thread_target_id: Optional[str] = None
         try:
-            if tracking and runtime_status not in {None, "idle"}:
+            if (
+                tracking
+                and active_lifecycle_match_id is not None
+                and runtime_status not in {None, "idle"}
+            ):
                 _LOGGER.info(
                     "scm.enqueue_managed_turn.reusing_thread "
                     "thread_target_id=%s lifecycle_status=active normalized_status=%s "
