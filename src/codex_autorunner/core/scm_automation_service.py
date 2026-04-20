@@ -353,6 +353,18 @@ def _ci_failed_head_sha_from_payload(
     return _normalize_text(bundle.get("ci_head_sha"))
 
 
+def _merged_feedback_publish_payload(
+    base_payload: Mapping[str, Any],
+    incoming_payload: Mapping[str, Any],
+) -> Optional[dict[str, Any]]:
+    existing_bundle = extract_feedback_bundle(base_payload)
+    incoming_bundle = extract_feedback_bundle(incoming_payload)
+    if existing_bundle is None or incoming_bundle is None:
+        return None
+    merged_bundle = merge_feedback_bundles(existing_bundle, incoming_bundle)
+    return apply_feedback_bundle_to_publish_payload(base_payload, merged_bundle)
+
+
 def _default_binding_resolver(hub_root: Path) -> ScmBindingResolver:
     def resolver(
         event: ScmEvent,
@@ -677,22 +689,29 @@ class ScmAutomationService:
         operation: PublishOperation,
         incoming_payload: Mapping[str, Any],
         next_attempt_at: Optional[str] = None,
+        operation_key: str,
+        operation_kind: str,
     ) -> PublishOperation:
-        existing_bundle = extract_feedback_bundle(operation.payload)
-        incoming_bundle = extract_feedback_bundle(incoming_payload)
-        if existing_bundle is None or incoming_bundle is None:
-            return operation
-        merged_bundle = merge_feedback_bundles(existing_bundle, incoming_bundle)
-        updated_payload = apply_feedback_bundle_to_publish_payload(
+        merged_payload = _merged_feedback_publish_payload(
             operation.payload,
-            merged_bundle,
+            incoming_payload,
         )
+        if merged_payload is None:
+            return operation
         updated = self._journal.update_pending_operation(
             operation.operation_id,
-            payload=updated_payload,
+            payload=merged_payload,
             next_attempt_at=next_attempt_at,
         )
-        return updated or operation
+        if updated is not None:
+            return updated
+        created, _deduped = self._journal.create_operation(
+            operation_key=operation_key,
+            operation_kind=operation_kind,
+            payload=merged_payload,
+            next_attempt_at=next_attempt_at,
+        )
+        return created
 
     def _review_comment_notice_key(
         self,
@@ -948,6 +967,8 @@ class ScmAutomationService:
                             operation=existing_ci_batch,
                             incoming_payload=payload,
                             next_attempt_at=next_attempt_at,
+                            operation_key=operation_key,
+                            operation_kind=intent.operation_kind,
                         )
                         deduped = True
                     else:
@@ -985,6 +1006,8 @@ class ScmAutomationService:
                         operation=operation,
                         incoming_payload=payload,
                         next_attempt_at=next_attempt_at,
+                        operation_key=operation_key,
+                        operation_kind=intent.operation_kind,
                     )
             if (
                 next_attempt_at is not None

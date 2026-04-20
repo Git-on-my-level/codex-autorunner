@@ -13,6 +13,33 @@ from codex_autorunner.core.scm_reaction_state import ScmReactionStateStore
 from codex_autorunner.core.scm_reaction_types import ReactionIntent, ScmReactionConfig
 
 
+def _ci_failed_event(
+    *,
+    event_id: str,
+    head_sha: str = "deadbeef",
+) -> ScmEvent:
+    return ScmEvent(
+        event_id=event_id,
+        provider="github",
+        event_type="check_run",
+        occurred_at="2026-03-26T00:00:00Z",
+        received_at="2026-03-26T00:00:01Z",
+        created_at="2026-03-26T00:00:02Z",
+        repo_slug="acme/widgets",
+        repo_id="repo-1",
+        pr_number=42,
+        delivery_id="delivery-1",
+        payload={
+            "action": "completed",
+            "status": "completed",
+            "conclusion": "failure",
+            "name": "ci / test",
+            "head_sha": head_sha,
+        },
+        raw_payload=None,
+    )
+
+
 def _event(
     *,
     event_id: str = "github:event-1",
@@ -219,6 +246,34 @@ class _JournalFake:
         if limit is not None:
             operations = operations[:limit]
         return operations
+
+
+class _JournalUpdateRaceFake(_JournalFake):
+    """Simulates losing a race when merging into a pending publish operation."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._fail_next_update_for: set[str] = set()
+
+    def arm_fail_next_update(self, operation_id: str) -> None:
+        self._fail_next_update_for.add(operation_id)
+
+    def update_pending_operation(
+        self,
+        operation_id: str,
+        *,
+        payload: Optional[dict] = None,
+        next_attempt_at: Optional[str] = None,
+    ) -> Optional[PublishOperation]:
+        self.update_calls.append(operation_id)
+        if operation_id in self._fail_next_update_for:
+            self._fail_next_update_for.discard(operation_id)
+            return None
+        return super().update_pending_operation(
+            operation_id,
+            payload=payload,
+            next_attempt_at=next_attempt_at,
+        )
 
 
 class _ProcessorFake:
@@ -490,6 +545,48 @@ def test_ingest_event_loads_persisted_event_routes_reactions_and_dedupes_publish
     assert len(reaction_state_store.should_calls) == 6
     assert len(reaction_state_store.mark_calls) == 4
     assert sorted(journal.operations_by_key) == ["scm:key-1", "scm:key-2"]
+
+
+def test_ci_failed_pending_merge_falls_back_to_create_when_update_races(
+    tmp_path: Path,
+) -> None:
+    head_sha = "abc123deadbeef0000"
+    event_a = _ci_failed_event(event_id="github:event-a", head_sha=head_sha)
+    event_b = _ci_failed_event(event_id="github:event-b", head_sha=head_sha)
+    binding = _binding()
+    journal = _JournalUpdateRaceFake()
+    service = ScmAutomationService(
+        tmp_path,
+        event_store=_EventStoreFake(event_a, event_b),
+        binding_resolver=_BindingResolverFake(binding),
+        reaction_router=route_scm_reactions,
+        reaction_state_store=_PermissiveReactionStateFake(),
+        journal=journal,
+        publish_processor=_ProcessorFake(processed=[]),
+    )
+
+    first = service.ingest_event("github:event-a")
+    assert len(first.publish_operations) == 1
+    pending = first.publish_operations[0]
+    journal.arm_fail_next_update(pending.operation_id)
+
+    second = service.ingest_event("github:event-b")
+    assert len(second.publish_operations) == 1
+    merged_op = second.publish_operations[0]
+    assert merged_op.operation_id != pending.operation_id
+    request = merged_op.payload.get("request")
+    assert isinstance(request, dict)
+    metadata = request.get("metadata")
+    assert isinstance(metadata, dict)
+    bundle = metadata.get("scm_feedback_bundle")
+    assert isinstance(bundle, dict)
+    event_ids = {
+        item["event_id"]
+        for item in bundle.get("items", [])
+        if isinstance(item, dict) and "event_id" in item
+    }
+    assert event_ids == {"github:event-a", "github:event-b"}
+    assert journal.create_calls[-1][1] == "enqueue_managed_turn"
 
 
 def test_ingest_event_suppresses_repeated_semantic_reaction_conditions_using_durable_state(
