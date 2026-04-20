@@ -205,3 +205,13 @@ class ReviewCommitSelectionState(SelectionState):
 @dataclass
 class ModelPickerState(SelectionState):
     options: dict[str, ModelOption] = dataclasses.field(default_factory=dict)
+
+
+@dataclass
+class DocumentBrowserState:
+    source: str
+    query: str = ""
+    list_page: int = 0
+    document_id: Optional[str] = None
+    chunk_index: int = 0
+    requester_user_id: Optional[str] = None

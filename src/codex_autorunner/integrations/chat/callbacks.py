@@ -29,6 +29,7 @@ CALLBACK_COMPACT = "compact"
 CALLBACK_PAGE = "page"
 CALLBACK_FLOW = "flow"
 CALLBACK_FLOW_RUN = "flow_run"
+CALLBACK_DOCUMENT_BROWSER = "document_browser"
 
 
 @dataclass(frozen=True)

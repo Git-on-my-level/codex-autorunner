@@ -10,6 +10,7 @@ from ..adapter import (
     BindCallback,
     CancelCallback,
     CompactCallback,
+    DocumentBrowserCallback,
     EffortCallback,
     FlowCallback,
     FlowRunCallback,
@@ -141,3 +142,6 @@ async def handle_callback(handlers: Any, callback: TelegramCallbackQuery) -> Non
     elif isinstance(parsed, FlowRunCallback):
         if key:
             await handlers._handle_flow_run_callback(key, callback, parsed)
+    elif isinstance(parsed, DocumentBrowserCallback):
+        if key:
+            await handlers._handle_document_browser_callback(key, callback, parsed)

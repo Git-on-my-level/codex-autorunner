@@ -212,19 +212,19 @@ async def test_autocomplete_delivery_error_returns_empty_choices() -> None:
 @pytest.mark.anyio
 async def test_component_with_custom_id_routes_to_component_handler() -> None:
     service = _FakeService()
+    service._handle_ticket_browser_page_component = AsyncMock()
     ctx = _ctx(
         kind=InteractionKind.COMPONENT,
-        custom_id="tickets_filter_select",
-        values=["open"],
+        custom_id="tickets_page:1",
         deferred=False,
     )
     payload: dict[str, Any] = {}
 
     await execute_ingressed_interaction(service, ctx, payload)
 
-    service._handle_ticket_filter_component.assert_awaited_once()
-    call_kwargs = service._handle_ticket_filter_component.call_args[1]
-    assert call_kwargs["values"] == ["open"]
+    service._handle_ticket_browser_page_component.assert_awaited_once()
+    call_kwargs = service._handle_ticket_browser_page_component.call_args[1]
+    assert call_kwargs["custom_id"] == "tickets_page:1"
 
 
 @pytest.mark.anyio

@@ -133,8 +133,8 @@ def test_extract_modal_values_supports_label_and_action_row_shapes() -> None:
                     "components": [
                         {
                             "type": 3,
-                            "custom_id": "tickets_filter_select",
-                            "values": ["open"],
+                            "custom_id": "contextspace_select",
+                            "values": ["spec"],
                         }
                     ],
                 },
@@ -144,7 +144,7 @@ def test_extract_modal_values_supports_label_and_action_row_shapes() -> None:
 
     assert extract_modal_values(payload) == {
         "ticket_body": "body text",
-        "tickets_filter_select": ["open"],
+        "contextspace_select": ["spec"],
     }
 
 

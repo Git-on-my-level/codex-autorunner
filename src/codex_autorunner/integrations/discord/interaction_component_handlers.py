@@ -28,9 +28,14 @@ UPDATE_CONFIRM_PREFIX = "update_confirm"
 UPDATE_CANCEL_PREFIX = "update_cancel"
 REVIEW_COMMIT_SELECT_ID = "review_commit_select"
 FLOW_ACTION_SELECT_PREFIX = "flow_action_select"
-TICKETS_FILTER_SELECT_ID = "tickets_filter_select"
-TICKETS_SELECT_ID = "tickets_select"
-TICKETS_MODAL_PREFIX = "tickets_modal"
+TICKETS_FILTER_SELECT_ID, TICKETS_SELECT_ID = "tickets_filter_select", "tickets_select"
+TICKETS_PAGE_CUSTOM_ID_PREFIX, TICKETS_BACK_CUSTOM_ID = "tickets_page", "tickets_back"
+TICKETS_CHUNK_CUSTOM_ID_PREFIX, TICKETS_MODAL_PREFIX = "tickets_chunk", "tickets_modal"
+CONTEXTSPACE_SELECT_ID, CONTEXTSPACE_BACK_CUSTOM_ID = (
+    "contextspace_select",
+    "contextspace_back",
+)
+CONTEXTSPACE_CHUNK_CUSTOM_ID_PREFIX = "contextspace_chunk"
 NEWT_HARD_RESET_CUSTOM_ID = "newt_hard_reset"
 NEWT_CANCEL_CUSTOM_ID = "newt_cancel"
 

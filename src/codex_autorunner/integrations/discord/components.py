@@ -8,6 +8,7 @@ from ...core.update_targets import (
 )
 from ..chat.agents import chat_agent_definitions, chat_hermes_profile_options
 from ..chat.model_selection import REASONING_EFFORT_VALUES
+from .interaction_component_handlers import TICKETS_FILTER_SELECT_ID
 from .interaction_registry import (
     AGENT_PROFILE_SELECT_ID,
     AGENT_SELECT_CUSTOM_ID,
@@ -17,7 +18,6 @@ from .interaction_registry import (
     MODEL_SELECT_CUSTOM_ID,
     REVIEW_COMMIT_SELECT_ID,
     SESSION_RESUME_SELECT_ID,
-    TICKETS_FILTER_SELECT_ID,
     TICKETS_SELECT_ID,
     UPDATE_TARGET_SELECT_ID,
 )

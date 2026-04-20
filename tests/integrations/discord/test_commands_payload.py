@@ -44,6 +44,7 @@ def test_build_application_commands_structure_is_stable() -> None:
         "diff",
         "skills",
         "tickets",
+        "contextspace",
         "review",
         "approvals",
         "mention",

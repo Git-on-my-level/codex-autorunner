@@ -245,6 +245,17 @@ from .components import (
     build_ticket_picker,
 )
 from .config import DiscordBotConfig
+from .document_browser import (
+    handle_contextspace_back_component,
+    handle_contextspace_browser,
+    handle_contextspace_chunk_component,
+    handle_contextspace_select_component,
+    handle_ticket_back_component,
+    handle_ticket_browser,
+    handle_ticket_chunk_component,
+    handle_ticket_page_component,
+    handle_ticket_select_component,
+)
 from .effects import (
     DiscordAutocompleteEffect,
     DiscordComponentResponseEffect,
@@ -275,7 +286,6 @@ from .flow_commands import (
     handle_flow_start,
     handle_flow_status,
     handle_flow_stop,
-    handle_tickets,
     prompt_flow_action_picker,
     resolve_flow_run_input,
     write_user_reply,
@@ -855,6 +865,7 @@ class DiscordBotService:
         self._pending_ticket_context: dict[str, dict[str, str]] = {}
         self._pending_ticket_filters: dict[str, str] = {}
         self._pending_ticket_search_queries: dict[str, str] = {}
+        self._document_browser_sessions: dict[str, Any] = {}
         self._responder = DiscordResponder(
             rest=self._rest,
             config=self._config,
@@ -4387,16 +4398,120 @@ class DiscordBotService:
         interaction_token: str,
         *,
         channel_id: str,
+        user_id: Optional[str],
         values: Optional[list[str]],
     ) -> None:
-        from .flow_commands import handle_ticket_select_component
-
         await handle_ticket_select_component(
             self,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
+            user_id=user_id,
             values=values,
+        )
+
+    async def _handle_ticket_browser_page_component(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+        user_id: Optional[str],
+        custom_id: str,
+    ) -> None:
+        await handle_ticket_page_component(
+            self,
+            interaction_id,
+            interaction_token,
+            channel_id=channel_id,
+            user_id=user_id,
+            custom_id=custom_id,
+        )
+
+    async def _handle_ticket_browser_back_component(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+        user_id: Optional[str],
+    ) -> None:
+        await handle_ticket_back_component(
+            self,
+            interaction_id,
+            interaction_token,
+            channel_id=channel_id,
+            user_id=user_id,
+        )
+
+    async def _handle_ticket_browser_chunk_component(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+        user_id: Optional[str],
+        custom_id: str,
+    ) -> None:
+        await handle_ticket_chunk_component(
+            self,
+            interaction_id,
+            interaction_token,
+            channel_id=channel_id,
+            user_id=user_id,
+            custom_id=custom_id,
+        )
+
+    async def _handle_contextspace_select_component(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+        user_id: Optional[str],
+        values: Optional[list[str]],
+    ) -> None:
+        await handle_contextspace_select_component(
+            self,
+            interaction_id,
+            interaction_token,
+            channel_id=channel_id,
+            user_id=user_id,
+            values=values,
+        )
+
+    async def _handle_contextspace_back_component(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+        user_id: Optional[str],
+    ) -> None:
+        await handle_contextspace_back_component(
+            self,
+            interaction_id,
+            interaction_token,
+            channel_id=channel_id,
+            user_id=user_id,
+        )
+
+    async def _handle_contextspace_chunk_component(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+        user_id: Optional[str],
+        custom_id: str,
+    ) -> None:
+        await handle_contextspace_chunk_component(
+            self,
+            interaction_id,
+            interaction_token,
+            channel_id=channel_id,
+            user_id=user_id,
+            custom_id=custom_id,
         )
 
     async def _open_ticket_modal(
@@ -4423,16 +4538,36 @@ class DiscordBotService:
         interaction_token: str,
         *,
         channel_id: str,
+        user_id: Optional[str],
         workspace_root: Path,
         options: dict[str, Any],
     ) -> None:
         await self._run_effectful_handler(
-            handle_tickets,
+            handle_ticket_browser,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
+            user_id=user_id,
             workspace_root=workspace_root,
             options=options,
+        )
+
+    async def _handle_contextspace(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+        user_id: Optional[str],
+        workspace_root: Path,
+    ) -> None:
+        await self._run_effectful_handler(
+            handle_contextspace_browser,
+            interaction_id,
+            interaction_token,
+            channel_id=channel_id,
+            user_id=user_id,
+            workspace_root=workspace_root,
         )
 
     def _resolve_workspace_from_token(

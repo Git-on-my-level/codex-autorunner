@@ -153,6 +153,16 @@ def build_command_specs(handlers: Any) -> dict[str, CommandSpec]:
             "list available skills",
             handlers._handle_skills,
         ),
+        "tickets": _spec(
+            "tickets",
+            "browse tickets",
+            handlers._handle_tickets,
+        ),
+        "contextspace": _spec(
+            "contextspace",
+            "browse contextspace docs",
+            handlers._handle_contextspace,
+        ),
         "mcp": _spec(
             "mcp",
             "list MCP server status",
