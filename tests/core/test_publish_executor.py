@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sqlite3
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -98,6 +100,50 @@ def _publish_hub(tmp_path: Path) -> tuple[Path, Path, str]:
         encoding="utf-8",
     )
     return hub_root, workspace_root, "repo-publish"
+
+
+def _create_scm_enqueue_operation(
+    *,
+    journal: PublishJournalStore,
+    thread_target_id: str,
+    binding_id: str,
+    repo_id: str,
+    operation_key: str,
+) -> PublishOperation:
+    operation, _ = journal.create_operation(
+        operation_key=operation_key,
+        operation_kind="enqueue_managed_turn",
+        payload={
+            "thread_target_id": thread_target_id,
+            "request": {
+                "kind": "message",
+                "message_text": "New PR review feedback arrived on acme/widgets#42.",
+                "metadata": {
+                    "scm": {
+                        "binding_id": binding_id,
+                        "event_id": "github:event-review-comment",
+                        "provider": "github",
+                        "repo_slug": "acme/widgets",
+                        "repo_id": repo_id,
+                        "pr_number": 42,
+                    }
+                },
+            },
+            "scm_reaction": {
+                "binding_id": binding_id,
+                "event_id": "github:event-review-comment",
+                "provider": "github",
+                "reaction_kind": "review_comment",
+                "repo_slug": "acme/widgets",
+                "repo_id": repo_id,
+                "pr_number": 42,
+                "head_branch": "feature/scm-rebind",
+                "base_branch": "main",
+                "thread_target_id": thread_target_id,
+            },
+        },
+    )
+    return operation
 
 
 def test_drain_pending_publish_operations_marks_success_and_does_not_replay_same_call(
@@ -589,8 +635,130 @@ def test_enqueue_managed_turn_executor_reuses_existing_execution_for_same_operat
     assert turns[0]["client_turn_id"] == first["client_request_id"]
 
 
+@pytest.mark.parametrize(
+    ("turn_status", "expected_runtime_status"),
+    [("ok", "completed"), ("interrupted", "interrupted")],
+)
+def test_enqueue_managed_turn_executor_reuses_reusable_scm_thread_statuses(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    turn_status: str,
+    expected_runtime_status: str,
+) -> None:
+    hub_root, workspace_root, repo_id = _publish_hub(tmp_path)
+    thread_store = PmaThreadStore(hub_root)
+    thread = thread_store.create_thread(
+        "codex",
+        workspace_root,
+        repo_id=repo_id,
+        metadata={"head_branch": "feature/scm-rebind"},
+    )
+    first_turn = thread_store.create_turn(
+        thread["managed_thread_id"], prompt="existing work"
+    )
+    if turn_status == "ok":
+        assert thread_store.mark_turn_finished(
+            first_turn["managed_turn_id"], status="ok"
+        )
+    else:
+        assert thread_store.mark_turn_interrupted(first_turn["managed_turn_id"])
+
+    binding = PrBindingStore(hub_root).upsert_binding(
+        provider="github",
+        repo_slug="acme/widgets",
+        repo_id=repo_id,
+        pr_number=42,
+        pr_state="open",
+        head_branch="feature/scm-rebind",
+        base_branch="main",
+        thread_target_id=thread["managed_thread_id"],
+    )
+    operation = _create_scm_enqueue_operation(
+        journal=PublishJournalStore(hub_root),
+        thread_target_id=thread["managed_thread_id"],
+        binding_id=binding.binding_id,
+        repo_id=repo_id,
+        operation_key=f"enqueue:scm:{expected_runtime_status}",
+    )
+
+    with caplog.at_level(
+        logging.INFO, logger="codex_autorunner.core.publish_operation_executors"
+    ):
+        result = build_enqueue_managed_turn_executor(hub_root=hub_root)(operation)
+
+    assert result["thread_target_id"] == thread["managed_thread_id"]
+    assert result["queued"] is False
+    turns = thread_store.list_turns(thread["managed_thread_id"], limit=10)
+    assert len(turns) == 2
+    assert turns[0]["managed_turn_id"] == result["managed_turn_id"]
+    assert turns[0]["status"] == "running"
+    assert any(
+        "scm.enqueue_managed_turn.reusing_thread" in message
+        and f"normalized_status={expected_runtime_status}" in message
+        for message in caplog.messages
+    )
+
+
+def test_enqueue_managed_turn_executor_queues_on_running_scm_thread(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    hub_root, workspace_root, repo_id = _publish_hub(tmp_path)
+    thread_store = PmaThreadStore(hub_root)
+    thread = thread_store.create_thread(
+        "codex",
+        workspace_root,
+        repo_id=repo_id,
+        metadata={"head_branch": "feature/scm-rebind"},
+    )
+    existing_turn = thread_store.create_turn(
+        thread["managed_thread_id"], prompt="already running"
+    )
+    binding = PrBindingStore(hub_root).upsert_binding(
+        provider="github",
+        repo_slug="acme/widgets",
+        repo_id=repo_id,
+        pr_number=42,
+        pr_state="open",
+        head_branch="feature/scm-rebind",
+        base_branch="main",
+        thread_target_id=thread["managed_thread_id"],
+    )
+    operation = _create_scm_enqueue_operation(
+        journal=PublishJournalStore(hub_root),
+        thread_target_id=thread["managed_thread_id"],
+        binding_id=binding.binding_id,
+        repo_id=repo_id,
+        operation_key="enqueue:scm:running-thread",
+    )
+
+    with caplog.at_level(
+        logging.INFO, logger="codex_autorunner.core.publish_operation_executors"
+    ):
+        result = build_enqueue_managed_turn_executor(hub_root=hub_root)(operation)
+
+    assert result["thread_target_id"] == thread["managed_thread_id"]
+    assert result["queued"] is True
+    turns = thread_store.list_turns(thread["managed_thread_id"], limit=10)
+    assert len(turns) == 2
+    assert {turn["managed_turn_id"] for turn in turns} == {
+        existing_turn["managed_turn_id"],
+        result["managed_turn_id"],
+    }
+    queued = [
+        turn for turn in turns if turn["managed_turn_id"] == result["managed_turn_id"]
+    ][0]
+    assert queued["status"] == "queued"
+    assert any(
+        "scm.enqueue_managed_turn.reusing_thread" in message
+        and "normalized_status=running" in message
+        for message in caplog.messages
+    )
+
+
 def test_enqueue_managed_turn_executor_rebinds_archived_scm_thread_with_bootstrap_prompt(
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     hub_root, workspace_root, repo_id = _publish_hub(tmp_path)
     thread_store = PmaThreadStore(hub_root)
@@ -631,42 +799,37 @@ def test_enqueue_managed_turn_executor_rebinds_archived_scm_thread_with_bootstra
             "line": 371,
         },
     )
-    journal = PublishJournalStore(hub_root)
-    operation, _ = journal.create_operation(
+    operation = _create_scm_enqueue_operation(
+        journal=PublishJournalStore(hub_root),
+        thread_target_id=archived_thread["managed_thread_id"],
+        binding_id=binding.binding_id,
+        repo_id=repo_id,
         operation_key="enqueue:scm:archived-thread",
-        operation_kind="enqueue_managed_turn",
+    )
+    operation = replace(
+        operation,
         payload={
-            "thread_target_id": archived_thread["managed_thread_id"],
+            **operation.payload,
             "request": {
-                "kind": "message",
-                "message_text": "New PR review feedback arrived on acme/widgets#42.",
+                **operation.payload["request"],
                 "metadata": {
                     "scm": {
-                        "binding_id": binding.binding_id,
+                        **operation.payload["request"]["metadata"]["scm"],
                         "event_id": event.event_id,
-                        "provider": "github",
-                        "repo_slug": "acme/widgets",
-                        "repo_id": repo_id,
-                        "pr_number": 42,
                     }
                 },
             },
             "scm_reaction": {
-                "binding_id": binding.binding_id,
+                **operation.payload["scm_reaction"],
                 "event_id": event.event_id,
-                "provider": "github",
-                "reaction_kind": "review_comment",
-                "repo_slug": "acme/widgets",
-                "repo_id": repo_id,
-                "pr_number": 42,
-                "head_branch": "feature/scm-rebind",
-                "base_branch": "main",
-                "thread_target_id": archived_thread["managed_thread_id"],
             },
         },
     )
 
-    result = build_enqueue_managed_turn_executor(hub_root=hub_root)(operation)
+    with caplog.at_level(
+        logging.INFO, logger="codex_autorunner.core.publish_operation_executors"
+    ):
+        result = build_enqueue_managed_turn_executor(hub_root=hub_root)(operation)
 
     assert result["thread_target_id"] != archived_thread["managed_thread_id"]
     assert (
@@ -697,6 +860,20 @@ def test_enqueue_managed_turn_executor_rebinds_archived_scm_thread_with_bootstra
         "https://github.com/acme/widgets/pull/42"
     )
     assert replacement_thread["metadata"]["head_branch"] == "feature/scm-rebind"
+    assert any(
+        "scm.enqueue_managed_turn.rebinding_thread" in message
+        and f"previous_thread_target_id={archived_thread['managed_thread_id']}"
+        in message
+        and "status=archived" in message
+        for message in caplog.messages
+    )
+    assert any(
+        "scm.enqueue_managed_turn.rebound_thread" in message
+        and f"previous_thread_target_id={archived_thread['managed_thread_id']}"
+        in message
+        and f"thread_target_id={result['thread_target_id']}" in message
+        for message in caplog.messages
+    )
 
 
 def test_enqueue_managed_turn_executor_dedupes_retry_after_scm_rebind_to_new_thread(

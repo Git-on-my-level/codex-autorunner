@@ -1336,9 +1336,11 @@ def test_process_due_watches_emits_new_pr_comment_and_inline_review_comment(
     }
 
 
+@pytest.mark.parametrize("pr_state", ["open", "draft"])
 def test_process_due_watches_reacts_then_wakes_thread_and_notifies_bound_chat(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    pr_state: str,
 ) -> None:
     hub_root = tmp_path / "hub"
     workspace_root = hub_root / "repo"
@@ -1376,7 +1378,7 @@ def test_process_due_watches_reacts_then_wakes_thread_and_notifies_bound_chat(
         repo_slug="acme/widgets",
         repo_id="repo-1",
         pr_number=17,
-        pr_state="open",
+        pr_state=pr_state,
         head_branch="feature/scm-polling",
         base_branch="main",
         thread_target_id=str(thread["managed_thread_id"]),
@@ -1396,7 +1398,7 @@ def test_process_due_watches_reacts_then_wakes_thread_and_notifies_bound_chat(
         reaction_config={"enabled": True},
         snapshot={
             "head_sha": "oldsha",
-            "pr_state": "open",
+            "pr_state": pr_state,
             "review_thread_comments": {},
         },
     )
@@ -1407,7 +1409,7 @@ def test_process_due_watches_reacts_then_wakes_thread_and_notifies_bound_chat(
             raw_config,
             pr_view_payload={
                 "state": "OPEN",
-                "isDraft": False,
+                "isDraft": pr_state == "draft",
                 "headRefOid": "newsha",
                 "author": {"login": "pr-author"},
             },
