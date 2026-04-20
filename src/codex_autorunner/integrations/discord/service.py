@@ -4385,7 +4385,7 @@ class DiscordBotService:
         channel_id: str,
         values: Optional[list[str]],
     ) -> None:
-        from .flow_commands import handle_ticket_filter_component
+        from .ticket_commands import handle_ticket_filter_component
 
         await handle_ticket_filter_component(
             self,
@@ -4543,7 +4543,7 @@ class DiscordBotService:
         workspace_root: Path,
         ticket_rel: str,
     ) -> None:
-        from .flow_commands import _open_ticket_modal
+        from .ticket_commands import _open_ticket_modal
 
         await _open_ticket_modal(
             self,
@@ -6140,7 +6140,7 @@ class DiscordBotService:
         custom_id: str,
         values: dict[str, Any],
     ) -> None:
-        from .flow_commands import handle_ticket_modal_submit
+        from .ticket_commands import handle_ticket_modal_submit
 
         await handle_ticket_modal_submit(
             self,
