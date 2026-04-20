@@ -5,6 +5,15 @@ Ownership boundaries:
   determination, progress event pumping, runtime event state, and queue-worker
   management.  The coordinator is the *only* execution path for managed PMA
   turns; surfaces must not bypass it.
+- **Durable final delivery** (`build_managed_thread_delivery_intent`,
+  `handoff_managed_thread_final_delivery`): transport-agnostic intent creation
+  and engine handoff.  These run after finalization and persist delivery state
+  before any surface-specific I/O.
+- **Queue-worker lifecycle** (`_finalize_queue_worker_failure`,
+  `_dispatch_finalized_delivery`, `_process_queued_execution`): explicit
+  subunits for queue-worker failure recording, delivery dispatch (durable vs
+  legacy), and per-execution finalization.  Extracted from the coordinator so
+  each phase is independently testable and auditable.
 - **Hub control-plane side effects** (bridged through this module):
   timeline persistence, cold-trace finalization, transcript writes, and thread
   activity records.  These are always best-effort; failure must not prevent
@@ -568,31 +577,6 @@ def _coerce_queue_worker_hooks(
     if isinstance(hooks, ManagedThreadCoordinatorHooks):
         return hooks.queue_worker_hooks()
     return hooks
-
-
-def _build_finalization_result(
-    *,
-    status: ManagedThreadStatus,
-    assistant_text: str,
-    error: Optional[str],
-    managed_thread_id: str,
-    managed_turn_id: str,
-    backend_thread_id: Optional[str],
-    token_usage: Optional[dict[str, Any]],
-    session_notice: Optional[str] = None,
-    fresh_backend_session_reason: Optional[str] = None,
-) -> ManagedThreadFinalizationResult:
-    return ManagedThreadFinalizationResult(
-        status=status,
-        assistant_text=assistant_text,
-        error=error,
-        managed_thread_id=managed_thread_id,
-        managed_turn_id=managed_turn_id,
-        backend_thread_id=backend_thread_id,
-        token_usage=token_usage,
-        session_notice=session_notice,
-        fresh_backend_session_reason=fresh_backend_session_reason,
-    )
 
 
 def _coerce_managed_thread_status(value: Any) -> ManagedThreadStatus:
@@ -1354,6 +1338,159 @@ async def complete_managed_thread_execution(
     )
 
 
+async def _finalize_queue_worker_failure(
+    orchestration_service: Any,
+    started_execution: RuntimeThreadExecution,
+    *,
+    error: str,
+) -> ManagedThreadFinalizationResult:
+    detail = error.strip() or _QUEUE_WORKER_FAILURE_ERROR
+    try:
+        orchestration_service.record_execution_result(
+            started_execution.thread.thread_target_id,
+            started_execution.execution.execution_id,
+            status="error",
+            assistant_text="",
+            error=detail,
+            backend_turn_id=None,
+            transcript_turn_id=None,
+        )
+    except asyncio.CancelledError:
+        log_event(
+            logger,
+            logging.WARNING,
+            "chat.managed_thread.queue_worker_failure_record_cancelled",
+            **_queue_worker_trace_fields(started_execution),
+            detail=detail,
+        )
+    except Exception as exc:
+        log_event(
+            logger,
+            logging.WARNING,
+            "chat.managed_thread.queue_worker_failure_record_failed",
+            **_queue_worker_trace_fields(started_execution),
+            detail=detail,
+            exc=exc,
+        )
+    return ManagedThreadFinalizationResult(
+        status="error",
+        assistant_text="",
+        error=detail,
+        managed_thread_id=started_execution.thread.thread_target_id,
+        managed_turn_id=started_execution.execution.execution_id,
+        backend_thread_id=getattr(
+            started_execution.thread,
+            "backend_thread_id",
+            None,
+        ),
+        token_usage=None,
+    )
+
+
+async def _dispatch_finalized_delivery(
+    finalized: ManagedThreadFinalizationResult,
+    *,
+    durable_delivery: Optional[ManagedThreadDurableDeliveryHooks],
+    deliver_result: Optional[DeliverQueuedResult],
+) -> None:
+    if durable_delivery is not None:
+        await handoff_managed_thread_final_delivery(
+            finalized,
+            delivery=durable_delivery,
+            logger=logger,
+        )
+    elif deliver_result is not None:
+        await deliver_result(finalized)
+
+
+async def _process_queued_execution(
+    started_execution: RuntimeThreadExecution,
+    *,
+    orchestration_service: Any,
+    finalize_started_execution: FinalizeQueuedExecution,
+    durable_delivery: Optional[ManagedThreadDurableDeliveryHooks],
+    deliver_result: Optional[DeliverQueuedResult],
+    run_with_indicator: Optional[RunWithIndicator],
+) -> None:
+    finalized: Optional[ManagedThreadFinalizationResult] = None
+    try:
+        if run_with_indicator is None:
+            finalized = coerce_managed_thread_finalization_result(
+                await finalize_started_execution(started_execution)
+            )
+        else:
+
+            async def _finalize_work() -> None:
+                nonlocal finalized
+                finalized = coerce_managed_thread_finalization_result(
+                    await finalize_started_execution(started_execution)
+                )
+
+            await run_with_indicator(_finalize_work)
+    except BaseException as exc:
+        logged_exc = exc if isinstance(exc, Exception) else None
+        if finalized is not None:
+            log_event(
+                logger,
+                logging.WARNING,
+                "chat.managed_thread.queue_worker_indicator_failed_post_finalization",
+                **_queue_worker_trace_fields(started_execution),
+                finalized_status=finalized.status,
+                cancelled=isinstance(exc, asyncio.CancelledError),
+                exc=logged_exc,
+            )
+        else:
+            log_event(
+                logger,
+                logging.ERROR,
+                "chat.managed_thread.queue_worker_execution_failed",
+                **_queue_worker_trace_fields(started_execution),
+                cancelled=isinstance(exc, asyncio.CancelledError),
+                exc=logged_exc,
+            )
+            finalized = await _finalize_queue_worker_failure(
+                orchestration_service,
+                started_execution,
+                error=str(exc) or _QUEUE_WORKER_FAILURE_ERROR,
+            )
+            try:
+                await _dispatch_finalized_delivery(
+                    finalized,
+                    durable_delivery=durable_delivery,
+                    deliver_result=deliver_result,
+                )
+            except Exception as delivery_exc:
+                log_event(
+                    logger,
+                    logging.ERROR,
+                    "chat.managed_thread.queue_worker_failure_delivery_failed",
+                    **_queue_worker_trace_fields(started_execution),
+                    finalized_status=finalized.status,
+                    exc=delivery_exc,
+                )
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+            return
+
+    if finalized is None:
+        return
+    try:
+        await _dispatch_finalized_delivery(
+            finalized,
+            durable_delivery=durable_delivery,
+            deliver_result=deliver_result,
+        )
+    except Exception as delivery_exc:
+        log_event(
+            logger,
+            logging.ERROR,
+            "chat.managed_thread.queue_worker_delivery_failed",
+            **_queue_worker_trace_fields(started_execution),
+            finalized_status=finalized.status,
+            exc=delivery_exc,
+        )
+
+
 def ensure_managed_thread_queue_worker(
     *,
     task_map: dict[str, asyncio.Task[Any]],
@@ -1373,141 +1510,7 @@ def ensure_managed_thread_queue_worker(
     if isinstance(existing, asyncio.Task) and not existing.done():
         return
 
-    worker_task: Optional[asyncio.Task[Any]] = None
     begin_next = begin_next_execution or begin_next_queued_runtime_thread_execution
-
-    async def _record_queue_worker_failure(
-        started_execution: RuntimeThreadExecution,
-        *,
-        error: str,
-    ) -> ManagedThreadFinalizationResult:
-        detail = error.strip() or _QUEUE_WORKER_FAILURE_ERROR
-        try:
-            orchestration_service.record_execution_result(
-                started_execution.thread.thread_target_id,
-                started_execution.execution.execution_id,
-                status="error",
-                assistant_text="",
-                error=detail,
-                backend_turn_id=None,
-                transcript_turn_id=None,
-            )
-        except asyncio.CancelledError:
-            log_event(
-                logger,
-                logging.WARNING,
-                "chat.managed_thread.queue_worker_failure_record_cancelled",
-                **_queue_worker_trace_fields(started_execution),
-                detail=detail,
-            )
-        except Exception as exc:
-            log_event(
-                logger,
-                logging.WARNING,
-                "chat.managed_thread.queue_worker_failure_record_failed",
-                **_queue_worker_trace_fields(started_execution),
-                detail=detail,
-                exc=exc,
-            )
-        return _build_finalization_result(
-            status="error",
-            assistant_text="",
-            error=detail,
-            managed_thread_id=started_execution.thread.thread_target_id,
-            managed_turn_id=started_execution.execution.execution_id,
-            backend_thread_id=getattr(
-                started_execution.thread,
-                "backend_thread_id",
-                None,
-            ),
-            token_usage=None,
-        )
-
-    async def _process_started_execution(
-        started_execution: RuntimeThreadExecution,
-    ) -> None:
-        finalized: Optional[ManagedThreadFinalizationResult] = None
-        try:
-            if run_with_indicator is None:
-                finalized = coerce_managed_thread_finalization_result(
-                    await finalize_started_execution(started_execution)
-                )
-            else:
-
-                async def _finalize_work() -> None:
-                    nonlocal finalized
-                    finalized = coerce_managed_thread_finalization_result(
-                        await finalize_started_execution(started_execution)
-                    )
-
-                await run_with_indicator(_finalize_work)
-        except BaseException as exc:
-            logged_exc = exc if isinstance(exc, Exception) else None
-            if finalized is not None:
-                log_event(
-                    logger,
-                    logging.WARNING,
-                    "chat.managed_thread.queue_worker_indicator_failed_post_finalization",
-                    **_queue_worker_trace_fields(started_execution),
-                    finalized_status=finalized.status,
-                    cancelled=isinstance(exc, asyncio.CancelledError),
-                    exc=logged_exc,
-                )
-            else:
-                log_event(
-                    logger,
-                    logging.ERROR,
-                    "chat.managed_thread.queue_worker_execution_failed",
-                    **_queue_worker_trace_fields(started_execution),
-                    cancelled=isinstance(exc, asyncio.CancelledError),
-                    exc=logged_exc,
-                )
-                finalized = await _record_queue_worker_failure(
-                    started_execution,
-                    error=str(exc) or _QUEUE_WORKER_FAILURE_ERROR,
-                )
-                try:
-                    if durable_delivery is not None:
-                        await handoff_managed_thread_final_delivery(
-                            finalized,
-                            delivery=durable_delivery,
-                            logger=logger,
-                        )
-                    elif deliver_result is not None:
-                        await deliver_result(finalized)
-                except Exception as delivery_exc:
-                    log_event(
-                        logger,
-                        logging.ERROR,
-                        "chat.managed_thread.queue_worker_failure_delivery_failed",
-                        **_queue_worker_trace_fields(started_execution),
-                        finalized_status=finalized.status,
-                        exc=delivery_exc,
-                    )
-                if isinstance(exc, asyncio.CancelledError):
-                    raise
-                return
-
-        if finalized is None:
-            return
-        try:
-            if durable_delivery is not None:
-                await handoff_managed_thread_final_delivery(
-                    finalized,
-                    delivery=durable_delivery,
-                    logger=logger,
-                )
-            elif deliver_result is not None:
-                await deliver_result(finalized)
-        except Exception as delivery_exc:
-            log_event(
-                logger,
-                logging.ERROR,
-                "chat.managed_thread.queue_worker_delivery_failed",
-                **_queue_worker_trace_fields(started_execution),
-                finalized_status=finalized.status,
-                exc=delivery_exc,
-            )
 
     async def _queue_worker() -> None:
         try:
@@ -1524,7 +1527,14 @@ def ensure_managed_thread_queue_worker(
                 )
                 if started is None:
                     break
-                await _process_started_execution(started)
+                await _process_queued_execution(
+                    started,
+                    orchestration_service=orchestration_service,
+                    finalize_started_execution=finalize_started_execution,
+                    durable_delivery=durable_delivery,
+                    deliver_result=deliver_result,
+                    run_with_indicator=run_with_indicator,
+                )
         except BaseException as exc:
             logged_exc = exc if isinstance(exc, Exception) else None
             log_event(
@@ -1564,10 +1574,8 @@ def ensure_managed_thread_queue_worker(
                 )
             raise
         finally:
-            if (
-                worker_task is not None
-                and task_map.get(managed_thread_id) is worker_task
-            ):
+            worker = task_map.get(managed_thread_id)
+            if isinstance(worker, asyncio.Task) and worker is asyncio.current_task():
                 task_map.pop(managed_thread_id, None)
 
     worker_task = spawn_task(_queue_worker())
@@ -2640,7 +2648,7 @@ async def finalize_managed_thread_execution(
                 fresh_backend_session_reason=fresh_backend_session_reason,
                 **runtime_trace_fields(event_state),
             )
-            return _build_finalization_result(
+            return ManagedThreadFinalizationResult(
                 status="error",
                 assistant_text="",
                 error=detail,
@@ -2713,7 +2721,7 @@ async def finalize_managed_thread_execution(
                 ),
                 exc=exc,
             )
-        return _build_finalization_result(
+        return ManagedThreadFinalizationResult(
             status="ok",
             assistant_text=resolved_assistant_text,
             error=None,
@@ -2780,7 +2788,7 @@ async def finalize_managed_thread_execution(
             fresh_backend_session_reason=fresh_backend_session_reason,
             **runtime_trace_fields(event_state),
         )
-        return _build_finalization_result(
+        return ManagedThreadFinalizationResult(
             status="interrupted",
             assistant_text="",
             error=errors.interrupted_error,
@@ -2861,7 +2869,7 @@ async def finalize_managed_thread_execution(
         fresh_backend_session_reason=fresh_backend_session_reason,
         **runtime_trace_fields(event_state),
     )
-    return _build_finalization_result(
+    return ManagedThreadFinalizationResult(
         status="error",
         assistant_text="",
         error=detail,
