@@ -340,49 +340,13 @@ class TicketRunner:
                 profile=current_ticket_profile,
                 binding_decision=binding_decision,
             )
-
-            if result.should_retry:
-                state["network_retry"] = {
-                    "retries": result.network_retries,
-                    "last_error": result.error,
-                }
-                return TicketResult(
-                    status="continue",
-                    state=state,
-                    reason=(
-                        f"Network error detected (attempt {result.network_retries}/{self._config.max_network_retries}): {result.error}\n"
-                        "Retrying automatically..."
-                    ),
-                    current_ticket=current_ticket_path,
-                    agent_output=result.text,
-                    agent_id=result.agent_id,
-                    agent_conversation_id=result.conversation_id,
-                    agent_turn_id=result.turn_id,
-                )
-
-            state.pop("network_retry", None)
-            commit_failure_result = runner_commit.handle_failed_commit_turn(
-                state=state,
-                workspace_root=self._workspace_root,
+            return self._handle_failed_turn(
+                state,
+                result=result,
+                current_ticket_path=current_ticket_path,
                 commit_pending=commit_pending,
                 commit_retries=commit_retries,
                 head_before_turn=head_before_turn,
-                max_commit_retries=self._config.max_commit_retries,
-                current_ticket_path=current_ticket_path,
-                result_error=result.error,
-                result_text=result.text,
-                result_agent_id=result.agent_id,
-                result_conversation_id=result.conversation_id,
-                result_turn_id=result.turn_id,
-            )
-            if commit_failure_result is not None:
-                return commit_failure_result
-            return self._pause(
-                state,
-                reason="Agent turn failed. Fix the issue and resume.",
-                reason_details=f"Error: {result.error}",
-                current_ticket=current_ticket_path,
-                reason_code="infra_error",
             )
 
         record_successful_turn_state(
@@ -427,6 +391,65 @@ class TicketRunner:
             auto_commit=self._config.auto_commit,
             checkpoint_message_template=self._config.checkpoint_message_template,
             emit_event=emit_event,
+        )
+
+    def _handle_failed_turn(
+        self,
+        state: dict[str, Any],
+        *,
+        result,
+        current_ticket_path: str,
+        commit_pending: bool,
+        commit_retries: int,
+        head_before_turn: Optional[str],
+    ) -> TicketResult:
+        state["last_agent_output"] = result.text
+        state["last_agent_id"] = result.agent_id
+        state["last_agent_conversation_id"] = result.conversation_id
+        state["last_agent_turn_id"] = result.turn_id
+
+        if result.should_retry:
+            state["network_retry"] = {
+                "retries": result.network_retries,
+                "last_error": result.error,
+            }
+            return TicketResult(
+                status="continue",
+                state=state,
+                reason=(
+                    f"Network error detected (attempt {result.network_retries}/{self._config.max_network_retries}): {result.error}\n"
+                    "Retrying automatically..."
+                ),
+                current_ticket=current_ticket_path,
+                agent_output=result.text,
+                agent_id=result.agent_id,
+                agent_conversation_id=result.conversation_id,
+                agent_turn_id=result.turn_id,
+            )
+
+        state.pop("network_retry", None)
+        commit_failure_result = runner_commit.handle_failed_commit_turn(
+            state=state,
+            workspace_root=self._workspace_root,
+            commit_pending=commit_pending,
+            commit_retries=commit_retries,
+            head_before_turn=head_before_turn,
+            max_commit_retries=self._config.max_commit_retries,
+            current_ticket_path=current_ticket_path,
+            result_error=result.error,
+            result_text=result.text,
+            result_agent_id=result.agent_id,
+            result_conversation_id=result.conversation_id,
+            result_turn_id=result.turn_id,
+        )
+        if commit_failure_result is not None:
+            return commit_failure_result
+        return self._pause(
+            state,
+            reason="Agent turn failed. Fix the issue and resume.",
+            reason_details=f"Error: {result.error}",
+            current_ticket=current_ticket_path,
+            reason_code="infra_error",
         )
 
     def _pause(

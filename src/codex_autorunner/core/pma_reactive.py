@@ -144,8 +144,13 @@ class PmaReactiveStore:
                         """,
                         (key, None, None, None, None, None, "{}", stamp, stamp, parsed),
                     )
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write(self._path, json.dumps(state, indent=2) + "\n")
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write(self._path, json.dumps(state, indent=2) + "\n")
+        except OSError as exc:
+            logger.warning(
+                "Failed to write reactive state mirror at %s: %s", self._path, exc
+            )
 
 
 __all__ = [
