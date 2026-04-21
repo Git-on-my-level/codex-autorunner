@@ -22,7 +22,10 @@ from codex_autorunner.core.filebox import (
     outbox_sent_dir,
 )
 from codex_autorunner.core.flows import FlowRunStatus
-from codex_autorunner.core.hub_control_plane import WorkspaceSetupCommandRequest
+from codex_autorunner.core.hub_control_plane import (
+    RunningThreadTargetIdsResponse,
+    WorkspaceSetupCommandRequest,
+)
 from codex_autorunner.core.orchestration.chat_operation_state import (
     ChatOperationState,
 )
@@ -7836,6 +7839,11 @@ async def test_car_newt_runs_hub_setup_commands_for_bound_workspace(
     class _FakeHubClient:
         def __init__(self) -> None:
             self.setup_calls: list[dict[str, object]] = []
+
+        async def list_thread_target_ids_with_running_executions(
+            self, _request: Any
+        ) -> RunningThreadTargetIdsResponse:
+            return RunningThreadTargetIdsResponse(thread_target_ids=())
 
         async def run_workspace_setup_commands(self, request: Any) -> Any:
             self.setup_calls.append(
