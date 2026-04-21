@@ -73,6 +73,11 @@ from ..chat.collaboration_policy import (
     build_telegram_collaboration_policy,
     evaluate_collaboration_policy,
 )
+from ..chat.managed_thread_delivery_support import (
+    ManagedThreadDeliveryCleanupContext,
+    ManagedThreadDeliverySendResult,
+    deliver_managed_thread_terminal_record,
+)
 from ..chat.managed_thread_delivery_worker import (
     ManagedThreadDeliveryWorker,
 )
@@ -521,41 +526,21 @@ class TelegramBotService(
                         outcome=ManagedThreadDeliveryOutcome.ABANDONED,
                         error="missing_telegram_chat_id",
                     )
-                if record.envelope.final_status == "ok":
-                    message_text = render_managed_thread_delivery_record_text(record)
-                    try:
-                        await service._send_message(
-                            target_chat_id,
-                            message_text,
-                            thread_id=target_thread_id,
-                            reply_to=None,
-                        )
-                        await service._flush_outbox_files(
-                            SimpleNamespace(
-                                workspace_path=transport_target.get("workspace_path"),
-                                pma_enabled=bool(transport_target.get("pma_enabled")),
-                            ),
-                            chat_id=target_chat_id,
-                            thread_id=target_thread_id,
-                            reply_to=None,
-                            topic_key=str(transport_target.get("topic_key") or ""),
-                        )
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as exc:
-                        return ManagedThreadDeliveryAttemptResult(
-                            outcome=ManagedThreadDeliveryOutcome.FAILED,
-                            error=str(exc) or exc.__class__.__name__,
-                        )
-                    return ManagedThreadDeliveryAttemptResult(
-                        outcome=ManagedThreadDeliveryOutcome.DELIVERED
+
+                async def _send_success(
+                    _context: ManagedThreadDeliveryCleanupContext,
+                ) -> ManagedThreadDeliverySendResult:
+                    await service._send_message(
+                        target_chat_id,
+                        render_managed_thread_delivery_record_text(record),
+                        thread_id=target_thread_id,
+                        reply_to=None,
                     )
-                if record.envelope.final_status == "interrupted":
-                    return ManagedThreadDeliveryAttemptResult(
-                        outcome=ManagedThreadDeliveryOutcome.ABANDONED,
-                        error="interrupted_turn_has_no_terminal_delivery",
-                    )
-                try:
+                    return ManagedThreadDeliverySendResult()
+
+                async def _send_failure(
+                    _context: ManagedThreadDeliveryCleanupContext,
+                ) -> ManagedThreadDeliverySendResult:
                     await service._send_message(
                         target_chat_id,
                         (
@@ -564,15 +549,31 @@ class TelegramBotService(
                         thread_id=target_thread_id,
                         reply_to=None,
                     )
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    return ManagedThreadDeliveryAttemptResult(
-                        outcome=ManagedThreadDeliveryOutcome.FAILED,
-                        error=str(exc) or exc.__class__.__name__,
+                    return ManagedThreadDeliverySendResult()
+
+                async def _cleanup(
+                    context: ManagedThreadDeliveryCleanupContext,
+                ) -> None:
+                    await service._flush_outbox_files(
+                        SimpleNamespace(
+                            workspace_path=context.transport_target.get(
+                                "workspace_path"
+                            ),
+                            pma_enabled=bool(
+                                context.transport_target.get("pma_enabled")
+                            ),
+                        ),
+                        chat_id=target_chat_id,
+                        thread_id=target_thread_id,
+                        reply_to=None,
+                        topic_key=str(context.transport_target.get("topic_key") or ""),
                     )
-                return ManagedThreadDeliveryAttemptResult(
-                    outcome=ManagedThreadDeliveryOutcome.DELIVERED
+
+                return await deliver_managed_thread_terminal_record(
+                    record,
+                    send_success=_send_success,
+                    send_failure=_send_failure,
+                    cleanup=_cleanup,
                 )
 
         state_root = Path(self._hub_root or self._config.root)

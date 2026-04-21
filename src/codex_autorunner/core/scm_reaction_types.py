@@ -86,6 +86,8 @@ def _login_list_from_mapping(mapping: Mapping[str, Any], *keys: str) -> tuple[st
 @dataclass(frozen=True)
 class ScmReactionConfig:
     ci_failed: bool = True
+    ci_failed_batch_window_seconds: int = 60
+    ci_failed_batch_max_window_seconds: int = 180
     changes_requested: bool = True
     review_comment: bool = True
     review_comment_batch_window_seconds: int = 15
@@ -120,6 +122,16 @@ class ScmReactionConfig:
                 default=(
                     defaults["ci_failed"] if default_enabled is None else default_value
                 ),
+            ),
+            ci_failed_batch_window_seconds=_int_from_mapping(
+                mapping,
+                "ci_failed_batch_window_seconds",
+                default=60,
+            ),
+            ci_failed_batch_max_window_seconds=_int_from_mapping(
+                mapping,
+                "ci_failed_batch_max_window_seconds",
+                default=180,
             ),
             changes_requested=_bool_from_mapping(
                 mapping,

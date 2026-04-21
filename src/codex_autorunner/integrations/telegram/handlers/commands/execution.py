@@ -45,8 +45,6 @@ from .....core.hub_control_plane import (
 from .....core.injected_context import wrap_injected_context
 from .....core.logging_utils import log_event
 from .....core.orchestration import (
-    ManagedThreadDeliveryAttemptResult,
-    ManagedThreadDeliveryOutcome,
     MessageRequest,
     SQLiteManagedThreadDeliveryEngine,
     build_harness_backed_orchestration_service,
@@ -83,6 +81,11 @@ from .....integrations.chat.compaction import match_pending_compact_seed
 from .....integrations.chat.constants import (
     APP_SERVER_UNAVAILABLE_MESSAGE,
     TOPIC_NOT_BOUND_MESSAGE,
+)
+from .....integrations.chat.managed_thread_delivery_support import (
+    ManagedThreadDeliveryCleanupContext,
+    ManagedThreadDeliverySendResult,
+    deliver_managed_thread_terminal_record,
 )
 from .....integrations.chat.managed_thread_lifecycle import (
     replace_surface_thread,
@@ -803,41 +806,21 @@ def _build_telegram_runner_hooks(
             transport_target = dict(record.target.transport_target or {})
             target_chat_id = int(transport_target.get("chat_id") or chat_id)
             target_thread_id = transport_target.get("thread_id", thread_id)
-            if record.envelope.final_status == "ok":
-                message_text = render_managed_thread_delivery_record_text(record)
-                try:
-                    await handlers._send_message(
-                        target_chat_id,
-                        message_text,
-                        thread_id=target_thread_id,
-                        reply_to=None,
-                    )
-                    await handlers._flush_outbox_files(
-                        SimpleNamespace(
-                            workspace_path=transport_target.get("workspace_path"),
-                            pma_enabled=bool(transport_target.get("pma_enabled")),
-                        ),
-                        chat_id=target_chat_id,
-                        thread_id=target_thread_id,
-                        reply_to=None,
-                        topic_key=str(transport_target.get("topic_key") or topic_key),
-                    )
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    return ManagedThreadDeliveryAttemptResult(
-                        outcome=ManagedThreadDeliveryOutcome.FAILED,
-                        error=str(exc) or exc.__class__.__name__,
-                    )
-                return ManagedThreadDeliveryAttemptResult(
-                    outcome=ManagedThreadDeliveryOutcome.DELIVERED
+
+            async def _send_success(
+                _context: ManagedThreadDeliveryCleanupContext,
+            ) -> ManagedThreadDeliverySendResult:
+                await handlers._send_message(
+                    target_chat_id,
+                    render_managed_thread_delivery_record_text(record),
+                    thread_id=target_thread_id,
+                    reply_to=None,
                 )
-            if record.envelope.final_status == "interrupted":
-                return ManagedThreadDeliveryAttemptResult(
-                    outcome=ManagedThreadDeliveryOutcome.ABANDONED,
-                    error="interrupted_turn_has_no_terminal_delivery",
-                )
-            try:
+                return ManagedThreadDeliverySendResult()
+
+            async def _send_failure(
+                _context: ManagedThreadDeliveryCleanupContext,
+            ) -> ManagedThreadDeliverySendResult:
                 await handlers._send_message(
                     target_chat_id,
                     (
@@ -846,15 +829,27 @@ def _build_telegram_runner_hooks(
                     thread_id=target_thread_id,
                     reply_to=None,
                 )
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                return ManagedThreadDeliveryAttemptResult(
-                    outcome=ManagedThreadDeliveryOutcome.FAILED,
-                    error=str(exc) or exc.__class__.__name__,
+                return ManagedThreadDeliverySendResult()
+
+            async def _cleanup(context: ManagedThreadDeliveryCleanupContext) -> None:
+                await handlers._flush_outbox_files(
+                    SimpleNamespace(
+                        workspace_path=context.transport_target.get("workspace_path"),
+                        pma_enabled=bool(context.transport_target.get("pma_enabled")),
+                    ),
+                    chat_id=target_chat_id,
+                    thread_id=target_thread_id,
+                    reply_to=None,
+                    topic_key=str(
+                        context.transport_target.get("topic_key") or topic_key
+                    ),
                 )
-            return ManagedThreadDeliveryAttemptResult(
-                outcome=ManagedThreadDeliveryOutcome.DELIVERED
+
+            return await deliver_managed_thread_terminal_record(
+                record,
+                send_success=_send_success,
+                send_failure=_send_failure,
+                cleanup=_cleanup,
             )
 
     durable_delivery = ManagedThreadDurableDeliveryHooks(

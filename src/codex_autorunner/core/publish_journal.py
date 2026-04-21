@@ -155,6 +155,63 @@ class PublishJournalStore:
             raise RuntimeError("publish operation row missing after insert")
         return _operation_from_row(created), False
 
+    def update_pending_operation(
+        self,
+        operation_id: str,
+        *,
+        payload: Optional[dict[str, Any]] = None,
+        next_attempt_at: Optional[str] = None,
+    ) -> Optional[PublishOperation]:
+        normalized_operation_id = _normalize_text(operation_id)
+        if normalized_operation_id is None:
+            return None
+        payload_object = (
+            _normalize_json_object(payload, field_name="payload")
+            if payload is not None
+            else None
+        )
+        normalized_next_attempt = (
+            _normalize_timestamp(next_attempt_at, field_name="next_attempt_at")
+            if next_attempt_at is not None
+            else None
+        )
+        updated_at = now_iso()
+        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            row = self._load_operation_row(conn, normalized_operation_id)
+            if row is None or str(row["state"]) != "pending":
+                return None
+            resolved_payload = (
+                payload_object
+                if payload_object is not None
+                else _json_loads_object(row["payload_json"])
+            )
+            resolved_next_attempt = (
+                normalized_next_attempt
+                if normalized_next_attempt is not None
+                else _normalize_text(row["next_attempt_at"]) or updated_at
+            )
+            with conn:
+                cursor = conn.execute(
+                    """
+                    UPDATE orch_publish_operations
+                       SET payload_json = ?,
+                           next_attempt_at = ?,
+                           updated_at = ?
+                     WHERE operation_id = ?
+                       AND state = 'pending'
+                    """,
+                    (
+                        _json_dumps(resolved_payload),
+                        resolved_next_attempt,
+                        updated_at,
+                        normalized_operation_id,
+                    ),
+                )
+                if cursor.rowcount == 0:
+                    return None
+                refreshed = self._load_operation_row(conn, normalized_operation_id)
+        return _operation_from_row(refreshed) if refreshed is not None else None
+
     def claim_pending_operations(
         self,
         *,

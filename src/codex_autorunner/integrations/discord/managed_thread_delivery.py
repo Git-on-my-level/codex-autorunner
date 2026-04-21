@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from typing import Any, Optional
 
@@ -16,6 +15,11 @@ from ...integrations.chat.managed_thread_turns import (
     ManagedThreadSurfaceInfo,
     build_managed_thread_delivery_intent,
     render_managed_thread_delivery_record_text,
+)
+from ..chat.managed_thread_delivery_support import (
+    ManagedThreadDeliveryCleanupContext,
+    ManagedThreadDeliverySendResult,
+    deliver_managed_thread_terminal_record,
 )
 from .constants import DISCORD_MAX_MESSAGE_LENGTH
 from .rendering import chunk_discord_message, format_discord_message
@@ -31,7 +35,7 @@ async def deliver_discord_managed_thread_record(
     error_record_label: str,
     default_execution_error: str,
 ) -> ManagedThreadDeliveryAttemptResult:
-    """Deliver a managed-thread delivery record to Discord (chunks ok-path; errors → message)."""
+    """Deliver a managed-thread delivery record to Discord (chunks ok-path; errors -> message)."""
     _ = claim
     target_channel_id = _resolve_delivery_channel_id(
         record, fallback=channel_id_fallback
@@ -41,7 +45,10 @@ async def deliver_discord_managed_thread_record(
             outcome=ManagedThreadDeliveryOutcome.ABANDONED,
             error="missing_discord_channel_id",
         )
-    if record.envelope.final_status == "ok":
+
+    async def _send_success(
+        _context: ManagedThreadDeliveryCleanupContext,
+    ) -> ManagedThreadDeliverySendResult:
         assistant_text = render_managed_thread_delivery_record_text(record)
         formatted = (
             format_discord_message(assistant_text)
@@ -58,40 +65,28 @@ async def deliver_discord_managed_thread_record(
         base_record_id = (
             f"{base_record_label}:{record.managed_thread_id}:{record.managed_turn_id}"
         )
-        try:
-            for chunk_index, chunk in enumerate(chunks, start=1):
-                record_id = (
-                    f"{base_record_id}:chunk:{chunk_index}"
-                    if len(chunks) > 1
-                    else base_record_id
-                )
-                delivered = await service._send_channel_message_safe(
-                    target_channel_id,
-                    {"content": chunk},
-                    record_id=record_id,
-                )
-                if not delivered:
-                    return ManagedThreadDeliveryAttemptResult(
-                        outcome=ManagedThreadDeliveryOutcome.FAILED,
-                        error=f"discord_send_deferred:{record_id}",
-                    )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            return ManagedThreadDeliveryAttemptResult(
-                outcome=ManagedThreadDeliveryOutcome.FAILED,
-                error=str(exc) or exc.__class__.__name__,
+        for chunk_index, chunk in enumerate(chunks, start=1):
+            record_id = (
+                f"{base_record_id}:chunk:{chunk_index}"
+                if len(chunks) > 1
+                else base_record_id
             )
-        return ManagedThreadDeliveryAttemptResult(
-            outcome=ManagedThreadDeliveryOutcome.DELIVERED,
+            delivered = await service._send_channel_message_safe(
+                target_channel_id,
+                {"content": chunk},
+                record_id=record_id,
+            )
+            if not delivered:
+                return ManagedThreadDeliverySendResult(
+                    error=f"discord_send_deferred:{record_id}",
+                )
+        return ManagedThreadDeliverySendResult(
             adapter_cursor={"chunk_count": len(chunks)},
         )
-    if record.envelope.final_status == "interrupted":
-        return ManagedThreadDeliveryAttemptResult(
-            outcome=ManagedThreadDeliveryOutcome.ABANDONED,
-            error="interrupted_turn_has_no_terminal_delivery",
-        )
-    try:
+
+    async def _send_failure(
+        _context: ManagedThreadDeliveryCleanupContext,
+    ) -> ManagedThreadDeliverySendResult:
         delivered = await service._send_channel_message_safe(
             target_channel_id,
             {
@@ -104,19 +99,27 @@ async def deliver_discord_managed_thread_record(
             ),
         )
         if not delivered:
-            return ManagedThreadDeliveryAttemptResult(
-                outcome=ManagedThreadDeliveryOutcome.FAILED,
+            return ManagedThreadDeliverySendResult(
                 error="discord_error_notice_deferred",
             )
-    except asyncio.CancelledError:
-        raise
-    except Exception as exc:
-        return ManagedThreadDeliveryAttemptResult(
-            outcome=ManagedThreadDeliveryOutcome.FAILED,
-            error=str(exc) or exc.__class__.__name__,
-        )
-    return ManagedThreadDeliveryAttemptResult(
-        outcome=ManagedThreadDeliveryOutcome.DELIVERED
+        return ManagedThreadDeliverySendResult()
+
+    async def _cleanup(context: ManagedThreadDeliveryCleanupContext) -> None:
+        raw_path = context.metadata.get("workspace_root")
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            return
+        flush = getattr(service, "_flush_outbox_files", None)
+        if not callable(flush):
+            return
+        workspace_root = Path(raw_path)
+        await flush(workspace_root=workspace_root, channel_id=target_channel_id)
+
+    return await deliver_managed_thread_terminal_record(
+        record,
+        send_success=_send_success,
+        send_failure=_send_failure,
+        cleanup=_cleanup,
+        cleanup_statuses=frozenset({"ok", "error"}),
     )
 
 
@@ -132,6 +135,7 @@ def build_discord_managed_thread_durable_delivery_hooks(
     *,
     channel_id: str,
     managed_thread_id: str,
+    workspace_root: Path,
     public_execution_error: str,
 ) -> ManagedThreadDurableDeliveryHooks:
     state_root = Path(getattr(getattr(service, "_config", None), "root", Path.cwd()))
@@ -169,7 +173,10 @@ def build_discord_managed_thread_durable_delivery_hooks(
                     surface_key=channel_id,
                 ),
                 transport_target={"channel_id": channel_id},
-                metadata={"managed_thread_id": managed_thread_id},
+                metadata={
+                    "managed_thread_id": managed_thread_id,
+                    "workspace_root": str(workspace_root),
+                },
             )
         ),
     )

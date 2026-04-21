@@ -761,6 +761,11 @@ class TelegramSurfaceHarness:
         approval_mode: Optional[str] = None,
         pma_enabled: bool = True,
     ) -> None:
+        seed_hub_files(self.root, force=True)
+        config_payload = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+        config_payload["discord_bot"]["state_file"] = "discord_state.sqlite3"
+        config_payload["telegram_bot"]["state_file"] = "telegram_state.sqlite3"
+        write_test_config(self.root / CONFIG_FILENAME, config_payload)
         self.service = TelegramBotService(
             make_telegram_config(self.root),
             hub_root=self.root,

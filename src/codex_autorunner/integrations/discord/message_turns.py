@@ -1962,12 +1962,14 @@ async def _run_discord_orchestrated_turn_for_message(
         service,
         channel_id=channel_id,
         managed_thread_id=managed_thread_id,
+        workspace_root=workspace_root,
         public_execution_error=public_execution_error,
     )
     queue_worker_hooks = _build_discord_queue_worker_hooks(
         service,
         channel_id=channel_id,
         managed_thread_id=managed_thread_id,
+        workspace_root=workspace_root,
         public_execution_error=public_execution_error,
     )
     _first_progress_recorded = False

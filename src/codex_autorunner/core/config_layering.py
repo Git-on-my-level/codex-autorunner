@@ -306,6 +306,8 @@ def _default_github_automation_section() -> Dict[str, Any]:
         "reactions": {
             "enabled": True,
             "ci_failed": True,
+            "ci_failed_batch_window_seconds": 60,
+            "ci_failed_batch_max_window_seconds": 180,
             "changes_requested": True,
             "review_comment": True,
             "approved_and_green": True,

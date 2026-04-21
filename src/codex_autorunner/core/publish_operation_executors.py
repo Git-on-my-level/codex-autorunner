@@ -21,6 +21,11 @@ from .pr_bindings import PrBinding, PrBindingStore
 from .publish_executor import PublishActionExecutor, TerminalPublishError
 from .publish_journal import PublishOperation
 from .scm_events import ScmEvent, ScmEventStore
+from .scm_feedback_bundle import (
+    apply_feedback_bundle_to_publish_payload,
+    extract_feedback_bundle,
+    merge_feedback_bundles,
+)
 from .scm_observability import correlation_id_for_operation, correlation_id_from_payload
 from .text_utils import _coerce_int, _normalize_optional_text
 
@@ -141,6 +146,50 @@ def _managed_turn_result(
     if correlation_id is not None:
         result["correlation_id"] = correlation_id
     return result
+
+
+def _merge_into_existing_queued_scm_turn(
+    store: PmaThreadStore,
+    *,
+    thread_target_id: str,
+    payload: dict[str, Any],
+) -> Optional[dict[str, Any]]:
+    incoming_bundle = extract_feedback_bundle(payload)
+    if incoming_bundle is None:
+        return None
+    queued_turns = store.list_queued_turns(thread_target_id, limit=1)
+    if not queued_turns:
+        return None
+    queued_turn = queued_turns[0]
+    existing_payload = store.get_queued_turn_queue_payload(
+        thread_target_id,
+        queued_turn["managed_turn_id"],
+    )
+    if existing_payload is None:
+        return None
+    existing_bundle = extract_feedback_bundle(existing_payload)
+    if existing_bundle is None:
+        return None
+    merged_bundle = merge_feedback_bundles(existing_bundle, incoming_bundle)
+    updated_payload = apply_feedback_bundle_to_publish_payload(
+        existing_payload,
+        merged_bundle,
+    )
+    updated_request = updated_payload.get("request")
+    if not isinstance(updated_request, Mapping):
+        return None
+    updated_prompt = _normalize_optional_text(updated_request.get("message_text"))
+    if updated_prompt is None:
+        return None
+    updated_turn = store.update_queued_turn_request(
+        thread_target_id,
+        queued_turn["managed_turn_id"],
+        prompt=updated_prompt,
+        queue_payload=updated_payload,
+    )
+    if updated_turn is None:
+        return None
+    return updated_turn
 
 
 def _resolve_scm_binding(
@@ -559,6 +608,23 @@ def build_enqueue_managed_turn_executor(*, hub_root: Path) -> PublishActionExecu
                     runtime_status,
                     *log_context,
                 )
+            if active_lifecycle_match_id is not None:
+                merged_turn = _merge_into_existing_queued_scm_turn(
+                    store,
+                    thread_target_id=thread_target_id,
+                    payload=queue_payload,
+                )
+                if merged_turn is not None:
+                    return _managed_turn_result(
+                        thread_target_id=thread_target_id,
+                        client_request_id=(
+                            _normalize_optional_text(merged_turn.get("client_turn_id"))
+                            or client_request_id
+                        ),
+                        turn=merged_turn,
+                        existed=True,
+                        correlation_id=correlation_id,
+                    )
             created = store.create_turn(
                 thread_target_id,
                 prompt=request.message_text,

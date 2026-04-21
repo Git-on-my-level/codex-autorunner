@@ -610,6 +610,7 @@ async def test_discord_managed_thread_delivery_uses_unique_record_ids_per_chunk(
         _ServiceStub(),
         channel_id="channel-1",
         managed_thread_id="thread-1",
+        workspace_root=Path.cwd(),
         public_execution_error="Discord turn failed",
     )
     content = ("a" * 1500) + "\n" + ("b" * 1500)
@@ -677,6 +678,7 @@ async def test_discord_managed_thread_delivery_includes_token_usage_footer() -> 
         _ServiceStub(),
         channel_id="channel-1",
         managed_thread_id="thread-1",
+        workspace_root=Path.cwd(),
         public_execution_error="Discord turn failed",
     )
 
@@ -3535,7 +3537,7 @@ async def test_component_interaction_queue_interrupt_send_promotes_and_interrupt
         state_store=store,
         outbox_manager=_FakeOutboxManager(),
     )
-    calls: list[tuple[str, str, str, str]] = []
+    calls: list[tuple[str, str, str, str, str]] = []
 
     try:
         conversation_id = service._dispatcher_conversation_id(
@@ -3557,6 +3559,7 @@ async def test_component_interaction_queue_interrupt_send_promotes_and_interrupt
                     kwargs["channel_id"],
                     kwargs["active_turn_text"],
                     kwargs["progress_reuse_source_message_id"],
+                    kwargs["dispatcher_conversation_id"],
                 )
             )
 
@@ -3585,6 +3588,7 @@ async def test_component_interaction_queue_interrupt_send_promotes_and_interrupt
                 "channel-1",
                 "Message received. Switching to it now...",
                 "m-2",
+                conversation_id,
             )
         ]
         assert len(rest.edited_original_interaction_responses) == 1
@@ -3594,6 +3598,71 @@ async def test_component_interaction_queue_interrupt_send_promotes_and_interrupt
         )
         assert (
             rest.edited_original_interaction_responses[0]["payload"]["components"] == []
+        )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_component_interaction_queue_interrupt_send_wakes_dispatcher_without_active_thread(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    wake_calls: list[str] = []
+
+    try:
+        conversation_id = service._dispatcher_conversation_id(
+            channel_id="channel-1",
+            guild_id="guild-1",
+        )
+
+        async def _promote_pending_message(
+            _conversation_id: str, message_id: str
+        ) -> bool:
+            assert _conversation_id == conversation_id
+            assert message_id == "m-2"
+            return True
+
+        async def _wake_conversation(_conversation_id: str) -> bool:
+            wake_calls.append(_conversation_id)
+            return True
+
+        service._dispatcher.promote_pending_message = _promote_pending_message  # type: ignore[method-assign]
+        service._dispatcher.wake_conversation = _wake_conversation  # type: ignore[method-assign]
+        service._get_discord_thread_binding = lambda **_kwargs: (  # type: ignore[method-assign]
+            None,
+            None,
+            None,
+        )
+
+        await service._handle_component_interaction_normalized(
+            "interaction-1",
+            "token-1",
+            channel_id="channel-1",
+            custom_id="queue_interrupt_send:m-2",
+            values=None,
+            guild_id="guild-1",
+            user_id="user-1",
+            message_id="notice-1",
+        )
+
+        assert wake_calls == [conversation_id]
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        assert (
+            rest.followup_messages[0]["payload"]["content"]
+            == "Queued request moved to the front."
         )
     finally:
         await store.close()
@@ -9174,6 +9243,7 @@ async def test_car_interrupt_treats_promoted_no_active_as_success(
         state_store=store,
         outbox_manager=_FakeOutboxManager(),
     )
+    wake_calls: list[str] = []
 
     class _FakeThreadService:
         def get_binding(self, *, surface_kind: str, surface_key: str) -> Any:
@@ -9201,6 +9271,12 @@ async def test_car_interrupt_treats_promoted_no_active_as_success(
 
     service._discord_thread_service = lambda: _FakeThreadService()  # type: ignore[assignment]
 
+    async def _wake_conversation(conversation_id: str) -> bool:
+        wake_calls.append(conversation_id)
+        return True
+
+    service._dispatcher.wake_conversation = _wake_conversation  # type: ignore[method-assign]
+
     try:
         await service._handle_car_interrupt(
             "interaction-1",
@@ -9209,6 +9285,7 @@ async def test_car_interrupt_treats_promoted_no_active_as_success(
             active_turn_text="Message received. Switching to it now...",
             cancel_queued=False,
             allow_promoted_no_active_success=True,
+            dispatcher_conversation_id="conversation-1",
             source_message_id="preview-1",
             progress_reuse_source_message_id="m-2",
             progress_reuse_acknowledgement="Message received. Switching to it now...",
@@ -9223,6 +9300,7 @@ async def test_car_interrupt_treats_promoted_no_active_as_success(
         assert rest.edited_channel_messages == []
         assert service._discord_turn_progress_reuse_requests == {}
         assert service._discord_reusable_progress_messages == {}
+        assert wake_calls == ["conversation-1"]
     finally:
         await store.close()
 

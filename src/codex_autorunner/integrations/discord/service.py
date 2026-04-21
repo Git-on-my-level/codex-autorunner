@@ -7006,6 +7006,108 @@ class DiscordBotService:
     def _list_paths_in_dir(self, folder: Path) -> list[Path]:
         return list_regular_files(folder)
 
+    def _build_outbox_sent_destination(self, *, sent_dir: Path, path: Path) -> Path:
+        destination = sent_dir / path.name
+        if destination.exists():
+            destination = sent_dir / f"{path.stem}-{uuid.uuid4().hex[:6]}{path.suffix}"
+        return destination
+
+    def _find_matching_sent_outbox_copy(
+        self,
+        *,
+        sent_dir: Path,
+        path: Path,
+        data: bytes,
+    ) -> Path | None:
+        if not sent_dir.exists():
+            return None
+        expected_size = len(data)
+        expected_digest = hashlib.sha256(data).digest()
+        candidates: list[Path] = []
+        exact = sent_dir / path.name
+        if exact.is_file():
+            candidates.append(exact)
+        with contextlib.suppress(OSError):
+            for candidate in sent_dir.glob(f"{path.stem}-*{path.suffix}"):
+                if candidate.is_file() and candidate != exact:
+                    candidates.append(candidate)
+        for candidate in candidates:
+            try:
+                if candidate.stat().st_size != expected_size:
+                    continue
+                if hashlib.sha256(candidate.read_bytes()).digest() == expected_digest:
+                    return candidate
+            except OSError:
+                continue
+        return None
+
+    def _cleanup_delivered_outbox_source(
+        self,
+        *,
+        path: Path,
+        channel_id: str,
+        archived_path: Path,
+    ) -> bool:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return True
+        except OSError as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.files.outbox.cleanup_failed",
+                channel_id=channel_id,
+                path=str(path),
+                archived_path=str(archived_path),
+                exc=exc,
+            )
+            return False
+        return True
+
+    def _archive_sent_outbox_file(
+        self,
+        *,
+        path: Path,
+        data: bytes,
+        sent_dir: Path,
+        channel_id: str,
+    ) -> bool:
+        sent_dir.mkdir(parents=True, exist_ok=True)
+        destination = self._build_outbox_sent_destination(sent_dir=sent_dir, path=path)
+        try:
+            path.replace(destination)
+            return True
+        except OSError as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.files.outbox.move_failed",
+                channel_id=channel_id,
+                path=str(path),
+                destination=str(destination),
+                exc=exc,
+            )
+        try:
+            destination.write_bytes(data)
+        except OSError as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.files.outbox.copy_failed",
+                channel_id=channel_id,
+                path=str(path),
+                destination=str(destination),
+                exc=exc,
+            )
+            return False
+        self._cleanup_delivered_outbox_source(
+            path=path,
+            channel_id=channel_id,
+            archived_path=destination,
+        )
+        return True
+
     async def _send_outbox_file(
         self,
         path: Path,
@@ -7025,6 +7127,26 @@ class DiscordBotService:
                 exc=exc,
             )
             return False
+        archived_copy = self._find_matching_sent_outbox_copy(
+            sent_dir=sent_dir,
+            path=path,
+            data=data,
+        )
+        if archived_copy is not None:
+            self._cleanup_delivered_outbox_source(
+                path=path,
+                channel_id=channel_id,
+                archived_path=archived_copy,
+            )
+            log_event(
+                self._logger,
+                logging.INFO,
+                "discord.files.outbox.already_archived",
+                channel_id=channel_id,
+                path=str(path),
+                archived_path=str(archived_copy),
+            )
+            return True
         try:
             await self._rest.create_channel_message_with_attachment(
                 channel_id=channel_id,
@@ -7041,23 +7163,13 @@ class DiscordBotService:
                 exc=exc,
             )
             return False
-        try:
-            sent_dir.mkdir(parents=True, exist_ok=True)
-            destination = sent_dir / path.name
-            if destination.exists():
-                destination = (
-                    sent_dir / f"{path.stem}-{uuid.uuid4().hex[:6]}{path.suffix}"
-                )
-            path.replace(destination)
-        except OSError as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.files.outbox.move_failed",
-                channel_id=channel_id,
-                path=str(path),
-                exc=exc,
-            )
+        archived = self._archive_sent_outbox_file(
+            path=path,
+            data=data,
+            sent_dir=sent_dir,
+            channel_id=channel_id,
+        )
+        if not archived:
             return False
         log_event(
             self._logger,
@@ -8095,6 +8207,7 @@ class DiscordBotService:
         execution_id: Optional[str] = None,
         progress_reuse_source_message_id: Optional[str] = None,
         progress_reuse_acknowledgement: Optional[str] = None,
+        dispatcher_conversation_id: Optional[str] = None,
         source: str = "unknown",
         source_custom_id: Optional[str] = None,
         source_message_id: Optional[str] = None,
@@ -8115,6 +8228,7 @@ class DiscordBotService:
             execution_id=execution_id,
             progress_reuse_source_message_id=progress_reuse_source_message_id,
             progress_reuse_acknowledgement=progress_reuse_acknowledgement,
+            dispatcher_conversation_id=dispatcher_conversation_id,
             source=source,
             source_custom_id=source_custom_id,
             source_message_id=source_message_id,
