@@ -34,9 +34,13 @@ _claim_discord_reusable_progress_message = (
 _DiscordOrchestrationState = _progress_lease_state._DiscordOrchestrationState
 _DiscordProgressReuseRequest = _progress_lease_state._DiscordProgressReuseRequest
 _DiscordReusableProgressMessage = _progress_lease_state._DiscordReusableProgressMessage
-_DiscordTurnExecutionSupervision = _progress_lease_state._DiscordTurnExecutionSupervision
+_DiscordTurnExecutionSupervision = (
+    _progress_lease_state._DiscordTurnExecutionSupervision
+)
 _execution_field = _progress_lease_state._execution_field
-_get_discord_thread_queue_task_map = _progress_lease_state._get_discord_thread_queue_task_map
+_get_discord_thread_queue_task_map = (
+    _progress_lease_state._get_discord_thread_queue_task_map
+)
 _peek_discord_progress_reuse_request = (
     _progress_lease_state._peek_discord_progress_reuse_request
 )
