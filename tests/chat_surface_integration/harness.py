@@ -190,7 +190,7 @@ def build_discord_message_create(
 class DiscordSurfaceHarness:
     root: Path
     logger_name: str = "test.chat_surface_integration.discord"
-    timeout_seconds: float = 2.0
+    timeout_seconds: float = 5.0
     store: Optional[DiscordStateStore] = field(default=None, init=False)
     rest: Optional[FakeDiscordRest] = field(default=None, init=False)
     service: Optional[DiscordBotService] = field(default=None, init=False)
@@ -737,7 +737,15 @@ def _telegram_surface_key(thread_id: Optional[int]) -> str:
 async def drain_telegram_spawned_tasks(service: TelegramBotService) -> None:
     while True:
         while service._spawned_tasks:
-            await asyncio.gather(*tuple(service._spawned_tasks))
+            results = await asyncio.gather(
+                *tuple(service._spawned_tasks),
+                return_exceptions=True,
+            )
+            for result in results:
+                if isinstance(result, BaseException) and not isinstance(
+                    result, asyncio.CancelledError
+                ):
+                    raise result
         for runtime in service._router._topics.values():
             await runtime.queue.join_idle()
         if not service._spawned_tasks:

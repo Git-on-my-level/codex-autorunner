@@ -168,7 +168,15 @@ async def _drain_spawned_tasks(service: TelegramBotService) -> None:
     # rather than service._spawned_tasks; drain both until stable.
     while True:
         while service._spawned_tasks:
-            await asyncio.gather(*tuple(service._spawned_tasks))
+            results = await asyncio.gather(
+                *tuple(service._spawned_tasks),
+                return_exceptions=True,
+            )
+            for result in results:
+                if isinstance(result, BaseException) and not isinstance(
+                    result, asyncio.CancelledError
+                ):
+                    raise result
         for runtime in service._router._topics.values():
             await runtime.queue.join_idle()
         if not service._spawned_tasks:

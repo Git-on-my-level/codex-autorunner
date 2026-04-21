@@ -372,6 +372,24 @@ def on_background_task_done(service: Any, task: asyncio.Task[Any]) -> None:
     try:
         task.result()
     except asyncio.CancelledError:
+        if not isinstance(task_context, dict) or not task_context:
+            return
+        if bool(getattr(service, "_background_shutdown_in_progress", False)):
+            return
+        log_event(
+            service._logger,
+            logging.WARNING,
+            "discord.background_task.cancelled",
+            channel_id=task_context.get("channel_id"),
+            managed_thread_id=task_context.get("managed_thread_id"),
+            execution_id=task_context.get("execution_id"),
+        )
+
+        async def _reconcile_cancelled() -> None:
+            await reconcile_background_task_failure(service, task_context)
+
+        reconcile_task = service._spawn_task(_reconcile_cancelled())
+        bind_discord_progress_task_context(reconcile_task)
         return
     except Exception as exc:
         log_event(
@@ -410,6 +428,7 @@ async def close_all_opencode_supervisors(service: Any) -> None:
 
 
 async def shutdown_service(service: Any) -> None:
+    service._background_shutdown_in_progress = True
 
     shutdown_deadline = (
         time.monotonic() + _DISCORD_BACKGROUND_TASK_SHUTDOWN_GRACE_SECONDS

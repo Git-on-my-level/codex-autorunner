@@ -142,6 +142,18 @@ class HermesHarness(AgentHarness):
     ) -> None:
         await self._supervisor.interrupt_turn(workspace_root, conversation_id, turn_id)
 
+    async def recover_stalled_turn(
+        self,
+        workspace_root: Path,
+        conversation_id: str,
+        turn_id: str,
+    ) -> Optional[TerminalTurnResult]:
+        return await self._supervisor.recover_turn_from_session_store(
+            workspace_root,
+            conversation_id,
+            turn_id,
+        )
+
     async def stream_events(
         self, workspace_root: Path, conversation_id: str, turn_id: str
     ) -> AsyncIterator[dict[str, Any]]:

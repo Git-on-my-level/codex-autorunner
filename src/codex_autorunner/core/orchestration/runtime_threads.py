@@ -33,6 +33,42 @@ def _harness_supports_progress_event_stream(harness: Any) -> bool:
     return True
 
 
+async def _recover_stalled_turn(
+    execution: RuntimeThreadExecution,
+) -> Optional[Any]:
+    recover = getattr(execution.harness, "recover_stalled_turn", None)
+    if not callable(recover):
+        return None
+    try:
+        result = await recover(
+            execution.workspace_root,
+            execution.thread.backend_thread_id or "",
+            execution.execution.backend_id or "",
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        return None
+    if not _looks_like_terminal_turn_result(result):
+        return None
+    return result
+
+
+def _looks_like_terminal_turn_result(result: Any) -> bool:
+    if result is None:
+        return False
+    status = getattr(result, "status", None)
+    assistant_text = getattr(result, "assistant_text", None)
+    raw_events = getattr(result, "raw_events", None)
+    errors = getattr(result, "errors", None)
+    return (
+        isinstance(status, str)
+        and isinstance(assistant_text, str)
+        and isinstance(raw_events, list)
+        and isinstance(errors, list)
+    )
+
+
 @dataclass(frozen=True)
 class RuntimeThreadExecution:
     """Started runtime-thread execution bound to one concrete harness instance."""
@@ -222,6 +258,10 @@ async def await_runtime_thread_outcome(
                 )
                 return state.build_timeout_outcome(RUNTIME_THREAD_TIMEOUT_ERROR)
             if stall_task is not None and stall_task in done:
+                recovered = await _recover_stalled_turn(execution)
+                if recovered is not None:
+                    state.note_transport_result(recovered)
+                    return state.build_outcome(execution_error_message)
                 await execution.harness.interrupt(
                     execution.workspace_root,
                     backend_thread_id,

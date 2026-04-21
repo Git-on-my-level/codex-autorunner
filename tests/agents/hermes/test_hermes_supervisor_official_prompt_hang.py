@@ -84,3 +84,55 @@ async def test_hermes_supervisor_completes_from_terminal_event_without_request_r
         ]
     finally:
         await supervisor.close_all()
+
+
+@pytest.mark.slow
+@pytest.mark.asyncio
+async def test_hermes_supervisor_recovers_second_prompt_from_persisted_session_store(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    hermes_home = tmp_path / "hermes-home"
+    supervisor = HermesSupervisor(
+        fake_acp_command("official_second_prompt_hang_with_persisted_completion"),
+        base_env={"HERMES_HOME": str(hermes_home)},
+    )
+    try:
+        caplog.set_level("INFO")
+        session = await supervisor.create_session(tmp_path)
+        first_turn_id = await supervisor.start_turn(
+            tmp_path, session.session_id, "first"
+        )
+        first_result = await asyncio.wait_for(
+            supervisor.wait_for_turn(tmp_path, session.session_id, first_turn_id),
+            timeout=2.0,
+        )
+
+        second_turn_id = await supervisor.start_turn(
+            tmp_path, session.session_id, "second"
+        )
+        second_result = await asyncio.wait_for(
+            supervisor.wait_for_turn(
+                tmp_path,
+                session.session_id,
+                second_turn_id,
+                timeout=0.2,
+            ),
+            timeout=2.0,
+        )
+
+        events = await supervisor.list_turn_events_snapshot(second_turn_id)
+        assert first_result.assistant_text == "fixture reply"
+        assert second_result.status == "completed"
+        assert second_result.assistant_text == "fixture reply 2"
+        assert [event.get("method") for event in events] == [
+            "prompt/started",
+            "session/update",
+            "session/update",
+            "prompt/completed",
+        ]
+        assert events[-1].get("params", {}).get("recoveredFrom") == "session_store"
+        assert "hermes.turn.recovered_from_session_store" in caplog.text
+        assert "hermes.turn.wait_timeout_recovered" in caplog.text
+    finally:
+        await supervisor.close_all()

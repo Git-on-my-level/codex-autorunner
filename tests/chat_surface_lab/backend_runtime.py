@@ -63,6 +63,7 @@ def fake_opencode_server_command(scenario: str = "smoke") -> list[str]:
 class HermesFixtureRuntime:
     scenario: str
     logger_name: str = "test.chat_surface_integration.hermes"
+    base_env: Optional[dict[str, str]] = None
     _descriptor: Optional[AgentDescriptor] = field(default=None, init=False)
     _supervisor: Optional[HermesSupervisor] = field(default=None, init=False)
 
@@ -71,6 +72,7 @@ class HermesFixtureRuntime:
         if self._supervisor is None:
             self._supervisor = HermesSupervisor(
                 fake_acp_command(self.scenario),
+                base_env=dict(self.base_env or {}),
                 logger=logging.getLogger(self.logger_name),
             )
         return self._supervisor

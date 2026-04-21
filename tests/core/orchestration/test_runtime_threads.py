@@ -1572,6 +1572,78 @@ async def test_runtime_threads_prompt_return_tracks_completion_metadata(
     assert outcome.terminal_signals == ()
 
 
+async def test_runtime_thread_stall_can_recover_from_harness_before_timeout(
+    tmp_path: Path,
+) -> None:
+    @dataclass
+    class _HarnessWithStallRecovery(_HarnessWithBlockingWait):
+        capabilities: frozenset[str] = frozenset(
+            ["durable_threads", "message_turns", "interrupt", "event_streaming"]
+        )
+        recovery_calls: list[tuple[Path, str, str]] = field(default_factory=list)
+
+        async def stream_events(
+            self, workspace_root: Path, conversation_id: str, turn_id: str
+        ):
+            _ = workspace_root, conversation_id, turn_id
+            yield {
+                "message": {
+                    "method": "session/update",
+                    "params": {
+                        "update": {"sessionUpdate": "agent_message_chunk"},
+                        "text": "partial output",
+                    },
+                }
+            }
+            await asyncio.Future()
+
+        async def recover_stalled_turn(
+            self, workspace_root: Path, conversation_id: str, turn_id: str
+        ) -> TerminalTurnResult:
+            self.recovery_calls.append((workspace_root, conversation_id, turn_id))
+            return TerminalTurnResult(
+                status="ok",
+                assistant_text="recovered output",
+                raw_events=[],
+                errors=[],
+            )
+
+    harness = _HarnessWithStallRecovery()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+
+    started = await begin_runtime_thread_execution(
+        service,
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="user-visible prompt",
+        ),
+    )
+    outcome = await asyncio.wait_for(
+        await_runtime_thread_outcome(
+            started,
+            interrupt_event=None,
+            timeout_seconds=5,
+            stall_timeout_seconds=0.05,
+            execution_error_message="Managed thread execution failed",
+        ),
+        timeout=1,
+    )
+
+    assert outcome.status == "ok"
+    assert outcome.assistant_text == "recovered output"
+    assert outcome.error is None
+    assert outcome.completion_source == "prompt_return"
+    assert harness.recovery_calls == [
+        (workspace_root, "backend-thread-1", "backend-turn-1")
+    ]
+    assert harness.interrupt_calls == []
+    assert harness.wait_cancelled.is_set()
+
+
 async def test_runtime_thread_timeout_cancels_wait_collector(
     tmp_path: Path,
 ) -> None:

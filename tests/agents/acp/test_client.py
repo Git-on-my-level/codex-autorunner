@@ -276,6 +276,45 @@ async def test_client_official_prompt_hang_tracks_last_session_update_state(
 
 
 @pytest.mark.asyncio
+async def test_client_can_recover_official_prompt_hang_with_synthetic_completion(
+    tmp_path: Path,
+) -> None:
+    client = ACPClient(fixture_command("official_prompt_hang"), cwd=tmp_path)
+    try:
+        created = await client.create_session(cwd=str(tmp_path))
+        handle = await client.start_prompt(created.session_id, "Reply with exactly OK.")
+        for _ in range(20):
+            state = client._prompts.get(handle.turn_id)
+            if (
+                state is not None
+                and state.last_session_update_kind == "agent_message_chunk"
+            ):
+                break
+            await asyncio.sleep(0.01)
+
+        recovered = await client.recover_prompt_completion(
+            handle.turn_id,
+            final_output="fixture reply",
+            recovery_source="session_store",
+        )
+        result = await asyncio.wait_for(handle.wait(), timeout=0.2)
+        state = client._prompts[handle.turn_id]
+
+        assert recovered is True
+        assert result.status == "completed"
+        assert result.final_output == "fixture reply"
+        assert state.completion_source == "session_store"
+        assert [event.kind for event in handle.snapshot_events()] == [
+            "turn_started",
+            "progress",
+            "output_delta",
+            "turn_terminal",
+        ]
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
 async def test_client_official_terminal_event_can_complete_before_request_returns(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,

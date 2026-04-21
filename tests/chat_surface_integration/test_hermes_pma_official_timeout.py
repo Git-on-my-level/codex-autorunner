@@ -60,7 +60,7 @@ async def test_discord_hermes_pma_stall_timeout_surfaces_timeout_for_silent_hang
     monkeypatch.setattr(
         discord_message_turns,
         "DISCORD_PMA_STALL_TIMEOUT_SECONDS",
-        0.05,
+        0.15,
     )
     harness = DiscordSurfaceHarness(tmp_path / "discord-stall")
     await harness.setup(agent="hermes")
@@ -76,6 +76,48 @@ async def test_discord_hermes_pma_stall_timeout_surfaces_timeout_for_silent_hang
             in str(op["payload"].get("content", "")).lower()
             for op in rest.message_ops
         )
+    finally:
+        await harness.close()
+        await runtime.close()
+
+
+@pytest.mark.anyio
+async def test_discord_hermes_pma_recovers_second_turn_from_persisted_session_store(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = HermesFixtureRuntime(
+        "official_second_prompt_hang_with_persisted_completion",
+        base_env={"HERMES_HOME": str(tmp_path / "hermes-home")},
+    )
+    patch_hermes_runtime(monkeypatch, runtime)
+    monkeypatch.setattr(discord_message_turns, "DISCORD_PMA_TIMEOUT_SECONDS", 30.0)
+    monkeypatch.setattr(
+        discord_message_turns,
+        "DISCORD_PMA_STALL_TIMEOUT_SECONDS",
+        0.15,
+    )
+    harness = DiscordSurfaceHarness(tmp_path / "discord-recover")
+    await harness.setup(agent="hermes")
+    try:
+        first = await harness.run_message("echo hello world")
+        second = await harness.run_message("echo hello world again")
+
+        assert first.execution_status == "ok"
+        assert second.execution_status == "ok"
+        assert second.execution_error is None
+        assert any(
+            op["op"] == "send"
+            and "fixture reply 2" in str(op["payload"].get("content", ""))
+            for op in second.message_ops
+        )
+        finalized = next(
+            record
+            for record in reversed(second.log_records)
+            if record.get("event") == "chat.managed_thread.turn_finalized"
+        )
+        assert finalized["status"] == "ok"
+        assert finalized["completion_source"] == "prompt_return"
     finally:
         await harness.close()
         await runtime.close()

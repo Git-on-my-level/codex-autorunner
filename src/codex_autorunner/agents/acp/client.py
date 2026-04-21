@@ -1084,6 +1084,47 @@ class ACPClient:
             completion_source=completion_source,
         )
 
+    async def recover_prompt_completion(
+        self,
+        turn_id: str,
+        *,
+        final_output: str,
+        recovery_source: str = "session_store",
+    ) -> bool:
+        state = self._prompts.get(turn_id)
+        if state is None or state.closed:
+            return False
+        terminal_event = normalize_notification(
+            {
+                "method": "prompt/completed",
+                "params": {
+                    "sessionId": state.session_id,
+                    "turnId": state.turn_id,
+                    "status": "completed",
+                    "finalOutput": final_output,
+                    "recoveredFrom": recovery_source,
+                },
+            }
+        )
+        if not isinstance(terminal_event, ACPTurnTerminalEvent):
+            raise ACPProtocolError(
+                "Recovered ACP prompt completion did not normalize terminally"
+            )
+        await self._record_prompt_terminal_event(
+            state,
+            terminal_event,
+            completion_source=recovery_source,
+        )
+        self._log_trace_event(
+            "acp.prompt.recovered",
+            session_id=state.session_id,
+            turn_id=state.turn_id,
+            completion_source=recovery_source,
+            recovered_output_chars=len(final_output),
+            **self._prompt_trace_fields(state),
+        )
+        return True
+
     async def _start_prompt_official(
         self,
         session_id: str,

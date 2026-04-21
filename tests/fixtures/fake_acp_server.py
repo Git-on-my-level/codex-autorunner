@@ -6,6 +6,7 @@ import os
 import sys
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 
@@ -39,6 +40,7 @@ class FakeACPServer:
         self._permission_waiters: dict[str, threading.Event] = {}
         self._permission_results: dict[str, dict[str, Any]] = {}
         self._last_official_prompt_params: dict[str, Any] | None = None
+        self._official_prompt_counts: dict[str, int] = {}
 
     def send(self, payload: dict[str, Any]) -> None:
         _write_line(self._lock, payload)
@@ -48,6 +50,76 @@ class FakeACPServer:
 
     def _send_error(self, request_id: Any, code: int, message: str) -> None:
         self.send({"id": request_id, "error": {"code": code, "message": message}})
+
+    def _session_store_path(self, session_id: str) -> Path | None:
+        hermes_home = str(os.environ.get("HERMES_HOME") or "").strip()
+        if not hermes_home:
+            return None
+        root = Path(hermes_home).expanduser() / "sessions"
+        root.mkdir(parents=True, exist_ok=True)
+        return root / f"session_{session_id}.json"
+
+    def _read_session_store(self, session_id: str) -> dict[str, Any]:
+        session_file = self._session_store_path(session_id)
+        if session_file is None or not session_file.exists():
+            return {
+                "session_id": session_id,
+                "model": "fake-hermes",
+                "base_url": "fixture",
+                "platform": "fixture",
+                "session_start": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "last_updated": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "system_prompt": "",
+                "tools": [],
+                "message_count": 0,
+                "messages": [],
+            }
+        try:
+            payload = json.loads(session_file.read_text())
+        except (OSError, ValueError, TypeError):
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        payload.setdefault("session_id", session_id)
+        payload.setdefault("messages", [])
+        return payload
+
+    def _write_session_store(
+        self,
+        session_id: str,
+        *,
+        messages: list[dict[str, Any]],
+    ) -> None:
+        session_file = self._session_store_path(session_id)
+        if session_file is None:
+            return
+        payload = self._read_session_store(session_id)
+        payload["messages"] = list(messages)
+        payload["message_count"] = len(messages)
+        payload["last_updated"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        payload.setdefault("session_start", time.strftime("%Y-%m-%dT%H:%M:%S"))
+        payload.setdefault("model", "fake-hermes")
+        payload.setdefault("base_url", "fixture")
+        payload.setdefault("platform", "fixture")
+        payload.setdefault("system_prompt", "")
+        payload.setdefault("tools", [])
+        session_file.write_text(json.dumps(payload))
+
+    def _append_session_exchange(
+        self,
+        session_id: str,
+        *,
+        prompt: str,
+        assistant_text: str,
+    ) -> None:
+        payload = self._read_session_store(session_id)
+        messages = payload.get("messages")
+        if not isinstance(messages, list):
+            messages = []
+        messages = list(messages)
+        messages.append({"role": "user", "content": prompt})
+        messages.append({"role": "assistant", "content": assistant_text})
+        self._write_session_store(session_id, messages=messages)
 
     def _stream_prompt(self, *, session_id: str, turn_id: str, prompt: str) -> None:
         self.send(
@@ -394,6 +466,23 @@ class FakeACPServer:
                 time.sleep(0.05)
         if self._scenario == "official_prompt_hang":
             return
+        if self._scenario == "official_second_prompt_hang_with_persisted_completion":
+            prompt_count = self._official_prompt_counts.get(session_id, 0) + 1
+            self._official_prompt_counts[session_id] = prompt_count
+            assistant_text = f"fixture reply {prompt_count}"
+            self._append_session_exchange(
+                session_id,
+                prompt=prompt,
+                assistant_text=assistant_text,
+            )
+            if prompt_count >= 2:
+                return
+            cancel_event.clear()
+            self._send_result(
+                request_id,
+                {"stopReason": "end_turn", "userMessageId": turn_id},
+            )
+            return
         if self._scenario == "official_cancelled_before_return":
             self.send(
                 {
@@ -593,6 +682,7 @@ class FakeACPServer:
                 "cwd": params.get("cwd"),
             }
             self._sessions[session_id] = session
+            self._write_session_store(session_id, messages=[])
             self._send_result(request_id, {"session": session})
             return
         if method == "session/load":
@@ -659,6 +749,7 @@ class FakeACPServer:
             }
             self._sessions[session_id] = session
             self._session_cancel_events[session_id] = threading.Event()
+            self._write_session_store(session_id, messages=[])
             self._send_result(request_id, session)
             return
         if method == "session/prompt":

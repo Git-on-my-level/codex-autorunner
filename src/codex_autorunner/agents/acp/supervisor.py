@@ -172,6 +172,21 @@ class ACPSubprocessSupervisor:
         client = await self.get_client(workspace_root)
         return await client.cancel_prompt(session_id, turn_id)
 
+    async def recover_prompt_completion(
+        self,
+        workspace_root: Path,
+        turn_id: str,
+        *,
+        final_output: str,
+        recovery_source: str = "session_store",
+    ) -> bool:
+        client = await self.get_client(workspace_root)
+        return await client.recover_prompt_completion(
+            turn_id,
+            final_output=final_output,
+            recovery_source=recovery_source,
+        )
+
     async def call_optional(
         self,
         workspace_root: Path,

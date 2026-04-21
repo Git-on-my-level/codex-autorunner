@@ -888,6 +888,7 @@ class DiscordBotService:
         self._discord_reusable_progress_messages: dict[str, Any] = {}
         self._background_tasks: set[asyncio.Task[Any]] = set()
         self._background_shutdown_wait_tasks: set[asyncio.Task[Any]] = set()
+        self._background_shutdown_in_progress = False
         self._typing_sessions: dict[str, int] = {}
         self._typing_tasks: dict[str, asyncio.Task[Any]] = {}
         self._typing_lock: Optional[asyncio.Lock] = None
