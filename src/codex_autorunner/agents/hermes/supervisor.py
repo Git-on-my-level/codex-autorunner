@@ -40,6 +40,50 @@ HERMES_ACP_COMMAND = "acp"
 HERMES_APPROVAL_TIMEOUT_SECONDS = 300.0
 
 
+def _prepend_path_entries(entries: Sequence[str], path: str) -> str:
+    merged: list[str] = []
+    for value in entries:
+        if value and value not in merged:
+            merged.append(value)
+    for value in path.split(os.pathsep):
+        if value and value not in merged:
+            merged.append(value)
+    return os.pathsep.join(merged)
+
+
+def _hermes_launch_path_entries(command: Sequence[str]) -> list[str]:
+    if not command:
+        return []
+    binary = str(command[0] or "").strip()
+    if not binary:
+        return []
+    resolved = resolve_executable(binary)
+    candidate: Optional[Path] = Path(resolved) if resolved else None
+    if candidate is None:
+        raw_candidate = Path(binary).expanduser()
+        if raw_candidate.is_absolute() and raw_candidate.exists():
+            candidate = raw_candidate
+    if candidate is None or not candidate.exists():
+        return []
+    return [str(candidate.parent)]
+
+
+def _build_hermes_base_env(
+    command: Sequence[str],
+    *,
+    base_env: Optional[Mapping[str, str]] = None,
+) -> dict[str, str]:
+    extra_paths = _hermes_launch_path_entries(command)
+    if not base_env and not extra_paths:
+        return {}
+    env = os.environ.copy()
+    if base_env:
+        env.update({str(key): str(value) for key, value in base_env.items()})
+    if extra_paths:
+        env["PATH"] = _prepend_path_entries(extra_paths, env.get("PATH", ""))
+    return env
+
+
 def _extract_session_summary(payload: Mapping[str, Any]) -> Optional[str]:
     for key in ("summary", "subtitle", "description"):
         value = _normalize_optional_text(payload.get(key))
@@ -105,7 +149,10 @@ class HermesSupervisor:
             raise ValueError("Hermes command must not be empty")
         self._logger = logger or logging.getLogger(__name__)
         self._command = tuple(str(part) for part in command)
-        self._base_env = dict(base_env or {})
+        self._base_env = _build_hermes_base_env(
+            self._command,
+            base_env=base_env,
+        )
         self._approval_handler = approval_handler
         self._default_approval_decision = _normalize_approval_decision(
             default_approval_decision,

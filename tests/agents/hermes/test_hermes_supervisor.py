@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -59,6 +60,18 @@ class _HermesCustomAliasConfig:
         if agent_id == "hermes-special":
             return "/opt/hermes/special-launcher"
         raise AssertionError(f"unexpected agent_id: {agent_id}")
+
+
+class _HermesProfileBinaryConfig:
+    def __init__(self, profile_binary: str) -> None:
+        self._profile_binary = profile_binary
+
+    def agent_binary(self, agent_id: str, *, profile: str | None = None) -> str:
+        if agent_id == "hermes" and profile == "m4-pma":
+            return self._profile_binary
+        if agent_id == "hermes":
+            return "hermes"
+        raise AssertionError(f"unexpected agent_id={agent_id!r} profile={profile!r}")
 
 
 async def _collect_events(
@@ -343,6 +356,34 @@ def test_build_hermes_supervisor_preserves_custom_alias_binary(
         "/opt/hermes/special-launcher",
         "acp",
     ]
+
+
+def test_build_hermes_supervisor_prepends_profile_binary_dir_to_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    wrapper = bin_dir / "hermes-m4-pma"
+    wrapper.write_text('#!/bin/sh\nexec hermes -p hermes-m4-pma "$@"\n')
+    wrapper.chmod(0o755)
+    sibling = bin_dir / "hermes"
+    sibling.write_text("#!/bin/sh\nexit 0\n")
+    sibling.chmod(0o755)
+
+    monkeypatch.setenv("PATH", "/usr/bin")
+
+    supervisor = build_hermes_supervisor_from_config(
+        _HermesProfileBinaryConfig(str(wrapper)),
+        agent_id="hermes",
+        profile="m4-pma",
+    )
+
+    assert supervisor is not None
+    path_value = supervisor._base_env["PATH"]
+    entries = [entry for entry in path_value.split(os.pathsep) if entry]
+    assert str(bin_dir) in entries
+    assert entries.index(str(bin_dir)) < entries.index("/usr/bin")
 
 
 @pytest.mark.slow
