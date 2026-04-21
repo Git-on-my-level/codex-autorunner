@@ -7,7 +7,7 @@ import os
 import subprocess
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from os.path import basename
 from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable, Mapping, Optional, Sequence
@@ -1036,7 +1036,10 @@ def _parse_session_timestamp(value: Any) -> Optional[float]:
         return None
     try:
         parsed = normalized.replace("Z", "+00:00")
-        return datetime.fromisoformat(parsed).timestamp()
+        dt = datetime.fromisoformat(parsed)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
     except (TypeError, ValueError):
         return None
 
