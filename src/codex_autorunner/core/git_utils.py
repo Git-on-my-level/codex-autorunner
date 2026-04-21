@@ -96,14 +96,34 @@ def git_linked_worktree_base_root(repo_root: Path) -> Optional[Path]:
     return common_git_dir.parent.resolve()
 
 
+def _resolved_git_directory_from_gitfile(repo_root: Path) -> Optional[Path]:
+    """Resolve the git directory when ``.git`` is a gitfile (not a directory)."""
+    git_path = repo_root.resolve() / ".git"
+    if not git_path.exists() or git_path.is_dir():
+        return None
+    try:
+        raw = git_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not raw.lower().startswith("gitdir:"):
+        return None
+    git_dir = Path(raw.split(":", 1)[1].strip())
+    if not git_dir.is_absolute():
+        git_dir = (repo_root.resolve() / git_dir).resolve()
+    return git_dir.resolve()
+
+
 def git_mutation_lock_path(repo_root: Path) -> Path:
     git_path = repo_root.resolve() / ".git"
     if git_path.is_dir():
         return git_path / "codex-autorunner-git-mutation.lock"
     common_git_dir = git_linked_worktree_common_dir(repo_root)
-    if common_git_dir is None:
-        return git_path / "codex-autorunner-git-mutation.lock"
-    return common_git_dir / "codex-autorunner-git-mutation.lock"
+    if common_git_dir is not None:
+        return common_git_dir / "codex-autorunner-git-mutation.lock"
+    resolved_git_dir = _resolved_git_directory_from_gitfile(repo_root)
+    if resolved_git_dir is not None:
+        return resolved_git_dir / "codex-autorunner-git-mutation.lock"
+    return git_path / "codex-autorunner-git-mutation.lock"
 
 
 @contextmanager
