@@ -592,3 +592,120 @@ def test_side_processes_do_not_import_polling_owners() -> None:
         "Side-process modules must not import hub-owned polling workers/services:\n"
         + "\n".join(violations)
     )
+
+
+# ---------------------------------------------------------------------------
+# Config parser / destination boundary tests (TICKET-020)
+# ---------------------------------------------------------------------------
+
+_CONFIG_PARSER_MODULES = (
+    "config_parsers",
+    "config_types",
+    "config_contract",
+    "config_layering",
+    "config_validation",
+)
+
+
+def _file_imports_module(path: Path, module_fragment: str) -> list[str]:
+    try:
+        source = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    imports = extract_imports(source)
+    return [
+        imp
+        for imp in imports
+        if module_fragment in imp and imp.startswith("codex_autorunner.")
+    ]
+
+
+@pytest.mark.parametrize("module_name", _CONFIG_PARSER_MODULES)
+def test_config_parser_modules_do_not_import_destinations(module_name: str) -> None:
+    path = SRC_ROOT / "core" / f"{module_name}.py"
+    if not path.exists():
+        pytest.skip(f"{path} not found")
+    hits = _file_imports_module(path, "destinations")
+    assert (
+        not hits
+    ), f"{module_name}.py should not import from destinations module, found: {hits}"
+
+
+def test_destinations_does_not_import_config_parsers() -> None:
+    path = SRC_ROOT / "core" / "destinations.py"
+    if not path.exists():
+        pytest.skip(f"{path} not found")
+    hits = _file_imports_module(path, "config_parsers")
+    assert (
+        not hits
+    ), f"destinations.py should not import from config_parsers, found: {hits}"
+
+
+def test_destinations_does_not_import_config_types() -> None:
+    path = SRC_ROOT / "core" / "destinations.py"
+    if not path.exists():
+        pytest.skip(f"{path} not found")
+    hits = _file_imports_module(path, "config_types")
+    assert (
+        not hits
+    ), f"destinations.py should not import from config_types, found: {hits}"
+
+
+def test_config_parsers_importable_without_destinations_in_sys_modules(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import importlib
+    import sys
+
+    to_remove = [
+        name
+        for name in sys.modules
+        if name == "codex_autorunner.core.destinations"
+        or name.startswith("codex_autorunner.core.destinations.")
+    ]
+    saved = {name: sys.modules.pop(name) for name in to_remove}
+    try:
+        importlib.invalidate_caches()
+        import codex_autorunner.core.config_parsers  # noqa: F401
+
+        leaked = [
+            name
+            for name in sys.modules
+            if name == "codex_autorunner.core.destinations"
+            or name.startswith("codex_autorunner.core.destinations.")
+        ]
+        assert (
+            not leaked
+        ), f"config_parsers transitively imported destinations modules: {leaked}"
+    finally:
+        sys.modules.update(saved)
+
+
+def test_destinations_importable_without_config_parsers_in_sys_modules(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import importlib
+    import sys
+
+    to_remove = [
+        name
+        for name in sys.modules
+        if name == "codex_autorunner.core.config_parsers"
+        or name.startswith("codex_autorunner.core.config_parsers.")
+    ]
+    saved = {name: sys.modules.pop(name) for name in to_remove}
+    try:
+        importlib.invalidate_caches()
+        import codex_autorunner.core.destinations  # noqa: F401
+
+        leaked = [
+            name
+            for name in sys.modules
+            if name == "codex_autorunner.core.config_parsers"
+            or name.startswith("codex_autorunner.core.config_parsers.")
+        ]
+        assert (
+            not leaked
+        ), f"destinations transitively imported config_parsers modules: {leaked}"
+    finally:
+        sys.modules.update(saved)

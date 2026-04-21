@@ -33,6 +33,7 @@ from ..ports.run_event import (
     OutputDelta,
     RunEvent,
     RunNotice,
+    Started,
     TokenUsage,
     ToolCall,
     ToolResult,
@@ -85,13 +86,135 @@ from .runtime_payload_shapes import (
     OpenCodeToolPartShape,
     TokenUsageShape,
 )
-from .runtime_threads import RuntimeThreadOutcome
+from .runtime_threads import RUNTIME_THREAD_TIMEOUT_ERROR, RuntimeThreadOutcome
 from .stream_text_merge import merge_assistant_stream_text
 
 _APPROVAL_METHODS = {
     "item/commandExecution/requestApproval",
     "item/fileChange/requestApproval",
 }
+
+DIRECT_RUN_EVENT_TYPES = (
+    OutputDelta,
+    ToolCall,
+    ApprovalRequested,
+    RunNotice,
+    TokenUsage,
+    Completed,
+    Failed,
+    Started,
+)
+
+
+def raw_event_message(raw_event: Any) -> dict[str, Any]:
+    if not isinstance(raw_event, dict):
+        return {}
+    message = raw_event.get("message")
+    if isinstance(message, dict):
+        return message
+    return raw_event
+
+
+def raw_event_method(raw_event: Any) -> str:
+    message = raw_event_message(raw_event)
+    return str(message.get("method") or "").strip()
+
+
+def raw_event_session_update(raw_event: Any) -> dict[str, Any]:
+    message = raw_event_message(raw_event)
+    params = message.get("params")
+    if not isinstance(params, dict):
+        return {}
+    update = params.get("update")
+    if isinstance(update, dict):
+        return update
+    return {}
+
+
+def raw_event_content_summary(raw_event: Any) -> dict[str, Any]:
+    update = raw_event_session_update(raw_event)
+    content = update.get("content")
+    part_types: list[str] = []
+    if isinstance(content, list):
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            item_type = str(item.get("type") or "").strip()
+            if item_type:
+                part_types.append(item_type)
+    return {
+        "session_update_kind": str(
+            update.get("sessionUpdate") or update.get("session_update") or ""
+        ).strip(),
+        "content_kind": type(content).__name__ if content is not None else "missing",
+        "content_part_count": len(content) if isinstance(content, list) else None,
+        "content_part_types": tuple(part_types),
+    }
+
+
+def note_run_event_state(
+    event_state: RuntimeThreadRunEventState,
+    run_event: Any,
+) -> None:
+    event_state.note_runtime_progress(
+        type(run_event).__name__,
+        timestamp=now_iso(),
+    )
+    if isinstance(run_event, OutputDelta):
+        if run_event.delta_type == RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM:
+            event_state.note_stream_text(str(run_event.content or ""))
+            return
+        if run_event.delta_type == RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE:
+            event_state.note_message_text(str(run_event.content or ""))
+            return
+        return
+    if isinstance(run_event, TokenUsage) and isinstance(run_event.usage, dict):
+        event_state.token_usage = dict(run_event.usage)
+        return
+    if isinstance(run_event, Completed):
+        event_state.completed_seen = True
+        if isinstance(run_event.final_message, str):
+            event_state.note_message_text(run_event.final_message)
+        return
+    if isinstance(run_event, Failed):
+        error_message = str(run_event.error_message or "").strip()
+        if error_message:
+            event_state.last_error_message = error_message
+
+
+async def normalize_runtime_progress_event(
+    raw_event: Any,
+    event_state: RuntimeThreadRunEventState,
+) -> list[Any]:
+    if isinstance(raw_event, DIRECT_RUN_EVENT_TYPES):
+        note_run_event_state(event_state, raw_event)
+        return [raw_event]
+    return await normalize_runtime_thread_raw_event(raw_event, event_state)
+
+
+def runtime_trace_fields(
+    event_state: RuntimeThreadRunEventState,
+) -> dict[str, Any]:
+    return {
+        "last_runtime_method": event_state.last_runtime_method,
+        "last_progress_at": event_state.last_progress_at,
+    }
+
+
+def completion_source_from_outcome(
+    outcome: RuntimeThreadOutcome,
+    *,
+    recovered_after_completion: bool,
+) -> str:
+    if recovered_after_completion and outcome.completion_source == "prompt_return":
+        return "post_completion_recovery"
+    if outcome.status == "interrupted":
+        return "interrupt"
+    if str(outcome.error or "").strip() == RUNTIME_THREAD_TIMEOUT_ERROR:
+        return "timeout"
+    if outcome.completion_source:
+        return outcome.completion_source
+    return "prompt_return"
 
 
 def merge_runtime_thread_raw_events(
@@ -1289,6 +1412,15 @@ __all__ = [
     "normalize_runtime_thread_raw_event",
     "recover_post_completion_outcome",
     "terminal_run_event_from_outcome",
+    "DIRECT_RUN_EVENT_TYPES",
+    "raw_event_message",
+    "raw_event_method",
+    "raw_event_session_update",
+    "raw_event_content_summary",
+    "note_run_event_state",
+    "normalize_runtime_progress_event",
+    "runtime_trace_fields",
+    "completion_source_from_outcome",
     "_extract_output_delta",
     "_output_delta_type_for_method",
     "_normalize_tool_name",

@@ -17,6 +17,8 @@ import httpx
 import typer
 
 from ...agents.registry import get_registered_agents
+from ...core.config import load_hub_config
+from ...core.config_contract import ConfigError
 from ...core.text_utils import _truncate_text
 
 logger = logging.getLogger(__name__)
@@ -272,6 +274,20 @@ def normalize_notify_on(value: Optional[str]) -> Optional[str]:
     if text != "terminal":
         raise typer.BadParameter("notify-on must be 'terminal'")
     return text
+
+
+def resolve_hub_path(path: Optional[Path]) -> Path:
+    start = path or Path.cwd()
+    try:
+        return load_hub_config(start).root
+    except (OSError, ValueError, ConfigError, AttributeError):
+        candidate = start.resolve()
+        if candidate.is_file():
+            parent = candidate.parent
+            if parent.name == ".codex-autorunner":
+                return parent.parent.resolve()
+            return parent.resolve()
+        return candidate
 
 
 @dataclass(frozen=True)

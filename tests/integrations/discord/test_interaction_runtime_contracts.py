@@ -4,6 +4,7 @@ import ast
 import subprocess
 import sys
 from pathlib import Path
+from typing import Optional
 
 DISCORD_DIR = (
     Path(__file__).resolve().parents[3]
@@ -45,6 +46,9 @@ HANDLER_FACING_RUNTIME_MODULES = {
         if path.name != "__init__.py"
     },
 }
+SCHEDULING_FUNCTIONS = {
+    "schedule_ingressed_interaction",
+}
 HANDLER_FACING_PRIVATE_RUNTIME_METHODS = {
     "_respond_ephemeral",
     "_respond_public",
@@ -65,35 +69,64 @@ HANDLER_FACING_PRIVATE_RUNTIME_METHODS = {
 }
 
 
-def _attribute_call_users(attribute_names: set[str]) -> dict[str, set[str]]:
+def _attribute_call_users(
+    attribute_names: set[str],
+    *,
+    exclude_functions: Optional[set[str]] = None,
+) -> dict[str, set[str]]:
     repo_root = DISCORD_DIR.parents[3]
     users: dict[str, set[str]] = {}
+    excluded = exclude_functions or set()
 
     for path in sorted(DISCORD_DIR.rglob("*.py")):
         relative = path.relative_to(repo_root).as_posix()
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            func = node.func
-            if isinstance(func, ast.Attribute) and func.attr in attribute_names:
-                users.setdefault(relative, set()).add(func.attr)
-                continue
-            if not (
-                isinstance(func, ast.Name)
-                and func.id == "getattr"
-                and len(node.args) >= 2
-            ):
-                continue
-            attr_name = node.args[1]
-            if (
-                isinstance(attr_name, ast.Constant)
-                and isinstance(attr_name.value, str)
-                and attr_name.value in attribute_names
-            ):
-                users.setdefault(relative, set()).add(attr_name.value)
+        _collect_attribute_calls(
+            tree, attribute_names, users, relative, excluded=excluded
+        )
 
     return users
+
+
+def _collect_attribute_calls(
+    node: ast.AST,
+    attribute_names: set[str],
+    users: dict[str, set[str]],
+    relative: str,
+    *,
+    excluded: set[str],
+) -> None:
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if child.name in excluded:
+                continue
+            _collect_attribute_calls(
+                child,
+                attribute_names,
+                users,
+                relative,
+                excluded=excluded,
+            )
+            continue
+        if isinstance(child, ast.Call):
+            func = child.func
+            if isinstance(func, ast.Attribute) and func.attr in attribute_names:
+                users.setdefault(relative, set()).add(func.attr)
+            elif (
+                isinstance(func, ast.Name)
+                and func.id == "getattr"
+                and len(child.args) >= 2
+            ):
+                attr_name = child.args[1]
+                if (
+                    isinstance(attr_name, ast.Constant)
+                    and isinstance(attr_name.value, str)
+                    and attr_name.value in attribute_names
+                ):
+                    users.setdefault(relative, set()).add(attr_name.value)
+        _collect_attribute_calls(
+            child, attribute_names, users, relative, excluded=excluded
+        )
 
 
 def _raw_response_users() -> dict[str, set[str]]:
@@ -178,7 +211,10 @@ def test_contract_handler_modules_do_not_bypass_interaction_runtime_boundary() -
 
 
 def test_contract_handler_facing_modules_do_not_call_private_runtime_methods() -> None:
-    users = _attribute_call_users(HANDLER_FACING_PRIVATE_RUNTIME_METHODS)
+    users = _attribute_call_users(
+        HANDLER_FACING_PRIVATE_RUNTIME_METHODS,
+        exclude_functions=SCHEDULING_FUNCTIONS,
+    )
     forbidden = {
         module: methods
         for module, methods in users.items()
@@ -240,6 +276,10 @@ EXTRACTED_MODULE_SEAMS: dict[str, set[str]] = {
         "handle_component_interaction",
         "handle_modal_submit_interaction",
         "handle_autocomplete_interaction",
+    },
+    "src/codex_autorunner/integrations/discord/interaction_scheduler.py": {
+        "schedule_ingressed_interaction",
+        "ScheduleResult",
     },
     "src/codex_autorunner/integrations/discord/interaction_slash_builders.py": {
         "ROOT_COMMANDS",

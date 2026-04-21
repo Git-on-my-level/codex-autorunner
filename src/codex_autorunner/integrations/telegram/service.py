@@ -141,13 +141,13 @@ from .runtime import TelegramWorkspaceAndTurnMixin
 from .state import (
     OutboxRecord,
     TelegramStateStore,
-    TopicRouter,
     parse_topic_key,
     topic_key,
 )
 from .ticket_flow_bridge import (
     TelegramTicketFlowBridge,
 )
+from .topic_router import TopicRouter
 from .transport import TelegramMessageTransport
 from .types import (
     PendingApproval,

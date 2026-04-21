@@ -83,8 +83,8 @@ from .commands.utils import (
     resolve_hub_config_path_for_cli as _resolve_hub_config_path_for_cli,
 )
 from .commands.worktree import register_worktree_commands
-from .pma_cli import _resolve_hub_path as _resolve_pma_hub_path
 from .pma_cli import pma_app as pma_cli_app
+from .pma_control_plane import resolve_hub_path as _resolve_pma_hub_path
 
 HubSupervisor = _HubSupervisor
 

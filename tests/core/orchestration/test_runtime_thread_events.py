@@ -4,8 +4,16 @@ from tests.acp_lifecycle_corpus import load_acp_lifecycle_corpus
 
 from codex_autorunner.core.orchestration.runtime_thread_events import (
     RuntimeThreadRunEventState,
+    completion_source_from_outcome,
+    normalize_runtime_progress_event,
     normalize_runtime_thread_raw_event,
+    note_run_event_state,
+    raw_event_content_summary,
+    raw_event_message,
+    raw_event_method,
+    raw_event_session_update,
     recover_post_completion_outcome,
+    runtime_trace_fields,
     terminal_run_event_from_outcome,
 )
 from codex_autorunner.core.orchestration.runtime_threads import RuntimeThreadOutcome
@@ -2317,3 +2325,253 @@ class TestRecoveryBehavior:
             assert (
                 state.completed_seen is expected
             ), f"method={method} status={status} expected completed_seen={expected}"
+
+
+class TestRawEventAccessors:
+    def test_raw_event_message_returns_nested_message(self) -> None:
+        raw = {"message": {"method": "session/update", "params": {"a": 1}}}
+        assert raw_event_message(raw) == {
+            "method": "session/update",
+            "params": {"a": 1},
+        }
+
+    def test_raw_event_message_returns_top_level_when_no_message_key(self) -> None:
+        raw = {"method": "turn/completed", "params": {}}
+        assert raw_event_message(raw) == raw
+
+    def test_raw_event_message_returns_empty_for_non_dict(self) -> None:
+        assert raw_event_message("not a dict") == {}
+        assert raw_event_message(None) == {}
+
+    def test_raw_event_message_returns_top_level_when_message_is_not_dict(self) -> None:
+        raw = {"message": "string", "method": "x"}
+        assert raw_event_message(raw) == raw
+
+    def test_raw_event_method_extracts_from_nested_message(self) -> None:
+        raw = {"message": {"method": "session/update"}}
+        assert raw_event_method(raw) == "session/update"
+
+    def test_raw_event_method_returns_empty_for_missing(self) -> None:
+        assert raw_event_method({}) == ""
+        assert raw_event_method(None) == ""
+
+    def test_raw_event_session_update_extracts_update(self) -> None:
+        raw = {
+            "message": {
+                "method": "session/update",
+                "params": {"update": {"sessionUpdate": "agent_message_chunk"}},
+            }
+        }
+        assert raw_event_session_update(raw) == {"sessionUpdate": "agent_message_chunk"}
+
+    def test_raw_event_session_update_returns_empty_when_no_update(self) -> None:
+        raw = {"message": {"method": "session/update", "params": {}}}
+        assert raw_event_session_update(raw) == {}
+
+    def test_raw_event_content_summary_describes_session_update(self) -> None:
+        raw = {
+            "message": {
+                "method": "session/update",
+                "params": {
+                    "update": {
+                        "sessionUpdate": "agent_message_chunk",
+                        "content": [
+                            {"type": "text", "text": "hello"},
+                            {"type": "output_text", "text": "world"},
+                        ],
+                    }
+                },
+            }
+        }
+        summary = raw_event_content_summary(raw)
+        assert summary["session_update_kind"] == "agent_message_chunk"
+        assert summary["content_kind"] == "list"
+        assert summary["content_part_count"] == 2
+        assert summary["content_part_types"] == ("text", "output_text")
+
+    def test_raw_event_content_summary_handles_missing_content(self) -> None:
+        raw = {
+            "message": {
+                "method": "session/update",
+                "params": {"update": {"sessionUpdate": "agent_thought_chunk"}},
+            }
+        }
+        summary = raw_event_content_summary(raw)
+        assert summary["session_update_kind"] == "agent_thought_chunk"
+        assert summary["content_kind"] == "missing"
+        assert summary["content_part_count"] is None
+
+
+class TestNoteRunEventState:
+    def test_note_run_event_state_tracks_stream_text(self) -> None:
+        state = RuntimeThreadRunEventState()
+        note_run_event_state(
+            state,
+            OutputDelta(
+                timestamp="2026-01-01T00:00:00Z",
+                content="hello ",
+                delta_type="assistant_stream",
+            ),
+        )
+        assert state.assistant_stream_text == "hello "
+        assert state.last_progress_at is not None
+
+    def test_note_run_event_state_tracks_message_text(self) -> None:
+        state = RuntimeThreadRunEventState()
+        note_run_event_state(
+            state,
+            OutputDelta(
+                timestamp="2026-01-01T00:00:00Z",
+                content="final",
+                delta_type="assistant_message",
+            ),
+        )
+        assert state.assistant_message_text == "final"
+
+    def test_note_run_event_state_tracks_token_usage(self) -> None:
+        state = RuntimeThreadRunEventState()
+        note_run_event_state(
+            state, TokenUsage(timestamp="2026-01-01T00:00:00Z", usage={"total": 42})
+        )
+        assert state.token_usage == {"total": 42}
+
+    def test_note_run_event_state_marks_completed(self) -> None:
+        state = RuntimeThreadRunEventState()
+        note_run_event_state(
+            state,
+            Completed(timestamp="2026-01-01T00:00:00Z", final_message="done"),
+        )
+        assert state.completed_seen is True
+        assert state.assistant_message_text == "done"
+
+    def test_note_run_event_state_tracks_error(self) -> None:
+        state = RuntimeThreadRunEventState()
+        note_run_event_state(
+            state, Failed(timestamp="2026-01-01T00:00:00Z", error_message="boom")
+        )
+        assert state.last_error_message == "boom"
+
+
+async def test_normalize_runtime_progress_event_passes_through_typed_events() -> None:
+    state = RuntimeThreadRunEventState()
+    event = OutputDelta(
+        timestamp="2026-01-01T00:00:00Z",
+        content="hi",
+        delta_type="assistant_stream",
+    )
+    result = await normalize_runtime_progress_event(event, state)
+    assert result == [event]
+    assert state.assistant_stream_text == "hi"
+
+
+async def test_normalize_runtime_progress_event_normalizes_raw_events() -> None:
+    state = RuntimeThreadRunEventState()
+    raw = {"method": "token/usage", "params": {"usage": {"totalTokens": 10}}}
+    result = await normalize_runtime_progress_event(raw, state)
+    assert len(result) == 1
+    assert isinstance(result[0], TokenUsage)
+    assert result[0].usage == {"totalTokens": 10}
+
+
+class TestRuntimeTraceFields:
+    def test_returns_method_and_progress_at(self) -> None:
+        state = RuntimeThreadRunEventState(
+            last_runtime_method="session/update",
+            last_progress_at="2026-01-01T00:00:00Z",
+        )
+        fields = runtime_trace_fields(state)
+        assert fields == {
+            "last_runtime_method": "session/update",
+            "last_progress_at": "2026-01-01T00:00:00Z",
+        }
+
+    def test_returns_none_when_unset(self) -> None:
+        state = RuntimeThreadRunEventState()
+        fields = runtime_trace_fields(state)
+        assert fields["last_runtime_method"] is None
+        assert fields["last_progress_at"] is None
+
+
+class TestCompletionSourceFromOutcome:
+    def test_returns_post_completion_recovery(self) -> None:
+        outcome = RuntimeThreadOutcome(
+            status="ok",
+            assistant_text="done",
+            error=None,
+            backend_thread_id="t1",
+            backend_turn_id="turn-1",
+            completion_source="prompt_return",
+        )
+        assert (
+            completion_source_from_outcome(outcome, recovered_after_completion=True)
+            == "post_completion_recovery"
+        )
+
+    def test_returns_interrupt_for_interrupted_status(self) -> None:
+        outcome = RuntimeThreadOutcome(
+            status="interrupted",
+            assistant_text="",
+            error="Runtime thread interrupted",
+            backend_thread_id="t1",
+            backend_turn_id="turn-1",
+        )
+        assert (
+            completion_source_from_outcome(outcome, recovered_after_completion=False)
+            == "interrupt"
+        )
+
+    def test_returns_timeout_for_timeout_error(self) -> None:
+        outcome = RuntimeThreadOutcome(
+            status="error",
+            assistant_text="",
+            error="Runtime thread timed out",
+            backend_thread_id="t1",
+            backend_turn_id="turn-1",
+        )
+        assert (
+            completion_source_from_outcome(outcome, recovered_after_completion=False)
+            == "timeout"
+        )
+
+    def test_returns_completion_source_when_present(self) -> None:
+        outcome = RuntimeThreadOutcome(
+            status="ok",
+            assistant_text="done",
+            error=None,
+            backend_thread_id="t1",
+            backend_turn_id="turn-1",
+            completion_source="idle_completion",
+        )
+        assert (
+            completion_source_from_outcome(outcome, recovered_after_completion=False)
+            == "idle_completion"
+        )
+
+    def test_returns_prompt_return_as_fallback(self) -> None:
+        outcome = RuntimeThreadOutcome(
+            status="ok",
+            assistant_text="done",
+            error=None,
+            backend_thread_id="t1",
+            backend_turn_id="turn-1",
+        )
+        assert (
+            completion_source_from_outcome(outcome, recovered_after_completion=False)
+            == "prompt_return"
+        )
+
+    def test_does_not_return_recovery_when_completion_source_is_not_prompt_return(
+        self,
+    ) -> None:
+        outcome = RuntimeThreadOutcome(
+            status="ok",
+            assistant_text="done",
+            error=None,
+            backend_thread_id="t1",
+            backend_turn_id="turn-1",
+            completion_source="idle_completion",
+        )
+        assert (
+            completion_source_from_outcome(outcome, recovered_after_completion=True)
+            == "idle_completion"
+        )

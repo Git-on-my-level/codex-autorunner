@@ -1511,16 +1511,18 @@ async def test_interrupt_thread_uses_harness_and_marks_execution(
         )
     )
 
+    _recovery_logger = "codex_autorunner.core.orchestration.recovery_lifecycle"
+
     with caplog.at_level(
         logging.INFO,
-        logger="codex_autorunner.core.orchestration.service",
+        logger=_recovery_logger,
     ):
         interrupted = await service.interrupt_thread(thread.thread_target_id)
 
     payloads = [
         json.loads(record.message)
         for record in caplog.records
-        if record.name == "codex_autorunner.core.orchestration.service"
+        if record.name == _recovery_logger
     ]
 
     assert harness.interrupt_calls == [

@@ -27,6 +27,7 @@ from codex_autorunner.core.orchestration.runtime_threads import (
     RuntimeThreadOutcome,
 )
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
+from codex_autorunner.core.ports.run_event import RunNotice
 from codex_autorunner.core.pr_bindings import PrBindingStore
 from codex_autorunner.core.scm_polling_watches import ScmPollingWatchStore
 
@@ -2264,7 +2265,7 @@ async def test_finalize_managed_thread_execution_continues_when_timeline_persist
     async def _normalize(*args: Any, **kwargs: Any) -> list[Any]:
         _ = args, kwargs
         return [
-            managed_thread_turns_module.RunNotice(
+            RunNotice(
                 timestamp="2026-04-15T00:00:00Z",
                 kind="progress",
                 message="partial",
@@ -2292,7 +2293,7 @@ async def test_finalize_managed_thread_execution_continues_when_timeline_persist
     )
     monkeypatch.setattr(
         managed_thread_turns_module,
-        "_normalize_runtime_progress_event",
+        "normalize_runtime_progress_event",
         _normalize,
     )
     monkeypatch.setattr(
@@ -2383,7 +2384,7 @@ async def test_finalize_managed_thread_execution_batches_live_timeline_persisten
     async def _normalize(raw_event: Any, _state: Any) -> list[Any]:
         index = int(raw_event["index"])
         return [
-            managed_thread_turns_module.RunNotice(
+            RunNotice(
                 timestamp=f"2026-04-15T00:00:{index:02d}Z",
                 kind="progress",
                 message=f"partial-{index}",
@@ -2407,7 +2408,7 @@ async def test_finalize_managed_thread_execution_batches_live_timeline_persisten
     )
     monkeypatch.setattr(
         managed_thread_turns_module,
-        "_normalize_runtime_progress_event",
+        "normalize_runtime_progress_event",
         _normalize,
     )
     monkeypatch.setattr(
@@ -2506,7 +2507,7 @@ async def test_finalize_managed_thread_execution_flushes_live_timeline_on_delay_
     async def _normalize(raw_event: Any, _state: Any) -> list[Any]:
         index = int(raw_event["index"])
         return [
-            managed_thread_turns_module.RunNotice(
+            RunNotice(
                 timestamp=f"2026-04-15T00:00:{index:02d}Z",
                 kind="progress",
                 message=f"partial-{index}",
@@ -2530,7 +2531,7 @@ async def test_finalize_managed_thread_execution_flushes_live_timeline_on_delay_
     )
     monkeypatch.setattr(
         managed_thread_turns_module,
-        "_normalize_runtime_progress_event",
+        "normalize_runtime_progress_event",
         _normalize,
     )
     monkeypatch.setattr(

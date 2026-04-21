@@ -215,6 +215,79 @@ class WorktreeManager:
         )
         return self._ctx.snapshot_for_repo(repo_id)
 
+    def set_worktree_setup_commands(
+        self, repo_id: str, commands: List[str]
+    ) -> RepoSnapshot:
+        self._ctx.invalidate_cache()
+        manifest = load_manifest(self._hub_config.manifest_path, self._hub_config.root)
+        entry = manifest.get(repo_id)
+        if not entry:
+            raise ValueError(f"Repo not found: {repo_id}")
+        if entry.kind != "base":
+            raise ValueError(
+                "Worktree setup commands can only be configured on base repos"
+            )
+        normalized = [str(cmd).strip() for cmd in commands if str(cmd).strip()]
+        entry.worktree_setup_commands = normalized or None
+        save_manifest(self._hub_config.manifest_path, manifest, self._hub_config.root)
+        return self._ctx.snapshot_for_repo(repo_id)
+
+    def run_setup_commands_for_workspace(
+        self,
+        workspace_path: Path,
+        *,
+        repo_id_hint: Optional[str] = None,
+    ) -> int:
+        workspace_root = workspace_path.expanduser().resolve()
+        snapshots = self._ctx.list_repos(use_cache=False)
+        snapshots_by_id = {snapshot.id: snapshot for snapshot in snapshots}
+        target: Optional[RepoSnapshot] = None
+
+        for snapshot in snapshots:
+            try:
+                if snapshot.path.expanduser().resolve() == workspace_root:
+                    target = snapshot
+                    break
+            except OSError:
+                continue
+
+        if target is None:
+            hint = (repo_id_hint or "").strip()
+            if hint:
+                target = snapshots_by_id.get(hint)
+
+        if target is None:
+            return 0
+
+        try:
+            execution_root = target.path.expanduser().resolve()
+        except OSError:
+            return 0
+
+        base_snapshot: Optional[RepoSnapshot] = target
+        if target.kind == "worktree":
+            base_id = (target.worktree_of or "").strip()
+            if not base_id:
+                return 0
+            base_snapshot = snapshots_by_id.get(base_id)
+        if base_snapshot is None or base_snapshot.kind != "base":
+            return 0
+
+        commands = [
+            str(cmd).strip()
+            for cmd in (base_snapshot.worktree_setup_commands or [])
+            if str(cmd).strip()
+        ]
+        if not commands:
+            return 0
+
+        self._run_worktree_setup_commands(
+            execution_root,
+            commands,
+            base_repo_id=base_snapshot.id,
+        )
+        return len(commands)
+
     def _archive_worktree_snapshot(
         self,
         resolved: ResolvedWorktreeEntry,

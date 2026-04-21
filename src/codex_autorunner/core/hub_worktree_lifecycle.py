@@ -21,6 +21,8 @@ class WorktreeHubContext(Protocol):
 
     def snapshot_for_repo(self, repo_id: str) -> "RepoSnapshot": ...
 
+    def list_repos(self, *, use_cache: bool = True) -> list["RepoSnapshot"]: ...
+
     def stop_runner(
         self,
         *,

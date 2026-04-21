@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from typing import Any, Optional
 
 import pytest
-from tests.telegram_pma_routing_support import _NewtHandler
+from tests.telegram_pma_workspace_support import _NewtHandler
 
 from codex_autorunner.core.git_utils import GitError
 from codex_autorunner.integrations.telegram.adapter import TelegramMessage

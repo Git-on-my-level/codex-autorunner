@@ -87,10 +87,10 @@ class TestFetchAgentCapabilities:
 
 
 class TestPmaModelsCapabilityCheck:
-    @patch("codex_autorunner.surfaces.cli.pma_cli._fetch_agent_capabilities")
+    @patch("codex_autorunner.surfaces.cli.pma_cli.fetch_agent_capabilities")
     @patch("codex_autorunner.surfaces.cli.pma_cli.load_hub_config")
-    @patch("codex_autorunner.surfaces.cli.pma_cli._build_pma_url")
-    @patch("codex_autorunner.surfaces.cli.pma_cli._request_json")
+    @patch("codex_autorunner.surfaces.cli.pma_cli.build_pma_url")
+    @patch("codex_autorunner.surfaces.cli.pma_cli.request_json")
     def test_models_command_fails_for_agent_without_model_listing(
         self, mock_request, mock_url, mock_config, mock_caps
     ):
@@ -106,8 +106,10 @@ class TestPmaModelsCapabilityCheck:
 
 
 class TestPmaThreadSpawnCapabilityCheck:
-    @patch("codex_autorunner.surfaces.cli.pma_cli._fetch_agent_capabilities")
-    @patch("codex_autorunner.surfaces.cli.pma_cli.load_hub_config")
+    @patch(
+        "codex_autorunner.surfaces.cli.pma_thread_commands._fetch_agent_capabilities"
+    )
+    @patch("codex_autorunner.surfaces.cli.pma_thread_commands.load_hub_config")
     def test_thread_spawn_fails_for_agent_without_durable_threads(
         self, mock_config, mock_caps
     ):

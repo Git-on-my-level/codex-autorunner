@@ -2,7 +2,7 @@
 
 import pytest
 
-from tests.pma_routes_support import (
+from tests.pma_support.files import (
     test_pma_context_snapshot,
     test_pma_context_snapshot_writes_via_to_thread,
     test_pma_docs_disabled,

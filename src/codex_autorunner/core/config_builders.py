@@ -1,23 +1,36 @@
-"""Typed builder functions for RepoConfig and HubConfig construction.
+"""Typed builder and loader functions for RepoConfig and HubConfig.
 
 These builders are the single ownership point for assembling validated,
 layered config dicts into the final typed config dataclasses.  They delegate
 section parsing to ``config_parsers`` and type definitions live in
 ``config_types``.
 
-The canonical load paths in ``core.config`` call these builders after
-validation, so the builders should never see invalid authored data.
+The public facade in ``core.config`` re-exports the load functions from
+this module; callers should import from ``core.config`` for the stable
+public API.
 """
 
+import os
 from pathlib import Path
 from typing import Any, Dict, Optional, cast
 
 from ..housekeeping import parse_housekeeping_config
+from ..manifest import ManifestError, load_manifest
 from .agent_config import parse_agents_config
-from .config_contract import ConfigError
-from .config_layering import DEFAULT_HUB_CONFIG, DEFAULT_REPO_CONFIG
-from .config_parsers import (  # noqa: I001
+from .config_contract import CONFIG_VERSION, ConfigError
+from .config_env import load_dotenv_for_root
+from .config_layering import (
+    CONFIG_FILENAME,
+    DEFAULT_HUB_CONFIG,
+    DEFAULT_REPO_CONFIG,
+    _load_yaml_dict,
+    derive_repo_config_data,
+    find_nearest_hub_config_path,
+    resolve_hub_config_data,
+)
+from .config_parsers import (
     _parse_app_server_config,
+    _parse_destination_config_section,
     _parse_notifications_config_section,
     _parse_opencode_config,
     _parse_pma_config,
@@ -33,17 +46,169 @@ from .config_parsers import (  # noqa: I001
     parse_flow_retention_config,
 )
 from .config_types import (
+    DestinationConfigSection,
     HubConfig,
     LogConfig,
     RepoConfig,
 )
+from .config_validation import _validate_hub_config, _validate_repo_config
+from .destinations import resolve_effective_repo_destination
+from .generated_hub_config import normalize_generated_hub_config
 from .path_utils import ConfigPathError, resolve_config_path
+from .utils import find_repo_root
+
+ACTIVE_HUB_ROOT_ENV = "CAR_HUB_ROOT"
 
 
 def _parse_agents_config(
     cfg: Dict[str, Any], defaults: Dict[str, Any]
 ) -> Dict[str, Any]:
     return parse_agents_config(cfg, defaults)
+
+
+def _resolve_hub_config_path(start: Path) -> Path:
+    config_path = find_nearest_hub_config_path(start)
+    if not config_path:
+        raise ConfigError(
+            f"Missing hub config file; expected to find {CONFIG_FILENAME} in {start} or parents "
+            "(pass --path on most commands, --hub-root on car render, or run 'car init' to initialize)"
+        )
+    return config_path
+
+
+def _resolve_repo_root(start: Path) -> Path:
+    search_dir = start.resolve() if start.is_dir() else start.resolve().parent
+    for current in [search_dir] + list(search_dir.parents):
+        if (current / ".codex-autorunner" / "state.sqlite3").exists():
+            return current
+        if (current / ".git").exists():
+            return current
+    return search_dir
+
+
+def load_hub_config_data(config_path: Path) -> Dict[str, Any]:
+    """Load, merge, and return a raw hub config dict for the given config path."""
+    load_dotenv_for_root(config_path.parent.parent.resolve())
+    data = normalize_generated_hub_config(config_path)
+    mode = data.get("mode")
+    if mode not in (None, "hub"):
+        raise ConfigError(f"Invalid mode '{mode}'; expected 'hub'")
+    root = config_path.parent.parent.resolve()
+    return resolve_hub_config_data(root, data)
+
+
+def ensure_hub_config_at(start: Path) -> tuple[Path, bool]:
+    """
+    Ensure a hub config exists at or above the given start path.
+
+    Returns a tuple of (config_path, did_initialize) where:
+    - config_path is the path to the hub config file
+    - did_initialize is True if we created a new config, False if it already existed
+    """
+    existing = find_nearest_hub_config_path(start)
+    if existing:
+        return (existing, False)
+
+    try:
+        target_root = find_repo_root(start)
+    except Exception:
+        target_root = start
+
+    from ..bootstrap import seed_hub_files
+
+    seed_hub_files(target_root)
+    new_path = find_nearest_hub_config_path(target_root)
+    if not new_path:
+        raise ConfigError(f"Failed to initialize hub config at {target_root}")
+    return (new_path, True)
+
+
+def load_hub_config(start: Path) -> HubConfig:
+    """Load the nearest hub config walking upward from the provided path."""
+    config_path = _resolve_hub_config_path(start)
+    merged = load_hub_config_data(config_path)
+    _validate_hub_config(merged, root=config_path.parent.parent.resolve())
+    return build_hub_config(config_path, merged)
+
+
+def _resolve_hub_path_for_repo(repo_root: Path, hub_path: Optional[Path]) -> Path:
+    if hub_path:
+        candidate = hub_path
+        if candidate.is_dir():
+            candidate = candidate / CONFIG_FILENAME
+        if not candidate.exists():
+            raise ConfigError(f"Hub config not found at {candidate}")
+        data = _load_yaml_dict(candidate)
+        mode = data.get("mode")
+        if mode not in (None, "hub"):
+            raise ConfigError(f"Invalid hub config mode '{mode}'; expected 'hub'")
+        return candidate
+    local_candidate = find_nearest_hub_config_path(repo_root)
+    if local_candidate:
+        return local_candidate
+    env_hub_root = os.environ.get(ACTIVE_HUB_ROOT_ENV, "").strip()
+    if env_hub_root:
+        candidate = Path(env_hub_root).expanduser()
+        if candidate.is_dir():
+            candidate = candidate / CONFIG_FILENAME
+        if candidate.exists():
+            data = _load_yaml_dict(candidate)
+            mode = data.get("mode")
+            if mode not in (None, "hub"):
+                raise ConfigError(
+                    f"Invalid hub config mode '{mode}' from {ACTIVE_HUB_ROOT_ENV}; expected 'hub'"
+                )
+            return candidate
+    return _resolve_hub_config_path(repo_root)
+
+
+def _resolve_repo_effective_destination(
+    hub: HubConfig, repo_root: Path
+) -> DestinationConfigSection:
+    try:
+        manifest = load_manifest(hub.manifest_path, hub.root)
+    except ManifestError as exc:
+        raise ConfigError(
+            "Failed to resolve effective destination from hub manifest: "
+            f"{hub.manifest_path}: {exc}"
+        ) from exc
+    except Exception as exc:
+        raise ConfigError(
+            "Failed to resolve effective destination from hub manifest: "
+            f"{hub.manifest_path}: {exc}"
+        ) from exc
+    repo = manifest.get_by_path(hub.root, repo_root)
+    if repo is None:
+        return _parse_destination_config_section({"kind": "local"})
+    repos_by_id = {entry.id: entry for entry in manifest.repos}
+    resolution = resolve_effective_repo_destination(repo, repos_by_id)
+    return _parse_destination_config_section(resolution.to_dict())
+
+
+def derive_repo_config(
+    hub: HubConfig, repo_root: Path, *, load_env: bool = True
+) -> RepoConfig:
+    if load_env:
+        load_dotenv_for_root(repo_root)
+    merged = derive_repo_config_data(hub.raw, repo_root)
+    merged["mode"] = "repo"
+    merged["version"] = CONFIG_VERSION
+    _validate_repo_config(merged, root=repo_root)
+    repo_config = build_repo_config(repo_root / CONFIG_FILENAME, merged)
+    repo_config.effective_destination = _resolve_repo_effective_destination(
+        hub, repo_root
+    )
+    return repo_config
+
+
+def load_repo_config(start: Path, hub_path: Optional[Path] = None) -> RepoConfig:
+    """Load a repo config by deriving it from the nearest hub config."""
+    repo_root = _resolve_repo_root(start)
+    hub_config_path = _resolve_hub_path_for_repo(repo_root, hub_path)
+    hub_config = load_hub_config_data(hub_config_path)
+    _validate_hub_config(hub_config, root=hub_config_path.parent.parent.resolve())
+    hub = build_hub_config(hub_config_path, hub_config)
+    return derive_repo_config(hub, repo_root)
 
 
 def build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
@@ -137,7 +302,9 @@ def build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         ),
         security=security_cfg,
         server_host=str(cfg["server"].get("host")),
-        server_port=int(cfg["server"].get("port")),
+        server_port=int(
+            cfg["server"].get("port", DEFAULT_REPO_CONFIG["server"]["port"])
+        ),
         server_base_path=normalize_base_path(cfg["server"].get("base_path", "")),
         server_access_log=bool(cfg["server"].get("access_log", False)),
         server_auth_token_env=str(cfg["server"].get("auth_token_env", "")),
@@ -259,7 +426,9 @@ def build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
             cfg.get("usage"), root, DEFAULT_HUB_CONFIG.get("usage")
         ),
         server_host=str(cfg["server"]["host"]),
-        server_port=int(cfg["server"]["port"]),
+        server_port=int(
+            cfg["server"].get("port", DEFAULT_HUB_CONFIG["server"]["port"])
+        ),
         server_base_path=normalize_base_path(cfg["server"].get("base_path", "")),
         server_access_log=bool(cfg["server"].get("access_log", False)),
         server_auth_token_env=str(cfg["server"].get("auth_token_env", "")),

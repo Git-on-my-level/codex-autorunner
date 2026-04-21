@@ -329,25 +329,29 @@ class TestPrivateHelperAliases:
     canonical implementations."""
 
     def test_normalize_base_path_alias(self) -> None:
-        assert facade._normalize_base_path is config_parsers._normalize_base_path
+        assert facade.normalize_base_path is config_parsers.normalize_base_path
 
     def test_is_loopback_host_alias(self) -> None:
-        assert facade._is_loopback_host is config_validation._is_loopback_host
+        assert facade.is_loopback_host is config_validation.is_loopback_host
 
 
 class TestBuilderDelegation:
-    """Verify that the facade delegates to config_builders, which in turn
-    delegate to config_parsers (the canonical parsers)."""
+    """Verify that the facade delegates load functions to config_builders."""
 
-    def test_build_hub_config_uses_builders(self) -> None:
-        from codex_autorunner.core.config_builders import build_hub_config
+    def test_load_hub_config_comes_from_builders(self) -> None:
+        from codex_autorunner.core.config_builders import load_hub_config
 
-        assert facade._build_hub_config_impl is build_hub_config
+        assert facade.load_hub_config is load_hub_config
 
-    def test_build_repo_config_uses_builders(self) -> None:
-        from codex_autorunner.core.config_builders import build_repo_config
+    def test_load_repo_config_comes_from_builders(self) -> None:
+        from codex_autorunner.core.config_builders import load_repo_config
 
-        assert facade._build_repo_config_impl is build_repo_config
+        assert facade.load_repo_config is load_repo_config
+
+    def test_derive_repo_config_comes_from_builders(self) -> None:
+        from codex_autorunner.core.config_builders import derive_repo_config
+
+        assert facade.derive_repo_config is derive_repo_config
 
     def test_builders_import_parsers_not_facade(self) -> None:
         import codex_autorunner.core.config_builders as builders

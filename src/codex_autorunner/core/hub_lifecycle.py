@@ -7,7 +7,16 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional, Protocol
 
-from .lifecycle_events import LifecycleEvent
+from .config import HubConfig
+from .hub_lifecycle_routing import LifecycleEventRouter
+from .hub_topology import RepoSnapshot
+from .lifecycle_events import (
+    LifecycleEvent,
+    LifecycleEventEmitter,
+    LifecycleEventStore,
+)
+from .pma_automation_store import PmaAutomationStore
+from .pma_safety import PmaSafetyChecker
 
 LIFECYCLE_RETRY_METADATA_KEY = "lifecycle_retry"
 
@@ -326,6 +335,184 @@ class HubLifecycleWorker:
         with self._thread_lock:
             if self._thread is thread:
                 self._thread = None
+
+
+class HubLifecycleOrchestrator:
+    """Consolidates lifecycle worker startup, shutdown, retry orchestration,
+    event routing, and outbox wiring into a single ownership boundary."""
+
+    def __init__(
+        self,
+        hub_config: HubConfig,
+        *,
+        list_repos_fn: Callable[[], list[RepoSnapshot]],
+        ensure_pma_automation_store_fn: Callable[[], PmaAutomationStore],
+        ensure_pma_safety_checker_fn: Callable[[], PmaSafetyChecker],
+        run_coroutine_fn: Callable[[Any], Any],
+        process_scm_polls_fn: Optional[Callable[[], dict[str, int]]] = None,
+        process_pma_timers_fn: Optional[Callable[[], int]] = None,
+        drain_pma_wakeups_fn: Optional[Callable[[], int]] = None,
+        logger: Optional[logging.Logger] = None,
+    ) -> None:
+        self._hub_config = hub_config
+        self._lifecycle_emitter = LifecycleEventEmitter(hub_config.root)
+        self._lifecycle_router = LifecycleEventRouter(
+            hub_config=hub_config,
+            lifecycle_store=self.lifecycle_store,
+            list_repos_fn=list_repos_fn,
+            ensure_pma_automation_store_fn=ensure_pma_automation_store_fn,
+            ensure_pma_safety_checker_fn=ensure_pma_safety_checker_fn,
+            run_coroutine_fn=run_coroutine_fn,
+            logger=logger,
+        )
+        self._lifecycle_worker = HubLifecycleWorker(
+            process_once=self._process_lifecycle_event_cycle,
+            poll_interval_seconds=5.0,
+            join_timeout_seconds=2.0,
+            thread_name="lifecycle-event-processor",
+            logger=logger,
+        )
+        self._process_scm_polls_fn = process_scm_polls_fn
+        self._process_pma_timers_fn = process_pma_timers_fn
+        self._drain_pma_wakeups_fn = drain_pma_wakeups_fn
+        self._process_event_fn: Callable[[LifecycleEvent], None] = (
+            self._process_lifecycle_event
+        )
+        self._lifecycle_event_processor = LifecycleEventProcessor(
+            store=self.lifecycle_store,
+            process_event=lambda event: self._process_event_fn(event),
+            retry_policy=self._build_lifecycle_retry_policy(),
+            logger=logger,
+        )
+        self._logger = logger or logging.getLogger("codex_autorunner.hub")
+
+    @property
+    def lifecycle_emitter(self) -> LifecycleEventEmitter:
+        return self._lifecycle_emitter
+
+    @property
+    def lifecycle_store(self) -> LifecycleEventStore:
+        return self._lifecycle_emitter._store
+
+    def startup(self) -> None:
+        self._lifecycle_worker.start()
+
+    def shutdown(self) -> None:
+        self._lifecycle_worker.stop()
+        from ..tickets.outbox import set_lifecycle_emitter
+
+        set_lifecycle_emitter(None)
+
+    def wire_outbox_lifecycle(self) -> None:
+        from ..tickets.outbox import set_lifecycle_emitter
+
+        if not self._hub_config.pma.enabled:
+            set_lifecycle_emitter(None)
+            return
+
+        def _emit_outbox_event(
+            event_type: str,
+            repo_id: str,
+            run_id: str,
+            data: dict[str, Any],
+            origin: str,
+        ) -> None:
+            if event_type == "dispatch_created":
+                self._lifecycle_emitter.emit_dispatch_created(
+                    repo_id, run_id, data=data, origin=origin
+                )
+                self._lifecycle_worker.wake()
+
+        set_lifecycle_emitter(_emit_outbox_event)
+
+    def process_lifecycle_events(self) -> int:
+        processed = self._lifecycle_event_processor.process_events(limit=100)
+        try:
+            self._drain_pma_wakeups()
+        except Exception:
+            self._logger.exception("Failed draining PMA automation wake-ups")
+        return processed
+
+    def trigger_pma_from_lifecycle_event(self, event: LifecycleEvent) -> None:
+        self._process_lifecycle_event(event)
+
+    def wake_worker(self) -> None:
+        self._lifecycle_worker.wake()
+
+    def _process_lifecycle_event(self, event: LifecycleEvent) -> None:
+        self._lifecycle_router.route_event(event)
+
+    def _process_lifecycle_event_cycle(self) -> bool:
+        productive = False
+        if self.process_lifecycle_events() > 0:
+            productive = True
+        scm_counts = self._process_scm_polls()
+        if scm_counts.get("polled", 0) > 0 or scm_counts.get("events_emitted", 0) > 0:
+            productive = True
+        timer_count = self._process_pma_timers()
+        if timer_count > 0:
+            productive = True
+        wakeup_count = self._drain_pma_wakeups()
+        if wakeup_count > 0:
+            productive = True
+        return productive
+
+    def _process_scm_polls(self) -> dict[str, int]:
+        if self._process_scm_polls_fn is not None:
+            return self._process_scm_polls_fn()
+        return {"polled": 0, "events_emitted": 0}
+
+    def _process_pma_timers(self) -> int:
+        if self._process_pma_timers_fn is not None:
+            return self._process_pma_timers_fn()
+        return 0
+
+    def _drain_pma_wakeups(self) -> int:
+        if self._drain_pma_wakeups_fn is not None:
+            return self._drain_pma_wakeups_fn()
+        return 0
+
+    def _build_lifecycle_retry_policy(self) -> LifecycleRetryPolicy:
+        raw = getattr(self._hub_config, "raw", {})
+        pma_config = raw.get("pma", {}) if isinstance(raw, dict) else {}
+        if not isinstance(pma_config, dict):
+            pma_config = {}
+
+        def _read_int(key: str, fallback: int, *, minimum: int = 0) -> int:
+            raw_value = pma_config.get(key, fallback)
+            try:
+                value = int(raw_value)
+            except (TypeError, ValueError):
+                return fallback
+            return value if value >= minimum else fallback
+
+        def _read_float(key: str, fallback: float, *, minimum: float = 0.0) -> float:
+            raw_value = pma_config.get(key, fallback)
+            try:
+                value = float(raw_value)
+            except (TypeError, ValueError):
+                return fallback
+            return value if value >= minimum else fallback
+
+        max_attempts = _read_int("lifecycle_retry_max_attempts", 3, minimum=1)
+        initial_backoff_seconds = _read_float(
+            "lifecycle_retry_initial_backoff_seconds",
+            5.0,
+            minimum=0.0,
+        )
+        max_backoff_seconds = _read_float(
+            "lifecycle_retry_max_backoff_seconds",
+            300.0,
+            minimum=0.0,
+        )
+        if max_backoff_seconds < initial_backoff_seconds:
+            max_backoff_seconds = initial_backoff_seconds
+
+        return LifecycleRetryPolicy(
+            max_attempts=max_attempts,
+            initial_backoff_seconds=initial_backoff_seconds,
+            max_backoff_seconds=max_backoff_seconds,
+        )
 
 
 def _is_unrecoverable_lifecycle_error(exc: Exception) -> bool:

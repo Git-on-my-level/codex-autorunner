@@ -86,8 +86,7 @@ def _build_sink() -> tuple[_FakeRest, DiscordResponder, DiscordEffectSink]:
         config=config,
         logger=logging.getLogger("test.discord.effects"),
     )
-    service = SimpleNamespace(_responder=responder)
-    return rest, responder, DiscordEffectSink(service)
+    return rest, responder, DiscordEffectSink(responder)
 
 
 @pytest.mark.anyio

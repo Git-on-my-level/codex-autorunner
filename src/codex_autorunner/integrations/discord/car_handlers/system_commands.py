@@ -5,11 +5,9 @@ import logging
 from pathlib import Path
 from typing import Any, Optional
 
-from ....core.config import ConfigError, load_hub_config
 from ....core.constants import DEFAULT_UPDATE_REPO_REF, DEFAULT_UPDATE_REPO_URL
 from ....core.update import (
     UpdateInProgressError,
-    _available_update_target_definitions,
     _format_update_confirmation_warning,
     _normalize_update_ref,
     _normalize_update_target,
@@ -19,17 +17,8 @@ from ....core.update_paths import resolve_update_paths
 from ....core.update_targets import get_update_target_label
 from ....core.utils import canonicalize_path
 from ...chat.constants import TOPIC_NOT_BOUND_DISCORD_MESSAGE
-from ..components import (
-    DISCORD_BUTTON_STYLE_DANGER,
-    build_action_row,
-    build_button,
-    build_update_target_picker,
-)
-from ..interaction_registry import (
-    UPDATE_CANCEL_PREFIX,
-    UPDATE_CONFIRM_PREFIX,
-    UPDATE_TARGET_SELECT_ID,
-)
+from ..components import build_update_target_picker
+from ..interaction_registry import UPDATE_TARGET_SELECT_ID
 from ..interaction_runtime import (
     ensure_component_response_deferred,
     ensure_ephemeral_response_deferred,
@@ -37,123 +26,26 @@ from ..interaction_runtime import (
     send_runtime_ephemeral,
     update_runtime_component_message,
 )
-from ..rendering import (
-    format_discord_message,
+from ..rendering import format_discord_message
+from ..update_service import (
+    active_update_session_count,
+    build_update_confirmation_components,
+    dynamic_update_target_definitions,
+    format_update_status_message,
+    mark_notified,
+    send_update_status_notice,
+    update_status_path,
+    update_thread_blocks_restart_warning,
 )
-from ..service_normalization import (
-    DiscordMessagePayload,
-    DiscordUpdateNoticeContext,
-    format_discord_update_status_message,
-)
 
-
-def _update_thread_blocks_restart_warning(thread: Any) -> bool:
-    thread_kind = str(getattr(thread, "thread_kind", "") or "").strip().lower()
-    return thread_kind != "ticket_flow"
-
-
-def _active_update_session_count(service: Any) -> int:
-    try:
-        orchestration_service = service._discord_thread_service()
-        threads = orchestration_service.list_thread_targets(lifecycle_status="active")
-    except (AttributeError, TypeError, RuntimeError):
-        return 0
-    get_running_execution = getattr(
-        orchestration_service, "get_running_execution", None
-    )
-    if not callable(get_running_execution):
-        return sum(
-            1
-            for thread in threads
-            if _update_thread_blocks_restart_warning(thread)
-            if str(getattr(thread, "status", "") or "").strip().lower() == "running"
-        )
-
-    active_count = 0
-    for thread in threads:
-        if not _update_thread_blocks_restart_warning(thread):
-            continue
-        thread_target_id = str(getattr(thread, "thread_target_id", "") or "").strip()
-        if not thread_target_id:
-            continue
-        try:
-            if get_running_execution(thread_target_id) is not None:
-                active_count += 1
-        except (AttributeError, TypeError, RuntimeError):
-            if str(getattr(thread, "status", "") or "").strip().lower() == "running":
-                active_count += 1
-    return active_count
-
-
-def _build_update_confirmation_components(
-    service: Any,
-    *,
-    update_target: str,
-) -> list[dict[str, Any]]:
-    return [
-        build_action_row(
-            [
-                build_button(
-                    "Update anyway",
-                    f"{UPDATE_CONFIRM_PREFIX}:{update_target}",
-                    style=DISCORD_BUTTON_STYLE_DANGER,
-                ),
-                build_button("Cancel", f"{UPDATE_CANCEL_PREFIX}:{update_target}"),
-            ]
-        )
-    ]
-
-
-def _update_status_path(service: Any) -> Path:
-    return resolve_update_paths().status_path
-
-
-def _format_update_status_message(
-    service: Any, status: Optional[dict[str, Any]]
-) -> str:
-    return format_discord_update_status_message(status)
-
-
-def _dynamic_update_target_definitions(service: Any):
-    raw_config = service._hub_raw_config_cache
-    if raw_config is None:
-        try:
-            raw_config = load_hub_config(service._config.root).raw
-        except (ConfigError, OSError, ValueError, RuntimeError):
-            raw_config = {}
-        service._hub_raw_config_cache = raw_config
-    return _available_update_target_definitions(
-        raw_config=raw_config if isinstance(raw_config, dict) else None,
-        update_backend=service._update_backend,
-        linux_service_names=(
-            service._update_linux_service_names
-            if isinstance(service._update_linux_service_names, dict)
-            else None
-        ),
-    )
-
-
-async def _send_update_status_notice(
-    service: Any, notify_context: dict[str, Any], text: str
-) -> None:
-    context = DiscordUpdateNoticeContext.from_raw(notify_context)
-    if context is None:
-        return
-    await service._send_channel_message_safe(
-        context.chat_id,
-        DiscordMessagePayload(content=text).to_payload(),
-    )
-
-
-def _mark_update_notified(service: Any, status: dict[str, Any]) -> None:
-    from ..service import mark_update_status_notified
-
-    mark_update_status_notified(
-        path=_update_status_path(service),
-        status=status,
-        logger=service._logger,
-        log_event_name="discord.update.notify_write_failed",
-    )
+_update_thread_blocks_restart_warning = update_thread_blocks_restart_warning
+_active_update_session_count = active_update_session_count
+_build_update_confirmation_components = build_update_confirmation_components
+_update_status_path = update_status_path
+_format_update_status_message = format_update_status_message
+_dynamic_update_target_definitions = dynamic_update_target_definitions
+_send_update_status_notice = send_update_status_notice
+_mark_update_notified = mark_notified
 
 
 async def handle_car_update(

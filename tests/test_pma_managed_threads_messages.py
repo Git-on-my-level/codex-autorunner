@@ -12,7 +12,6 @@ from fastapi.testclient import TestClient
 
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.hub import HubSupervisor
-from codex_autorunner.core.orchestration.bindings import OrchestrationBindingStore
 from codex_autorunner.core.orchestration.runtime_bindings import (
     clear_runtime_thread_binding,
 )
@@ -22,9 +21,21 @@ from codex_autorunner.core.pma_thread_store import (
 )
 from codex_autorunner.core.pma_transcripts import PmaTranscriptStore
 from codex_autorunner.integrations.discord.state import DiscordStateStore
-from codex_autorunner.integrations.telegram.state import TelegramStateStore, topic_key
+from codex_autorunner.integrations.telegram.state import TelegramStateStore
 from codex_autorunner.server import create_hub_app
 from tests.conftest import write_test_config
+from tests.pma_support import (
+    _bind_thread_to_discord,
+    _bind_thread_to_telegram,
+    _enable_pma,
+    _repo_owner,
+)
+from tests.pma_support.managed_threads import (
+    FakeAutomationStore,
+    FakeClient,
+    FakeSupervisor,
+    install_fake_supervisor,
+)
 
 pytestmark = pytest.mark.slow
 
@@ -38,94 +49,6 @@ def _disable_hub_lifecycle_worker(monkeypatch) -> None:
     )
 
 
-def _enable_pma(
-    hub_root: Path,
-    *,
-    model: str | None = None,
-    reasoning: str | None = None,
-    max_text_chars: int | None = None,
-    managed_thread_terminal_followup_default: bool | None = None,
-    reactive_enabled: bool | None = None,
-) -> None:
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    cfg.setdefault("pma", {})
-    cfg["pma"]["enabled"] = True
-    if model is not None:
-        cfg["pma"]["model"] = model
-    if reasoning is not None:
-        cfg["pma"]["reasoning"] = reasoning
-    if max_text_chars is not None:
-        cfg["pma"]["max_text_chars"] = max_text_chars
-    if managed_thread_terminal_followup_default is not None:
-        cfg["pma"][
-            "managed_thread_terminal_followup_default"
-        ] = managed_thread_terminal_followup_default
-    if reactive_enabled is not None:
-        cfg["pma"]["reactive_enabled"] = reactive_enabled
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-
-
-def _repo_owner(hub_env) -> dict[str, str]:
-    return {"resource_kind": "repo", "resource_id": hub_env.repo_id}
-
-
-async def _bind_thread_to_discord(
-    hub_env,
-    *,
-    managed_thread_id: str,
-    channel_id: str,
-) -> None:
-    OrchestrationBindingStore(hub_env.hub_root).upsert_binding(
-        surface_kind="discord",
-        surface_key=channel_id,
-        thread_target_id=managed_thread_id,
-        agent_id="codex",
-        repo_id=hub_env.repo_id,
-        mode="repo",
-    )
-    store = DiscordStateStore(
-        hub_env.hub_root / ".codex-autorunner" / "discord_state.sqlite3"
-    )
-    try:
-        await store.upsert_binding(
-            channel_id=channel_id,
-            guild_id="guild-1",
-            workspace_path=str(hub_env.repo_root.resolve()),
-            repo_id=hub_env.repo_id,
-        )
-    finally:
-        await store.close()
-
-
-async def _bind_thread_to_telegram(
-    hub_env,
-    *,
-    managed_thread_id: str,
-    chat_id: int,
-    thread_id: int | None,
-) -> None:
-    surface_key = topic_key(chat_id, thread_id)
-    OrchestrationBindingStore(hub_env.hub_root).upsert_binding(
-        surface_kind="telegram",
-        surface_key=surface_key,
-        thread_target_id=managed_thread_id,
-        agent_id="codex",
-        repo_id=hub_env.repo_id,
-        mode="repo",
-    )
-    store = TelegramStateStore(
-        hub_env.hub_root / ".codex-autorunner" / "telegram_state.sqlite3"
-    )
-    try:
-        await store.bind_topic(
-            surface_key,
-            str(hub_env.repo_root.resolve()),
-            repo_id=hub_env.repo_id,
-        )
-    finally:
-        await store.close()
-
-
 def test_send_message_persists_turns_and_reuses_backend_thread(hub_env) -> None:
     _enable_pma(
         hub_env.hub_root,
@@ -136,72 +59,8 @@ def test_send_message_persists_turns_and_reuses_backend_thread(hub_env) -> None:
     )
     app = create_hub_app(hub_env.hub_root)
 
-    class FakeTurnHandle:
-        def __init__(self, turn_id: str, assistant_text: str) -> None:
-            self.turn_id = turn_id
-            self._assistant_text = assistant_text
-
-        async def wait(self, timeout=None):
-            _ = timeout
-            return type(
-                "Result",
-                (),
-                {
-                    "agent_messages": [self._assistant_text],
-                    "raw_events": [],
-                    "errors": [],
-                },
-            )()
-
-    class FakeClient:
-        def __init__(self) -> None:
-            self.resume_calls: list[str] = []
-            self.thread_start_roots: list[str] = []
-            self.turn_start_calls: list[dict[str, object]] = []
-            self._thread_seq = 0
-
-        async def thread_resume(self, thread_id: str) -> None:
-            self.resume_calls.append(thread_id)
-
-        async def thread_start(self, root: str) -> dict:
-            self._thread_seq += 1
-            thread_id = f"backend-thread-{self._thread_seq}"
-            self.thread_start_roots.append(root)
-            return {"id": thread_id}
-
-        async def turn_start(
-            self,
-            thread_id: str,
-            prompt: str,
-            approval_policy: str,
-            sandbox_policy: str,
-            **turn_kwargs,
-        ):
-            self.turn_start_calls.append(
-                {
-                    "thread_id": thread_id,
-                    "prompt": prompt,
-                    "approval_policy": approval_policy,
-                    "sandbox_policy": sandbox_policy,
-                    "turn_kwargs": dict(turn_kwargs),
-                }
-            )
-            index = len(self.turn_start_calls)
-            return FakeTurnHandle(
-                turn_id=f"backend-turn-{index}",
-                assistant_text=f"assistant-output-{index}",
-            )
-
-    class FakeSupervisor:
-        def __init__(self) -> None:
-            self.client = FakeClient()
-            self.workspace_roots: list[Path] = []
-
-        async def get_client(self, hub_root: Path):
-            self.workspace_roots.append(hub_root)
-            return self.client
-
-    fake_supervisor = FakeSupervisor()
+    fake_client = FakeClient(sequential=True)
+    fake_supervisor = FakeSupervisor(fake_client)
 
     with TestClient(app) as client:
         app.state.app_server_supervisor = fake_supervisor
@@ -428,45 +287,7 @@ async def test_send_message_enqueues_assistant_output_to_bound_chat_outboxes(
 ) -> None:
     _enable_pma(hub_env.hub_root, managed_thread_terminal_followup_default=False)
     app = create_hub_app(hub_env.hub_root)
-
-    class FakeTurnHandle:
-        turn_id = "backend-turn-1"
-
-        async def wait(self, timeout=None):
-            _ = timeout
-            return type(
-                "Result",
-                (),
-                {
-                    "agent_messages": ["assistant-output"],
-                    "raw_events": [],
-                    "errors": [],
-                },
-            )()
-
-    class FakeClient:
-        async def thread_start(self, root: str) -> dict:
-            _ = root
-            return {"id": "backend-thread-1"}
-
-        async def turn_start(
-            self,
-            thread_id: str,
-            prompt: str,
-            approval_policy: str,
-            sandbox_policy: str,
-            **turn_kwargs,
-        ):
-            _ = thread_id, prompt, approval_policy, sandbox_policy, turn_kwargs
-            return FakeTurnHandle()
-
-    class FakeSupervisor:
-        async def get_client(self, hub_root: Path):
-            _ = hub_root
-            return FakeClient()
-
-    app.state.app_server_supervisor = FakeSupervisor()
-    app.state.app_server_events = object()
+    install_fake_supervisor(app)
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
@@ -535,48 +356,11 @@ async def test_send_message_continues_bound_chat_delivery_after_one_surface_fail
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
 
-    class FakeTurnHandle:
-        turn_id = "backend-turn-1"
-
-        async def wait(self, timeout=None):
-            _ = timeout
-            return type(
-                "Result",
-                (),
-                {
-                    "agent_messages": ["assistant-output"],
-                    "raw_events": [],
-                    "errors": [],
-                },
-            )()
-
-    class FakeClient:
-        async def thread_start(self, root: str) -> dict:
-            _ = root
-            return {"id": "backend-thread-1"}
-
-        async def turn_start(
-            self,
-            thread_id: str,
-            prompt: str,
-            approval_policy: str,
-            sandbox_policy: str,
-            **turn_kwargs,
-        ):
-            _ = thread_id, prompt, approval_policy, sandbox_policy, turn_kwargs
-            return FakeTurnHandle()
-
-    class FakeSupervisor:
-        async def get_client(self, hub_root: Path):
-            _ = hub_root
-            return FakeClient()
-
     async def _fail_discord_enqueue(self, record):
         _ = self, record
         raise RuntimeError("discord enqueue failed")
 
-    app.state.app_server_supervisor = FakeSupervisor()
-    app.state.app_server_events = object()
+    install_fake_supervisor(app)
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
@@ -684,56 +468,8 @@ def test_send_message_compact_seed_used_only_before_backend_thread_exists(
     )
     app = create_hub_app(hub_env.hub_root)
 
-    class FakeTurnHandle:
-        def __init__(self, turn_id: str) -> None:
-            self.turn_id = turn_id
-
-        async def wait(self, timeout=None):
-            _ = timeout
-            return type(
-                "Result",
-                (),
-                {
-                    "agent_messages": ["assistant-output"],
-                    "raw_events": [],
-                    "errors": [],
-                },
-            )()
-
-    class FakeClient:
-        def __init__(self) -> None:
-            self.turn_start_calls: list[dict[str, str]] = []
-            self._turn_count = 0
-
-        async def thread_resume(self, thread_id: str) -> None:
-            _ = thread_id
-
-        async def thread_start(self, root: str) -> dict:
-            _ = root
-            return {"id": "backend-thread-1"}
-
-        async def turn_start(
-            self,
-            thread_id: str,
-            prompt: str,
-            approval_policy: str,
-            sandbox_policy: str,
-            **turn_kwargs,
-        ):
-            _ = approval_policy, sandbox_policy, turn_kwargs
-            self.turn_start_calls.append({"thread_id": thread_id, "prompt": prompt})
-            self._turn_count += 1
-            return FakeTurnHandle(turn_id=f"backend-turn-{self._turn_count}")
-
-    class FakeSupervisor:
-        def __init__(self) -> None:
-            self.client = FakeClient()
-
-        async def get_client(self, hub_root: Path):
-            _ = hub_root
-            return self.client
-
-    fake_supervisor = FakeSupervisor()
+    fake_client = FakeClient()
+    fake_supervisor = FakeSupervisor(fake_client)
 
     with TestClient(app) as client:
         app.state.app_server_supervisor = fake_supervisor
@@ -787,56 +523,8 @@ def test_send_message_after_restart_does_not_duplicate_compact_seed(
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
 
-    class FakeTurnHandle:
-        def __init__(self, turn_id: str) -> None:
-            self.turn_id = turn_id
-
-        async def wait(self, timeout=None):
-            _ = timeout
-            return type(
-                "Result",
-                (),
-                {
-                    "agent_messages": ["assistant-output"],
-                    "raw_events": [],
-                    "errors": [],
-                },
-            )()
-
-    class FakeClient:
-        def __init__(self) -> None:
-            self.turn_start_calls: list[dict[str, str]] = []
-            self._turn_count = 0
-
-        async def thread_resume(self, thread_id: str) -> None:
-            _ = thread_id
-
-        async def thread_start(self, root: str) -> dict:
-            _ = root
-            self._turn_count += 1
-            return {"id": f"backend-thread-{self._turn_count}"}
-
-        async def turn_start(
-            self,
-            thread_id: str,
-            prompt: str,
-            approval_policy: str,
-            sandbox_policy: str,
-            **turn_kwargs,
-        ):
-            _ = approval_policy, sandbox_policy, turn_kwargs
-            self.turn_start_calls.append({"thread_id": thread_id, "prompt": prompt})
-            return FakeTurnHandle(turn_id=f"backend-turn-{len(self.turn_start_calls)}")
-
-    class FakeSupervisor:
-        def __init__(self) -> None:
-            self.client = FakeClient()
-
-        async def get_client(self, hub_root: Path):
-            _ = hub_root
-            return self.client
-
-    fake_supervisor = FakeSupervisor()
+    fake_client = FakeClient(sequential=True)
+    fake_supervisor = FakeSupervisor(fake_client)
     app.state.app_server_supervisor = fake_supervisor
     app.state.app_server_events = object()
 
@@ -930,20 +618,7 @@ def test_send_message_reports_interrupt_failure_without_marking_turn_failed(
 ) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
-
-    class FakeClient:
-        async def turn_interrupt(
-            self, turn_id: str, *, thread_id: str | None = None
-        ) -> None:
-            _ = turn_id, thread_id
-            raise RuntimeError("backend interrupt exploded")
-
-    class FakeSupervisor:
-        async def get_client(self, hub_root: Path):
-            _ = hub_root
-            return FakeClient()
-
-    app.state.app_server_supervisor = FakeSupervisor()
+    install_fake_supervisor(app)
 
     with TestClient(app) as client:
         create_resp = client.post(
@@ -1057,49 +732,12 @@ def test_send_message_finalizes_turn_when_transcript_write_fails(
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
 
-    class FakeTurnHandle:
-        turn_id = "backend-turn-1"
-
-        async def wait(self, timeout=None):
-            _ = timeout
-            return type(
-                "Result",
-                (),
-                {
-                    "agent_messages": ["assistant-output"],
-                    "raw_events": [],
-                    "errors": [],
-                },
-            )()
-
-    class FakeClient:
-        async def thread_start(self, root: str) -> dict:
-            _ = root
-            return {"id": "backend-thread-1"}
-
-        async def turn_start(
-            self,
-            thread_id: str,
-            prompt: str,
-            approval_policy: str,
-            sandbox_policy: str,
-            **turn_kwargs,
-        ):
-            _ = thread_id, prompt, approval_policy, sandbox_policy, turn_kwargs
-            return FakeTurnHandle()
-
-    class FakeSupervisor:
-        async def get_client(self, hub_root: Path):
-            _ = hub_root
-            return FakeClient()
-
     def _raise_transcript_write(*args, **kwargs):
         _ = args, kwargs
         raise RuntimeError("disk-full-secret")
 
     monkeypatch.setattr(PmaTranscriptStore, "write_transcript", _raise_transcript_write)
-    app.state.app_server_supervisor = FakeSupervisor()
-    app.state.app_server_events = object()
+    install_fake_supervisor(app)
 
     with TestClient(app) as client:
         create_resp = client.post(
@@ -1138,42 +776,6 @@ def test_send_message_does_not_report_ok_when_turn_already_interrupted(
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
 
-    class FakeTurnHandle:
-        turn_id = "backend-turn-1"
-
-        async def wait(self, timeout=None):
-            _ = timeout
-            return type(
-                "Result",
-                (),
-                {
-                    "agent_messages": ["assistant-output"],
-                    "raw_events": [],
-                    "errors": [],
-                },
-            )()
-
-    class FakeClient:
-        async def thread_start(self, root: str) -> dict:
-            _ = root
-            return {"id": "backend-thread-1"}
-
-        async def turn_start(
-            self,
-            thread_id: str,
-            prompt: str,
-            approval_policy: str,
-            sandbox_policy: str,
-            **turn_kwargs,
-        ):
-            _ = thread_id, prompt, approval_policy, sandbox_policy, turn_kwargs
-            return FakeTurnHandle()
-
-    class FakeSupervisor:
-        async def get_client(self, hub_root: Path):
-            _ = hub_root
-            return FakeClient()
-
     original_mark_turn_finished = PmaThreadStore.mark_turn_finished
 
     def _interrupt_before_success_finalize(
@@ -1203,8 +805,7 @@ def test_send_message_does_not_report_ok_when_turn_already_interrupted(
         "mark_turn_finished",
         _interrupt_before_success_finalize,
     )
-    app.state.app_server_supervisor = FakeSupervisor()
-    app.state.app_server_events = object()
+    install_fake_supervisor(app)
 
     with TestClient(app) as client:
         create_resp = client.post(
@@ -1237,30 +838,9 @@ def test_send_message_does_not_report_ok_when_turn_already_interrupted(
 def test_send_message_sanitizes_unexpected_execution_errors(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
-
-    class FakeClient:
-        async def thread_start(self, root: str) -> dict:
-            _ = root
-            return {"id": "backend-thread-1"}
-
-        async def turn_start(
-            self,
-            thread_id: str,
-            prompt: str,
-            approval_policy: str,
-            sandbox_policy: str,
-            **turn_kwargs,
-        ):
-            _ = thread_id, prompt, approval_policy, sandbox_policy, turn_kwargs
-            raise RuntimeError("sensitive-backend-message")
-
-    class FakeSupervisor:
-        async def get_client(self, hub_root: Path):
-            _ = hub_root
-            return FakeClient()
-
-    app.state.app_server_supervisor = FakeSupervisor()
-    app.state.app_server_events = object()
+    install_fake_supervisor(
+        app, client=FakeClient(turn_error=RuntimeError("sensitive-backend-message"))
+    )
 
     with TestClient(app) as client:
         create_resp = client.post(
@@ -1292,61 +872,9 @@ def test_send_message_notifies_automation_on_completion(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
 
-    class FakeAutomationStore:
-        def __init__(self) -> None:
-            self.transitions: list[dict[str, object]] = []
-            self.subscriptions: list[dict[str, object]] = []
-
-        def notify_transition(self, payload: dict[str, object]) -> None:
-            self.transitions.append(dict(payload))
-
-        def create_subscription(self, payload: dict[str, object]) -> dict[str, object]:
-            subscription = dict(payload)
-            subscription.setdefault("subscription_id", "sub-1")
-            subscription.setdefault("thread_id", payload.get("thread_id"))
-            self.subscriptions.append(subscription)
-            return {"subscription": subscription}
-
-    class FakeTurnHandle:
-        turn_id = "backend-turn-1"
-
-        async def wait(self, timeout=None):
-            _ = timeout
-            return type(
-                "Result",
-                (),
-                {
-                    "agent_messages": ["assistant-output"],
-                    "raw_events": [],
-                    "errors": [],
-                },
-            )()
-
-    class FakeClient:
-        async def thread_start(self, root: str) -> dict:
-            _ = root
-            return {"id": "backend-thread-1"}
-
-        async def turn_start(
-            self,
-            thread_id: str,
-            prompt: str,
-            approval_policy: str,
-            sandbox_policy: str,
-            **turn_kwargs,
-        ):
-            _ = thread_id, prompt, approval_policy, sandbox_policy, turn_kwargs
-            return FakeTurnHandle()
-
-    class FakeSupervisor:
-        async def get_client(self, hub_root: Path):
-            _ = hub_root
-            return FakeClient()
-
     fake_store = FakeAutomationStore()
+    install_fake_supervisor(app)
     app.state.hub_supervisor.get_pma_automation_store = lambda: fake_store
-    app.state.app_server_supervisor = FakeSupervisor()
-    app.state.app_server_events = object()
 
     with TestClient(app) as client:
         create_resp = client.post(
@@ -1380,38 +908,11 @@ def test_send_message_notifies_automation_on_failure(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
 
-    class FakeAutomationStore:
-        def __init__(self) -> None:
-            self.transitions: list[dict[str, object]] = []
-
-        def notify_transition(self, payload: dict[str, object]) -> None:
-            self.transitions.append(dict(payload))
-
-    class FakeClient:
-        async def thread_start(self, root: str) -> dict:
-            _ = root
-            return {"id": "backend-thread-1"}
-
-        async def turn_start(
-            self,
-            thread_id: str,
-            prompt: str,
-            approval_policy: str,
-            sandbox_policy: str,
-            **turn_kwargs,
-        ):
-            _ = thread_id, prompt, approval_policy, sandbox_policy, turn_kwargs
-            raise RuntimeError("sensitive-backend-message")
-
-    class FakeSupervisor:
-        async def get_client(self, hub_root: Path):
-            _ = hub_root
-            return FakeClient()
-
     fake_store = FakeAutomationStore()
+    install_fake_supervisor(
+        app, client=FakeClient(turn_error=RuntimeError("sensitive-backend-message"))
+    )
     app.state.hub_supervisor.get_pma_automation_store = lambda: fake_store
-    app.state.app_server_supervisor = FakeSupervisor()
-    app.state.app_server_events = object()
 
     with TestClient(app) as client:
         create_resp = client.post(
@@ -1885,45 +1386,7 @@ async def test_agent_workspace_threads_run_in_parallel_without_workspace_wide_qu
 def test_managed_thread_completion_subscription_enqueues_wakeup(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
-
-    class FakeTurnHandle:
-        turn_id = "backend-turn-1"
-
-        async def wait(self, timeout=None):
-            _ = timeout
-            return type(
-                "Result",
-                (),
-                {
-                    "agent_messages": ["assistant-output"],
-                    "raw_events": [],
-                    "errors": [],
-                },
-            )()
-
-    class FakeClient:
-        async def thread_start(self, root: str) -> dict:
-            _ = root
-            return {"id": "backend-thread-1"}
-
-        async def turn_start(
-            self,
-            thread_id: str,
-            prompt: str,
-            approval_policy: str,
-            sandbox_policy: str,
-            **turn_kwargs,
-        ):
-            _ = thread_id, prompt, approval_policy, sandbox_policy, turn_kwargs
-            return FakeTurnHandle()
-
-    class FakeSupervisor:
-        async def get_client(self, hub_root: Path):
-            _ = hub_root
-            return FakeClient()
-
-    app.state.app_server_supervisor = FakeSupervisor()
-    app.state.app_server_events = object()
+    install_fake_supervisor(app)
 
     with TestClient(app) as client:
         create_resp = client.post(
@@ -1986,45 +1449,7 @@ def test_managed_thread_completion_subscription_enqueues_wakeup(hub_env) -> None
 def test_send_message_notify_on_terminal_auto_subscribes_once(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
-
-    class FakeTurnHandle:
-        turn_id = "backend-turn-1"
-
-        async def wait(self, timeout=None):
-            _ = timeout
-            return type(
-                "Result",
-                (),
-                {
-                    "agent_messages": ["assistant-output"],
-                    "raw_events": [],
-                    "errors": [],
-                },
-            )()
-
-    class FakeClient:
-        async def thread_start(self, root: str) -> dict:
-            _ = root
-            return {"id": "backend-thread-1"}
-
-        async def turn_start(
-            self,
-            thread_id: str,
-            prompt: str,
-            approval_policy: str,
-            sandbox_policy: str,
-            **turn_kwargs,
-        ):
-            _ = thread_id, prompt, approval_policy, sandbox_policy, turn_kwargs
-            return FakeTurnHandle()
-
-    class FakeSupervisor:
-        async def get_client(self, hub_root: Path):
-            _ = hub_root
-            return FakeClient()
-
-    app.state.app_server_supervisor = FakeSupervisor()
-    app.state.app_server_events = object()
+    install_fake_supervisor(app)
 
     with TestClient(app) as client:
         create_resp = client.post(
@@ -2066,45 +1491,7 @@ def test_send_message_notify_on_terminal_auto_subscribes_once(hub_env) -> None:
 def test_send_message_defaults_to_terminal_followup_subscription(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
-
-    class FakeTurnHandle:
-        turn_id = "backend-turn-1"
-
-        async def wait(self, timeout=None):
-            _ = timeout
-            return type(
-                "Result",
-                (),
-                {
-                    "agent_messages": ["assistant-output"],
-                    "raw_events": [],
-                    "errors": [],
-                },
-            )()
-
-    class FakeClient:
-        async def thread_start(self, root: str) -> dict:
-            _ = root
-            return {"id": "backend-thread-1"}
-
-        async def turn_start(
-            self,
-            thread_id: str,
-            prompt: str,
-            approval_policy: str,
-            sandbox_policy: str,
-            **turn_kwargs,
-        ):
-            _ = thread_id, prompt, approval_policy, sandbox_policy, turn_kwargs
-            return FakeTurnHandle()
-
-    class FakeSupervisor:
-        async def get_client(self, hub_root: Path):
-            _ = hub_root
-            return FakeClient()
-
-    app.state.app_server_supervisor = FakeSupervisor()
-    app.state.app_server_events = object()
+    install_fake_supervisor(app)
 
     with TestClient(app) as client:
         create_resp = client.post(
@@ -2146,45 +1533,7 @@ async def test_send_message_defer_execution_completes_in_background(hub_env) -> 
     app = create_hub_app(hub_env.hub_root)
     blocker = asyncio.Event()
 
-    class FakeTurnHandle:
-        turn_id = "backend-turn-1"
-
-        async def wait(self, timeout=None):
-            _ = timeout
-            await blocker.wait()
-            return type(
-                "Result",
-                (),
-                {
-                    "agent_messages": ["assistant-output"],
-                    "raw_events": [],
-                    "errors": [],
-                },
-            )()
-
-    class FakeClient:
-        async def thread_start(self, root: str) -> dict:
-            _ = root
-            return {"id": "backend-thread-1"}
-
-        async def turn_start(
-            self,
-            thread_id: str,
-            prompt: str,
-            approval_policy: str,
-            sandbox_policy: str,
-            **turn_kwargs,
-        ):
-            _ = thread_id, prompt, approval_policy, sandbox_policy, turn_kwargs
-            return FakeTurnHandle()
-
-    class FakeSupervisor:
-        async def get_client(self, hub_root: Path):
-            _ = hub_root
-            return FakeClient()
-
-    app.state.app_server_supervisor = FakeSupervisor()
-    app.state.app_server_events = object()
+    install_fake_supervisor(app, client=FakeClient(blocker=blocker))
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(

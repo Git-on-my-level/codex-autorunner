@@ -96,15 +96,8 @@ from ...core.orchestration.managed_thread_delivery_ledger import (
 )
 from ...core.state import now_iso
 from ...core.state_roots import resolve_global_state_root
-from ...core.update import (  # noqa: F401 - kept for test monkeypatching
-    UpdateInProgressError,
-    _available_update_target_definitions,
-    _format_update_confirmation_warning,
-    _normalize_update_ref,
-    _normalize_update_target,
-    _read_update_status,
-    _spawn_update_process,
-    _update_target_restarts_surface,
+from ...core.update import (
+    UpdateInProgressError,  # noqa: F401 - re-exported for test monkeypatching
 )
 from ...core.update_paths import resolve_update_paths  # noqa: F401
 from ...core.update_targets import (  # noqa: F401
@@ -188,10 +181,6 @@ from ...integrations.chat.run_mirror import ChatRunMirror
 from ...integrations.chat.turn_policy import (
     PlainTextTurnContext,
     should_trigger_plain_text_turn,
-)
-from ...integrations.chat.update_notifier import (  # noqa: F401 - kept for test monkeypatching
-    ChatUpdateStatusNotifier,
-    mark_update_status_notified,
 )
 from ...integrations.github.context_injection import maybe_inject_github_context
 from ...manifest import load_manifest
@@ -320,6 +309,9 @@ from .interaction_registry import (
     slash_command_route_for_path,
     slash_command_workspace_lock_policy,
 )
+from .interaction_scheduler import (
+    schedule_ingressed_interaction as _schedule_ingressed_interaction,
+)
 from .interaction_session import (
     DiscordInteractionSession,
     InteractionSessionKind,
@@ -409,6 +401,17 @@ from .service_normalization import (
     format_hub_flow_overview_line,
 )
 from .state import DiscordStateStore, InteractionLedgerRecord, OutboxRecord
+from .update_service import (  # noqa: F401 - re-exported for test monkeypatching
+    ChatUpdateStatusNotifier,
+    _available_update_target_definitions,
+    _format_update_confirmation_warning,
+    _normalize_update_ref,
+    _normalize_update_target,
+    _read_update_status,
+    _spawn_update_process,
+    _update_target_restarts_surface,
+    mark_update_status_notified,
+)
 from .workspace_commands import (
     handle_bind,
     handle_bind_page_component,
@@ -876,7 +879,7 @@ class DiscordBotService:
             record_delivery=self._record_interaction_delivery,
             record_delivery_cursor=self._record_interaction_delivery_cursor,
         )
-        self._effect_sink = DiscordEffectSink(self)
+        self._effect_sink = DiscordEffectSink(self._responder)
         self._queued_notice_messages: dict[tuple[str, str], str] = {}
         self._queued_notice_messages_by_source: dict[
             tuple[str, str], tuple[str, str]
@@ -3937,176 +3940,81 @@ class DiscordBotService:
 
     async def _on_dispatch(self, event_type: str, payload: dict[str, Any]) -> None:
         if event_type == "INTERACTION_CREATE":
-            dispatch_started_at = time.monotonic()
-            submission_order = (
-                payload.get("__car_dispatch_order")
-                if isinstance(payload.get("__car_dispatch_order"), int)
-                else None
-            )
-            ingress_result = await self._ingress.process_raw_payload(payload)
-            if not ingress_result.accepted:
-                if ingress_result.context is not None:
-                    log_event(
-                        self._logger,
-                        logging.INFO,
-                        "discord.interaction.rejected",
-                        rejection_reason=ingress_result.rejection_reason,
-                        **self._interaction_telemetry_fields(
-                            ingress_result.context,
-                            now=dispatch_started_at,
-                        ),
-                    )
-                if ingress_result.rejection_reason == "normalization_failed":
-                    interaction_id = extract_interaction_id(payload)
-                    interaction_token = extract_interaction_token(payload)
-                    if interaction_id and interaction_token:
-                        await self._respond_ephemeral(
-                            interaction_id,
-                            interaction_token,
-                            "I could not parse this interaction. Please retry the command.",
-                        )
-                elif (
-                    ingress_result.rejection_reason == "unauthorized"
-                    and ingress_result.context is not None
-                ):
-                    ctx = ingress_result.context
-                    if ctx.kind == InteractionKind.AUTOCOMPLETE:
-                        await self.respond_autocomplete(
-                            ctx.interaction_id,
-                            ctx.interaction_token,
-                            choices=[],
-                        )
-                    else:
-                        await self.respond_ephemeral(
-                            ctx.interaction_id,
-                            ctx.interaction_token,
-                            "This Discord command is not authorized for this channel/user/guild.",
-                        )
-                self._command_runner.skip_submission_order(submission_order)
-                return
-            if ingress_result.context is not None:
-                ctx = ingress_result.context
-                submitted_to_runner = False
-                try:
-                    envelope = await self._build_runtime_interaction_envelope(ctx)
-                    log_event(
-                        self._logger,
-                        logging.INFO,
-                        "discord.interaction.admitted",
-                        **self._interaction_telemetry_fields(
-                            ctx,
-                            now=dispatch_started_at,
-                            envelope=envelope,
-                        ),
-                    )
-                    await self._register_chat_operation_received(
-                        ctx,
-                        conversation_id=envelope.conversation_id,
-                    )
-                    acked = await self._acknowledge_runtime_envelope(
-                        envelope,
-                        stage="dispatch",
-                    )
-                    if not acked and self._dispatch_ack_failure_confirms_expiry(
-                        ctx,
-                        envelope,
-                    ):
-                        log_event(
-                            self._logger,
-                            logging.WARNING,
-                            "discord.interaction.delivery_expired_before_dispatch",
-                            expired_before_ack=True,
-                            ack_budget_seconds=self._initial_ack_budget_seconds(),
-                            **self._interaction_telemetry_fields(
-                                ctx,
-                                envelope=envelope,
-                            ),
-                        )
-                        # The interaction callback window is already gone. Trying to
-                        # answer again only produces a second stale-callback failure
-                        # that can bubble back into gateway reconnect handling.
-                        ctx.timing = replace(
-                            ctx.timing,
-                            ack_finished_at=time.monotonic(),
-                            ingress_finished_at=time.monotonic(),
-                        )
-                        return
-                    if not acked and envelope.dispatch_ack_policy not in (
-                        None,
-                        "immediate",
-                    ):
-                        await self._respond_ephemeral(
-                            ctx.interaction_id,
-                            ctx.interaction_token,
-                            "Discord interaction did not acknowledge. Please retry.",
-                        )
-                        ctx.timing = replace(
-                            ctx.timing,
-                            ack_finished_at=time.monotonic(),
-                            ingress_finished_at=time.monotonic(),
-                        )
-                        return
-
-                    duplicate_after_ack = await self._register_interaction_ingress(ctx)
-                    if duplicate_after_ack:
-                        return
-                    await self._persist_runtime_interaction(
-                        envelope,
-                        payload,
-                        scheduler_state="acknowledged",
-                    )
-                    self._ingress.finalize_success(ctx)
-                    log_event(
-                        self._logger,
-                        logging.INFO,
-                        "discord.interaction.enqueued",
-                        ingress_elapsed_ms=(
-                            round(
-                                (
-                                    ctx.timing.ingress_finished_at
-                                    - ctx.timing.ingress_started_at
-                                )
-                                * 1000,
-                                1,
-                            )
-                            if (
-                                ctx.timing.ingress_started_at is not None
-                                and ctx.timing.ingress_finished_at is not None
-                            )
-                            else None
-                        ),
-                        **self._interaction_telemetry_fields(
-                            ctx,
-                            envelope=envelope,
-                        ),
-                    )
-                    self._command_runner.submit(
-                        envelope.context,
-                        payload,
-                        resource_keys=envelope.resource_keys,
-                        conversation_id=envelope.conversation_id,
-                        queue_wait_ack_policy=envelope.queue_wait_ack_policy,
-                        submission_order=submission_order,
-                    )
-                    submitted_to_runner = True
-                    # Let the admitted interaction task start before the next gateway
-                    # interaction is processed so deferred command ordering stays stable.
-                    await asyncio.sleep(0)
-                finally:
-                    if not submitted_to_runner:
-                        self._command_runner.skip_submission_order(submission_order)
-                    await self._release_interaction_ingress(ctx.interaction_id)
+            await self._handle_interaction_create(payload)
             return
         if event_type == "MESSAGE_CREATE":
-            # Keep MESSAGE_CREATE handling off the gateway hot path. Channel/guild
-            # name enrichment can perform Discord REST lookups and must not delay
-            # later interaction callbacks that need to ack within ~3 seconds.
             self._spawn_task(
                 self._record_channel_directory_seen_from_message_payload(payload)
             )
             message_event = self._chat_adapter.parse_message_event(payload)
             if message_event is not None:
                 self._command_runner.submit_event(message_event)
+
+    async def _handle_interaction_create(self, payload: dict[str, Any]) -> None:
+        dispatch_started_at = time.monotonic()
+        submission_order = (
+            payload.get("__car_dispatch_order")
+            if isinstance(payload.get("__car_dispatch_order"), int)
+            else None
+        )
+        ingress_result = await self._ingress.process_raw_payload(payload)
+        if not ingress_result.accepted:
+            if ingress_result.context is not None:
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "discord.interaction.rejected",
+                    rejection_reason=ingress_result.rejection_reason,
+                    **self._interaction_telemetry_fields(
+                        ingress_result.context,
+                        now=dispatch_started_at,
+                    ),
+                )
+            if ingress_result.rejection_reason == "normalization_failed":
+                interaction_id = extract_interaction_id(payload)
+                interaction_token = extract_interaction_token(payload)
+                if interaction_id and interaction_token:
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        "I could not parse this interaction. Please retry the command.",
+                    )
+            elif (
+                ingress_result.rejection_reason == "unauthorized"
+                and ingress_result.context is not None
+            ):
+                ctx = ingress_result.context
+                if ctx.kind == InteractionKind.AUTOCOMPLETE:
+                    await self.respond_autocomplete(
+                        ctx.interaction_id,
+                        ctx.interaction_token,
+                        choices=[],
+                    )
+                else:
+                    await self.respond_ephemeral(
+                        ctx.interaction_id,
+                        ctx.interaction_token,
+                        "This Discord command is not authorized for this channel/user/guild.",
+                    )
+            self._command_runner.skip_submission_order(submission_order)
+            return
+        schedule_ctx: IngressContext | None = ingress_result.context
+        if schedule_ctx is None:
+            return
+        submitted_to_runner = False
+        try:
+            result = await _schedule_ingressed_interaction(
+                self,
+                schedule_ctx,
+                payload,
+                submission_order=submission_order,
+                dispatch_started_at=dispatch_started_at,
+            )
+            submitted_to_runner = result.submitted
+        finally:
+            if not submitted_to_runner:
+                self._command_runner.skip_submission_order(submission_order)
+            await self._release_interaction_ingress(schedule_ctx.interaction_id)
 
     async def _record_channel_directory_seen_from_message_payload(
         self, payload: dict[str, Any]
@@ -4385,7 +4293,7 @@ class DiscordBotService:
         channel_id: str,
         values: Optional[list[str]],
     ) -> None:
-        from .flow_commands import handle_ticket_filter_component
+        from .ticket_commands import handle_ticket_filter_component
 
         await handle_ticket_filter_component(
             self,
@@ -4543,7 +4451,7 @@ class DiscordBotService:
         workspace_root: Path,
         ticket_rel: str,
     ) -> None:
-        from .flow_commands import _open_ticket_modal
+        from .ticket_commands import _open_ticket_modal
 
         await _open_ticket_modal(
             self,
@@ -6140,7 +6048,7 @@ class DiscordBotService:
         custom_id: str,
         values: dict[str, Any],
     ) -> None:
-        from .flow_commands import handle_ticket_modal_submit
+        from .ticket_commands import handle_ticket_modal_submit
 
         await handle_ticket_modal_submit(
             self,
@@ -6363,16 +6271,12 @@ class DiscordBotService:
 
     @staticmethod
     def _update_thread_blocks_restart_warning(thread: Any) -> bool:
-        from .car_handlers.system_commands import (
-            _update_thread_blocks_restart_warning as update_thread_blocks_restart_warning,
-        )
+        from .update_service import update_thread_blocks_restart_warning
 
         return update_thread_blocks_restart_warning(thread)
 
     def _active_update_session_count(self) -> int:
-        from .car_handlers.system_commands import (
-            _active_update_session_count as active_update_session_count,
-        )
+        from .update_service import active_update_session_count
 
         return active_update_session_count(self)
 
@@ -6424,48 +6328,36 @@ class DiscordBotService:
         *,
         update_target: str,
     ) -> list[dict[str, Any]]:
-        from .car_handlers.system_commands import (
-            _build_update_confirmation_components as build_update_confirmation_components,
-        )
+        from .update_service import build_update_confirmation_components
 
         return build_update_confirmation_components(self, update_target=update_target)
 
     def _update_status_path(self) -> Path:
-        from .car_handlers.system_commands import (
-            _update_status_path as update_status_path,
-        )
+        from .update_service import update_status_path
 
         return update_status_path(self)
 
     def _format_update_status_message(self, status: Optional[dict[str, Any]]) -> str:
-        from .car_handlers.system_commands import (
-            _format_update_status_message as fmt_status_msg,
-        )
+        from .update_service import format_update_status_message
 
-        return fmt_status_msg(self, status)
+        return format_update_status_message(self, status)
 
     def _dynamic_update_target_definitions(self):
-        from .car_handlers.system_commands import (
-            _dynamic_update_target_definitions as dynamic_update_target_definitions,
-        )
+        from .update_service import dynamic_update_target_definitions
 
         return dynamic_update_target_definitions(self)
 
     async def _send_update_status_notice(
         self, notify_context: dict[str, Any], text: str
     ) -> None:
-        from .car_handlers.system_commands import (
-            _send_update_status_notice as send_update_status_notice,
-        )
+        from .update_service import send_update_status_notice
 
         await send_update_status_notice(self, notify_context, text)
 
     def _mark_update_notified(self, status: dict[str, Any]) -> None:
-        from .car_handlers.system_commands import (
-            _mark_update_notified as mark_update_notified,
-        )
+        from .update_service import mark_notified
 
-        mark_update_notified(self, status)
+        mark_notified(self, status)
 
     async def _handle_car_update_status(
         self,

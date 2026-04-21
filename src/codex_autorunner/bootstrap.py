@@ -10,11 +10,11 @@ from .core.about_car import (
     ensure_ticket_flow_quickstart_file_for_repo,
     ensure_tickets_agents_file_for_repo,
 )
-from .core.config import (
+from .core.config_contract import ConfigError
+from .core.config_layering import (
     CONFIG_FILENAME,
     DEFAULT_HUB_CONFIG,
     REPO_OVERRIDE_FILENAME,
-    ConfigError,
 )
 from .core.config_layering import (
     GENERATED_CONFIG_HEADER as CORE_GENERATED_CONFIG_HEADER,

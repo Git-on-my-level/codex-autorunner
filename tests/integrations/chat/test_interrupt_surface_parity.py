@@ -12,7 +12,7 @@ from tests.integrations.discord.test_service_routing import (
     _FakeOutboxManager,
     _FakeRest,
 )
-from tests.telegram_pma_routing_support import _ManagedThreadPMAHandler
+from tests.telegram_pma_managed_thread_support import _ManagedThreadPMAHandler
 
 from codex_autorunner.integrations.discord.service import DiscordBotService
 from codex_autorunner.integrations.discord.state import DiscordStateStore

@@ -10,7 +10,6 @@ from .agent_config import (
     resolve_agent_target_from_agents,
 )
 from .config_contract import ConfigError
-from .destinations import default_local_destination
 from .report_retention import (
     DEFAULT_REPORT_MAX_HISTORY_FILES,
     DEFAULT_REPORT_MAX_TOTAL_BYTES,
@@ -356,9 +355,7 @@ class RepoConfig(AgentConfigMixin):
     durable_writes: bool
     templates: TemplatesConfig
     effective_destination: DestinationConfigSection = dataclasses.field(
-        default_factory=lambda: cast(
-            DestinationConfigSection, dict(default_local_destination())
-        )
+        default_factory=lambda: cast(DestinationConfigSection, {"kind": "local"})
     )
 
     def doc_path(self, key: str) -> Path:
