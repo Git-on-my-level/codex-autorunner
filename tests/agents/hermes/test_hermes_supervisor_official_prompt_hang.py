@@ -108,6 +108,8 @@ async def test_hermes_supervisor_recovers_second_prompt_from_persisted_session_s
             timeout=2.0,
         )
 
+        # Second prompt is different, but the assistant output is the same as the
+        # first turn (see fake_acp_server official_second_prompt_hang...).
         second_turn_id = await supervisor.start_turn(
             tmp_path, session.session_id, "second"
         )
@@ -122,9 +124,10 @@ async def test_hermes_supervisor_recovers_second_prompt_from_persisted_session_s
         )
 
         events = await supervisor.list_turn_events_snapshot(second_turn_id)
-        assert first_result.assistant_text == "fixture reply"
+        same_text = "identical fixture output"
+        assert first_result.assistant_text == same_text
         assert second_result.status == "completed"
-        assert second_result.assistant_text == "fixture reply 2"
+        assert second_result.assistant_text == same_text
         assert [event.get("method") for event in events] == [
             "prompt/started",
             "session/update",

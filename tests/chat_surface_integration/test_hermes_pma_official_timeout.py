@@ -108,7 +108,7 @@ async def test_discord_hermes_pma_recovers_second_turn_from_persisted_session_st
         assert second.execution_error is None
         assert any(
             op["op"] == "send"
-            and "fixture reply 2" in str(op["payload"].get("content", ""))
+            and "identical fixture output" in str(op["payload"].get("content", ""))
             for op in second.message_ops
         )
         finalized = next(

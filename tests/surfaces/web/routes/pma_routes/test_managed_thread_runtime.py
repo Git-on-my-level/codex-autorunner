@@ -100,7 +100,10 @@ async def test_recover_orphaned_managed_thread_executions_unblocks_restart_queue
     updated_queued = store.get_turn(managed_thread_id, queued["managed_turn_id"])
     assert updated_running is not None
     assert updated_running["status"] == "error"
-    assert updated_running["error"] == "Backend thread missing from orchestration state"
+    assert (
+        updated_running["error"]
+        == "Running execution could not be reattached after restart"
+    )
     assert updated_queued is not None
     assert updated_queued["status"] == "queued"
 
@@ -280,7 +283,10 @@ async def test_recover_orphaned_managed_thread_executions_recovers_pma_runs_on_c
     updated_queued = store.get_turn(managed_thread_id, queued["managed_turn_id"])
     assert updated_running is not None
     assert updated_running["status"] == "error"
-    assert updated_running["error"] == "Backend thread missing from orchestration state"
+    assert (
+        updated_running["error"]
+        == "Running execution could not be reattached after restart"
+    )
     assert updated_queued is not None
     assert updated_queued["status"] == "queued"
 

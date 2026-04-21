@@ -1,4 +1,6 @@
 import asyncio
+import json
+import logging
 import sys
 import time
 from pathlib import Path
@@ -129,6 +131,31 @@ async def test_turn_result_defaults_to_last_agent_message(tmp_path: Path) -> Non
         assert result.final_message == "final reply"
     finally:
         await client.close()
+
+
+@pytest.mark.anyio
+async def test_restart_task_failure_is_logged_and_harvested(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    logger = logging.getLogger("test.app_server.restart")
+    client = CodexAppServerClient(
+        fixture_command("basic"),
+        cwd=tmp_path,
+        logger=logger,
+    )
+    task = asyncio.get_running_loop().create_future()
+    task.set_exception(RuntimeError("restart boom"))
+
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        client._log_restart_task_result(task)
+
+    events = [json.loads(record.message) for record in caplog.records]
+    assert any(
+        event["event"] == "app_server.restart.task_failed"
+        and event["error"] == "restart boom"
+        and event["error_type"] == "RuntimeError"
+        for event in events
+    )
 
 
 @pytest.mark.anyio

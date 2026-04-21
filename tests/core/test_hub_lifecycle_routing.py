@@ -204,7 +204,7 @@ def test_route_event_flow_stopped_enqueues_pma(tmp_path: Path) -> None:
     assert event.event_id in store.marked_processed_ids
 
 
-def test_route_event_unhandled_type_not_processed(tmp_path: Path) -> None:
+def test_route_event_flow_started_enqueues_pma(tmp_path: Path) -> None:
     router, store = _make_router(tmp_path)
     event = LifecycleEvent(
         event_type=LifecycleEventType.FLOW_STARTED,
@@ -212,7 +212,44 @@ def test_route_event_unhandled_type_not_processed(tmp_path: Path) -> None:
         run_id="run-1",
     )
     router.route_event(event)
-    assert event.event_id not in store.marked_processed_ids
+    assert event.event_id in store.marked_processed_ids
+
+
+def test_route_event_flow_resumed_enqueues_pma(tmp_path: Path) -> None:
+    router, store = _make_router(tmp_path)
+    event = LifecycleEvent(
+        event_type=LifecycleEventType.FLOW_RESUMED,
+        repo_id="repo-1",
+        run_id="run-1",
+    )
+    router.route_event(event)
+    assert event.event_id in store.marked_processed_ids
+
+
+def test_build_transition_payload_defaults_for_flow_started_and_resumed(
+    tmp_path: Path,
+) -> None:
+    router, _ = _make_router(tmp_path)
+
+    started_payload = router._build_transition_payload(
+        LifecycleEvent(
+            event_type=LifecycleEventType.FLOW_STARTED,
+            repo_id="repo-1",
+            run_id="run-1",
+        )
+    )
+    resumed_payload = router._build_transition_payload(
+        LifecycleEvent(
+            event_type=LifecycleEventType.FLOW_RESUMED,
+            repo_id="repo-1",
+            run_id="run-1",
+        )
+    )
+
+    assert started_payload["from_state"] == "pending"
+    assert started_payload["to_state"] == "running"
+    assert resumed_payload["from_state"] == "paused"
+    assert resumed_payload["to_state"] == "running"
 
 
 def test_check_reactive_gate_returns_allowed_by_default(tmp_path: Path) -> None:

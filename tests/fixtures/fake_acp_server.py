@@ -326,6 +326,9 @@ class FakeACPServer:
         cancel_event = self._session_cancel_events[session_id]
         thought_content: Any = {"type": "text", "text": "thinking"}
         reply_content: Any = {"type": "text", "text": "fixture reply"}
+        if self._scenario == "official_second_prompt_hang_with_persisted_completion":
+            # Match persisted session-store text so streaming chunks and recovery agree.
+            reply_content = {"type": "text", "text": "identical fixture output"}
         if self._scenario == "official_content_parts":
             thought_content = [
                 {"type": "text", "text": "thinking"},
@@ -469,7 +472,10 @@ class FakeACPServer:
         if self._scenario == "official_second_prompt_hang_with_persisted_completion":
             prompt_count = self._official_prompt_counts.get(session_id, 0) + 1
             self._official_prompt_counts[session_id] = prompt_count
-            assistant_text = f"fixture reply {prompt_count}"
+            # Intentionally identical across turns: session-store recovery must not
+            # reject a new completion just because the assistant text matches the
+            # previous turn (regression: identical outputs on consecutive prompts).
+            assistant_text = "identical fixture output"
             self._append_session_exchange(
                 session_id,
                 prompt=prompt,

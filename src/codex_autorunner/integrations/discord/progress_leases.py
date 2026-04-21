@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from dataclasses import dataclass, field
 from typing import Any, Awaitable, Optional, cast
 
 from ...core.ports.run_event import TokenUsage
@@ -18,7 +17,7 @@ from ..chat.managed_thread_progress_projector import (
     ManagedThreadProgressProjector,
 )
 from ..chat.turn_metrics import _extract_context_usage_percent
-from . import progress_runtime_state as _progress_runtime_state
+from . import progress_lease_state as _progress_lease_state
 from .errors import (
     DiscordPermanentError,
     DiscordTransientError,
@@ -29,179 +28,44 @@ from .rendering import (
     truncate_for_discord,
 )
 
+_claim_discord_reusable_progress_message = (
+    _progress_lease_state._claim_discord_reusable_progress_message
+)
+_DiscordOrchestrationState = _progress_lease_state._DiscordOrchestrationState
+_DiscordProgressReuseRequest = _progress_lease_state._DiscordProgressReuseRequest
+_DiscordReusableProgressMessage = _progress_lease_state._DiscordReusableProgressMessage
+_DiscordTurnExecutionSupervision = (
+    _progress_lease_state._DiscordTurnExecutionSupervision
+)
+_execution_field = _progress_lease_state._execution_field
+_get_discord_thread_queue_task_map = (
+    _progress_lease_state._get_discord_thread_queue_task_map
+)
+_peek_discord_progress_reuse_request = (
+    _progress_lease_state._peek_discord_progress_reuse_request
+)
+_progress_task_context = _progress_lease_state._progress_task_context
+_stash_discord_reusable_progress_message = (
+    _progress_lease_state._stash_discord_reusable_progress_message
+)
+bind_discord_progress_task_context = (
+    _progress_lease_state.bind_discord_progress_task_context
+)
+clear_discord_turn_progress_reuse = (
+    _progress_lease_state.clear_discord_turn_progress_reuse
+)
+request_discord_turn_progress_reuse = (
+    _progress_lease_state.request_discord_turn_progress_reuse
+)
+
 _logger = logging.getLogger(__name__)
 
 _DISCORD_PROGRESS_LIVE_STATES = frozenset({"pending", "active"})
 _DISCORD_PROGRESS_RECONCILABLE_STATES = frozenset({"pending", "active", "retiring"})
 
-_claim_discord_reusable_progress_message = (
-    _progress_runtime_state._claim_discord_reusable_progress_message
-)
-_DiscordOrchestrationState = _progress_runtime_state._DiscordOrchestrationState
-_DiscordProgressReuseRequest = _progress_runtime_state._DiscordProgressReuseRequest
-_DiscordReusableProgressMessage = (
-    _progress_runtime_state._DiscordReusableProgressMessage
-)
-_get_discord_thread_queue_task_map = (
-    _progress_runtime_state._get_discord_thread_queue_task_map
-)
-_peek_discord_progress_reuse_request = (
-    _progress_runtime_state._peek_discord_progress_reuse_request
-)
-_stash_discord_reusable_progress_message = (
-    _progress_runtime_state._stash_discord_reusable_progress_message
-)
-clear_discord_turn_progress_reuse = (
-    _progress_runtime_state.clear_discord_turn_progress_reuse
-)
-request_discord_turn_progress_reuse = (
-    _progress_runtime_state.request_discord_turn_progress_reuse
-)
-
 
 class DiscordTurnStartupFailure(RuntimeError):
     """Raised after a Discord turn startup failure has been surfaced to the user."""
-
-
-@dataclass
-class _DiscordTurnExecutionSupervision:
-    service: Any
-    channel_id: str
-    task_context: dict[str, Any] = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        self._set_text_field("channel_id", self.channel_id)
-
-    def _set_text_field(self, key: str, value: Optional[str]) -> None:
-        normalized = str(value or "").strip()
-        if normalized:
-            self.task_context[key] = normalized
-            return
-        self.task_context.pop(key, None)
-
-    def _set_bool_field(self, key: str, value: bool) -> None:
-        if value:
-            self.task_context[key] = True
-            return
-        self.task_context.pop(key, None)
-
-    def bind_task(self, task: asyncio.Task[Any]) -> asyncio.Task[Any]:
-        cast(Any, task)._discord_progress_task_context = self.task_context
-        return task
-
-    def set_managed_thread_id(self, managed_thread_id: Optional[str]) -> None:
-        self._set_text_field("managed_thread_id", managed_thread_id)
-
-    def set_execution_id(self, execution_id: Optional[str]) -> None:
-        self._set_text_field("execution_id", execution_id)
-
-    def set_lease_id(self, lease_id: Optional[str]) -> None:
-        self._set_text_field("lease_id", lease_id)
-
-    def set_message_id(self, message_id: Optional[str]) -> None:
-        self._set_text_field("message_id", message_id)
-
-    def set_failure_note(self, failure_note: Optional[str]) -> None:
-        self._set_text_field("failure_note", failure_note)
-
-    def set_shutdown_note(self, shutdown_note: Optional[str]) -> None:
-        self._set_text_field("shutdown_note", shutdown_note)
-
-    def set_orphaned(self, orphaned: bool) -> None:
-        self._set_bool_field("orphaned", orphaned)
-
-    def clear_progress_tracking(self, *, keep_execution_id: bool = True) -> None:
-        self.task_context.pop("lease_id", None)
-        self.task_context.pop("message_id", None)
-        if not keep_execution_id:
-            self.task_context.pop("execution_id", None)
-
-    async def reconcile_failure(
-        self,
-        *,
-        failure_note: Optional[str] = None,
-        allow_channel_fallback: bool = True,
-    ) -> int:
-        context = dict(self.task_context)
-        if isinstance(failure_note, str) and failure_note.strip():
-            context["failure_note"] = failure_note.strip()
-        reconciler = getattr(self.service, "_reconcile_background_task_failure", None)
-        if not callable(reconciler):
-            return 0
-        return int(
-            await reconciler(
-                context,
-                allow_channel_fallback=allow_channel_fallback,
-            )
-            or 0
-        )
-
-
-def _execution_field(record: Any, field: str) -> Optional[str]:
-    if isinstance(record, dict):
-        value = record.get(field)
-    else:
-        value = getattr(record, field, None)
-    normalized = str(value or "").strip()
-    return normalized or None
-
-
-def _progress_task_context(
-    *,
-    managed_thread_id: Optional[str] = None,
-    execution_id: Optional[str] = None,
-    lease_id: Optional[str] = None,
-    channel_id: Optional[str] = None,
-    message_id: Optional[str] = None,
-    failure_note: Optional[str] = None,
-    shutdown_note: Optional[str] = None,
-    orphaned: bool = False,
-) -> dict[str, Any]:
-    context: dict[str, Any] = {}
-    if isinstance(managed_thread_id, str) and managed_thread_id.strip():
-        context["managed_thread_id"] = managed_thread_id.strip()
-    if isinstance(execution_id, str) and execution_id.strip():
-        context["execution_id"] = execution_id.strip()
-    if isinstance(lease_id, str) and lease_id.strip():
-        context["lease_id"] = lease_id.strip()
-    if isinstance(channel_id, str) and channel_id.strip():
-        context["channel_id"] = channel_id.strip()
-    if isinstance(message_id, str) and message_id.strip():
-        context["message_id"] = message_id.strip()
-    if isinstance(failure_note, str) and failure_note.strip():
-        context["failure_note"] = failure_note.strip()
-    if isinstance(shutdown_note, str) and shutdown_note.strip():
-        context["shutdown_note"] = shutdown_note.strip()
-    if orphaned:
-        context["orphaned"] = True
-    return context
-
-
-def bind_discord_progress_task_context(
-    task: asyncio.Task[Any],
-    *,
-    managed_thread_id: Optional[str] = None,
-    execution_id: Optional[str] = None,
-    lease_id: Optional[str] = None,
-    channel_id: Optional[str] = None,
-    message_id: Optional[str] = None,
-    failure_note: Optional[str] = None,
-    shutdown_note: Optional[str] = None,
-    orphaned: bool = False,
-) -> asyncio.Task[Any]:
-    context = _progress_task_context(
-        managed_thread_id=managed_thread_id,
-        execution_id=execution_id,
-        lease_id=lease_id,
-        channel_id=channel_id,
-        message_id=message_id,
-        failure_note=failure_note,
-        shutdown_note=shutdown_note,
-        orphaned=orphaned,
-    )
-    if context:
-        cast(Any, task)._discord_progress_task_context = context
-    return task
 
 
 async def _upsert_discord_progress_lease(

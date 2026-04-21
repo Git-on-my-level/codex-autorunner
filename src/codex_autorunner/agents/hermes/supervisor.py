@@ -676,9 +676,6 @@ class HermesSupervisor:
             and snapshot.message_count <= baseline_count
         ):
             return None
-        baseline_text = _normalize_optional_text(state.baseline_last_assistant_text)
-        if baseline_text is not None and baseline_text == assistant_text:
-            return None
         recovered = await self._acp.recover_prompt_completion(
             workspace_root,
             state.turn_id,
