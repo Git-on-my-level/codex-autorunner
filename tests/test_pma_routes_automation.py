@@ -2,7 +2,7 @@
 
 import pytest
 
-from tests.pma_routes_support import (
+from tests.pma_support.automation import (
     test_pma_automation_subscription_alias_endpoint_supports_kwargs_only_store,
     test_pma_automation_subscription_create_normalizes_event_type_aliases,
     test_pma_automation_subscription_endpoints,

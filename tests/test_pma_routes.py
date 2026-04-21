@@ -2,7 +2,7 @@
 
 import pytest
 
-from tests.pma_routes_support import (
+from tests.pma_support.core import (
     test_build_pma_routes_does_not_construct_async_primitives_on_route_build,
     test_build_pma_routes_registers_unique_method_path_pairs,
     test_execute_opencode_records_completion_only_messages_in_timeline,
