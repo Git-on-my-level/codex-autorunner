@@ -1508,6 +1508,22 @@ class CodexAppServerClient:
         if self._restart_task is not None and not self._restart_task.done():
             return
         self._restart_task = asyncio.create_task(self._restart_after_disconnect())
+        self._restart_task.add_done_callback(self._log_restart_task_result)
+
+    def _log_restart_task_result(self, task: asyncio.Future[Any]) -> None:
+        if task.cancelled():
+            return
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.ERROR,
+                "app_server.restart.task_failed",
+                exc=exc,
+            )
 
     @retry_transient(max_attempts=10, base_wait=0.5, max_wait=30.0)
     async def _restart_after_disconnect(self) -> None:

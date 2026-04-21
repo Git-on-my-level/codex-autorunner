@@ -209,7 +209,10 @@ def test_interrupt_managed_thread_recovers_when_runtime_binding_is_lost_after_re
     updated_turn = store.get_turn(managed_thread_id, managed_turn_id)
     assert updated_turn is not None
     assert updated_turn["status"] == "error"
-    assert updated_turn["error"] == "Backend thread missing from orchestration state"
+    assert (
+        updated_turn["error"]
+        == "Running execution could not be reattached after restart"
+    )
 
 
 @pytest.mark.slow
