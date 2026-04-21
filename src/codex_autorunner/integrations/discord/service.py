@@ -318,6 +318,9 @@ from .interaction_session import (
 )
 from .interactions import extract_interaction_id, extract_interaction_token
 from .managed_thread_delivery import deliver_discord_managed_thread_record
+from .managed_thread_startup_recovery import (
+    recover_managed_thread_executions_on_startup as _recover_managed_thread_executions_on_startup_impl,
+)
 from .message_turns import (
     DiscordMessageTurnResult,
     build_discord_thread_orchestration_service,
@@ -978,6 +981,7 @@ class DiscordBotService:
         _validate_command_sync_config_impl(self)
         self._outbox.start()
         outbox_task = asyncio.create_task(self._outbox.run_loop())
+        await _recover_managed_thread_executions_on_startup_impl(self)
         self._opencode_prune_task = asyncio.create_task(
             _run_opencode_prune_loop_impl(self)
         )

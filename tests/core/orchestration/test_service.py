@@ -64,6 +64,7 @@ class _FakeHarness:
     backend_runtime_instance_id_value: Optional[str] = None
     next_turn_id: str = "backend-turn-1"
     ensure_ready_error: Optional[Exception] = None
+    recover_stalled_turn_result: Optional[TerminalTurnResult] = None
     start_turn_errors: dict[str, Exception] = field(default_factory=dict)
     start_review_errors: dict[str, Exception] = field(default_factory=dict)
     ensure_ready_calls: list[Path] = field(default_factory=list)
@@ -74,6 +75,9 @@ class _FakeHarness:
     start_turn_calls: list[dict[str, Any]] = field(default_factory=list)
     start_review_calls: list[dict[str, Any]] = field(default_factory=list)
     interrupt_calls: list[tuple[Path, str, Optional[str]]] = field(default_factory=list)
+    recover_stalled_turn_calls: list[tuple[Path, str, str]] = field(
+        default_factory=list
+    )
     interrupt_error: Optional[Exception] = None
     # When set, start_turn/start_review assert execution has provisional backend_id.
     provisional_backend_assert: Optional[tuple[Any, str]] = None
@@ -195,6 +199,14 @@ class _FakeHarness:
     ):
         if False:
             yield f"{workspace_root}:{conversation_id}:{turn_id}"
+
+    async def recover_stalled_turn(
+        self, workspace_root: Path, conversation_id: str, turn_id: str
+    ) -> Optional[TerminalTurnResult]:
+        self.recover_stalled_turn_calls.append(
+            (workspace_root, conversation_id, turn_id)
+        )
+        return self.recover_stalled_turn_result
 
 
 def _make_descriptor(
@@ -1732,6 +1744,49 @@ async def test_recover_running_execution_after_restart_without_binding_stays_res
     assert recovered.error == "Running execution could not be reattached after restart"
     assert _thread_runtime_binding(restarted_service, thread.thread_target_id) is None
     assert restarted_service.get_running_execution(thread.thread_target_id) is None
+
+
+async def test_recover_running_execution_from_harness_marks_terminal_result(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness(
+        recover_stalled_turn_result=TerminalTurnResult(
+            status="completed",
+            assistant_text="Recovered from runtime",
+        )
+    )
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+    execution = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="Need an answer",
+        )
+    )
+    started_thread = service.get_thread_target(thread.thread_target_id)
+    assert started_thread is not None
+
+    restarted_service = _build_service(tmp_path, harness)
+
+    recovered = await restarted_service.recover_running_execution_from_harness(
+        thread.thread_target_id
+    )
+
+    assert recovered is not None
+    assert recovered.execution_id == execution.execution_id
+    assert recovered.status == "ok"
+    assert recovered.output_text == "Recovered from runtime"
+    assert restarted_service.get_running_execution(thread.thread_target_id) is None
+    assert harness.recover_stalled_turn_calls == [
+        (
+            workspace_root,
+            started_thread.backend_thread_id or "",
+            execution.backend_id or "",
+        )
+    ]
 
 
 async def test_stop_thread_recovers_unknown_hermes_turn_interrupt_error(
