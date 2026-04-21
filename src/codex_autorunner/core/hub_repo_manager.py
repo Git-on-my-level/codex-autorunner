@@ -36,6 +36,7 @@ from .git_utils import (
 )
 from .orchestration.sqlite import open_orchestration_sqlite
 from .pma_thread_store import PmaThreadStore
+from .utils import is_within
 
 if TYPE_CHECKING:
     from .hub import RepoSnapshot
@@ -628,6 +629,11 @@ class RepoManager:
             raise ValueError(
                 f"Repo path must live under repos_root ({base_dir})"
             ) from exc
+        if is_within(root=self._hub_config.worktrees_root, target=target):
+            raise ValueError(
+                "Repo path must not live under worktrees_root; "
+                "use `car hub worktree create` instead"
+            )
         return target
 
     def _validate_no_id_conflict(

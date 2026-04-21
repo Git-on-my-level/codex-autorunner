@@ -1757,6 +1757,75 @@ def test_cleanup_all_skips_worktree_when_binding_lookup_raises_runtime_error(
     assert worktree.path.exists()
 
 
+def test_cleanup_all_repairs_legacy_worktree_entries_before_cleanup(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg["pma"]["cleanup_require_archive"] = False
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id=base.id,
+        branch="feature/legacy-cleanup-all",
+        start_point="HEAD",
+    )
+
+    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+    manifest = load_manifest(manifest_path, hub_root)
+    entry = manifest.get(worktree.id)
+    assert entry is not None
+    entry.kind = "base"
+    entry.worktree_of = None
+    save_manifest(manifest_path, manifest, hub_root)
+
+    preview = supervisor.cleanup_all(dry_run=True)
+    assert preview["worktrees"]["archived_count"] == 1
+
+    result = supervisor.cleanup_all(dry_run=False)
+
+    assert result["worktrees"]["archived_count"] == 1
+    assert not worktree.path.exists()
+    manifest = load_manifest(manifest_path, hub_root)
+    assert manifest.get(worktree.id) is None
+
+
+def test_cleanup_all_removes_missing_worktree_manifest_entries(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg["pma"]["cleanup_require_archive"] = False
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id=base.id,
+        branch="feature/missing-worktree-entry",
+        start_point="HEAD",
+    )
+    run_git(
+        ["worktree", "remove", "--force", str(worktree.path)], base.path, check=True
+    )
+
+    result = supervisor.cleanup_all(dry_run=False)
+
+    assert result["worktrees"]["archived_count"] == 1
+    manifest = load_manifest(hub_root / ".codex-autorunner" / "manifest.yml", hub_root)
+    assert manifest.get(worktree.id) is None
+
+
 def test_hub_api_cleanup_all_preview_and_job(tmp_path: Path, monkeypatch):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
@@ -3027,6 +3096,49 @@ def test_cleanup_worktree_failure_keeps_bound_pma_threads_active(
     assert thread is not None
     assert thread["lifecycle_status"] == "active"
     assert worktree.path.exists()
+
+
+def test_cleanup_worktree_removes_leftover_car_state_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg["pma"]["cleanup_require_archive"] = False
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/leftover-car-state",
+        start_point="HEAD",
+    )
+
+    def _leave_only_car_state(**kwargs) -> None:
+        worktree_path = kwargs["worktree_path"]
+        for child in worktree_path.iterdir():
+            if child.name == ".codex-autorunner":
+                continue
+            if child.is_dir():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+
+    monkeypatch.setattr(
+        supervisor._worktree_manager,
+        "_remove_worktree_git_refs",
+        _leave_only_car_state,
+    )
+
+    supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=False)
+
+    assert not worktree.path.exists()
 
 
 def test_cleanup_worktree_archives_pma_threads_before_manifest_removal(

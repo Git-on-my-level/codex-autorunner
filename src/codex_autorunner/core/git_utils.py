@@ -63,24 +63,46 @@ def run_git(
     return proc
 
 
+def git_linked_worktree_git_dir(repo_root: Path) -> Optional[Path]:
+    """Return the linked-worktree gitdir when ``repo_root`` is a non-main worktree."""
+    git_path = repo_root.resolve() / ".git"
+    if not git_path.exists() or git_path.is_dir():
+        return None
+    try:
+        raw = git_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not raw.lower().startswith("gitdir:"):
+        return None
+    git_dir = Path(raw.split(":", 1)[1].strip())
+    if not git_dir.is_absolute():
+        git_dir = (repo_root.resolve() / git_dir).resolve()
+    if git_dir.parent.name != "worktrees":
+        return None
+    return git_dir.resolve()
+
+
+def git_linked_worktree_common_dir(repo_root: Path) -> Optional[Path]:
+    git_dir = git_linked_worktree_git_dir(repo_root)
+    if git_dir is None:
+        return None
+    return git_dir.parent.parent.resolve()
+
+
+def git_linked_worktree_base_root(repo_root: Path) -> Optional[Path]:
+    common_git_dir = git_linked_worktree_common_dir(repo_root)
+    if common_git_dir is None:
+        return None
+    return common_git_dir.parent.resolve()
+
+
 def git_mutation_lock_path(repo_root: Path) -> Path:
     git_path = repo_root.resolve() / ".git"
     if git_path.is_dir():
         return git_path / "codex-autorunner-git-mutation.lock"
-    try:
-        raw = git_path.read_text(encoding="utf-8").strip()
-    except OSError:
+    common_git_dir = git_linked_worktree_common_dir(repo_root)
+    if common_git_dir is None:
         return git_path / "codex-autorunner-git-mutation.lock"
-    if not raw.lower().startswith("gitdir:"):
-        return git_path / "codex-autorunner-git-mutation.lock"
-    git_dir = Path(raw.split(":", 1)[1].strip())
-    if not git_dir.is_absolute():
-        git_dir = (repo_root.resolve() / git_dir).resolve()
-    common_git_dir = (
-        git_dir.parent.parent.resolve()
-        if git_dir.parent.name == "worktrees"
-        else git_dir.resolve()
-    )
     return common_git_dir / "codex-autorunner-git-mutation.lock"
 
 
