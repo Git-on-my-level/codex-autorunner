@@ -1417,6 +1417,7 @@ async def handle_car_interrupt(
     execution_id: Optional[str] = None,
     progress_reuse_source_message_id: Optional[str] = None,
     progress_reuse_acknowledgement: Optional[str] = None,
+    dispatcher_conversation_id: Optional[str] = None,
     source: str = "unknown",
     source_custom_id: Optional[str] = None,
     source_message_id: Optional[str] = None,
@@ -1653,6 +1654,13 @@ async def handle_car_interrupt(
             if allow_promoted_no_active_success:
                 text = format_discord_message("Queued request moved to the front.")
                 await _send_interrupt_response(text)
+                normalized_conversation_id = (
+                    str(dispatcher_conversation_id or "").strip() or None
+                )
+                if normalized_conversation_id is not None:
+                    await service._wake_dispatcher_conversation(
+                        normalized_conversation_id
+                    )
                 return
             get_execution = getattr(orchestration_service, "get_execution", None)
             get_latest_execution = getattr(
