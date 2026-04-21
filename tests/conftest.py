@@ -242,6 +242,9 @@ def _stub_surface_startup_handshakes_for_non_handshake_tests(
         async def get_running_execution(self, request):
             return self._service.get_running_execution(request)
 
+        async def list_thread_target_ids_with_running_executions(self, request):
+            return self._service.list_thread_target_ids_with_running_executions(request)
+
         async def get_latest_execution(self, request):
             return self._service.get_latest_execution(request)
 

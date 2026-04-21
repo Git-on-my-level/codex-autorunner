@@ -1911,8 +1911,22 @@ async def _run_discord_orchestrated_turn_for_message(
         nonlocal progress_heartbeat_task
         if progress_heartbeat_task is not None:
             progress_heartbeat_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
+            try:
                 await progress_heartbeat_task
+            except asyncio.CancelledError:
+                pass
+            except (
+                DiscordTransientError,
+                DiscordPermanentError,
+                RuntimeError,
+                ConnectionError,
+                OSError,
+            ):
+                _logger.debug(
+                    "Discord progress heartbeat task failed during shutdown for channel=%s",
+                    channel_id,
+                    exc_info=True,
+                )
             progress_heartbeat_task = None
 
     async def _begin_next_execution(

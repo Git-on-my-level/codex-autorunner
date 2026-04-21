@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -182,5 +183,86 @@ async def test_hermes_supervisor_recovers_second_prompt_from_persisted_session_s
         assert events[-1].get("params", {}).get("recoveredFrom") == "session_store"
         assert "hermes.turn.recovered_from_session_store" in caplog.text
         assert "hermes.turn.wait_timeout_recovered" in caplog.text
+    finally:
+        await supervisor.close_all()
+
+
+@pytest.mark.asyncio
+async def test_hermes_supervisor_wait_for_turn_recovers_without_active_turn_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    supervisor = HermesSupervisor(fake_acp_command("official_prompt_hang"))
+    try:
+
+        async def _fake_snapshot(_session_id: str) -> SimpleNamespace:
+            return SimpleNamespace(
+                message_count=4,
+                last_updated_unix=time.time(),
+                last_assistant_text="persisted reply",
+            )
+
+        monkeypatch.setattr(
+            supervisor,
+            "_read_session_store_snapshot",
+            _fake_snapshot,
+        )
+
+        result = await supervisor.wait_for_turn(
+            tmp_path,
+            "session-1",
+            "turn-9",
+        )
+
+        assert result.status == "completed"
+        assert result.assistant_text == "persisted reply"
+        assert [event.get("method") for event in result.raw_events] == [
+            "prompt/completed"
+        ]
+        assert (
+            result.raw_events[0].get("params", {}).get("recoveredFrom")
+            == "session_store_missing_state"
+        )
+    finally:
+        await supervisor.close_all()
+
+
+@pytest.mark.asyncio
+async def test_hermes_supervisor_recovers_session_store_without_active_turn_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    supervisor = HermesSupervisor(fake_acp_command("official_prompt_hang"))
+    try:
+
+        async def _fake_snapshot(_session_id: str) -> SimpleNamespace:
+            return SimpleNamespace(
+                message_count=4,
+                last_updated_unix=time.time(),
+                last_assistant_text="persisted reply",
+            )
+
+        monkeypatch.setattr(
+            supervisor,
+            "_read_session_store_snapshot",
+            _fake_snapshot,
+        )
+
+        result = await supervisor.recover_turn_from_session_store(
+            tmp_path,
+            "session-1",
+            "turn-9",
+        )
+
+        assert result is not None
+        assert result.status == "completed"
+        assert result.assistant_text == "persisted reply"
+        assert [event.get("method") for event in result.raw_events] == [
+            "prompt/completed"
+        ]
+        assert (
+            result.raw_events[0].get("params", {}).get("recoveredFrom")
+            == "session_store_missing_state"
+        )
     finally:
         await supervisor.close_all()

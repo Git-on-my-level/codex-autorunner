@@ -32,6 +32,7 @@ from ....core.hub_control_plane import (
     QueueDepthRequest,
     QueuedExecutionListRequest,
     RunningExecutionLookupRequest,
+    RunningThreadTargetIdsRequest,
     SurfaceBindingListRequest,
     SurfaceBindingLookupRequest,
     SurfaceBindingUpsertRequest,
@@ -321,6 +322,16 @@ def build_hub_control_plane_routes() -> APIRouter:
                 {"thread_target_id": thread_target_id}
             ),
             operation=service.get_running_execution,
+        )
+
+    @router.post("/thread-targets/executions/running/query")
+    async def list_thread_target_ids_with_running_executions(
+        request: Request, payload: dict[str, Any]
+    ):
+        service = _require_control_plane_service(request)
+        return await _run_control_plane_call(
+            request_factory=lambda: RunningThreadTargetIdsRequest.from_mapping(payload),
+            operation=service.list_thread_target_ids_with_running_executions,
         )
 
     @router.get("/thread-targets/{thread_target_id}/executions/latest")

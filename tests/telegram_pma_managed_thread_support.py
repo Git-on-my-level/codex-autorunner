@@ -112,6 +112,9 @@ class _InProcessHubControlPlaneClient:
     async def get_running_execution(self, request: Any) -> Any:
         return self._service.get_running_execution(request)
 
+    async def list_thread_target_ids_with_running_executions(self, request: Any) -> Any:
+        return self._service.list_thread_target_ids_with_running_executions(request)
+
     async def get_latest_execution(self, request: Any) -> Any:
         return self._service.get_latest_execution(request)
 

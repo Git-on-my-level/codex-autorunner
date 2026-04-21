@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -81,6 +82,22 @@ def _normalize_request_kind(value: Any) -> MessageRequestKind:
     if normalized == "review":
         return "review"
     return "message"
+
+
+def _normalize_recovered_execution_status(
+    status: Any,
+    *,
+    assistant_text: str,
+    errors: list[str],
+) -> str:
+    normalized = str(status or "").strip().lower()
+    if normalized in {"ok", "completed", "complete", "success", "succeeded"}:
+        return "ok"
+    if normalized in {"interrupted", "cancelled", "canceled", "aborted"}:
+        return "interrupted"
+    if assistant_text and not errors and not normalized:
+        return "ok"
+    return "error"
 
 
 def _record_thread_activity_best_effort(
@@ -192,6 +209,11 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
                 limit=limit,
             )
         ]
+
+    def list_thread_ids_with_running_executions(
+        self, *, limit: Optional[int] = 200
+    ) -> list[str]:
+        return self._store.list_thread_ids_with_running_executions(limit=limit)
 
     def resume_thread_target(
         self,
@@ -1156,6 +1178,122 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         return self._recovery_helper.recover_running_execution_after_restart(
             thread_target_id
         )
+
+    async def recover_running_execution_from_harness(
+        self,
+        thread_target_id: str,
+        *,
+        default_error: Optional[str] = None,
+    ) -> Optional[ExecutionRecord]:
+        thread = self.get_thread_target(thread_target_id)
+        if thread is None:
+            raise KeyError(f"Unknown thread target '{thread_target_id}'")
+
+        execution = self.get_running_execution(thread_target_id)
+        if execution is None:
+            return None
+
+        workspace_root = (
+            Path(thread.workspace_root)
+            if isinstance(thread.workspace_root, str) and thread.workspace_root.strip()
+            else None
+        )
+        if workspace_root is None:
+            return None
+
+        runtime_binding = _resolve_thread_runtime_binding(
+            self.thread_store, thread_target_id
+        )
+        backend_thread_id = (
+            runtime_binding.backend_thread_id
+            if runtime_binding is not None and runtime_binding.backend_thread_id
+            else (
+                thread.backend_thread_id.strip()
+                if isinstance(thread.backend_thread_id, str)
+                and thread.backend_thread_id.strip()
+                else None
+            )
+        )
+        backend_turn_id = (
+            execution.backend_id.strip()
+            if isinstance(execution.backend_id, str) and execution.backend_id.strip()
+            else None
+        )
+        if backend_thread_id is None or backend_turn_id is None:
+            return None
+
+        harness = self._harness_for_thread(thread)
+        recover = getattr(harness, "recover_stalled_turn", None)
+        if not callable(recover):
+            return None
+
+        try:
+            recovered = await recover(
+                workspace_root, backend_thread_id, backend_turn_id
+            )
+        except asyncio.CancelledError:
+            raise
+        except (
+            RuntimeError,
+            OSError,
+            ValueError,
+            TypeError,
+            AttributeError,
+            ConnectionError,
+        ):
+            return None
+        if recovered is None:
+            return None
+
+        assistant_text = str(getattr(recovered, "assistant_text", "") or "")
+        raw_errors = getattr(recovered, "errors", None)
+        errors = []
+        if isinstance(raw_errors, list):
+            errors = [
+                normalized
+                for item in raw_errors
+                if (normalized := str(item or "").strip())
+            ]
+        status = _normalize_recovered_execution_status(
+            getattr(recovered, "status", None),
+            assistant_text=assistant_text,
+            errors=errors,
+        )
+        error_text: Optional[str] = None
+        if status == "error":
+            error_text = errors[0] if errors else (default_error or execution.error)
+        elif status == "interrupted":
+            error_text = errors[0] if errors else execution.error
+
+        log_event(
+            logger,
+            logging.WARNING,
+            "orchestration.thread.recovered_from_harness",
+            thread_target_id=thread_target_id,
+            execution_id=execution.execution_id,
+            backend_thread_id=backend_thread_id,
+            backend_turn_id=backend_turn_id,
+            recovered_status=status,
+            recovered_output_chars=len(assistant_text),
+            error_text=error_text,
+            agent_id=thread.agent_id,
+            agent_profile=thread.agent_profile,
+        )
+        try:
+            return self.thread_store.record_execution_result(
+                thread_target_id,
+                execution.execution_id,
+                status=status,
+                assistant_text=assistant_text if status == "ok" else "",
+                error=error_text,
+                backend_turn_id=backend_turn_id,
+                transcript_turn_id=None,
+            )
+        except KeyError:
+            refreshed = self.get_execution(thread_target_id, execution.execution_id)
+            if refreshed is not None:
+                return refreshed
+            raise
 
     def get_execution(
         self, thread_target_id: str, execution_id: str

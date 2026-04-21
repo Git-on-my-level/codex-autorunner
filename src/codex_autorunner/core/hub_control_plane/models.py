@@ -24,6 +24,8 @@ from ._executions import (
     QueueDepthResponse,
     QueuedExecutionListRequest,
     RunningExecutionLookupRequest,
+    RunningThreadTargetIdsRequest,
+    RunningThreadTargetIdsResponse,
 )
 from ._handshake import (
     ControlPlaneCapability,
@@ -116,6 +118,8 @@ __all__ = [
     "QueueDepthResponse",
     "QueuedExecutionListRequest",
     "RunningExecutionLookupRequest",
+    "RunningThreadTargetIdsRequest",
+    "RunningThreadTargetIdsResponse",
     "THREAD_TARGET_LIST_LIFECYCLE_STATUSES",
     "HandshakeCompatibility",
     "HandshakeCompatibilityState",
