@@ -384,6 +384,7 @@ def test_build_hermes_supervisor_prepends_profile_binary_dir_to_path(
     entries = [entry for entry in path_value.split(os.pathsep) if entry]
     assert str(bin_dir) in entries
     assert entries.index(str(bin_dir)) < entries.index("/usr/bin")
+    assert supervisor.launch_env == supervisor._base_env
 
 
 @pytest.mark.slow

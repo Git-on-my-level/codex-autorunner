@@ -180,6 +180,11 @@ class HermesSupervisor:
     def launch_command(self) -> tuple[str, ...]:
         return self._command
 
+    @property
+    def launch_env(self) -> dict[str, str]:
+        """Environment passed to the ACP subprocess (PATH additions for profile wrappers)."""
+        return dict(self._base_env)
+
     async def ensure_ready(self, workspace_root: Path) -> None:
         started_at = time.monotonic()
         log_event(

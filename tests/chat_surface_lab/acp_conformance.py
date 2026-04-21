@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import time
@@ -25,6 +26,25 @@ DEFAULT_ARTIFACT_DIR = Path(".codex-autorunner") / "diagnostics" / "acp-conforma
 DEFAULT_COMPLETION_PROMPT = (
     "Return only the token CONFORMANCE_OK. Do not add punctuation or extra words."
 )
+
+_PROMPT_COMPLETION_STATUSES = frozenset(
+    {
+        "completed",
+        "complete",
+        "done",
+        "success",
+        "succeeded",
+    }
+)
+
+
+def _assert_prompt_completed_ok(result: Any) -> None:
+    status = str(getattr(result, "status", "") or "").strip().lower()
+    if status not in _PROMPT_COMPLETION_STATUSES:
+        raise AssertionError(f"Unexpected prompt status: {result.status}")
+    final_output = str(getattr(result, "final_output", "") or "")
+    if not final_output.strip():
+        raise AssertionError("Prompt completed without any final output")
 
 
 @dataclass(frozen=True)
@@ -121,6 +141,7 @@ def discover_repo_acp_targets(repo_root: Path) -> list[ACPConformanceTarget]:
                     command=supervisor.launch_command,
                     source="repo_config",
                     agent_id="hermes",
+                    env=supervisor.launch_env,
                     notes=_notes_from_preflight(
                         base_preflight.message, base_preflight.version
                     ),
@@ -153,6 +174,7 @@ def discover_repo_acp_targets(repo_root: Path) -> list[ACPConformanceTarget]:
                     source="repo_config",
                     agent_id="hermes",
                     profile=profile_name,
+                    env=supervisor.launch_env,
                     notes=_notes_from_preflight(
                         preflight.message,
                         preflight.version,
@@ -391,28 +413,21 @@ async def _portable_session_roundtrip_case(
 async def _portable_prompt_completion_case(
     client: ACPClient,
     workspace_root: Path,
-    prompt: str,
+    portable_prompt: str,
 ) -> dict[str, Any]:
     created = await client.create_session(cwd=str(workspace_root))
-    handle = await client.start_prompt(created.session_id, prompt)
+    handle = await client.start_prompt(created.session_id, portable_prompt)
     collector = _EventCollector()
     collector_task = asyncio.create_task(collector.collect(handle))
     try:
         result = await handle.wait(timeout=60.0)
     finally:
-        await collector_task
+        collector_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await collector_task
 
     final_output = str(result.final_output or "")
-    if result.status.lower() not in {
-        "completed",
-        "complete",
-        "done",
-        "success",
-        "succeeded",
-    }:
-        raise AssertionError(f"Unexpected prompt status: {result.status}")
-    if not final_output.strip():
-        raise AssertionError("Prompt completed without any final output")
+    _assert_prompt_completed_ok(result)
 
     return {
         "session_id": created.session_id,
@@ -429,14 +444,15 @@ async def _portable_prompt_completion_case(
 async def _portable_prompt_reuse_case(
     client: ACPClient,
     workspace_root: Path,
-    prompt: str,
+    portable_prompt: str,
 ) -> dict[str, Any]:
     created = await client.create_session(cwd=str(workspace_root))
     turn_ids: list[str] = []
     outputs: list[str] = []
     for _ in range(2):
-        handle = await client.start_prompt(created.session_id, prompt)
+        handle = await client.start_prompt(created.session_id, portable_prompt)
         result = await handle.wait(timeout=60.0)
+        _assert_prompt_completed_ok(result)
         turn_ids.append(handle.turn_id)
         outputs.append(str(result.final_output or ""))
     if len(set(turn_ids)) != 2:
