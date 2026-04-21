@@ -48,6 +48,27 @@ def _extract_session_summary(payload: Mapping[str, Any]) -> Optional[str]:
     return None
 
 
+def _build_session_store_recovered_raw_events(
+    *,
+    session_id: str,
+    turn_id: str,
+    assistant_text: str,
+    recovery_source: str,
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "method": "prompt/completed",
+            "params": {
+                "sessionId": session_id,
+                "turnId": turn_id,
+                "status": "completed",
+                "finalOutput": assistant_text,
+                "recoveredFrom": recovery_source,
+            },
+        }
+    ]
+
+
 class HermesSupervisorError(RuntimeError):
     pass
 
@@ -437,8 +458,29 @@ class HermesSupervisor:
             session_id,
             turn_id,
         )
-        state = await self._require_turn_state(workspace_root, resolved_turn_id)
+        workspace = _workspace_key(workspace_root)
         started_at = time.monotonic()
+        try:
+            state = await self._require_turn_state(workspace_root, resolved_turn_id)
+        except HermesSupervisorError:
+            recovered = (
+                await self._recover_turn_result_from_session_store_without_state(
+                    session_id=session_id,
+                    turn_id=resolved_turn_id,
+                )
+            )
+            if recovered is None:
+                raise
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "hermes.turn.wait_missing_state_recovered",
+                workspace_root=workspace,
+                session_id=session_id,
+                turn_id=resolved_turn_id,
+                elapsed_ms=_elapsed_ms(started_at),
+            )
+            return recovered
         try:
             result = await state.handle.wait(timeout=timeout)
         except asyncio.TimeoutError:
@@ -463,11 +505,33 @@ class HermesSupervisor:
                     last_progress_at=state.last_progress_at,
                 )
             else:
+                recovered_without_state = (
+                    await self._recover_turn_result_from_session_store_without_state(
+                        session_id=session_id,
+                        turn_id=resolved_turn_id,
+                    )
+                )
+                if recovered_without_state is not None:
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "hermes.turn.wait_timeout_recovered_without_state",
+                        workspace_root=workspace,
+                        session_id=session_id,
+                        turn_id=resolved_turn_id,
+                        timeout_seconds=timeout,
+                        elapsed_ms=_elapsed_ms(started_at),
+                        last_event_method=state.last_event_method,
+                        last_runtime_method=state.last_event_method,
+                        last_session_update_kind=state.last_session_update_kind,
+                        last_progress_at=state.last_progress_at,
+                    )
+                    return recovered_without_state
                 log_event(
                     self._logger,
                     logging.WARNING,
                     "hermes.turn.wait_timeout",
-                    workspace_root=_workspace_key(workspace_root),
+                    workspace_root=workspace,
                     session_id=session_id,
                     turn_id=resolved_turn_id,
                     timeout_seconds=timeout,
@@ -478,6 +542,51 @@ class HermesSupervisor:
                     last_progress_at=state.last_progress_at,
                 )
                 raise
+        except Exception as exc:
+            recovered = await self._recover_turn_from_session_store(
+                workspace_root,
+                state,
+            )
+            if recovered is not None:
+                result = recovered
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "hermes.turn.wait_error_recovered",
+                    workspace_root=workspace,
+                    session_id=session_id,
+                    turn_id=resolved_turn_id,
+                    elapsed_ms=_elapsed_ms(started_at),
+                    last_event_method=state.last_event_method,
+                    last_runtime_method=state.last_event_method,
+                    last_session_update_kind=state.last_session_update_kind,
+                    last_progress_at=state.last_progress_at,
+                    detail=str(exc) or exc.__class__.__name__,
+                )
+            else:
+                recovered_without_state = (
+                    await self._recover_turn_result_from_session_store_without_state(
+                        session_id=session_id,
+                        turn_id=resolved_turn_id,
+                    )
+                )
+                if recovered_without_state is not None:
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "hermes.turn.wait_error_recovered_without_state",
+                        workspace_root=workspace,
+                        session_id=session_id,
+                        turn_id=resolved_turn_id,
+                        elapsed_ms=_elapsed_ms(started_at),
+                        last_event_method=state.last_event_method,
+                        last_runtime_method=state.last_event_method,
+                        last_session_update_kind=state.last_session_update_kind,
+                        last_progress_at=state.last_progress_at,
+                        detail=str(exc) or exc.__class__.__name__,
+                    )
+                    return recovered_without_state
+                raise
         await self._sync_prompt_snapshot_into_event_buffer(workspace_root, state)
         await state.event_buffer.close()
         errors = [result.error_message] if result.error_message else []
@@ -486,7 +595,7 @@ class HermesSupervisor:
             self._logger,
             logging.INFO,
             "hermes.turn.completed",
-            workspace_root=_workspace_key(workspace_root),
+            workspace_root=workspace,
             session_id=session_id,
             turn_id=resolved_turn_id,
             status=result.status,
@@ -540,10 +649,19 @@ class HermesSupervisor:
             session_id,
             turn_id,
         )
-        state = await self._require_turn_state(workspace_root, resolved_turn_id)
+        try:
+            state = await self._require_turn_state(workspace_root, resolved_turn_id)
+        except HermesSupervisorError:
+            return await self._recover_turn_result_from_session_store_without_state(
+                session_id=session_id,
+                turn_id=resolved_turn_id,
+            )
         result = await self._recover_turn_from_session_store(workspace_root, state)
         if result is None:
-            return None
+            return await self._recover_turn_result_from_session_store_without_state(
+                session_id=session_id,
+                turn_id=resolved_turn_id,
+            )
         await self._sync_prompt_snapshot_into_event_buffer(workspace_root, state)
         await state.event_buffer.close()
         errors = [result.error_message] if result.error_message else []
@@ -699,6 +817,40 @@ class HermesSupervisor:
             last_progress_at=state.last_progress_at,
         )
         return await state.handle.wait(timeout=0.1)
+
+    async def _recover_turn_result_from_session_store_without_state(
+        self,
+        *,
+        session_id: str,
+        turn_id: str,
+    ) -> Optional[TerminalTurnResult]:
+        snapshot = await self._read_session_store_snapshot(session_id)
+        if snapshot is None:
+            return None
+        assistant_text = _normalize_optional_text(snapshot.last_assistant_text)
+        if not assistant_text or snapshot.last_updated_unix is None:
+            return None
+        raw_events = _build_session_store_recovered_raw_events(
+            session_id=session_id,
+            turn_id=turn_id,
+            assistant_text=assistant_text,
+            recovery_source="session_store_missing_state",
+        )
+        log_event(
+            self._logger,
+            logging.WARNING,
+            "hermes.turn.recovered_from_session_store_without_state",
+            session_id=session_id,
+            turn_id=turn_id,
+            recovered_output_chars=len(assistant_text),
+            recovered_message_count=snapshot.message_count,
+        )
+        return TerminalTurnResult(
+            status="completed",
+            assistant_text=assistant_text,
+            errors=[],
+            raw_events=raw_events,
+        )
 
     async def _read_session_store_snapshot(
         self,
