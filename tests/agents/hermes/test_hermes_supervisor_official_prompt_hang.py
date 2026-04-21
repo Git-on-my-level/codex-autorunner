@@ -2,11 +2,52 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from tests.chat_surface_harness.hermes import fake_acp_command
 
-from codex_autorunner.agents.hermes.supervisor import HermesSupervisor
+from codex_autorunner.agents.hermes.supervisor import (
+    HermesSupervisor,
+    _probe_hermes_session_store_root,
+)
+
+
+@pytest.mark.parametrize(
+    ("stdout", "relative_path"),
+    [
+        (
+            "hermes_home ~/.hermes/profiles/hermes-m4-pma\n",
+            Path(".hermes/profiles/hermes-m4-pma"),
+        ),
+        (
+            "--- hermes dump ---\n"
+            "profile: hermes-m4-pma\n"
+            "hermes_home:      ~/.hermes/profiles/hermes-m4-pma\n"
+            "--- end dump ---\n",
+            Path(".hermes/profiles/hermes-m4-pma"),
+        ),
+    ],
+)
+def test_probe_hermes_session_store_root_parses_dump_output(
+    monkeypatch: pytest.MonkeyPatch,
+    stdout: str,
+    relative_path: Path,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+    def _fake_run(*args, **kwargs):
+        _ = args, kwargs
+        return SimpleNamespace(returncode=0, stdout=stdout)
+
+    monkeypatch.setattr(
+        "codex_autorunner.agents.hermes.supervisor.subprocess.run",
+        _fake_run,
+    )
+
+    expected = (tmp_path / "home" / relative_path).resolve()
+    assert _probe_hermes_session_store_root("/tmp/hermes", {}) == expected
 
 
 @pytest.mark.slow

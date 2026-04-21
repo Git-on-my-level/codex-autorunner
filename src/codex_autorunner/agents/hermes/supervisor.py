@@ -1060,8 +1060,16 @@ def _probe_hermes_session_store_root(
     if result.returncode != 0:
         return None
     for line in result.stdout.splitlines():
-        key, _, value = line.partition(" ")
-        if key.strip().lower() != "hermes_home":
+        stripped = line.strip()
+        if not stripped:
+            continue
+        key: str
+        value: str
+        if ":" in stripped:
+            key, _, value = stripped.partition(":")
+        else:
+            key, _, value = stripped.partition(" ")
+        if key.strip().lower().rstrip(":") != "hermes_home":
             continue
         normalized = _normalize_optional_text(value)
         if normalized:
