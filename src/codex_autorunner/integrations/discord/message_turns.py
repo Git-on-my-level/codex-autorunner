@@ -597,6 +597,7 @@ async def _submit_discord_thread_message(
         channel_id=dispatch.channel_id,
     )
     supervision.set_orphaned(True)
+    supervision.set_reconcile_on_cancel(True)
     supervision.set_failure_note(
         "Turn failed: background task terminated unexpectedly."
     )
@@ -2351,6 +2352,7 @@ async def _run_discord_orchestrated_turn_for_message(
                         "no longer live. Please retry if needed."
                     ),
                     orphaned=True,
+                    reconcile_on_cancel=True,
                     await_on_shutdown=True,
                 ),
                 begin_next_execution=cast(

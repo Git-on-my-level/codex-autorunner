@@ -629,6 +629,7 @@ def _spawn_discord_progress_background_task(
     message_id: Optional[str] = None,
     failure_note: Optional[str] = None,
     orphaned: bool = False,
+    reconcile_on_cancel: bool = False,
     await_on_shutdown: bool = False,
 ) -> asyncio.Task[Any]:
     task = _spawn_discord_background_task(
@@ -645,4 +646,5 @@ def _spawn_discord_progress_background_task(
         message_id=message_id,
         failure_note=failure_note,
         orphaned=orphaned,
+        reconcile_on_cancel=reconcile_on_cancel,
     )
