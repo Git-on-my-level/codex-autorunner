@@ -330,9 +330,7 @@ def build_hub_control_plane_routes() -> APIRouter:
     ):
         service = _require_control_plane_service(request)
         return await _run_control_plane_call(
-            request_factory=lambda: RunningThreadTargetIdsRequest.from_mapping(
-                payload
-            ),
+            request_factory=lambda: RunningThreadTargetIdsRequest.from_mapping(payload),
             operation=service.list_thread_target_ids_with_running_executions,
         )
 
