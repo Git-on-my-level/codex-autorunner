@@ -11,6 +11,7 @@ from .manifest import (
     ensure_unique_repo_id,
     is_safe_repo_id,
     load_manifest,
+    match_base_repo_id,
     sanitize_repo_id,
     save_manifest,
 )
@@ -34,20 +35,6 @@ def discover_and_init(hub_config: HubConfig) -> Tuple[Manifest, List[DiscoveryRe
     manifest = load_manifest(hub_config.manifest_path, hub_config.root)
     records: List[DiscoveryRecord] = []
     seen_ids: set[str] = set()
-
-    def _match_base_repo_id(base_name: str, *, base_path: Optional[Path]) -> str:
-        normalized_base = sanitize_repo_id(base_name)
-        if base_path is not None:
-            existing = manifest.get_by_path(hub_config.root, base_path)
-            if existing is not None:
-                return existing.id
-        for repo in manifest.repos:
-            if repo.kind != "base":
-                continue
-            display_name = (repo.display_name or "").strip()
-            if display_name == base_name or repo.id == normalized_base:
-                return repo.id
-        return normalized_base
 
     def _infer_repo_shape(
         repo_path: Path,
@@ -78,7 +65,9 @@ def discover_and_init(hub_config: HubConfig) -> Tuple[Manifest, List[DiscoveryRe
 
         worktree_of = None
         if kind == "worktree" and base_name:
-            worktree_of = _match_base_repo_id(base_name, base_path=base_path)
+            worktree_of = match_base_repo_id(
+                manifest, hub_config.root, base_name, base_path=base_path
+            )
         return kind, worktree_of, branch or branch_from_name
 
     def _normalize_manifest_ids() -> None:

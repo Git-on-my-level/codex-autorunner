@@ -20,7 +20,7 @@ from ..bootstrap import seed_repo_files
 from ..manifest import (
     Manifest,
     load_manifest,
-    sanitize_repo_id,
+    match_base_repo_id,
     save_manifest,
 )
 from .archive import (
@@ -624,26 +624,6 @@ class WorktreeManager:
             repo_id=repo_id,
         )
 
-    def _match_base_repo_id(
-        self,
-        *,
-        manifest: Manifest,
-        base_name: str,
-        base_path: Optional[Path],
-    ) -> str:
-        normalized_base = sanitize_repo_id(base_name)
-        if base_path is not None:
-            existing = manifest.get_by_path(self._hub_config.root, base_path)
-            if existing is not None:
-                return existing.id
-        for repo in manifest.repos:
-            if repo.kind != "base":
-                continue
-            display_name = (repo.display_name or "").strip()
-            if display_name == base_name or repo.id == normalized_base:
-                return repo.id
-        return normalized_base
-
     def _infer_worktree_metadata(
         self,
         *,
@@ -661,9 +641,10 @@ class WorktreeManager:
 
         worktree_of = None
         if base_name:
-            worktree_of = self._match_base_repo_id(
-                manifest=manifest,
-                base_name=base_name,
+            worktree_of = match_base_repo_id(
+                manifest,
+                self._hub_config.root,
+                base_name,
                 base_path=base_path,
             )
 
