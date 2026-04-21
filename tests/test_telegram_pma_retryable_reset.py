@@ -13,7 +13,7 @@ from codex_autorunner.integrations.telegram.handlers.commands import (
     execution as execution_commands_module,
 )
 from codex_autorunner.integrations.telegram.state import TelegramTopicRecord
-from tests.telegram_pma_routing_support import _PMAWorkspaceHandler
+from tests.telegram_pma_workspace_support import _PMAWorkspaceHandler
 
 
 @pytest.mark.anyio

@@ -9,7 +9,7 @@ import pytest
 from codex_autorunner.core.orchestration.runtime_bindings import (
     clear_runtime_thread_binding,
 )
-from tests import telegram_pma_routing_support as support
+from tests import telegram_pma_managed_thread_support as support
 
 _SESSION_NOTICE = "Notice: I started a new live session for this conversation."
 

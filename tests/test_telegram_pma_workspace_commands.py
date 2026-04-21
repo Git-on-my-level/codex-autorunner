@@ -9,7 +9,7 @@ from tests.integrations.telegram.test_newt_workspace_commands import (
     test_newt_runs_hub_setup_commands_for_workspace,
     test_newt_thread_fallback_and_workspace_state_reset,
 )
-from tests.telegram_pma_routing_support import (
+from tests.telegram_pma_workspace_support import (
     test_apply_compact_summary_preserves_pma_mode_for_replacement_thread,
     test_apply_compact_summary_uses_shared_lifecycle_before_topic_mirror_update,
     test_archive_uses_shared_fresh_start_and_resets_topic,

@@ -1,6 +1,6 @@
 # ruff: noqa: F401
 
-from tests.telegram_pma_routing_support import (
+from tests.telegram_pma_managed_thread_support import (
     test_managed_thread_queue_worker_wraps_execution_with_typing_indicator,
     test_pma_followup_turn_without_new_thread_reuses_managed_thread_and_registry,
     test_pma_interrupt_recovers_missing_backend_thread_for_text_turns,
