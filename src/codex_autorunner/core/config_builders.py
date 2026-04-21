@@ -302,7 +302,9 @@ def build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         ),
         security=security_cfg,
         server_host=str(cfg["server"].get("host")),
-        server_port=int(cfg["server"].get("port")),
+        server_port=int(
+            cfg["server"].get("port", DEFAULT_REPO_CONFIG["server"]["port"])
+        ),
         server_base_path=normalize_base_path(cfg["server"].get("base_path", "")),
         server_access_log=bool(cfg["server"].get("access_log", False)),
         server_auth_token_env=str(cfg["server"].get("auth_token_env", "")),
@@ -424,7 +426,9 @@ def build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
             cfg.get("usage"), root, DEFAULT_HUB_CONFIG.get("usage")
         ),
         server_host=str(cfg["server"]["host"]),
-        server_port=int(cfg["server"].get("port")),
+        server_port=int(
+            cfg["server"].get("port", DEFAULT_HUB_CONFIG["server"]["port"])
+        ),
         server_base_path=normalize_base_path(cfg["server"].get("base_path", "")),
         server_access_log=bool(cfg["server"].get("access_log", False)),
         server_auth_token_env=str(cfg["server"].get("auth_token_env", "")),
