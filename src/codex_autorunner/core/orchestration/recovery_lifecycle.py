@@ -22,8 +22,11 @@ from .models import (
     ThreadTarget,
 )
 
-LOST_BACKEND_THREAD_ERROR = "Backend thread lost after restart"
-MISSING_BACKEND_THREAD_ERROR = "Backend thread missing from orchestration state"
+LOST_BACKEND_THREAD_ERROR = "Running execution could not be reattached after restart"
+MISSING_BACKEND_THREAD_ERROR = (
+    "Running execution could not be reattached after restart because no backend "
+    "thread binding was persisted"
+)
 logger = logging.getLogger(__name__)
 
 
@@ -362,20 +365,29 @@ class _ThreadRecoveryHelper:
             self.thread_store, thread_target_id
         )
         backend_thread_id = (
-            runtime_binding.backend_thread_id if runtime_binding is not None else None
+            runtime_binding.backend_thread_id
+            if runtime_binding is not None and runtime_binding.backend_thread_id
+            else (
+                thread.backend_thread_id.strip()
+                if isinstance(thread.backend_thread_id, str)
+                and thread.backend_thread_id.strip()
+                else None
+            )
         )
         return self.recover_lost_backend_execution(
             thread_target_id=thread_target_id,
             execution=execution,
             backend_thread_id=backend_thread_id,
-            error_message=(
-                LOST_BACKEND_THREAD_ERROR
-                if backend_thread_id
-                else MISSING_BACKEND_THREAD_ERROR
-            ),
+            error_message=LOST_BACKEND_THREAD_ERROR,
             reason=(
                 "startup_lost_backend_binding"
-                if backend_thread_id
+                if (
+                    backend_thread_id
+                    or (
+                        isinstance(execution.backend_id, str)
+                        and execution.backend_id.strip()
+                    )
+                )
                 else "startup_missing_backend_thread_id"
             ),
         )

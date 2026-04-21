@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import time
 from typing import Optional, Tuple
 
@@ -14,6 +15,18 @@ from .models import (
     HandshakeRequest,
     evaluate_handshake_compatibility,
 )
+
+_STARTUP_RETRY_JITTER_RATIO = 0.1
+
+
+def _jittered_retry_delay(delay_seconds: float) -> float:
+    normalized_delay = max(delay_seconds, 0.0)
+    if normalized_delay == 0.0:
+        return 0.0
+    jitter = normalized_delay * _STARTUP_RETRY_JITTER_RATIO
+    if jitter <= 0.0:
+        return normalized_delay
+    return normalized_delay + random.uniform(0.0, jitter)
 
 
 async def perform_startup_hub_handshake(
@@ -87,18 +100,19 @@ async def perform_startup_hub_handshake(
                 and time.monotonic() < startup_retry_deadline
             )
             if should_retry:
+                sleep_seconds = _jittered_retry_delay(delay_seconds)
                 log_event(
                     logger,
-                    logging.WARNING,
+                    logging.INFO,
                     f"{log_event_name_prefix}.hub_control_plane.handshake_retrying",
                     hub_root=hub_root_str,
                     attempt=attempt,
-                    delay_seconds=round(delay_seconds, 2),
+                    delay_seconds=round(sleep_seconds, 2),
                     error_code=exc.code,
                     message=str(exc),
                     expected_schema_generation=expected_schema_generation,
                 )
-                await asyncio.sleep(delay_seconds)
+                await asyncio.sleep(sleep_seconds)
                 delay_seconds = min(
                     max(delay_seconds, 0.1) * 2.0,
                     retry_max_delay_seconds,

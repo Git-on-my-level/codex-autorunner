@@ -1670,7 +1670,7 @@ async def test_stop_thread_marks_interrupted_when_runtime_binding_is_lost_after_
     assert outcome.execution.error is None
 
 
-async def test_recover_running_execution_after_restart_marks_missing_backend_binding(
+async def test_recover_running_execution_after_restart_marks_restart_reattach_failure(
     tmp_path: Path,
 ) -> None:
     harness = _FakeHarness()
@@ -1696,7 +1696,40 @@ async def test_recover_running_execution_after_restart_marks_missing_backend_bin
     assert recovered is not None
     assert recovered.execution_id == execution.execution_id
     assert recovered.status == "error"
-    assert recovered.error == "Backend thread missing from orchestration state"
+    assert recovered.error == "Running execution could not be reattached after restart"
+    assert _thread_runtime_binding(restarted_service, thread.thread_target_id) is None
+    assert restarted_service.get_running_execution(thread.thread_target_id) is None
+
+
+async def test_recover_running_execution_after_restart_without_binding_stays_restart_specific(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+    execution = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="Need an answer",
+        )
+    )
+
+    clear_runtime_thread_binding(tmp_path / "hub", thread.thread_target_id)
+    service.thread_store.set_thread_backend_id(thread.thread_target_id, None)
+    service.thread_store.set_execution_backend_id(execution.execution_id, None)
+    restarted_service = _build_service(tmp_path, harness)
+
+    recovered = restarted_service.recover_running_execution_after_restart(
+        thread.thread_target_id
+    )
+
+    assert recovered is not None
+    assert recovered.execution_id == execution.execution_id
+    assert recovered.status == "error"
+    assert recovered.error == "Running execution could not be reattached after restart"
     assert _thread_runtime_binding(restarted_service, thread.thread_target_id) is None
     assert restarted_service.get_running_execution(thread.thread_target_id) is None
 

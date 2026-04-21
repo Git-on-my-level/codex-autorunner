@@ -116,6 +116,8 @@ class LifecycleEventRouter:
                             event, reason="dispatch_created"
                         )
         elif event.event_type in (
+            LifecycleEventType.FLOW_STARTED,
+            LifecycleEventType.FLOW_RESUMED,
             LifecycleEventType.FLOW_PAUSED,
             LifecycleEventType.FLOW_COMPLETED,
             LifecycleEventType.FLOW_FAILED,
@@ -198,6 +200,8 @@ class LifecycleEventRouter:
     ) -> dict[str, Optional[str]]:
         data = event.data if isinstance(event.data, dict) else {}
         to_state_fallback = {
+            LifecycleEventType.FLOW_STARTED: "running",
+            LifecycleEventType.FLOW_RESUMED: "running",
             LifecycleEventType.FLOW_PAUSED: "blocked",
             LifecycleEventType.FLOW_COMPLETED: "completed",
             LifecycleEventType.FLOW_FAILED: "failed",
@@ -216,6 +220,10 @@ class LifecycleEventRouter:
         )
         if from_state is None:
             if event.event_type == LifecycleEventType.DISPATCH_CREATED:
+                from_state = "paused"
+            elif event.event_type == LifecycleEventType.FLOW_STARTED:
+                from_state = "pending"
+            elif event.event_type == LifecycleEventType.FLOW_RESUMED:
                 from_state = "paused"
             elif to_state in {"paused", "blocked", "completed", "failed", "stopped"}:
                 from_state = "running"
