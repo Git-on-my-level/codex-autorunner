@@ -22,6 +22,7 @@ from ..chat.managed_thread_delivery_support import (
     deliver_managed_thread_terminal_record,
 )
 from .constants import DISCORD_MAX_MESSAGE_LENGTH
+from .progress_leases import cleanup_discord_terminal_progress_leases
 from .rendering import chunk_discord_message, format_discord_message
 
 
@@ -107,12 +108,28 @@ async def deliver_discord_managed_thread_record(
     async def _cleanup(context: ManagedThreadDeliveryCleanupContext) -> None:
         raw_path = context.metadata.get("workspace_root")
         if not isinstance(raw_path, str) or not raw_path.strip():
-            return
+            workspace_root = None
+        else:
+            workspace_root = Path(raw_path)
         flush = getattr(service, "_flush_outbox_files", None)
-        if not callable(flush):
-            return
-        workspace_root = Path(raw_path)
-        await flush(workspace_root=workspace_root, channel_id=target_channel_id)
+        if callable(flush) and workspace_root is not None:
+            await flush(workspace_root=workspace_root, channel_id=target_channel_id)
+        completion_note = (
+            "Status: this turn already failed."
+            if str(record.envelope.final_status or "").strip().lower() == "error"
+            else "Status: this turn already completed."
+        )
+        await cleanup_discord_terminal_progress_leases(
+            service,
+            managed_thread_id=record.managed_thread_id,
+            execution_id=record.managed_turn_id,
+            channel_id=target_channel_id,
+            note=completion_note,
+            record_prefix=(
+                "discord:managed-thread-progress-cleanup:"
+                f"{record.managed_thread_id}:{record.managed_turn_id}"
+            ),
+        )
 
     return await deliver_managed_thread_terminal_record(
         record,

@@ -545,6 +545,96 @@ async def test_queued_delivery_preserves_progress_lease_until_terminal_delivery(
 
 
 @pytest.mark.anyio
+async def test_terminal_delivery_retire_progress_anchor_when_preview_delete_fails(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allowed_channel_ids=frozenset({"channel-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    await store.upsert_turn_progress_lease(
+        lease_id="lease-1",
+        managed_thread_id="thread-1",
+        execution_id="exec-1",
+        channel_id="channel-1",
+        message_id="progress-1",
+        state="active",
+        progress_label="working",
+    )
+
+    async def _fail_delete(
+        channel_id: str,
+        message_id: str,
+        *,
+        record_id: str | None = None,
+    ) -> bool:
+        _ = (channel_id, message_id, record_id)
+        return False
+
+    service._delete_channel_message_safe = _fail_delete  # type: ignore[method-assign]
+    dispatch = SimpleNamespace(
+        service=service,
+        channel_id="channel-1",
+        session_key="session-1",
+        pending_compact_seed=None,
+        agent="codex",
+        model_override=None,
+    )
+    supervision = SimpleNamespace(
+        task_context={
+            "managed_thread_id": "thread-1",
+            "lease_id": "lease-1",
+            "message_id": "progress-1",
+            "execution_id": "exec-1",
+        },
+        set_message_id=lambda _value: None,
+        set_execution_id=lambda _value: None,
+        set_failure_note=lambda _value: None,
+        clear_progress_tracking=lambda **_kwargs: None,
+    )
+
+    try:
+        await discord_message_turns_module._deliver_discord_turn_result(
+            dispatch,
+            workspace_root=workspace,
+            turn_result=DiscordMessageTurnResult(
+                final_message="final response",
+                preview_message_id="progress-1",
+                execution_id="exec-1",
+                send_final_message=True,
+            ),
+            supervision=supervision,
+        )
+
+        assert len(rest.channel_messages) == 1
+        assert rest.channel_messages[0]["payload"]["content"] == "final response"
+        assert rest.deleted_channel_messages == []
+        assert rest.edited_channel_messages
+        retired = rest.edited_channel_messages[-1]
+        assert retired["message_id"] == "progress-1"
+        assert "already completed" in retired["payload"]["content"].lower()
+        assert retired["payload"]["components"] == []
+        assert (
+            await store.list_turn_progress_leases(
+                managed_thread_id="thread-1",
+                execution_id="exec-1",
+            )
+            == []
+        )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_shutdown_timeout_reconciles_supervised_progress_leases(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
