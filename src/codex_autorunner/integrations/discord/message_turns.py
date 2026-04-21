@@ -134,6 +134,7 @@ from .progress_leases import (  # noqa: F401  re-export for backward compat
     _update_discord_progress_lease,
     _upsert_discord_progress_lease,
     bind_discord_progress_task_context,
+    cleanup_discord_terminal_progress_leases,
     clear_discord_turn_progress_leases,
     clear_discord_turn_progress_reuse,
     reconcile_discord_turn_progress_leases,
@@ -561,6 +562,33 @@ def _resolve_discord_managed_thread_status(
     return _DiscordManagedThreadStatus(thread_target_id=thread_target_id, busy=busy)
 
 
+async def _delete_discord_progress_message_safe(
+    service: Any,
+    *,
+    channel_id: str,
+    message_id: str,
+    record_id: str,
+) -> bool:
+    delete_safe = getattr(service, "_delete_channel_message_safe", None)
+    if not callable(delete_safe):
+        return False
+    try:
+        deleted = await delete_safe(
+            channel_id=channel_id,
+            message_id=message_id,
+            record_id=record_id,
+        )
+    except (
+        DiscordTransientError,
+        DiscordPermanentError,
+        RuntimeError,
+        ConnectionError,
+        OSError,
+    ):
+        return False
+    return deleted is not False
+
+
 async def _submit_discord_thread_message(
     request: SurfaceThreadMessageRequest,
     *,
@@ -641,7 +669,8 @@ async def _submit_discord_thread_message(
                 supervision.task_context, "message_id"
             )
             if progress_message_id:
-                await dispatch.service._delete_channel_message_safe(
+                await _delete_discord_progress_message_safe(
+                    dispatch.service,
                     channel_id=dispatch.channel_id,
                     message_id=progress_message_id,
                     record_id=(
@@ -658,14 +687,22 @@ async def _submit_discord_thread_message(
                     else f"Turn failed: {failure_message}"
                 )
             )
-            await dispatch.service._send_channel_message_safe(
-                dispatch.channel_id,
-                {"content": fallback_text},
-                record_id=(
-                    f"turn:background_failure:{dispatch.session_key}:"
-                    f"{uuid.uuid4().hex[:8]}"
-                ),
-            )
+            try:
+                await dispatch.service._send_channel_message_safe(
+                    dispatch.channel_id,
+                    {"content": fallback_text},
+                    record_id=(
+                        f"turn:background_failure:{dispatch.session_key}:"
+                        f"{uuid.uuid4().hex[:8]}"
+                    ),
+                )
+            except TypeError as exc:
+                if "record_id" not in str(exc):
+                    raise
+                await dispatch.service._send_channel_message_safe(
+                    dispatch.channel_id,
+                    {"content": fallback_text},
+                )
 
     async def _send_initial_progress_placeholder() -> Optional[str]:
         initial_content = "Received. Preparing turn..."
@@ -1239,54 +1276,60 @@ async def _deliver_discord_turn_result(
             attachment_caption="Final response too long; attached as final-response.md.",
         )
     if visible_terminal_delivery:
-        if isinstance(preview_message_id, str) and preview_message_id:
-            preview_message_deleted = await dispatch.service._delete_channel_message_safe(
-                channel_id=dispatch.channel_id,
-                message_id=preview_message_id,
-                record_id=(
-                    f"turn:delete_progress:{dispatch.session_key}:{uuid.uuid4().hex[:8]}"
-                ),
+        if not preserve_progress_lease:
+            # Require execution_id or managed_thread_id so listing does not fall back to
+            # channel_id-only (matches every lease on the channel).
+            _can_cleanup_terminal_leases = (
+                isinstance(execution_id, str)
+                and execution_id
+                or (isinstance(managed_thread_id, str) and managed_thread_id.strip())
             )
-            if preview_message_deleted:
-                if current_lease_id:
-                    await _delete_discord_progress_lease(
-                        dispatch.service,
-                        lease_id=current_lease_id,
-                    )
-                elif (
-                    isinstance(execution_id, str)
-                    and execution_id
-                    and not preserve_progress_lease
-                ):
-                    for lease in await _list_discord_progress_leases(
-                        dispatch.service,
-                        execution_id=execution_id,
-                    ):
-                        orphaned_lease_id = _execution_field(lease, "lease_id")
-                        if orphaned_lease_id:
-                            await _delete_discord_progress_lease(
-                                dispatch.service,
-                                lease_id=orphaned_lease_id,
-                            )
-                if supervision is not None:
-                    supervision.clear_progress_tracking()
-        elif (
-            isinstance(execution_id, str)
-            and execution_id
-            and not preserve_progress_lease
-        ):
-            for lease in await _list_discord_progress_leases(
-                dispatch.service,
-                execution_id=execution_id,
+            cleaned_progress = (
+                await cleanup_discord_terminal_progress_leases(
+                    dispatch.service,
+                    managed_thread_id=managed_thread_id,
+                    execution_id=execution_id,
+                    channel_id=dispatch.channel_id,
+                    note="Status: this turn already completed.",
+                    record_prefix=(
+                        f"turn:delete_progress:{dispatch.session_key}:{uuid.uuid4().hex[:8]}"
+                    ),
+                )
+                if _can_cleanup_terminal_leases
+                else 0
+            )
+            preview_message_deleted = bool(
+                cleaned_progress
+                and isinstance(preview_message_id, str)
+                and preview_message_id
+                and (
+                    preview_message_id == current_message_id
+                    or not isinstance(current_message_id, str)
+                )
+            )
+            if (
+                not preview_message_deleted
+                and isinstance(preview_message_id, str)
+                and preview_message_id
             ):
-                current_lease_id = _execution_field(lease, "lease_id")
-                if current_lease_id:
+                preview_message_deleted = await _delete_discord_progress_message_safe(
+                    dispatch.service,
+                    channel_id=dispatch.channel_id,
+                    message_id=preview_message_id,
+                    record_id=(
+                        "turn:delete_preview:"
+                        f"{dispatch.session_key}:{uuid.uuid4().hex[:8]}"
+                    ),
+                )
+                if preview_message_deleted and current_lease_id:
                     await _delete_discord_progress_lease(
                         dispatch.service,
                         lease_id=current_lease_id,
                     )
-            if supervision is not None:
-                supervision.set_lease_id(None)
+            if (
+                cleaned_progress or preview_message_deleted
+            ) and supervision is not None:
+                supervision.clear_progress_tracking()
     elif isinstance(preview_message_id, str) and preview_message_id:
         failure_note = (
             "Status: this turn finished, but Discord failed before the final reply "

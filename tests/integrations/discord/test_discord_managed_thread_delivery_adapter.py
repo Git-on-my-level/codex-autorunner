@@ -14,7 +14,12 @@ from types import SimpleNamespace
 from typing import Any, Optional
 
 import pytest
-from tests.discord_message_turns_support import _FakeRest
+from tests.discord_message_turns_support import (
+    _config,
+    _FakeGateway,
+    _FakeOutboxManager,
+    _FakeRest,
+)
 
 from codex_autorunner.core.filebox import outbox_dir, outbox_sent_dir
 from codex_autorunner.core.orchestration import (
@@ -33,6 +38,7 @@ from codex_autorunner.integrations.chat.managed_thread_turns import (
 )
 from codex_autorunner.integrations.discord import message_turns as discord_message_turns
 from codex_autorunner.integrations.discord.service import DiscordBotService
+from codex_autorunner.integrations.discord.state import DiscordStateStore
 
 
 def _make_engine(
@@ -599,6 +605,70 @@ async def test_discord_adapter_session_notice_included_in_delivery(
     content = service.sent_messages[0]["payload"]["content"]
     assert "A new session was started." in content
     assert "Hello from the agent" in content
+
+
+@pytest.mark.anyio
+async def test_discord_adapter_clears_progress_anchor_after_terminal_delivery(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allowed_channel_ids=frozenset({"channel-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    await store.upsert_turn_progress_lease(
+        lease_id="lease-1",
+        managed_thread_id="thread-1",
+        execution_id="turn-1",
+        channel_id="channel-1",
+        message_id="preview-1",
+        state="active",
+        progress_label="working",
+    )
+
+    async def _delete_preview(
+        channel_id: str,
+        message_id: str,
+        *,
+        record_id: Optional[str] = None,
+    ) -> bool:
+        _ = record_id
+        await rest.delete_channel_message(
+            channel_id=channel_id,
+            message_id=message_id,
+        )
+        return True
+
+    service._delete_channel_message_safe = _delete_preview  # type: ignore[method-assign]
+    delivery = _build_hooks(tmp_path, service=service)
+    finalized = _finalized_ok(managed_turn_id="turn-1")
+
+    try:
+        record = await handoff_managed_thread_final_delivery(
+            finalized,
+            delivery=delivery,
+            logger=logging.getLogger("test"),
+        )
+
+        assert record is not None
+        assert record.state is ManagedThreadDeliveryState.DELIVERED
+        assert len(rest.deleted_channel_messages) == 1
+        assert rest.deleted_channel_messages[0]["message_id"] == "preview-1"
+        assert (
+            await store.list_turn_progress_leases(
+                managed_thread_id="thread-1",
+                execution_id="turn-1",
+            )
+            == []
+        )
+    finally:
+        await store.close()
 
 
 @pytest.mark.anyio

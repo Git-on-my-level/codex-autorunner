@@ -413,6 +413,66 @@ async def _delete_discord_progress_lease(service: Any, *, lease_id: str) -> None
     await deleter(lease_id=lease_id)
 
 
+async def cleanup_discord_terminal_progress_leases(
+    service: Any,
+    *,
+    managed_thread_id: Optional[str] = None,
+    execution_id: Optional[str] = None,
+    channel_id: Optional[str] = None,
+    note: str,
+    record_prefix: str,
+) -> int:
+    leases = await _list_discord_progress_leases(
+        service,
+        managed_thread_id=managed_thread_id,
+        execution_id=execution_id,
+        channel_id=channel_id,
+    )
+    if not leases:
+        return 0
+    cleaned = 0
+    for lease in leases:
+        current_lease_id = _execution_field(lease, "lease_id")
+        current_channel_id = _execution_field(lease, "channel_id")
+        current_message_id = _execution_field(lease, "message_id")
+        if not current_lease_id or not current_channel_id or not current_message_id:
+            continue
+        delete_safe = getattr(service, "_delete_channel_message_safe", None)
+        try:
+            deleted = (
+                await delete_safe(
+                    channel_id=current_channel_id,
+                    message_id=current_message_id,
+                    record_id=f"{record_prefix}:{current_lease_id}",
+                )
+                if callable(delete_safe)
+                else False
+            )
+        except (
+            DiscordTransientError,
+            DiscordPermanentError,
+            RuntimeError,
+            ConnectionError,
+            OSError,
+        ):
+            deleted = False
+        deleted = deleted is not False
+        if deleted:
+            await _delete_discord_progress_lease(service, lease_id=current_lease_id)
+            cleaned += 1
+            continue
+        retired = await _retire_discord_progress_message(
+            service,
+            channel_id=current_channel_id,
+            message_id=current_message_id,
+            note=note,
+        )
+        if retired:
+            await _delete_discord_progress_lease(service, lease_id=current_lease_id)
+            cleaned += 1
+    return cleaned
+
+
 async def _retire_discord_progress_message(
     service: Any,
     *,
