@@ -1277,15 +1277,26 @@ async def _deliver_discord_turn_result(
         )
     if visible_terminal_delivery:
         if not preserve_progress_lease:
-            cleaned_progress = await cleanup_discord_terminal_progress_leases(
-                dispatch.service,
-                managed_thread_id=managed_thread_id,
-                execution_id=execution_id,
-                channel_id=dispatch.channel_id,
-                note="Status: this turn already completed.",
-                record_prefix=(
-                    f"turn:delete_progress:{dispatch.session_key}:{uuid.uuid4().hex[:8]}"
-                ),
+            # Require execution_id or managed_thread_id so listing does not fall back to
+            # channel_id-only (matches every lease on the channel).
+            _can_cleanup_terminal_leases = (
+                isinstance(execution_id, str)
+                and execution_id
+                or (isinstance(managed_thread_id, str) and managed_thread_id.strip())
+            )
+            cleaned_progress = (
+                await cleanup_discord_terminal_progress_leases(
+                    dispatch.service,
+                    managed_thread_id=managed_thread_id,
+                    execution_id=execution_id,
+                    channel_id=dispatch.channel_id,
+                    note="Status: this turn already completed.",
+                    record_prefix=(
+                        f"turn:delete_progress:{dispatch.session_key}:{uuid.uuid4().hex[:8]}"
+                    ),
+                )
+                if _can_cleanup_terminal_leases
+                else 0
             )
             preview_message_deleted = bool(
                 cleaned_progress
@@ -1315,9 +1326,9 @@ async def _deliver_discord_turn_result(
                         dispatch.service,
                         lease_id=current_lease_id,
                     )
-            if cleaned_progress and supervision is not None:
-                supervision.clear_progress_tracking()
-            elif preview_message_deleted and supervision is not None:
+            if (
+                cleaned_progress or preview_message_deleted
+            ) and supervision is not None:
                 supervision.clear_progress_tracking()
     elif isinstance(preview_message_id, str) and preview_message_id:
         failure_note = (
