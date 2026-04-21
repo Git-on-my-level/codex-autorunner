@@ -485,6 +485,144 @@ async def test_background_task_done_reconciles_progress_lease(
 
 
 @pytest.mark.anyio
+async def test_background_task_done_ignores_expected_progress_task_cancellation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allowed_channel_ids=frozenset({"channel-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    await store.upsert_turn_progress_lease(
+        lease_id="lease-1",
+        managed_thread_id="thread-1",
+        execution_id="exec-1",
+        channel_id="channel-1",
+        message_id="preview-1",
+        state="active",
+        progress_label="working",
+    )
+    monkeypatch.setattr(
+        discord_message_turns_module,
+        "build_discord_thread_orchestration_service",
+        lambda _service: _FakeThreadService(execution_status="running"),
+    )
+
+    blocker = asyncio.Event()
+
+    async def _hang_forever() -> None:
+        await blocker.wait()
+
+    try:
+        task = service._spawn_task(_hang_forever())
+        bind_discord_progress_task_context(
+            task,
+            managed_thread_id="thread-1",
+            execution_id="exec-1",
+            lease_id="lease-1",
+            channel_id="channel-1",
+            message_id="preview-1",
+            failure_note="Status: this progress message lost its worker.",
+            orphaned=True,
+        )
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        while service._background_tasks:
+            await asyncio.gather(
+                *list(service._background_tasks),
+                return_exceptions=True,
+            )
+
+        assert rest.edited_channel_messages == []
+        leases = await store.list_turn_progress_leases(
+            managed_thread_id="thread-1",
+            execution_id="exec-1",
+        )
+        assert [lease.lease_id for lease in leases] == ["lease-1"]
+    finally:
+        blocker.set()
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_background_task_done_reconciles_cancel_sensitive_progress_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allowed_channel_ids=frozenset({"channel-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    await store.upsert_turn_progress_lease(
+        lease_id="lease-1",
+        managed_thread_id="thread-1",
+        execution_id="exec-1",
+        channel_id="channel-1",
+        message_id="preview-1",
+        state="active",
+        progress_label="working",
+    )
+    monkeypatch.setattr(
+        discord_message_turns_module,
+        "build_discord_thread_orchestration_service",
+        lambda _service: _FakeThreadService(execution_status="running"),
+    )
+
+    blocker = asyncio.Event()
+
+    async def _hang_forever() -> None:
+        await blocker.wait()
+
+    try:
+        task = service._spawn_task(_hang_forever())
+        bind_discord_progress_task_context(
+            task,
+            managed_thread_id="thread-1",
+            execution_id="exec-1",
+            lease_id="lease-1",
+            channel_id="channel-1",
+            message_id="preview-1",
+            failure_note="Status: this progress message lost its queue worker.",
+            orphaned=True,
+            reconcile_on_cancel=True,
+        )
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        while service._background_tasks:
+            await asyncio.gather(
+                *list(service._background_tasks),
+                return_exceptions=True,
+            )
+
+        assert rest.edited_channel_messages
+        assert "lost its queue worker" in (
+            rest.edited_channel_messages[-1]["payload"]["content"].lower()
+        )
+        assert (
+            await store.list_turn_progress_leases(
+                managed_thread_id="thread-1",
+                execution_id="exec-1",
+            )
+            == []
+        )
+    finally:
+        blocker.set()
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_queued_delivery_preserves_progress_lease_until_terminal_delivery(
     tmp_path: Path,
 ) -> None:

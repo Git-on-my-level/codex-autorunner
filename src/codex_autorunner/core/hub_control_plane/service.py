@@ -60,6 +60,8 @@ from .models import (
     QueueDepthResponse,
     QueuedExecutionListRequest,
     RunningExecutionLookupRequest,
+    RunningThreadTargetIdsRequest,
+    RunningThreadTargetIdsResponse,
     SurfaceBindingListRequest,
     SurfaceBindingListResponse,
     SurfaceBindingLookupRequest,
@@ -513,6 +515,14 @@ class HubSharedStateService:
             request.thread_target_id
         )
         return ExecutionResponse(execution=_execution_from_record(execution))
+
+    def list_thread_target_ids_with_running_executions(
+        self, request: RunningThreadTargetIdsRequest
+    ) -> RunningThreadTargetIdsResponse:
+        ids = self._execution_store.list_thread_ids_with_running_executions(
+            limit=request.limit,
+        )
+        return RunningThreadTargetIdsResponse(thread_target_ids=tuple(ids))
 
     def get_latest_execution(
         self, request: LatestExecutionLookupRequest

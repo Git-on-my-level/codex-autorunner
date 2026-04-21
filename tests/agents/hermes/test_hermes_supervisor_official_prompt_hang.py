@@ -22,6 +22,10 @@ from codex_autorunner.agents.hermes.supervisor import (
             Path(".hermes/profiles/hermes-m4-pma"),
         ),
         (
+            "hermes_home ~/.hermes/profiles/with:colon\n",
+            Path(".hermes/profiles/with:colon"),
+        ),
+        (
             "--- hermes dump ---\n"
             "profile: hermes-m4-pma\n"
             "hermes_home:      ~/.hermes/profiles/hermes-m4-pma\n"

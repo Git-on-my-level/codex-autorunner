@@ -206,6 +206,38 @@ def test_git_mutation_lock_path_uses_common_git_dir_for_worktrees(
     )
 
 
+def test_git_mutation_lock_path_uses_resolved_git_dir_for_gitfile_non_worktree(
+    tmp_path: Path,
+) -> None:
+    """git init --separate-git-dir: .git is a file; lock must live in the real git dir."""
+    repo_root = tmp_path / "checkout"
+    repo_root.mkdir()
+    actual_git = tmp_path / "git-dir"
+    actual_git.mkdir()
+    (repo_root / ".git").write_text(f"gitdir: {actual_git}\n", encoding="utf-8")
+
+    assert git_utils.git_mutation_lock_path(repo_root) == (
+        actual_git / "codex-autorunner-git-mutation.lock"
+    )
+
+
+def test_git_linked_worktree_base_root_returns_parent_repo_for_linked_worktrees(
+    tmp_path: Path,
+) -> None:
+    common_git_dir = tmp_path / "main-repo" / ".git"
+    common_git_dir.mkdir(parents=True)
+    worktree_root = tmp_path / "worktree"
+    worktree_root.mkdir()
+    (worktree_root / ".git").write_text(
+        f"gitdir: {common_git_dir / 'worktrees' / 'topic'}\n",
+        encoding="utf-8",
+    )
+
+    assert git_utils.git_linked_worktree_base_root(worktree_root) == (
+        tmp_path / "main-repo"
+    )
+
+
 def test_describe_newt_reject_reasons_summarizes_git_status(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -376,6 +376,8 @@ def on_background_task_done(service: Any, task: asyncio.Task[Any]) -> None:
             return
         if bool(getattr(service, "_background_shutdown_in_progress", False)):
             return
+        if not bool(task_context.get("reconcile_on_cancel")):
+            return
         log_event(
             service._logger,
             logging.WARNING,

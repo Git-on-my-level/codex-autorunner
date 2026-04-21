@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import shutil
 import sqlite3
 import subprocess
 from pathlib import Path
@@ -19,6 +20,7 @@ from ..bootstrap import seed_repo_files
 from ..manifest import (
     Manifest,
     load_manifest,
+    match_base_repo_id,
     save_manifest,
 )
 from .archive import (
@@ -47,6 +49,7 @@ from .git_utils import (
     git_failure_detail,
     git_head_sha,
     git_is_clean,
+    git_linked_worktree_base_root,
     git_mutation_lock,
     resolve_ref_sha,
     run_git,
@@ -621,6 +624,147 @@ class WorktreeManager:
             repo_id=repo_id,
         )
 
+    def _infer_worktree_metadata(
+        self,
+        *,
+        manifest: Manifest,
+        display_name: str,
+        worktree_path: Path,
+        existing_branch: Optional[str],
+    ) -> tuple[Optional[str], Optional[str]]:
+        base_path = git_linked_worktree_base_root(worktree_path)
+        base_name: Optional[str] = None
+        if base_path is not None:
+            base_name = base_path.name
+        elif "--" in display_name:
+            base_name = display_name.split("--", 1)[0] or None
+
+        worktree_of = None
+        if base_name:
+            worktree_of = match_base_repo_id(
+                manifest,
+                self._hub_config.root,
+                base_name,
+                base_path=base_path,
+            )
+
+        branch = existing_branch or git_branch(worktree_path)
+        if not branch and "--" in display_name:
+            _, branch_suffix = display_name.split("--", 1)
+            branch = branch_suffix or None
+        return worktree_of, branch
+
+    def _normalize_manifest_worktree_entries(self, manifest: Manifest) -> bool:
+        changed = False
+        for entry in manifest.repos:
+            repo_path = (self._hub_config.root / entry.path).resolve()
+            if not repo_path.exists():
+                continue
+            base_path = git_linked_worktree_base_root(repo_path)
+            if base_path is None and entry.kind != "worktree":
+                continue
+
+            display_name = entry.display_name or entry.id or repo_path.name
+            worktree_of, branch = self._infer_worktree_metadata(
+                manifest=manifest,
+                display_name=display_name,
+                worktree_path=repo_path,
+                existing_branch=entry.branch,
+            )
+            if entry.kind != "worktree":
+                entry.kind = "worktree"
+                changed = True
+            if worktree_of and entry.worktree_of != worktree_of:
+                entry.worktree_of = worktree_of
+                changed = True
+            if branch and entry.branch != branch:
+                entry.branch = branch
+                changed = True
+        return changed
+
+    def _inspect_orphaned_worktree_dir(self, worktree_path: Path) -> dict[str, object]:
+        if not worktree_path.exists():
+            return {
+                "status": "missing",
+                "message": "worktree directory already missing",
+            }
+        if not worktree_path.is_dir():
+            return {
+                "status": "safe_to_remove",
+                "message": "worktree path is not a directory",
+            }
+
+        unexpected_entries: list[str] = []
+        for child in sorted(worktree_path.iterdir(), key=lambda item: item.name):
+            if child.name in {".codex-autorunner", ".git"}:
+                continue
+            unexpected_entries.append(child.name)
+
+        if unexpected_entries:
+            rendered = ", ".join(unexpected_entries[:5])
+            if len(unexpected_entries) > 5:
+                rendered = f"{rendered}, ..."
+            return {
+                "status": "blocked_non_car_files",
+                "message": (
+                    "orphaned worktree directory still has non-CAR files: "
+                    f"{rendered}"
+                ),
+            }
+        return {
+            "status": "safe_to_remove",
+            "message": "orphaned worktree directory only contains CAR metadata",
+        }
+
+    def _remove_orphaned_worktree_dir(self, worktree_path: Path) -> dict[str, object]:
+        inspection = self._inspect_orphaned_worktree_dir(worktree_path)
+        if inspection["status"] != "safe_to_remove":
+            return inspection
+        if worktree_path.exists():
+            if worktree_path.is_dir():
+                shutil.rmtree(worktree_path)
+            else:
+                worktree_path.unlink()
+        return {
+            "status": "removed",
+            "message": "removed orphaned worktree directory",
+        }
+
+    def _cleanup_orphaned_worktree_entry(
+        self,
+        *,
+        entry,
+        dry_run: bool,
+    ) -> dict[str, str]:
+        worktree_path = (self._hub_config.root / entry.path).resolve()
+        branch_name = entry.branch
+        if (
+            branch_name is None
+            and worktree_path.exists()
+            and git_available(worktree_path)
+        ):
+            branch_name = git_branch(worktree_path)
+        branch_name = branch_name or "unknown"
+
+        inspection = self._inspect_orphaned_worktree_dir(worktree_path)
+        if inspection["status"] == "blocked_non_car_files":
+            raise ValueError(str(inspection["message"]))
+        if dry_run:
+            return {"id": entry.id, "branch": branch_name}
+
+        if worktree_path.exists():
+            self._ctx.stop_runner(repo_id=entry.id, repo_path=worktree_path)
+        self._archive_bound_pma_threads(
+            worktree_repo_id=entry.id,
+            worktree_path=worktree_path,
+        )
+        self._remove_orphaned_worktree_dir(worktree_path)
+
+        manifest = load_manifest(self._hub_config.manifest_path, self._hub_config.root)
+        manifest.repos = [repo for repo in manifest.repos if repo.id != entry.id]
+        save_manifest(self._hub_config.manifest_path, manifest, self._hub_config.root)
+        return {"id": entry.id, "branch": branch_name}
+
     def _remove_worktree_git_refs(
         self,
         *,
@@ -819,6 +963,18 @@ class WorktreeManager:
             "archive_pma_threads", "ok", detail=f"archived={len(archived_thread_ids)}"
         )
 
+        orphan_dir_cleanup = self._remove_orphaned_worktree_dir(worktree_path)
+        orphan_dir_status = str(orphan_dir_cleanup.get("status", "unknown"))
+        report.add_step(
+            "worktree_dir_cleanup",
+            "ok" if orphan_dir_status in {"removed", "missing"} else "error",
+            detail=(
+                None
+                if orphan_dir_status in {"removed", "missing"}
+                else str(orphan_dir_cleanup.get("message") or "")
+            ),
+        )
+
         resolved.manifest.repos = [
             r for r in resolved.manifest.repos if r.id != worktree_repo_id
         ]
@@ -927,10 +1083,17 @@ class WorktreeManager:
         worktree_items: list[dict[str, str]] = []
         worktree_errors: list[dict[str, str]] = []
         for entry in manifest.repos:
-            if entry.kind != "worktree":
+            worktree_path = (self._hub_config.root / entry.path).resolve()
+            is_legacy_linked_worktree = (
+                entry.kind != "worktree"
+                and worktree_path.exists()
+                and git_linked_worktree_base_root(worktree_path) is not None
+            )
+            if entry.kind != "worktree" and not is_legacy_linked_worktree:
                 continue
             if not entry.worktree_of:
-                continue
+                if not is_legacy_linked_worktree:
+                    continue
             try:
                 if self._has_active_chat_binding(entry.id):
                     continue
@@ -941,9 +1104,24 @@ class WorktreeManager:
                     exc_info=exc,
                 )
                 continue
-            worktree_path = (self._hub_config.root / entry.path).resolve()
-            if not worktree_path.exists():
+
+            if not worktree_path.exists() or not git_available(worktree_path):
+                try:
+                    worktree_items.append(
+                        self._cleanup_orphaned_worktree_entry(
+                            entry=entry,
+                            dry_run=dry_run,
+                        )
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "cleanup_all: orphaned worktree cleanup failed for %s",
+                        entry.id,
+                        exc_info=exc,
+                    )
+                    worktree_errors.append({"id": entry.id, "error": str(exc)})
                 continue
+
             if git_available(worktree_path):
                 try:
                     if not git_is_clean(worktree_path):
@@ -1034,6 +1212,11 @@ class WorktreeManager:
 
     def cleanup_all(self, *, dry_run: bool = False) -> Dict[str, object]:
         manifest = load_manifest(self._hub_config.manifest_path, self._hub_config.root)
+        manifest_changed = self._normalize_manifest_worktree_entries(manifest)
+        if manifest_changed and not dry_run:
+            save_manifest(
+                self._hub_config.manifest_path, manifest, self._hub_config.root
+            )
         unbound_threads_by_repo = self._ctx.collect_unbound_repo_threads(
             manifest=manifest
         )
@@ -1065,7 +1248,10 @@ class WorktreeManager:
         )
 
         if not dry_run and (
-            total_thread_count or len(worktree_items) or total_flow_count
+            manifest_changed
+            or total_thread_count
+            or len(worktree_items)
+            or total_flow_count
         ):
             self._ctx.invalidate_cache()
 

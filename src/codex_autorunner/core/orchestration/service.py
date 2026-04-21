@@ -210,6 +210,11 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
             )
         ]
 
+    def list_thread_ids_with_running_executions(
+        self, *, limit: Optional[int] = 200
+    ) -> list[str]:
+        return self._store.list_thread_ids_with_running_executions(limit=limit)
+
     def resume_thread_target(
         self,
         thread_target_id: str,

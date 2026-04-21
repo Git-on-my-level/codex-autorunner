@@ -48,6 +48,8 @@ from .models import (
     QueueDepthResponse,
     QueuedExecutionListRequest,
     RunningExecutionLookupRequest,
+    RunningThreadTargetIdsRequest,
+    RunningThreadTargetIdsResponse,
     SurfaceBindingListRequest,
     SurfaceBindingListResponse,
     SurfaceBindingLookupRequest,
@@ -471,6 +473,16 @@ class HttpHubControlPlaneClient(HubControlPlaneClient):
             ),
         )
         return ExecutionResponse.from_mapping(payload)
+
+    async def list_thread_target_ids_with_running_executions(
+        self, request: RunningThreadTargetIdsRequest
+    ) -> RunningThreadTargetIdsResponse:
+        payload = await self._request(
+            method="POST",
+            path="/hub/api/control-plane/thread-targets/executions/running/query",
+            json_payload=request.to_dict(),
+        )
+        return RunningThreadTargetIdsResponse.from_mapping(payload)
 
     async def get_latest_execution(
         self, request: LatestExecutionLookupRequest

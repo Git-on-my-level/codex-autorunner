@@ -41,6 +41,8 @@ from .models import (
     QueueDepthResponse,
     QueuedExecutionListRequest,
     RunningExecutionLookupRequest,
+    RunningThreadTargetIdsRequest,
+    RunningThreadTargetIdsResponse,
     SurfaceBindingListRequest,
     SurfaceBindingListResponse,
     SurfaceBindingLookupRequest,
@@ -122,6 +124,10 @@ class HubControlPlaneClient(Protocol):
     async def get_running_execution(
         self, request: RunningExecutionLookupRequest
     ) -> ExecutionResponse: ...
+
+    async def list_thread_target_ids_with_running_executions(
+        self, request: RunningThreadTargetIdsRequest
+    ) -> RunningThreadTargetIdsResponse: ...
 
     async def get_latest_execution(
         self, request: LatestExecutionLookupRequest

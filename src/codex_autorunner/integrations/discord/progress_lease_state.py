@@ -74,6 +74,9 @@ class _DiscordTurnExecutionSupervision:
     def set_orphaned(self, orphaned: bool) -> None:
         self._set_bool_field("orphaned", orphaned)
 
+    def set_reconcile_on_cancel(self, reconcile_on_cancel: bool) -> None:
+        self._set_bool_field("reconcile_on_cancel", reconcile_on_cancel)
+
     def clear_progress_tracking(self, *, keep_execution_id: bool = True) -> None:
         self.task_context.pop("lease_id", None)
         self.task_context.pop("message_id", None)
@@ -262,6 +265,7 @@ def _progress_task_context(
     failure_note: Optional[str] = None,
     shutdown_note: Optional[str] = None,
     orphaned: bool = False,
+    reconcile_on_cancel: bool = False,
 ) -> dict[str, Any]:
     context: dict[str, Any] = {}
     if isinstance(managed_thread_id, str) and managed_thread_id.strip():
@@ -280,6 +284,8 @@ def _progress_task_context(
         context["shutdown_note"] = shutdown_note.strip()
     if orphaned:
         context["orphaned"] = True
+    if reconcile_on_cancel:
+        context["reconcile_on_cancel"] = True
     return context
 
 
@@ -294,6 +300,7 @@ def bind_discord_progress_task_context(
     failure_note: Optional[str] = None,
     shutdown_note: Optional[str] = None,
     orphaned: bool = False,
+    reconcile_on_cancel: bool = False,
 ) -> asyncio.Task[Any]:
     context = _progress_task_context(
         managed_thread_id=managed_thread_id,
@@ -304,6 +311,7 @@ def bind_discord_progress_task_context(
         failure_note=failure_note,
         shutdown_note=shutdown_note,
         orphaned=orphaned,
+        reconcile_on_cancel=reconcile_on_cancel,
     )
     if context:
         cast(Any, task)._discord_progress_task_context = context

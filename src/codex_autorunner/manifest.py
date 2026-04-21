@@ -275,6 +275,27 @@ class Manifest:
         return workspace
 
 
+def match_base_repo_id(
+    manifest: Manifest,
+    hub_root: Path,
+    base_name: str,
+    *,
+    base_path: Optional[Path],
+) -> str:
+    normalized_base = sanitize_repo_id(base_name)
+    if base_path is not None:
+        existing = manifest.get_by_path(hub_root, base_path)
+        if existing is not None:
+            return existing.id
+    for repo in manifest.repos:
+        if repo.kind != "base":
+            continue
+        display_name = (repo.display_name or "").strip()
+        if display_name == base_name or repo.id == normalized_base:
+            return repo.id
+    return normalized_base
+
+
 def _relative_to_hub_root(hub_root: Path, target: Path) -> Path:
     if not target.is_absolute():
         target = (hub_root / target).resolve()

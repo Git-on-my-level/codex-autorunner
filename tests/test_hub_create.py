@@ -90,6 +90,22 @@ def test_hub_create_repo_rejects_duplicate_id(tmp_path: Path):
         supervisor.create_repo("demo", repo_path=Path("other"))
 
 
+def test_hub_create_repo_rejects_paths_under_worktrees_root(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg["hub"]["repos_root"] = "."
+    cfg["hub"]["worktrees_root"] = "worktrees"
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+    )
+    with pytest.raises(ValueError, match="must not live under worktrees_root"):
+        supervisor.create_repo("bad", repo_path=Path("worktrees/bad"))
+
+
 def test_hub_clone_repo_cli(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))

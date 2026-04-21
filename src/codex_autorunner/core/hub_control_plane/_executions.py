@@ -101,6 +101,43 @@ class RunningExecutionLookupRequest:
 
 
 @dataclass(frozen=True)
+class RunningThreadTargetIdsRequest:
+    limit: Optional[int] = None
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> "RunningThreadTargetIdsRequest":
+        if "limit" not in data:
+            return cls(limit=None)
+        limit_value = data.get("limit")
+        if limit_value is None:
+            return cls(limit=None)
+        return cls(limit=coerce_int(limit_value, field_name="limit"))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"limit": self.limit}
+
+
+@dataclass(frozen=True)
+class RunningThreadTargetIdsResponse:
+    thread_target_ids: tuple[str, ...] = ()
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> "RunningThreadTargetIdsResponse":
+        raw = data.get("thread_target_ids", data.get("threadTargetIds", ()))
+        if not isinstance(raw, (list, tuple)):
+            return cls(thread_target_ids=())
+        normalized: list[str] = []
+        for item in raw:
+            tid = normalize_optional_text(item)
+            if tid:
+                normalized.append(tid)
+        return cls(thread_target_ids=tuple(normalized))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"thread_target_ids": list(self.thread_target_ids)}
+
+
+@dataclass(frozen=True)
 class LatestExecutionLookupRequest:
     thread_target_id: str
 
@@ -659,4 +696,6 @@ __all__ = [
     "QueueDepthResponse",
     "QueuedExecutionListRequest",
     "RunningExecutionLookupRequest",
+    "RunningThreadTargetIdsRequest",
+    "RunningThreadTargetIdsResponse",
 ]

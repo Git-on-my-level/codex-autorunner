@@ -32,6 +32,7 @@ from .models import (
     QueueDepthRequest,
     QueuedExecutionListRequest,
     RunningExecutionLookupRequest,
+    RunningThreadTargetIdsRequest,
     ThreadActivityRecordRequest,
     ThreadBackendIdUpdateRequest,
     ThreadTargetArchiveRequest,
@@ -374,6 +375,17 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
             ),
         )
         return response.execution
+
+    def list_thread_ids_with_running_executions(
+        self, *, limit: Optional[int] = 200
+    ) -> list[str]:
+        response = self._run(
+            operation="list_thread_ids_with_running_executions",
+            action=lambda client: client.list_thread_target_ids_with_running_executions(
+                RunningThreadTargetIdsRequest(limit=limit),
+            ),
+        )
+        return list(response.thread_target_ids)
 
     def get_latest_execution(self, thread_target_id: str) -> Optional[ExecutionRecord]:
         response = self._run(

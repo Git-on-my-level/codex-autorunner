@@ -1218,7 +1218,11 @@ def _probe_hermes_session_store_root(
         key: str
         value: str
         if ":" in stripped:
-            key, _, value = stripped.partition(":")
+            before_colon, _, after_colon = stripped.partition(":")
+            if " " not in before_colon.strip():
+                key, value = before_colon, after_colon
+            else:
+                key, _, value = stripped.partition(" ")
         else:
             key, _, value = stripped.partition(" ")
         if key.strip().lower().rstrip(":") != "hermes_home":

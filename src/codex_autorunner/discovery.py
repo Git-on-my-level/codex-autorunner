@@ -4,12 +4,14 @@ from typing import List, Optional, Tuple
 
 from .bootstrap import seed_repo_files
 from .core.config import HubConfig
+from .core.git_utils import git_branch, git_linked_worktree_base_root
 from .manifest import (
     Manifest,
     ManifestRepo,
     ensure_unique_repo_id,
     is_safe_repo_id,
     load_manifest,
+    match_base_repo_id,
     sanitize_repo_id,
     save_manifest,
 )
@@ -33,6 +35,40 @@ def discover_and_init(hub_config: HubConfig) -> Tuple[Manifest, List[DiscoveryRe
     manifest = load_manifest(hub_config.manifest_path, hub_config.root)
     records: List[DiscoveryRecord] = []
     seen_ids: set[str] = set()
+
+    def _infer_repo_shape(
+        repo_path: Path,
+        *,
+        display_name: str,
+        default_kind: str,
+    ) -> tuple[str, Optional[str], Optional[str]]:
+        branch = git_branch(repo_path)
+        branch_from_name: Optional[str] = None
+        if "--" in display_name:
+            _, branch_suffix = display_name.split("--", 1)
+            branch_from_name = branch_suffix or None
+
+        base_path = git_linked_worktree_base_root(repo_path)
+        if base_path is None and default_kind != "worktree":
+            return default_kind, None, branch or branch_from_name
+
+        kind = (
+            "worktree"
+            if base_path is not None or default_kind == "worktree"
+            else default_kind
+        )
+        base_name: Optional[str] = None
+        if base_path is not None:
+            base_name = base_path.name
+        elif "--" in display_name:
+            base_name = display_name.split("--", 1)[0]
+
+        worktree_of = None
+        if kind == "worktree" and base_name:
+            worktree_of = match_base_repo_id(
+                manifest, hub_config.root, base_name, base_path=base_path
+            )
+        return kind, worktree_of, branch or branch_from_name
 
     def _normalize_manifest_ids() -> None:
         reserved_ids = {repo.id for repo in manifest.repos}
@@ -91,37 +127,31 @@ def discover_and_init(hub_config: HubConfig) -> Tuple[Manifest, List[DiscoveryRe
             existing_entry = manifest.get_by_path(hub_config.root, child)
             if not existing_entry:
                 existing_entry = manifest.get(display_name)
+            detected_kind, detected_worktree_of, detected_branch = _infer_repo_shape(
+                child,
+                display_name=display_name,
+                default_kind=kind,
+            )
             added = False
             if not existing_entry:
-                # Best-effort grouping inference for worktrees created outside of CAR:
-                # name convention: <base_repo_id>--<branch>
-                worktree_of: Optional[str] = None
-                branch: Optional[str] = None
-                if kind == "worktree" and "--" in display_name:
-                    base_id, rest = display_name.split("--", 1)
-                    if base_id:
-                        matched_base = next(
-                            (
-                                repo.id
-                                for repo in manifest.repos
-                                if repo.display_name == base_id
-                            ),
-                            None,
-                        )
-                        worktree_of = matched_base or sanitize_repo_id(base_id)
-                    branch = rest or None
                 existing_entry = manifest.ensure_repo(
                     hub_config.root,
                     child,
                     repo_id=display_name,
                     display_name=display_name,
-                    kind=kind,
-                    worktree_of=worktree_of,
-                    branch=branch,
+                    kind=detected_kind,
+                    worktree_of=detected_worktree_of,
+                    branch=detected_branch,
                 )
                 added = True
             if existing_entry.display_name is None:
                 existing_entry.display_name = display_name
+            if detected_kind == "worktree":
+                existing_entry.kind = "worktree"
+                if detected_worktree_of:
+                    existing_entry.worktree_of = detected_worktree_of
+                if detected_branch:
+                    existing_entry.branch = detected_branch
             repo_entry = existing_entry
             _record_repo(repo_entry, added=added)
 

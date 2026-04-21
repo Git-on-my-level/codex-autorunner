@@ -10,6 +10,7 @@ from codex_autorunner.core.config import (
     load_hub_config,
     load_repo_config,
 )
+from codex_autorunner.core.git_utils import run_git
 from codex_autorunner.discovery import discover_and_init
 from codex_autorunner.manifest import (
     MANIFEST_VERSION,
@@ -328,6 +329,64 @@ def test_discovery_sanitizes_repo_ids(tmp_path: Path):
     )
     repo_entry = next(r for r in manifest_data["repos"] if r["id"] == entry.repo.id)
     assert repo_entry["display_name"] == "demo#repo"
+
+
+def test_discovery_repairs_linked_worktrees_misregistered_as_base(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    config = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    config["hub"]["repos_root"] = "workspace"
+    config_path = hub_root / CONFIG_FILENAME
+    write_test_config(config_path, config)
+
+    repos_root = hub_root / "workspace"
+    base_dir = repos_root / "base"
+    base_dir.mkdir(parents=True, exist_ok=True)
+    run_git(["init"], base_dir, check=True)
+    (base_dir / "README.md").write_text("hello\n", encoding="utf-8")
+    run_git(["add", "README.md"], base_dir, check=True)
+    run_git(
+        [
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "init",
+        ],
+        base_dir,
+        check=True,
+    )
+
+    legacy_worktree = repos_root / "base--legacy-branch"
+    run_git(
+        ["worktree", "add", "-b", "legacy/branch", str(legacy_worktree), "HEAD"],
+        base_dir,
+        check=True,
+    )
+
+    manifest = load_manifest(hub_root / ".codex-autorunner" / "manifest.yml", hub_root)
+    manifest.ensure_repo(
+        hub_root,
+        legacy_worktree,
+        repo_id="base--legacy-branch",
+        kind="base",
+    )
+    save_manifest(hub_root / ".codex-autorunner" / "manifest.yml", manifest, hub_root)
+
+    hub_config = load_hub_config(hub_root)
+    manifest, records = discover_and_init(hub_config)
+
+    entry = next(r for r in records if r.repo.id == "base--legacy-branch")
+    assert entry.repo.kind == "worktree"
+    assert entry.repo.worktree_of == "base"
+    assert entry.repo.branch == "legacy/branch"
+
+    manifest_entry = manifest.get("base--legacy-branch")
+    assert manifest_entry is not None
+    assert manifest_entry.kind == "worktree"
+    assert manifest_entry.worktree_of == "base"
+    assert manifest_entry.branch == "legacy/branch"
 
 
 def test_discovery_skips_hub_root_repo_by_default(tmp_path: Path):
