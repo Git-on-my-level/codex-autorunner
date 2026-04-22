@@ -36,6 +36,7 @@ from ...core.orchestration import (
     FlowTarget,
     MessageRequest,
     PausedFlowTarget,
+    SQLiteManagedThreadDeliveryEngine,
     SurfaceThreadMessageRequest,
     build_surface_orchestration_ingress,
 )
@@ -175,6 +176,47 @@ DISCORD_PMA_PROGRESS_HEARTBEAT_INTERVAL_SECONDS = 2.0
 _sanitize_runtime_thread_result_error = sanitize_runtime_thread_error
 
 
+def _abandon_pending_discord_delivery(
+    service: Any,
+    *,
+    delivery_id: Optional[str],
+    channel_id: str,
+    session_key: str,
+) -> None:
+    if not isinstance(delivery_id, str) or not delivery_id.strip():
+        return
+    state_root = getattr(getattr(service, "_config", None), "root", None)
+    if state_root is None:
+        state_root = Path(".")
+    try:
+        engine = SQLiteManagedThreadDeliveryEngine(Path(state_root))
+        abandoned = engine.abandon_delivery(
+            delivery_id,
+            detail="abandoned_after_direct_discord_delivery",
+        )
+    except Exception as exc:
+        log_event(
+            service._logger,
+            logging.WARNING,
+            "discord.turn.delivery_abandon_failed",
+            channel_id=channel_id,
+            session_key=session_key,
+            delivery_id=delivery_id,
+            exc=exc,
+        )
+        return
+    if abandoned is not None:
+        log_event(
+            service._logger,
+            logging.INFO,
+            "discord.turn.delivery_abandoned",
+            channel_id=channel_id,
+            session_key=session_key,
+            delivery_id=delivery_id,
+            delivery_state=abandoned.state.value,
+        )
+
+
 @dataclass(frozen=True)
 class DiscordMessageTurnResult:
     final_message: str
@@ -185,6 +227,7 @@ class DiscordMessageTurnResult:
     elapsed_seconds: Optional[float] = None
     send_final_message: bool = True
     delivery_visibility_pending: bool = False
+    durable_delivery_id: Optional[str] = None
     deferred_delivery: bool = False
     preserve_progress_lease: bool = False
 
@@ -1181,6 +1224,7 @@ async def _deliver_discord_turn_result(
         execution_id = turn_result.execution_id
         send_final_message = turn_result.send_final_message
         delivery_visibility_pending = turn_result.delivery_visibility_pending
+        durable_delivery_id = turn_result.durable_delivery_id
         preserve_progress_lease = turn_result.preserve_progress_lease
         intermediate_text = (
             turn_result.intermediate_message.strip()
@@ -1201,6 +1245,7 @@ async def _deliver_discord_turn_result(
         execution_id = None
         send_final_message = True
         delivery_visibility_pending = False
+        durable_delivery_id = None
         preserve_progress_lease = False
 
     managed_thread_id = None
@@ -1261,6 +1306,13 @@ async def _deliver_discord_turn_result(
             record_prefix=f"turn:final:{dispatch.session_key}",
             attachment_filename="final-response.md",
             attachment_caption="Final response too long; attached as final-response.md.",
+        )
+    if visible_terminal_delivery and delivery_visibility_pending:
+        _abandon_pending_discord_delivery(
+            dispatch.service,
+            delivery_id=durable_delivery_id,
+            channel_id=dispatch.channel_id,
+            session_key=dispatch.session_key,
         )
     if visible_terminal_delivery:
         if not preserve_progress_lease:
@@ -2326,6 +2378,11 @@ async def _run_discord_orchestrated_turn_for_message(
                 _flow,
                 "durable_delivery_pending",
                 False,
+            ),
+            durable_delivery_id=getattr(
+                _flow,
+                "durable_delivery_id",
+                None,
             ),
         )
 

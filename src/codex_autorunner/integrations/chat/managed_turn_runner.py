@@ -190,6 +190,7 @@ async def run_managed_surface_turn(
             raise RuntimeError("Managed-thread turn finalized without a result")
         durable_delivery_performed = False
         durable_delivery_pending = False
+        durable_delivery_id: Optional[str] = None
         if config.hooks.durable_delivery is not None:
             try:
                 delivery_record = await handoff_managed_thread_final_delivery(
@@ -197,6 +198,7 @@ async def run_managed_surface_turn(
                     delivery=config.hooks.durable_delivery,
                     logger=_runner_logger,
                 )
+                durable_delivery_id = getattr(delivery_record, "delivery_id", None)
                 durable_delivery_performed = (
                     delivery_record is not None
                     and delivery_record.state is ManagedThreadDeliveryState.DELIVERED
@@ -215,13 +217,18 @@ async def run_managed_surface_turn(
                 raise
             except Exception:
                 pass
-        if durable_delivery_performed or durable_delivery_pending:
+        if (
+            durable_delivery_performed
+            or durable_delivery_pending
+            or durable_delivery_id is not None
+        ):
             finalized_flow = ManagedThreadExecutionFlowResult(
                 started_execution=finalized_flow.started_execution,
                 queued=finalized_flow.queued,
                 finalized=finalized_flow.finalized,
                 durable_delivery_performed=durable_delivery_performed,
                 durable_delivery_pending=durable_delivery_pending,
+                durable_delivery_id=durable_delivery_id,
             )
         if config.on_finalized is None:
             raise RuntimeError("Managed-surface turn requires on_finalized")

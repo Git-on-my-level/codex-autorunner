@@ -242,10 +242,9 @@ def test_apply_run_event_to_progress_tracker_renders_commentary_live_only() -> N
     live = render_progress_text(tracker, max_length=2000, now=1.0)
     final = render_progress_text(tracker, max_length=2000, now=1.0, render_mode="final")
 
-    assert "Interim note from agent while this turn is still running:" in live
     assert "Checking the ACP event path" in live
-    assert "Final reply will be sent separately when the turn completes." in live
-    assert "Interim note from agent while this turn is still running:" not in final
+    assert "Interim note from agent while this turn is still running:" not in live
+    assert "Final reply will be sent separately when the turn completes." not in live
     assert "Checking the ACP event path" not in final
 
 
@@ -300,6 +299,36 @@ def test_apply_run_event_to_progress_tracker_already_streamed_commentary_only_en
     assert outcome.changed is False
     assert [action.label for action in tracker.actions] == ["output"]
     assert tracker.last_output_index is None
+
+
+def test_apply_run_event_to_progress_tracker_skips_commentary_that_matches_live_output() -> (
+    None
+):
+    tracker = _tracker()
+    runtime_state = ProgressRuntimeState()
+
+    apply_run_event_to_progress_tracker(
+        tracker,
+        OutputDelta(
+            timestamp="t0",
+            content="same live text",
+            delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
+        ),
+        runtime_state=runtime_state,
+    )
+
+    outcome = apply_run_event_to_progress_tracker(
+        tracker,
+        RunNotice(
+            timestamp="t1",
+            kind="commentary",
+            message="same live text",
+        ),
+        runtime_state=runtime_state,
+    )
+
+    assert outcome.changed is False
+    assert [action.label for action in tracker.actions] == ["output"]
 
 
 def test_tool_call_ends_output_segment_before_later_commentary_and_snapshot() -> None:

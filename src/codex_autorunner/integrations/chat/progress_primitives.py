@@ -422,11 +422,7 @@ def render_progress_text(
             commentary_lines = action.text.split("\n")
             if not commentary_lines:
                 commentary_lines = [action.text]
-            block = [
-                "Interim note from agent while this turn is still running:",
-                *commentary_lines,
-                "Final reply will be sent separately when the turn completes.",
-            ]
+            block = commentary_lines
             if blocks:
                 block.insert(0, "")
         else:

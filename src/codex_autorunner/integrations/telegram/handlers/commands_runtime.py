@@ -14,6 +14,7 @@ from ....agents.opencode.supervisor import OpenCodeSupervisorError
 from ....core.coercion import coerce_int
 from ....core.config import load_hub_config
 from ....core.logging_utils import log_event
+from ....core.orchestration import SQLiteManagedThreadDeliveryEngine
 from ....core.orchestration.chat_operation_state import ChatOperationState
 from ....core.state import now_iso
 from ....core.update import (
@@ -147,6 +148,50 @@ from .commands import (
 )
 from .commands.execution import _TurnRunFailure
 from .commands.shared import _RuntimeStub  # noqa: F401
+
+
+def _abandon_pending_telegram_delivery(
+    handlers: Any,
+    *,
+    delivery_id: Optional[str],
+    chat_id: int,
+    thread_id: Optional[int],
+) -> None:
+    if not isinstance(delivery_id, str) or not delivery_id.strip():
+        return
+    state_root = getattr(getattr(handlers, "_config", None), "root", None)
+    if state_root is None:
+        state_root = getattr(handlers, "_hub_root", None)
+    if state_root is None:
+        state_root = Path(".")
+    try:
+        engine = SQLiteManagedThreadDeliveryEngine(Path(state_root))
+        abandoned = engine.abandon_delivery(
+            delivery_id,
+            detail="abandoned_after_direct_telegram_delivery",
+        )
+    except Exception as exc:
+        log_event(
+            handlers._logger,
+            logging.WARNING,
+            "telegram.response.delivery_abandon_failed",
+            chat_id=chat_id,
+            thread_id=thread_id,
+            delivery_id=delivery_id,
+            exc=exc,
+        )
+        return
+    if abandoned is not None:
+        log_event(
+            handlers._logger,
+            logging.INFO,
+            "telegram.response.delivery_abandoned",
+            chat_id=chat_id,
+            thread_id=thread_id,
+            delivery_id=delivery_id,
+            delivery_state=abandoned.state.value,
+        )
+
 
 PROMPT_CONTEXT_RE = re.compile("\\bprompt\\b", re.IGNORECASE)
 PROMPT_CONTEXT_HINT = (
@@ -442,6 +487,13 @@ class TelegramCommandHandlers(
             )
         if _durable_handled:
             response_sent = True
+        elif response_sent:
+            _abandon_pending_telegram_delivery(
+                self,
+                delivery_id=getattr(outcome, "durable_delivery_id", None),
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+            )
         if response_sent:
             key = await self._resolve_topic_key(message.chat_id, message.thread_id)
             log_event(

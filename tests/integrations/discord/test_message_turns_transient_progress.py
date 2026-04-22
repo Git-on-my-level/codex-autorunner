@@ -7,6 +7,10 @@ from typing import Any, Optional
 import pytest
 from tests import discord_message_turns_support as support
 
+from codex_autorunner.core.orchestration import SQLiteManagedThreadDeliveryEngine
+from codex_autorunner.core.orchestration.managed_thread_delivery import (
+    ManagedThreadDeliveryState,
+)
 from codex_autorunner.core.ports.run_event import (
     ApprovalRequested,
     Completed,
@@ -528,6 +532,77 @@ async def test_deliver_result_reconciles_stale_siblings_without_final_message(
             in edited["payload"]["content"].lower()
             for edited in rest.edited_channel_messages
         )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_deliver_result_abandons_pending_durable_delivery_after_visible_final_send(
+    tmp_path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    store = support.DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = support._FakeRest()
+    service = support.DiscordBotService(
+        support._config(tmp_path, allowed_channel_ids=frozenset({"channel-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=support._FakeGateway([]),
+        state_store=store,
+        outbox_manager=support._FakeOutboxManager(),
+    )
+    engine = SQLiteManagedThreadDeliveryEngine(tmp_path)
+    finalized = support.managed_thread_turns_module.ManagedThreadFinalizationResult(
+        status="ok",
+        assistant_text="fixture reply",
+        error=None,
+        managed_thread_id="thread-1",
+        managed_turn_id="exec-1",
+        backend_thread_id="backend-1",
+    )
+    intent = support.managed_thread_turns_module.build_managed_thread_delivery_intent(
+        finalized,
+        surface=support.managed_thread_turns_module.ManagedThreadSurfaceInfo(
+            log_label="Discord",
+            surface_kind="discord",
+            surface_key="channel-1",
+        ),
+        transport_target={"channel_id": "channel-1"},
+    )
+    record = engine.create_intent(intent).record
+    patched = engine._ledger.patch_delivery(
+        record.delivery_id,
+        state=ManagedThreadDeliveryState.RETRY_SCHEDULED,
+    )
+    assert patched is not None
+    dispatch = SimpleNamespace(
+        service=service,
+        channel_id="channel-1",
+        session_key="session-1",
+        pending_compact_seed=None,
+        agent="codex",
+        model_override=None,
+    )
+
+    try:
+        await support.discord_message_turns_module._deliver_discord_turn_result(
+            dispatch,
+            workspace_root=workspace,
+            turn_result=support.DiscordMessageTurnResult(
+                final_message="done",
+                execution_id="exec-1",
+                send_final_message=True,
+                delivery_visibility_pending=True,
+                durable_delivery_id=record.delivery_id,
+            ),
+        )
+
+        abandoned = engine._ledger.get_delivery(record.delivery_id)
+        assert abandoned is not None
+        assert abandoned.state is ManagedThreadDeliveryState.ABANDONED
+        assert len(rest.channel_messages) == 1
     finally:
         await store.close()
 

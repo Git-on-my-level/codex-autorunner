@@ -10,6 +10,10 @@ import pytest
 
 from codex_autorunner.agents.registry import AgentDescriptor
 from codex_autorunner.core.hub_control_plane import HubSharedStateService
+from codex_autorunner.core.orchestration import SQLiteManagedThreadDeliveryEngine
+from codex_autorunner.core.orchestration.managed_thread_delivery import (
+    ManagedThreadDeliveryState,
+)
 from codex_autorunner.core.orchestration.sqlite import prepare_orchestration_sqlite
 from codex_autorunner.core.pma_context import (
     build_hub_snapshot,
@@ -1376,6 +1380,85 @@ async def test_pma_managed_thread_turn_recovers_if_wait_disconnects_after_comple
     for task in remaining_tasks:
         with contextlib.suppress(asyncio.CancelledError):
             await task
+
+
+@pytest.mark.anyio
+async def test_handle_normal_message_abandons_pending_durable_delivery_after_direct_send(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = TelegramTopicRecord(
+        pma_enabled=True,
+        workspace_path=None,
+        repo_id="repo-1",
+        agent="codex",
+    )
+    handler = _ManagedThreadPMAHandler(record, tmp_path)
+    engine = SQLiteManagedThreadDeliveryEngine(tmp_path)
+    finalized = execution_commands_module.ManagedThreadFinalizationResult(
+        status="ok",
+        assistant_text="telegram managed final reply",
+        error=None,
+        managed_thread_id="thread-1",
+        managed_turn_id="exec-1",
+        backend_thread_id="backend-1",
+    )
+    intent = execution_commands_module.build_managed_thread_delivery_intent(
+        finalized,
+        surface=execution_commands_module.ManagedThreadSurfaceInfo(
+            log_label="Telegram",
+            surface_kind="telegram",
+            surface_key="-1001:101",
+        ),
+        transport_target={"chat_id": -1001, "thread_id": 101},
+    )
+    record_entry = engine.create_intent(intent).record
+    patched = engine._ledger.patch_delivery(
+        record_entry.delivery_id,
+        state=ManagedThreadDeliveryState.RETRY_SCHEDULED,
+    )
+    assert patched is not None
+
+    async def _fake_run_turn_and_collect_result(
+        *args: Any, **kwargs: Any
+    ) -> _TurnRunResult:
+        _ = args, kwargs
+        return _TurnRunResult(
+            record=record,
+            thread_id="backend-1",
+            turn_id="exec-1",
+            response="telegram managed final reply",
+            placeholder_id=None,
+            elapsed_seconds=None,
+            token_usage=None,
+            transcript_message_id=None,
+            transcript_text=None,
+            durable_delivery_handled=False,
+            durable_delivery_id=record_entry.delivery_id,
+        )
+
+    monkeypatch.setattr(
+        handler,
+        "_run_turn_and_collect_result",
+        _fake_run_turn_and_collect_result,
+    )
+
+    message = TelegramMessage(
+        update_id=1,
+        message_id=10,
+        chat_id=-1001,
+        thread_id=101,
+        from_user_id=42,
+        text="hello",
+        date=None,
+        is_topic_message=True,
+    )
+
+    await handler._handle_normal_message(message, runtime=_RuntimeStub())
+
+    abandoned = engine._ledger.get_delivery(record_entry.delivery_id)
+    assert abandoned is not None
+    assert abandoned.state is ManagedThreadDeliveryState.ABANDONED
+    assert "telegram managed final reply" in handler._sent
 
 
 @pytest.mark.anyio

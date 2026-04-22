@@ -14,7 +14,12 @@ from ...core.ports.run_event import (
     RunNotice,
     ToolCall,
 )
-from .progress_primitives import ProgressAction, TurnProgressTracker
+from .progress_primitives import (
+    ProgressAction,
+    TurnProgressTracker,
+    _normalize_output_text,
+    _output_matches_final_message,
+)
 
 
 @dataclass
@@ -123,6 +128,18 @@ def apply_run_event_to_progress_tracker(
             if already_streamed:
                 return ProgressTrackerEventOutcome(changed=False)
             if not notice:
+                return ProgressTrackerEventOutcome(changed=False)
+            latest_output = _normalize_output_text(tracker.latest_output_text()).strip()
+            notice_text = _normalize_output_text(notice).strip()
+            if (
+                latest_output
+                and notice_text
+                and (
+                    latest_output == notice_text
+                    or _output_matches_final_message(latest_output, notice_text)
+                    or _output_matches_final_message(notice_text, latest_output)
+                )
+            ):
                 return ProgressTrackerEventOutcome(changed=False)
             tracker.note_commentary(notice)
             return ProgressTrackerEventOutcome(changed=True, force=True)

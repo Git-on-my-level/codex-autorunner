@@ -223,6 +223,7 @@ class ManagedThreadExecutionFlowResult:
     finalized: Optional[ManagedThreadFinalizationResult] = None
     durable_delivery_performed: bool = False
     durable_delivery_pending: bool = False
+    durable_delivery_id: Optional[str] = None
 
 
 @dataclass(frozen=True)

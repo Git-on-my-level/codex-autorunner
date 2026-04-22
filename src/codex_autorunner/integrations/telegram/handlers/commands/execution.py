@@ -200,6 +200,7 @@ class _TurnRunResult:
     interrupt_status_turn_id: Optional[str] = None
     interrupt_status_fallback_text: Optional[str] = None
     durable_delivery_handled: bool = False
+    durable_delivery_id: Optional[str] = None
 
 
 @dataclass
@@ -286,6 +287,44 @@ def _telegram_state_root(handlers: Any) -> Path:
     if state_root is None:
         state_root = Path(".")
     return Path(state_root)
+
+
+def _abandon_pending_telegram_delivery(
+    handlers: Any,
+    *,
+    delivery_id: Optional[str],
+    chat_id: int,
+    thread_id: Optional[int],
+) -> None:
+    if not isinstance(delivery_id, str) or not delivery_id.strip():
+        return
+    try:
+        engine = SQLiteManagedThreadDeliveryEngine(_telegram_state_root(handlers))
+        abandoned = engine.abandon_delivery(
+            delivery_id,
+            detail="abandoned_after_direct_telegram_delivery",
+        )
+    except Exception as exc:
+        log_event(
+            handlers._logger,
+            logging.WARNING,
+            "telegram.response.delivery_abandon_failed",
+            chat_id=chat_id,
+            thread_id=thread_id,
+            delivery_id=delivery_id,
+            exc=exc,
+        )
+        return
+    if abandoned is not None:
+        log_event(
+            handlers._logger,
+            logging.INFO,
+            "telegram.response.delivery_abandoned",
+            chat_id=chat_id,
+            thread_id=thread_id,
+            delivery_id=delivery_id,
+            delivery_state=abandoned.state.value,
+        )
 
 
 def _spawn_telegram_background_task(handlers: Any, coro: Any) -> asyncio.Task[Any]:
@@ -1274,6 +1313,13 @@ async def _run_telegram_managed_thread_turn(
                     placeholder_id=prepared_placeholder_id,
                     response=failure_message,
                 )
+                if response_sent and getattr(_flow, "durable_delivery_pending", False):
+                    _abandon_pending_telegram_delivery(
+                        handlers,
+                        delivery_id=getattr(_flow, "durable_delivery_id", None),
+                        chat_id=message.chat_id,
+                        thread_id=message.thread_id,
+                    )
             elif send_failure_response and prepared_placeholder_id is not None:
                 await handlers._delete_message(
                     message.chat_id,
@@ -1382,6 +1428,7 @@ async def _run_telegram_managed_thread_turn(
             interrupt_status_turn_id=backend_turn_id or None,
             interrupt_status_fallback_text=interrupt_status_fallback_text,
             durable_delivery_handled=_delivery_handled,
+            durable_delivery_id=getattr(_flow, "durable_delivery_id", None),
         )
 
     queue_task_map = getattr(handlers, "_telegram_managed_thread_queue_tasks", None)

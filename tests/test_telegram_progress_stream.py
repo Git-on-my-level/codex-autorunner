@@ -322,11 +322,10 @@ def test_render_progress_text_keeps_commentary_live_only() -> None:
     final = render_progress_text(tracker, max_length=2000, now=1.0, render_mode="final")
 
     assert "streamed output" in live
-    assert "Interim note from agent while this turn is still running:" in live
     assert "interim commentary block" in live
-    assert "Final reply will be sent separately when the turn completes." in live
+    assert "Interim note from agent while this turn is still running:" not in live
+    assert "Final reply will be sent separately when the turn completes." not in live
     assert "streamed output" in final
-    assert "Interim note from agent while this turn is still running:" not in final
     assert "interim commentary block" not in final
 
 
