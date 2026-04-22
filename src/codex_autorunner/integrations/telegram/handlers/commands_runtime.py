@@ -1804,9 +1804,9 @@ class TelegramCommandHandlers(
                 return None
             return _format_feature_flags(result)
 
-        async def _fetch_codex_features() -> tuple[
-            list[CodexFeatureRow], Optional[str]
-        ]:
+        async def _fetch_codex_features() -> (
+            tuple[list[CodexFeatureRow], Optional[str]]
+        ):
             features_command = derive_codex_features_command(
                 self._config.app_server_command
             )
