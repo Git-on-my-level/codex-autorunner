@@ -15,7 +15,6 @@ from codex_autorunner.integrations.discord import (
 )
 from codex_autorunner.integrations.discord.service import DiscordBotService
 from codex_autorunner.integrations.discord.state import DiscordStateStore
-from tests.chat_surface_harness.discord import drain_spawned_tasks
 from tests.discord_message_turns_support import (
     _config,
     _FakeOutboxManager,
@@ -84,7 +83,19 @@ async def test_message_create_startup_failure_keeps_generic_error_without_raw_de
             timeout=3,
         )
         await asyncio.wait_for(submit_started.wait(), timeout=1)
-        await asyncio.wait_for(drain_spawned_tasks(service), timeout=1)
+        task = next(
+            pending
+            for pending in service._background_tasks
+            if isinstance(
+                getattr(pending, "_discord_progress_task_context", None),
+                dict,
+            )
+            and getattr(pending, "_discord_progress_task_context", {}).get(
+                "failure_note"
+            )
+        )
+        with contextlib.suppress(RuntimeError, asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=1)
         assert submit_started.is_set()
         assert rest.edited_channel_messages
         assert any(

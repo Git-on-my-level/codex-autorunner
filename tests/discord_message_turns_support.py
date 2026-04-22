@@ -1143,7 +1143,7 @@ async def test_orchestrated_turn_submission_timeout_deletes_progress_placeholder
     )
     monkeypatch.setattr(
         discord_message_turns_module,
-        "DISCORD_MANAGED_THREAD_SUBMISSION_TIMEOUT_SECONDS",
+        "DISCORD_PMA_SUBMISSION_TIMEOUT_SECONDS",
         0.01,
     )
     monkeypatch.setattr(

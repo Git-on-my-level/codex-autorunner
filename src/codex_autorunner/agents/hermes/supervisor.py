@@ -1,13 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
-import subprocess
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from os.path import basename
 from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable, Mapping, Optional, Sequence
@@ -33,7 +30,6 @@ from ..managed_runtime import RuntimePreflightResult
 from ..types import TerminalTurnResult
 
 _logger = logging.getLogger(__name__)
-_SESSION_STORE_TIMESTAMP_SLOP_SECONDS = 1.0
 
 HERMES_RUNTIME_ID = "hermes"
 HERMES_ACP_COMMAND = "acp"
@@ -92,27 +88,6 @@ def _extract_session_summary(payload: Mapping[str, Any]) -> Optional[str]:
     return None
 
 
-def _build_session_store_recovered_raw_events(
-    *,
-    session_id: str,
-    turn_id: str,
-    assistant_text: str,
-    recovery_source: str,
-) -> list[dict[str, Any]]:
-    return [
-        {
-            "method": "prompt/completed",
-            "params": {
-                "sessionId": session_id,
-                "turnId": turn_id,
-                "status": "completed",
-                "finalOutput": assistant_text,
-                "recoveredFrom": recovery_source,
-            },
-        }
-    ]
-
-
 class HermesSupervisorError(RuntimeError):
     pass
 
@@ -139,16 +114,6 @@ class _HermesTurnState:
     last_event_method: Optional[str] = None
     last_session_update_kind: Optional[str] = None
     last_progress_at: Optional[str] = None
-    started_at_unix: float = field(default_factory=time.time)
-    baseline_message_count: Optional[int] = None
-    baseline_last_assistant_text: Optional[str] = None
-
-
-@dataclass(frozen=True)
-class _HermesSessionStoreSnapshot:
-    message_count: Optional[int]
-    last_updated_unix: Optional[float]
-    last_assistant_text: Optional[str]
 
 
 class HermesSupervisor:
@@ -193,8 +158,6 @@ class HermesSupervisor:
         )
         self._turn_states: dict[tuple[str, str], _HermesTurnState] = {}
         self._session_turns: dict[tuple[str, str], str] = {}
-        self._session_store_root: Optional[Path] = None
-        self._session_store_probe_attempted = False
         self._lock = asyncio.Lock()
 
     @property
@@ -445,7 +408,6 @@ class HermesSupervisor:
             model=_normalize_optional_text(model),
             launch_command=list(self._command),
         )
-        baseline_snapshot = await self._read_session_store_snapshot(session_id)
         handle = await self._acp.start_prompt(
             workspace_root,
             session_id,
@@ -470,9 +432,6 @@ class HermesSupervisor:
             self._session_turns[(workspace, session_id)] = handle.turn_id
         if previous_state is not None:
             await self._cancel_pending_approval_task(previous_state)
-        if baseline_snapshot is not None:
-            state.baseline_message_count = baseline_snapshot.message_count
-            state.baseline_last_assistant_text = baseline_snapshot.last_assistant_text
         for event in await self._acp.prompt_events_snapshot(
             workspace_root, handle.turn_id
         ):
@@ -512,133 +471,41 @@ class HermesSupervisor:
         )
         workspace = _workspace_key(workspace_root)
         started_at = time.monotonic()
+        state = await self._require_turn_state(workspace_root, resolved_turn_id)
         try:
-            state = await self._require_turn_state(workspace_root, resolved_turn_id)
-        except HermesSupervisorError:
-            recovered = (
-                await self._recover_turn_result_from_session_store_without_state(
-                    session_id=session_id,
-                    turn_id=resolved_turn_id,
-                )
-            )
-            if recovered is None:
-                raise
+            result = await state.handle.wait(timeout=timeout)
+        except asyncio.TimeoutError:
             log_event(
                 self._logger,
                 logging.WARNING,
-                "hermes.turn.wait_missing_state_recovered",
+                "hermes.turn.wait_timeout",
+                workspace_root=workspace,
+                session_id=session_id,
+                turn_id=resolved_turn_id,
+                timeout_seconds=timeout,
+                elapsed_ms=_elapsed_ms(started_at),
+                last_event_method=state.last_event_method,
+                last_runtime_method=state.last_event_method,
+                last_session_update_kind=state.last_session_update_kind,
+                last_progress_at=state.last_progress_at,
+            )
+            raise
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "hermes.turn.wait_error",
                 workspace_root=workspace,
                 session_id=session_id,
                 turn_id=resolved_turn_id,
                 elapsed_ms=_elapsed_ms(started_at),
+                last_event_method=state.last_event_method,
+                last_runtime_method=state.last_event_method,
+                last_session_update_kind=state.last_session_update_kind,
+                last_progress_at=state.last_progress_at,
+                detail=str(exc) or exc.__class__.__name__,
             )
-            return recovered
-        try:
-            result = await state.handle.wait(timeout=timeout)
-        except asyncio.TimeoutError:
-            recovered = await self._recover_turn_from_session_store(
-                workspace_root,
-                state,
-            )
-            if recovered is not None:
-                result = recovered
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "hermes.turn.wait_timeout_recovered",
-                    workspace_root=_workspace_key(workspace_root),
-                    session_id=session_id,
-                    turn_id=resolved_turn_id,
-                    timeout_seconds=timeout,
-                    elapsed_ms=_elapsed_ms(started_at),
-                    last_event_method=state.last_event_method,
-                    last_runtime_method=state.last_event_method,
-                    last_session_update_kind=state.last_session_update_kind,
-                    last_progress_at=state.last_progress_at,
-                )
-            else:
-                recovered_without_state = (
-                    await self._recover_turn_result_from_session_store_without_state(
-                        session_id=session_id,
-                        turn_id=resolved_turn_id,
-                    )
-                )
-                if recovered_without_state is not None:
-                    log_event(
-                        self._logger,
-                        logging.WARNING,
-                        "hermes.turn.wait_timeout_recovered_without_state",
-                        workspace_root=workspace,
-                        session_id=session_id,
-                        turn_id=resolved_turn_id,
-                        timeout_seconds=timeout,
-                        elapsed_ms=_elapsed_ms(started_at),
-                        last_event_method=state.last_event_method,
-                        last_runtime_method=state.last_event_method,
-                        last_session_update_kind=state.last_session_update_kind,
-                        last_progress_at=state.last_progress_at,
-                    )
-                    return recovered_without_state
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "hermes.turn.wait_timeout",
-                    workspace_root=workspace,
-                    session_id=session_id,
-                    turn_id=resolved_turn_id,
-                    timeout_seconds=timeout,
-                    elapsed_ms=_elapsed_ms(started_at),
-                    last_event_method=state.last_event_method,
-                    last_runtime_method=state.last_event_method,
-                    last_session_update_kind=state.last_session_update_kind,
-                    last_progress_at=state.last_progress_at,
-                )
-                raise
-        except Exception as exc:
-            recovered = await self._recover_turn_from_session_store(
-                workspace_root,
-                state,
-            )
-            if recovered is not None:
-                result = recovered
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "hermes.turn.wait_error_recovered",
-                    workspace_root=workspace,
-                    session_id=session_id,
-                    turn_id=resolved_turn_id,
-                    elapsed_ms=_elapsed_ms(started_at),
-                    last_event_method=state.last_event_method,
-                    last_runtime_method=state.last_event_method,
-                    last_session_update_kind=state.last_session_update_kind,
-                    last_progress_at=state.last_progress_at,
-                    detail=str(exc) or exc.__class__.__name__,
-                )
-            else:
-                recovered_without_state = (
-                    await self._recover_turn_result_from_session_store_without_state(
-                        session_id=session_id,
-                        turn_id=resolved_turn_id,
-                    )
-                )
-                if recovered_without_state is not None:
-                    log_event(
-                        self._logger,
-                        logging.WARNING,
-                        "hermes.turn.wait_error_recovered_without_state",
-                        workspace_root=workspace,
-                        session_id=session_id,
-                        turn_id=resolved_turn_id,
-                        elapsed_ms=_elapsed_ms(started_at),
-                        last_event_method=state.last_event_method,
-                        last_runtime_method=state.last_event_method,
-                        last_session_update_kind=state.last_session_update_kind,
-                        last_progress_at=state.last_progress_at,
-                        detail=str(exc) or exc.__class__.__name__,
-                    )
-                    return recovered_without_state
-                raise
+            raise
         await self._sync_prompt_snapshot_into_event_buffer(workspace_root, state)
         await state.event_buffer.close()
         errors = [result.error_message] if result.error_message else []
@@ -658,15 +525,6 @@ class HermesSupervisor:
             last_session_update_kind=state.last_session_update_kind,
             last_progress_at=state.last_progress_at,
             error_message=result.error_message,
-            recovered_from_session_store=(
-                "session_store"
-                if any(
-                    event.get("params", {}).get("recoveredFrom") == "session_store"
-                    for event in raw_events
-                    if isinstance(event, dict)
-                )
-                else False
-            ),
         )
         return TerminalTurnResult(
             status=result.status,
@@ -689,40 +547,6 @@ class HermesSupervisor:
         state = await self._require_turn_state(workspace_root, resolved_turn_id)
         async for event in state.event_buffer.tail():
             yield event
-
-    async def recover_turn_from_session_store(
-        self,
-        workspace_root: Path,
-        session_id: str,
-        turn_id: str,
-    ) -> Optional[TerminalTurnResult]:
-        resolved_turn_id = await self._resolve_turn_id(
-            workspace_root,
-            session_id,
-            turn_id,
-        )
-        try:
-            state = await self._require_turn_state(workspace_root, resolved_turn_id)
-        except HermesSupervisorError:
-            return await self._recover_turn_result_from_session_store_without_state(
-                session_id=session_id,
-                turn_id=resolved_turn_id,
-            )
-        result = await self._recover_turn_from_session_store(workspace_root, state)
-        if result is None:
-            return await self._recover_turn_result_from_session_store_without_state(
-                session_id=session_id,
-                turn_id=resolved_turn_id,
-            )
-        await self._sync_prompt_snapshot_into_event_buffer(workspace_root, state)
-        await state.event_buffer.close()
-        errors = [result.error_message] if result.error_message else []
-        return TerminalTurnResult(
-            status=result.status,
-            assistant_text=result.final_output,
-            errors=errors,
-            raw_events=state.event_buffer.snapshot(),
-        )
 
     async def list_turn_events_snapshot(self, turn_id: str) -> list[dict[str, Any]]:
         async with self._lock:
@@ -819,120 +643,6 @@ class HermesSupervisor:
         if state is None:
             raise HermesSupervisorError(f"Unknown Hermes turn '{turn_id}'")
         return state
-
-    async def _recover_turn_from_session_store(
-        self,
-        workspace_root: Path,
-        state: _HermesTurnState,
-    ) -> Optional[Any]:
-        await self._sync_prompt_snapshot_into_event_buffer(workspace_root, state)
-        snapshot = await self._read_session_store_snapshot(state.session_id)
-        if snapshot is None:
-            return None
-        assistant_text = _normalize_optional_text(snapshot.last_assistant_text)
-        if not assistant_text:
-            return None
-        if snapshot.last_updated_unix is None:
-            return None
-        if (
-            snapshot.last_updated_unix
-            < state.started_at_unix - _SESSION_STORE_TIMESTAMP_SLOP_SECONDS
-        ):
-            return None
-        baseline_count = state.baseline_message_count
-        if (
-            baseline_count is not None
-            and snapshot.message_count is not None
-            and snapshot.message_count <= baseline_count
-        ):
-            return None
-        recovered = await self._acp.recover_prompt_completion(
-            workspace_root,
-            state.turn_id,
-            final_output=assistant_text,
-            recovery_source="session_store",
-        )
-        if not recovered:
-            return None
-        log_event(
-            self._logger,
-            logging.WARNING,
-            "hermes.turn.recovered_from_session_store",
-            workspace_root=_workspace_key(workspace_root),
-            session_id=state.session_id,
-            turn_id=state.turn_id,
-            recovered_output_chars=len(assistant_text),
-            baseline_message_count=baseline_count,
-            recovered_message_count=snapshot.message_count,
-            last_event_method=state.last_event_method,
-            last_session_update_kind=state.last_session_update_kind,
-            last_progress_at=state.last_progress_at,
-        )
-        return await state.handle.wait(timeout=0.1)
-
-    async def _recover_turn_result_from_session_store_without_state(
-        self,
-        *,
-        session_id: str,
-        turn_id: str,
-    ) -> Optional[TerminalTurnResult]:
-        snapshot = await self._read_session_store_snapshot(session_id)
-        if snapshot is None:
-            return None
-        assistant_text = _normalize_optional_text(snapshot.last_assistant_text)
-        if not assistant_text or snapshot.last_updated_unix is None:
-            return None
-        raw_events = _build_session_store_recovered_raw_events(
-            session_id=session_id,
-            turn_id=turn_id,
-            assistant_text=assistant_text,
-            recovery_source="session_store_missing_state",
-        )
-        log_event(
-            self._logger,
-            logging.WARNING,
-            "hermes.turn.recovered_from_session_store_without_state",
-            session_id=session_id,
-            turn_id=turn_id,
-            recovered_output_chars=len(assistant_text),
-            recovered_message_count=snapshot.message_count,
-        )
-        return TerminalTurnResult(
-            status="completed",
-            assistant_text=assistant_text,
-            errors=[],
-            raw_events=raw_events,
-        )
-
-    async def _read_session_store_snapshot(
-        self,
-        session_id: str,
-    ) -> Optional[_HermesSessionStoreSnapshot]:
-        session_store_root = await self._resolve_session_store_root()
-        if session_store_root is None:
-            return None
-        session_file = session_store_root / "sessions" / f"session_{session_id}.json"
-        return await asyncio.to_thread(_read_session_store_snapshot, session_file)
-
-    async def _resolve_session_store_root(self) -> Optional[Path]:
-        if self._session_store_probe_attempted:
-            return self._session_store_root
-        self._session_store_probe_attempted = True
-        configured_home = _normalize_optional_text(
-            self._base_env.get("HERMES_HOME") or os.environ.get("HERMES_HOME")
-        )
-        if configured_home:
-            self._session_store_root = Path(configured_home).expanduser()
-            return self._session_store_root
-        binary = _normalize_optional_text(self._command[0] if self._command else None)
-        if binary is None or not basename(binary).lower().startswith("hermes"):
-            return None
-        self._session_store_root = await asyncio.to_thread(
-            _probe_hermes_session_store_root,
-            binary,
-            self._base_env,
-        )
-        return self._session_store_root
 
     async def _wait_for_turn_state(
         self,
@@ -1170,119 +880,6 @@ class HermesSupervisor:
             decision,
             reason,
         )
-
-
-def _read_session_store_snapshot(
-    session_file: Path,
-) -> Optional[_HermesSessionStoreSnapshot]:
-    try:
-        payload = json.loads(session_file.read_text())
-    except (OSError, ValueError, TypeError):
-        return None
-    if not isinstance(payload, dict):
-        return None
-    messages = payload.get("messages")
-    message_count = payload.get("message_count")
-    if not isinstance(message_count, int):
-        message_count = len(messages) if isinstance(messages, list) else None
-    last_assistant_text: Optional[str] = None
-    if isinstance(messages, list):
-        for message in reversed(messages):
-            if not isinstance(message, dict):
-                continue
-            if _normalize_optional_text(message.get("role")) != "assistant":
-                continue
-            last_assistant_text = _extract_session_message_text(message)
-            if last_assistant_text:
-                break
-    last_updated = _parse_session_timestamp(payload.get("last_updated"))
-    return _HermesSessionStoreSnapshot(
-        message_count=message_count,
-        last_updated_unix=last_updated,
-        last_assistant_text=last_assistant_text,
-    )
-
-
-def _extract_session_message_text(message: Mapping[str, Any]) -> Optional[str]:
-    extracted: list[str] = []
-
-    def _walk(value: Any) -> None:
-        if isinstance(value, str):
-            normalized = value.strip()
-            if normalized:
-                extracted.append(normalized)
-            return
-        if isinstance(value, list):
-            for item in value:
-                _walk(item)
-            return
-        if isinstance(value, dict):
-            for key in ("text", "content"):
-                if key in value:
-                    _walk(value.get(key))
-            for key in ("parts", "items"):
-                if key in value:
-                    _walk(value.get(key))
-
-    _walk(message.get("content"))
-    _walk(message.get("parts"))
-    if not extracted:
-        return None
-    return "\n".join(extracted).strip() or None
-
-
-def _parse_session_timestamp(value: Any) -> Optional[float]:
-    normalized = _normalize_optional_text(value)
-    if normalized is None:
-        return None
-    try:
-        parsed = normalized.replace("Z", "+00:00")
-        dt = datetime.fromisoformat(parsed)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.timestamp()
-    except (TypeError, ValueError):
-        return None
-
-
-def _probe_hermes_session_store_root(
-    binary: str,
-    base_env: Mapping[str, str],
-) -> Optional[Path]:
-    env = os.environ.copy()
-    env.update({key: value for key, value in base_env.items() if value})
-    try:
-        result = subprocess.run(
-            [binary, "dump"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            env=env,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if result.returncode != 0:
-        return None
-    for line in result.stdout.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        key: str
-        value: str
-        if ":" in stripped:
-            before_colon, _, after_colon = stripped.partition(":")
-            if " " not in before_colon.strip():
-                key, value = before_colon, after_colon
-            else:
-                key, _, value = stripped.partition(" ")
-        else:
-            key, _, value = stripped.partition(" ")
-        if key.strip().lower().rstrip(":") != "hermes_home":
-            continue
-        normalized = _normalize_optional_text(value)
-        if normalized:
-            return Path(normalized).expanduser()
-    return None
 
 
 def _normalize_approval_decision(value: Any, *, default: str) -> str:
