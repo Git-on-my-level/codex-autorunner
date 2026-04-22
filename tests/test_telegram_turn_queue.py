@@ -1,12 +1,17 @@
 import asyncio
 import logging
 import tempfile
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional
 
 import pytest
 
+from codex_autorunner.integrations.chat.queue_status import (
+    coerce_queue_status_items,
+    format_queue_status_text,
+)
 from codex_autorunner.integrations.telegram.adapter import TelegramMessage
 from codex_autorunner.integrations.telegram.constants import (
     PLACEHOLDER_TEXT,
@@ -74,8 +79,14 @@ class _ClientStub:
 
 
 class _RouterStub:
-    def __init__(self, records: dict[str, TelegramTopicRecord]) -> None:
+    def __init__(
+        self,
+        records: dict[str, TelegramTopicRecord],
+        *,
+        runtimes: Optional[dict[str, object]] = None,
+    ) -> None:
         self._records = records
+        self._runtimes = runtimes or {}
 
     async def get_topic(self, key: str) -> Optional[TelegramTopicRecord]:
         return self._records.get(key)
@@ -97,6 +108,17 @@ class _RouterStub:
         if callable(apply):
             apply(record)
 
+    def runtime_for(self, key: str) -> object:
+        return self._runtimes.setdefault(
+            key,
+            SimpleNamespace(
+                queue=SimpleNamespace(
+                    pending_item_ids=lambda: [],
+                    pending_items=lambda: [],
+                )
+            ),
+        )
+
 
 class _HandlerStub(TelegramCommandHandlers):
     def __init__(
@@ -107,6 +129,7 @@ class _HandlerStub(TelegramCommandHandlers):
         records: dict[str, TelegramTopicRecord],
         placeholder_events: Optional[dict[int, asyncio.Event]] = None,
         deliver_result: bool = True,
+        runtimes: Optional[dict[str, object]] = None,
     ) -> None:
         self._logger = logging.getLogger("test")
         self._config = SimpleNamespace(
@@ -118,8 +141,14 @@ class _HandlerStub(TelegramCommandHandlers):
             agent_turn_timeout_seconds={"codex": None, "opencode": None},
             message_overflow="document",
         )
-        self._router = _RouterStub(records)
+        self._router = _RouterStub(records, runtimes=runtimes)
         self._turn_semaphore = asyncio.Semaphore(max_parallel_turns)
+        self._queued_placeholder_map: dict[tuple[int, int], int] = {}
+        self._queued_placeholder_timestamps: dict[tuple[int, int], float] = {}
+        self._queue_status_message_map: dict[tuple[int, Optional[int]], int] = {}
+        self._queue_status_message_timestamps: dict[
+            tuple[int, Optional[int]], float
+        ] = {}
         self._turn_contexts: dict[tuple[str, str], object] = {}
         self._turn_preview_text: dict[tuple[str, str], str] = {}
         self._turn_preview_updated_at: dict[tuple[str, str], float] = {}
@@ -223,20 +252,76 @@ class _HandlerStub(TelegramCommandHandlers):
             "reply_markup": reply_markup,
         }
         self._placeholder_calls.append(call)
+        placeholder_id = 100 + len(self._placeholder_calls)
         if reply_to is not None:
-            placeholder_id = 100 + len(self._placeholder_calls)
             self._placeholder_ids[reply_to] = placeholder_id
             event = self._placeholder_events.get(reply_to)
             if event is not None:
                 event.set()
-            return placeholder_id
-        return 0
+        return placeholder_id
 
     async def _edit_message_text(
-        self, _chat_id: int, message_id: int, text: str
+        self,
+        _chat_id: int,
+        message_id: int,
+        text: str,
+        *,
+        reply_markup: Optional[dict[str, object]] = None,
     ) -> bool:
         self._edit_calls.append((message_id, text))
         return True
+
+    async def _refresh_topic_queue_status_message(
+        self,
+        *,
+        topic_key: str,
+        chat_id: int,
+        thread_id: Optional[int],
+        reply_to_message_id: Optional[int] = None,
+        repost: bool = False,
+    ) -> Optional[int]:
+        runtime = self._router.runtime_for(topic_key)
+        pending_items = getattr(runtime.queue, "pending_items", lambda: [])()
+        items = coerce_queue_status_items(pending_items)
+        key = (chat_id, thread_id)
+        if not items:
+            self._queue_status_message_map.pop(key, None)
+            return None
+        existing = self._queue_status_message_map.get(key)
+        if existing is not None and not repost:
+            await self._edit_message_text(
+                chat_id,
+                existing,
+                format_queue_status_text(items),
+            )
+            return existing
+        message_id = await self._send_placeholder(
+            chat_id,
+            thread_id=thread_id,
+            reply_to=reply_to_message_id,
+            text=format_queue_status_text(items),
+        )
+        self._queue_status_message_map[key] = message_id
+        if existing is not None and existing != message_id:
+            await self._delete_message(chat_id, existing, thread_id=thread_id)
+        return message_id
+
+    def _get_queued_placeholder(self, chat_id: int, message_id: int) -> Optional[int]:
+        return self._queued_placeholder_map.get((chat_id, message_id))
+
+    def _set_queued_placeholder(
+        self, chat_id: int, message_id: int, placeholder_id: int
+    ) -> None:
+        self._queued_placeholder_map[(chat_id, message_id)] = placeholder_id
+
+    def _clear_queued_placeholder(self, chat_id: int, message_id: int) -> None:
+        self._queued_placeholder_map.pop((chat_id, message_id), None)
+
+    def _claim_queued_placeholder(self, chat_id: int, message_id: int) -> Optional[int]:
+        return self._queued_placeholder_map.pop((chat_id, message_id), None)
+
+    def _queued_placeholder_keyboard(self, source_message_id: int) -> dict[str, object]:
+        return {"source_message_id": source_message_id}
 
     def _format_turn_metrics_text(
         self,
@@ -436,6 +521,65 @@ async def test_turn_placeholder_sent_while_queued() -> None:
 
     placeholder_id = handler._placeholder_ids[2]
     assert (placeholder_id, PLACEHOLDER_TEXT) in handler._edit_calls
+
+
+@pytest.mark.anyio
+async def test_queue_wait_uses_refreshed_placeholder_when_available() -> None:
+    client = _ClientStub(turn_wait_events=[asyncio.Event()])
+    records = {"10:11": _record("thread-1")}
+    handler = _HandlerStub(client=client, max_parallel_turns=1, records=records)
+
+    handler._set_queued_placeholder(10, 2, 222)
+    await handler._turn_semaphore.acquire()
+
+    try:
+        resolved_placeholder_id = await handler._log_queue_wait_and_update_placeholder(
+            _message(message_id=2, thread_id=11),
+            "10:11",
+            "thread-1",
+            handler._turn_semaphore,
+            time.monotonic(),
+            111,
+            QUEUED_PLACEHOLDER_TEXT,
+        )
+    finally:
+        handler._turn_semaphore.release()
+
+    assert resolved_placeholder_id == 222
+    assert handler._edit_calls[-1] == (222, PLACEHOLDER_TEXT)
+
+
+@pytest.mark.anyio
+async def test_terminal_delivery_requeues_pending_placeholders_in_order() -> None:
+    client = _ClientStub(turn_wait_events=[asyncio.Event()])
+    records = {"10:11": _record("thread-1")}
+    runtimes = {
+        "10:11": SimpleNamespace(
+            queue=SimpleNamespace(
+                pending_item_ids=lambda: ["2", "3"],
+                pending_items=lambda: [
+                    {"item_id": "2", "preview": "Second request"},
+                    {"item_id": "3", "preview": "Third request"},
+                ],
+            )
+        )
+    }
+    handler = _HandlerStub(
+        client=client,
+        max_parallel_turns=1,
+        records=records,
+        runtimes=runtimes,
+    )
+    handler._queue_status_message_map[(10, 11)] = 502
+
+    await handler._requeue_pending_topic_status_message(
+        chat_id=10,
+        thread_id=11,
+        topic_key="10:11",
+    )
+
+    assert handler._queue_status_message_map[(10, 11)] == 101
+    assert handler._delete_calls == [(10, 502)]
 
 
 @pytest.mark.anyio

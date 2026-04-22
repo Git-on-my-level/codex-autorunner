@@ -1746,7 +1746,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
         queue_started_at: float,
         placeholder_id: Optional[int],
         placeholder_text: str,
-    ) -> None:
+    ) -> Optional[int]:
         queue_wait_ms = int((time.monotonic() - queue_started_at) * 1000)
         log_event(
             self._logger,
@@ -1761,6 +1761,17 @@ class ExecutionCommands(TelegramCommandSupportMixin):
             max_parallel_turns=self._config.concurrency.max_parallel_turns,
             per_topic_queue=self._config.concurrency.per_topic_queue,
         )
+        claim_queued_placeholder = getattr(self, "_claim_queued_placeholder", None)
+        claimed_placeholder_id = (
+            claim_queued_placeholder(
+                message.chat_id,
+                message.message_id,
+            )
+            if callable(claim_queued_placeholder)
+            else None
+        )
+        if claimed_placeholder_id is not None:
+            placeholder_id = claimed_placeholder_id
         if (
             turn_semaphore.locked()
             and placeholder_id is not None
@@ -1771,6 +1782,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 placeholder_id,
                 PLACEHOLDER_TEXT,
             )
+        return placeholder_id
 
     async def _execute_opencode_turn(
         self,
@@ -1960,7 +1972,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
             turn_elapsed_seconds = None
 
             try:
-                await self._log_queue_wait_and_update_placeholder(
+                placeholder_id = await self._log_queue_wait_and_update_placeholder(
                     message,
                     key,
                     thread_id,
@@ -2545,7 +2557,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
             turn_key: Optional[TurnKey] = None
             turn_started_at: Optional[float] = None
             try:
-                await self._log_queue_wait_and_update_placeholder(
+                placeholder_id = await self._log_queue_wait_and_update_placeholder(
                     message,
                     key,
                     thread_id,
@@ -3025,6 +3037,12 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 thread_id=message.thread_id,
                 placeholder_id=placeholder_id,
                 placeholder_sent_at=now_iso(),
+            )
+        if queued and placeholder_id is not None:
+            self._set_queued_placeholder(
+                message.chat_id,
+                message.message_id,
+                placeholder_id,
             )
         return placeholder_id
 

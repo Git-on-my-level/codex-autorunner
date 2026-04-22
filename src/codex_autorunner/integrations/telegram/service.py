@@ -84,6 +84,12 @@ from ..chat.managed_thread_delivery_worker import (
 from ..chat.managed_thread_turns import (
     render_managed_thread_delivery_record_text,
 )
+from ..chat.queue_status import (
+    QUEUE_STATUS_ITEM_LIMIT,
+    QueueStatusItem,
+    coerce_queue_status_items,
+    format_queue_status_text,
+)
 from ..chat.service import ChatBotServiceCore
 from ..chat.turn_policy import PlainTextTurnContext
 from ..chat.update_notifier import ChatUpdateStatusNotifier
@@ -114,7 +120,6 @@ from .config import (
 from .config import TelegramBotConfigError as TelegramBotConfigError  # re-export
 from .constants import (
     DEFAULT_INTERRUPT_TIMEOUT_SECONDS,
-    QUEUED_PLACEHOLDER_TEXT,
     TurnKey,
 )
 from .dispatch import dispatch_update
@@ -136,6 +141,7 @@ from .helpers import (
 )
 from .notifications import TelegramNotificationHandlers
 from .outbox import TelegramOutboxManager
+from .queue_status_message_manager import TelegramQueueStatusMessageManager
 from .queued_placeholder_manager import TelegramQueuedPlaceholderManager
 from .runtime import TelegramWorkspaceAndTurnMixin
 from .state import (
@@ -450,6 +456,7 @@ class TelegramBotService(
         self._outbox_inflight: set[str] = set()
         self._outbox_lock: Optional[asyncio.Lock] = None
         self._queued_placeholder_manager = TelegramQueuedPlaceholderManager()
+        self._queue_status_message_manager = TelegramQueueStatusMessageManager()
         self._bot_username: Optional[str] = None
         self._token_usage_by_thread: "collections.OrderedDict[str, dict[str, Any]]" = (
             collections.OrderedDict()
@@ -1836,68 +1843,131 @@ class TelegramBotService(
         *,
         force_queue: bool = False,
         item_id: Optional[str] = None,
+        item_label: Optional[str] = None,
     ) -> Optional[str]:
         runtime = self._router.runtime_for(key)
         wrapped = self._wrap_topic_work(key, work)
         if force_queue or self._config.concurrency.per_topic_queue:
-            return runtime.queue.enqueue_detached(wrapped, item_id=item_id)
+            return runtime.queue.enqueue_detached(
+                wrapped,
+                item_id=item_id,
+                item_label=item_label,
+            )
         self._spawn_task(wrapped())
         return None
 
-    def _queued_placeholder_keyboard(self, source_message_id: int) -> dict[str, Any]:
-        source = str(source_message_id)
-        return build_inline_keyboard(
-            [
+    def _queue_status_key(
+        self, chat_id: int, thread_id: Optional[int]
+    ) -> tuple[int, Optional[int]]:
+        return (chat_id, thread_id)
+
+    def _get_queue_status_message_id(
+        self, chat_id: int, thread_id: Optional[int]
+    ) -> Optional[int]:
+        return self._queue_status_message_manager.get(chat_id, thread_id)
+
+    def _set_queue_status_message_id(
+        self, chat_id: int, thread_id: Optional[int], message_id: int
+    ) -> None:
+        self._queue_status_message_manager.set(chat_id, thread_id, message_id)
+
+    def _clear_queue_status_message_id(
+        self, chat_id: int, thread_id: Optional[int]
+    ) -> None:
+        self._queue_status_message_manager.clear(chat_id, thread_id)
+
+    @property
+    def _queue_status_message_map(self) -> dict[tuple[int, Optional[int]], int]:
+        return self._queue_status_message_manager.map
+
+    @property
+    def _queue_status_message_timestamps(
+        self,
+    ) -> dict[tuple[int, Optional[int]], float]:
+        return self._queue_status_message_manager.timestamps
+
+    def _queue_status_keyboard(
+        self, items: list[QueueStatusItem]
+    ) -> Optional[dict[str, Any]]:
+        rows: list[list[InlineButton]] = []
+        for index, item in enumerate(items[:QUEUE_STATUS_ITEM_LIMIT], start=1):
+            source = str(item.item_id)
+            rows.append(
                 [
                     InlineButton(
-                        "Cancel",
+                        f"Cancel {index}",
                         encode_cancel_callback(f"queue_cancel:{source}"),
                     ),
                     InlineButton(
-                        "Interrupt + Send",
+                        f"Send {index}",
                         encode_cancel_callback(f"queue_interrupt_send:{source}"),
                     ),
                 ]
-            ]
-        )
+            )
+        if not rows:
+            return None
+        return build_inline_keyboard(rows)
 
-    async def _maybe_send_queued_placeholder(
-        self, message: TelegramMessage, *, topic_key: str
-    ) -> Optional[int]:
+    async def _queue_status_items_for_topic(
+        self, topic_key: str
+    ) -> list[QueueStatusItem]:
         runtime = self._router.runtime_for(topic_key)
-        is_busy = runtime.current_turn_id is not None or runtime.queue.pending() > 0
-        if not is_busy:
-            return None
-        from .immediate_feedback_bridge import telegram_publish_queued_notice
+        pending_items = getattr(runtime.queue, "pending_items", None)
+        if not callable(pending_items):
+            return []
+        return coerce_queue_status_items(
+            pending_items(),
+            fallback_prefix="Request",
+        )
 
-        result = await telegram_publish_queued_notice(
-            self,
-            chat_id=message.chat_id,
-            thread_id=message.thread_id,
-            reply_to_message_id=message.message_id,
-            text=QUEUED_PLACEHOLDER_TEXT,
-            logger=self._logger,
-        )
-        if result.anchor_ref is None:
+    async def _refresh_topic_queue_status_message(
+        self,
+        *,
+        topic_key: str,
+        chat_id: int,
+        thread_id: Optional[int],
+        reply_to_message_id: Optional[int] = None,
+        repost: bool = False,
+    ) -> Optional[int]:
+        items = await self._queue_status_items_for_topic(topic_key)
+        existing_message_id = self._get_queue_status_message_id(chat_id, thread_id)
+        if not items:
+            if existing_message_id is not None:
+                self._clear_queue_status_message_id(chat_id, thread_id)
+                await self._delete_message(
+                    chat_id,
+                    existing_message_id,
+                    thread_id=thread_id,
+                )
             return None
-        try:
-            placeholder_id = int(result.anchor_ref)
-        except (TypeError, ValueError):
-            return None
-        self._set_queued_placeholder(
-            message.chat_id, message.message_id, placeholder_id
+        text = format_queue_status_text(items)
+        reply_markup = self._queue_status_keyboard(items)
+        if existing_message_id is not None and not repost:
+            await self._edit_message_text(
+                chat_id,
+                existing_message_id,
+                text,
+                reply_markup=reply_markup,
+            )
+            self._set_queue_status_message_id(chat_id, thread_id, existing_message_id)
+            return existing_message_id
+        message_id = await self._send_placeholder(
+            chat_id,
+            thread_id=thread_id,
+            reply_to=reply_to_message_id,
+            text=text,
+            reply_markup=reply_markup,
         )
-        log_event(
-            self._logger,
-            logging.INFO,
-            "telegram.placeholder.queued",
-            topic_key=topic_key,
-            chat_id=message.chat_id,
-            thread_id=message.thread_id,
-            message_id=message.message_id,
-            placeholder_id=placeholder_id,
-        )
-        return placeholder_id
+        if message_id is None:
+            return existing_message_id
+        self._set_queue_status_message_id(chat_id, thread_id, message_id)
+        if existing_message_id is not None and existing_message_id != message_id:
+            await self._delete_message(
+                chat_id,
+                existing_message_id,
+                thread_id=thread_id,
+            )
+        return message_id
 
     def _wrap_placeholder_work(
         self,

@@ -3478,7 +3478,7 @@ async def test_component_interaction_queue_cancel_cancels_selected_pending_messa
             channel_id="channel-1",
             guild_id="guild-1",
         )
-        service._queued_notice_messages[(conversation_id, "m-2")] = "notice-1"
+        service._queue_status_messages[conversation_id] = ("channel-1", "notice-1")
 
         async def _cancel_pending_message(
             _conversation_id: str, message_id: str
@@ -3521,6 +3521,59 @@ async def test_component_interaction_queue_cancel_cancels_selected_pending_messa
             rest.edited_original_interaction_responses[-1]["payload"]["components"]
             == []
         )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_refresh_queue_status_message_reposts_status_below_terminal(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        conversation_id = service._dispatcher_conversation_id(
+            channel_id="channel-1",
+            guild_id="guild-1",
+        )
+        service._queue_status_messages[conversation_id] = ("channel-1", "notice-1")
+
+        async def _queue_status(_conversation_id: str) -> dict[str, Any]:
+            assert _conversation_id == conversation_id
+            return {
+                "active": True,
+                "pending_items": [
+                    {"item_id": "m-2", "preview": "Second"},
+                    {"item_id": "m-3", "preview": "Third"},
+                ],
+            }
+
+        service._dispatcher.queue_status = _queue_status  # type: ignore[method-assign]
+        service._command_runner.describe_busy = (  # type: ignore[method-assign]
+            lambda _conversation_id: "codex turn"
+        )
+
+        await service._refresh_queue_status_message(
+            conversation_id=conversation_id,
+            channel_id="channel-1",
+            repost=True,
+        )
+
+        assert [item["message_id"] for item in rest.channel_messages] == ["msg-1"]
+        assert rest.deleted_channel_messages == [
+            {"channel_id": "channel-1", "message_id": "notice-1"},
+        ]
+        assert service._queue_status_messages[conversation_id] == ("channel-1", "msg-1")
     finally:
         await store.close()
 
@@ -4009,7 +4062,7 @@ async def test_queued_notice_keeps_interrupt_when_message_turn_active(
             conversation_id
         )
 
-        assert content == "Queued behind /car newt; will run when it finishes."
+        assert content == "/car newt"
         assert allow_interrupt is True
     finally:
         await store.close()
@@ -4051,7 +4104,7 @@ async def test_queued_notice_hides_interrupt_when_only_ingressed_busy(
             conversation_id
         )
 
-        assert content == "Queued behind /car newt; will run when it finishes."
+        assert content == "/car newt"
         assert allow_interrupt is False
     finally:
         await store.close()
@@ -7616,7 +7669,7 @@ async def test_message_turn_waits_for_ingressed_slash_command_to_finish(
             (
                 item["payload"]
                 for item in rest.channel_messages
-                if "Queued behind /car newt; will run when it finishes."
+                if "Queued requests (1) behind /car newt"
                 in item["payload"].get("content", "")
             ),
             None,
@@ -7753,7 +7806,7 @@ async def test_run_forever_drains_message_queued_behind_ingressed_slash_command(
             (
                 item["payload"]
                 for item in rest.channel_messages
-                if "Queued behind /car newt; will run when it finishes."
+                if "Queued requests (1) behind /car newt"
                 in item["payload"].get("content", "")
             ),
             None,

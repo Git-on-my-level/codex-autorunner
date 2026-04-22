@@ -289,13 +289,10 @@ async def handle_queue_cancel_button(
         "Cancelling queued request...",
         components=[],
     )
-    await service._clear_queued_notice(
+    await service._refresh_queue_status_message(
         conversation_id=conversation_id,
-        source_message_id=source_message_id,
         channel_id=channel_id,
     )
-    if message_id:
-        service._queued_notice_messages.pop((conversation_id, source_message_id), None)
     await service.respond_ephemeral(
         interaction_id,
         interaction_token,
@@ -339,6 +336,10 @@ async def handle_queue_interrupt_send_button(
             "Queued request is no longer pending.",
         )
         return
+    await service._refresh_queue_status_message(
+        conversation_id=conversation_id,
+        channel_id=channel_id,
+    )
     binding = await service._store.get_binding(channel_id=channel_id)
     pma_enabled = bool(binding.get("pma_enabled", False)) if binding else False
     mode = "pma" if pma_enabled else "repo"

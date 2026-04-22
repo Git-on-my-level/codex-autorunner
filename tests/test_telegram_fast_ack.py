@@ -25,9 +25,15 @@ from codex_autorunner.integrations.chat.models import (
     ChatMessageRef,
     ChatThreadRef,
 )
+from codex_autorunner.integrations.chat.queue_status import (
+    coerce_queue_status_items,
+    format_queue_status_text,
+)
 from codex_autorunner.integrations.telegram.adapter import (
+    InlineButton,
     TelegramCallbackQuery,
     TelegramMessage,
+    build_inline_keyboard,
     encode_cancel_callback,
 )
 from codex_autorunner.integrations.telegram.dispatch import (
@@ -117,6 +123,7 @@ class _ServiceStub:
         self._bot = _BotStub()
         self._allowlist = None
         self._queued_placeholder_map: dict[tuple[int, int], int] = {}
+        self._queue_status_messages: dict[tuple[int, Optional[int]], int] = {}
         self._coalesced_buffers: dict = {}
         self._coalesce_locks: dict = {}
         self._media_batch_buffers: dict = {}
@@ -196,13 +203,72 @@ class _ServiceStub:
         *,
         force_queue: bool = False,
         item_id: Optional[str] = None,
+        item_label: Optional[str] = None,
     ) -> Optional[str]:
         runtime = self._router.runtime_for(key)
         wrapped = self._wrap_topic_work(key, work)
         if force_queue:
-            return runtime.queue.enqueue_detached(wrapped, item_id=item_id)
+            return runtime.queue.enqueue_detached(
+                wrapped,
+                item_id=item_id,
+                item_label=item_label,
+            )
         self._spawn_task(wrapped())
         return None
+
+    async def _refresh_topic_queue_status_message(
+        self,
+        *,
+        topic_key: str,
+        chat_id: int,
+        thread_id: Optional[int],
+        reply_to_message_id: Optional[int] = None,
+        repost: bool = False,
+    ) -> Optional[int]:
+        runtime = self._router.runtime_for(topic_key)
+        items = coerce_queue_status_items(runtime.queue.pending_items())
+        key = (chat_id, thread_id)
+        if not items:
+            self._queue_status_messages.pop(key, None)
+            return None
+        rows = []
+        for index, item in enumerate(items[:5], start=1):
+            rows.append(
+                [
+                    InlineButton(
+                        f"Cancel {index}",
+                        encode_cancel_callback(f"queue_cancel:{item.item_id}"),
+                    )
+                ]
+            )
+            rows.append(
+                [
+                    InlineButton(
+                        f"Send {index}",
+                        encode_cancel_callback(f"queue_interrupt_send:{item.item_id}"),
+                    )
+                ]
+            )
+        reply_markup = build_inline_keyboard(rows)
+        if key in self._queue_status_messages and not repost:
+            message_id = self._queue_status_messages[key]
+            await self._bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=format_queue_status_text(items),
+                reply_markup=reply_markup,
+            )
+            return message_id
+        response = await self._bot.send_message(
+            chat_id,
+            format_queue_status_text(items),
+            message_thread_id=thread_id,
+            reply_to_message_id=reply_to_message_id,
+            reply_markup=reply_markup,
+        )
+        message_id = int(response["message_id"])
+        self._queue_status_messages[key] = message_id
+        return message_id
 
     def _wrap_topic_work(self, key: str, work):
         async def wrapped():
@@ -259,12 +325,11 @@ async def test_fast_ack_sent_when_topic_has_current_turn() -> None:
 
     assert len(handler._bot.sent_messages) == 1
     sent = handler._bot.sent_messages[0]
-    assert sent["text"] == QUEUED_NOTICE_TEXT
+    assert sent["text"].startswith("Queued requests (1)")
     assert sent["chat_id"] == 10
     assert sent["reply_to"] == 1
     assert sent["reply_markup"] is not None
-
-    assert handler._queued_placeholder_map.get((10, 1)) is not None
+    assert handler._queue_status_messages[(10, 11)] == 1000
 
 
 @pytest.mark.anyio
@@ -296,12 +361,11 @@ async def test_fast_ack_sent_when_topic_queue_has_depth(
 
     assert len(handler._bot.sent_messages) == 1
     sent = handler._bot.sent_messages[0]
-    assert sent["text"] == QUEUED_NOTICE_TEXT
+    assert sent["text"].startswith("Queued requests (1)")
     assert sent["chat_id"] == 10
     assert sent["reply_to"] == 1
     assert sent["reply_markup"] is not None
-
-    assert handler._queued_placeholder_map.get((10, 1)) is not None
+    assert handler._queue_status_messages[(10, 11)] == 1000
 
 
 @pytest.mark.anyio
@@ -328,6 +392,7 @@ async def test_fast_ack_not_sent_when_topic_is_idle() -> None:
 
     assert len(handler._bot.sent_messages) == 0
     assert (10, 1) not in handler._queued_placeholder_map
+    assert (10, 11) not in handler._queue_status_messages
 
 
 @pytest.mark.anyio
@@ -356,10 +421,7 @@ async def test_fast_ack_marks_operation_queued_after_visible_notice() -> None:
 
     await _dispatch_message(handler, update, context)
 
-    assert [change["state"].value for change in handler.state_changes] == [
-        "visible",
-        "queued",
-    ]
+    assert [change["state"].value for change in handler.state_changes] == ["queued"]
 
 
 @pytest.mark.anyio

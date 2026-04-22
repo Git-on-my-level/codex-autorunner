@@ -20,6 +20,7 @@ from .components import (
     build_action_row,
     build_button,
     build_queue_notice_buttons,
+    build_queue_status_buttons,
 )
 from .rendering import format_discord_message, truncate_for_discord
 
@@ -347,6 +348,24 @@ def build_discord_queue_notice_message(
         content=content or "Queued (waiting for available worker...)",
         components=components,
     )
+
+
+def build_discord_queue_status_message(
+    *,
+    queued_items: Sequence[tuple[int, str]],
+    content: str,
+    allow_interrupt: bool = True,
+) -> DiscordMessagePayload:
+    components = (
+        tuple(
+            build_queue_status_buttons(
+                queued_items,
+                allow_interrupt=allow_interrupt,
+            )
+        )
+        or None
+    )
+    return DiscordMessagePayload(content=content, components=components)
 
 
 def format_discord_update_status_message(status: Optional[dict[str, Any]]) -> str:

@@ -12,13 +12,13 @@ from ..chat.action_ux_contract import (
     callback_entry_bypasses_queue,
     telegram_callback_ux_contract_for_callback,
 )
+from ..chat.queue_status import build_queue_item_preview
 from .adapter import (
     TelegramUpdate,
     allowlist_allows,
 )
 from .chat_callbacks import TelegramCallbackCodec
 from .immediate_feedback_bridge import (
-    telegram_ack_and_enqueue,
     telegram_immediate_callback_ack,
 )
 from .state import topic_key
@@ -318,46 +318,65 @@ async def _dispatch_message(
             runtime.current_turn_id is not None or runtime.queue.pending() > 0
         )
 
+        await _mark_chat_operation_state(
+            handlers,
+            operation_id,
+            state=ChatOperationState.QUEUED,
+        )
+        enqueue_kwargs = {
+            "force_queue": True,
+            "item_id": str(message.message_id),
+            "item_label": build_queue_item_preview(
+                message.text or message.caption,
+                fallback=f"Request {message.message_id}",
+            ),
+        }
+        try:
+            handlers._enqueue_topic_work(
+                context.topic_key,
+                lambda: _with_chat_operation(
+                    handlers,
+                    operation_id,
+                    lambda: _run_with_typing_indicator(
+                        handlers,
+                        chat_id=message.chat_id,
+                        thread_id=message.thread_id,
+                        work=_handle,
+                    ),
+                )(),
+                **enqueue_kwargs,
+            )
+        except TypeError as exc:
+            if "item_label" not in str(exc):
+                raise
+            enqueue_kwargs.pop("item_label", None)
+            handlers._enqueue_topic_work(
+                context.topic_key,
+                lambda: _with_chat_operation(
+                    handlers,
+                    operation_id,
+                    lambda: _run_with_typing_indicator(
+                        handlers,
+                        chat_id=message.chat_id,
+                        thread_id=message.thread_id,
+                        work=_handle,
+                    ),
+                )(),
+                **enqueue_kwargs,
+            )
         if is_busy:
-            _ack_result, queued_result = await telegram_ack_and_enqueue(
+            refresh_queue_status = getattr(
                 handlers,
-                callback_id=None,
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-                message_id=message.message_id,
-                reply_to_message_id=message.message_id,
-                is_busy=True,
-                operation_id=operation_id,
-                logger=handlers._logger if hasattr(handlers, "_logger") else None,
+                "_refresh_topic_queue_status_message",
+                None,
             )
-            if queued_result.anchor_ref is not None:
-                _set_queued_placeholder(
-                    handlers,
-                    message.chat_id,
-                    message.message_id,
-                    queued_result.anchor_ref,
-                )
-        else:
-            await _mark_chat_operation_state(
-                handlers,
-                operation_id,
-                state=ChatOperationState.QUEUED,
-            )
-        handlers._enqueue_topic_work(
-            context.topic_key,
-            lambda: _with_chat_operation(
-                handlers,
-                operation_id,
-                lambda: _run_with_typing_indicator(
-                    handlers,
+            if callable(refresh_queue_status):
+                await refresh_queue_status(
+                    topic_key=context.topic_key,
                     chat_id=message.chat_id,
                     thread_id=message.thread_id,
-                    work=_handle,
-                ),
-            )(),
-            force_queue=True,
-            item_id=str(message.message_id),
-        )
+                    reply_to_message_id=message.message_id,
+                )
         return
     await _with_chat_operation(
         handlers,
@@ -379,25 +398,6 @@ def _get_topic_runtime(handlers: Any, topic_key_str: str) -> Any:
     if not callable(runtime_fn):
         return None
     return runtime_fn(topic_key_str)
-
-
-def _set_queued_placeholder(
-    handlers: Any,
-    chat_id: int,
-    message_id: int,
-    placeholder_id: str,
-) -> None:
-    setter = getattr(handlers, "_set_queued_placeholder", None)
-    if callable(setter):
-        try:
-            int_placeholder = int(placeholder_id)
-            setter(chat_id, message_id, int_placeholder)
-            return
-        except (TypeError, ValueError):
-            pass
-    placeholder_map = getattr(handlers, "_queued_placeholder_map", None)
-    if isinstance(placeholder_map, dict):
-        placeholder_map[(chat_id, message_id)] = placeholder_id
 
 
 _ROUTES: tuple[tuple[str, DispatchRoute], ...] = (

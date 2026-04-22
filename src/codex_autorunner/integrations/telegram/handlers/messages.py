@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import inspect
 import logging
 import time
 from dataclasses import dataclass
@@ -234,9 +235,29 @@ async def _clear_message_placeholder(
 
 
 async def handle_message(handlers: Any, message: TelegramMessage) -> None:
-    placeholder_id = handlers._claim_queued_placeholder(
-        message.chat_id, message.message_id
+    claim_queued_placeholder = getattr(handlers, "_claim_queued_placeholder", None)
+    placeholder_id = (
+        claim_queued_placeholder(message.chat_id, message.message_id)
+        if callable(claim_queued_placeholder)
+        else None
     )
+    refresh_queue_status = getattr(
+        handlers, "_refresh_topic_queue_status_message", None
+    )
+    if callable(refresh_queue_status):
+        resolve_topic_key = getattr(handlers, "_resolve_topic_key", None)
+        if callable(resolve_topic_key):
+            topic_key = resolve_topic_key(message.chat_id, message.thread_id)
+            if inspect.isawaitable(topic_key):
+                topic_key = await topic_key
+        else:
+            topic_key = None
+        if isinstance(topic_key, str) and topic_key:
+            await refresh_queue_status(
+                topic_key=topic_key,
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+            )
     if message.is_edited:
         await handle_edited_message(handlers, message, placeholder_id=placeholder_id)
         return

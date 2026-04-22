@@ -454,6 +454,11 @@ class TelegramCommandHandlers(
                 placeholder_id=outcome.placeholder_id,
                 final_response_sent_at=now_iso(),
             )
+            await self._requeue_pending_topic_status_message(
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                topic_key=key,
+            )
         interrupt_status_turn_id = getattr(outcome, "interrupt_status_turn_id", None)
         interrupt_status_fallback_text = getattr(
             outcome, "interrupt_status_fallback_text", None
@@ -498,6 +503,26 @@ class TelegramCommandHandlers(
             reply_to=message.message_id,
         )
 
+    async def _requeue_pending_topic_status_message(
+        self,
+        *,
+        chat_id: int,
+        thread_id: Optional[int],
+        topic_key: str,
+    ) -> None:
+        refresh_queue_status = getattr(
+            self, "_refresh_topic_queue_status_message", None
+        )
+        if not callable(refresh_queue_status):
+            return
+        await refresh_queue_status(
+            topic_key=topic_key,
+            chat_id=chat_id,
+            thread_id=thread_id,
+            reply_to_message_id=None,
+            repost=True,
+        )
+
     def _interrupt_keyboard(self) -> dict[str, Any]:
         return build_inline_keyboard(
             [[InlineButton("Cancel", encode_cancel_callback("interrupt"))]]
@@ -521,15 +546,14 @@ class TelegramCommandHandlers(
         if not cancelled:
             await self._answer_callback(callback, "Queue item is no longer pending")
             return
-        placeholder_id = self._get_queued_placeholder(
-            callback.chat_id, source_message_id
+        refresh_queue_status = getattr(
+            self, "_refresh_topic_queue_status_message", None
         )
-        self._clear_queued_placeholder(callback.chat_id, source_message_id)
-        if placeholder_id is not None:
-            await self._delete_message(
-                callback.chat_id,
-                placeholder_id,
-                callback.thread_id,
+        if callable(refresh_queue_status):
+            await refresh_queue_status(
+                topic_key=key,
+                chat_id=callback.chat_id,
+                thread_id=callback.thread_id,
             )
         await self._answer_callback(callback, "Queued message cancelled")
 
@@ -551,6 +575,15 @@ class TelegramCommandHandlers(
         if not promoted:
             await self._answer_callback(callback, "Queue item is no longer pending")
             return
+        refresh_queue_status = getattr(
+            self, "_refresh_topic_queue_status_message", None
+        )
+        if callable(refresh_queue_status):
+            await refresh_queue_status(
+                topic_key=key,
+                chat_id=callback.chat_id,
+                thread_id=callback.thread_id,
+            )
         if runtime.current_turn_id is None:
             await self._answer_callback(callback, "Queued message moved to front")
             return

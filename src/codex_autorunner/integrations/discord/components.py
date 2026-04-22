@@ -626,6 +626,35 @@ def build_queue_notice_buttons(
     return build_action_row(buttons)
 
 
+def build_queue_status_buttons(
+    queued_items: Sequence[tuple[int, str]],
+    *,
+    allow_interrupt: bool = True,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for index, source_message_id in queued_items:
+        source = str(source_message_id or "").strip()
+        if not source:
+            continue
+        buttons = [
+            build_button(
+                f"Cancel {index}",
+                f"queue_cancel:{source}",
+                style=DISCORD_BUTTON_STYLE_DANGER,
+            )
+        ]
+        if allow_interrupt:
+            buttons.append(
+                build_button(
+                    f"Send {index}",
+                    f"queue_interrupt_send:{source}",
+                    style=DISCORD_BUTTON_STYLE_PRIMARY,
+                )
+            )
+        rows.append(build_action_row(buttons))
+    return rows
+
+
 def build_queued_turn_progress_buttons(
     *,
     execution_id: str,
