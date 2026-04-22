@@ -32,13 +32,10 @@ def reserve_managed_thread_direct_delivery(
         return None
     engine = SQLiteManagedThreadDeliveryEngine(Path(state_root))
     normalized_claim_token = str(claim_token or "").strip()
-    if normalized_claim_token:
-        return ManagedThreadDirectDeliveryReservation(
-            engine=engine,
-            delivery_id=normalized_delivery_id,
-            claim_token=normalized_claim_token,
-        )
-    claim = engine.claim_delivery(normalized_delivery_id)
+    claim = engine.ensure_direct_delivery_claim(
+        normalized_delivery_id,
+        proposed_token=normalized_claim_token or None,
+    )
     if claim is None:
         return None
     return ManagedThreadDirectDeliveryReservation(

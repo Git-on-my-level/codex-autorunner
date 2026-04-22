@@ -30,6 +30,7 @@ from .managed_thread_delivery import (
     ManagedThreadDeliveryIntent,
     ManagedThreadDeliveryOutcome,
     ManagedThreadDeliveryRecord,
+    ManagedThreadDeliveryRecoveryAction,
     ManagedThreadDeliveryRecoverySweepResult,
     ManagedThreadDeliveryRegistration,
     ManagedThreadDeliveryState,
@@ -464,6 +465,120 @@ class SQLiteManagedThreadDeliveryEngine:
             claim_token=claim_token,
             claimed_at=claimed_at,
             claim_expires_at=claim_expires_at,
+        )
+
+    def ensure_direct_delivery_claim(
+        self,
+        delivery_id: str,
+        *,
+        proposed_token: Optional[str] = None,
+        now: Optional[datetime] = None,
+    ) -> Optional[ManagedThreadDeliveryClaim]:
+        """Return a claim suitable for direct-surface delivery bookkeeping.
+
+        Validates *proposed_token* against the ledger when it still matches an
+        active lease; otherwise recovers expired claims for this adapter and
+        issues a fresh claim (same policy as :meth:`claim_delivery`).
+        """
+        current_at = now or datetime.now(timezone.utc)
+        normalized_id = str(delivery_id or "").strip()
+        if not normalized_id:
+            return None
+
+        record = self._ledger.get_delivery(normalized_id)
+        if record is None:
+            return None
+        if record.state in MANAGED_THREAD_DELIVERY_TERMINAL_STATES:
+            return None
+
+        proposed = str(proposed_token or "").strip()
+        if proposed and record.claim_token == proposed:
+            decision = plan_managed_thread_delivery_recovery(
+                record,
+                now=current_at,
+                claim_ttl=self._claim_ttl,
+                max_attempts=self._max_attempts,
+            )
+            if (
+                decision.action == ManagedThreadDeliveryRecoveryAction.NOOP
+                and decision.reason == "claim_active"
+            ):
+                claimed_at = str(record.claimed_at or current_at.isoformat())
+                claim_expires_at = str(
+                    record.claim_expires_at
+                    or default_claim_expiry(
+                        claimed_at=current_at, claim_ttl=self._claim_ttl
+                    )
+                )
+                return ManagedThreadDeliveryClaim(
+                    record=record,
+                    claim_token=proposed,
+                    claimed_at=claimed_at,
+                    claim_expires_at=claim_expires_at,
+                )
+
+        if proposed and record.claim_token and proposed != record.claim_token:
+            if record.state in {
+                ManagedThreadDeliveryState.CLAIMED,
+                ManagedThreadDeliveryState.DELIVERING,
+            }:
+                self._ledger.patch_delivery(
+                    normalized_id,
+                    state=ManagedThreadDeliveryState.RETRY_SCHEDULED,
+                    claim_token=None,
+                    claimed_at=None,
+                    claim_expires_at=None,
+                    next_attempt_at=current_at.isoformat(),
+                    last_error="direct_delivery_claim_token_mismatch",
+                )
+
+        refreshed = self._ledger.get_delivery(normalized_id)
+        adapter_key = refreshed.target.adapter_key if refreshed is not None else ""
+        if adapter_key:
+            self._recover_expired_claims(
+                adapter_key=str(adapter_key),
+                now=current_at,
+                limit=64,
+            )
+        self._force_delivery_due_for_direct_claim(normalized_id, now=current_at)
+        return self.claim_delivery(normalized_id, now=current_at)
+
+    def _force_delivery_due_for_direct_claim(
+        self, delivery_id: str, *, now: datetime
+    ) -> None:
+        """Make PENDING/RETRY_SCHEDULED rows claimable immediately for direct-send."""
+
+        record = self._ledger.get_delivery(delivery_id)
+        if record is None:
+            return
+        if record.state not in {
+            ManagedThreadDeliveryState.PENDING,
+            ManagedThreadDeliveryState.RETRY_SCHEDULED,
+        }:
+            return
+        due_at = record.next_attempt_at
+        if due_at is None:
+            return
+        parsed = None
+        try:
+            if str(due_at).endswith("Z"):
+                parsed = datetime.fromisoformat(
+                    str(due_at).replace("Z", "+00:00")
+                )
+            else:
+                parsed = datetime.fromisoformat(str(due_at))
+        except ValueError:
+            return
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        else:
+            parsed = parsed.astimezone(timezone.utc)
+        if parsed <= now:
+            return
+        self._ledger.patch_delivery(
+            delivery_id,
+            next_attempt_at=now.isoformat(),
+            validate_transition=False,
         )
 
     def record_attempt_result(

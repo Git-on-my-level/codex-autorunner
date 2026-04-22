@@ -418,6 +418,92 @@ class TestEngineClaimDelivery:
         assert claim is None
 
 
+class TestEngineEnsureDirectDeliveryClaim:
+    def test_accepts_matching_active_claim_token(self, tmp_path: Path) -> None:
+        engine = _engine(tmp_path)
+        engine.create_intent(_intent(adapter_key="telegram"))
+        first = engine.claim_delivery(
+            "delivery-1",
+            now=datetime(2026, 4, 18, 1, 0, 0, tzinfo=timezone.utc),
+        )
+        assert first is not None
+        ensured = engine.ensure_direct_delivery_claim(
+            "delivery-1",
+            proposed_token=first.claim_token,
+            now=datetime(2026, 4, 18, 1, 2, 0, tzinfo=timezone.utc),
+        )
+        assert ensured is not None
+        assert ensured.claim_token == first.claim_token
+
+    def test_reclaims_when_proposed_token_is_stale(self, tmp_path: Path) -> None:
+        engine = _engine(tmp_path)
+        engine.create_intent(_intent(adapter_key="telegram"))
+        first = engine.claim_delivery(
+            "delivery-1",
+            now=datetime(2026, 4, 18, 1, 0, 0, tzinfo=timezone.utc),
+        )
+        assert first is not None
+        reclaimed = engine.ensure_direct_delivery_claim(
+            "delivery-1",
+            proposed_token="stale-token",
+            now=datetime(2026, 4, 18, 1, 1, 0, tzinfo=timezone.utc),
+        )
+        assert reclaimed is not None
+        assert reclaimed.claim_token != "stale-token"
+        assert reclaimed.claim_token != first.claim_token
+        assert reclaimed.record.state is ManagedThreadDeliveryState.CLAIMED
+
+    def test_recovers_expired_claim_then_issues_fresh_token(self, tmp_path: Path) -> None:
+        engine = _engine(tmp_path)
+        engine.create_intent(_intent(adapter_key="telegram"))
+        first = engine.claim_delivery(
+            "delivery-1",
+            now=datetime(2026, 4, 18, 1, 0, 0, tzinfo=timezone.utc),
+        )
+        assert first is not None
+        late = datetime(2026, 4, 18, 1, 10, 0, tzinfo=timezone.utc)
+        recovered = engine.ensure_direct_delivery_claim(
+            "delivery-1",
+            proposed_token=first.claim_token,
+            now=late,
+        )
+        assert recovered is not None
+        assert recovered.claim_token != first.claim_token
+
+    def test_without_proposed_token_claims_pending_record(self, tmp_path: Path) -> None:
+        engine = _engine(tmp_path)
+        engine.create_intent(_intent(adapter_key="telegram"))
+        ensured = engine.ensure_direct_delivery_claim(
+            "delivery-1",
+            proposed_token=None,
+            now=datetime(2026, 4, 18, 1, 0, 0, tzinfo=timezone.utc),
+        )
+        assert ensured is not None
+        assert ensured.record.state is ManagedThreadDeliveryState.CLAIMED
+
+    def test_returns_none_for_terminal_records(self, tmp_path: Path) -> None:
+        engine = _engine(tmp_path)
+        engine.create_intent(_intent(adapter_key="telegram"))
+        claim = engine.claim_next_delivery(
+            adapter_key="telegram",
+            now=datetime(2026, 4, 18, 1, 0, 0, tzinfo=timezone.utc),
+        )
+        assert claim is not None
+        engine.record_attempt_result(
+            "delivery-1",
+            claim_token=claim.claim_token,
+            result=ManagedThreadDeliveryAttemptResult(
+                outcome=ManagedThreadDeliveryOutcome.DIRECT_SURFACE_DELIVERED,
+            ),
+        )
+        ensured = engine.ensure_direct_delivery_claim(
+            "delivery-1",
+            proposed_token=claim.claim_token,
+            now=datetime(2026, 4, 18, 1, 5, 0, tzinfo=timezone.utc),
+        )
+        assert ensured is None
+
+
 class TestEngineRecordAttemptResult:
     def test_success_marks_delivered(self, tmp_path: Path) -> None:
         engine = _engine(tmp_path)

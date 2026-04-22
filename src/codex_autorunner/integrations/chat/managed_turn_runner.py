@@ -211,9 +211,12 @@ async def run_managed_surface_turn(
                     "direct_delivery_claim_token",
                     None,
                 )
-                durable_delivery_performed = (
-                    delivery_record is not None
-                    and delivery_record.state is ManagedThreadDeliveryState.DELIVERED
+                durable_delivery_performed = delivery_record is not None and (
+                    delivery_record.state
+                    in (
+                        ManagedThreadDeliveryState.DELIVERED,
+                        ManagedThreadDeliveryState.DIRECT_SURFACE_DELIVERED,
+                    )
                 )
                 durable_delivery_pending = durable_delivery_claim_token is not None or (
                     delivery_record is not None
