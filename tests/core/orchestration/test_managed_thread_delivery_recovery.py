@@ -796,9 +796,21 @@ class TestLedgerExpiredClaimQueries:
                 surface_key="chat-2",
             )
         )
+        ledger.register_intent(
+            _intent(
+                delivery_id="d-direct",
+                managed_turn_id="turn-3",
+                surface_key="chat-3",
+            )
+        )
         ledger.patch_delivery(
             "d-terminal",
             state=ManagedThreadDeliveryState.DELIVERED,
+            validate_transition=False,
+        )
+        ledger.patch_delivery(
+            "d-direct",
+            state=ManagedThreadDeliveryState.DIRECT_SURFACE_DELIVERED,
             validate_transition=False,
         )
 

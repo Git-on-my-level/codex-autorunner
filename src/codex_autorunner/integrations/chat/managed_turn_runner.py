@@ -191,19 +191,34 @@ async def run_managed_surface_turn(
         durable_delivery_performed = False
         durable_delivery_pending = False
         durable_delivery_id: Optional[str] = None
+        durable_delivery_claim_token: Optional[str] = None
         if config.hooks.durable_delivery is not None:
             try:
-                delivery_record = await handoff_managed_thread_final_delivery(
+                delivery_handoff = await handoff_managed_thread_final_delivery(
                     finalized,
                     delivery=config.hooks.durable_delivery,
                     logger=_runner_logger,
+                    retain_claim_for_direct_delivery=True,
+                )
+                delivery_record = (
+                    getattr(delivery_handoff, "record", delivery_handoff)
+                    if delivery_handoff is not None
+                    else None
                 )
                 durable_delivery_id = getattr(delivery_record, "delivery_id", None)
-                durable_delivery_performed = (
-                    delivery_record is not None
-                    and delivery_record.state is ManagedThreadDeliveryState.DELIVERED
+                durable_delivery_claim_token = getattr(
+                    delivery_handoff,
+                    "direct_delivery_claim_token",
+                    None,
                 )
-                durable_delivery_pending = (
+                durable_delivery_performed = delivery_record is not None and (
+                    delivery_record.state
+                    in (
+                        ManagedThreadDeliveryState.DELIVERED,
+                        ManagedThreadDeliveryState.DIRECT_SURFACE_DELIVERED,
+                    )
+                )
+                durable_delivery_pending = durable_delivery_claim_token is not None or (
                     delivery_record is not None
                     and delivery_record.state
                     in {
@@ -229,6 +244,7 @@ async def run_managed_surface_turn(
                 durable_delivery_performed=durable_delivery_performed,
                 durable_delivery_pending=durable_delivery_pending,
                 durable_delivery_id=durable_delivery_id,
+                durable_delivery_claim_token=durable_delivery_claim_token,
             )
         if config.on_finalized is None:
             raise RuntimeError("Managed-surface turn requires on_finalized")

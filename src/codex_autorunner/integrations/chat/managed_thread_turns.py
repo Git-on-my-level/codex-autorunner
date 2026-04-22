@@ -224,6 +224,23 @@ class ManagedThreadExecutionFlowResult:
     durable_delivery_performed: bool = False
     durable_delivery_pending: bool = False
     durable_delivery_id: Optional[str] = None
+    durable_delivery_claim_token: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class ManagedThreadDeliveryHandoffResult:
+    """Outcome of the initial durable-delivery handoff after finalization.
+
+    The common path returns a terminal record. When a direct surface fallback
+    should finish the delivery, the original claim token can be retained here so
+    the surface completes the same durable obligation without reopening a race.
+    """
+
+    record: ManagedThreadDeliveryRecord
+    direct_delivery_claim_token: Optional[str] = None
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.record, name)
 
 
 @dataclass(frozen=True)
@@ -767,7 +784,8 @@ async def handoff_managed_thread_final_delivery(
     *,
     delivery: ManagedThreadDurableDeliveryHooks,
     logger: logging.Logger,
-) -> Optional[ManagedThreadDeliveryRecord]:
+    retain_claim_for_direct_delivery: bool = False,
+) -> Optional[ManagedThreadDeliveryHandoffResult]:
     """Persist and hand off one finalized result to the durable delivery engine."""
 
     intent = delivery.build_delivery_intent(finalized)
@@ -777,7 +795,7 @@ async def handoff_managed_thread_final_delivery(
     record = registration.record
     claim = delivery.engine.claim_delivery(record.delivery_id)
     if claim is None:
-        return record
+        return ManagedThreadDeliveryHandoffResult(record=record)
     try:
         result = await delivery.adapter.deliver_managed_thread_record(
             claim.record,
@@ -826,6 +844,23 @@ async def handoff_managed_thread_final_delivery(
             outcome=ManagedThreadDeliveryOutcome.FAILED,
             error=str(exc) or exc.__class__.__name__,
         )
+        if retain_claim_for_direct_delivery:
+            log_event(
+                logger,
+                logging.INFO,
+                "chat.managed_thread.delivery_claim_held_for_direct_fallback",
+                **_managed_thread_delivery_trace_fields(
+                    record,
+                    claim_token=claim.claim_token,
+                    adapter_key=delivery.adapter.adapter_key,
+                ),
+                outcome=attempt_result.outcome.value,
+                attempted_error=attempt_result.error,
+            )
+            return ManagedThreadDeliveryHandoffResult(
+                record=claim.record,
+                direct_delivery_claim_token=claim.claim_token,
+            )
         updated: Optional[ManagedThreadDeliveryRecord] = None
         try:
             updated = delivery.engine.record_attempt_result(
@@ -860,7 +895,27 @@ async def handoff_managed_thread_final_delivery(
             attempted_error=attempt_result.error,
             exc=exc,
         )
-        return updated or record
+        return ManagedThreadDeliveryHandoffResult(record=updated or record)
+    if retain_claim_for_direct_delivery and result.outcome not in (
+        ManagedThreadDeliveryOutcome.DELIVERED,
+        ManagedThreadDeliveryOutcome.DUPLICATE,
+    ):
+        log_event(
+            logger,
+            logging.INFO,
+            "chat.managed_thread.delivery_claim_held_for_direct_fallback",
+            **_managed_thread_delivery_trace_fields(
+                record,
+                claim_token=claim.claim_token,
+                adapter_key=delivery.adapter.adapter_key,
+            ),
+            outcome=result.outcome.value,
+            attempted_error=result.error,
+        )
+        return ManagedThreadDeliveryHandoffResult(
+            record=claim.record,
+            direct_delivery_claim_token=claim.claim_token,
+        )
     try:
         updated = delivery.engine.record_attempt_result(
             record.delivery_id,
@@ -882,7 +937,7 @@ async def handoff_managed_thread_final_delivery(
             exc=bookkeeping_exc,
         )
         raise
-    return updated or record
+    return ManagedThreadDeliveryHandoffResult(record=updated or record)
 
 
 def resolve_managed_thread_target(

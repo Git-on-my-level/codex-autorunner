@@ -15,7 +15,7 @@ from .....core.pma_context import (
     load_pma_prompt,
 )
 from .....core.text_utils import _normalize_optional_text
-from .....integrations.app_server.threads import pma_base_key
+from .....integrations.app_server.threads import pma_automation_key, pma_base_key
 from ...services.pma.common import pma_config_from_raw
 from ..agent_profile_validation import resolve_requested_agent_profile
 from ..agents import _available_agents
@@ -30,6 +30,17 @@ logger = logging.getLogger(__name__)
 def _get_pma_config(request: Any) -> dict[str, Any]:
     raw = getattr(request.app.state.config, "raw", {})
     return pma_config_from_raw(raw)
+
+
+def resolve_pma_session_key(
+    agent_id: str,
+    profile: Optional[str],
+    *,
+    automation_trigger: bool,
+) -> str:
+    if automation_trigger:
+        return pma_automation_key(agent_id, profile)
+    return pma_base_key(agent_id, profile)
 
 
 async def execute_queue_item(
@@ -207,7 +218,11 @@ async def execute_queue_item(
             github_context_injector = _default_injector
 
         snapshot = await snapshot_builder(supervisor, hub_root=hub_root)
-        prompt_state_key = pma_base_key(agent_id, profile)
+        prompt_state_key = resolve_pma_session_key(
+            agent_id,
+            profile,
+            automation_trigger=automation_trigger,
+        )
 
         async def _rebuild_prompt(force_full_base_prompt: bool) -> str:
             built = format_pma_prompt(
@@ -329,7 +344,11 @@ async def execute_queue_item(
             model=model,
             reasoning=reasoning,
             thread_registry=registry,
-            thread_key=pma_base_key(agent_id, profile),
+            thread_key=resolve_pma_session_key(
+                agent_id,
+                profile,
+                automation_trigger=automation_trigger,
+            ),
             on_meta=_meta,
             timeout_seconds=turn_timeout_seconds,
             rebuild_prompt=_rebuild_prompt,

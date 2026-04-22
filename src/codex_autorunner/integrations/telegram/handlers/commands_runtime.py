@@ -146,7 +146,7 @@ from .commands import (
     WorkspaceCommands,
 )
 from .commands.execution import (
-    _abandon_pending_telegram_delivery,
+    _record_pending_telegram_direct_delivery,
     _TurnRunFailure,
 )
 from .commands.shared import _RuntimeStub  # noqa: F401
@@ -446,11 +446,30 @@ class TelegramCommandHandlers(
         if _durable_handled:
             response_sent = True
         elif response_sent:
-            _abandon_pending_telegram_delivery(
+            _record_pending_telegram_direct_delivery(
                 self,
                 delivery_id=getattr(outcome, "durable_delivery_id", None),
+                claim_token=getattr(
+                    outcome,
+                    "durable_delivery_claim_token",
+                    None,
+                ),
                 chat_id=message.chat_id,
                 thread_id=message.thread_id,
+                delivered=True,
+            )
+        elif getattr(outcome, "durable_delivery_id", None):
+            _record_pending_telegram_direct_delivery(
+                self,
+                delivery_id=getattr(outcome, "durable_delivery_id", None),
+                claim_token=getattr(
+                    outcome,
+                    "durable_delivery_claim_token",
+                    None,
+                ),
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                delivered=False,
             )
         if response_sent:
             key = await self._resolve_topic_key(message.chat_id, message.thread_id)

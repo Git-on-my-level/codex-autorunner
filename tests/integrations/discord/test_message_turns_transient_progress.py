@@ -537,7 +537,7 @@ async def test_deliver_result_reconciles_stale_siblings_without_final_message(
 
 
 @pytest.mark.anyio
-async def test_deliver_result_abandons_pending_durable_delivery_after_visible_final_send(
+async def test_deliver_result_marks_pending_durable_delivery_direct_surface_delivered_after_visible_final_send(
     tmp_path,
 ) -> None:
     workspace = tmp_path / "workspace"
@@ -577,6 +577,8 @@ async def test_deliver_result_abandons_pending_durable_delivery_after_visible_fi
         state=ManagedThreadDeliveryState.RETRY_SCHEDULED,
     )
     assert patched is not None
+    claim = engine.claim_delivery(record.delivery_id)
+    assert claim is not None
     dispatch = SimpleNamespace(
         service=service,
         channel_id="channel-1",
@@ -596,12 +598,13 @@ async def test_deliver_result_abandons_pending_durable_delivery_after_visible_fi
                 send_final_message=True,
                 delivery_visibility_pending=True,
                 durable_delivery_id=record.delivery_id,
+                durable_delivery_claim_token=claim.claim_token,
             ),
         )
 
-        abandoned = engine._ledger.get_delivery(record.delivery_id)
-        assert abandoned is not None
-        assert abandoned.state is ManagedThreadDeliveryState.ABANDONED
+        delivered = engine._ledger.get_delivery(record.delivery_id)
+        assert delivered is not None
+        assert delivered.state is ManagedThreadDeliveryState.DIRECT_SURFACE_DELIVERED
         assert len(rest.channel_messages) == 1
     finally:
         await store.close()

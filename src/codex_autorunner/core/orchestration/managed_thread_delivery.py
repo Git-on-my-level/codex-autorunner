@@ -39,6 +39,7 @@ class ManagedThreadDeliveryState(str, Enum):
     DELIVERING = "delivering"
     RETRY_SCHEDULED = "retry_scheduled"
     DELIVERED = "delivered"
+    DIRECT_SURFACE_DELIVERED = "direct_surface_delivered"
     FAILED = "failed"
     ABANDONED = "abandoned"
     EXPIRED = "expired"
@@ -47,6 +48,7 @@ class ManagedThreadDeliveryState(str, Enum):
 MANAGED_THREAD_DELIVERY_TERMINAL_STATES = frozenset(
     {
         ManagedThreadDeliveryState.DELIVERED,
+        ManagedThreadDeliveryState.DIRECT_SURFACE_DELIVERED,
         ManagedThreadDeliveryState.FAILED,
         ManagedThreadDeliveryState.ABANDONED,
         ManagedThreadDeliveryState.EXPIRED,
@@ -63,6 +65,7 @@ MANAGED_THREAD_DELIVERY_ALLOWED_TRANSITIONS: dict[
             ManagedThreadDeliveryState.CLAIMED,
             ManagedThreadDeliveryState.DELIVERING,
             ManagedThreadDeliveryState.RETRY_SCHEDULED,
+            ManagedThreadDeliveryState.DIRECT_SURFACE_DELIVERED,
             ManagedThreadDeliveryState.ABANDONED,
             ManagedThreadDeliveryState.EXPIRED,
         }
@@ -71,6 +74,7 @@ MANAGED_THREAD_DELIVERY_ALLOWED_TRANSITIONS: dict[
         {
             ManagedThreadDeliveryState.DELIVERING,
             ManagedThreadDeliveryState.RETRY_SCHEDULED,
+            ManagedThreadDeliveryState.DIRECT_SURFACE_DELIVERED,
             ManagedThreadDeliveryState.ABANDONED,
             ManagedThreadDeliveryState.EXPIRED,
         }
@@ -78,6 +82,7 @@ MANAGED_THREAD_DELIVERY_ALLOWED_TRANSITIONS: dict[
     ManagedThreadDeliveryState.DELIVERING: frozenset(
         {
             ManagedThreadDeliveryState.DELIVERED,
+            ManagedThreadDeliveryState.DIRECT_SURFACE_DELIVERED,
             ManagedThreadDeliveryState.RETRY_SCHEDULED,
             ManagedThreadDeliveryState.FAILED,
             ManagedThreadDeliveryState.ABANDONED,
@@ -87,11 +92,13 @@ MANAGED_THREAD_DELIVERY_ALLOWED_TRANSITIONS: dict[
         {
             ManagedThreadDeliveryState.CLAIMED,
             ManagedThreadDeliveryState.DELIVERING,
+            ManagedThreadDeliveryState.DIRECT_SURFACE_DELIVERED,
             ManagedThreadDeliveryState.ABANDONED,
             ManagedThreadDeliveryState.EXPIRED,
         }
     ),
     ManagedThreadDeliveryState.DELIVERED: frozenset(),
+    ManagedThreadDeliveryState.DIRECT_SURFACE_DELIVERED: frozenset(),
     ManagedThreadDeliveryState.FAILED: frozenset(),
     ManagedThreadDeliveryState.ABANDONED: frozenset(),
     ManagedThreadDeliveryState.EXPIRED: frozenset(),
@@ -102,6 +109,7 @@ class ManagedThreadDeliveryOutcome(str, Enum):
     """Engine-owned result classification for one adapter delivery attempt."""
 
     DELIVERED = "delivered"
+    DIRECT_SURFACE_DELIVERED = "direct_surface_delivered"
     DUPLICATE = "duplicate"
     RETRY = "retry"
     FAILED = "failed"

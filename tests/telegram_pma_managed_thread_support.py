@@ -1383,7 +1383,7 @@ async def test_pma_managed_thread_turn_recovers_if_wait_disconnects_after_comple
 
 
 @pytest.mark.anyio
-async def test_handle_normal_message_abandons_pending_durable_delivery_after_direct_send(
+async def test_handle_normal_message_marks_pending_durable_delivery_direct_surface_delivered_after_direct_send(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     record = TelegramTopicRecord(
@@ -1417,6 +1417,8 @@ async def test_handle_normal_message_abandons_pending_durable_delivery_after_dir
         state=ManagedThreadDeliveryState.RETRY_SCHEDULED,
     )
     assert patched is not None
+    claim = engine.claim_delivery(record_entry.delivery_id)
+    assert claim is not None
 
     async def _fake_run_turn_and_collect_result(
         *args: Any, **kwargs: Any
@@ -1434,6 +1436,7 @@ async def test_handle_normal_message_abandons_pending_durable_delivery_after_dir
             transcript_text=None,
             durable_delivery_handled=False,
             durable_delivery_id=record_entry.delivery_id,
+            durable_delivery_claim_token=claim.claim_token,
         )
 
     monkeypatch.setattr(
@@ -1455,9 +1458,9 @@ async def test_handle_normal_message_abandons_pending_durable_delivery_after_dir
 
     await handler._handle_normal_message(message, runtime=_RuntimeStub())
 
-    abandoned = engine._ledger.get_delivery(record_entry.delivery_id)
-    assert abandoned is not None
-    assert abandoned.state is ManagedThreadDeliveryState.ABANDONED
+    delivered = engine._ledger.get_delivery(record_entry.delivery_id)
+    assert delivered is not None
+    assert delivered.state is ManagedThreadDeliveryState.DIRECT_SURFACE_DELIVERED
     assert "telegram managed final reply" in handler._sent
 
 

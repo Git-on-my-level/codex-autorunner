@@ -228,6 +228,7 @@ async def test_run_managed_surface_turn_preserves_durable_delivery_id(
         return SimpleNamespace(
             delivery_id="delivery-1",
             state=ManagedThreadDeliveryState.RETRY_SCHEDULED,
+            direct_delivery_claim_token="claim-token-1",
         )
 
     monkeypatch.setattr(
@@ -271,6 +272,94 @@ async def test_run_managed_surface_turn_preserves_durable_delivery_id(
     assert captured_flow is not None
     assert captured_flow.durable_delivery_pending is True
     assert captured_flow.durable_delivery_performed is False
+    assert captured_flow.durable_delivery_id == "delivery-1"
+    assert captured_flow.durable_delivery_claim_token == "claim-token-1"
+
+
+@pytest.mark.anyio
+async def test_run_managed_surface_turn_counts_direct_surface_delivered_as_performed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = _build_started_execution(tmp_path)
+    finalized = ManagedThreadFinalizationResult(
+        status="ok",
+        assistant_text="done",
+        error=None,
+        managed_thread_id="thread-1",
+        managed_turn_id="exec-1",
+        backend_thread_id="backend-thread-1",
+    )
+
+    async def _submit_execution(
+        *args: Any, **kwargs: Any
+    ) -> ManagedThreadSubmissionResult:
+        _ = args, kwargs
+        return ManagedThreadSubmissionResult(started_execution=started, queued=False)
+
+    async def _fake_complete(
+        coordinator: Any,
+        submission: ManagedThreadSubmissionResult,
+        **kwargs: Any,
+    ) -> ManagedThreadExecutionFlowResult:
+        _ = coordinator, submission, kwargs
+        return ManagedThreadExecutionFlowResult(
+            started_execution=started,
+            queued=False,
+            finalized=finalized,
+        )
+
+    async def _fake_handoff(*args: Any, **kwargs: Any) -> Any:
+        _ = args, kwargs
+        return SimpleNamespace(
+            delivery_id="delivery-1",
+            record=SimpleNamespace(
+                delivery_id="delivery-1",
+                state=ManagedThreadDeliveryState.DIRECT_SURFACE_DELIVERED,
+            ),
+        )
+
+    monkeypatch.setattr(
+        managed_turn_runner_module,
+        "complete_managed_thread_execution",
+        _fake_complete,
+    )
+    monkeypatch.setattr(
+        managed_turn_runner_module,
+        "handoff_managed_thread_final_delivery",
+        _fake_handoff,
+    )
+
+    captured_flow: ManagedThreadExecutionFlowResult | None = None
+
+    def _on_finalized(
+        flow: ManagedThreadExecutionFlowResult,
+        finalized: ManagedThreadFinalizationResult,
+    ) -> str:
+        nonlocal captured_flow
+        captured_flow = flow
+        return finalized.assistant_text
+
+    result = await managed_turn_runner_module.run_managed_surface_turn(
+        started.request,
+        config=managed_turn_runner_module.ManagedSurfaceRunnerConfig[str](
+            coordinator=SimpleNamespace(
+                submit_execution=_submit_execution,
+                ensure_queue_worker=lambda **kwargs: None,
+            ),
+            client_request_id="req-1",
+            sandbox_policy=None,
+            hooks=ManagedThreadCoordinatorHooks(
+                durable_delivery=_make_durable_hooks(tmp_path),
+            ),
+            on_finalized=_on_finalized,
+        ),
+    )
+
+    assert result == "done"
+    assert captured_flow is not None
+    assert captured_flow.durable_delivery_performed is True
+    assert captured_flow.durable_delivery_pending is False
     assert captured_flow.durable_delivery_id == "delivery-1"
 
 

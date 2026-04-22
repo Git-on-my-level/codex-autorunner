@@ -15,6 +15,7 @@ from codex_autorunner.integrations.app_server.threads import (
     file_chat_discord_key,
     file_chat_target_key,
     normalize_feature_key,
+    pma_automation_key,
     pma_base_key,
     pma_legacy_alias_keys,
     pma_legacy_migration_fallback_keys,
@@ -301,6 +302,16 @@ class TestPmaBaseKeyHelper:
     def test_none_profile_omits_suffix(self) -> None:
         assert pma_base_key("hermes", None) == "pma.hermes"
         assert pma_base_key("codex", None) == PMA_KEY
+
+
+class TestPmaAutomationKeyHelper:
+    def test_automation_key_appends_reserved_suffix(self) -> None:
+        assert pma_automation_key("codex") == "pma.automation"
+        assert pma_automation_key("opencode") == "pma.opencode.automation"
+        assert (
+            pma_automation_key("hermes", "m4-pma")
+            == "pma.hermes.profile.m4-pma.automation"
+        )
 
 
 class TestPmaTopicScopedKeyHelper:
