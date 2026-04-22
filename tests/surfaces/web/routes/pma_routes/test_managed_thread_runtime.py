@@ -424,6 +424,154 @@ def test_managed_thread_message_route_uses_orchestration_service_seam(
     assert fake_service.record_calls[0]["execution_id"] == "managed-turn-1"
 
 
+def test_managed_thread_message_route_retires_live_progress_after_final_delivery_enqueue(
+    hub_env,
+    monkeypatch,
+) -> None:
+    app = build_pma_hub_app(hub_env.hub_root)
+    store = PmaThreadStore(hub_env.hub_root)
+    created = store.create_thread(
+        "codex", hub_env.repo_root.resolve(), repo_id=hub_env.repo_id
+    )
+    managed_thread_id = str(created["managed_thread_id"])
+    call_order: list[str] = []
+
+    class FakeProgressSession:
+        async def start(self) -> None:
+            call_order.append("progress:start")
+
+        async def apply_run_events(self, events: list[object]) -> None:
+            _ = events
+
+        async def finalize(
+            self,
+            *,
+            status: str,
+            failure_message: Optional[str] = None,
+        ) -> None:
+            _ = failure_message
+            call_order.append(f"progress:finalize:{status}")
+
+        async def close(self) -> None:
+            call_order.append("progress:close")
+
+    class FakeService:
+        def get_thread_target(self, thread_target_id: str):
+            return SimpleNamespace(
+                thread_target_id=thread_target_id,
+                backend_thread_id="backend-thread-1",
+            )
+
+        def record_execution_result(
+            self,
+            thread_target_id: str,
+            execution_id: str,
+            *,
+            status: str,
+            assistant_text: Optional[str] = None,
+            error: Optional[str] = None,
+            backend_turn_id: Optional[str] = None,
+            transcript_turn_id: Optional[str] = None,
+        ):
+            _ = (
+                thread_target_id,
+                execution_id,
+                assistant_text,
+                error,
+                backend_turn_id,
+                transcript_turn_id,
+            )
+            return SimpleNamespace(status=status, error=None)
+
+        def get_execution(self, thread_target_id: str, execution_id: str):
+            _ = thread_target_id, execution_id
+            return None
+
+    async def _fake_begin(
+        service, request, *, client_request_id=None, sandbox_policy=None
+    ):
+        _ = service, client_request_id, sandbox_policy
+        return SimpleNamespace(
+            execution=SimpleNamespace(
+                execution_id="managed-turn-1",
+                backend_id="backend-turn-1",
+            ),
+            thread=SimpleNamespace(
+                backend_thread_id="backend-thread-1",
+                thread_target_id=managed_thread_id,
+                agent_id="codex",
+            ),
+            workspace_root=hub_env.repo_root.resolve(),
+            request=request,
+            harness=None,
+        )
+
+    async def _fake_await(*args, **kwargs):
+        _ = args, kwargs
+        return RuntimeThreadOutcome(
+            status="ok",
+            assistant_text="assistant-output",
+            error=None,
+            backend_thread_id="backend-thread-1",
+            backend_turn_id="backend-turn-1",
+        )
+
+    async def _fake_deliver(*args, **kwargs):
+        _ = args, kwargs
+        call_order.append("deliver:assistant")
+        return SimpleNamespace(target_count=1, published_count=1)
+
+    async def _fake_notify(*args, **kwargs):
+        _ = args, kwargs
+        call_order.append("notify:terminal")
+
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "_build_managed_thread_orchestration_service",
+        lambda request, *, thread_store=None: FakeService(),
+    )
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "begin_runtime_thread_execution",
+        _fake_begin,
+    )
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "await_runtime_thread_outcome",
+        _fake_await,
+    )
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "build_bound_chat_live_progress_session",
+        lambda **_: FakeProgressSession(),
+    )
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "deliver_bound_chat_assistant_output",
+        _fake_deliver,
+    )
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "notify_managed_thread_terminal_transition",
+        _fake_notify,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={"message": "hello from route"},
+        )
+
+    assert response.status_code == 200
+    assert call_order == [
+        "progress:start",
+        "deliver:assistant",
+        "notify:terminal",
+        "progress:finalize:ok",
+        "progress:close",
+    ]
+
+
 def test_managed_thread_message_route_honors_explicit_core_context_profile(
     hub_env,
     monkeypatch,

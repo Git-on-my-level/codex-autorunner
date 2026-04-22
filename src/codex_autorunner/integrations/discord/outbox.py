@@ -22,6 +22,7 @@ _OUTBOX_PROGRESS_KEY = "_codex_autorunner_outbox"
 _OUTBOX_PROGRESS_CHUNK_INDEX = "discord_chunk_start_index"
 
 SendMessageFn = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
+EditMessageFn = Callable[[str, str, dict[str, Any]], Awaitable[Any]]
 DeleteMessageFn = Callable[[str, str], Awaitable[None]]
 DeliveredCallback = Callable[[OutboxRecord, Optional[str]], Awaitable[None]]
 
@@ -142,6 +143,7 @@ class DiscordOutboxManager:
         store: DiscordStateStore,
         *,
         send_message: SendMessageFn,
+        edit_message: Optional[EditMessageFn] = None,
         delete_message: Optional[DeleteMessageFn] = None,
         on_delivered: Optional[DeliveredCallback] = None,
         logger: logging.Logger,
@@ -153,6 +155,7 @@ class DiscordOutboxManager:
     ) -> None:
         self._store = store
         self._send_message = send_message
+        self._edit_message = edit_message
         self._delete_message = delete_message
         self._on_delivered = on_delivered
         self._logger = logger
@@ -325,6 +328,26 @@ class DiscordOutboxManager:
                     )
                     return False
                 await self._delete_message(current.channel_id, current.message_id)
+            elif current.operation == "edit":
+                if (
+                    self._edit_message is None
+                    or not isinstance(current.message_id, str)
+                    or not current.message_id
+                ):
+                    await self._store.record_outbox_failure(
+                        current.record_id,
+                        error=(
+                            "Unsupported Discord outbox edit operation: "
+                            "missing edit handler or message id"
+                        ),
+                        retry_after_seconds=None,
+                    )
+                    return False
+                await self._edit_message(
+                    current.channel_id,
+                    current.message_id,
+                    _discord_send_payload(current.payload_json),
+                )
             else:
                 await self._store.record_outbox_failure(
                     current.record_id,

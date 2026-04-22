@@ -786,6 +786,7 @@ class DiscordBotService:
             else DiscordOutboxManager(
                 self._store,
                 send_message=self._send_channel_message,
+                edit_message=self._edit_channel_message,
                 delete_message=self._delete_channel_message,
                 on_delivered=self._handle_discord_outbox_delivery,
                 logger=logger,
@@ -3909,6 +3910,18 @@ class DiscordBotService:
     ) -> dict[str, Any]:
         return await _send_channel_message_impl(
             self._rest, self._logger, channel_id, payload
+        )
+
+    async def _edit_channel_message(
+        self,
+        channel_id: str,
+        message_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        return await self._rest.edit_channel_message(
+            channel_id=channel_id,
+            message_id=message_id,
+            payload=payload,
         )
 
     async def _delete_channel_message(self, channel_id: str, message_id: str) -> None:

@@ -42,6 +42,9 @@ from .....core.pma_transcripts import PmaTranscriptStore
 from .....core.ports.run_event import Completed, Failed, RunEvent
 from .....core.text_utils import _truncate_text
 from .....core.time_utils import now_iso
+from .....integrations.chat.bound_live_progress import (
+    build_bound_chat_live_progress_session,
+)
 from .....integrations.github.managed_thread_pr_binding import (
     self_claim_and_arm_pr_binding,
 )
@@ -505,6 +508,26 @@ async def _run_managed_thread_execution(
         and current_backend_thread_id
         and live_backend_turn_id
     ):
+        progress_session = build_bound_chat_live_progress_session(
+            hub_root=hub_root,
+            raw_config=(
+                request.app.state.config.raw
+                if isinstance(getattr(request.app.state.config, "raw", None), dict)
+                else {}
+            ),
+            managed_thread_id=managed_thread_id,
+            managed_turn_id=current_turn_id,
+            agent=str(getattr(started.thread, "agent_id", "") or "agent"),
+            model=started.request.model,
+        )
+        try:
+            await progress_session.start()
+        except Exception:
+            logger.exception(
+                "Failed to start bound chat live progress (managed_thread_id=%s, managed_turn_id=%s)",
+                managed_thread_id,
+                current_turn_id,
+            )
 
         async def _collect_timeline() -> None:
             async for raw_event in harness_progress_event_stream(
@@ -520,9 +543,38 @@ async def _run_managed_thread_execution(
                     timestamp=now_iso(),
                 )
                 timeline_events.extend(new_events)
+                try:
+                    await progress_session.apply_run_events(new_events)
+                except Exception:
+                    logger.exception(
+                        "Failed to apply bound chat live progress update (managed_thread_id=%s, managed_turn_id=%s)",
+                        managed_thread_id,
+                        current_turn_id,
+                    )
                 _persist_live_timeline_events(new_events)
 
         stream_task = asyncio.create_task(_collect_timeline())
+    else:
+        progress_session = build_bound_chat_live_progress_session(
+            hub_root=hub_root,
+            raw_config=(
+                request.app.state.config.raw
+                if isinstance(getattr(request.app.state.config, "raw", None), dict)
+                else {}
+            ),
+            managed_thread_id=managed_thread_id,
+            managed_turn_id=current_turn_id,
+            agent=str(getattr(started.thread, "agent_id", "") or "agent"),
+            model=started.request.model,
+        )
+        try:
+            await progress_session.start()
+        except Exception:
+            logger.exception(
+                "Failed to start bound chat live progress (managed_thread_id=%s, managed_turn_id=%s)",
+                managed_thread_id,
+                current_turn_id,
+            )
     try:
         outcome = await await_runtime_thread_outcome(
             started,
@@ -651,6 +703,20 @@ async def _run_managed_thread_execution(
                 transition_state = "interrupted"
             elif finalized_status == "error" and finalized_execution is not None:
                 detail = sanitize_managed_thread_result_error(finalized_execution.error)
+            try:
+                await progress_session.finalize(
+                    status=response_status,
+                    failure_message=detail,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to finalize bound chat live progress (managed_thread_id=%s, managed_turn_id=%s)",
+                    managed_thread_id,
+                    current_turn_id,
+                )
+            finally:
+                with contextlib.suppress(Exception):
+                    await progress_session.close()
             await notify_managed_thread_terminal_transition(
                 request,
                 thread=current_thread_row,
@@ -687,6 +753,17 @@ async def _run_managed_thread_execution(
             to_state="completed",
             reason="managed_turn_completed",
         )
+        try:
+            await progress_session.finalize(status="ok")
+        except Exception:
+            logger.exception(
+                "Failed to finalize bound chat live progress (managed_thread_id=%s, managed_turn_id=%s)",
+                managed_thread_id,
+                current_turn_id,
+            )
+        finally:
+            with contextlib.suppress(Exception):
+                await progress_session.close()
         return build_execution_result_payload(
             status="ok",
             managed_thread_id=managed_thread_id,
@@ -725,6 +802,20 @@ async def _run_managed_thread_execution(
         except KeyError:
             pass
         detail = "PMA chat interrupted"
+        try:
+            await progress_session.finalize(
+                status="interrupted",
+                failure_message=detail,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to finalize bound chat live progress (managed_thread_id=%s, managed_turn_id=%s)",
+                managed_thread_id,
+                current_turn_id,
+            )
+        finally:
+            with contextlib.suppress(Exception):
+                await progress_session.close()
         await notify_managed_thread_terminal_transition(
             request,
             thread=current_thread_row,
@@ -776,6 +867,20 @@ async def _run_managed_thread_execution(
         )
     except KeyError:
         pass
+    try:
+        await progress_session.finalize(
+            status="error",
+            failure_message=detail,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to finalize bound chat live progress (managed_thread_id=%s, managed_turn_id=%s)",
+            managed_thread_id,
+            current_turn_id,
+        )
+    finally:
+        with contextlib.suppress(Exception):
+            await progress_session.close()
     await notify_managed_thread_terminal_transition(
         request,
         thread=current_thread_row,

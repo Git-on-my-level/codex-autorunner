@@ -78,7 +78,8 @@ async def test_outbox_coalescing_collapses_edits(
     monkeypatch.setattr(outbox_module, "OUTBOX_IMMEDIATE_RETRY_DELAYS", [])
     store = TelegramStateStore(tmp_path / "telegram_state.sqlite3")
     try:
-        calls = []
+        send_calls: list[str] = []
+        edit_calls: list[tuple[int, str]] = []
 
         async def send_message(
             _chat_id: int,
@@ -87,10 +88,18 @@ async def test_outbox_coalescing_collapses_edits(
             thread_id: Optional[int] = None,
             reply_to: Optional[int] = None,
         ) -> None:
-            calls.append(text)
+            send_calls.append(text)
 
-        async def edit_message_text(*_args, **_kwargs) -> bool:
-            return False
+        async def edit_message_text(
+            _chat_id: int,
+            message_id: int,
+            text: str,
+            *,
+            message_thread_id: Optional[int] = None,
+        ) -> bool:
+            _ = message_thread_id
+            edit_calls.append((message_id, text))
+            return True
 
         async def delete_message(*_args, **_kwargs) -> bool:
             return False
@@ -141,8 +150,8 @@ async def test_outbox_coalescing_collapses_edits(
 
         await manager._flush(records)
 
-        assert len(calls) == 1
-        assert calls[0] == "hello world"
+        assert send_calls == []
+        assert edit_calls == [(789, "hello world")]
         records = await store.list_outbox()
         assert len(records) == 0
     finally:

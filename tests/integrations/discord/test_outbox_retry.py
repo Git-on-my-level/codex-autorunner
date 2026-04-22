@@ -177,6 +177,49 @@ async def test_outbox_delete_operation_is_supported(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_outbox_edit_operation_is_supported(tmp_path: Path) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    clock = _Clock()
+    calls: list[tuple[str, str, dict]] = []
+
+    async def send_message(_channel_id: str, _payload: dict) -> dict:
+        return {"id": "msg-1"}
+
+    async def edit_message(
+        channel_id: str, message_id: str, payload: dict
+    ) -> None:
+        calls.append((channel_id, message_id, payload))
+
+    manager = DiscordOutboxManager(
+        store,
+        send_message=send_message,
+        edit_message=edit_message,
+        logger=logging.getLogger("test"),
+        now_fn=clock.now,
+        sleep_fn=clock.sleep,
+    )
+
+    try:
+        await store.initialize()
+        manager.start()
+        delivered = await manager.send_with_outbox(
+            OutboxRecord(
+                record_id="edit-1",
+                channel_id="chan-1",
+                message_id="msg-123",
+                operation="edit",
+                payload_json={"content": "working"},
+                created_at=now_iso(),
+            )
+        )
+        assert delivered is True
+        assert calls == [("chan-1", "msg-123", {"content": "working"})]
+        assert await store.get_outbox("edit-1") is None
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_outbox_drops_record_after_exhausting_attempts(tmp_path: Path) -> None:
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
     clock = _Clock()

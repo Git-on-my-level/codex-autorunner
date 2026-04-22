@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import sqlite3
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
@@ -46,6 +47,12 @@ MANAGED_THREAD_INTERRUPT_FAILED_DETAIL = (
 )
 BOUND_CHAT_SURFACE_KINDS = frozenset({"discord", "telegram"})
 BOUND_CHAT_CLIENT_TURN_PREFIXES = ("discord:", "telegram:")
+
+
+@dataclass(frozen=True)
+class BoundChatAssistantDeliveryResult:
+    target_count: int = 0
+    published_count: int = 0
 
 
 def _interrupt_recovered_lost_backend_payload(
@@ -461,10 +468,10 @@ async def deliver_bound_chat_assistant_output(
     managed_thread_id: str,
     managed_turn_id: str,
     assistant_text: str,
-) -> None:
+) -> BoundChatAssistantDeliveryResult:
     message = str(assistant_text or "").strip()
     if not message:
-        return
+        return BoundChatAssistantDeliveryResult()
 
     hub_root = request.app.state.config.root
     binding_store = OrchestrationBindingStore(hub_root)
@@ -478,11 +485,13 @@ async def deliver_bound_chat_assistant_output(
         if binding.surface_kind in BOUND_CHAT_SURFACE_KINDS
     ]
     if not bindings:
-        return
+        return BoundChatAssistantDeliveryResult()
 
     discord_store: Optional[DiscordStateStore] = None
     telegram_store: Optional[TelegramStateStore] = None
     created_at = now_iso()
+    target_count = 0
+    published_count = 0
     try:
         for binding in bindings:
             try:
@@ -498,6 +507,7 @@ async def deliver_bound_chat_assistant_output(
                     channel_id = normalize_optional_text(binding.surface_key)
                     if channel_id is None:
                         continue
+                    target_count += 1
                     chunks = chunk_discord_message(
                         format_discord_message(message),
                         max_len=PMA_DISCORD_MESSAGE_MAX_LEN,
@@ -528,6 +538,7 @@ async def deliver_bound_chat_assistant_output(
                                 record
                             )
                         )
+                        published_count += 1
                     continue
 
                 if binding.surface_kind != "telegram":
@@ -551,6 +562,7 @@ async def deliver_bound_chat_assistant_output(
                         surface_key,
                     )
                     continue
+                target_count += 1
                 digest = hashlib.sha256(
                     (
                         f"managed-thread:{managed_turn_id}:telegram:{chat_id}:{thread_id or 'root'}"
@@ -578,6 +590,7 @@ async def deliver_bound_chat_assistant_output(
                         record
                     )
                 )
+                published_count += 1
             except (
                 RuntimeError,
                 OSError,
@@ -611,6 +624,10 @@ async def deliver_bound_chat_assistant_output(
                 RuntimeError,
             ):  # intentional: best-effort store close
                 logger.exception("Failed to close telegram bound-chat delivery store")
+    return BoundChatAssistantDeliveryResult(
+        target_count=target_count,
+        published_count=published_count,
+    )
 
 
 async def notify_managed_thread_terminal_transition(
