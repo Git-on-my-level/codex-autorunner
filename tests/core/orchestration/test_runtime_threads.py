@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,6 +20,9 @@ from codex_autorunner.core.orchestration import (
     MappingAgentDefinitionCatalog,
     MessageRequest,
     PmaThreadExecutionStore,
+)
+from codex_autorunner.core.orchestration import (
+    runtime_threads as runtime_threads_module,
 )
 from codex_autorunner.core.orchestration.models import ExecutionRecord, ThreadTarget
 from codex_autorunner.core.orchestration.runtime_threads import (
@@ -1640,6 +1644,88 @@ async def test_runtime_thread_stall_can_recover_from_harness_before_timeout(
     assert harness.recovery_calls == [
         (workspace_root, "backend-thread-1", "backend-turn-1")
     ]
+    assert harness.interrupt_calls == []
+    assert harness.wait_cancelled.is_set()
+
+
+async def test_runtime_thread_recovery_probe_can_finish_before_stall_deadline(
+    tmp_path: Path,
+) -> None:
+    @dataclass
+    class _HarnessWithDelayedRecovery(_HarnessWithBlockingWait):
+        capabilities: frozenset[str] = frozenset(
+            ["durable_threads", "message_turns", "interrupt", "event_streaming"]
+        )
+        recovery_calls: list[float] = field(default_factory=list)
+
+        async def stream_events(
+            self, workspace_root: Path, conversation_id: str, turn_id: str
+        ):
+            _ = workspace_root, conversation_id, turn_id
+            yield {
+                "message": {
+                    "method": "session/update",
+                    "params": {
+                        "update": {"sessionUpdate": "agent_message_chunk"},
+                        "text": "partial output",
+                    },
+                }
+            }
+            await asyncio.Future()
+
+        async def recover_stalled_turn(
+            self, workspace_root: Path, conversation_id: str, turn_id: str
+        ) -> Optional[TerminalTurnResult]:
+            _ = workspace_root, conversation_id, turn_id
+            self.recovery_calls.append(time.monotonic())
+            if len(self.recovery_calls) < 2:
+                return None
+            return TerminalTurnResult(
+                status="ok",
+                assistant_text="recovered before hard stall",
+                raw_events=[],
+                errors=[],
+            )
+
+    original_interval = runtime_threads_module._STALL_RECOVERY_PROBE_INTERVAL_SECONDS
+    runtime_threads_module._STALL_RECOVERY_PROBE_INTERVAL_SECONDS = 0.03
+    try:
+        harness = _HarnessWithDelayedRecovery()
+        service = _build_service(tmp_path, harness)
+        workspace_root = tmp_path / "workspace"
+        workspace_root.mkdir()
+        thread = service.create_thread_target("codex", workspace_root)
+
+        started = await begin_runtime_thread_execution(
+            service,
+            MessageRequest(
+                target_id=thread.thread_target_id,
+                target_kind="thread",
+                message_text="user-visible prompt",
+            ),
+        )
+        started_at = time.monotonic()
+        outcome = await asyncio.wait_for(
+            await_runtime_thread_outcome(
+                started,
+                interrupt_event=None,
+                timeout_seconds=5,
+                stall_timeout_seconds=0.3,
+                execution_error_message="Managed thread execution failed",
+            ),
+            timeout=1,
+        )
+    finally:
+        runtime_threads_module._STALL_RECOVERY_PROBE_INTERVAL_SECONDS = (
+            original_interval
+        )
+
+    elapsed = time.monotonic() - started_at
+    assert outcome.status == "ok"
+    assert outcome.assistant_text == "recovered before hard stall"
+    assert outcome.completion_source == "prompt_return"
+    assert len(harness.recovery_calls) == 2
+    assert elapsed < 0.25
     assert harness.interrupt_calls == []
     assert harness.wait_cancelled.is_set()
 

@@ -16,6 +16,7 @@ from .service import HarnessBackedOrchestrationService
 
 _INTERRUPT_POLL_INTERVAL_SECONDS = 0.05
 _STALL_POLL_INTERVAL_SECONDS = 0.25
+_STALL_RECOVERY_PROBE_INTERVAL_SECONDS = 15.0
 RUNTIME_THREAD_TIMEOUT_ERROR = "Runtime thread timed out"
 RUNTIME_THREAD_INTERRUPTED_ERROR = "Runtime thread interrupted"
 RUNTIME_THREAD_MISSING_BACKEND_IDS_ERROR = (
@@ -67,6 +68,10 @@ def _looks_like_terminal_turn_result(result: Any) -> bool:
         and isinstance(raw_events, list)
         and isinstance(errors, list)
     )
+
+
+def _harness_supports_stall_recovery(harness: Any) -> bool:
+    return callable(getattr(harness, "recover_stalled_turn", None))
 
 
 @dataclass(frozen=True)
@@ -217,6 +222,16 @@ async def await_runtime_thread_outcome(
         if stall_timeout_seconds is not None and float(stall_timeout_seconds) > 0.0
         else None
     )
+    recovery_probe_task = None
+    recovery_probe_interval = _stall_recovery_probe_interval_seconds(
+        stall_timeout_seconds
+    )
+    if recovery_probe_interval is not None and _harness_supports_stall_recovery(
+        execution.harness
+    ):
+        recovery_probe_task = asyncio.create_task(
+            _wait_for_progress_recovery_probe(state, recovery_probe_interval)
+        )
     stream_task = None
     if observe_progress_events and _harness_supports_progress_event_stream(
         execution.harness
@@ -232,6 +247,8 @@ async def await_runtime_thread_outcome(
         wait_tasks.add(terminal_wait_task)
         if stall_task is not None:
             wait_tasks.add(stall_task)
+        if recovery_probe_task is not None:
+            wait_tasks.add(recovery_probe_task)
         while True:
             done, _ = await asyncio.wait(
                 wait_tasks,
@@ -257,6 +274,18 @@ async def await_runtime_thread_outcome(
                     backend_turn_id,
                 )
                 return state.build_timeout_outcome(RUNTIME_THREAD_TIMEOUT_ERROR)
+            if recovery_probe_task is not None and recovery_probe_task in done:
+                wait_tasks.discard(recovery_probe_task)
+                recovered = await _recover_stalled_turn(execution)
+                if recovered is not None:
+                    state.note_transport_result(recovered)
+                    return state.build_outcome(execution_error_message)
+                assert recovery_probe_interval is not None
+                recovery_probe_task = asyncio.create_task(
+                    _wait_for_progress_recovery_probe(state, recovery_probe_interval)
+                )
+                wait_tasks.add(recovery_probe_task)
+                continue
             if stall_task is not None and stall_task in done:
                 recovered = await _recover_stalled_turn(execution)
                 if recovered is not None:
@@ -281,6 +310,8 @@ async def await_runtime_thread_outcome(
             cleanup_tasks.append(interrupt_task)
         if stall_task is not None:
             cleanup_tasks.append(stall_task)
+        if recovery_probe_task is not None:
+            cleanup_tasks.append(recovery_probe_task)
         if stream_task is not None:
             cleanup_tasks.append(stream_task)
         for task in cleanup_tasks:
@@ -304,6 +335,38 @@ async def _wait_for_progress_stall(
         last_progress = state.last_progress_monotonic
         if last_progress is not None:
             deadline = max(deadline, last_progress + timeout_seconds)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        await asyncio.sleep(min(remaining, _STALL_POLL_INTERVAL_SECONDS))
+
+
+def _stall_recovery_probe_interval_seconds(
+    stall_timeout_seconds: Optional[float],
+) -> Optional[float]:
+    interval = float(_STALL_RECOVERY_PROBE_INTERVAL_SECONDS)
+    if interval <= 0.0:
+        return None
+    if stall_timeout_seconds is None:
+        return interval
+    timeout_seconds = float(stall_timeout_seconds)
+    if timeout_seconds <= 0.0:
+        return None
+    if timeout_seconds <= interval:
+        return None
+    return interval
+
+
+async def _wait_for_progress_recovery_probe(
+    state: RuntimeTurnTerminalStateMachine,
+    probe_interval_seconds: float,
+) -> None:
+    timeout_seconds = max(float(probe_interval_seconds), 0.0)
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        last_progress = state.last_progress_monotonic
+        if last_progress is not None:
+            deadline = last_progress + timeout_seconds
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return
