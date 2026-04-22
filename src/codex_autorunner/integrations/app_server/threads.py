@@ -50,6 +50,7 @@ PMA_HERMES_KEY = "pma.hermes"
 PMA_PREFIX = "pma."
 PMA_OPENCODE_PREFIX = "pma.opencode."
 PMA_HERMES_PREFIX = "pma.hermes."
+PMA_AUTOMATION_SEGMENT = "automation"
 
 LOGGER = logging.getLogger("codex_autorunner.app_server")
 
@@ -102,6 +103,11 @@ def pma_base_key(agent: str, profile: Optional[str] = None) -> str:
     normalized = _normalize_pma_agent_family(agent)
     base_key = PMA_KEY if normalized is None else f"{PMA_KEY}.{normalized}"
     return _append_profile_suffix(base_key, profile)
+
+
+def pma_automation_key(agent: str, profile: Optional[str] = None) -> str:
+    """Return the PMA registry key reserved for automation-triggered turns."""
+    return f"{pma_base_key(agent, profile)}.{PMA_AUTOMATION_SEGMENT}"
 
 
 def pma_legacy_alias_keys(agent: str, profile: Optional[str]) -> tuple[str, ...]:

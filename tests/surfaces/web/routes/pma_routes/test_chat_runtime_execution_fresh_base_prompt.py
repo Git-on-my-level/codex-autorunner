@@ -9,6 +9,9 @@ from types import SimpleNamespace
 import pytest
 
 from codex_autorunner.core.orchestration import FreshConversationRequiredError
+from codex_autorunner.surfaces.web.routes.pma_routes.chat_queue_execution import (
+    resolve_pma_session_key,
+)
 from codex_autorunner.surfaces.web.routes.pma_routes.chat_runtime_execution import (
     execute_harness_turn,
 )
@@ -98,3 +101,20 @@ async def test_fresh_conversation_uses_rebuild_prompt_for_base_prompt_injection(
     assert result["status"] == "ok"
     assert rebuild_calls == [True]
     assert prompts_seen == ["DELTA_PROMPT\n\nCORE PMA FROM PROMPT_MD\n\n"]
+
+
+def test_resolve_pma_session_key_isolates_automation_from_interactive_pma() -> None:
+    interactive = resolve_pma_session_key(
+        "hermes",
+        "m4-pma",
+        automation_trigger=False,
+    )
+    automation = resolve_pma_session_key(
+        "hermes",
+        "m4-pma",
+        automation_trigger=True,
+    )
+
+    assert interactive == "pma.hermes.profile.m4-pma"
+    assert automation == "pma.hermes.profile.m4-pma.automation"
+    assert automation != interactive
