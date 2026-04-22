@@ -7,8 +7,8 @@ import pytest
 from tests.chat_surface_harness.hermes import fake_acp_command
 
 from codex_autorunner.agents.hermes.supervisor import (
-    HermesSupervisorError,
     HermesSupervisor,
+    HermesSupervisorError,
 )
 
 
