@@ -54,6 +54,109 @@ class _UnknownMessageEditProgressRest(support._FakeRest):
 
 
 @pytest.mark.asyncio
+async def test_orchestrated_turn_pending_durable_delivery_keeps_direct_final_message(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    thread = SimpleNamespace(thread_target_id="thread-1")
+
+    class _Store:
+        async def get_binding(self, *, channel_id: str) -> dict[str, Any]:
+            assert channel_id == "channel-1"
+            return {}
+
+    class _Service:
+        def __init__(self) -> None:
+            self._config = support._config(tmp_path)
+            self._store = _Store()
+            self._rest = support._FakeRest()
+            self._logger = logging.getLogger(__name__)
+
+        async def _send_channel_message(
+            self, channel_id: str, payload: dict[str, Any]
+        ) -> dict[str, Any]:
+            return await self._rest.create_channel_message(
+                channel_id=channel_id,
+                payload=payload,
+            )
+
+        def _resolve_agent_state(self, binding: Any) -> tuple[str, Optional[str]]:
+            _ = binding
+            return "hermes", None
+
+        def _runtime_agent_for_binding(self, binding: Any) -> str:
+            _ = binding
+            return "hermes"
+
+    async def _fake_run_managed_surface_turn(
+        _request: Any,
+        *,
+        config: Any,
+    ) -> support.discord_message_turns_module.DiscordMessageTurnResult:
+        finalized = support.managed_thread_turns_module.ManagedThreadFinalizationResult(
+            status="ok",
+            assistant_text="fixture reply",
+            error=None,
+            managed_thread_id="thread-1",
+            managed_turn_id="exec-1",
+            backend_thread_id="backend-1",
+            token_usage={"input_tokens": 1, "output_tokens": 1},
+        )
+        return await config.on_finalized(
+            SimpleNamespace(
+                durable_delivery_performed=False,
+                durable_delivery_pending=True,
+            ),
+            finalized,
+        )
+
+    monkeypatch.setattr(
+        support.discord_message_turns_module,
+        "resolve_discord_thread_target",
+        lambda *args, **kwargs: (SimpleNamespace(), thread),
+    )
+    monkeypatch.setattr(
+        support.discord_message_turns_module,
+        "_build_discord_managed_thread_coordinator",
+        lambda *args, **kwargs: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        support.discord_message_turns_module,
+        "run_managed_surface_turn",
+        _fake_run_managed_surface_turn,
+    )
+
+    result = await support.discord_message_turns_module._run_discord_orchestrated_turn_for_message(
+        _Service(),
+        workspace_root=tmp_path,
+        prompt_text="echo hello world",
+        input_items=None,
+        source_message_id=None,
+        agent="hermes",
+        model_override=None,
+        reasoning_effort=None,
+        session_key="session-1",
+        orchestrator_channel_key="channel-1",
+        managed_thread_surface_key=None,
+        mode="pma",
+        pma_enabled=True,
+        execution_prompt="<user_message>\necho hello world\n</user_message>\n",
+        public_execution_error="Discord PMA turn failed",
+        timeout_error="Discord PMA turn timed out",
+        interrupted_error="Discord PMA turn interrupted",
+        approval_mode="never",
+        sandbox_policy="dangerFullAccess",
+        max_actions=12,
+        min_edit_interval_seconds=1.0,
+        heartbeat_interval_seconds=2.0,
+    )
+
+    assert result.send_final_message is True
+    assert result.delivery_visibility_pending is True
+    assert "fixture reply" in result.final_message
+
+
+@pytest.mark.asyncio
 async def test_spawn_discord_progress_background_task_uses_service_tracking() -> None:
     class _Service:
         def __init__(self) -> None:

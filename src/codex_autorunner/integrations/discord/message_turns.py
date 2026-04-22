@@ -2314,9 +2314,13 @@ async def _run_discord_orchestrated_turn_for_message(
             intermediate_message=intermediate_message,
             token_usage=finalized.token_usage,
             elapsed_seconds=max(0.0, time.monotonic() - tracker.started_at),
-            send_final_message=not (
-                getattr(_flow, "durable_delivery_performed", False)
-                or getattr(_flow, "durable_delivery_pending", False)
+            # Match Telegram semantics: only suppress the visible terminal reply
+            # after a confirmed durable delivery, not while durable delivery is
+            # merely pending or retry-scheduled.
+            send_final_message=not getattr(
+                _flow,
+                "durable_delivery_performed",
+                False,
             ),
             delivery_visibility_pending=getattr(
                 _flow,
