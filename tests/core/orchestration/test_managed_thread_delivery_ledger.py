@@ -453,7 +453,9 @@ class TestEngineEnsureDirectDeliveryClaim:
         assert reclaimed.claim_token != first.claim_token
         assert reclaimed.record.state is ManagedThreadDeliveryState.CLAIMED
 
-    def test_recovers_expired_claim_then_issues_fresh_token(self, tmp_path: Path) -> None:
+    def test_recovers_expired_claim_then_issues_fresh_token(
+        self, tmp_path: Path
+    ) -> None:
         engine = _engine(tmp_path)
         engine.create_intent(_intent(adapter_key="telegram"))
         first = engine.claim_delivery(

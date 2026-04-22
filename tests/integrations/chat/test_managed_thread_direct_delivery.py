@@ -22,7 +22,9 @@ from codex_autorunner.integrations.chat.managed_thread_direct_delivery import (
 )
 
 
-def _intent(tmp_path: Path, *, adapter_key: str = "telegram") -> ManagedThreadDeliveryIntent:
+def _intent(
+    tmp_path: Path, *, adapter_key: str = "telegram"
+) -> ManagedThreadDeliveryIntent:
     hub_root = tmp_path / "hub"
     initialize_orchestration_sqlite(hub_root, durable=False)
     return ManagedThreadDeliveryIntent(
@@ -79,7 +81,9 @@ def test_reserve_refreshes_stale_claim_token_before_recording(tmp_path: Path) ->
     assert updated.state is ManagedThreadDeliveryState.DIRECT_SURFACE_DELIVERED
 
 
-def test_reserve_returns_none_when_already_direct_surface_delivered(tmp_path: Path) -> None:
+def test_reserve_returns_none_when_already_direct_surface_delivered(
+    tmp_path: Path,
+) -> None:
     intent = _intent(tmp_path)
     hub_root = tmp_path / "hub"
     engine = SQLiteManagedThreadDeliveryEngine(hub_root, durable=False)

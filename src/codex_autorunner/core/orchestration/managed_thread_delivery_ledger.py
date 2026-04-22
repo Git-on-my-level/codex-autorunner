@@ -562,9 +562,7 @@ class SQLiteManagedThreadDeliveryEngine:
         parsed = None
         try:
             if str(due_at).endswith("Z"):
-                parsed = datetime.fromisoformat(
-                    str(due_at).replace("Z", "+00:00")
-                )
+                parsed = datetime.fromisoformat(str(due_at).replace("Z", "+00:00"))
             else:
                 parsed = datetime.fromisoformat(str(due_at))
         except ValueError:
