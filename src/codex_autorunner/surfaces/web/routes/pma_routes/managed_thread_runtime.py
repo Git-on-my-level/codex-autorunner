@@ -501,6 +501,27 @@ async def _run_managed_thread_execution(
         )
         return manifest_id
 
+    progress_session = build_bound_chat_live_progress_session(
+        hub_root=hub_root,
+        raw_config=(
+            request.app.state.config.raw
+            if isinstance(getattr(request.app.state.config, "raw", None), dict)
+            else {}
+        ),
+        managed_thread_id=managed_thread_id,
+        managed_turn_id=current_turn_id,
+        agent=str(getattr(started.thread, "agent_id", "") or "agent"),
+        model=started.request.model,
+    )
+    try:
+        await progress_session.start()
+    except Exception:
+        logger.exception(
+            "Failed to start bound chat live progress (managed_thread_id=%s, managed_turn_id=%s)",
+            managed_thread_id,
+            current_turn_id,
+        )
+
     if (
         harness is not None
         and callable(getattr(harness, "supports", None))
@@ -508,26 +529,6 @@ async def _run_managed_thread_execution(
         and current_backend_thread_id
         and live_backend_turn_id
     ):
-        progress_session = build_bound_chat_live_progress_session(
-            hub_root=hub_root,
-            raw_config=(
-                request.app.state.config.raw
-                if isinstance(getattr(request.app.state.config, "raw", None), dict)
-                else {}
-            ),
-            managed_thread_id=managed_thread_id,
-            managed_turn_id=current_turn_id,
-            agent=str(getattr(started.thread, "agent_id", "") or "agent"),
-            model=started.request.model,
-        )
-        try:
-            await progress_session.start()
-        except Exception:
-            logger.exception(
-                "Failed to start bound chat live progress (managed_thread_id=%s, managed_turn_id=%s)",
-                managed_thread_id,
-                current_turn_id,
-            )
 
         async def _collect_timeline() -> None:
             async for raw_event in harness_progress_event_stream(
@@ -554,27 +555,6 @@ async def _run_managed_thread_execution(
                 _persist_live_timeline_events(new_events)
 
         stream_task = asyncio.create_task(_collect_timeline())
-    else:
-        progress_session = build_bound_chat_live_progress_session(
-            hub_root=hub_root,
-            raw_config=(
-                request.app.state.config.raw
-                if isinstance(getattr(request.app.state.config, "raw", None), dict)
-                else {}
-            ),
-            managed_thread_id=managed_thread_id,
-            managed_turn_id=current_turn_id,
-            agent=str(getattr(started.thread, "agent_id", "") or "agent"),
-            model=started.request.model,
-        )
-        try:
-            await progress_session.start()
-        except Exception:
-            logger.exception(
-                "Failed to start bound chat live progress (managed_thread_id=%s, managed_turn_id=%s)",
-                managed_thread_id,
-                current_turn_id,
-            )
     try:
         outcome = await await_runtime_thread_outcome(
             started,
@@ -734,27 +714,42 @@ async def _run_managed_thread_execution(
                 error=detail,
                 response_payload=response_payload,
             )
-        thread_store.update_thread_after_turn(
-            managed_thread_id,
-            last_turn_id=current_turn_id,
-            last_message_preview=current_preview,
-        )
-        await deliver_bound_chat_assistant_output(
-            request,
-            managed_thread_id=managed_thread_id,
-            managed_turn_id=current_turn_id,
-            assistant_text=outcome.assistant_text,
-        )
-        await notify_managed_thread_terminal_transition(
-            request,
-            thread=current_thread_row,
-            managed_thread_id=managed_thread_id,
-            managed_turn_id=current_turn_id,
-            to_state="completed",
-            reason="managed_turn_completed",
-        )
+        post_turn_failed = False
         try:
-            await progress_session.finalize(status="ok")
+            thread_store.update_thread_after_turn(
+                managed_thread_id,
+                last_turn_id=current_turn_id,
+                last_message_preview=current_preview,
+            )
+            await deliver_bound_chat_assistant_output(
+                request,
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=current_turn_id,
+                assistant_text=outcome.assistant_text,
+            )
+            await notify_managed_thread_terminal_transition(
+                request,
+                thread=current_thread_row,
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=current_turn_id,
+                to_state="completed",
+                reason="managed_turn_completed",
+            )
+        except Exception:
+            logger.exception(
+                "Managed-thread ok-path post-turn steps failed (managed_thread_id=%s, managed_turn_id=%s)",
+                managed_thread_id,
+                current_turn_id,
+            )
+            post_turn_failed = True
+        try:
+            if post_turn_failed:
+                await progress_session.finalize(
+                    status="error",
+                    failure_message=MANAGED_THREAD_PUBLIC_EXECUTION_ERROR,
+                )
+            else:
+                await progress_session.finalize(status="ok")
         except Exception:
             logger.exception(
                 "Failed to finalize bound chat live progress (managed_thread_id=%s, managed_turn_id=%s)",
@@ -764,6 +759,16 @@ async def _run_managed_thread_execution(
         finally:
             with contextlib.suppress(Exception):
                 await progress_session.close()
+        if post_turn_failed:
+            return build_execution_result_payload(
+                status="error",
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=current_turn_id,
+                backend_thread_id=resolved_backend_thread_id or "",
+                assistant_text="",
+                error=MANAGED_THREAD_PUBLIC_EXECUTION_ERROR,
+                response_payload=response_payload,
+            )
         return build_execution_result_payload(
             status="ok",
             managed_thread_id=managed_thread_id,
