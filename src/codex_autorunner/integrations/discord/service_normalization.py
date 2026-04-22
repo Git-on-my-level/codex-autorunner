@@ -415,3 +415,11 @@ def format_hub_flow_overview_line(
         f"{display['status_label']} {display['done_count']}/{display['total_count']}"
         f"{run_suffix}{duration_suffix}{freshness_suffix}"
     )
+
+
+# Keep explicit module-level references so dead-code heuristics treat these queue
+# helpers as part of the Discord normalization surface (tests import them too).
+_DISCORD_QUEUE_SURFACE_HELPERS = (
+    build_discord_queue_notice_message,
+    build_discord_queue_status_message,
+)

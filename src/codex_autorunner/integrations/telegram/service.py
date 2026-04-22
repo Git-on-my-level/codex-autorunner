@@ -1938,14 +1938,21 @@ class TelegramBotService(
         text = format_queue_status_text(items)
         reply_markup = self._queue_status_keyboard(items)
         if existing_message_id is not None and not repost:
-            await self._edit_message_text(
+            edited = await self._edit_message_text(
                 chat_id,
                 existing_message_id,
                 text,
+                message_thread_id=thread_id,
                 reply_markup=reply_markup,
             )
-            self._set_queue_status_message_id(chat_id, thread_id, existing_message_id)
-            return existing_message_id
+            if edited:
+                self._set_queue_status_message_id(
+                    chat_id, thread_id, existing_message_id
+                )
+                return existing_message_id
+            # Stale anchor (for example message deleted); drop it and resend below.
+            self._clear_queue_status_message_id(chat_id, thread_id)
+            existing_message_id = None
         message_id = await self._send_placeholder(
             chat_id,
             thread_id=thread_id,
