@@ -366,7 +366,7 @@ async def _wait_for_progress_recovery_probe(
     while True:
         last_progress = state.last_progress_monotonic
         if last_progress is not None:
-            deadline = last_progress + timeout_seconds
+            deadline = max(deadline, last_progress + timeout_seconds)
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return
