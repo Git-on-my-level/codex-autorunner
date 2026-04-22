@@ -170,6 +170,7 @@ DISCORD_PMA_TIMEOUT_SECONDS = 7200
 _DEFAULT_DISCORD_PMA_TIMEOUT_SECONDS = 7200
 DISCORD_PMA_STALL_TIMEOUT_SECONDS = 1800
 _DEFAULT_DISCORD_PMA_STALL_TIMEOUT_SECONDS = 1800
+DISCORD_PMA_SUBMISSION_TIMEOUT_SECONDS = 300.0
 DISCORD_MANAGED_THREAD_SUBMISSION_TIMEOUT_SECONDS = 45.0
 DISCORD_PMA_PROGRESS_MAX_ACTIONS = 12
 DISCORD_PMA_PROGRESS_MIN_EDIT_INTERVAL_SECONDS = 1.0
@@ -2018,6 +2019,12 @@ async def _run_discord_orchestrated_turn_for_message(
             sandbox_policy=sandbox_policy,
         )
 
+    submission_timeout_seconds = (
+        DISCORD_PMA_SUBMISSION_TIMEOUT_SECONDS
+        if pma_enabled
+        else DISCORD_MANAGED_THREAD_SUBMISSION_TIMEOUT_SECONDS
+    )
+
     try:
         if reusable_progress_message_id:
             progress_message_id = reusable_progress_message_id
@@ -2179,7 +2186,7 @@ async def _run_discord_orchestrated_turn_for_message(
                 "discord.turn.submission_timeout",
                 channel_id=channel_id,
                 thread_target_id=managed_thread_id,
-                timeout_seconds=DISCORD_MANAGED_THREAD_SUBMISSION_TIMEOUT_SECONDS,
+                timeout_seconds=submission_timeout_seconds,
                 pma_enabled=pma_enabled,
                 workspace_root=str(workspace_root),
                 agent=logical_agent,
@@ -2456,11 +2463,7 @@ async def _run_discord_orchestrated_turn_for_message(
             ),
             begin_execution=_begin_execution,
             complete_execution=complete_managed_thread_execution,
-            submission_timeout_seconds=(
-                None
-                if pma_enabled
-                else DISCORD_MANAGED_THREAD_SUBMISSION_TIMEOUT_SECONDS
-            ),
+            submission_timeout_seconds=submission_timeout_seconds,
             runtime_event_state=RuntimeThreadRunEventState(),
             after_submission=_after_submission,
             on_submission_error=_on_submission_error,

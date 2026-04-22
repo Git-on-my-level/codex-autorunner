@@ -6,13 +6,13 @@ from types import SimpleNamespace
 from typing import Any, Optional
 
 import pytest
+from tests.discord_message_turns_support import _config, _FakeRest
 
 import codex_autorunner.integrations.discord.message_turns as discord_message_turns_module
-from tests.discord_message_turns_support import _config, _FakeRest
 
 
 @pytest.mark.asyncio
-async def test_discord_pma_turn_does_not_apply_submission_timeout(
+async def test_discord_pma_turn_uses_pma_submission_timeout(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -76,6 +76,11 @@ async def test_discord_pma_turn_does_not_apply_submission_timeout(
 
     monkeypatch.setattr(
         discord_message_turns_module,
+        "DISCORD_PMA_SUBMISSION_TIMEOUT_SECONDS",
+        123.0,
+    )
+    monkeypatch.setattr(
+        discord_message_turns_module,
         "resolve_discord_thread_target",
         lambda *args, **kwargs: (SimpleNamespace(), thread),
     )
@@ -122,4 +127,4 @@ async def test_discord_pma_turn_does_not_apply_submission_timeout(
     )
 
     assert result.final_message == "ok"
-    assert captured_timeout is None
+    assert captured_timeout == 123.0

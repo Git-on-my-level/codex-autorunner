@@ -63,7 +63,7 @@ async def test_discord_hermes_pma_stall_timeout_surfaces_timeout_for_silent_hang
     monkeypatch.setattr(
         discord_message_turns,
         "DISCORD_PMA_STALL_TIMEOUT_SECONDS",
-        0.15,
+        1.0,
     )
     harness = DiscordSurfaceHarness(tmp_path / "discord-stall")
     await harness.setup(agent="hermes")
@@ -98,7 +98,7 @@ async def test_discord_hermes_pma_does_not_replay_second_turn_from_persisted_ses
     monkeypatch.setattr(
         discord_message_turns,
         "DISCORD_PMA_STALL_TIMEOUT_SECONDS",
-        0.15,
+        1.0,
     )
     harness = DiscordSurfaceHarness(tmp_path / "discord-recover")
     await harness.setup(agent="hermes")
