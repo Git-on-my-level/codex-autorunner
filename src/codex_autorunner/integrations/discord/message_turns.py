@@ -2456,7 +2456,11 @@ async def _run_discord_orchestrated_turn_for_message(
             ),
             begin_execution=_begin_execution,
             complete_execution=complete_managed_thread_execution,
-            submission_timeout_seconds=DISCORD_MANAGED_THREAD_SUBMISSION_TIMEOUT_SECONDS,
+            submission_timeout_seconds=(
+                None
+                if pma_enabled
+                else DISCORD_MANAGED_THREAD_SUBMISSION_TIMEOUT_SECONDS
+            ),
             runtime_event_state=RuntimeThreadRunEventState(),
             after_submission=_after_submission,
             on_submission_error=_on_submission_error,

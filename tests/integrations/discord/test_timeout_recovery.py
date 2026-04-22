@@ -1,34 +1,24 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Optional
 
 import pytest
-from tests.discord_message_turns_support import _config, _FakeRest
 
 import codex_autorunner.integrations.discord.message_turns as discord_message_turns_module
+from tests.discord_message_turns_support import _config, _FakeRest
 
 
 @pytest.mark.asyncio
-async def test_orchestrated_turn_submission_timeout_evicts_cached_runtime_supervisor(
+async def test_discord_pma_turn_does_not_apply_submission_timeout(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     rest = _FakeRest()
     thread = SimpleNamespace(thread_target_id="thread-1")
-    submit_started = asyncio.Event()
-
-    class _FakeSupervisor:
-        def __init__(self) -> None:
-            self.closed_workspaces: list[Path] = []
-
-        async def close_workspace(self, workspace_root: Path) -> None:
-            self.closed_workspaces.append(workspace_root)
-
-    fake_supervisor = _FakeSupervisor()
+    captured_timeout: Optional[float] = 123.0
 
     class _Store:
         async def get_binding(self, *, channel_id: str) -> dict[str, Any]:
@@ -41,9 +31,7 @@ async def test_orchestrated_turn_submission_timeout_evicts_cached_runtime_superv
             self._store = _Store()
             self._rest = rest
             self._logger = logging.getLogger(__name__)
-            self._agent_runtime_supervisors = {
-                ("hermes", "hermes", "m4-pma"): fake_supervisor
-            }
+            self._agent_runtime_supervisors = {}
 
         async def _send_channel_message(
             self, channel_id: str, payload: dict[str, Any]
@@ -67,10 +55,24 @@ async def test_orchestrated_turn_submission_timeout_evicts_cached_runtime_superv
             _ = binding
             return "hermes"
 
-    async def _hanging_submit(self, *args: Any, **kwargs: Any) -> Any:
-        _ = args, kwargs
-        submit_started.set()
-        await asyncio.Future()
+    async def _fake_run_managed_surface_turn(request: Any, *, config: Any) -> Any:
+        nonlocal captured_timeout
+        _ = request
+        captured_timeout = config.submission_timeout_seconds
+        return SimpleNamespace(
+            final_message="ok",
+            preview_message_id=None,
+            execution_id=None,
+            intermediate_message=None,
+            token_usage=None,
+            elapsed_seconds=0.0,
+            send_final_message=True,
+            delivery_visibility_pending=False,
+            durable_delivery_id=None,
+            durable_delivery_claim_token=None,
+            deferred_delivery=False,
+            preserve_progress_lease=False,
+        )
 
     monkeypatch.setattr(
         discord_message_turns_module,
@@ -87,20 +89,12 @@ async def test_orchestrated_turn_submission_timeout_evicts_cached_runtime_superv
     )
     monkeypatch.setattr(
         discord_message_turns_module,
-        "DISCORD_MANAGED_THREAD_SUBMISSION_TIMEOUT_SECONDS",
-        0.01,
-    )
-    monkeypatch.setattr(
-        discord_message_turns_module.ManagedThreadTurnCoordinator,
-        "submit_execution",
-        _hanging_submit,
+        "run_managed_surface_turn",
+        _fake_run_managed_surface_turn,
     )
 
     service = _Service()
-    with pytest.raises(
-        RuntimeError,
-        match="Turn failed to start in time. Please retry.",
-    ):
+    result = (
         await discord_message_turns_module._run_discord_orchestrated_turn_for_message(
             service,
             workspace_root=tmp_path,
@@ -125,7 +119,7 @@ async def test_orchestrated_turn_submission_timeout_evicts_cached_runtime_superv
             min_edit_interval_seconds=1.0,
             heartbeat_interval_seconds=2.0,
         )
+    )
 
-    assert submit_started.is_set()
-    assert fake_supervisor.closed_workspaces == [tmp_path]
-    assert service._agent_runtime_supervisors == {}
+    assert result.final_message == "ok"
+    assert captured_timeout is None

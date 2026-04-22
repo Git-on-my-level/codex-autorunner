@@ -85,7 +85,7 @@ async def test_discord_hermes_pma_stall_timeout_surfaces_timeout_for_silent_hang
 
 
 @pytest.mark.anyio
-async def test_discord_hermes_pma_recovers_second_turn_from_persisted_session_store(
+async def test_discord_hermes_pma_does_not_replay_second_turn_from_persisted_session_store(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -107,9 +107,14 @@ async def test_discord_hermes_pma_recovers_second_turn_from_persisted_session_st
         second = await harness.run_message("echo hello world again")
 
         assert first.execution_status == "ok"
-        assert second.execution_status == "ok"
-        assert second.execution_error is None
+        assert second.execution_status == "error"
         assert any(
+            op["op"] == "send"
+            and "discord pma turn timed out"
+            in str(op["payload"].get("content", "")).lower()
+            for op in second.message_ops
+        )
+        assert not any(
             op["op"] == "send"
             and "identical fixture output" in str(op["payload"].get("content", ""))
             for op in second.message_ops
@@ -119,15 +124,15 @@ async def test_discord_hermes_pma_recovers_second_turn_from_persisted_session_st
             for record in reversed(second.log_records)
             if record.get("event") == "chat.managed_thread.turn_finalized"
         )
-        assert finalized["status"] == "ok"
-        assert finalized["completion_source"] == "prompt_return"
+        assert finalized["status"] == "error"
+        assert finalized["completion_source"] == "timeout"
     finally:
         await harness.close()
         await runtime.close()
 
 
 @pytest.mark.anyio
-async def test_discord_hermes_pma_recovers_from_persisted_completion_before_stall_timeout(
+async def test_discord_hermes_pma_does_not_recover_from_persisted_completion_before_timeout(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -141,7 +146,7 @@ async def test_discord_hermes_pma_recovers_from_persisted_completion_before_stal
         "_STALL_RECOVERY_PROBE_INTERVAL_SECONDS",
         0.05,
     )
-    monkeypatch.setattr(discord_message_turns, "DISCORD_PMA_TIMEOUT_SECONDS", 30.0)
+    monkeypatch.setattr(discord_message_turns, "DISCORD_PMA_TIMEOUT_SECONDS", 0.2)
     monkeypatch.setattr(
         discord_message_turns,
         "DISCORD_PMA_STALL_TIMEOUT_SECONDS",
@@ -154,9 +159,14 @@ async def test_discord_hermes_pma_recovers_from_persisted_completion_before_stal
         second = await harness.run_message("echo hello world again")
 
         assert first.execution_status == "ok"
-        assert second.execution_status == "ok"
-        assert second.execution_error is None
+        assert second.execution_status == "error"
         assert any(
+            op["op"] == "send"
+            and "discord pma turn timed out"
+            in str(op["payload"].get("content", "")).lower()
+            for op in second.message_ops
+        )
+        assert not any(
             op["op"] == "send"
             and "identical fixture output" in str(op["payload"].get("content", ""))
             for op in second.message_ops
@@ -166,14 +176,8 @@ async def test_discord_hermes_pma_recovers_from_persisted_completion_before_stal
             for record in reversed(second.log_records)
             if record.get("event") == "chat.managed_thread.turn_finalized"
         )
-        assert finalized["status"] == "ok"
-        assert finalized["completion_source"] == "prompt_return"
-        assert not any(
-            op["op"] == "send"
-            and "discord pma turn timed out"
-            in str(op["payload"].get("content", "")).lower()
-            for op in second.message_ops
-        )
+        assert finalized["status"] == "error"
+        assert finalized["completion_source"] == "timeout"
     finally:
         await harness.close()
         await runtime.close()
