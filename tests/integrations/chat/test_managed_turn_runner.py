@@ -228,6 +228,7 @@ async def test_run_managed_surface_turn_preserves_durable_delivery_id(
         return SimpleNamespace(
             delivery_id="delivery-1",
             state=ManagedThreadDeliveryState.RETRY_SCHEDULED,
+            direct_delivery_claim_token="claim-token-1",
         )
 
     monkeypatch.setattr(
@@ -272,6 +273,7 @@ async def test_run_managed_surface_turn_preserves_durable_delivery_id(
     assert captured_flow.durable_delivery_pending is True
     assert captured_flow.durable_delivery_performed is False
     assert captured_flow.durable_delivery_id == "delivery-1"
+    assert captured_flow.durable_delivery_claim_token == "claim-token-1"
 
 
 @pytest.mark.anyio

@@ -461,6 +461,30 @@ class TestEngineRecordAttemptResult:
         assert updated is not None
         assert updated.state is ManagedThreadDeliveryState.DELIVERED
 
+    def test_direct_surface_delivery_marks_terminal(self, tmp_path: Path) -> None:
+        engine = _engine(tmp_path)
+        engine.create_intent(_intent(adapter_key="telegram"))
+        claim = engine.claim_next_delivery(
+            adapter_key="telegram",
+            now=datetime(2026, 4, 18, 1, 0, 0, tzinfo=timezone.utc),
+        )
+        assert claim is not None
+
+        result = ManagedThreadDeliveryAttemptResult(
+            outcome=ManagedThreadDeliveryOutcome.DIRECT_SURFACE_DELIVERED,
+            metadata={"delivery_surface": "telegram"},
+        )
+        updated = engine.record_attempt_result(
+            "delivery-1",
+            claim_token=claim.claim_token,
+            result=result,
+        )
+        assert updated is not None
+        assert updated.state is ManagedThreadDeliveryState.DIRECT_SURFACE_DELIVERED
+        assert updated.delivered_at is not None
+        assert updated.claim_token is None
+        assert updated.metadata["delivery_surface"] == "telegram"
+
     def test_retry_schedules_next_attempt(self, tmp_path: Path) -> None:
         engine = _engine(tmp_path)
         engine.create_intent(_intent(adapter_key="telegram"))

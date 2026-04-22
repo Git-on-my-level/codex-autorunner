@@ -478,10 +478,12 @@ class SQLiteManagedThreadDeliveryEngine:
             return None
         if record.claim_token != claim_token:
             return None
+        metadata_updates = dict(result.metadata or {})
         if record.state == ManagedThreadDeliveryState.CLAIMED:
             self._ledger.patch_delivery(
                 delivery_id,
                 state=ManagedThreadDeliveryState.DELIVERING,
+                metadata_updates=metadata_updates or None,
             )
         outcome = result.outcome
         if outcome == ManagedThreadDeliveryOutcome.DELIVERED:
@@ -491,6 +493,16 @@ class SQLiteManagedThreadDeliveryEngine:
                 delivered_at=now_iso(),
                 adapter_cursor=result.adapter_cursor,
                 claim_token=None,
+                metadata_updates=metadata_updates or None,
+            )
+        if outcome == ManagedThreadDeliveryOutcome.DIRECT_SURFACE_DELIVERED:
+            return self._ledger.patch_delivery(
+                delivery_id,
+                state=ManagedThreadDeliveryState.DIRECT_SURFACE_DELIVERED,
+                delivered_at=now_iso(),
+                adapter_cursor=result.adapter_cursor,
+                claim_token=None,
+                metadata_updates=metadata_updates or None,
             )
         if outcome == ManagedThreadDeliveryOutcome.DUPLICATE:
             return self._ledger.patch_delivery(
@@ -499,6 +511,7 @@ class SQLiteManagedThreadDeliveryEngine:
                 delivered_at=now_iso(),
                 adapter_cursor=result.adapter_cursor,
                 claim_token=None,
+                metadata_updates=metadata_updates or None,
             )
         if outcome == ManagedThreadDeliveryOutcome.RETRY:
             next_attempt_at = _compute_next_attempt_at(
@@ -514,6 +527,7 @@ class SQLiteManagedThreadDeliveryEngine:
                 last_error=result.error,
                 adapter_cursor=result.adapter_cursor,
                 claim_token=None,
+                metadata_updates=metadata_updates or None,
             )
         if outcome == ManagedThreadDeliveryOutcome.FAILED:
             if record.attempt_count >= self._max_attempts:
@@ -522,6 +536,7 @@ class SQLiteManagedThreadDeliveryEngine:
                     state=ManagedThreadDeliveryState.FAILED,
                     last_error=result.error or "max_attempts_exceeded",
                     claim_token=None,
+                    metadata_updates=metadata_updates or None,
                 )
             next_attempt_at = _compute_next_attempt_at(
                 record.attempt_count,
@@ -536,6 +551,7 @@ class SQLiteManagedThreadDeliveryEngine:
                 last_error=result.error,
                 adapter_cursor=result.adapter_cursor,
                 claim_token=None,
+                metadata_updates=metadata_updates or None,
             )
         if outcome == ManagedThreadDeliveryOutcome.ABANDONED:
             return self._ledger.patch_delivery(
@@ -543,6 +559,7 @@ class SQLiteManagedThreadDeliveryEngine:
                 state=ManagedThreadDeliveryState.ABANDONED,
                 last_error=result.error or "abandoned_by_adapter",
                 claim_token=None,
+                metadata_updates=metadata_updates or None,
             )
         return None
 
