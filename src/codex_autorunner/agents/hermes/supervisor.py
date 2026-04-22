@@ -114,7 +114,6 @@ class _HermesTurnState:
     last_event_method: Optional[str] = None
     last_session_update_kind: Optional[str] = None
     last_progress_at: Optional[str] = None
-    started_at_unix: float = field(default_factory=time.time)
 
 
 class HermesSupervisor:
