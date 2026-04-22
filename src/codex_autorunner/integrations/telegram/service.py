@@ -66,6 +66,11 @@ from ...tickets.replies import dispatch_reply, ensure_reply_dirs, resolve_reply_
 from ...voice import VoiceConfig, VoiceService
 from ..app_server.event_buffer import AppServerEventBuffer
 from ..app_server.supervisor import WorkspaceAppServerSupervisor
+from ..chat.bound_live_progress import (
+    bound_chat_progress_delivered_message_id,
+    bound_chat_progress_send_record_id,
+    mark_bound_chat_progress_delivered,
+)
 from ..chat.channel_directory import ChannelDirectoryStore
 from ..chat.collaboration_policy import (
     CollaborationEvaluationContext,
@@ -594,47 +599,106 @@ class TelegramBotService(
     async def _handle_telegram_outbox_delivery(
         self, record: OutboxRecord, delivered_message_id: Optional[int]
     ) -> None:
+        delivered_id_str = (
+            str(delivered_message_id) if isinstance(delivered_message_id, int) else None
+        )
         if record.operation_id:
             await self._mark_chat_operation_state(
                 record.operation_id,
                 state=ChatOperationState.COMPLETED,
                 delivery_state="delivered",
-                anchor_ref=(
-                    str(delivered_message_id)
-                    if isinstance(delivered_message_id, int)
-                    else None
-                ),
+                anchor_ref=delivered_id_str,
             )
-        if not isinstance(delivered_message_id, int):
-            return
-        delivered_id_str = str(delivered_message_id)
-        if self._hub_client is None:
+        if delivered_id_str is None:
+            pass
+        elif self._hub_client is None:
             log_event(
                 self._logger,
                 logging.WARNING,
                 "telegram.outbox.delivery_mark.hub_client_unavailable",
                 record_id=record.record_id,
             )
-            return
-        from ...core.hub_control_plane import (
-            NotificationDeliveryMarkRequest as _CPDeliveryMarkRequest,
-        )
+        else:
+            from ...core.hub_control_plane import (
+                NotificationDeliveryMarkRequest as _CPDeliveryMarkRequest,
+            )
 
-        try:
-            await self._hub_client.mark_notification_delivered(
-                _CPDeliveryMarkRequest(
-                    delivery_record_id=record.record_id,
-                    delivered_message_id=delivered_id_str,
+            try:
+                await self._hub_client.mark_notification_delivered(
+                    _CPDeliveryMarkRequest(
+                        delivery_record_id=record.record_id,
+                        delivered_message_id=delivered_id_str,
+                    )
                 )
+            except (HubControlPlaneError, OSError, ValueError) as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.outbox.delivery_mark.control_plane_failed",
+                    record_id=record.record_id,
+                    exc=exc,
+                )
+        if (
+            delivered_id_str is not None
+            and record.operation == "send"
+            and record.record_id.startswith("managed-thread-progress:")
+        ):
+            mark_bound_chat_progress_delivered(
+                hub_root=self._config.root,
+                delivery_record_id=record.record_id,
+                delivered_message_id=delivered_id_str,
             )
-        except (HubControlPlaneError, OSError, ValueError) as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "telegram.outbox.delivery_mark.control_plane_failed",
-                record_id=record.record_id,
-                exc=exc,
+        cleanup_payload = record.delivery_metadata
+        if not isinstance(cleanup_payload, dict):
+            return
+        if cleanup_payload.get("kind") != "managed_thread_live_progress":
+            return
+        managed_thread_id = str(cleanup_payload.get("managed_thread_id") or "").strip()
+        managed_turn_id = str(cleanup_payload.get("managed_turn_id") or "").strip()
+        surface_key = str(cleanup_payload.get("surface_key") or "").strip()
+        if not managed_thread_id or not managed_turn_id or not surface_key:
+            return
+        progress_send_record_id = str(
+            cleanup_payload.get("progress_send_record_id")
+            or bound_chat_progress_send_record_id(
+                surface_kind="telegram",
+                surface_key=surface_key,
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=managed_turn_id,
             )
+        ).strip()
+        progress_message_id: Optional[int] = None
+        raw_progress_message_id = bound_chat_progress_delivered_message_id(
+            hub_root=self._config.root,
+            delivery_record_id=progress_send_record_id,
+        )
+        if raw_progress_message_id:
+            try:
+                progress_message_id = int(raw_progress_message_id)
+            except ValueError:
+                progress_message_id = None
+        if progress_message_id is None:
+            await self._store.delete_outbox(progress_send_record_id)
+            return
+        cleanup_record = OutboxRecord(
+            record_id=(
+                "managed-thread-progress-cleanup:"
+                f"{progress_send_record_id}:{delivered_id_str}"
+            ),
+            chat_id=record.chat_id,
+            thread_id=record.thread_id,
+            reply_to_message_id=None,
+            placeholder_message_id=None,
+            text="",
+            created_at=now_iso(),
+            operation="delete",
+            message_id=progress_message_id,
+            outbox_key=(
+                "managed-thread-progress-cleanup:"
+                f"{progress_send_record_id}:{progress_message_id}"
+            ),
+        )
+        await self._store.enqueue_outbox(cleanup_record)
 
     async def _housekeeping_roots(self) -> list[Path]:
         roots = set(

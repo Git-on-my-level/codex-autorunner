@@ -659,3 +659,67 @@ async def test_outbox_replay_after_send_failure_with_operation_id(
         assert len(remaining) == 0
     finally:
         await store.close()
+
+
+@pytest.mark.anyio
+async def test_outbox_give_up_invokes_delivery_callback_with_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(outbox_module, "OUTBOX_MAX_ATTEMPTS", 1)
+    store = TelegramStateStore(tmp_path / "telegram_state.sqlite3")
+    callbacks: list[tuple[str, int | None]] = []
+    try:
+
+        async def send_message(
+            _chat_id: int,
+            _text: str,
+            *,
+            thread_id: Optional[int] = None,
+            reply_to: Optional[int] = None,
+        ) -> int:
+            _ = thread_id, reply_to
+            raise RuntimeError("boom")
+
+        async def edit_message_text(*_args, **_kwargs) -> bool:
+            return False
+
+        async def delete_message(*_args, **_kwargs) -> bool:
+            return False
+
+        async def on_delivered(
+            record: OutboxRecord,
+            delivered_message_id: Optional[int],
+        ) -> None:
+            callbacks.append((record.record_id, delivered_message_id))
+
+        manager = TelegramOutboxManager(
+            store,
+            send_message=send_message,
+            edit_message_text=edit_message_text,
+            delete_message=delete_message,
+            logger=logging.getLogger("test"),
+            on_delivered=on_delivered,
+        )
+        manager.start()
+
+        await store.enqueue_outbox(
+            OutboxRecord(
+                record_id="give-up",
+                chat_id=123,
+                thread_id=None,
+                reply_to_message_id=None,
+                placeholder_message_id=None,
+                text="hello",
+                created_at=now_iso(),
+                operation="send",
+                message_id=None,
+            )
+        )
+
+        await manager._flush(await store.list_outbox())
+        await manager._flush(await store.list_outbox())
+
+        assert callbacks == [("give-up", None)]
+        assert await store.list_outbox() == []
+    finally:
+        await store.close()

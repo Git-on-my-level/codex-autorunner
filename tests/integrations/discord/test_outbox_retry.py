@@ -185,9 +185,7 @@ async def test_outbox_edit_operation_is_supported(tmp_path: Path) -> None:
     async def send_message(_channel_id: str, _payload: dict) -> dict:
         return {"id": "msg-1"}
 
-    async def edit_message(
-        channel_id: str, message_id: str, payload: dict
-    ) -> None:
+    async def edit_message(channel_id: str, message_id: str, payload: dict) -> None:
         calls.append((channel_id, message_id, payload))
 
     manager = DiscordOutboxManager(
@@ -674,6 +672,98 @@ async def test_coalesce_prefers_latest_created_at(tmp_path: Path) -> None:
 
         await manager._flush(await store.list_outbox())
         assert sent == ["second"]
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_outbox_give_up_invokes_delivery_callback_with_none(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    callbacks: list[tuple[str, str | None]] = []
+
+    async def send_message(_channel_id: str, _payload: dict) -> dict:
+        raise RuntimeError("boom")
+
+    async def on_delivered(
+        record: OutboxRecord, delivered_message_id: str | None
+    ) -> None:
+        callbacks.append((record.record_id, delivered_message_id))
+
+    manager = DiscordOutboxManager(
+        store,
+        send_message=send_message,
+        on_delivered=on_delivered,
+        logger=logging.getLogger("test"),
+        max_attempts=1,
+        immediate_retry_delays=(0.0,),
+    )
+
+    try:
+        await store.initialize()
+        manager.start()
+
+        delivered = await manager.send_with_outbox(
+            OutboxRecord(
+                record_id="give-up",
+                channel_id="chan-1",
+                message_id=None,
+                operation="send",
+                payload_json={"content": "hello"},
+                created_at=now_iso(),
+            )
+        )
+
+        assert delivered is False
+        assert callbacks == [("give-up", None)]
+        assert await store.list_outbox() == []
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_outbox_delivery_callback_io_error_does_not_retry_send(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    send_count = {"n": 0}
+
+    async def send_message(_channel_id: str, _payload: dict) -> dict:
+        send_count["n"] += 1
+        return {"id": "msg-ok"}
+
+    async def on_delivered(
+        _record: OutboxRecord, _delivered_message_id: str | None
+    ) -> None:
+        raise OSError("sqlite unavailable")
+
+    manager = DiscordOutboxManager(
+        store,
+        send_message=send_message,
+        on_delivered=on_delivered,
+        logger=logging.getLogger("test"),
+        immediate_retry_delays=(0.0,),
+    )
+
+    try:
+        await store.initialize()
+        manager.start()
+
+        delivered = await manager.send_with_outbox(
+            OutboxRecord(
+                record_id="callback-io-error",
+                channel_id="chan-1",
+                message_id=None,
+                operation="send",
+                payload_json={"content": "hello"},
+                created_at=now_iso(),
+            )
+        )
+
+        assert delivered is True
+        assert send_count["n"] == 1
+        assert await store.list_outbox() == []
     finally:
         await store.close()
 

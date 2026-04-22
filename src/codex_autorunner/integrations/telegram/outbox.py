@@ -275,6 +275,21 @@ class TelegramOutboxManager:
                     attempts=record.attempts,
                     conversation_id=conversation_id,
                 )
+                if self._on_delivered is not None:
+                    try:
+                        await self._on_delivered(record, None)
+                    except (
+                        Exception
+                    ):  # intentional: user-supplied callback must not break give-up cleanup
+                        log_event(
+                            self._logger,
+                            logging.WARNING,
+                            "telegram.outbox.give_up_callback_failed",
+                            record_id=record.record_id,
+                            chat_id=record.chat_id,
+                            thread_id=record.thread_id,
+                            conversation_id=conversation_id,
+                        )
                 if record.outbox_key:
                     records = await self._store.list_outbox()
                     for r in records:

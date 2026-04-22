@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
 import uuid
@@ -8,10 +9,10 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from ...core.chat_bindings import (
-    active_chat_binding_metadata_by_thread,
     resolve_discord_state_path,
     resolve_telegram_state_path,
 )
+from ...core.orchestration import OrchestrationBindingStore
 from ...core.pma_notification_store import PmaNotificationStore
 from ...core.ports.run_event import RunEvent
 from ...core.time_utils import now_iso
@@ -40,28 +41,45 @@ _DELETE_OPERATION = "delete"
 
 @dataclass
 class BoundChatLiveProgressSession:
-    adapter: "_BaseBoundProgressAdapter | None"
+    adapters: tuple["_BaseBoundProgressAdapter", ...]
     tracker: TurnProgressTracker
     projector: ManagedThreadProgressProjector
     max_length: int
 
     @property
     def enabled(self) -> bool:
-        return self.adapter is not None
+        return bool(self.adapters)
+
+    @property
+    def surface_targets(self) -> tuple[tuple[str, str], ...]:
+        return tuple(
+            (adapter.surface_kind, adapter.surface_key) for adapter in self.adapters
+        )
 
     async def start(self) -> None:
-        if self.adapter is None:
+        if not self.adapters:
             return
         self.projector.mark_working(force=True)
         rendered = self.projector.render(
             max_length=self.max_length,
             now=time.monotonic(),
         )
-        if await self.adapter.publish(rendered):
+        published = False
+        for adapter in self.adapters:
+            try:
+                if await adapter.publish(rendered):
+                    published = True
+            except Exception:
+                logger.exception(
+                    "Failed to publish bound chat live progress start (surface_kind=%s, surface_key=%s)",
+                    adapter.surface_kind,
+                    adapter.surface_key,
+                )
+        if published:
             self.projector.note_rendered(rendered, now=time.monotonic())
 
     async def apply_run_events(self, events: list[RunEvent]) -> None:
-        if self.adapter is None:
+        if not self.adapters:
             return
         for event in events:
             if hasattr(event, "usage") and isinstance(
@@ -78,7 +96,18 @@ class BoundChatLiveProgressSession:
                 now=time.monotonic(),
                 render_mode=outcome.render_mode,
             )
-            if await self.adapter.publish(rendered):
+            published = False
+            for adapter in self.adapters:
+                try:
+                    if await adapter.publish(rendered):
+                        published = True
+                except Exception:
+                    logger.exception(
+                        "Failed to publish bound chat live progress update (surface_kind=%s, surface_key=%s)",
+                        adapter.surface_kind,
+                        adapter.surface_key,
+                    )
+            if published:
                 self.projector.note_rendered(rendered, now=time.monotonic())
 
     async def finalize(
@@ -87,11 +116,19 @@ class BoundChatLiveProgressSession:
         status: str,
         failure_message: Optional[str] = None,
     ) -> None:
-        if self.adapter is None:
+        if not self.adapters:
             return
         normalized = str(status or "").strip().lower()
         if normalized == "ok":
-            await self.adapter.complete_success()
+            for adapter in self.adapters:
+                try:
+                    await adapter.complete_success()
+                except Exception:
+                    logger.exception(
+                        "Failed to retire bound chat live progress success state (surface_kind=%s, surface_key=%s)",
+                        adapter.surface_kind,
+                        adapter.surface_key,
+                    )
             return
         if normalized == "interrupted":
             self.tracker.set_label("cancelled")
@@ -104,11 +141,26 @@ class BoundChatLiveProgressSession:
             now=time.monotonic(),
             render_mode="final",
         )
-        await self.adapter.complete_with_message(rendered)
+        for adapter in self.adapters:
+            try:
+                await adapter.complete_with_message(rendered)
+            except Exception:
+                logger.exception(
+                    "Failed to publish bound chat live progress terminal state (surface_kind=%s, surface_key=%s)",
+                    adapter.surface_kind,
+                    adapter.surface_key,
+                )
 
     async def close(self) -> None:
-        if self.adapter is not None:
-            await self.adapter.close()
+        for adapter in self.adapters:
+            try:
+                await adapter.close()
+            except Exception:
+                logger.exception(
+                    "Failed to close bound chat live progress adapter (surface_kind=%s, surface_key=%s)",
+                    adapter.surface_kind,
+                    adapter.surface_key,
+                )
 
 
 class _BaseBoundProgressAdapter:
@@ -124,26 +176,38 @@ class _BaseBoundProgressAdapter:
         self._managed_thread_id = managed_thread_id
         self._managed_turn_id = managed_turn_id
         self._surface_key = surface_key
+        self._surface_scope_id = _bound_progress_surface_scope_id(
+            surface_kind=self.surface_kind,
+            surface_key=surface_key,
+        )
         self._notifications = PmaNotificationStore(self._hub_root)
 
     @property
     def send_record_id(self) -> str:
-        return (
-            f"managed-thread-progress:{self.surface_kind}:"
-            f"{self._managed_thread_id}:{self._managed_turn_id}:send"
+        return bound_chat_progress_send_record_id(
+            surface_kind=self.surface_kind,
+            surface_key=self._surface_key,
+            managed_thread_id=self._managed_thread_id,
+            managed_turn_id=self._managed_turn_id,
         )
 
     @property
     def edit_operation_id(self) -> str:
         return (
             f"managed-thread-progress:{self.surface_kind}:"
+            f"{self._surface_scope_id}:"
             f"{self._managed_thread_id}:{self._managed_turn_id}:edit"
         )
+
+    @property
+    def surface_key(self) -> str:
+        return self._surface_key
 
     def _record_notification(self) -> None:
         self._notifications.record_notification(
             correlation_id=(
-                f"managed-thread-progress:{self._managed_thread_id}:{self._managed_turn_id}"
+                "managed-thread-progress:"
+                f"{self._managed_thread_id}:{self._managed_turn_id}:{self._surface_scope_id}"
             ),
             source_kind=_PROGRESS_SOURCE_KIND,
             delivery_mode="bound",
@@ -329,6 +393,7 @@ class _DiscordBoundProgressAdapter(_BaseBoundProgressAdapter):
         record = DiscordOutboxRecord(
             record_id=(
                 f"managed-thread-progress:{self.surface_kind}:"
+                f"{self._surface_scope_id}:"
                 f"{self._managed_thread_id}:{self._managed_turn_id}:delete"
             ),
             channel_id=self._surface_key,
@@ -520,6 +585,7 @@ class _TelegramBoundProgressAdapter(_BaseBoundProgressAdapter):
         record = TelegramOutboxRecord(
             record_id=(
                 f"managed-thread-progress:{self.surface_kind}:"
+                f"{self._surface_scope_id}:"
                 f"{self._managed_thread_id}:{self._managed_turn_id}:delete"
             ),
             chat_id=self._chat_id,
@@ -552,6 +618,126 @@ class _TelegramBoundProgressAdapter(_BaseBoundProgressAdapter):
         await self._store.close()
 
 
+def _bound_progress_surface_scope_id(*, surface_kind: str, surface_key: str) -> str:
+    digest = hashlib.sha256(f"{surface_kind}:{surface_key}".encode("utf-8")).hexdigest()
+    return digest[:12]
+
+
+def bound_chat_progress_send_record_id(
+    *,
+    surface_kind: str,
+    surface_key: str,
+    managed_thread_id: str,
+    managed_turn_id: str,
+) -> str:
+    return (
+        f"managed-thread-progress:{surface_kind}:"
+        f"{_bound_progress_surface_scope_id(surface_kind=surface_kind, surface_key=surface_key)}:"
+        f"{managed_thread_id}:{managed_turn_id}:send"
+    )
+
+
+def build_bound_chat_progress_cleanup_metadata(
+    *,
+    surface_kind: str,
+    surface_key: str,
+    managed_thread_id: str,
+    managed_turn_id: str,
+) -> dict[str, str]:
+    return {
+        "kind": _PROGRESS_SOURCE_KIND,
+        "surface_kind": surface_kind,
+        "surface_key": surface_key,
+        "managed_thread_id": managed_thread_id,
+        "managed_turn_id": managed_turn_id,
+        "progress_send_record_id": bound_chat_progress_send_record_id(
+            surface_kind=surface_kind,
+            surface_key=surface_key,
+            managed_thread_id=managed_thread_id,
+            managed_turn_id=managed_turn_id,
+        ),
+    }
+
+
+def mark_bound_chat_progress_delivered(
+    *,
+    hub_root: Path,
+    delivery_record_id: str,
+    delivered_message_id: Any,
+) -> None:
+    PmaNotificationStore(hub_root).mark_delivered(
+        delivery_record_id=delivery_record_id,
+        delivered_message_id=delivered_message_id,
+    )
+
+
+def bound_chat_progress_delivered_message_id(
+    *,
+    hub_root: Path,
+    delivery_record_id: str,
+) -> Optional[str]:
+    conversation = PmaNotificationStore(hub_root).get_by_delivery_record_id(
+        delivery_record_id
+    )
+    if conversation is None:
+        return None
+    delivered_message_id = str(conversation.delivered_message_id or "").strip()
+    return delivered_message_id or None
+
+
+def _build_bound_progress_adapter(
+    *,
+    hub_root: Path,
+    raw_config: Mapping[str, Any],
+    surface_kind: str,
+    surface_key: str,
+    managed_thread_id: str,
+    managed_turn_id: str,
+) -> _BaseBoundProgressAdapter | None:
+    if surface_kind == "discord" and surface_key:
+        return _DiscordBoundProgressAdapter(
+            hub_root=hub_root,
+            raw_config=raw_config,
+            managed_thread_id=managed_thread_id,
+            managed_turn_id=managed_turn_id,
+            channel_id=surface_key,
+        )
+    if surface_kind == "telegram" and surface_key:
+        return _TelegramBoundProgressAdapter(
+            hub_root=hub_root,
+            raw_config=raw_config,
+            managed_thread_id=managed_thread_id,
+            managed_turn_id=managed_turn_id,
+            topic_surface_key=surface_key,
+        )
+    return None
+
+
+async def cleanup_bound_chat_live_progress_success(
+    *,
+    hub_root: Path,
+    raw_config: Mapping[str, Any],
+    surface_kind: str,
+    surface_key: str,
+    managed_thread_id: str,
+    managed_turn_id: str,
+) -> None:
+    adapter = _build_bound_progress_adapter(
+        hub_root=hub_root,
+        raw_config=raw_config,
+        surface_kind=surface_kind,
+        surface_key=surface_key,
+        managed_thread_id=managed_thread_id,
+        managed_turn_id=managed_turn_id,
+    )
+    if adapter is None:
+        return
+    try:
+        await adapter.complete_success()
+    finally:
+        await adapter.close()
+
+
 def build_bound_chat_live_progress_session(
     *,
     hub_root: Path,
@@ -561,32 +747,42 @@ def build_bound_chat_live_progress_session(
     agent: str,
     model: Optional[str],
 ) -> BoundChatLiveProgressSession:
-    binding = active_chat_binding_metadata_by_thread(hub_root=hub_root).get(
-        managed_thread_id
-    )
-    adapter: _BaseBoundProgressAdapter | None = None
+    binding_store = OrchestrationBindingStore(hub_root)
+    adapters: list[_BaseBoundProgressAdapter] = []
     max_length = _DISCORD_MAX_PROGRESS_LEN
-    if isinstance(binding, Mapping):
-        surface_kind = str(binding.get("binding_kind") or "").strip()
-        surface_key = str(binding.get("binding_id") or "").strip()
-        if surface_kind == "discord" and surface_key:
-            adapter = _DiscordBoundProgressAdapter(
-                hub_root=hub_root,
-                raw_config=raw_config,
-                managed_thread_id=managed_thread_id,
-                managed_turn_id=managed_turn_id,
-                channel_id=surface_key,
+    bindings = sorted(
+        (
+            binding
+            for binding in binding_store.list_bindings(
+                thread_target_id=managed_thread_id,
+                include_disabled=False,
+                limit=1000,
             )
+            if binding.surface_kind in {"discord", "telegram"}
+        ),
+        key=lambda binding: (
+            str(binding.surface_kind or ""),
+            str(binding.surface_key or ""),
+        ),
+    )
+    for binding in bindings:
+        surface_kind = str(binding.surface_kind or "").strip()
+        surface_key = str(binding.surface_key or "").strip()
+        adapter = _build_bound_progress_adapter(
+            hub_root=hub_root,
+            raw_config=raw_config,
+            surface_kind=surface_kind,
+            surface_key=surface_key,
+            managed_thread_id=managed_thread_id,
+            managed_turn_id=managed_turn_id,
+        )
+        if adapter is None:
+            continue
+        adapters.append(adapter)
+        if surface_kind == "telegram":
+            max_length = max(max_length, _TELEGRAM_MAX_PROGRESS_LEN)
+        else:
             max_length = _DISCORD_MAX_PROGRESS_LEN
-        elif surface_kind == "telegram" and surface_key:
-            adapter = _TelegramBoundProgressAdapter(
-                hub_root=hub_root,
-                raw_config=raw_config,
-                managed_thread_id=managed_thread_id,
-                managed_turn_id=managed_turn_id,
-                topic_surface_key=surface_key,
-            )
-            max_length = _TELEGRAM_MAX_PROGRESS_LEN
     tracker = TurnProgressTracker(
         started_at=time.monotonic(),
         agent=agent,
@@ -601,7 +797,7 @@ def build_bound_chat_live_progress_session(
         heartbeat_interval_seconds=5.0,
     )
     return BoundChatLiveProgressSession(
-        adapter=adapter,
+        adapters=tuple(adapters),
         tracker=tracker,
         projector=projector,
         max_length=max_length,
@@ -610,5 +806,10 @@ def build_bound_chat_live_progress_session(
 
 __all__ = [
     "BoundChatLiveProgressSession",
+    "bound_chat_progress_delivered_message_id",
+    "build_bound_chat_progress_cleanup_metadata",
     "build_bound_chat_live_progress_session",
+    "bound_chat_progress_send_record_id",
+    "cleanup_bound_chat_live_progress_success",
+    "mark_bound_chat_progress_delivered",
 ]

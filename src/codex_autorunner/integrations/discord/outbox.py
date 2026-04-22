@@ -20,6 +20,7 @@ OUTBOX_MAX_ATTEMPTS = 5
 OUTBOX_IMMEDIATE_RETRY_DELAYS = (0.0, 1.0, 2.0)
 _OUTBOX_PROGRESS_KEY = "_codex_autorunner_outbox"
 _OUTBOX_PROGRESS_CHUNK_INDEX = "discord_chunk_start_index"
+_OUTBOX_CLEANUP_KEY = "_codex_autorunner_cleanup"
 
 SendMessageFn = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 EditMessageFn = Callable[[str, str, dict[str, Any]], Awaitable[Any]]
@@ -112,6 +113,7 @@ def _with_discord_chunk_start_index(
 def _discord_send_payload(payload_json: dict[str, Any]) -> dict[str, Any]:
     send_payload = dict(payload_json)
     send_payload.pop(_OUTBOX_PROGRESS_KEY, None)
+    send_payload.pop(_OUTBOX_CLEANUP_KEY, None)
     return send_payload
 
 
@@ -377,11 +379,7 @@ class DiscordOutboxManager:
         if self._on_delivered is not None:
             try:
                 await self._on_delivered(current, delivered_message_id)
-            except (
-                RuntimeError,
-                TypeError,
-                ValueError,
-            ):  # callback must not disrupt delivery
+            except Exception:  # callback must not disrupt delivery
                 self._logger.warning(
                     "discord.outbox.delivery_callback_failed record_id=%s",
                     current.record_id,
@@ -398,6 +396,15 @@ class DiscordOutboxManager:
             record.attempts,
             record.last_error,
         )
+        if self._on_delivered is not None:
+            try:
+                await self._on_delivered(record, None)
+            except Exception:  # callback must not disrupt give-up cleanup
+                self._logger.warning(
+                    "discord.outbox.give_up_callback_failed record_id=%s",
+                    record.record_id,
+                    exc_info=True,
+                )
         await self._store.mark_outbox_delivered(record.record_id)
 
     async def _mark_records_delivered(self, record: OutboxRecord) -> None:
