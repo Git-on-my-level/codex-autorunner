@@ -1856,11 +1856,6 @@ class TelegramBotService(
         self._spawn_task(wrapped())
         return None
 
-    def _queue_status_key(
-        self, chat_id: int, thread_id: Optional[int]
-    ) -> tuple[int, Optional[int]]:
-        return (chat_id, thread_id)
-
     def _get_queue_status_message_id(
         self, chat_id: int, thread_id: Optional[int]
     ) -> Optional[int]:

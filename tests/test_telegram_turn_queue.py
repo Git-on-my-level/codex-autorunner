@@ -113,7 +113,6 @@ class _RouterStub:
             key,
             SimpleNamespace(
                 queue=SimpleNamespace(
-                    pending_item_ids=lambda: [],
                     pending_items=lambda: [],
                 )
             ),
@@ -556,7 +555,6 @@ async def test_terminal_delivery_requeues_pending_placeholders_in_order() -> Non
     runtimes = {
         "10:11": SimpleNamespace(
             queue=SimpleNamespace(
-                pending_item_ids=lambda: ["2", "3"],
                 pending_items=lambda: [
                     {"item_id": "2", "preview": "Second request"},
                     {"item_id": "3", "preview": "Third request"},

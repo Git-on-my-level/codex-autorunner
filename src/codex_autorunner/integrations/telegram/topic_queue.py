@@ -31,16 +31,6 @@ class TopicQueue:
     def pending(self) -> int:
         return self._queue.qsize()
 
-    def pending_item_ids(self) -> list[str]:
-        item_ids: list[str] = []
-        for item in list(getattr(self._queue, "_queue", ())):
-            if item is _QUEUE_STOP:
-                continue
-            entry = cast(_TopicQueueEntry, item)
-            if isinstance(entry.item_id, str) and entry.item_id:
-                item_ids.append(entry.item_id)
-        return item_ids
-
     def pending_items(self) -> list[dict[str, str]]:
         items: list[dict[str, str]] = []
         for item in list(getattr(self._queue, "_queue", ())):
