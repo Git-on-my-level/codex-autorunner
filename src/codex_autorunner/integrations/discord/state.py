@@ -313,6 +313,9 @@ class DiscordStateStore:
     async def enqueue_outbox(self, record: OutboxRecord) -> OutboxRecord:
         return await self._run(self._upsert_outbox_sync, record)  # type: ignore[no-any-return]
 
+    async def delete_outbox(self, record_id: str) -> None:
+        await self._run(self._delete_outbox_sync, record_id)
+
     async def get_outbox(self, record_id: str) -> Optional[OutboxRecord]:
         return await self._run(self._get_outbox_sync, record_id)  # type: ignore[no-any-return]
 

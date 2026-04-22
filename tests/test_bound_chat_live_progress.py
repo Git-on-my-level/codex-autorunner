@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from codex_autorunner.core.orchestration.chat_operation_state import ChatOperationState
 from codex_autorunner.core.pma_notification_store import PmaNotificationStore
 from codex_autorunner.core.ports.run_event import (
     RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
@@ -13,9 +14,12 @@ from codex_autorunner.core.ports.run_event import (
 )
 from codex_autorunner.integrations.chat import bound_live_progress as progress_module
 from codex_autorunner.integrations.chat.bound_live_progress import (
+    bound_chat_progress_delete_record_id,
+    bound_chat_progress_edit_operation_id,
     bound_chat_progress_send_record_id,
     build_bound_chat_live_progress_session,
     build_bound_chat_progress_cleanup_metadata,
+    mark_bound_chat_progress_delivered,
 )
 from codex_autorunner.integrations.discord.config import DiscordBotConfig
 from codex_autorunner.integrations.discord.service import DiscordBotService
@@ -103,6 +107,39 @@ async def test_discord_bound_live_progress_enqueues_send_edit_and_delete(
             record.operation == "edit" and record.message_id == "msg-1"
             for record in records
         )
+        stale_edit_operation_id = bound_chat_progress_edit_operation_id(
+            surface_kind="discord",
+            surface_key="channel-1",
+            managed_thread_id="thread-1",
+            managed_turn_id="turn-1",
+        )
+        stale_delete_record_id = bound_chat_progress_delete_record_id(
+            surface_kind="discord",
+            surface_key="channel-1",
+            managed_thread_id="thread-1",
+            managed_turn_id="turn-1",
+        )
+        await store.enqueue_outbox(
+            DiscordOutboxRecord(
+                record_id=f"{stale_edit_operation_id}:stale-edit",
+                channel_id="channel-1",
+                message_id="msg-1",
+                operation="edit",
+                payload_json={"content": "working 1"},
+                created_at="2026-01-01T00:00:01Z",
+                operation_id=stale_edit_operation_id,
+            )
+        )
+        await store.enqueue_outbox(
+            DiscordOutboxRecord(
+                record_id=stale_delete_record_id,
+                channel_id="channel-1",
+                message_id="msg-1",
+                operation="delete",
+                payload_json={},
+                created_at="2026-01-01T00:00:01Z",
+            )
+        )
 
         await session.finalize(status="ok")
         records = await store.list_outbox()
@@ -110,6 +147,10 @@ async def test_discord_bound_live_progress_enqueues_send_edit_and_delete(
             record.operation == "delete" and record.message_id == "msg-1"
             for record in records
         )
+        assert await store.get_outbox(f"{stale_edit_operation_id}:stale-edit") is None
+        delete_record = await store.get_outbox(stale_delete_record_id)
+        assert delete_record is not None
+        assert delete_record.created_at != "2026-01-01T00:00:01Z"
         await session.close()
     finally:
         await store.close()
@@ -167,6 +208,39 @@ async def test_discord_service_cleanup_retires_progress_from_service_outbox_deli
             created_at="2026-01-01T00:00:00Z",
         )
         await store.enqueue_outbox(progress_record)
+        stale_edit_operation_id = bound_chat_progress_edit_operation_id(
+            surface_kind="discord",
+            surface_key="channel-1",
+            managed_thread_id="thread-1",
+            managed_turn_id="turn-1",
+        )
+        stale_delete_record_id = bound_chat_progress_delete_record_id(
+            surface_kind="discord",
+            surface_key="channel-1",
+            managed_thread_id="thread-1",
+            managed_turn_id="turn-1",
+        )
+        await store.enqueue_outbox(
+            DiscordOutboxRecord(
+                record_id=f"{stale_edit_operation_id}:stale-edit",
+                channel_id="channel-1",
+                message_id="progress-msg-1",
+                operation="edit",
+                payload_json={"content": "working 1"},
+                created_at="2026-01-01T00:00:00Z",
+                operation_id=stale_edit_operation_id,
+            )
+        )
+        await store.enqueue_outbox(
+            DiscordOutboxRecord(
+                record_id=stale_delete_record_id,
+                channel_id="channel-1",
+                message_id="progress-msg-1",
+                operation="delete",
+                payload_json={},
+                created_at="2026-01-01T00:00:00Z",
+            )
+        )
 
         async def _noop_delivery(*args: object, **kwargs: object) -> None:
             _ = args, kwargs
@@ -223,6 +297,8 @@ async def test_discord_service_cleanup_retires_progress_from_service_outbox_deli
                 f"discord:managed-thread-progress-cleanup:{progress_send_record_id}",
             )
         ]
+        assert await store.get_outbox(f"{stale_edit_operation_id}:stale-edit") is None
+        assert await store.get_outbox(stale_delete_record_id) is None
     finally:
         await service._store.close()
         await service._rest.close()
@@ -271,6 +347,45 @@ async def test_telegram_service_cleanup_retires_progress_from_service_outbox_del
             message_id=None,
         )
         await store.enqueue_outbox(progress_record)
+        stale_edit_operation_id = bound_chat_progress_edit_operation_id(
+            surface_kind="telegram",
+            surface_key="-1001:77",
+            managed_thread_id="thread-1",
+            managed_turn_id="turn-1",
+        )
+        stale_delete_record_id = bound_chat_progress_delete_record_id(
+            surface_kind="telegram",
+            surface_key="-1001:77",
+            managed_thread_id="thread-1",
+            managed_turn_id="turn-1",
+        )
+        await store.enqueue_outbox(
+            TelegramOutboxRecord(
+                record_id=f"{stale_edit_operation_id}:stale-edit",
+                chat_id=-1001,
+                thread_id=77,
+                reply_to_message_id=None,
+                placeholder_message_id=None,
+                text="working 1",
+                created_at="2026-01-01T00:00:00Z",
+                operation="edit",
+                message_id=77,
+                operation_id=stale_edit_operation_id,
+            )
+        )
+        await store.enqueue_outbox(
+            TelegramOutboxRecord(
+                record_id=stale_delete_record_id,
+                chat_id=-1001,
+                thread_id=77,
+                reply_to_message_id=None,
+                placeholder_message_id=None,
+                text="",
+                created_at="2026-01-01T00:00:00Z",
+                operation="delete",
+                message_id=77,
+            )
+        )
 
         await service._handle_telegram_outbox_delivery(progress_record, 77)
         await service._handle_telegram_outbox_delivery(
@@ -310,8 +425,475 @@ async def test_telegram_service_cleanup_retires_progress_from_service_outbox_del
         assert progress_send_record_id in cleanup_records[0].record_id
         assert cleanup_records[0].outbox_key is not None
         assert progress_send_record_id in cleanup_records[0].outbox_key
+        assert await store.get_outbox(f"{stale_edit_operation_id}:stale-edit") is None
+        assert await store.get_outbox(stale_delete_record_id) is None
     finally:
         await service._bot.close()
+
+
+@pytest.mark.anyio
+async def test_telegram_service_does_not_mark_failed_outbox_delivery_as_delivered(
+    tmp_path: Path,
+) -> None:
+    config = _telegram_config(tmp_path)
+    service = TelegramBotService(config, hub_root=tmp_path)
+    state_changes: list[dict[str, object]] = []
+
+    async def _mark_chat_operation_state(
+        operation_id: str | None,
+        *,
+        state: object,
+        **changes: object,
+    ) -> None:
+        state_changes.append(
+            {
+                "operation_id": operation_id,
+                "state": state,
+                **changes,
+            }
+        )
+
+    service._mark_chat_operation_state = _mark_chat_operation_state  # type: ignore[method-assign]
+    try:
+        await service._handle_telegram_outbox_delivery(
+            TelegramOutboxRecord(
+                record_id="terminal:telegram:failed",
+                chat_id=123,
+                thread_id=77,
+                reply_to_message_id=None,
+                placeholder_message_id=None,
+                text="final reply",
+                created_at="2026-01-01T00:00:00Z",
+                operation="send",
+                message_id=None,
+                operation_id="op-123",
+                delivery_metadata=build_bound_chat_progress_cleanup_metadata(
+                    surface_kind="telegram",
+                    surface_key="123:77",
+                    managed_thread_id="thread-1",
+                    managed_turn_id="turn-1",
+                ),
+            ),
+            None,
+        )
+
+        assert state_changes == [
+            {
+                "operation_id": "op-123",
+                "state": ChatOperationState.FAILED,
+                "delivery_state": "failed",
+                "terminal_outcome": "failed",
+            }
+        ]
+    finally:
+        await service._bot.close()
+
+
+@pytest.mark.anyio
+async def test_telegram_service_marks_edit_delivery_without_message_id_completed(
+    tmp_path: Path,
+) -> None:
+    config = _telegram_config(tmp_path)
+    service = TelegramBotService(config, hub_root=tmp_path)
+    state_changes: list[dict[str, object]] = []
+
+    async def _mark_chat_operation_state(
+        operation_id: str | None,
+        *,
+        state: object,
+        **changes: object,
+    ) -> None:
+        state_changes.append(
+            {
+                "operation_id": operation_id,
+                "state": state,
+                **changes,
+            }
+        )
+
+    service._mark_chat_operation_state = _mark_chat_operation_state  # type: ignore[method-assign]
+    try:
+        await service._handle_telegram_outbox_delivery(
+            TelegramOutboxRecord(
+                record_id="terminal:telegram:edit",
+                chat_id=123,
+                thread_id=77,
+                reply_to_message_id=None,
+                placeholder_message_id=None,
+                text="updated",
+                created_at="2026-01-01T00:00:00Z",
+                operation="edit",
+                message_id=55,
+                operation_id="op-edit-1",
+            ),
+            None,
+        )
+
+        assert state_changes == [
+            {
+                "operation_id": "op-edit-1",
+                "state": ChatOperationState.COMPLETED,
+                "delivery_state": "delivered",
+            }
+        ]
+    finally:
+        await service._bot.close()
+
+
+@pytest.mark.anyio
+async def test_telegram_service_failed_terminal_send_retires_progress_anchor(
+    tmp_path: Path,
+) -> None:
+    config = _telegram_config(tmp_path)
+    service = TelegramBotService(config, hub_root=tmp_path)
+
+    progress_send_record_id = bound_chat_progress_send_record_id(
+        surface_kind="telegram",
+        surface_key="123:77",
+        managed_thread_id="thread-1",
+        managed_turn_id="turn-1",
+    )
+    PmaNotificationStore(tmp_path).record_notification(
+        correlation_id="managed-thread-progress:thread-1:turn-1:telegram",
+        source_kind="managed_thread_live_progress",
+        delivery_mode="bound",
+        surface_kind="telegram",
+        surface_key="123:77",
+        delivery_record_id=progress_send_record_id,
+        managed_thread_id="thread-1",
+        context={"managed_turn_id": "turn-1"},
+    )
+    mark_bound_chat_progress_delivered(
+        hub_root=tmp_path,
+        delivery_record_id=progress_send_record_id,
+        delivered_message_id="77",
+    )
+    try:
+        await service._handle_telegram_outbox_delivery(
+            TelegramOutboxRecord(
+                record_id="terminal:telegram:failed",
+                chat_id=123,
+                thread_id=77,
+                reply_to_message_id=None,
+                placeholder_message_id=None,
+                text="final reply",
+                created_at="2026-01-01T00:00:00Z",
+                operation="send",
+                message_id=None,
+                operation_id="op-123",
+                delivery_metadata=build_bound_chat_progress_cleanup_metadata(
+                    surface_kind="telegram",
+                    surface_key="123:77",
+                    managed_thread_id="thread-1",
+                    managed_turn_id="turn-1",
+                ),
+            ),
+            None,
+        )
+
+        cleanup_record = await service._store.get_outbox(
+            f"managed-thread-progress-failure:{progress_send_record_id}"
+        )
+        assert cleanup_record is not None
+        assert cleanup_record.operation == "edit"
+        assert cleanup_record.message_id == 77
+        assert (
+            cleanup_record.text
+            == "Status: this turn finished, but Telegram failed before the final reply was delivered. Please retry if needed."
+        )
+    finally:
+        await service._bot.close()
+
+
+@pytest.mark.anyio
+async def test_telegram_service_failed_terminal_send_cancels_pending_progress_send(
+    tmp_path: Path,
+) -> None:
+    config = _telegram_config(tmp_path)
+    service = TelegramBotService(config, hub_root=tmp_path)
+
+    progress_send_record_id = bound_chat_progress_send_record_id(
+        surface_kind="telegram",
+        surface_key="123:77",
+        managed_thread_id="thread-1",
+        managed_turn_id="turn-1",
+    )
+    await service._store.enqueue_outbox(
+        TelegramOutboxRecord(
+            record_id=progress_send_record_id,
+            chat_id=123,
+            thread_id=77,
+            reply_to_message_id=None,
+            placeholder_message_id=None,
+            text="working",
+            created_at="2026-01-01T00:00:00Z",
+            operation="send",
+            message_id=None,
+        )
+    )
+    try:
+        await service._handle_telegram_outbox_delivery(
+            TelegramOutboxRecord(
+                record_id="terminal:telegram:failed-pending-progress",
+                chat_id=123,
+                thread_id=77,
+                reply_to_message_id=None,
+                placeholder_message_id=None,
+                text="final reply",
+                created_at="2026-01-01T00:00:01Z",
+                operation="send",
+                message_id=None,
+                delivery_metadata=build_bound_chat_progress_cleanup_metadata(
+                    surface_kind="telegram",
+                    surface_key="123:77",
+                    managed_thread_id="thread-1",
+                    managed_turn_id="turn-1",
+                ),
+            ),
+            None,
+        )
+
+        assert await service._store.get_outbox(progress_send_record_id) is None
+    finally:
+        await service._bot.close()
+
+
+@pytest.mark.anyio
+async def test_telegram_service_failed_terminal_send_retires_stale_progress_updates(
+    tmp_path: Path,
+) -> None:
+    config = _telegram_config(tmp_path)
+    service = TelegramBotService(config, hub_root=tmp_path)
+
+    progress_send_record_id = bound_chat_progress_send_record_id(
+        surface_kind="telegram",
+        surface_key="123:77",
+        managed_thread_id="thread-1",
+        managed_turn_id="turn-1",
+    )
+    stale_edit_operation_id = bound_chat_progress_edit_operation_id(
+        surface_kind="telegram",
+        surface_key="123:77",
+        managed_thread_id="thread-1",
+        managed_turn_id="turn-1",
+    )
+    stale_delete_record_id = bound_chat_progress_delete_record_id(
+        surface_kind="telegram",
+        surface_key="123:77",
+        managed_thread_id="thread-1",
+        managed_turn_id="turn-1",
+    )
+    PmaNotificationStore(tmp_path).record_notification(
+        correlation_id="managed-thread-progress:thread-1:turn-1:telegram:stale",
+        source_kind="managed_thread_live_progress",
+        delivery_mode="bound",
+        surface_kind="telegram",
+        surface_key="123:77",
+        delivery_record_id=progress_send_record_id,
+        managed_thread_id="thread-1",
+        context={"managed_turn_id": "turn-1"},
+    )
+    mark_bound_chat_progress_delivered(
+        hub_root=tmp_path,
+        delivery_record_id=progress_send_record_id,
+        delivered_message_id="77",
+    )
+    await service._store.enqueue_outbox(
+        TelegramOutboxRecord(
+            record_id=f"{stale_edit_operation_id}:stale-edit",
+            chat_id=123,
+            thread_id=77,
+            reply_to_message_id=None,
+            placeholder_message_id=None,
+            text="working 1",
+            created_at="2026-01-01T00:00:00Z",
+            operation="edit",
+            message_id=77,
+            operation_id=stale_edit_operation_id,
+        )
+    )
+    await service._store.enqueue_outbox(
+        TelegramOutboxRecord(
+            record_id=stale_delete_record_id,
+            chat_id=123,
+            thread_id=77,
+            reply_to_message_id=None,
+            placeholder_message_id=None,
+            text="",
+            created_at="2026-01-01T00:00:01Z",
+            operation="delete",
+            message_id=77,
+        )
+    )
+
+    try:
+        await service._handle_telegram_outbox_delivery(
+            TelegramOutboxRecord(
+                record_id="terminal:telegram:failed-with-stale-progress",
+                chat_id=123,
+                thread_id=77,
+                reply_to_message_id=None,
+                placeholder_message_id=None,
+                text="final reply",
+                created_at="2026-01-01T00:00:02Z",
+                operation="send",
+                message_id=None,
+                delivery_metadata=build_bound_chat_progress_cleanup_metadata(
+                    surface_kind="telegram",
+                    surface_key="123:77",
+                    managed_thread_id="thread-1",
+                    managed_turn_id="turn-1",
+                ),
+            ),
+            None,
+        )
+
+        assert (
+            await service._store.get_outbox(f"{stale_edit_operation_id}:stale-edit")
+            is None
+        )
+        assert await service._store.get_outbox(stale_delete_record_id) is None
+        failure_record = await service._store.get_outbox(
+            f"managed-thread-progress-failure:{progress_send_record_id}"
+        )
+        assert failure_record is not None
+        assert failure_record.operation == "edit"
+    finally:
+        await service._bot.close()
+
+
+@pytest.mark.anyio
+async def test_discord_service_failed_terminal_send_retires_stale_progress_updates(
+    tmp_path: Path,
+) -> None:
+    config: DiscordBotConfig = discord_config(tmp_path)
+    service = DiscordBotService(
+        config,
+        logger=logging.getLogger("test.discord.progress.failure_cleanup"),
+        state_store=DiscordStateStore(config.state_file),
+    )
+    await service._store.initialize()
+
+    progress_send_record_id = bound_chat_progress_send_record_id(
+        surface_kind="discord",
+        surface_key="channel-1",
+        managed_thread_id="thread-1",
+        managed_turn_id="turn-1",
+    )
+    stale_edit_operation_id = bound_chat_progress_edit_operation_id(
+        surface_kind="discord",
+        surface_key="channel-1",
+        managed_thread_id="thread-1",
+        managed_turn_id="turn-1",
+    )
+    stale_delete_record_id = bound_chat_progress_delete_record_id(
+        surface_kind="discord",
+        surface_key="channel-1",
+        managed_thread_id="thread-1",
+        managed_turn_id="turn-1",
+    )
+    PmaNotificationStore(tmp_path).record_notification(
+        correlation_id="managed-thread-progress:thread-1:turn-1:discord:stale",
+        source_kind="managed_thread_live_progress",
+        delivery_mode="bound",
+        surface_kind="discord",
+        surface_key="channel-1",
+        delivery_record_id=progress_send_record_id,
+        managed_thread_id="thread-1",
+        context={"managed_turn_id": "turn-1"},
+    )
+    mark_bound_chat_progress_delivered(
+        hub_root=tmp_path,
+        delivery_record_id=progress_send_record_id,
+        delivered_message_id="progress-msg-1",
+    )
+    await service._store.enqueue_outbox(
+        DiscordOutboxRecord(
+            record_id=f"{stale_edit_operation_id}:stale-edit",
+            channel_id="channel-1",
+            message_id="progress-msg-1",
+            operation="edit",
+            payload_json={"content": "working 1"},
+            created_at="2026-01-01T00:00:00Z",
+            operation_id=stale_edit_operation_id,
+        )
+    )
+    await service._store.enqueue_outbox(
+        DiscordOutboxRecord(
+            record_id=stale_delete_record_id,
+            channel_id="channel-1",
+            message_id="progress-msg-1",
+            operation="delete",
+            payload_json={},
+            created_at="2026-01-01T00:00:01Z",
+        )
+    )
+    try:
+        await service._handle_discord_outbox_delivery(
+            DiscordOutboxRecord(
+                record_id="terminal:discord:failed-with-stale-progress",
+                channel_id="channel-1",
+                message_id=None,
+                operation="send",
+                payload_json={
+                    "content": "final reply",
+                    "_codex_autorunner_cleanup": build_bound_chat_progress_cleanup_metadata(
+                        surface_kind="discord",
+                        surface_key="channel-1",
+                        managed_thread_id="thread-1",
+                        managed_turn_id="turn-1",
+                    ),
+                },
+                created_at="2026-01-01T00:00:02Z",
+            ),
+            None,
+        )
+
+        assert (
+            await service._store.get_outbox(f"{stale_edit_operation_id}:stale-edit")
+            is None
+        )
+        assert await service._store.get_outbox(stale_delete_record_id) is None
+        failure_record = await service._store.get_outbox(
+            f"managed-thread-progress-failure:{progress_send_record_id}"
+        )
+        assert failure_record is not None
+        assert failure_record.operation == "edit"
+        assert failure_record.message_id == "progress-msg-1"
+    finally:
+        await service._store.close()
+        await service._rest.close()
+
+
+@pytest.mark.anyio
+async def test_telegram_run_polling_recovers_managed_thread_executions_on_startup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _telegram_config(tmp_path)
+    service = TelegramBotService(config, hub_root=tmp_path)
+    calls: list[str] = []
+
+    async def _recover(_service: object) -> None:
+        calls.append("recover")
+
+    async def _run_chat_core() -> None:
+        calls.append("run")
+
+    async def _perform_hub_handshake() -> bool:
+        return True
+
+    monkeypatch.setattr(service, "_perform_hub_handshake", _perform_hub_handshake)
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.telegram.service._recover_managed_thread_executions_on_startup_impl",
+        _recover,
+    )
+    monkeypatch.setattr(service._chat_core, "run", _run_chat_core)
+
+    await service.run_polling()
+
+    assert calls == ["recover", "run"]
+    await service._bot.close()
 
 
 @pytest.mark.anyio
@@ -415,6 +997,43 @@ async def test_bound_live_progress_isolates_adapter_failures(
     assert any(call.startswith("publish:") for call in healthy.calls)
     assert "complete_success" in healthy.calls
     assert "close" in healthy.calls
+
+
+@pytest.mark.anyio
+async def test_bound_live_progress_skips_malformed_bindings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeBindingStore:
+        def __init__(self, _hub_root: Path) -> None:
+            _ = _hub_root
+
+        def list_bindings(self, **_: object) -> list[object]:
+            return [
+                type(
+                    "Binding",
+                    (),
+                    {"surface_kind": "telegram", "surface_key": "bad-key"},
+                )(),
+                type(
+                    "Binding",
+                    (),
+                    {"surface_kind": "discord", "surface_key": "channel-1"},
+                )(),
+            ]
+
+    monkeypatch.setattr(progress_module, "OrchestrationBindingStore", FakeBindingStore)
+    session = build_bound_chat_live_progress_session(
+        hub_root=tmp_path,
+        raw_config={},
+        managed_thread_id="thread-1",
+        managed_turn_id="turn-1",
+        agent="codex",
+        model="gpt-5",
+    )
+
+    assert session.surface_targets == (("discord", "channel-1"),)
+    await session.close()
 
 
 @pytest.mark.anyio

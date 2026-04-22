@@ -213,7 +213,8 @@ async def test_telegram_queue_visibility_before_recovery(
         await asyncio.sleep(0)
         await asyncio.sleep(0)
         assert any(
-            "Queued (waiting for available worker...)" in str(item.get("text") or "")
+            ("Queued (waiting for available worker...)" in str(item.get("text") or ""))
+            or ("Queued requests (1)" in str(item.get("text") or ""))
             for item in harness.bot.messages
         )
         runtime.current_turn_id = None

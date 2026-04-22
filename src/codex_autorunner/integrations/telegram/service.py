@@ -68,8 +68,8 @@ from ..app_server.event_buffer import AppServerEventBuffer
 from ..app_server.supervisor import WorkspaceAppServerSupervisor
 from ..chat.bound_live_progress import (
     bound_chat_progress_delivered_message_id,
-    bound_chat_progress_send_record_id,
     mark_bound_chat_progress_delivered,
+    retire_bound_chat_progress_outbox_records,
 )
 from ..chat.channel_directory import ChannelDirectoryStore
 from ..chat.collaboration_policy import (
@@ -143,6 +143,9 @@ from .helpers import (
     _split_topic_key,
     _telegram_lock_path,
     _with_conversation_id,
+)
+from .managed_thread_startup_recovery import (
+    recover_managed_thread_executions_on_startup as _recover_managed_thread_executions_on_startup_impl,
 )
 from .notifications import TelegramNotificationHandlers
 from .outbox import TelegramOutboxManager
@@ -602,16 +605,89 @@ class TelegramBotService(
         delivered_id_str = (
             str(delivered_message_id) if isinstance(delivered_message_id, int) else None
         )
+        operation = str(record.operation or "").strip().lower()
+        delivered_without_message_id = operation in {"edit", "delete"}
+        cleanup_payload = record.delivery_metadata
         if record.operation_id:
-            await self._mark_chat_operation_state(
-                record.operation_id,
-                state=ChatOperationState.COMPLETED,
-                delivery_state="delivered",
-                anchor_ref=delivered_id_str,
-            )
+            if delivered_id_str is None and not delivered_without_message_id:
+                await self._mark_chat_operation_state(
+                    record.operation_id,
+                    state=ChatOperationState.FAILED,
+                    delivery_state="failed",
+                    terminal_outcome="failed",
+                )
+            else:
+                state_changes: dict[str, object] = {
+                    "delivery_state": "delivered",
+                }
+                if delivered_id_str is not None:
+                    state_changes["anchor_ref"] = delivered_id_str
+                await self._mark_chat_operation_state(
+                    record.operation_id,
+                    state=ChatOperationState.COMPLETED,
+                    **state_changes,
+                )
         if delivered_id_str is None:
-            pass
-        elif self._hub_client is None:
+            if (
+                operation == "send"
+                and isinstance(cleanup_payload, dict)
+                and cleanup_payload.get("kind") == "managed_thread_live_progress"
+            ):
+                surface_key = str(cleanup_payload.get("surface_key") or "").strip()
+                progress_send_record_id = (
+                    await retire_bound_chat_progress_outbox_records(
+                        store=self._store,
+                        surface_kind="telegram",
+                        surface_key=surface_key,
+                        managed_thread_id=str(
+                            cleanup_payload.get("managed_thread_id") or ""
+                        ).strip(),
+                        managed_turn_id=str(
+                            cleanup_payload.get("managed_turn_id") or ""
+                        ).strip(),
+                    )
+                )
+                raw_progress_message_id = bound_chat_progress_delivered_message_id(
+                    hub_root=self._config.root,
+                    delivery_record_id=progress_send_record_id,
+                )
+                if raw_progress_message_id:
+                    try:
+                        progress_message_id = int(raw_progress_message_id)
+                        await self._store.enqueue_outbox(
+                            OutboxRecord(
+                                record_id=(
+                                    "managed-thread-progress-failure:"
+                                    f"{progress_send_record_id}"
+                                ),
+                                chat_id=record.chat_id,
+                                thread_id=record.thread_id,
+                                reply_to_message_id=None,
+                                placeholder_message_id=None,
+                                text=(
+                                    "Status: this turn finished, but Telegram failed "
+                                    "before the final reply was delivered. Please "
+                                    "retry if needed."
+                                ),
+                                created_at=now_iso(),
+                                operation="edit",
+                                message_id=progress_message_id,
+                                outbox_key=(
+                                    "managed-thread-progress-failure:"
+                                    f"{progress_send_record_id}"
+                                ),
+                            )
+                        )
+                    except ValueError:
+                        log_event(
+                            self._logger,
+                            logging.WARNING,
+                            "telegram.outbox.progress_failure_cleanup_failed",
+                            record_id=record.record_id,
+                            progress_message_id=raw_progress_message_id,
+                        )
+            return
+        if self._hub_client is None:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -658,15 +734,13 @@ class TelegramBotService(
         surface_key = str(cleanup_payload.get("surface_key") or "").strip()
         if not managed_thread_id or not managed_turn_id or not surface_key:
             return
-        progress_send_record_id = str(
-            cleanup_payload.get("progress_send_record_id")
-            or bound_chat_progress_send_record_id(
-                surface_kind="telegram",
-                surface_key=surface_key,
-                managed_thread_id=managed_thread_id,
-                managed_turn_id=managed_turn_id,
-            )
-        ).strip()
+        progress_send_record_id = await retire_bound_chat_progress_outbox_records(
+            store=self._store,
+            surface_kind="telegram",
+            surface_key=surface_key,
+            managed_thread_id=managed_thread_id,
+            managed_turn_id=managed_turn_id,
+        )
         progress_message_id: Optional[int] = None
         raw_progress_message_id = bound_chat_progress_delivered_message_id(
             hub_root=self._config.root,
@@ -1097,6 +1171,7 @@ class TelegramBotService(
         handshake_ok = await self._perform_hub_handshake()
         if not handshake_ok:
             raise SystemExit(1)
+        await _recover_managed_thread_executions_on_startup_impl(self)
         await self._chat_core.run()
 
     @property

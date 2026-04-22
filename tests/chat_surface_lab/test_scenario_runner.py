@@ -62,6 +62,10 @@ async def test_runner_executes_queued_visibility_matrix(
     assert any(
         budget.budget_id == "queue_visible" for budget in result.observed_budgets
     )
+    assert not any(
+        record.get("event") == "discord.background_task.shutdown_timeout"
+        for record in discord.log_records
+    )
 
 
 @pytest.mark.anyio

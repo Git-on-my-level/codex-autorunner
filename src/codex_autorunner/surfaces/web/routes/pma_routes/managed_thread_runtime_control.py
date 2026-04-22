@@ -23,6 +23,9 @@ from .....integrations.app_server.event_buffer import AppServerEventBuffer
 from .....integrations.chat.bound_live_progress import (
     build_bound_chat_progress_cleanup_metadata,
 )
+from .....integrations.chat.managed_thread_startup_recovery import (
+    find_surface_key_for_running_execution,
+)
 from .....integrations.chat.managed_thread_turns import (
     ensure_managed_thread_queue_worker as ensure_shared_managed_thread_queue_worker,
 )
@@ -307,16 +310,22 @@ async def restart_queue_workers(
         ensure_queue_worker_callback(app, managed_thread_id)
 
 
-def _has_bound_chat_surface(
-    binding_store: OrchestrationBindingStore, managed_thread_id: str
+def _has_owning_bound_chat_surface(
+    binding_store: OrchestrationBindingStore,
+    managed_thread_id: str,
+    *,
+    thread_store: PmaThreadStore,
 ) -> bool:
     return any(
-        binding.surface_kind in BOUND_CHAT_SURFACE_KINDS
-        for binding in binding_store.list_bindings(
-            thread_target_id=managed_thread_id,
-            include_disabled=False,
+        find_surface_key_for_running_execution(
+            binding_store,
+            thread_store,
+            managed_thread_id=managed_thread_id,
+            surface_kind=surface_kind,
             limit=1000,
         )
+        is not None
+        for surface_kind in BOUND_CHAT_SURFACE_KINDS
     )
 
 
@@ -384,8 +393,10 @@ async def recover_orphaned_executions(
                     execution = (
                         service.get_running_execution(managed_thread_id) or execution
                     )
-            if _has_bound_chat_surface(
-                binding_store, managed_thread_id
+            if _has_owning_bound_chat_surface(
+                binding_store,
+                managed_thread_id,
+                thread_store=thread_store,
             ) and _is_chat_origin_running_execution(thread_store, managed_thread_id):
                 continue
             has_turn = getattr(app_server_events, "has_turn", None)

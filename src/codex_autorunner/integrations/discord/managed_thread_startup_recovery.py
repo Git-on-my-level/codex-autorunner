@@ -1,111 +1,88 @@
 from __future__ import annotations
 
-import asyncio
-import logging
 from pathlib import Path
 from typing import Any
 
-from ...core.logging_utils import log_event
-from ...integrations.chat.managed_thread_turns import (
-    ManagedThreadFinalizationResult,
-    handoff_managed_thread_final_delivery,
+from ...integrations.chat.managed_thread_startup_recovery import (
+    recover_managed_thread_executions_on_startup as recover_surface_managed_thread_executions_on_startup,
 )
 from .managed_thread_delivery import build_discord_managed_thread_durable_delivery_hooks
+from .managed_thread_routing import (
+    _build_discord_managed_thread_coordinator,
+    _build_discord_queue_worker_hooks,
+)
 from .message_turns import build_discord_thread_orchestration_service
+from .progress_leases import (
+    _get_discord_thread_queue_task_map,
+    _spawn_discord_progress_background_task,
+)
 
 
 async def recover_managed_thread_executions_on_startup(service: Any) -> None:
-    orchestration_service = build_discord_thread_orchestration_service(service)
-    thread_store = getattr(orchestration_service, "thread_store", None)
-    list_running = getattr(
-        thread_store, "list_thread_ids_with_running_executions", None
-    )
-    if not callable(list_running):
-        return
+    public_execution_error = "Discord PMA turn failed"
 
-    recovered = 0
-    failed = 0
-    for managed_thread_id in list_running(limit=None):
-        try:
-            thread = orchestration_service.get_thread_target(managed_thread_id)
-            execution = orchestration_service.get_running_execution(managed_thread_id)
-            if thread is None or execution is None:
-                continue
-            bindings = orchestration_service.list_bindings(
-                thread_target_id=managed_thread_id,
-                surface_kind="discord",
-                include_disabled=False,
-                limit=5,
-            )
-            if not bindings:
-                continue
-            channel_id = next(
-                (
-                    surface_key
-                    for binding in bindings
-                    if isinstance(
-                        surface_key := getattr(binding, "surface_key", None), str
-                    )
-                    and surface_key.strip()
-                ),
-                None,
-            )
-            if channel_id is None or not thread.workspace_root:
-                continue
-
-            recovered_execution = (
-                await orchestration_service.recover_running_execution_from_harness(
-                    managed_thread_id,
-                    default_error="Discord PMA turn failed",
-                )
-            )
-            if recovered_execution is None:
-                recovered_execution = (
-                    orchestration_service.recover_running_execution_after_restart(
-                        managed_thread_id
-                    )
-                )
-            if recovered_execution is None:
-                continue
-
-            finalized = ManagedThreadFinalizationResult(
-                status=recovered_execution.status,
-                assistant_text=recovered_execution.output_text or "",
-                error=recovered_execution.error,
-                managed_thread_id=managed_thread_id,
-                managed_turn_id=recovered_execution.execution_id,
-                backend_thread_id=thread.backend_thread_id,
-                token_usage=None,
-            )
-            delivery = build_discord_managed_thread_durable_delivery_hooks(
-                service,
-                channel_id=channel_id,
-                managed_thread_id=managed_thread_id,
-                workspace_root=Path(thread.workspace_root),
-                public_execution_error="Discord PMA turn failed",
-            )
-            await handoff_managed_thread_final_delivery(
-                finalized,
-                delivery=delivery,
-                logger=service._logger,
-            )
-            recovered += 1
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            failed += 1
-            log_event(
-                service._logger,
-                logging.WARNING,
-                "discord.turn.startup_execution_recovery_failed",
-                managed_thread_id=managed_thread_id,
-                exc=exc,
-            )
-    if recovered or failed:
-        log_event(
-            service._logger,
-            logging.INFO,
-            "discord.turn.startup_execution_recovery_finished",
-            recovered=recovered,
-            failed=failed,
+    def _recover_pending_queue(
+        owner: Any,
+        orchestration_service: Any,
+        surface_key: str,
+        managed_thread_id: str,
+        thread: Any,
+    ) -> bool:
+        workspace_root = getattr(thread, "workspace_root", None)
+        if not workspace_root:
+            return False
+        coordinator = _build_discord_managed_thread_coordinator(
+            service=owner,
+            orchestration_service=orchestration_service,
+            channel_id=surface_key,
+            public_execution_error=public_execution_error,
+            timeout_error="Discord PMA turn timed out",
+            interrupted_error="Discord PMA turn interrupted",
+            pma_enabled=True,
         )
+        queue_worker_hooks = _build_discord_queue_worker_hooks(
+            owner,
+            channel_id=surface_key,
+            managed_thread_id=managed_thread_id,
+            workspace_root=Path(str(workspace_root)),
+            public_execution_error=public_execution_error,
+        )
+        coordinator.ensure_queue_worker(
+            task_map=_get_discord_thread_queue_task_map(owner),
+            managed_thread_id=managed_thread_id,
+            spawn_task=lambda coro: _spawn_discord_progress_background_task(
+                owner,
+                coro,
+                managed_thread_id=managed_thread_id,
+                failure_note=(
+                    "Status: this progress message lost its queue worker and is "
+                    "no longer live. Please retry if needed."
+                ),
+                orphaned=True,
+                reconcile_on_cancel=True,
+                await_on_shutdown=True,
+            ),
+            hooks=queue_worker_hooks,
+        )
+        return True
+
+    await recover_surface_managed_thread_executions_on_startup(
+        service,
+        surface_kind="discord",
+        build_orchestration_service=build_discord_thread_orchestration_service,
+        build_durable_delivery=lambda owner, surface_key, managed_thread_id, thread, public_execution_error: (
+            None
+            if not getattr(thread, "workspace_root", None)
+            else build_discord_managed_thread_durable_delivery_hooks(
+                owner,
+                channel_id=surface_key,
+                managed_thread_id=managed_thread_id,
+                workspace_root=Path(str(thread.workspace_root)),
+                public_execution_error=public_execution_error,
+            )
+        ),
+        recover_pending_queue=_recover_pending_queue,
+        public_execution_error=public_execution_error,
+        failure_event_name="discord.turn.startup_execution_recovery_failed",
+        finished_event_name="discord.turn.startup_execution_recovery_finished",
+    )

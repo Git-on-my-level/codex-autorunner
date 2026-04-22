@@ -16,13 +16,11 @@ from ...core.orchestration import OrchestrationBindingStore
 from ...core.pma_notification_store import PmaNotificationStore
 from ...core.ports.run_event import RunEvent
 from ...core.time_utils import now_iso
-from ..discord.outbox import DiscordOutboxManager
 from ..discord.rendering import truncate_for_discord
 from ..discord.rest import DiscordRestClient
 from ..discord.state import DiscordStateStore
 from ..discord.state import OutboxRecord as DiscordOutboxRecord
 from ..telegram.adapter import TelegramBotClient
-from ..telegram.outbox import TelegramOutboxManager
 from ..telegram.outbox import _outbox_key as telegram_outbox_key
 from ..telegram.state import OutboxRecord as TelegramOutboxRecord
 from ..telegram.state import TelegramStateStore, parse_topic_key
@@ -193,10 +191,20 @@ class _BaseBoundProgressAdapter:
 
     @property
     def edit_operation_id(self) -> str:
-        return (
-            f"managed-thread-progress:{self.surface_kind}:"
-            f"{self._surface_scope_id}:"
-            f"{self._managed_thread_id}:{self._managed_turn_id}:edit"
+        return bound_chat_progress_edit_operation_id(
+            surface_kind=self.surface_kind,
+            surface_key=self._surface_key,
+            managed_thread_id=self._managed_thread_id,
+            managed_turn_id=self._managed_turn_id,
+        )
+
+    @property
+    def delete_record_id(self) -> str:
+        return bound_chat_progress_delete_record_id(
+            surface_kind=self.surface_kind,
+            surface_key=self._surface_key,
+            managed_thread_id=self._managed_thread_id,
+            managed_turn_id=self._managed_turn_id,
         )
 
     @property
@@ -232,11 +240,24 @@ class _BaseBoundProgressAdapter:
             return await self._upsert_pending_send(text)
         return await self._enqueue_edit(anchor_id, text)
 
+    async def _retire_outbox_records(self) -> None:
+        store = getattr(self, "_store", None)
+        if store is None:
+            return
+        await retire_bound_chat_progress_outbox_records(
+            store=store,
+            surface_kind=self.surface_kind,
+            surface_key=self._surface_key,
+            managed_thread_id=self._managed_thread_id,
+            managed_turn_id=self._managed_turn_id,
+        )
+
     async def complete_success(self) -> None:
         anchor_id = self._delivered_anchor_id()
         if anchor_id is None:
             await self._delete_pending_send()
             return
+        await self._retire_outbox_records()
         await self._enqueue_delete(anchor_id)
 
     async def complete_with_message(self, text: str) -> None:
@@ -245,6 +266,7 @@ class _BaseBoundProgressAdapter:
         if anchor_id is None:
             await self._upsert_pending_send(text)
             return
+        await self._retire_outbox_records()
         await self._enqueue_edit(anchor_id, text)
 
     async def close(self) -> None:
@@ -287,16 +309,15 @@ class _DiscordBoundProgressAdapter(_BaseBoundProgressAdapter):
             resolve_discord_state_path(hub_root, raw_config)
         )
         self._raw_config = dict(raw_config)
-        self._outbox: DiscordOutboxManager | None = None
         self._rest: DiscordRestClient | None = None
 
     @property
     def surface_kind(self) -> str:
         return "discord"
 
-    async def _manager(self) -> DiscordOutboxManager | None:
-        if self._outbox is not None:
-            return self._outbox
+    async def _rest_client(self) -> DiscordRestClient | None:
+        if self._rest is not None:
+            return self._rest
         discord_config = self._raw_config.get("discord_bot")
         if not isinstance(discord_config, Mapping):
             return None
@@ -304,109 +325,114 @@ class _DiscordBoundProgressAdapter(_BaseBoundProgressAdapter):
         if not bot_token:
             return None
         self._rest = DiscordRestClient(bot_token=bot_token)
-
-        async def _on_delivered(
-            record: DiscordOutboxRecord,
-            delivered_message_id: Optional[str],
-        ) -> None:
-            if record.record_id != self.send_record_id:
-                return
-            self._notifications.mark_delivered(
-                delivery_record_id=self.send_record_id,
-                delivered_message_id=delivered_message_id,
-            )
-
-        async def _send(channel_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-            assert self._rest is not None
-            return await self._rest.create_channel_message(
-                channel_id=channel_id,
-                payload=payload,
-            )
-
-        async def _edit(
-            channel_id: str,
-            message_id: str,
-            payload: dict[str, Any],
-        ) -> None:
-            assert self._rest is not None
-            await self._rest.edit_channel_message(
-                channel_id=channel_id,
-                message_id=message_id,
-                payload=payload,
-            )
-
-        async def _delete(channel_id: str, message_id: str) -> None:
-            assert self._rest is not None
-            await self._rest.delete_channel_message(
-                channel_id=channel_id,
-                message_id=message_id,
-            )
-
-        outbox = DiscordOutboxManager(
-            self._store,
-            send_message=_send,
-            edit_message=_edit,
-            delete_message=_delete,
-            on_delivered=_on_delivered,
-            logger=logger,
-        )
-        outbox.start()
-        self._outbox = outbox
-        return outbox
+        return self._rest
 
     async def _upsert_pending_send(self, text: str) -> bool:
+        rest = await self._rest_client()
+        payload = {
+            "content": truncate_for_discord(text, max_len=_DISCORD_MAX_PROGRESS_LEN)
+        }
+        if rest is not None:
+            existing = await self._store.get_outbox(self.send_record_id)
+            if existing is not None:
+                rest = None
+        if rest is not None:
+            try:
+                response = await rest.create_channel_message(
+                    channel_id=self._surface_key,
+                    payload=payload,
+                )
+            except Exception:
+                logger.warning(
+                    "Bound chat live progress direct Discord send failed; falling back to outbox",
+                    exc_info=True,
+                )
+            else:
+                delivered_message_id = str(
+                    response.get("id") if isinstance(response, Mapping) else ""
+                ).strip()
+                if delivered_message_id:
+                    self._notifications.mark_delivered(
+                        delivery_record_id=self.send_record_id,
+                        delivered_message_id=delivered_message_id,
+                    )
+                    return True
         record = DiscordOutboxRecord(
             record_id=self.send_record_id,
             channel_id=self._surface_key,
             message_id=None,
             operation="send",
-            payload_json={
-                "content": truncate_for_discord(text, max_len=_DISCORD_MAX_PROGRESS_LEN)
-            },
+            payload_json=payload,
             created_at=now_iso(),
         )
-        manager = await self._manager()
-        if manager is None:
-            await self._store.enqueue_outbox(record)
-            return True
-        return await manager.send_with_outbox(record)
+        await self._store.enqueue_outbox(record)
+        return True
 
     async def _enqueue_edit(self, anchor_id: str, text: str) -> bool:
+        rest = await self._rest_client()
+        payload = {
+            "content": truncate_for_discord(text, max_len=_DISCORD_MAX_PROGRESS_LEN)
+        }
+        if rest is not None:
+            if any(
+                record.operation_id == self.edit_operation_id
+                for record in await self._store.list_outbox()
+            ):
+                rest = None
+        if rest is not None:
+            try:
+                await rest.edit_channel_message(
+                    channel_id=self._surface_key,
+                    message_id=anchor_id,
+                    payload=payload,
+                )
+            except Exception:
+                logger.warning(
+                    "Bound chat live progress direct Discord edit failed; falling back to outbox",
+                    exc_info=True,
+                )
+            else:
+                return True
         record = DiscordOutboxRecord(
             record_id=f"{self.edit_operation_id}:{uuid.uuid4().hex[:8]}",
             channel_id=self._surface_key,
             message_id=anchor_id,
             operation=_EDIT_OPERATION,
-            payload_json={
-                "content": truncate_for_discord(text, max_len=_DISCORD_MAX_PROGRESS_LEN)
-            },
+            payload_json=payload,
             created_at=now_iso(),
             operation_id=self.edit_operation_id,
         )
-        manager = await self._manager()
-        if manager is None:
-            await self._store.enqueue_outbox(record)
-            return True
-        return await manager.send_with_outbox(record)
+        await self._store.enqueue_outbox(record)
+        return True
 
     async def _enqueue_delete(self, anchor_id: str) -> None:
+        rest = await self._rest_client()
+        if rest is not None:
+            existing_delete = await self._store.get_outbox(self.delete_record_id)
+            if existing_delete is not None:
+                rest = None
+        if rest is not None:
+            try:
+                await rest.delete_channel_message(
+                    channel_id=self._surface_key,
+                    message_id=anchor_id,
+                )
+            except Exception:
+                logger.warning(
+                    "Bound chat live progress direct Discord delete failed; falling back to outbox",
+                    exc_info=True,
+                )
+            else:
+                return
         record = DiscordOutboxRecord(
-            record_id=(
-                f"managed-thread-progress:{self.surface_kind}:"
-                f"{self._surface_scope_id}:"
-                f"{self._managed_thread_id}:{self._managed_turn_id}:delete"
-            ),
+            record_id=self.delete_record_id,
             channel_id=self._surface_key,
             message_id=anchor_id,
             operation=_DELETE_OPERATION,
             payload_json={},
             created_at=now_iso(),
         )
-        manager = await self._manager()
-        if manager is None:
-            await self._store.enqueue_outbox(record)
-            return
-        await manager.send_with_outbox(record)
+        await self._store.enqueue_outbox(record)
 
     async def _delete_pending_send(self) -> None:
         await self._store.mark_outbox_delivered(self.send_record_id)
@@ -441,15 +467,14 @@ class _TelegramBoundProgressAdapter(_BaseBoundProgressAdapter):
         )
         self._raw_config = dict(raw_config)
         self._bot: TelegramBotClient | None = None
-        self._outbox: TelegramOutboxManager | None = None
 
     @property
     def surface_kind(self) -> str:
         return "telegram"
 
-    async def _manager(self) -> TelegramOutboxManager | None:
-        if self._outbox is not None:
-            return self._outbox
+    async def _bot_client(self) -> TelegramBotClient | None:
+        if self._bot is not None:
+            return self._bot
         telegram_config = self._raw_config.get("telegram_bot")
         if not isinstance(telegram_config, Mapping):
             return None
@@ -457,109 +482,89 @@ class _TelegramBoundProgressAdapter(_BaseBoundProgressAdapter):
         if not bot_token:
             return None
         self._bot = TelegramBotClient(bot_token, logger=logger)
-
-        async def _on_delivered(
-            record: TelegramOutboxRecord,
-            delivered_message_id: Optional[int],
-        ) -> None:
-            if record.record_id != self.send_record_id:
-                return
-            self._notifications.mark_delivered(
-                delivery_record_id=self.send_record_id,
-                delivered_message_id=delivered_message_id,
-            )
-
-        async def _send(
-            chat_id: int,
-            text: str,
-            *,
-            thread_id: Optional[int] = None,
-            reply_to: Optional[int] = None,
-            overflow_mode_override: Optional[str] = None,
-        ) -> Optional[int]:
-            _ = overflow_mode_override
-            assert self._bot is not None
-            response = await self._bot.send_message(
-                chat_id,
-                text,
-                message_thread_id=thread_id,
-                reply_to_message_id=reply_to,
-            )
-            raw_message_id = (
-                response.get("message_id") if isinstance(response, Mapping) else None
-            )
-            return int(raw_message_id) if isinstance(raw_message_id, int) else None
-
-        async def _edit(
-            chat_id: int,
-            message_id: int,
-            text: str,
-            *,
-            message_thread_id: Optional[int] = None,
-        ) -> bool:
-            assert self._bot is not None
-            result = await self._bot.edit_message_text(
-                chat_id,
-                message_id,
-                text,
-                message_thread_id=message_thread_id,
-            )
-            return bool(result)
-
-        async def _delete(
-            chat_id: int,
-            message_id: int,
-            thread_id: Optional[int],
-        ) -> bool:
-            assert self._bot is not None
-            return await self._bot.delete_message(
-                chat_id,
-                message_id,
-                message_thread_id=thread_id,
-            )
-
-        outbox = TelegramOutboxManager(
-            self._store,
-            send_message=_send,
-            edit_message_text=_edit,
-            delete_message=_delete,
-            on_delivered=_on_delivered,
-            logger=logger,
-        )
-        outbox.start()
-        self._outbox = outbox
-        return outbox
+        return self._bot
 
     async def _upsert_pending_send(self, text: str) -> bool:
+        bot = await self._bot_client()
+        bounded_text = text[:_TELEGRAM_MAX_PROGRESS_LEN]
+        if bot is not None:
+            existing = await self._store.get_outbox(self.send_record_id)
+            if existing is not None:
+                bot = None
+        if bot is not None:
+            try:
+                response = await bot.send_message(
+                    self._chat_id,
+                    bounded_text,
+                    message_thread_id=self._thread_id,
+                    reply_to_message_id=None,
+                )
+            except Exception:
+                logger.warning(
+                    "Bound chat live progress direct Telegram send failed; falling back to outbox",
+                    exc_info=True,
+                )
+            else:
+                delivered_message_id = (
+                    response.get("message_id")
+                    if isinstance(response, Mapping)
+                    else None
+                )
+                if isinstance(delivered_message_id, int):
+                    self._notifications.mark_delivered(
+                        delivery_record_id=self.send_record_id,
+                        delivered_message_id=delivered_message_id,
+                    )
+                    return True
         record = TelegramOutboxRecord(
             record_id=self.send_record_id,
             chat_id=self._chat_id,
             thread_id=self._thread_id,
             reply_to_message_id=None,
             placeholder_message_id=None,
-            text=text[:_TELEGRAM_MAX_PROGRESS_LEN],
+            text=bounded_text,
             created_at=now_iso(),
             operation="send",
             message_id=None,
         )
-        manager = await self._manager()
-        if manager is None:
-            await self._store.enqueue_outbox(record)
-            return True
-        return await manager.send_message_with_outbox(record)
+        await self._store.enqueue_outbox(record)
+        return True
 
     async def _enqueue_edit(self, anchor_id: str, text: str) -> bool:
         try:
             message_id = int(anchor_id)
         except (TypeError, ValueError):
             return False
+        bounded_text = text[:_TELEGRAM_MAX_PROGRESS_LEN]
+        bot = await self._bot_client()
+        if bot is not None:
+            if any(
+                record.operation_id == self.edit_operation_id
+                for record in await self._store.list_outbox()
+            ):
+                bot = None
+        if bot is not None:
+            try:
+                edit_ok = await bot.edit_message_text(
+                    self._chat_id,
+                    message_id,
+                    bounded_text,
+                    message_thread_id=self._thread_id,
+                )
+            except Exception:
+                logger.warning(
+                    "Bound chat live progress direct Telegram edit failed; falling back to outbox",
+                    exc_info=True,
+                )
+            else:
+                return bool(edit_ok)
         record = TelegramOutboxRecord(
             record_id=f"{self.edit_operation_id}:{uuid.uuid4().hex[:8]}",
             chat_id=self._chat_id,
             thread_id=self._thread_id,
             reply_to_message_id=None,
             placeholder_message_id=None,
-            text=text[:_TELEGRAM_MAX_PROGRESS_LEN],
+            text=bounded_text,
             created_at=now_iso(),
             operation=_EDIT_OPERATION,
             message_id=message_id,
@@ -571,23 +576,36 @@ class _TelegramBoundProgressAdapter(_BaseBoundProgressAdapter):
             ),
             operation_id=self.edit_operation_id,
         )
-        manager = await self._manager()
-        if manager is None:
-            await self._store.enqueue_outbox(record)
-            return True
-        return await manager.send_message_with_outbox(record)
+        await self._store.enqueue_outbox(record)
+        return True
 
     async def _enqueue_delete(self, anchor_id: str) -> None:
         try:
             message_id = int(anchor_id)
         except (TypeError, ValueError):
             return
+        bot = await self._bot_client()
+        if bot is not None:
+            existing_delete = await self._store.get_outbox(self.delete_record_id)
+            if existing_delete is not None:
+                bot = None
+        if bot is not None:
+            try:
+                delete_ok = await bot.delete_message(
+                    self._chat_id,
+                    message_id,
+                    message_thread_id=self._thread_id,
+                )
+            except Exception:
+                logger.warning(
+                    "Bound chat live progress direct Telegram delete failed; falling back to outbox",
+                    exc_info=True,
+                )
+            else:
+                if delete_ok:
+                    return
         record = TelegramOutboxRecord(
-            record_id=(
-                f"managed-thread-progress:{self.surface_kind}:"
-                f"{self._surface_scope_id}:"
-                f"{self._managed_thread_id}:{self._managed_turn_id}:delete"
-            ),
+            record_id=self.delete_record_id,
             chat_id=self._chat_id,
             thread_id=self._thread_id,
             reply_to_message_id=None,
@@ -603,11 +621,7 @@ class _TelegramBoundProgressAdapter(_BaseBoundProgressAdapter):
                 _DELETE_OPERATION,
             ),
         )
-        manager = await self._manager()
-        if manager is None:
-            await self._store.enqueue_outbox(record)
-            return
-        await manager.send_message_with_outbox(record)
+        await self._store.enqueue_outbox(record)
 
     async def _delete_pending_send(self) -> None:
         await self._store.delete_outbox(self.send_record_id)
@@ -635,6 +649,74 @@ def bound_chat_progress_send_record_id(
         f"{_bound_progress_surface_scope_id(surface_kind=surface_kind, surface_key=surface_key)}:"
         f"{managed_thread_id}:{managed_turn_id}:send"
     )
+
+
+def bound_chat_progress_edit_operation_id(
+    *,
+    surface_kind: str,
+    surface_key: str,
+    managed_thread_id: str,
+    managed_turn_id: str,
+) -> str:
+    return (
+        f"managed-thread-progress:{surface_kind}:"
+        f"{_bound_progress_surface_scope_id(surface_kind=surface_kind, surface_key=surface_key)}:"
+        f"{managed_thread_id}:{managed_turn_id}:edit"
+    )
+
+
+def bound_chat_progress_delete_record_id(
+    *,
+    surface_kind: str,
+    surface_key: str,
+    managed_thread_id: str,
+    managed_turn_id: str,
+) -> str:
+    return (
+        f"managed-thread-progress:{surface_kind}:"
+        f"{_bound_progress_surface_scope_id(surface_kind=surface_kind, surface_key=surface_key)}:"
+        f"{managed_thread_id}:{managed_turn_id}:delete"
+    )
+
+
+async def retire_bound_chat_progress_outbox_records(
+    *,
+    store: Any,
+    surface_kind: str,
+    surface_key: str,
+    managed_thread_id: str,
+    managed_turn_id: str,
+) -> str:
+    send_record_id = bound_chat_progress_send_record_id(
+        surface_kind=surface_kind,
+        surface_key=surface_key,
+        managed_thread_id=managed_thread_id,
+        managed_turn_id=managed_turn_id,
+    )
+    await store.delete_outbox(send_record_id)
+    await store.delete_outbox(
+        bound_chat_progress_delete_record_id(
+            surface_kind=surface_kind,
+            surface_key=surface_key,
+            managed_thread_id=managed_thread_id,
+            managed_turn_id=managed_turn_id,
+        )
+    )
+    edit_operation_id = bound_chat_progress_edit_operation_id(
+        surface_kind=surface_kind,
+        surface_key=surface_key,
+        managed_thread_id=managed_thread_id,
+        managed_turn_id=managed_turn_id,
+    )
+    list_outbox = getattr(store, "list_outbox", None)
+    if callable(list_outbox):
+        for record in await list_outbox():
+            if getattr(record, "operation_id", None) != edit_operation_id:
+                continue
+            record_id = str(getattr(record, "record_id", "") or "").strip()
+            if record_id:
+                await store.delete_outbox(record_id)
+    return send_record_id
 
 
 def build_bound_chat_progress_cleanup_metadata(
@@ -768,14 +850,22 @@ def build_bound_chat_live_progress_session(
     for binding in bindings:
         surface_kind = str(binding.surface_kind or "").strip()
         surface_key = str(binding.surface_key or "").strip()
-        adapter = _build_bound_progress_adapter(
-            hub_root=hub_root,
-            raw_config=raw_config,
-            surface_kind=surface_kind,
-            surface_key=surface_key,
-            managed_thread_id=managed_thread_id,
-            managed_turn_id=managed_turn_id,
-        )
+        try:
+            adapter = _build_bound_progress_adapter(
+                hub_root=hub_root,
+                raw_config=raw_config,
+                surface_kind=surface_kind,
+                surface_key=surface_key,
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=managed_turn_id,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to build bound chat live progress adapter (surface_kind=%s, surface_key=%s)",
+                surface_kind,
+                surface_key,
+            )
+            continue
         if adapter is None:
             continue
         adapters.append(adapter)
@@ -806,10 +896,13 @@ def build_bound_chat_live_progress_session(
 
 __all__ = [
     "BoundChatLiveProgressSession",
+    "bound_chat_progress_delete_record_id",
     "bound_chat_progress_delivered_message_id",
+    "bound_chat_progress_edit_operation_id",
     "build_bound_chat_progress_cleanup_metadata",
     "build_bound_chat_live_progress_session",
     "bound_chat_progress_send_record_id",
     "cleanup_bound_chat_live_progress_success",
     "mark_bound_chat_progress_delivered",
+    "retire_bound_chat_progress_outbox_records",
 ]

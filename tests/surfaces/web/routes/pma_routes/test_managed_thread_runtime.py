@@ -216,8 +216,18 @@ async def test_recover_orphaned_managed_thread_executions_restores_backend_ids_f
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("surface_kind", "surface_key", "client_turn_id"),
+    (
+        ("discord", "channel-123", "discord:channel-123:run-1"),
+        ("telegram", "123:456", "telegram:123:456:run-1"),
+    ),
+)
 async def test_recover_orphaned_managed_thread_executions_skips_chat_bound_threads(
     hub_env,
+    surface_kind: str,
+    surface_key: str,
+    client_turn_id: str,
 ) -> None:
     app = build_pma_hub_app(hub_env.hub_root)
     store = PmaThreadStore(hub_env.hub_root)
@@ -231,11 +241,11 @@ async def test_recover_orphaned_managed_thread_executions_skips_chat_bound_threa
     running = store.create_turn(
         managed_thread_id,
         prompt="running",
-        client_turn_id="discord:channel-123:run-1",
+        client_turn_id=client_turn_id,
     )
     bindings.upsert_binding(
-        surface_kind="discord",
-        surface_key="channel-123",
+        surface_kind=surface_kind,
+        surface_key=surface_key,
         thread_target_id=managed_thread_id,
         agent_id="codex",
         repo_id=hub_env.repo_id,
