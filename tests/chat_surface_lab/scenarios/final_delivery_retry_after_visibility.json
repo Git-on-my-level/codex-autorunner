@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "scenario_id": "final_delivery_retry_after_visibility",
-  "description": "Discord keeps a visible terminal failure note when the final reply send is rate-limited after turn finalization.",
+  "description": "Discord falls back to a direct final reply when durable terminal delivery is rate-limited after turn finalization.",
   "surfaces": [
     "discord"
   ],
@@ -57,7 +57,7 @@
       ],
       "params": {
         "event_name": "discord.turn.delivery_finished",
-        "field": "visible_failure_notice",
+        "field": "send_final_message",
         "value": true
       }
     },
@@ -77,7 +77,7 @@
       ],
       "params": {
         "attr": "has_delete_event",
-        "value": false
+        "value": true
       }
     },
     {
@@ -98,5 +98,5 @@
     "hermes",
     "pma"
   ],
-  "notes": "Characterizes the case where final Discord delivery falls back to the outbox after the turn has already finalized."
+  "notes": "Characterizes the case where the durable Discord send is retried in the outbox, but the direct PMA surface still posts the final reply immediately."
 }

@@ -410,12 +410,23 @@ def render_progress_text(
             block = [f"🧠 {action.text}"]
             if blocks:
                 block.insert(0, "")
-        elif action.label in {"output", "commentary"}:
+        elif action.label == "output":
             output_lines = action.text.split("\n")
             if not output_lines:
                 block = [action.text]
             else:
                 block = output_lines
+            if blocks:
+                block.insert(0, "")
+        elif action.label == "commentary":
+            commentary_lines = action.text.split("\n")
+            if not commentary_lines:
+                commentary_lines = [action.text]
+            block = [
+                "Interim note from agent while this turn is still running:",
+                *commentary_lines,
+                "Final reply will be sent separately when the turn completes.",
+            ]
             if blocks:
                 block.insert(0, "")
         else:

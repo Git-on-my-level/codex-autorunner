@@ -242,7 +242,10 @@ def test_apply_run_event_to_progress_tracker_renders_commentary_live_only() -> N
     live = render_progress_text(tracker, max_length=2000, now=1.0)
     final = render_progress_text(tracker, max_length=2000, now=1.0, render_mode="final")
 
+    assert "Interim note from agent while this turn is still running:" in live
     assert "Checking the ACP event path" in live
+    assert "Final reply will be sent separately when the turn completes." in live
+    assert "Interim note from agent while this turn is still running:" not in final
     assert "Checking the ACP event path" not in final
 
 

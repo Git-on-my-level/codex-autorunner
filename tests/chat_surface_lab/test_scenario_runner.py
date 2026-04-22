@@ -86,7 +86,7 @@ async def test_runner_executes_interrupt_optimistic_acceptance_matrix(
 
 
 @pytest.mark.anyio
-async def test_runner_keeps_visible_failure_note_when_final_delivery_is_outboxed(
+async def test_runner_falls_back_to_direct_final_reply_when_durable_delivery_is_outboxed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -107,7 +107,7 @@ async def test_runner_keeps_visible_failure_note_when_final_delivery_is_outboxed
     )
     assert any(
         record.get("event") == "discord.turn.delivery_finished"
-        and record.get("visible_failure_notice") is True
+        and record.get("send_final_message") is True
         for record in discord.log_records
     )
 
