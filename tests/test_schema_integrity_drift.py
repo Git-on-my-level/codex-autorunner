@@ -20,7 +20,6 @@ from codex_autorunner.server import create_hub_app
 from tests.conftest import write_test_config
 
 runner = CliRunner()
-pytestmark = pytest.mark.docker_managed_cleanup
 
 
 def _seed_single_repo_manifest(hub_root: Path, repo_id: str = "base") -> None:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import subprocess
 import sys
 from pathlib import Path
 
@@ -9,22 +8,20 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
-def _run_drift_check(*args: str) -> subprocess.CompletedProcess[str]:
-    repo_root = _repo_root()
-    script_path = repo_root / "scripts" / "check_destination_contract_drift.py"
-    return subprocess.run(
-        [sys.executable, str(script_path), *args],
-        cwd=repo_root,
-        check=False,
-        text=True,
-        capture_output=True,
-    )
+_repo_root_str = str(_repo_root())
+if _repo_root_str not in sys.path:
+    sys.path.insert(0, _repo_root_str)
+
+from scripts.check_destination_contract_drift import run_check  # noqa: E402
 
 
 def test_destination_contract_drift_check_passes() -> None:
-    result = _run_drift_check()
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "passed" in result.stdout.lower()
+    repo_root = _repo_root()
+    issues = run_check(
+        destinations_doc=repo_root / "docs" / "configuration" / "destinations.md",
+        schema_doc=repo_root / "docs" / "reference" / "hub-manifest-schema.md",
+    )
+    assert not issues, "\n".join(issues)
 
 
 def test_destination_contract_drift_check_detects_schema_mismatch(
@@ -40,7 +37,9 @@ def test_destination_contract_drift_check_detects_schema_mismatch(
         encoding="utf-8",
     )
 
-    result = _run_drift_check("--schema-doc", str(patched_schema))
-    output = result.stdout + result.stderr
-    assert result.returncode == 1, output
-    assert "drift" in output.lower()
+    issues = run_check(
+        destinations_doc=repo_root / "docs" / "configuration" / "destinations.md",
+        schema_doc=patched_schema,
+    )
+    assert issues, "Expected drift issues but got none"
+    assert any("drift" in issue.lower() for issue in issues), "\n".join(issues)
