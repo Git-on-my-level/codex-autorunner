@@ -15,7 +15,7 @@ from codex_autorunner.integrations.discord import (
 )
 from codex_autorunner.integrations.discord.service import DiscordBotService
 from codex_autorunner.integrations.discord.state import DiscordStateStore
-from tests.discord_message_turns_support import (
+from tests.support.discord_turn_fakes import (
     _config,
     _FakeOutboxManager,
     _FakeRest,

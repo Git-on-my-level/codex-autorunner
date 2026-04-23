@@ -9,7 +9,7 @@ from typing import Any, Optional
 import pytest
 
 import codex_autorunner.integrations.discord.message_turns as discord_message_turns_module
-from tests.discord_message_turns_support import _config, _FakeRest
+from tests.support.discord_turn_fakes import _config, _FakeRest
 
 
 @pytest.mark.asyncio
