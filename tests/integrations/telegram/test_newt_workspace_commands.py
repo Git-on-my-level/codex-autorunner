@@ -48,6 +48,15 @@ def _patch_newt_branch_reset(
         "codex_autorunner.integrations.telegram.handlers.commands.workspace_session_commands.run_newt_branch_reset",
         _fake_reset,
     )
+
+    async def _fake_sync_binding(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.telegram.handlers.commands.execution._sync_telegram_thread_binding",
+        _fake_sync_binding,
+    )
+
     return calls
 
 
