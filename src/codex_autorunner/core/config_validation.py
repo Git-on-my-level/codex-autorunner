@@ -2,15 +2,30 @@
 
 from __future__ import annotations
 
+import dataclasses
 import ipaddress
 from pathlib import Path
 from typing import Any, Dict, Tuple, Type, Union, cast
 
 from .config_contract import (
-    _TICKET_FLOW_APPROVAL_MODE_ALIASES,
-    _TICKET_FLOW_APPROVAL_MODE_ALLOWED,
     CONFIG_VERSION,
     ConfigError,
+)
+from .config_field_schema import (
+    AGENT_FIELD_SCHEMAS,
+    AGENT_PROFILE_FIELD_SCHEMAS,
+    APP_SERVER_CLIENT_FIELD_SCHEMAS,
+    APP_SERVER_FIELD_SCHEMAS,
+    APP_SERVER_OUTPUT_FIELD_SCHEMAS,
+    APP_SERVER_PROMPT_SECTION_SCHEMAS,
+    OPENCODE_FIELD_SCHEMAS,
+    SHARED_SCHEMA_FIELD_PATHS,
+    TICKET_FLOW_FIELD_SCHEMAS,
+    UPDATE_FIELD_SCHEMAS,
+    UPDATE_LINUX_SERVICE_NAME_SCHEMAS,
+    USAGE_FIELD_SCHEMAS,
+    normalize_choice_value,
+    validate_schema_field,
 )
 from .mutation_policy import (
     MUTATION_POLICY_ACTION_TYPES,
@@ -19,19 +34,22 @@ from .mutation_policy import (
 )
 from .path_utils import ConfigPathError, resolve_config_path
 
-_APP_SERVER_OUTPUT_POLICIES = {"final_only", "all_agent_messages"}
+SHARED_CONFIG_VALIDATION_FIELD_PATHS = SHARED_SCHEMA_FIELD_PATHS
 
 
 def _normalize_ticket_flow_approval_mode(value: Any, *, scope: str) -> str:
-    if not isinstance(value, str):
-        raise ConfigError(f"{scope} must be a string")
-    normalized = value.strip().lower()
-    canonical = _TICKET_FLOW_APPROVAL_MODE_ALIASES.get(normalized)
-    if canonical is None:
-        raise ConfigError(
-            f"{scope} must be one of: {_TICKET_FLOW_APPROVAL_MODE_ALLOWED}"
-        )
-    return canonical
+    schema = TICKET_FLOW_FIELD_SCHEMAS["approval_mode"]
+    scope_schema = dataclasses.replace(
+        schema,
+        path=scope,
+        type_message=f"{scope} must be a string",
+        value_message=(
+            schema.value_message.replace("ticket_flow.approval_mode", scope)
+            if schema.value_message
+            else None
+        ),
+    )
+    return normalize_choice_value(value, scope_schema)
 
 
 def _validate_version(cfg: Dict[str, Any]) -> None:
@@ -87,169 +105,39 @@ def _validate_app_server_config(cfg: Dict[str, Any]) -> None:
         return
     if not isinstance(app_server_cfg, dict):
         raise ConfigError("app_server section must be a mapping if provided")
-    command = app_server_cfg.get("command")
-    if command is not None and not isinstance(command, (list, str)):
-        raise ConfigError("app_server.command must be a list or string if provided")
-    if "state_root" in app_server_cfg and not isinstance(
-        app_server_cfg.get("state_root", ""), str
-    ):
-        raise ConfigError("app_server.state_root must be a string path")
-    if (
-        "auto_restart" in app_server_cfg
-        and app_server_cfg.get("auto_restart") is not None
-    ):
-        if not isinstance(app_server_cfg.get("auto_restart"), bool):
-            raise ConfigError("app_server.auto_restart must be boolean or null")
-    for key in ("max_handles", "idle_ttl_seconds"):
-        if key in app_server_cfg and app_server_cfg.get(key) is not None:
-            val = app_server_cfg.get(key)
-            if not isinstance(val, int):
-                raise ConfigError(f"app_server.{key} must be an integer or null")
-            if val <= 0:
-                raise ConfigError(f"app_server.{key} must be > 0 or null")
-    if (
-        "turn_timeout_seconds" in app_server_cfg
-        and app_server_cfg.get("turn_timeout_seconds") is not None
-    ):
-        turn_timeout = app_server_cfg.get("turn_timeout_seconds")
-        if not isinstance(turn_timeout, (int, float)):
-            raise ConfigError(
-                "app_server.turn_timeout_seconds must be a number or null"
-            )
-        if turn_timeout <= 0:
-            raise ConfigError("app_server.turn_timeout_seconds must be > 0 or null")
-    if (
-        "request_timeout" in app_server_cfg
-        and app_server_cfg.get("request_timeout") is not None
-    ):
-        req_timeout = app_server_cfg.get("request_timeout")
-        if not isinstance(req_timeout, (int, float)):
-            raise ConfigError("app_server.request_timeout must be a number or null")
-        if req_timeout <= 0:
-            raise ConfigError("app_server.request_timeout must be > 0 or null")
-    for key in (
-        "turn_stall_timeout_seconds",
-        "turn_stall_poll_interval_seconds",
-    ):
-        if key in app_server_cfg and app_server_cfg.get(key) is not None:
-            val = app_server_cfg.get(key)
-            if not isinstance(val, (int, float)):
-                raise ConfigError(f"app_server.{key} must be a number or null")
-            if val <= 0:
-                raise ConfigError(f"app_server.{key} must be > 0 or null")
-    if (
-        "turn_stall_recovery_min_interval_seconds" in app_server_cfg
-        and app_server_cfg.get("turn_stall_recovery_min_interval_seconds") is not None
-    ):
-        recovery_interval = app_server_cfg.get(
-            "turn_stall_recovery_min_interval_seconds"
-        )
-        if not isinstance(recovery_interval, (int, float)):
-            raise ConfigError(
-                "app_server.turn_stall_recovery_min_interval_seconds must be a number or null"
-            )
-        if recovery_interval < 0:
-            raise ConfigError(
-                "app_server.turn_stall_recovery_min_interval_seconds must be >= 0 or null"
-            )
-    if (
-        "turn_stall_max_recovery_attempts" in app_server_cfg
-        and app_server_cfg.get("turn_stall_max_recovery_attempts") is not None
-    ):
-        max_attempts = app_server_cfg.get("turn_stall_max_recovery_attempts")
-        if not isinstance(max_attempts, int):
-            raise ConfigError(
-                "app_server.turn_stall_max_recovery_attempts must be an integer or null"
-            )
-        if max_attempts <= 0:
-            raise ConfigError(
-                "app_server.turn_stall_max_recovery_attempts must be > 0 or null"
-            )
+    for key, schema in APP_SERVER_FIELD_SCHEMAS.items():
+        if key in app_server_cfg:
+            validate_schema_field(app_server_cfg.get(key), schema)
     client_cfg = app_server_cfg.get("client")
     if client_cfg is not None:
         if not isinstance(client_cfg, dict):
             raise ConfigError("app_server.client must be a mapping if provided")
-        for key in (
-            "max_message_bytes",
-            "oversize_preview_bytes",
-            "max_oversize_drain_bytes",
-        ):
+        for key, schema in APP_SERVER_CLIENT_FIELD_SCHEMAS.items():
             if key in client_cfg:
-                value = client_cfg.get(key)
-                if not isinstance(value, int):
-                    raise ConfigError(f"app_server.client.{key} must be an integer")
-                if value <= 0:
-                    raise ConfigError(f"app_server.client.{key} must be > 0")
-        for key in (
-            "restart_backoff_initial_seconds",
-            "restart_backoff_max_seconds",
-            "restart_backoff_jitter_ratio",
-        ):
-            if key in client_cfg:
-                value = client_cfg.get(key)
-                if not isinstance(value, (int, float)):
-                    raise ConfigError(
-                        f"app_server.client.{key} must be a number if provided"
-                    )
-                if key == "restart_backoff_jitter_ratio":
-                    if value < 0:
-                        raise ConfigError(
-                            "app_server.client.restart_backoff_jitter_ratio must be >= 0"
-                        )
-                elif value <= 0:
-                    raise ConfigError(f"app_server.client.{key} must be > 0")
+                validate_schema_field(client_cfg.get(key), schema)
     output_cfg = app_server_cfg.get("output")
     if output_cfg is not None:
         if not isinstance(output_cfg, dict):
             raise ConfigError("app_server.output must be a mapping if provided")
         if "policy" in output_cfg:
-            policy = output_cfg.get("policy")
-            if not isinstance(policy, str):
-                raise ConfigError("app_server.output.policy must be a string")
-            if policy.strip().lower() not in _APP_SERVER_OUTPUT_POLICIES:
-                allowed = ", ".join(sorted(_APP_SERVER_OUTPUT_POLICIES))
-                raise ConfigError(f"app_server.output.policy must be one of: {allowed}")
+            validate_schema_field(
+                output_cfg.get("policy"),
+                APP_SERVER_OUTPUT_FIELD_SCHEMAS["policy"],
+            )
     prompts = app_server_cfg.get("prompts")
     if prompts is not None:
         if not isinstance(prompts, dict):
             raise ConfigError("app_server.prompts must be a mapping if provided")
-        expected = {
-            "doc_chat": {
-                "max_chars": 1,
-                "message_max_chars": 1,
-                "target_excerpt_max_chars": 0,
-                "recent_summary_max_chars": 0,
-            },
-            "spec_ingest": {
-                "max_chars": 1,
-                "message_max_chars": 1,
-                "spec_excerpt_max_chars": 0,
-            },
-            "autorunner": {
-                "max_chars": 1,
-                "message_max_chars": 1,
-                "todo_excerpt_max_chars": 0,
-                "prev_run_max_chars": 0,
-            },
-        }
-        for section, keys in expected.items():
+        for section, section_schema in APP_SERVER_PROMPT_SECTION_SCHEMAS.items():
             section_cfg = prompts.get(section)
             if section_cfg is None:
                 continue
             if not isinstance(section_cfg, dict):
                 raise ConfigError(f"app_server.prompts.{section} must be a mapping")
-            for key, min_value in keys.items():
+            for key, schema in section_schema.items():
                 if key not in section_cfg:
                     continue
-                value = section_cfg.get(key)
-                if value is None or not isinstance(value, int):
-                    raise ConfigError(
-                        f"app_server.prompts.{section}.{key} must be an integer"
-                    )
-                if value < min_value:
-                    raise ConfigError(
-                        f"app_server.prompts.{section}.{key} must be >= {min_value}"
-                    )
+                validate_schema_field(section_cfg.get(key), schema)
 
 
 def _validate_collaboration_policy_config(cfg: Dict[str, Any]) -> None:
@@ -440,49 +328,9 @@ def _validate_opencode_config(cfg: Dict[str, Any]) -> None:
         return
     if not isinstance(opencode_cfg, dict):
         raise ConfigError("opencode section must be a mapping if provided")
-    if "server_scope" in opencode_cfg and opencode_cfg.get("server_scope") is not None:
-        server_scope = opencode_cfg.get("server_scope")
-        if not isinstance(server_scope, str):
-            raise ConfigError("opencode.server_scope must be a string or null")
-        if server_scope.strip().lower() not in {"workspace", "global"}:
-            raise ConfigError("opencode.server_scope must be 'workspace' or 'global'")
-    if (
-        "session_stall_timeout_seconds" in opencode_cfg
-        and opencode_cfg.get("session_stall_timeout_seconds") is not None
-    ):
-        stall_timeout = opencode_cfg.get("session_stall_timeout_seconds")
-        if not isinstance(stall_timeout, (int, float)):
-            raise ConfigError(
-                "opencode.session_stall_timeout_seconds must be a number or null"
-            )
-        if stall_timeout <= 0:
-            raise ConfigError(
-                "opencode.session_stall_timeout_seconds must be > 0 or null"
-            )
-    if (
-        "max_text_chars" in opencode_cfg
-        and opencode_cfg.get("max_text_chars") is not None
-    ):
-        max_text_chars = opencode_cfg.get("max_text_chars")
-        if not isinstance(max_text_chars, int):
-            raise ConfigError("opencode.max_text_chars must be an integer or null")
-        if max_text_chars <= 0:
-            raise ConfigError("opencode.max_text_chars must be > 0 or null")
-    if "max_handles" in opencode_cfg and opencode_cfg.get("max_handles") is not None:
-        oc_handles = opencode_cfg.get("max_handles")
-        if not isinstance(oc_handles, int):
-            raise ConfigError("opencode.max_handles must be an integer or null")
-        if oc_handles <= 0:
-            raise ConfigError("opencode.max_handles must be > 0 or null")
-    if (
-        "idle_ttl_seconds" in opencode_cfg
-        and opencode_cfg.get("idle_ttl_seconds") is not None
-    ):
-        oc_idle = opencode_cfg.get("idle_ttl_seconds")
-        if not isinstance(oc_idle, int):
-            raise ConfigError("opencode.idle_ttl_seconds must be an integer or null")
-        if oc_idle <= 0:
-            raise ConfigError("opencode.idle_ttl_seconds must be > 0 or null")
+    for key, schema in OPENCODE_FIELD_SCHEMAS.items():
+        if key in opencode_cfg:
+            validate_schema_field(opencode_cfg.get(key), schema)
 
 
 def _validate_update_config(cfg: Dict[str, Any]) -> None:
@@ -491,40 +339,17 @@ def _validate_update_config(cfg: Dict[str, Any]) -> None:
         return
     if not isinstance(update_cfg, dict):
         raise ConfigError("update section must be a mapping if provided")
-    backend = update_cfg.get("backend")
-    if backend is not None:
-        if not isinstance(backend, str):
-            raise ConfigError("update.backend must be a string")
-        if backend.strip().lower() not in {"auto", "launchd", "systemd-user"}:
-            raise ConfigError(
-                "update.backend must be one of: auto, launchd, systemd-user"
-            )
-    if "skip_checks" in update_cfg and update_cfg.get("skip_checks") is not None:
-        if not isinstance(update_cfg.get("skip_checks"), bool):
-            raise ConfigError("update.skip_checks must be boolean or null")
+    for key, schema in UPDATE_FIELD_SCHEMAS.items():
+        if key in update_cfg:
+            validate_schema_field(update_cfg.get(key), schema)
     linux_services = update_cfg.get("linux_service_names")
     if linux_services is None:
         return
     if not isinstance(linux_services, dict):
         raise ConfigError("update.linux_service_names must be a mapping if provided")
-    hub_service = linux_services.get("hub")
-    telegram_service = linux_services.get("telegram")
-    discord_service = linux_services.get("discord")
-    if hub_service is not None:
-        if not isinstance(hub_service, str) or not hub_service.strip():
-            raise ConfigError(
-                "update.linux_service_names.hub must be a non-empty string"
-            )
-    if telegram_service is not None:
-        if not isinstance(telegram_service, str) or not telegram_service.strip():
-            raise ConfigError(
-                "update.linux_service_names.telegram must be a non-empty string"
-            )
-    if discord_service is not None:
-        if not isinstance(discord_service, str) or not discord_service.strip():
-            raise ConfigError(
-                "update.linux_service_names.discord must be a non-empty string"
-            )
+    for key, schema in UPDATE_LINUX_SERVICE_NAME_SCHEMAS.items():
+        if key in linux_services:
+            validate_schema_field(linux_services.get(key), schema)
 
 
 def _validate_usage_config(cfg: Dict[str, Any], *, root: Path) -> None:
@@ -533,39 +358,9 @@ def _validate_usage_config(cfg: Dict[str, Any], *, root: Path) -> None:
         return
     if not isinstance(usage_cfg, dict):
         raise ConfigError("usage section must be a mapping if provided")
-    cache_scope = usage_cfg.get("cache_scope")
-    if cache_scope is not None and not isinstance(cache_scope, str):
-        raise ConfigError("usage.cache_scope must be a string if provided")
-    if isinstance(cache_scope, str):
-        scope_val = cache_scope.strip().lower()
-        if scope_val and scope_val not in {"global", "repo"}:
-            raise ConfigError("usage.cache_scope must be 'global' or 'repo'")
-    global_cache_root = usage_cfg.get("global_cache_root")
-    if global_cache_root is not None:
-        if not isinstance(global_cache_root, str):
-            raise ConfigError("usage.global_cache_root must be a string or null")
-        try:
-            resolve_config_path(
-                global_cache_root,
-                root,
-                allow_absolute=True,
-                allow_home=True,
-                scope="usage.global_cache_root",
-            )
-        except ConfigPathError as exc:
-            raise ConfigError(str(exc)) from exc
-    repo_cache_path = usage_cfg.get("repo_cache_path")
-    if repo_cache_path is not None:
-        if not isinstance(repo_cache_path, str):
-            raise ConfigError("usage.repo_cache_path must be a string or null")
-        try:
-            resolve_config_path(
-                repo_cache_path,
-                root,
-                scope="usage.repo_cache_path",
-            )
-        except ConfigPathError as exc:
-            raise ConfigError(str(exc)) from exc
+    for key, schema in USAGE_FIELD_SCHEMAS.items():
+        if key in usage_cfg:
+            validate_schema_field(usage_cfg.get(key), schema, root=root)
 
 
 def _validate_agents_config(cfg: Dict[str, Any]) -> None:
@@ -577,32 +372,27 @@ def _validate_agents_config(cfg: Dict[str, Any]) -> None:
     for agent_id, agent_cfg in agents_cfg.items():
         if not isinstance(agent_cfg, dict):
             raise ConfigError(f"agents.{agent_id} must be a mapping")
-        backend = agent_cfg.get("backend")
-        if backend is not None and (
-            not isinstance(backend, str) or not backend.strip()
-        ):
-            raise ConfigError(
-                f"agents.{agent_id}.backend must be a non-empty string when provided"
-            )
-        binary = agent_cfg.get("binary")
-        if not isinstance(binary, str) or not binary.strip():
+        if "binary" not in agent_cfg:
             raise ConfigError(f"agents.{agent_id}.binary is required")
-        if "serve_command" in agent_cfg and not isinstance(
-            agent_cfg.get("serve_command"), (list, str)
-        ):
-            raise ConfigError(f"agents.{agent_id}.serve_command must be a list or str")
+        for key, raw_schema in AGENT_FIELD_SCHEMAS.items():
+            if key not in agent_cfg:
+                continue
+            schema = dataclasses.replace(
+                raw_schema,
+                type_message=(
+                    raw_schema.type_message.format(agent_id=agent_id)
+                    if raw_schema.type_message
+                    else None
+                ),
+                value_message=(
+                    raw_schema.value_message.format(agent_id=agent_id)
+                    if raw_schema.value_message
+                    else None
+                ),
+            )
+            validate_schema_field(agent_cfg.get(key), schema)
         default_profile = agent_cfg.get("default_profile")
-        if default_profile is not None and (
-            not isinstance(default_profile, str) or not default_profile.strip()
-        ):
-            raise ConfigError(
-                f"agents.{agent_id}.default_profile must be a non-empty string when provided"
-            )
         profiles = agent_cfg.get("profiles")
-        if profiles is not None and not isinstance(profiles, dict):
-            raise ConfigError(
-                f"agents.{agent_id}.profiles must be a mapping when provided"
-            )
         if isinstance(profiles, dict):
             normalized_profile_ids: set[str] = set()
             for profile_id, profile_cfg in profiles.items():
@@ -616,33 +406,29 @@ def _validate_agents_config(cfg: Dict[str, Any]) -> None:
                     raise ConfigError(
                         f"agents.{agent_id}.profiles.{profile_id} must be a mapping"
                     )
-                profile_backend = profile_cfg.get("backend")
-                if profile_backend is not None and (
-                    not isinstance(profile_backend, str) or not profile_backend.strip()
-                ):
-                    raise ConfigError(
-                        f"agents.{agent_id}.profiles.{profile_id}.backend must be a non-empty string when provided"
+                for key, raw_schema in AGENT_PROFILE_FIELD_SCHEMAS.items():
+                    if key not in profile_cfg:
+                        continue
+                    schema = dataclasses.replace(
+                        raw_schema,
+                        type_message=(
+                            raw_schema.type_message.format(
+                                agent_id=agent_id,
+                                profile_id=profile_id,
+                            )
+                            if raw_schema.type_message
+                            else None
+                        ),
+                        value_message=(
+                            raw_schema.value_message.format(
+                                agent_id=agent_id,
+                                profile_id=profile_id,
+                            )
+                            if raw_schema.value_message
+                            else None
+                        ),
                     )
-                profile_binary = profile_cfg.get("binary")
-                if profile_binary is not None and (
-                    not isinstance(profile_binary, str) or not profile_binary.strip()
-                ):
-                    raise ConfigError(
-                        f"agents.{agent_id}.profiles.{profile_id}.binary must be a non-empty string when provided"
-                    )
-                if "serve_command" in profile_cfg and not isinstance(
-                    profile_cfg.get("serve_command"), (list, str)
-                ):
-                    raise ConfigError(
-                        f"agents.{agent_id}.profiles.{profile_id}.serve_command must be a list or str"
-                    )
-                display_name = profile_cfg.get("display_name")
-                if display_name is not None and (
-                    not isinstance(display_name, str) or not display_name.strip()
-                ):
-                    raise ConfigError(
-                        f"agents.{agent_id}.profiles.{profile_id}.display_name must be a non-empty string when provided"
-                    )
+                    validate_schema_field(profile_cfg.get(key), schema)
             if isinstance(default_profile, str) and default_profile.strip():
                 if default_profile.strip().lower() not in normalized_profile_ids:
                     raise ConfigError(
@@ -732,25 +518,9 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
     if ticket_flow_cfg is not None and not isinstance(ticket_flow_cfg, dict):
         raise ConfigError("ticket_flow section must be a mapping if provided")
     if isinstance(ticket_flow_cfg, dict):
-        if "approval_mode" in ticket_flow_cfg:
-            _normalize_ticket_flow_approval_mode(
-                ticket_flow_cfg.get("approval_mode"),
-                scope="ticket_flow.approval_mode",
-            )
-        if "default_approval_decision" in ticket_flow_cfg and not isinstance(
-            ticket_flow_cfg.get("default_approval_decision"), str
-        ):
-            raise ConfigError("ticket_flow.default_approval_decision must be a string")
-        if "include_previous_ticket_context" in ticket_flow_cfg and not isinstance(
-            ticket_flow_cfg.get("include_previous_ticket_context"), bool
-        ):
-            raise ConfigError(
-                "ticket_flow.include_previous_ticket_context must be boolean"
-            )
-        if "auto_resume" in ticket_flow_cfg and not isinstance(
-            ticket_flow_cfg.get("auto_resume"), bool
-        ):
-            raise ConfigError("ticket_flow.auto_resume must be boolean")
+        for key, schema in TICKET_FLOW_FIELD_SCHEMAS.items():
+            if key in ticket_flow_cfg:
+                validate_schema_field(ticket_flow_cfg.get(key), schema)
     ui_cfg = cfg.get("ui")
     if ui_cfg is not None and not isinstance(ui_cfg, dict):
         raise ConfigError("ui section must be a mapping if provided")

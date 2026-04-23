@@ -40,6 +40,7 @@ from .config_parsers import (
     _parse_ticket_flow_config,
     _parse_update_backend,
     _parse_update_linux_service_names,
+    _parse_update_skip_checks,
     _parse_usage_config,
     _parse_voice_config_section,
     normalize_base_path,
@@ -244,7 +245,7 @@ def build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
     update_cfg = cast(
         Dict[str, Any], update_cfg if isinstance(update_cfg, dict) else {}
     )
-    update_skip_checks = bool(update_cfg.get("skip_checks", False))
+    update_skip_checks = _parse_update_skip_checks(update_cfg)
     update_backend = _parse_update_backend(update_cfg)
     update_linux_service_names = _parse_update_linux_service_names(update_cfg)
     autorunner_cfg = cfg.get("autorunner")
@@ -381,7 +382,7 @@ def build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
     update_cfg = cast(
         Dict[str, Any], update_cfg if isinstance(update_cfg, dict) else {}
     )
-    update_skip_checks = bool(update_cfg.get("skip_checks", False))
+    update_skip_checks = _parse_update_skip_checks(update_cfg)
     update_backend = _parse_update_backend(update_cfg)
     update_linux_service_names = _parse_update_linux_service_names(update_cfg)
     storage_cfg = cfg.get("storage")
