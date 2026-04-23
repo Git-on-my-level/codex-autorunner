@@ -17,9 +17,14 @@ from ...core.orchestration import (
 )
 from ...core.orchestration.bindings import OrchestrationBindingStore
 from ...integrations.chat.agents import resolve_chat_runtime_agent
+from ..chat.bound_live_progress import (
+    build_bound_chat_queue_execution_controller,
+    resolve_bound_chat_queue_progress_context,
+)
 from ..chat.managed_thread_turns import (
     ManagedThreadCoordinatorHooks,
     ManagedThreadErrorMessages,
+    ManagedThreadExecutionHooks,
     ManagedThreadFinalizationResult,
     ManagedThreadSurfaceInfo,
     ManagedThreadTargetRequest,
@@ -45,23 +50,7 @@ _logger = logging.getLogger(__name__)
 
 _DEFAULT_DISCORD_PMA_TIMEOUT_SECONDS = 7200
 _DEFAULT_DISCORD_PMA_STALL_TIMEOUT_SECONDS = 1800
-
-
-def _build_managed_thread_input_items(
-    runtime_prompt: str,
-    input_items: Optional[list[dict[str, Any]]],
-) -> Optional[list[dict[str, Any]]]:
-    return _shared_build_managed_thread_input_items(
-        runtime_prompt,
-        input_items,
-    )
-
-
-def _coerce_launch_command(value: Any) -> Optional[list[str]]:
-    if isinstance(value, (list, tuple)):
-        command = [str(part) for part in value if str(part).strip()]
-        return command or None
-    return None
+_build_managed_thread_input_items = _shared_build_managed_thread_input_items
 
 
 def _runtime_launch_command_from_harness(harness: Any) -> Optional[list[str]]:
@@ -71,10 +60,13 @@ def _runtime_launch_command_from_harness(harness: Any) -> Optional[list[str]]:
     launch_command = getattr(supervisor, "launch_command", None)
     if callable(launch_command):
         try:
-            return _coerce_launch_command(launch_command())
+            launch_command = launch_command()
         except (RuntimeError, ValueError, TypeError, AttributeError):
             return None
-    return _coerce_launch_command(launch_command)
+    if isinstance(launch_command, (list, tuple)):
+        command = [str(part) for part in launch_command if str(part).strip()]
+        return command or None
+    return None
 
 
 async def _evict_cached_runtime_supervisors(
@@ -447,6 +439,20 @@ def _build_discord_runner_hooks(
         workspace_root=workspace_root,
         public_execution_error=public_execution_error,
     )
+    hub_root, raw_config = resolve_bound_chat_queue_progress_context(
+        service,
+        fallback_root=workspace_root,
+    )
+    queue_progress = build_bound_chat_queue_execution_controller(
+        hub_root=hub_root,
+        raw_config=raw_config,
+        managed_thread_id=managed_thread_id,
+        surface_targets=(("discord", channel_id),),
+        base_hooks=ManagedThreadExecutionHooks(
+            on_execution_started=_on_execution_started,
+            on_execution_finished=_on_execution_finished,
+        ),
+    )
 
     async def _deliver_result(finalized: ManagedThreadFinalizationResult) -> None:
         if finalized.status == "ok":
@@ -502,6 +508,7 @@ def _build_discord_runner_hooks(
         durable_delivery=durable_delivery,
         deliver_result=_deliver_result,
         run_with_indicator=_run_with_discord_typing_indicator,
+        queue_execution_hooks=queue_progress.hooks,
     )
 
 

@@ -108,6 +108,7 @@ def _build_hooks(
     tmp_path: Path,
     *,
     handlers: _TelegramHandlersStub,
+    managed_thread_id: str = "thread-1",
     chat_id: int = 12345,
     thread_id: Optional[int] = 99,
     topic_key: str = "test-topic",
@@ -117,6 +118,7 @@ def _build_hooks(
     initialize_orchestration_sqlite(hub_root, durable=False)
     hooks = _build_telegram_runner_hooks(
         handlers,
+        managed_thread_id=managed_thread_id,
         chat_id=chat_id,
         thread_id=thread_id,
         topic_key=topic_key,
@@ -492,6 +494,7 @@ async def test_telegram_direct_turn_intent_before_transport_ordering(
     handlers = _OrderedHandlers(state_root=tmp_path)
     hooks = _build_telegram_runner_hooks(
         handlers,
+        managed_thread_id="thread-1",
         chat_id=12345,
         thread_id=99,
         topic_key="test-topic",
@@ -529,6 +532,7 @@ async def test_telegram_direct_turn_error_status_uses_durable_path(
     handlers = _TelegramHandlersStub(state_root=tmp_path)
     hooks = _build_telegram_runner_hooks(
         handlers,
+        managed_thread_id="thread-1",
         chat_id=12345,
         thread_id=99,
         topic_key="test-topic",
@@ -561,6 +565,7 @@ async def test_telegram_direct_turn_cancellation_leaves_durable_record(
     )
     hooks = _build_telegram_runner_hooks(
         handlers,
+        managed_thread_id="thread-1",
         chat_id=12345,
         thread_id=99,
         topic_key="test-topic",

@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..chat.bound_live_progress import (
+    build_bound_chat_queue_execution_controller,
+    resolve_bound_chat_queue_progress_context,
+)
 from ..chat.managed_thread_startup_recovery import (
     recover_managed_thread_executions_on_startup as recover_surface_managed_thread_executions_on_startup,
 )
@@ -17,6 +21,23 @@ from .state import parse_topic_key
 async def recover_managed_thread_executions_on_startup(service: Any) -> None:
     public_execution_error = "Telegram PMA turn failed"
 
+    def _build_execution_hooks(
+        owner: Any,
+        surface_key: str,
+        managed_thread_id: str,
+        thread: Any,
+    ) -> Any:
+        hub_root, raw_config = resolve_bound_chat_queue_progress_context(
+            owner,
+            fallback_root=getattr(thread, "workspace_root", None) or owner._config.root,
+        )
+        return build_bound_chat_queue_execution_controller(
+            hub_root=hub_root,
+            raw_config=raw_config,
+            managed_thread_id=managed_thread_id,
+            surface_targets=(("telegram", surface_key),),
+        ).hooks
+
     def _build_delivery(
         owner: Any,
         surface_key: str,
@@ -27,6 +48,7 @@ async def recover_managed_thread_executions_on_startup(service: Any) -> None:
         chat_id, thread_id, _ = parse_topic_key(surface_key)
         hooks = _build_telegram_runner_hooks(
             owner,
+            managed_thread_id=_managed_thread_id,
             chat_id=chat_id,
             thread_id=thread_id,
             topic_key=surface_key,
@@ -61,6 +83,7 @@ async def recover_managed_thread_executions_on_startup(service: Any) -> None:
         )
         runner_hooks = _build_telegram_runner_hooks(
             owner,
+            managed_thread_id=managed_thread_id,
             chat_id=chat_id,
             thread_id=thread_id,
             topic_key=surface_key,
@@ -81,6 +104,7 @@ async def recover_managed_thread_executions_on_startup(service: Any) -> None:
         surface_kind="telegram",
         build_orchestration_service=_build_telegram_thread_orchestration_service,
         build_durable_delivery=_build_delivery,
+        build_execution_hooks=_build_execution_hooks,
         recover_pending_queue=_recover_pending_queue,
         public_execution_error=public_execution_error,
         failure_event_name="telegram.turn.startup_execution_recovery_failed",

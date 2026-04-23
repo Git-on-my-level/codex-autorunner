@@ -27,6 +27,10 @@ from .....integrations.chat.managed_thread_startup_recovery import (
     find_surface_key_for_running_execution,
 )
 from .....integrations.chat.managed_thread_turns import (
+    ManagedThreadCoordinatorHooks,
+    ManagedThreadQueueWorkerHooks,
+)
+from .....integrations.chat.managed_thread_turns import (
     ensure_managed_thread_queue_worker as ensure_shared_managed_thread_queue_worker,
 )
 from .....integrations.discord.rendering import format_discord_message
@@ -240,6 +244,9 @@ def ensure_queue_worker(
     finalize_managed_thread_execution: Any,
     deliver_managed_thread_execution_result: Any,
     track_managed_thread_task: Any,
+    hooks: Optional[
+        ManagedThreadQueueWorkerHooks | ManagedThreadCoordinatorHooks
+    ] = None,
 ) -> None:
     task_map = getattr(app.state, "pma_managed_thread_queue_tasks", None)
     if not isinstance(task_map, dict):
@@ -272,7 +279,15 @@ def ensure_queue_worker(
             response_payload={},
         )
 
-    ensure_shared_managed_thread_queue_worker(
+    resolved_hooks: Optional[ManagedThreadQueueWorkerHooks]
+    if hooks is None:
+        resolved_hooks = None
+    elif isinstance(hooks, ManagedThreadCoordinatorHooks):
+        resolved_hooks = hooks.queue_worker_hooks()
+    else:
+        resolved_hooks = hooks
+
+    shared_kwargs = dict(
         task_map=task_map,
         managed_thread_id=managed_thread_id,
         orchestration_service=service,
@@ -282,8 +297,24 @@ def ensure_queue_worker(
             track_managed_thread_task=track_managed_thread_task,
         ),
         finalize_started_execution=_finalize_started_execution,
-        deliver_result=_deliver_result,
         poll_interval_seconds=0.1,
+    )
+    ensure_shared_managed_thread_queue_worker(
+        **shared_kwargs,
+        durable_delivery=(
+            None if resolved_hooks is None else resolved_hooks.durable_delivery
+        ),
+        deliver_result=(
+            _deliver_result
+            if resolved_hooks is None
+            else (resolved_hooks.deliver_result or _deliver_result)
+        ),
+        run_with_indicator=(
+            None if resolved_hooks is None else resolved_hooks.run_with_indicator
+        ),
+        execution_hooks=(
+            None if resolved_hooks is None else resolved_hooks.execution_hooks
+        ),
     )
 
 

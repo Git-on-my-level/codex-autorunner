@@ -3,6 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from ...integrations.chat.bound_live_progress import (
+    build_bound_chat_queue_execution_controller,
+    resolve_bound_chat_queue_progress_context,
+)
 from ...integrations.chat.managed_thread_startup_recovery import (
     recover_managed_thread_executions_on_startup as recover_surface_managed_thread_executions_on_startup,
 )
@@ -20,6 +24,23 @@ from .progress_leases import (
 
 async def recover_managed_thread_executions_on_startup(service: Any) -> None:
     public_execution_error = "Discord PMA turn failed"
+
+    def _build_execution_hooks(
+        owner: Any,
+        surface_key: str,
+        managed_thread_id: str,
+        _thread: Any,
+    ) -> Any:
+        hub_root, raw_config = resolve_bound_chat_queue_progress_context(
+            owner,
+            fallback_root=Path(owner._config.root),
+        )
+        return build_bound_chat_queue_execution_controller(
+            hub_root=hub_root,
+            raw_config=raw_config,
+            managed_thread_id=managed_thread_id,
+            surface_targets=(("discord", surface_key),),
+        ).hooks
 
     def _recover_pending_queue(
         owner: Any,
@@ -81,6 +102,7 @@ async def recover_managed_thread_executions_on_startup(service: Any) -> None:
                 public_execution_error=public_execution_error,
             )
         ),
+        build_execution_hooks=_build_execution_hooks,
         recover_pending_queue=_recover_pending_queue,
         public_execution_error=public_execution_error,
         failure_event_name="discord.turn.startup_execution_recovery_failed",

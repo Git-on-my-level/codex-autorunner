@@ -94,6 +94,12 @@ ProgressEventHandler = Callable[[Any], Awaitable[None]]
 RunWithIndicator = Callable[[Callable[[], Awaitable[None]]], Awaitable[None]]
 ManagedThreadStatus = Literal["ok", "error", "interrupted"]
 ManagedThreadLifecycleHook = Callable[[RuntimeThreadExecution], object]
+ManagedThreadFinalizationHook = Callable[
+    [RuntimeThreadExecution, "ManagedThreadFinalizationResult"], object
+]
+ManagedThreadExecutionErrorHook = Callable[
+    [RuntimeThreadExecution, BaseException], object
+]
 SpawnTask = Callable[[Awaitable[Any]], asyncio.Task[Any]]
 MessagePreviewBuilder = Callable[[str], str]
 
@@ -247,6 +253,8 @@ class ManagedThreadDeliveryHandoffResult:
 class ManagedThreadExecutionHooks:
     on_execution_started: Optional[ManagedThreadLifecycleHook] = None
     on_execution_finished: Optional[ManagedThreadLifecycleHook] = None
+    on_execution_finalized: Optional[ManagedThreadFinalizationHook] = None
+    on_execution_error: Optional[ManagedThreadExecutionErrorHook] = None
     on_progress_event: Optional[ProgressEventHandler] = None
 
 
@@ -268,15 +276,20 @@ class ManagedThreadCoordinatorHooks:
 
     on_execution_started: Optional[ManagedThreadLifecycleHook] = None
     on_execution_finished: Optional[ManagedThreadLifecycleHook] = None
+    on_execution_finalized: Optional[ManagedThreadFinalizationHook] = None
+    on_execution_error: Optional[ManagedThreadExecutionErrorHook] = None
     on_progress_event: Optional[ProgressEventHandler] = None
     durable_delivery: Optional[ManagedThreadDurableDeliveryHooks] = None
     deliver_result: Optional[DeliverQueuedResult] = None
     run_with_indicator: Optional[RunWithIndicator] = None
+    queue_execution_hooks: Optional[ManagedThreadExecutionHooks] = None
 
     def execution_hooks(self) -> ManagedThreadExecutionHooks:
         return ManagedThreadExecutionHooks(
             on_execution_started=self.on_execution_started,
             on_execution_finished=self.on_execution_finished,
+            on_execution_finalized=self.on_execution_finalized,
+            on_execution_error=self.on_execution_error,
             on_progress_event=self.on_progress_event,
         )
 
@@ -289,7 +302,7 @@ class ManagedThreadCoordinatorHooks:
             durable_delivery=self.durable_delivery,
             deliver_result=self.deliver_result,
             run_with_indicator=self.run_with_indicator,
-            execution_hooks=self.execution_hooks(),
+            execution_hooks=self.queue_execution_hooks or self.execution_hooks(),
         )
 
 
@@ -577,6 +590,70 @@ async def _invoke_lifecycle_hook(
     result = hook(started)
     if inspect.isawaitable(result):
         await result
+
+
+async def _invoke_finalization_hook(
+    hook: Optional[ManagedThreadFinalizationHook],
+    started: RuntimeThreadExecution,
+    finalized: "ManagedThreadFinalizationResult",
+) -> None:
+    if hook is None:
+        return
+    result = hook(started, finalized)
+    if inspect.isawaitable(result):
+        await result
+
+
+async def _invoke_execution_error_hook(
+    hook: Optional[ManagedThreadExecutionErrorHook],
+    started: RuntimeThreadExecution,
+    exc: BaseException,
+) -> None:
+    if hook is None:
+        return
+    result = hook(started, exc)
+    if inspect.isawaitable(result):
+        await result
+
+
+def _queue_worker_progress_execution_hooks(
+    hooks: Optional[ManagedThreadExecutionHooks],
+) -> Optional[ManagedThreadExecutionHooks]:
+    if hooks is None or hooks.on_progress_event is None:
+        return None
+    return ManagedThreadExecutionHooks(on_progress_event=hooks.on_progress_event)
+
+
+def _wrap_queue_worker_finalizer_with_execution_hooks(
+    finalize_started_execution: FinalizeQueuedExecution,
+    execution_hooks: Optional[ManagedThreadExecutionHooks],
+) -> FinalizeQueuedExecution:
+    if execution_hooks is None:
+        return finalize_started_execution
+
+    async def _wrapped(
+        started: RuntimeThreadExecution,
+    ) -> ManagedThreadFinalizationResult:
+        await _invoke_lifecycle_hook(execution_hooks.on_execution_started, started)
+        try:
+            finalized = await finalize_started_execution(started)
+            await _invoke_finalization_hook(
+                execution_hooks.on_execution_finalized,
+                started,
+                finalized,
+            )
+            return finalized
+        except BaseException as exc:
+            await _invoke_execution_error_hook(
+                execution_hooks.on_execution_error,
+                started,
+                exc,
+            )
+            raise
+        finally:
+            await _invoke_lifecycle_hook(execution_hooks.on_execution_finished, started)
+
+    return _wrapped
 
 
 def _coerce_execution_hooks(
@@ -1098,7 +1175,7 @@ class ManagedThreadTurnCoordinator:
                 )
         await _invoke_lifecycle_hook(resolved_hooks.on_execution_started, started)
         try:
-            return await finalize_managed_thread_execution(
+            finalized = await finalize_managed_thread_execution(
                 orchestration_service=self.orchestration_service,
                 started=started,
                 state_root=self.state_root,
@@ -1111,6 +1188,19 @@ class ManagedThreadTurnCoordinator:
                 runtime_event_state=runtime_event_state,
                 on_progress_event=resolved_hooks.on_progress_event,
             )
+            await _invoke_finalization_hook(
+                resolved_hooks.on_execution_finalized,
+                started,
+                finalized,
+            )
+            return finalized
+        except BaseException as exc:
+            await _invoke_execution_error_hook(
+                resolved_hooks.on_execution_error,
+                started,
+                exc,
+            )
+            raise
         finally:
             await _invoke_lifecycle_hook(resolved_hooks.on_execution_finished, started)
 
@@ -1132,11 +1222,14 @@ class ManagedThreadTurnCoordinator:
             spawn_task=spawn_task,
             finalize_started_execution=lambda started: self.run_started_execution(
                 started,
-                hooks=resolved_hooks.execution_hooks,
+                hooks=_queue_worker_progress_execution_hooks(
+                    resolved_hooks.execution_hooks
+                ),
             ),
             durable_delivery=resolved_hooks.durable_delivery,
             deliver_result=resolved_hooks.deliver_result,
             run_with_indicator=resolved_hooks.run_with_indicator,
+            execution_hooks=resolved_hooks.execution_hooks,
             poll_interval_seconds=poll_interval_seconds,
             begin_next_execution=begin_next_execution,
         )
@@ -1557,6 +1650,7 @@ def ensure_managed_thread_queue_worker(
     durable_delivery: Optional[ManagedThreadDurableDeliveryHooks] = None,
     deliver_result: Optional[DeliverQueuedResult] = None,
     run_with_indicator: Optional[RunWithIndicator] = None,
+    execution_hooks: Optional[ManagedThreadExecutionHooks] = None,
     poll_interval_seconds: float = 0.1,
     begin_next_execution: Optional[ManagedThreadQueuedExecutionStarter] = None,
 ) -> None:
@@ -1567,6 +1661,10 @@ def ensure_managed_thread_queue_worker(
         return
 
     begin_next = begin_next_execution or begin_next_queued_runtime_thread_execution
+    queue_finalize = _wrap_queue_worker_finalizer_with_execution_hooks(
+        finalize_started_execution,
+        execution_hooks,
+    )
 
     async def _queue_worker() -> None:
         try:
@@ -1586,7 +1684,7 @@ def ensure_managed_thread_queue_worker(
                 await _process_queued_execution(
                     started,
                     orchestration_service=orchestration_service,
-                    finalize_started_execution=finalize_started_execution,
+                    finalize_started_execution=queue_finalize,
                     durable_delivery=durable_delivery,
                     deliver_result=deliver_result,
                     run_with_indicator=run_with_indicator,

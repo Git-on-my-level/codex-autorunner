@@ -2138,6 +2138,7 @@ async def _run_discord_orchestrated_turn_for_message(
             else queue_worker_hooks.deliver_result
         ),
         run_with_indicator=queue_worker_hooks.run_with_indicator,
+        queue_execution_hooks=queue_worker_hooks.execution_hooks,
     )
     progress_backend_turn_id: Optional[str] = None
 

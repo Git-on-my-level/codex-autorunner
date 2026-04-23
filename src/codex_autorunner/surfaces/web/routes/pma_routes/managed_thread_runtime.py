@@ -5,42 +5,40 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, Optional, cast
+from typing import TYPE_CHECKING, Any, Callable, Optional, cast
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from .....core.config import ConfigError, load_repo_config
 from .....core.orchestration import MessageRequest
-from .....core.orchestration.cold_trace_store import ColdTraceWriter
-from .....core.orchestration.runtime_thread_events import (
-    RuntimeThreadRunEventState,
-    normalize_runtime_thread_raw_event,
-)
+from .....core.orchestration.runtime_thread_events import RuntimeThreadRunEventState
 from .....core.orchestration.runtime_threads import (
     RuntimeThreadExecution,
     begin_runtime_thread_execution,
 )
 from .....core.orchestration.service import BusyInterruptFailedError
-from .....core.orchestration.turn_timeline import (
-    persist_turn_timeline,
-)
 from .....core.pma_thread_store import (
     ManagedThreadAlreadyHasRunningTurnError,
     ManagedThreadNotActiveError,
     PmaThreadStore,
 )
-from .....core.ports.run_event import RunEvent
 from .....core.text_utils import _truncate_text
 from .....integrations.chat.bound_live_progress import (
-    build_bound_chat_live_progress_session,
+    build_bound_chat_queue_execution_controller,
+    cleanup_bound_chat_live_progress_failure,
     cleanup_bound_chat_live_progress_success,
 )
+from .....integrations.chat.managed_thread_startup_recovery import (
+    find_surface_key_for_running_execution,
+)
 from .....integrations.chat.managed_thread_turns import (
+    ManagedThreadCoordinatorHooks,
     ManagedThreadErrorMessages,
+    ManagedThreadExecutionHooks,
     ManagedThreadFinalizationResult,
     ManagedThreadSurfaceInfo,
-    finalize_managed_thread_execution,
+    ManagedThreadTurnCoordinator,
 )
 from .....integrations.github.managed_thread_pr_binding import (
     self_claim_and_arm_pr_binding,
@@ -93,7 +91,6 @@ _DEFAULT_PMA_TIMEOUT_SECONDS = 7200
 @dataclass(frozen=True)
 class _PmaManagedThreadFinalizedExecution:
     result: ManagedThreadFinalizationResult
-    progress_targets: tuple[tuple[str, str], ...] = ()
 
 
 def _build_managed_thread_orchestration_service(
@@ -213,91 +210,33 @@ def _self_claim_pr_bindings_for_managed_thread(
     )
 
 
-def _build_managed_thread_turn_metadata(
+def _resolve_pma_chat_bound_surface_targets(
     *,
+    service: Any,
     managed_thread_id: str,
-    managed_turn_id: str,
-    thread_row: dict[str, Any],
-    backend_thread_id: str,
-    backend_turn_id: Optional[str],
-    workspace_root: Optional[Path],
-    model: Optional[str],
-    reasoning: Optional[str],
-    status: str,
-) -> dict[str, Any]:
-    metadata: dict[str, Any] = {
-        "managed_thread_id": managed_thread_id,
-        "managed_turn_id": managed_turn_id,
-        "repo_id": thread_row.get("repo_id"),
-        "resource_kind": thread_row.get("resource_kind"),
-        "resource_id": thread_row.get("resource_id"),
-        "agent": thread_row.get("agent"),
-        "backend_thread_id": backend_thread_id,
-        "backend_turn_id": backend_turn_id,
-        "model": model,
-        "reasoning": reasoning,
-        "status": status,
-    }
-    if workspace_root is not None:
-        metadata["workspace_root"] = str(workspace_root)
-    return metadata
-
-
-def _persist_managed_thread_timeline(
-    *,
-    hub_root: Path,
-    managed_thread_id: str,
-    managed_turn_id: str,
-    thread_row: dict[str, Any],
-    metadata: dict[str, Any],
-    events: list[RunEvent],
-    log_status: str,
-    cold_trace_writer: Optional[ColdTraceWriter] = None,
-) -> Optional[str]:
-    try:
-        persist_turn_timeline(
-            hub_root,
-            execution_id=managed_turn_id,
-            target_kind="thread_target",
-            target_id=managed_thread_id,
-            repo_id=normalize_optional_text(thread_row.get("repo_id")),
-            resource_kind=normalize_optional_text(thread_row.get("resource_kind")),
-            resource_id=normalize_optional_text(thread_row.get("resource_id")),
-            metadata=metadata,
-            events=events,
-            cold_trace_writer=cold_trace_writer,
+) -> tuple[tuple[str, str], ...]:
+    thread_store = getattr(service, "thread_store", None)
+    if thread_store is None:
+        return ()
+    targets: list[tuple[str, str]] = []
+    for surface_kind in ("discord", "telegram"):
+        surface_key = find_surface_key_for_running_execution(
+            service,
+            thread_store,
+            managed_thread_id=managed_thread_id,
+            surface_kind=surface_kind,
+            limit=1000,
         )
-    except (
-        OSError,
-        RuntimeError,
-        TypeError,
-        ValueError,
-    ):  # best-effort timeline persistence
-        logger.exception(
-            "Failed to persist %s managed-thread timeline (managed_thread_id=%s, managed_turn_id=%s)",
-            log_status,
+        if surface_key is not None:
+            targets.append((surface_kind, surface_key))
+    if len(targets) > 1:
+        logger.warning(
+            "Ambiguous PMA chat-bound surface ownership; suppressing live progress fanout (managed_thread_id=%s, targets=%s)",
             managed_thread_id,
-            managed_turn_id,
+            targets,
         )
-    finally:
-        if cold_trace_writer is not None:
-            cold_trace_writer.close()
-    return normalize_optional_text(metadata.get("trace_manifest_id"))
-
-
-async def _timeline_from_runtime_raw_events(
-    raw_events: tuple[Any, ...],
-) -> list[RunEvent]:
-    state = RuntimeThreadRunEventState()
-    timeline_events: list[RunEvent] = []
-    for raw_event in raw_events:
-        timeline_events.extend(
-            await normalize_runtime_thread_raw_event(
-                raw_event,
-                state,
-            )
-        )
-    return timeline_events
+        return ()
+    return tuple(targets)
 
 
 async def _run_managed_thread_execution(
@@ -310,13 +249,38 @@ async def _run_managed_thread_execution(
     fallback_backend_thread_id: Optional[str] = None,
     delivery_payload: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
-    finalized = await _finalize_managed_thread_execution(
+    managed_thread_id = (
+        normalize_optional_text(getattr(started.thread, "thread_target_id", None))
+        or normalize_optional_text(thread.get("managed_thread_id"))
+        or normalize_optional_text(thread.get("thread_target_id"))
+        or ""
+    )
+    queue_progress = build_bound_chat_queue_execution_controller(
+        hub_root=request.app.state.config.root,
+        raw_config=(
+            request.app.state.config.raw
+            if isinstance(getattr(request.app.state.config, "raw", None), dict)
+            else {}
+        ),
+        managed_thread_id=managed_thread_id,
+        surface_target_resolver=lambda _started: _resolve_pma_chat_bound_surface_targets(
+            service=service,
+            managed_thread_id=managed_thread_id,
+        ),
+        retain_completed_surface_targets=True,
+    )
+    coordinator = _build_pma_managed_thread_coordinator(
         request,
         service=service,
-        thread_store=thread_store,
-        thread=thread,
-        started=started,
-        fallback_backend_thread_id=fallback_backend_thread_id,
+        managed_thread_id=managed_thread_id,
+        message_text=started.request.message_text,
+    )
+    finalized = _PmaManagedThreadFinalizedExecution(
+        result=await coordinator.run_started_execution(
+            started,
+            hooks=queue_progress.hooks,
+            runtime_event_state=RuntimeThreadRunEventState(),
+        )
     )
     return await _deliver_managed_thread_execution_result(
         request,
@@ -324,6 +288,10 @@ async def _run_managed_thread_execution(
         thread=thread,
         finalized=finalized,
         response_payload=dict(delivery_payload or {}),
+        progress_targets=queue_progress.surface_targets_for(
+            finalized.result.managed_turn_id
+        ),
+        clear_progress_targets=queue_progress.clear_surface_targets,
     )
 
 
@@ -336,6 +304,33 @@ def _pma_finalization_errors(request: Request) -> ManagedThreadErrorMessages:
     )
 
 
+def _build_pma_managed_thread_coordinator(
+    request: Request,
+    *,
+    service: Any,
+    managed_thread_id: str,
+    message_text: str,
+) -> ManagedThreadTurnCoordinator:
+    return ManagedThreadTurnCoordinator(
+        orchestration_service=service,
+        state_root=request.app.state.config.root,
+        surface=ManagedThreadSurfaceInfo(
+            log_label="PMA",
+            surface_kind="pma_web",
+            surface_key=managed_thread_id,
+        ),
+        errors=_pma_finalization_errors(request),
+        logger=logger,
+        turn_preview=_truncate_text(message_text, 120),
+        hub_client=getattr(request.app.state, "hub_client", None),
+        raw_config=(
+            request.app.state.config.raw
+            if isinstance(getattr(request.app.state.config, "raw", None), dict)
+            else {}
+        ),
+    )
+
+
 async def _finalize_managed_thread_execution(
     request: Request,
     *,
@@ -344,6 +339,7 @@ async def _finalize_managed_thread_execution(
     thread: dict[str, Any],
     started: RuntimeThreadExecution,
     fallback_backend_thread_id: Optional[str] = None,
+    on_progress_event: Optional[Any] = None,
 ) -> _PmaManagedThreadFinalizedExecution:
     managed_thread_id = (
         normalize_optional_text(getattr(started.thread, "thread_target_id", None))
@@ -353,86 +349,20 @@ async def _finalize_managed_thread_execution(
     )
     if not managed_thread_id:
         raise RuntimeError("Managed-thread execution is missing thread_target_id")
-    current_turn_id = started.execution.execution_id
-    current_preview = _truncate_text(started.request.message_text, 120)
-    hub_root = request.app.state.config.root
     _ = thread_store, fallback_backend_thread_id
-    progress_session = build_bound_chat_live_progress_session(
-        hub_root=hub_root,
-        raw_config=(
-            request.app.state.config.raw
-            if isinstance(getattr(request.app.state.config, "raw", None), dict)
-            else {}
-        ),
+    coordinator = _build_pma_managed_thread_coordinator(
+        request,
+        service=service,
         managed_thread_id=managed_thread_id,
-        managed_turn_id=current_turn_id,
-        agent=str(getattr(started.thread, "agent_id", "") or "agent"),
-        model=started.request.model,
+        message_text=started.request.message_text,
     )
-    progress_targets = tuple(getattr(progress_session, "surface_targets", ()))
-    try:
-        await progress_session.start()
-    except Exception:
-        logger.exception(
-            "Failed to start bound chat live progress (managed_thread_id=%s, managed_turn_id=%s)",
-            managed_thread_id,
-            current_turn_id,
-        )
-
-    async def _handle_progress_event(run_event: RunEvent) -> None:
-        try:
-            await progress_session.apply_run_events([run_event])
-        except Exception:
-            logger.exception(
-                "Failed to apply bound chat live progress update (managed_thread_id=%s, managed_turn_id=%s)",
-                managed_thread_id,
-                current_turn_id,
-            )
-
-    finalized = await finalize_managed_thread_execution(
-        orchestration_service=service,
-        started=started,
-        state_root=hub_root,
-        hub_client=getattr(request.app.state, "hub_client", None),
-        raw_config=(
-            request.app.state.config.raw
-            if isinstance(getattr(request.app.state.config, "raw", None), dict)
-            else {}
-        ),
-        surface=ManagedThreadSurfaceInfo(
-            log_label="PMA",
-            surface_kind="pma_web",
-            surface_key=managed_thread_id,
-        ),
-        errors=_pma_finalization_errors(request),
-        logger=logger,
-        turn_preview=current_preview,
+    finalized = await coordinator.run_started_execution(
+        started,
+        hooks=ManagedThreadExecutionHooks(on_progress_event=on_progress_event),
         runtime_event_state=RuntimeThreadRunEventState(),
-        on_progress_event=_handle_progress_event,
     )
-    if finalized.status != "ok":
-        try:
-            await progress_session.finalize(
-                status=finalized.status,
-                failure_message=finalized.error,
-            )
-        except Exception:
-            logger.exception(
-                "Failed to finalize bound chat live progress (managed_thread_id=%s, managed_turn_id=%s)",
-                managed_thread_id,
-                current_turn_id,
-            )
-    try:
-        await progress_session.close()
-    except Exception:
-        logger.exception(
-            "Failed to close bound chat live progress (managed_thread_id=%s, managed_turn_id=%s)",
-            managed_thread_id,
-            current_turn_id,
-        )
     return _PmaManagedThreadFinalizedExecution(
         result=finalized,
-        progress_targets=progress_targets,
     )
 
 
@@ -443,6 +373,8 @@ async def _deliver_managed_thread_execution_result(
     thread: dict[str, Any],
     finalized: _PmaManagedThreadFinalizedExecution,
     response_payload: dict[str, Any],
+    progress_targets: tuple[tuple[str, str], ...] = (),
+    clear_progress_targets: Optional[Callable[[str], None]] = None,
 ) -> dict[str, Any]:
     finalized_result = finalized.result
     managed_thread_id = finalized_result.managed_thread_id
@@ -479,27 +411,37 @@ async def _deliver_managed_thread_execution_result(
                     managed_thread_id,
                     managed_turn_id,
                 )
-        delivery_result = await deliver_bound_chat_assistant_output(
-            request,
-            managed_thread_id=managed_thread_id,
-            managed_turn_id=managed_turn_id,
-            assistant_text=finalized_result.assistant_text,
-        )
-        await notify_managed_thread_terminal_transition(
-            request,
-            thread=current_thread_row,
-            managed_thread_id=managed_thread_id,
-            managed_turn_id=managed_turn_id,
-            to_state="completed",
-            reason="managed_turn_completed",
-        )
+        try:
+            delivery_result = await deliver_bound_chat_assistant_output(
+                request,
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=managed_turn_id,
+                assistant_text=finalized_result.assistant_text,
+            )
+            await notify_managed_thread_terminal_transition(
+                request,
+                thread=current_thread_row,
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=managed_turn_id,
+                to_state="completed",
+                reason="managed_turn_completed",
+            )
+        except Exception:
+            await _cleanup_progress_targets_after_delivery_failure(
+                request,
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=managed_turn_id,
+                progress_targets=progress_targets,
+                clear_progress_targets=clear_progress_targets,
+            )
+            raise
         covered_targets = {
             (str(surface_kind), str(surface_key))
             for surface_kind, surface_key in getattr(
                 delivery_result, "covered_targets", ()
             )
         }
-        for surface_kind, surface_key in finalized.progress_targets:
+        for surface_kind, surface_key in progress_targets:
             if (surface_kind, surface_key) in covered_targets:
                 continue
             try:
@@ -525,6 +467,8 @@ async def _deliver_managed_thread_execution_result(
                     surface_kind,
                     surface_key,
                 )
+        if clear_progress_targets is not None:
+            clear_progress_targets(managed_turn_id)
         return build_execution_result_payload(
             status="ok",
             managed_thread_id=managed_thread_id,
@@ -575,15 +519,84 @@ async def _deliver_managed_thread_execution_result(
     )
 
 
+async def _cleanup_progress_targets_after_delivery_failure(
+    request: Request,
+    *,
+    managed_thread_id: str,
+    managed_turn_id: str,
+    progress_targets: tuple[tuple[str, str], ...],
+    clear_progress_targets: Optional[Callable[[str], None]],
+) -> None:
+    for surface_kind, surface_key in progress_targets:
+        try:
+            await cleanup_bound_chat_live_progress_failure(
+                hub_root=request.app.state.config.root,
+                raw_config=(
+                    request.app.state.config.raw
+                    if isinstance(getattr(request.app.state.config, "raw", None), dict)
+                    else {}
+                ),
+                surface_kind=surface_kind,
+                surface_key=surface_key,
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=managed_turn_id,
+                failure_message="Final response delivery failed. Please retry.",
+            )
+        except Exception:
+            logger.exception(
+                "Failed to retire bound chat live progress target after delivery failure (managed_thread_id=%s, managed_turn_id=%s, surface_kind=%s, surface_key=%s)",
+                managed_thread_id,
+                managed_turn_id,
+                surface_kind,
+                surface_key,
+            )
+    if clear_progress_targets is not None:
+        clear_progress_targets(managed_turn_id)
+
+
 def ensure_managed_thread_queue_worker(app: Any, managed_thread_id: str) -> None:
+    def _resolve_surface_targets(_started: Any) -> tuple[tuple[str, str], ...]:
+        service = _build_managed_thread_orchestration_service_for_app(app)
+        return _resolve_pma_chat_bound_surface_targets(
+            service=service,
+            managed_thread_id=managed_thread_id,
+        )
+
+    queue_progress = build_bound_chat_queue_execution_controller(
+        hub_root=app.state.config.root,
+        raw_config=(
+            app.state.config.raw
+            if isinstance(getattr(app.state.config, "raw", None), dict)
+            else {}
+        ),
+        managed_thread_id=managed_thread_id,
+        surface_target_resolver=_resolve_surface_targets,
+        retain_completed_surface_targets=True,
+    )
+
+    async def _deliver_with_progress_targets(*args: Any, **kwargs: Any) -> Any:
+        finalized = kwargs.get("finalized")
+        managed_turn_id = str(
+            getattr(getattr(finalized, "result", None), "managed_turn_id", "") or ""
+        ).strip()
+        return await _deliver_managed_thread_execution_result(
+            *args,
+            **kwargs,
+            progress_targets=queue_progress.surface_targets_for(managed_turn_id),
+            clear_progress_targets=queue_progress.clear_surface_targets,
+        )
+
     ensure_queue_worker(
         app,
         managed_thread_id,
         managed_thread_request_for_app=_managed_thread_request_for_app,
         build_service_for_app=_build_managed_thread_orchestration_service_for_app,
         finalize_managed_thread_execution=_finalize_managed_thread_execution,
-        deliver_managed_thread_execution_result=_deliver_managed_thread_execution_result,
+        deliver_managed_thread_execution_result=_deliver_with_progress_targets,
         track_managed_thread_task=_track_managed_thread_task,
+        hooks=ManagedThreadCoordinatorHooks(
+            queue_execution_hooks=queue_progress.hooks,
+        ),
     )
 
 

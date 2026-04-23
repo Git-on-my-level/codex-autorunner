@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from types import SimpleNamespace
 from typing import Any, Callable, Optional
 
 from ...core.logging_utils import log_event
 from .managed_thread_turns import (
     ManagedThreadDurableDeliveryHooks,
+    ManagedThreadExecutionHooks,
     ManagedThreadFinalizationResult,
+    _invoke_execution_error_hook,
+    _invoke_finalization_hook,
+    _invoke_lifecycle_hook,
     handoff_managed_thread_final_delivery,
 )
 
@@ -15,6 +20,10 @@ BuildOrchestrationService = Callable[[Any], Any]
 BuildDurableDelivery = Callable[
     [Any, str, str, Any, str],
     Optional[ManagedThreadDurableDeliveryHooks],
+]
+BuildRecoveryExecutionHooks = Callable[
+    [Any, str, str, Any],
+    Optional[ManagedThreadExecutionHooks],
 ]
 RecoverPendingQueue = Callable[[Any, Any, str, str, Any], object]
 _PENDING_QUEUE_SCAN_LIMIT = 10_000
@@ -156,6 +165,7 @@ async def recover_managed_thread_executions_on_startup(
     surface_kind: str,
     build_orchestration_service: BuildOrchestrationService,
     build_durable_delivery: BuildDurableDelivery,
+    build_execution_hooks: Optional[BuildRecoveryExecutionHooks] = None,
     recover_pending_queue: Optional[RecoverPendingQueue] = None,
     public_execution_error: str,
     failure_event_name: str,
@@ -212,6 +222,22 @@ async def recover_managed_thread_executions_on_startup(
             )
             if delivery is None:
                 continue
+            execution_hooks = (
+                build_execution_hooks(
+                    service,
+                    surface_key,
+                    managed_thread_id,
+                    thread,
+                )
+                if build_execution_hooks is not None
+                else None
+            )
+            started = _build_recovered_started_execution(
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=recovered_execution.execution_id,
+                thread=thread,
+                recovered_execution=recovered_execution,
+            )
 
             finalized = ManagedThreadFinalizationResult(
                 status=recovered_execution.status,
@@ -222,11 +248,37 @@ async def recover_managed_thread_executions_on_startup(
                 backend_thread_id=getattr(thread, "backend_thread_id", None),
                 token_usage=None,
             )
-            await handoff_managed_thread_final_delivery(
-                finalized,
-                delivery=delivery,
-                logger=service._logger,
-            )
+            if execution_hooks is not None:
+                await _invoke_lifecycle_hook(
+                    execution_hooks.on_execution_started,
+                    started,
+                )
+            try:
+                await handoff_managed_thread_final_delivery(
+                    finalized,
+                    delivery=delivery,
+                    logger=service._logger,
+                )
+                if execution_hooks is not None:
+                    await _invoke_finalization_hook(
+                        execution_hooks.on_execution_finalized,
+                        started,
+                        finalized,
+                    )
+            except BaseException as exc:
+                if execution_hooks is not None:
+                    await _invoke_execution_error_hook(
+                        execution_hooks.on_execution_error,
+                        started,
+                        exc,
+                    )
+                raise
+            finally:
+                if execution_hooks is not None:
+                    await _invoke_lifecycle_hook(
+                        execution_hooks.on_execution_finished,
+                        started,
+                    )
             recovered += 1
         except asyncio.CancelledError:
             raise
@@ -271,6 +323,21 @@ async def recover_managed_thread_executions_on_startup(
                     limit=1000,
                 )
                 if len(owned_surface_keys) != 1:
+                    reason = (
+                        "no_owned_surface_binding"
+                        if not owned_surface_keys
+                        else "ambiguous_surface_ownership"
+                    )
+                    log_event(
+                        service._logger,
+                        logging.INFO,
+                        "chat.managed_thread.startup_pending_queue_skipped",
+                        managed_thread_id=managed_thread_id,
+                        surface_kind=surface_kind,
+                        reason=reason,
+                        owned_surface_keys=owned_surface_keys,
+                        owned_surface_key_count=len(owned_surface_keys),
+                    )
                     continue
                 thread = orchestration_service.get_thread_target(managed_thread_id)
                 if thread is None:
@@ -306,3 +373,33 @@ async def recover_managed_thread_executions_on_startup(
             rearmed_pending=rearmed_pending,
             failed=failed,
         )
+
+
+def _build_recovered_started_execution(
+    *,
+    managed_thread_id: str,
+    managed_turn_id: str,
+    thread: Any,
+    recovered_execution: Any,
+) -> Any:
+    return SimpleNamespace(
+        execution=SimpleNamespace(
+            execution_id=managed_turn_id,
+            backend_id=_normalized_optional_text(
+                getattr(recovered_execution, "backend_id", None)
+            ),
+            status="running",
+        ),
+        thread=SimpleNamespace(
+            thread_target_id=managed_thread_id,
+            backend_thread_id=_normalized_optional_text(
+                getattr(thread, "backend_thread_id", None)
+            ),
+            agent_id=getattr(thread, "agent_id", None),
+        ),
+        request=SimpleNamespace(
+            message_text="",
+            model=None,
+        ),
+        workspace_root=getattr(thread, "workspace_root", None),
+    )

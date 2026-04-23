@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import inspect
 import logging
 import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional
 
 from ...core.chat_bindings import (
     resolve_discord_state_path,
@@ -25,6 +27,10 @@ from ..telegram.outbox import _outbox_key as telegram_outbox_key
 from ..telegram.state import OutboxRecord as TelegramOutboxRecord
 from ..telegram.state import TelegramStateStore, parse_topic_key
 from .managed_thread_progress_projector import ManagedThreadProgressProjector
+from .managed_thread_turns import (
+    ManagedThreadExecutionHooks,
+    ManagedThreadFinalizationResult,
+)
 from .progress_primitives import TurnProgressTracker
 from .turn_metrics import _extract_context_usage_percent
 
@@ -159,6 +165,35 @@ class BoundChatLiveProgressSession:
                     adapter.surface_kind,
                     adapter.surface_key,
                 )
+
+
+@dataclass
+class BoundChatQueueExecutionController:
+    hooks: ManagedThreadExecutionHooks
+    _completed_surface_targets: dict[str, tuple[tuple[str, str], ...]]
+
+    def surface_targets_for(
+        self,
+        managed_turn_id: str,
+    ) -> tuple[tuple[str, str], ...]:
+        return self._completed_surface_targets.get(managed_turn_id, ())
+
+    def clear_surface_targets(self, managed_turn_id: str) -> None:
+        self._completed_surface_targets.pop(managed_turn_id, None)
+
+
+def resolve_bound_chat_queue_progress_context(
+    owner: Any,
+    *,
+    fallback_root: Path,
+) -> tuple[Path, Mapping[str, Any]]:
+    config = getattr(owner, "_config", None)
+    hub_root = getattr(config, "root", None)
+    raw_config = getattr(config, "raw", None)
+    return (
+        hub_root if isinstance(hub_root, Path) else Path(fallback_root),
+        raw_config if isinstance(raw_config, Mapping) else {},
+    )
 
 
 class _BaseBoundProgressAdapter:
@@ -820,6 +855,55 @@ async def cleanup_bound_chat_live_progress_success(
         await adapter.close()
 
 
+async def cleanup_bound_chat_live_progress_failure(
+    *,
+    hub_root: Path,
+    raw_config: Mapping[str, Any],
+    surface_kind: str,
+    surface_key: str,
+    managed_thread_id: str,
+    managed_turn_id: str,
+    failure_message: str,
+) -> None:
+    adapter = _build_bound_progress_adapter(
+        hub_root=hub_root,
+        raw_config=raw_config,
+        surface_kind=surface_kind,
+        surface_key=surface_key,
+        managed_thread_id=managed_thread_id,
+        managed_turn_id=managed_turn_id,
+    )
+    if adapter is None:
+        return
+    tracker = TurnProgressTracker(
+        started_at=time.monotonic(),
+        agent="agent",
+        model="default",
+        label="failed",
+        max_actions=1,
+        max_output_chars=(
+            _DISCORD_MAX_PROGRESS_LEN
+            if surface_kind == "discord"
+            else _TELEGRAM_MAX_PROGRESS_LEN
+        ),
+    )
+    tracker.note_error(failure_message or "Turn failed.")
+    projector = ManagedThreadProgressProjector(
+        tracker,
+        min_render_interval_seconds=0.0,
+        heartbeat_interval_seconds=5.0,
+    )
+    rendered = projector.render(
+        max_length=tracker.max_output_chars,
+        now=time.monotonic(),
+        render_mode="final",
+    )
+    try:
+        await adapter.complete_with_message(rendered)
+    finally:
+        await adapter.close()
+
+
 def build_bound_chat_live_progress_session(
     *,
     hub_root: Path,
@@ -828,28 +912,16 @@ def build_bound_chat_live_progress_session(
     managed_turn_id: str,
     agent: str,
     model: Optional[str],
+    surface_targets: Optional[tuple[tuple[str, str], ...]] = None,
 ) -> BoundChatLiveProgressSession:
-    binding_store = OrchestrationBindingStore(hub_root)
     adapters: list[_BaseBoundProgressAdapter] = []
     max_length = _DISCORD_MAX_PROGRESS_LEN
-    bindings = sorted(
-        (
-            binding
-            for binding in binding_store.list_bindings(
-                thread_target_id=managed_thread_id,
-                include_disabled=False,
-                limit=1000,
-            )
-            if binding.surface_kind in {"discord", "telegram"}
-        ),
-        key=lambda binding: (
-            str(binding.surface_kind or ""),
-            str(binding.surface_key or ""),
-        ),
+    targets = bound_chat_live_progress_targets(
+        hub_root=hub_root,
+        managed_thread_id=managed_thread_id,
+        surface_targets=surface_targets,
     )
-    for binding in bindings:
-        surface_kind = str(binding.surface_kind or "").strip()
-        surface_key = str(binding.surface_key or "").strip()
+    for surface_kind, surface_key in targets:
         try:
             adapter = _build_bound_progress_adapter(
                 hub_root=hub_root,
@@ -894,15 +966,198 @@ def build_bound_chat_live_progress_session(
     )
 
 
+def bound_chat_live_progress_targets(
+    *,
+    hub_root: Path,
+    managed_thread_id: str,
+    surface_targets: Optional[tuple[tuple[str, str], ...]] = None,
+) -> tuple[tuple[str, str], ...]:
+    if surface_targets is not None:
+        return tuple(
+            (
+                str(surface_kind).strip(),
+                str(surface_key).strip(),
+            )
+            for surface_kind, surface_key in surface_targets
+            if str(surface_kind).strip() and str(surface_key).strip()
+        )
+    binding_store = OrchestrationBindingStore(hub_root)
+    bindings = sorted(
+        (
+            binding
+            for binding in binding_store.list_bindings(
+                thread_target_id=managed_thread_id,
+                include_disabled=False,
+                limit=1000,
+            )
+            if binding.surface_kind in {"discord", "telegram"}
+        ),
+        key=lambda binding: (
+            str(binding.surface_kind or ""),
+            str(binding.surface_key or ""),
+        ),
+    )
+    return tuple(
+        (
+            str(binding.surface_kind or "").strip(),
+            str(binding.surface_key or "").strip(),
+        )
+        for binding in bindings
+        if str(binding.surface_kind or "").strip()
+        and str(binding.surface_key or "").strip()
+    )
+
+
+def build_bound_chat_queue_execution_controller(
+    *,
+    hub_root: Path,
+    raw_config: Mapping[str, Any],
+    managed_thread_id: str,
+    surface_targets: Optional[tuple[tuple[str, str], ...]] = None,
+    surface_target_resolver: Optional[
+        Callable[[Any], tuple[tuple[str, str], ...]]
+    ] = None,
+    base_hooks: Optional[ManagedThreadExecutionHooks] = None,
+    retain_completed_surface_targets: bool = False,
+) -> BoundChatQueueExecutionController:
+    current_session: Optional[BoundChatLiveProgressSession] = None
+    current_turn_id: Optional[str] = None
+    completed_surface_targets: dict[str, tuple[tuple[str, str], ...]] = {}
+    base = base_hooks or ManagedThreadExecutionHooks()
+
+    async def _on_started(started: Any) -> None:
+        nonlocal current_session
+        nonlocal current_turn_id
+        if base.on_execution_started is not None:
+            result = base.on_execution_started(started)
+            if inspect.isawaitable(result):
+                await result
+        current_turn_id = str(
+            getattr(started.execution, "execution_id", "") or ""
+        ).strip()
+        try:
+            current_session = build_bound_chat_live_progress_session(
+                hub_root=hub_root,
+                raw_config=raw_config,
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=current_turn_id,
+                agent=str(getattr(started.thread, "agent_id", "") or "agent"),
+                model=getattr(started.request, "model", None),
+                surface_targets=(
+                    surface_target_resolver(started)
+                    if surface_target_resolver is not None
+                    else surface_targets
+                ),
+            )
+            await current_session.start()
+        except Exception:
+            logger.exception(
+                "Failed to start bound chat live progress session (managed_thread_id=%s, managed_turn_id=%s)",
+                managed_thread_id,
+                current_turn_id,
+            )
+            if current_session is not None:
+                try:
+                    await current_session.close()
+                except Exception:
+                    logger.exception(
+                        "Failed to close bound chat live progress session after startup error (managed_thread_id=%s, managed_turn_id=%s)",
+                        managed_thread_id,
+                        current_turn_id,
+                    )
+            current_session = None
+
+    async def _on_progress(run_event: RunEvent) -> None:
+        if current_session is not None:
+            await current_session.apply_run_events([run_event])
+        if base.on_progress_event is not None:
+            await base.on_progress_event(run_event)
+
+    async def _on_finalized(
+        started: Any,
+        finalized: ManagedThreadFinalizationResult,
+    ) -> None:
+        nonlocal current_session
+        nonlocal current_turn_id
+        session = current_session
+        turn_id = current_turn_id
+        current_session = None
+        current_turn_id = None
+        if session is not None:
+            normalized_status = str(finalized.status or "").strip().lower()
+            if normalized_status == "ok":
+                if retain_completed_surface_targets and turn_id:
+                    completed_surface_targets[turn_id] = session.surface_targets
+            else:
+                await session.finalize(
+                    status=finalized.status,
+                    failure_message=finalized.error,
+                )
+            await session.close()
+        if base.on_execution_finalized is not None:
+            result = base.on_execution_finalized(started, finalized)
+            if inspect.isawaitable(result):
+                await result
+
+    async def _on_error(started: Any, exc: BaseException) -> None:
+        nonlocal current_session
+        nonlocal current_turn_id
+        session = current_session
+        current_session = None
+        current_turn_id = None
+        if session is not None:
+            try:
+                if not isinstance(exc, asyncio.CancelledError):
+                    await session.finalize(
+                        status="error",
+                        failure_message=str(exc) or None,
+                    )
+            finally:
+                await session.close()
+        if base.on_execution_error is not None:
+            result = base.on_execution_error(started, exc)
+            if inspect.isawaitable(result):
+                await result
+
+    async def _on_finished(started: Any) -> None:
+        nonlocal current_session
+        nonlocal current_turn_id
+        session = current_session
+        current_session = None
+        current_turn_id = None
+        if session is not None:
+            await session.close()
+        if base.on_execution_finished is not None:
+            result = base.on_execution_finished(started)
+            if inspect.isawaitable(result):
+                await result
+
+    return BoundChatQueueExecutionController(
+        hooks=ManagedThreadExecutionHooks(
+            on_execution_started=_on_started,
+            on_execution_finished=_on_finished,
+            on_execution_finalized=_on_finalized,
+            on_execution_error=_on_error,
+            on_progress_event=_on_progress,
+        ),
+        _completed_surface_targets=completed_surface_targets,
+    )
+
+
 __all__ = [
+    "BoundChatQueueExecutionController",
+    "bound_chat_live_progress_targets",
     "BoundChatLiveProgressSession",
     "bound_chat_progress_delete_record_id",
     "bound_chat_progress_delivered_message_id",
     "bound_chat_progress_edit_operation_id",
+    "build_bound_chat_queue_execution_controller",
     "build_bound_chat_progress_cleanup_metadata",
     "build_bound_chat_live_progress_session",
     "bound_chat_progress_send_record_id",
+    "cleanup_bound_chat_live_progress_failure",
     "cleanup_bound_chat_live_progress_success",
     "mark_bound_chat_progress_delivered",
+    "resolve_bound_chat_queue_progress_context",
     "retire_bound_chat_progress_outbox_records",
 ]

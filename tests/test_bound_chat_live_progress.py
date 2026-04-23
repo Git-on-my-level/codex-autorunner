@@ -19,7 +19,11 @@ from codex_autorunner.integrations.chat.bound_live_progress import (
     bound_chat_progress_send_record_id,
     build_bound_chat_live_progress_session,
     build_bound_chat_progress_cleanup_metadata,
+    build_bound_chat_queue_execution_controller,
     mark_bound_chat_progress_delivered,
+)
+from codex_autorunner.integrations.chat.managed_thread_turns import (
+    ManagedThreadFinalizationResult,
 )
 from codex_autorunner.integrations.discord.config import DiscordBotConfig
 from codex_autorunner.integrations.discord.service import DiscordBotService
@@ -34,6 +38,246 @@ from codex_autorunner.integrations.telegram.state import (
 )
 from codex_autorunner.integrations.telegram.state import TelegramStateStore
 from tests.discord_message_turns_support import _config as discord_config
+
+
+@pytest.mark.anyio
+async def test_bound_chat_queue_execution_controller_records_completed_targets_on_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    class FakeSession:
+        surface_targets = (("discord", "channel-1"),)
+
+        async def start(self) -> None:
+            calls.append("start")
+
+        async def apply_run_events(self, events: list[object]) -> None:
+            _ = events
+            calls.append("progress")
+
+        async def finalize(
+            self,
+            *,
+            status: str,
+            failure_message: str | None = None,
+        ) -> None:
+            _ = failure_message
+            calls.append(f"finalize:{status}")
+
+        async def close(self) -> None:
+            calls.append("close")
+
+    monkeypatch.setattr(
+        progress_module,
+        "build_bound_chat_live_progress_session",
+        lambda **_: FakeSession(),
+    )
+    controller = build_bound_chat_queue_execution_controller(
+        hub_root=tmp_path,
+        raw_config={},
+        managed_thread_id="thread-1",
+        retain_completed_surface_targets=True,
+    )
+    started = SimpleNamespace(
+        execution=SimpleNamespace(execution_id="turn-1"),
+        thread=SimpleNamespace(agent_id="codex"),
+        request=SimpleNamespace(model="gpt-5"),
+    )
+
+    assert controller.hooks.on_execution_started is not None
+    assert controller.hooks.on_progress_event is not None
+    assert controller.hooks.on_execution_finalized is not None
+
+    await controller.hooks.on_execution_started(started)
+    await controller.hooks.on_progress_event(
+        OutputDelta(
+            timestamp="2026-01-01T00:00:01Z",
+            content="working",
+            delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+        )
+    )
+    await controller.hooks.on_execution_finalized(
+        started,
+        ManagedThreadFinalizationResult(
+            status="ok",
+            assistant_text="done",
+            error=None,
+            managed_thread_id="thread-1",
+            managed_turn_id="turn-1",
+            backend_thread_id="backend-1",
+        ),
+    )
+
+    assert controller.surface_targets_for("turn-1") == (("discord", "channel-1"),)
+    controller.clear_surface_targets("turn-1")
+    assert controller.surface_targets_for("turn-1") == ()
+    assert calls == ["start", "progress", "close"]
+
+
+@pytest.mark.anyio
+async def test_bound_chat_queue_execution_controller_does_not_retain_targets_by_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeSession:
+        surface_targets = (("discord", "channel-1"),)
+
+        async def start(self) -> None:
+            return None
+
+        async def apply_run_events(self, events: list[object]) -> None:
+            _ = events
+
+        async def finalize(
+            self,
+            *,
+            status: str,
+            failure_message: str | None = None,
+        ) -> None:
+            _ = status, failure_message
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        progress_module,
+        "build_bound_chat_live_progress_session",
+        lambda **_: FakeSession(),
+    )
+    controller = build_bound_chat_queue_execution_controller(
+        hub_root=tmp_path,
+        raw_config={},
+        managed_thread_id="thread-1",
+    )
+    started = SimpleNamespace(
+        execution=SimpleNamespace(execution_id="turn-default"),
+        thread=SimpleNamespace(agent_id="codex"),
+        request=SimpleNamespace(model="gpt-5"),
+    )
+
+    assert controller.hooks.on_execution_started is not None
+    assert controller.hooks.on_execution_finalized is not None
+
+    await controller.hooks.on_execution_started(started)
+    await controller.hooks.on_execution_finalized(
+        started,
+        ManagedThreadFinalizationResult(
+            status="ok",
+            assistant_text="done",
+            error=None,
+            managed_thread_id="thread-1",
+            managed_turn_id="turn-default",
+            backend_thread_id="backend-1",
+        ),
+    )
+
+    assert controller.surface_targets_for("turn-default") == ()
+
+
+@pytest.mark.anyio
+async def test_bound_chat_queue_execution_controller_finalizes_error_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    class FakeSession:
+        surface_targets = (("telegram", "123:55"),)
+
+        async def start(self) -> None:
+            calls.append("start")
+
+        async def apply_run_events(self, events: list[object]) -> None:
+            _ = events
+
+        async def finalize(
+            self,
+            *,
+            status: str,
+            failure_message: str | None = None,
+        ) -> None:
+            calls.append(f"finalize:{status}:{failure_message}")
+
+        async def close(self) -> None:
+            calls.append("close")
+
+    monkeypatch.setattr(
+        progress_module,
+        "build_bound_chat_live_progress_session",
+        lambda **_: FakeSession(),
+    )
+    controller = build_bound_chat_queue_execution_controller(
+        hub_root=tmp_path,
+        raw_config={},
+        managed_thread_id="thread-1",
+    )
+    started = SimpleNamespace(
+        execution=SimpleNamespace(execution_id="turn-2"),
+        thread=SimpleNamespace(agent_id="codex"),
+        request=SimpleNamespace(model="gpt-5"),
+    )
+
+    assert controller.hooks.on_execution_started is not None
+    assert controller.hooks.on_execution_error is not None
+
+    await controller.hooks.on_execution_started(started)
+    await controller.hooks.on_execution_error(started, RuntimeError("boom"))
+
+    assert controller.surface_targets_for("turn-2") == ()
+    assert calls == ["start", "finalize:error:boom", "close"]
+
+
+@pytest.mark.anyio
+async def test_bound_chat_queue_execution_controller_ignores_startup_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    class FakeSession:
+        surface_targets = (("discord", "channel-1"),)
+
+        async def start(self) -> None:
+            calls.append("start")
+            raise RuntimeError("boom")
+
+        async def apply_run_events(self, events: list[object]) -> None:
+            _ = events
+
+        async def finalize(
+            self,
+            *,
+            status: str,
+            failure_message: str | None = None,
+        ) -> None:
+            _ = status, failure_message
+
+        async def close(self) -> None:
+            calls.append("close")
+
+    monkeypatch.setattr(
+        progress_module,
+        "build_bound_chat_live_progress_session",
+        lambda **_: FakeSession(),
+    )
+    controller = build_bound_chat_queue_execution_controller(
+        hub_root=tmp_path,
+        raw_config={},
+        managed_thread_id="thread-1",
+    )
+    started = SimpleNamespace(
+        execution=SimpleNamespace(execution_id="turn-3"),
+        thread=SimpleNamespace(agent_id="codex"),
+        request=SimpleNamespace(model="gpt-5"),
+    )
+
+    assert controller.hooks.on_execution_started is not None
+    await controller.hooks.on_execution_started(started)
+
+    assert controller.surface_targets_for("turn-3") == ()
+    assert calls == ["start", "close"]
 
 
 @pytest.mark.anyio

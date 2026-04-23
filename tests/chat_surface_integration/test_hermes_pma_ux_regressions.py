@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from typing import Any, Callable
 
 import pytest
@@ -214,13 +215,129 @@ async def test_telegram_queue_visibility_before_recovery(
         await asyncio.sleep(0)
         assert any(
             ("Queued (waiting for available worker...)" in str(item.get("text") or ""))
-            or ("Queued requests (1)" in str(item.get("text") or ""))
+            or (
+                str(item.get("text") or "").startswith("Queued requests (1)")
+                and "echo queued after busy" in str(item.get("text") or "")
+            )
             for item in harness.bot.messages
         )
         runtime.current_turn_id = None
         runtime.queue.cancel_pending()
     finally:
+        runtime.current_turn_id = None
+        runtime.queue.cancel_pending()
+        await runtime.queue.close()
         await harness.close()
+
+
+@pytest.mark.anyio
+async def test_telegram_queued_turn_wakes_into_visible_working_stream(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = HermesFixtureRuntime("official_prompt_hang")
+    patch_hermes_runtime(monkeypatch, runtime)
+
+    harness = TelegramSurfaceHarness(
+        tmp_path / "telegram-queued-working-stream",
+        timeout_seconds=15.0,
+    )
+    await harness.setup(agent="hermes", approval_mode="yolo")
+    first_task: asyncio.Task[None] | None = None
+    queued_task: asyncio.Task[None] | None = None
+    try:
+        assert harness.service is not None
+        first_task = asyncio.create_task(
+            harness.service._dispatch_update(
+                TelegramUpdate(
+                    update_id=1,
+                    message=build_telegram_message(
+                        "cancel me",
+                        thread_id=55,
+                        message_id=1,
+                        update_id=1,
+                    ),
+                    callback=None,
+                )
+            )
+        )
+        thread_target_id, _execution_id = await harness.wait_for_running_execution(
+            timeout_seconds=2.0
+        )
+        assert harness.bot is not None
+        assert harness._log_capture is not None
+        initial_progress_count = sum(
+            1
+            for record in harness._log_capture.records
+            if record.get("event") == "telegram.progress.first"
+        )
+        initial_working_message_id = max(
+            (
+                int(item.get("message_id") or 0)
+                for item in harness.bot.messages
+                if str(item.get("text") or "") == "Working..."
+            ),
+            default=0,
+        )
+
+        queued_task = harness.start_active_message(
+            "echo queued after busy",
+            thread_id=55,
+            message_id=2,
+            update_id=2,
+        )
+        await asyncio.sleep(0.2)
+        newest_working_before_stop = max(
+            (
+                int(item.get("message_id") or 0)
+                for item in harness.bot.messages
+                if str(item.get("text") or "") == "Working..."
+            ),
+            default=0,
+        )
+        assert newest_working_before_stop == initial_working_message_id
+
+        await harness.orchestration_service().stop_thread(thread_target_id)
+        resumed_thread_target_id, _resumed_execution_id = (
+            await harness.wait_for_running_execution(timeout_seconds=2.0)
+        )
+        assert resumed_thread_target_id == thread_target_id
+
+        deadline = asyncio.get_running_loop().time() + 8.0
+        while True:
+            progress_count = sum(
+                1
+                for record in harness._log_capture.records
+                if record.get("event") == "telegram.progress.first"
+            )
+            newest_working_message_id = max(
+                (
+                    int(item.get("message_id") or 0)
+                    for item in harness.bot.messages
+                    if str(item.get("text") or "") == "Working..."
+                ),
+                default=0,
+            )
+            if (
+                newest_working_message_id > initial_working_message_id
+                and progress_count >= initial_progress_count + 1
+            ):
+                break
+            if asyncio.get_running_loop().time() >= deadline:
+                raise AssertionError(
+                    "Telegram queued turn never transitioned into a visible working stream"
+                )
+            await asyncio.sleep(0.05)
+    finally:
+        if first_task is not None:
+            first_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await first_task
+        if queued_task is not None:
+            with contextlib.suppress(asyncio.CancelledError):
+                await queued_task
+        await harness.close()
+        await runtime.close()
 
 
 @pytest.mark.anyio
@@ -294,6 +411,14 @@ async def test_surfaces_acknowledge_interrupt_controls_before_final_confirmation
             "chat.managed_thread.turn_finalized",
         )
         assert telegram_finalized.get("status") == "interrupted"
+        telegram_timing = _latest_event(
+            telegram.bot.log_records,
+            "chat_ux_timing.telegram.managed_thread_turn",
+        )
+        assert telegram_timing.get("status") == "interrupted"
+        assert isinstance(
+            telegram_timing.get("chat_ux_delta_terminal_ms"), (int, float)
+        )
         assert "Telegram PMA turn interrupted" in str(
             telegram_finalized.get("detail") or ""
         )

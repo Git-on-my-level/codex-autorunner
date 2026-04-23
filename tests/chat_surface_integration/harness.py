@@ -34,6 +34,7 @@ from codex_autorunner.integrations.discord.state import DiscordStateStore
 from codex_autorunner.integrations.telegram.adapter import (
     TelegramCallbackQuery,
     TelegramMessage,
+    TelegramUpdate,
 )
 from codex_autorunner.integrations.telegram.config import TelegramBotConfig
 from codex_autorunner.integrations.telegram.handlers.commands.execution import (
@@ -703,6 +704,8 @@ class DiscordSurfaceHarness:
             return False
         if service._background_tasks:
             return True
+        if service._background_shutdown_wait_tasks:
+            return True
         command_runner = getattr(service, "_command_runner", None)
         is_busy = getattr(command_runner, "is_busy", None)
         if callable(is_busy) and is_busy(
@@ -716,6 +719,8 @@ class DiscordSurfaceHarness:
         if service is None:
             return False
         if service._background_tasks:
+            return True
+        if any(not task.done() for task in service._background_shutdown_wait_tasks):
             return True
         command_runner = getattr(service, "_command_runner", None)
         is_busy = getattr(command_runner, "is_busy", None)
@@ -1038,10 +1043,14 @@ class TelegramSurfaceHarness:
         if self.bot is None:
             raise RuntimeError("TelegramSurfaceHarness.setup() must run first")
         message_start_index = len(self.bot.messages)
+        message = build_telegram_message(
+            text,
+            thread_id=thread_id,
+            message_id=1,
+            update_id=1,
+        )
         await asyncio.wait_for(
-            self.service._handle_message_inner(
-                build_telegram_message(text, thread_id=thread_id)
-            ),
+            self.service._handle_message_inner(message),
             timeout=self.timeout_seconds,
         )
         await asyncio.wait_for(
@@ -1094,12 +1103,16 @@ class TelegramSurfaceHarness:
     ) -> None:
         if self.service is None:
             raise RuntimeError("TelegramSurfaceHarness.setup() must run first")
-        await self.service._handle_message_inner(
-            build_telegram_message(
-                text,
-                thread_id=thread_id,
-                message_id=message_id,
+        await self.service._dispatch_update(
+            TelegramUpdate(
                 update_id=update_id,
+                message=build_telegram_message(
+                    text,
+                    thread_id=thread_id,
+                    message_id=message_id,
+                    update_id=update_id,
+                ),
+                callback=None,
             )
         )
 
@@ -1210,13 +1223,31 @@ class TelegramSurfaceHarness:
                         execution_id = str(
                             getattr(execution, "execution_id", "") or ""
                         ).strip()
-                        if status == "running" and execution_id:
+                        if (
+                            status == "running"
+                            and execution_id
+                            and self._has_telegram_working_anchor(thread_id=thread_id)
+                        ):
                             return thread_target_id, execution_id
             if asyncio.get_running_loop().time() >= deadline:
                 raise TimeoutError(
                     "TelegramSurfaceHarness did not expose a running turn"
                 )
             await asyncio.sleep(0.01)
+
+    def _has_telegram_working_anchor(
+        self,
+        *,
+        thread_id: Optional[int],
+    ) -> bool:
+        bot = self.bot
+        if bot is None:
+            return False
+        return any(
+            str(item.get("text") or "") == "Working..."
+            and item.get("thread_id") == thread_id
+            for item in bot.messages
+        )
 
     async def wait_for_execution_status(
         self,
@@ -1292,6 +1323,21 @@ class TelegramSurfaceHarness:
 
     async def close(self) -> None:
         if self.service is not None:
+            for runtime in self.service._router._topics.values():
+                runtime.current_turn_id = None
+                runtime.current_turn_key = None
+                runtime.pending_request_id = None
+                runtime.interrupt_requested = False
+                runtime.interrupt_message_id = None
+                runtime.interrupt_turn_id = None
+                runtime.queued_turn_cancel = None
+                runtime.queue.cancel_active()
+                runtime.queue.cancel_pending()
+                await runtime.queue.close()
+            await asyncio.wait_for(
+                drain_telegram_spawned_tasks(self.service),
+                timeout=self.timeout_seconds,
+            )
             await self.service._app_server_supervisor.close_all()
             self.service = None
         self.bot = None

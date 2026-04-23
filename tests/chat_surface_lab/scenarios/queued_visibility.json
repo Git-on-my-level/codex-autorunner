@@ -3,14 +3,16 @@
   "scenario_id": "queued_visibility",
   "description": "A queued submission is visibly acknowledged before recovery resumes the active turn.",
   "surfaces": [
-    "discord"
+    "discord",
+    "telegram"
   ],
   "runtime_fixture": {
     "kind": "hermes",
     "scenario": "official_prompt_hang"
   },
   "harness_timeouts": {
-    "discord": 25.0
+    "discord": 25.0,
+    "telegram": 25.0
   },
   "approval_mode": "yolo",
   "actions": [
@@ -25,7 +27,68 @@
       "kind": "wait_for_running_execution",
       "actor": "system",
       "payload": {
-        "timeout_seconds": 2.0
+        "timeout_seconds": 5.0
+      }
+    },
+    {
+      "kind": "wait_for_running_execution",
+      "actor": "system",
+      "surfaces": [
+        "telegram"
+      ],
+      "payload": {
+        "timeout_seconds": 5.0,
+        "save_as": "initial_running"
+      }
+    },
+    {
+      "kind": "wait_for_log_event",
+      "actor": "system",
+      "surfaces": [
+        "telegram"
+      ],
+      "payload": {
+        "event_name": "telegram.progress.first",
+        "timeout_seconds": 5.0
+      }
+    },
+    {
+      "kind": "capture_observation",
+      "actor": "system",
+      "surfaces": [
+        "telegram"
+      ],
+      "payload": {
+        "name": "initial_progress_count",
+        "observation": "log_event_count",
+        "event_name": "telegram.progress.first"
+      }
+    },
+    {
+      "kind": "capture_observation",
+      "actor": "system",
+      "surfaces": [
+        "telegram"
+      ],
+      "payload": {
+        "name": "initial_working_message_id",
+        "observation": "max_message_id_by_text",
+        "text": "Working..."
+      }
+    },
+    {
+      "kind": "capture_observation",
+      "actor": "system",
+      "surfaces": [
+        "telegram"
+      ],
+      "payload": {
+        "name": "initial_queue_message_count",
+        "observation": "message_count_matching_text",
+        "contains_any": [
+          "Queued requests (1)",
+          "Queued (waiting for available worker...)"
+        ]
       }
     },
     {
@@ -34,16 +97,79 @@
       "payload": {
         "text": "echo queued after busy",
         "message_id": "m-2"
+      },
+      "surfaces": [
+        "discord"
+      ]
+    },
+    {
+      "kind": "start_active_message",
+      "actor": "user",
+      "surfaces": [
+        "telegram"
+      ],
+      "payload": {
+        "task_id": "queued",
+        "text": "echo queued after busy",
+        "thread_id": 55,
+        "message_id": 2,
+        "update_id": 2
       }
     },
     {
       "kind": "wait_for_log_event",
       "actor": "system",
+      "surfaces": [
+        "discord"
+      ],
       "payload": {
         "event_name": "discord.turn.managed_thread_submission",
         "field": "queued",
         "equals": true,
-        "timeout_seconds": 2.0
+        "timeout_seconds": 5.0
+      }
+    },
+    {
+      "kind": "wait_for_log_event",
+      "actor": "system",
+      "surfaces": [
+        "telegram"
+      ],
+      "payload": {
+        "event_name": "chat_ux_timing.telegram.managed_thread_turn",
+        "field": "chat_ux_delta_queue_visible_ms",
+        "field_exists": true,
+        "timeout_seconds": 5.0
+      }
+    },
+    {
+      "kind": "wait_for_observation_delta",
+      "actor": "system",
+      "surfaces": [
+        "telegram"
+      ],
+      "payload": {
+        "name": "initial_queue_message_count",
+        "observation": "message_count_matching_text",
+        "contains_any": [
+          "Queued requests (1)",
+          "Queued (waiting for available worker...)"
+        ],
+        "min_delta": 1,
+        "timeout_seconds": 5.0
+      }
+    },
+    {
+      "kind": "assert_observation_delta",
+      "actor": "system",
+      "surfaces": [
+        "telegram"
+      ],
+      "payload": {
+        "name": "initial_working_message_id",
+        "observation": "max_message_id_by_text",
+        "text": "Working...",
+        "expected_delta": 0
       }
     },
     {
@@ -52,9 +178,77 @@
       "payload": {}
     },
     {
+      "kind": "wait_for_running_execution",
+      "actor": "system",
+      "surfaces": [
+        "telegram"
+      ],
+      "payload": {
+        "timeout_seconds": 4.0,
+        "save_as": "resumed_running"
+      }
+    },
+    {
+      "kind": "assert_execution_transition",
+      "actor": "system",
+      "surfaces": [
+        "telegram"
+      ],
+      "payload": {
+        "from": "initial_running",
+        "to": "resumed_running"
+      }
+    },
+    {
+      "kind": "wait_for_observation_delta",
+      "actor": "system",
+      "surfaces": [
+        "telegram"
+      ],
+      "payload": {
+        "name": "initial_working_message_id",
+        "observation": "max_message_id_by_text",
+        "text": "Working...",
+        "min_delta": 1,
+        "timeout_seconds": 4.0
+      }
+    },
+    {
+      "kind": "wait_for_observation_delta",
+      "actor": "system",
+      "surfaces": [
+        "telegram"
+      ],
+      "payload": {
+        "name": "initial_progress_count",
+        "observation": "log_event_count",
+        "event_name": "telegram.progress.first",
+        "min_delta": 1,
+        "timeout_seconds": 4.0
+      }
+    },
+    {
+      "kind": "stop_active_thread",
+      "actor": "system",
+      "surfaces": [
+        "telegram"
+      ],
+      "payload": {}
+    },
+    {
       "kind": "await_active_message",
       "actor": "system",
       "payload": {}
+    },
+    {
+      "kind": "await_active_message",
+      "actor": "system",
+      "surfaces": [
+        "telegram"
+      ],
+      "payload": {
+        "task_id": "queued"
+      }
     }
   ],
   "expected_terminal": {
@@ -71,6 +265,17 @@
         "field": "queued",
         "value": true
       }
+    },
+    {
+      "kind": "log_event_field_contains",
+      "surfaces": [
+        "telegram"
+      ],
+      "params": {
+        "event_name": "chat_ux_timing.telegram.managed_thread_turn",
+        "field": "status",
+        "contains": "interrupted"
+      }
     }
   ],
   "latency_budgets": [
@@ -80,6 +285,14 @@
       "field": "chat_ux_delta_queue_visible_ms",
       "surfaces": [
         "discord"
+      ]
+    },
+    {
+      "budget_id": "queue_visible",
+      "event_name": "chat_ux_timing.telegram.managed_thread_turn",
+      "field": "chat_ux_delta_queue_visible_ms",
+      "surfaces": [
+        "telegram"
       ]
     }
   ],
