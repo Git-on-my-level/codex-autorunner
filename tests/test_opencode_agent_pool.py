@@ -18,6 +18,7 @@ from codex_autorunner.core.config import TicketFlowConfig
 from codex_autorunner.core.flows.models import FlowEventType
 from codex_autorunner.core.orchestration import ColdTraceStore
 from codex_autorunner.core.orchestration.turn_timeline import list_turn_timeline
+from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.integrations.agents.agent_pool_impl import DefaultAgentPool
 from codex_autorunner.tickets.agent_pool import AgentTurnRequest
 
@@ -27,11 +28,12 @@ async def _await_until(
     *,
     timeout_s: float = 2.0,
     poll_s: float = 0.01,
-) -> None:
+) -> Any:
     deadline = asyncio.get_running_loop().time() + timeout_s
     while asyncio.get_running_loop().time() < deadline:
-        if predicate():
-            return
+        result = predicate()
+        if result:
+            return result
         await asyncio.sleep(poll_s)
     raise AssertionError("timed out waiting for async condition")
 
@@ -292,6 +294,8 @@ def _make_pool(
         ),
     )
     pool = DefaultAgentPool(cfg)  # type: ignore[arg-type]
+    pool._hub_root = tmp_path.resolve()  # type: ignore[attr-defined]
+    pool._thread_store = PmaThreadStore(pool._hub_root)  # type: ignore[attr-defined]
     pool._agent_descriptors_override = descriptors or {  # type: ignore[attr-defined]
         "codex": _build_descriptor("codex"),
         "opencode": _build_descriptor("opencode"),
@@ -946,9 +950,20 @@ async def test_run_turn_persists_full_timeline_from_raw_events_after_partial_liv
         with contextlib.suppress(asyncio.CancelledError):
             await release_task
 
-    timeline = list_turn_timeline(
-        tmp_path,
-        execution_id=str(result.raw["execution_id"]),
+    execution_id = str(result.raw["execution_id"])
+    timeline = await _await_until(
+        lambda: (
+            entries
+            if len(
+                entries := list_turn_timeline(
+                    tmp_path,
+                    execution_id=execution_id,
+                )
+            )
+            >= 3
+            else None
+        ),
+        timeout_s=2.0,
     )
 
     assert [entry["event_type"] for entry in timeline] == [
@@ -957,9 +972,7 @@ async def test_run_turn_persists_full_timeline_from_raw_events_after_partial_liv
         "turn_completed",
     ]
     assert timeline[1]["event"]["result"] == {"stdout": str(tmp_path)}
-    checkpoint = ColdTraceStore(tmp_path).load_checkpoint(
-        str(result.raw["execution_id"])
-    )
+    checkpoint = ColdTraceStore(tmp_path).load_checkpoint(execution_id)
     assert checkpoint is not None
     assert checkpoint.trace_manifest_id
     manifest = ColdTraceStore(tmp_path).get_manifest_by_trace_id(
@@ -1220,7 +1233,21 @@ async def test_run_turn_uses_profile_aware_runtime_resolution_for_hermes_queue_d
     )
     await first_started.wait()
 
-    thread = pool._thread_store.list_threads(agent="hermes", limit=1)[0]
+    thread = await _await_until(
+        lambda: next(
+            (
+                candidate
+                for candidate in pool._thread_store.list_threads(
+                    agent="hermes", limit=1
+                )
+                if candidate.get("name") == "ticket-flow:hermes@m4-pma"
+                and isinstance(candidate.get("metadata"), dict)
+                and candidate["metadata"].get("agent_profile") == "m4-pma"
+            ),
+            None,
+        ),
+        timeout_s=2.0,
+    )
     thread_id = str(thread["managed_thread_id"])
     assert thread["name"] == "ticket-flow:hermes@m4-pma"
     assert thread["metadata"]["agent_profile"] == "m4-pma"

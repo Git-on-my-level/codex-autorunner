@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+import codex_autorunner.core.config_builders as config_builders
 from codex_autorunner.bootstrap import GENERATED_CONFIG_HEADER
 from codex_autorunner.core.config import (
     ACTIVE_HUB_ROOT_ENV,
@@ -20,6 +21,30 @@ from codex_autorunner.core.config import (
 )
 from codex_autorunner.housekeeping import HousekeepingConfig, HousekeepingRule
 from tests.conftest import write_test_config
+
+
+def _limit_hub_config_search_to_tmp_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    boundary = tmp_path.resolve()
+
+    def _finder(start: Path):
+        resolved = start.resolve()
+        search_dir = resolved if resolved.is_dir() else resolved.parent
+        for current in [search_dir] + list(search_dir.parents):
+            try:
+                current.relative_to(boundary)
+            except ValueError:
+                break
+            candidate = current / CONFIG_FILENAME
+            if not candidate.exists():
+                continue
+            data = yaml.safe_load(candidate.read_text(encoding="utf-8")) or {}
+            if isinstance(data, dict) and data.get("mode") in (None, "hub"):
+                return candidate
+        return None
+
+    monkeypatch.setattr(config_builders, "find_nearest_hub_config_path", _finder)
 
 
 def test_load_hub_config_prefers_config_over_root_overrides(tmp_path: Path) -> None:
@@ -1041,8 +1066,11 @@ def test_load_repo_config_preserves_explicit_empty_app_server_command(
     assert config.app_server.command == []
 
 
-def test_load_hub_config_raises_when_no_config_in_git_repo(tmp_path: Path) -> None:
+def test_load_hub_config_raises_when_no_config_in_git_repo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Test that load_hub_config raises ConfigError without creating hub config."""
+    _limit_hub_config_search_to_tmp_path(monkeypatch, tmp_path)
     git_repo = tmp_path / "repo"
     git_repo.mkdir()
     (git_repo / ".git").mkdir()
@@ -1059,8 +1087,11 @@ def test_load_hub_config_raises_when_no_config_in_git_repo(tmp_path: Path) -> No
     assert not config_path.exists(), "load_hub_config should not create config file"
 
 
-def test_load_hub_config_raises_without_seeding_in_empty_dir(tmp_path: Path) -> None:
+def test_load_hub_config_raises_without_seeding_in_empty_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Test that load_hub_config raises ConfigError in empty directory."""
+    _limit_hub_config_search_to_tmp_path(monkeypatch, tmp_path)
     empty_dir = tmp_path / "empty"
     empty_dir.mkdir()
 
@@ -1141,10 +1172,13 @@ def test_load_repo_config_prefers_nearest_hub_over_active_hub_root_env(
     assert config.agent_binary("opencode") == "/local/opencode"
 
 
-def test_ensure_hub_config_at_seeds_when_missing(tmp_path: Path) -> None:
+def test_ensure_hub_config_at_seeds_when_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Test that ensure_hub_config_at seeds hub config when missing."""
     from codex_autorunner.core.config import ensure_hub_config_at
 
+    _limit_hub_config_search_to_tmp_path(monkeypatch, tmp_path)
     git_repo = tmp_path / "repo"
     git_repo.mkdir()
     (git_repo / ".git").mkdir()
