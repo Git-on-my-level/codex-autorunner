@@ -4,7 +4,6 @@ import hashlib
 import json
 import logging
 from datetime import datetime, timezone
-from importlib import import_module
 from pathlib import Path
 from typing import Any, Optional
 
@@ -164,9 +163,7 @@ def pma_topic_scoped_key(
 ) -> str:
     base = pma_base_key(agent, profile)
     if topic_key_fn is None:
-        topic_key_fn = import_module(
-            "codex_autorunner.integrations.telegram.state"
-        ).topic_key
+        raise ValueError("topic_key_fn is required for PMA topic-scoped keys")
     return f"{base}.{topic_key_fn(chat_id, thread_id)}"
 
 

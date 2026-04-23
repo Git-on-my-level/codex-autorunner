@@ -35,6 +35,9 @@ from ....core.orchestration.sqlite import open_orchestration_sqlite
 from ....core.pma_automation_store import PmaAutomationStore
 from ....manifest import Manifest, load_manifest, save_manifest
 from ...web.app import create_hub_app
+from ...web.routes.pma_routes.managed_thread_runtime import (
+    recover_orphaned_managed_thread_executions,
+)
 from ..hub_path_option import hub_root_path_option
 
 
@@ -1225,6 +1228,7 @@ def register_hub_commands(
         summary = run_execution_history_canary(
             path,
             create_hub_app=create_hub_app,
+            recover_orphaned_executions=recover_orphaned_managed_thread_executions,
             execution_count=execution_count,
             output_chunks=output_chunks,
             notice_count=notice_count,

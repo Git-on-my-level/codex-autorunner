@@ -871,12 +871,12 @@ def pma_doctor_checks(
         )
     )
 
-    default_agent = pma_cfg.get("default_agent", "codex")
-    from ..integrations.agents import get_registered_agents
-
-    registered_agents = get_registered_agents()
-    if default_agent not in registered_agents:
-        available = ", ".join(sorted(registered_agents.keys()))
+    default_agent = (
+        str(pma_cfg.get("default_agent", "codex") or "codex").strip().lower()
+    )
+    configured_agents = _configured_agent_ids(config)
+    if default_agent not in configured_agents:
+        available = ", ".join(sorted(configured_agents))
         checks.append(
             DoctorCheck(
                 name="PMA default agent",
@@ -925,6 +925,27 @@ def pma_doctor_checks(
         _check_pma_artifacts(checks, repo_root)
 
     return checks
+
+
+def _configured_agent_ids(
+    config: Union[HubConfig, RepoConfig, dict[str, Any]],
+) -> set[str]:
+    agents = getattr(config, "agents", None)
+    if isinstance(agents, dict):
+        return {
+            str(agent_id).strip().lower()
+            for agent_id in agents
+            if str(agent_id).strip()
+        }
+    if isinstance(config, dict):
+        raw_agents = config.get("agents")
+        if isinstance(raw_agents, dict):
+            return {
+                str(agent_id).strip().lower()
+                for agent_id in raw_agents
+                if str(agent_id).strip()
+            }
+    return {"codex", "opencode", "hermes", "zeroclaw"}
 
 
 def hub_worktree_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
