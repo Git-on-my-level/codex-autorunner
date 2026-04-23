@@ -24,6 +24,7 @@ Responsibilities:
 - canonical state + artifacts under `.codex-autorunner/`
 - plans/snapshots/outputs/run metadata
 - a durable bridge between humans, agents, and the engine
+- PMA delivery intent selection and durable notification bookkeeping before any transport adapter writes outbox state
 
 ## Adapters (protocol translation)
 Responsibilities:
@@ -53,6 +54,7 @@ Mapping the conceptual layers to the codebase:
 - **Engine**: `src/codex_autorunner/core/`. Handles the core loop, state, and locking.
 - **Control Plane**: `.codex-autorunner/` (files, including the ticket queue under `tickets/`). Ticket queue behavior is implemented under `src/codex_autorunner/tickets/`.
 - **Adapters**: `src/codex_autorunner/integrations/` (GitHub, Telegram, App Server).
+  - PMA chat delivery follows the same split: `core/pma_chat_delivery.py` emits transport-agnostic attempts, `pma_chat_delivery_runtime.py` dispatches them, and Discord/Telegram adapters own formatting, topic parsing, and outbox writes.
   - **Discord interaction runtime**: ingress (`ingress.py`) -> command runner (`command_runner.py`) -> interaction dispatch (`interaction_dispatch.py`).  Two-phase lifecycle: ingress acknowledges on the gateway hot path, then the runner executes the handler in the background with timeout enforcement.
 - **Surfaces**:
   - **Hub**: Supervises multiple repos/worktrees (primary interface for users).
