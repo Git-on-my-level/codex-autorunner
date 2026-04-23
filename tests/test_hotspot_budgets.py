@@ -437,7 +437,6 @@ HELPER_OWNERSHIP_RULES = (
         helper_names=(
             "_flatten_opencode_tokens",
             "_extract_opencode_usage_payload",
-            "_extract_opencode_usage_value",
             "_build_opencode_token_usage",
         ),
         scan_roots=("src/codex_autorunner/integrations/telegram/handlers",),

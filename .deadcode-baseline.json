@@ -17,7 +17,6 @@
     "python:function:src/codex_autorunner/integrations/discord/hub_handshake.py:25:perform_hub_handshake",
     "python:function:src/codex_autorunner/integrations/chat/chat_ux_telemetry.py:347:reset_global_accumulator",
     "python:function:src/codex_autorunner/integrations/telegram/handlers/utils.py:19:_flatten_opencode_tokens",
-    "python:function:src/codex_autorunner/integrations/telegram/handlers/utils.py:23:_extract_opencode_usage_value",
     "python:function:src/codex_autorunner/tickets/runner_post_turn.py:326:apply_successful_turn_state",
     "python:function:src/codex_autorunner/tickets/runner_post_turn.py:347:apply_loop_guard_state",
     "python:function:src/codex_autorunner/tickets/runner_post_turn.py:358:build_loop_guard_pause_result",

@@ -186,6 +186,12 @@ class TelegramStateStore:
         return await self._update_topic(key, apply)
 
     async def ensure_topic(self, key: str) -> TelegramTopicRecord:
+        """Create the topic record if absent and return it.
+
+        The no-op apply callback is intentional: callers need an
+        ``ensure-exists`` touch that does not modify any fields.
+        """
+
         def apply(_record: TelegramTopicRecord) -> None:
             pass
 

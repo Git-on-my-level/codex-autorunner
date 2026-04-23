@@ -24,7 +24,7 @@ class TelegramChatStateStore(ChatStateStore):
         self._pending_selections: dict[str, dict[str, dict[str, Any]]] = {}
 
     async def close(self) -> None:
-        # TelegramBotService owns the underlying store lifecycle.
+        """No-op: TelegramBotService owns the underlying store lifecycle."""
         return None
 
     def resolve_conversation_key(
