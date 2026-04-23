@@ -3975,7 +3975,7 @@ class DiscordBotService:
         self,
         task_context: dict[str, Any],
         *,
-        allow_channel_fallback: bool = True,
+        allow_channel_fallback: bool = False,
     ) -> int:
         return await _reconcile_background_task_failure_impl(
             self, task_context, allow_channel_fallback=allow_channel_fallback

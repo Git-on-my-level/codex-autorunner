@@ -800,8 +800,6 @@ async def handle_flow_status(
                         components=components,
                     )
                 return
-            if not explicit_run_requested:
-                pass
             message = (
                 f"Ticket_flow run {run_id_opt.strip()} not found."
                 if explicit_run_requested
