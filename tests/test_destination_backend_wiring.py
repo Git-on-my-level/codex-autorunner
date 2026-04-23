@@ -12,6 +12,7 @@ from codex_autorunner.core.config import (
     load_hub_config,
     load_repo_config,
 )
+from codex_autorunner.core.state import RunnerState
 from codex_autorunner.integrations.agents.destination_wrapping import WrappedCommand
 from codex_autorunner.integrations.agents.wiring import (
     AgentBackendFactory,
@@ -344,6 +345,44 @@ def test_agent_backend_factory_reuses_shared_opencode_supervisor_without_owning_
 
     assert shared.close_calls == 0
     assert factory._opencode_supervisor is None
+
+
+def test_agent_backend_factory_uses_alias_backed_opencode_runtime_config(
+    monkeypatch, tmp_path: Path
+) -> None:
+    hub_root, repo_root = _make_repo_config(tmp_path)
+    config = load_repo_config(repo_root, hub_path=hub_root)
+    config.agents["opencode-review"] = config.agents["opencode"].__class__(
+        backend="opencode",
+        binary="opencode",
+        serve_command=None,
+        base_url="http://127.0.0.1:4455",
+        subagent_models=None,
+    )
+
+    captured: dict[str, object] = {}
+
+    class _FakeOpenCodeBackend:
+        def __init__(self, **kwargs):  # type: ignore[no-untyped-def]
+            captured.update(kwargs)
+
+        def configure(self, **_kwargs):  # type: ignore[no-untyped-def]
+            return None
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.agents.wiring.OpenCodeBackend",
+        _FakeOpenCodeBackend,
+    )
+
+    factory = AgentBackendFactory(repo_root, config)
+    backend = factory(
+        "opencode-review",
+        RunnerState(None, "idle", None, None, None),
+        None,
+    )
+
+    assert isinstance(backend, _FakeOpenCodeBackend)
+    assert captured["base_url"] == "http://127.0.0.1:4455"
 
 
 def test_derive_repo_config_sets_effective_destination_from_manifest(

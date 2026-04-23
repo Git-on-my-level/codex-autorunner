@@ -12,7 +12,7 @@ import subprocess
 from datetime import datetime, timedelta, timezone
 from importlib.util import find_spec
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Callable, Optional, Union, cast
 
 from ..manifest import load_manifest, load_manifest_with_issues
 from ..voice.config import VoiceConfig
@@ -44,6 +44,56 @@ _logger = logging.getLogger(__name__)
 PMA_STATE_FILE = f"{REPO_STATE_DIR}/pma/state.json"
 PMA_QUEUE_DIR = f"{REPO_STATE_DIR}/pma/queue"
 STUCK_LANE_THRESHOLD_MINUTES = 60
+
+
+def _configured_agent_execution_targets(context: Any = None) -> tuple[Any, ...]:
+    module = importlib.import_module("codex_autorunner.agents.registry")
+    func = cast(Callable[[Any], tuple[Any, ...]], module.configured_agent_execution_targets)
+    return func(context)
+
+
+def _descriptor_runtime_kind(agent_id: str, descriptor: Any) -> str:
+    module = importlib.import_module("codex_autorunner.agents.registry")
+    func = cast(Callable[[str, Any], str], module.descriptor_runtime_kind)
+    return func(agent_id, descriptor)
+
+
+def _get_agent_descriptor(agent_id: str, context: Any = None) -> Any:
+    module = importlib.import_module("codex_autorunner.agents.registry")
+    func = cast(Callable[[str, Any], Any], module.get_agent_descriptor)
+    return func(agent_id, context)
+
+
+def _get_registered_agents(context: Any = None) -> dict[str, Any]:
+    module = importlib.import_module("codex_autorunner.agents.registry")
+    func = cast(Callable[[Any], dict[str, Any]], module.get_registered_agents)
+    return func(context)
+
+
+def _run_agent_runtime_preflight(
+    agent_id: str,
+    profile: Optional[str] = None,
+    *,
+    context: Any = None,
+) -> Any:
+    module = importlib.import_module("codex_autorunner.agents.registry")
+    func = cast(
+        Callable[[str, Optional[str], Any], Any],
+        lambda requested_agent_id, requested_profile, requested_context: (
+            module.run_agent_runtime_preflight(
+                requested_agent_id,
+                requested_profile,
+                context=requested_context,
+            )
+        ),
+    )
+    return func(agent_id, profile, context)
+
+
+def _validate_agent_id(agent_id: str, context: Any = None) -> str:
+    module = importlib.import_module("codex_autorunner.agents.registry")
+    func = cast(Callable[[str, Any], str], module.validate_agent_id)
+    return func(agent_id, context)
 
 
 class DoctorCheck:
@@ -113,33 +163,6 @@ class DoctorReport:
         for check in self.checks:
             if check.passed and check.severity != "info":
                 print(check)
-
-
-def _zeroclaw_runtime_preflight(hub_config: HubConfig):
-    module = importlib.import_module("codex_autorunner.agents.zeroclaw.supervisor")
-    return module.zeroclaw_runtime_preflight(hub_config)
-
-
-def zeroclaw_runtime_preflight(hub_config: HubConfig):
-    return _zeroclaw_runtime_preflight(hub_config)
-
-
-def _hermes_runtime_preflight(hub_config: HubConfig, *, agent_id: str = "hermes"):
-    module = importlib.import_module("codex_autorunner.agents.hermes.supervisor")
-    return module.hermes_runtime_preflight(hub_config, agent_id=agent_id)
-
-
-def hermes_runtime_preflight(hub_config: HubConfig, *, agent_id: str = "hermes"):
-    return _hermes_runtime_preflight(hub_config, agent_id=agent_id)
-
-
-def _run_hermes_runtime_preflight(hub_config: HubConfig, *, agent_id: str = "hermes"):
-    try:
-        return hermes_runtime_preflight(hub_config, agent_id=agent_id)
-    except TypeError as exc:
-        if "agent_id" not in str(exc):
-            raise
-        return hermes_runtime_preflight(hub_config)
 
 
 def doctor(
@@ -875,7 +898,15 @@ def pma_doctor_checks(
         str(pma_cfg.get("default_agent", "codex") or "codex").strip().lower()
     )
     configured_agents = _configured_agent_ids(config)
-    if default_agent not in configured_agents:
+    try:
+        if not isinstance(config, dict):
+            default_agent = _validate_agent_id(default_agent, config)
+            default_agent_valid = True
+        else:
+            default_agent_valid = default_agent in configured_agents
+    except ValueError:
+        default_agent_valid = False
+    if not default_agent_valid:
         available = ", ".join(sorted(configured_agents))
         checks.append(
             DoctorCheck(
@@ -896,6 +927,26 @@ def pma_doctor_checks(
                 severity="info",
             )
         )
+        if not isinstance(config, dict):
+            descriptor = _get_agent_descriptor(default_agent, config)
+            if descriptor is not None and descriptor.runtime_preflight is not None:
+                result = _run_agent_runtime_preflight(default_agent, context=config)
+                status = str(getattr(result, "status", "") or "").strip().lower()
+                checks.append(
+                    DoctorCheck(
+                        name="PMA default agent readiness",
+                        passed=status in {"", "ready", "deferred"},
+                        message=str(
+                            getattr(result, "message", None)
+                            or f"{default_agent} runtime ready."
+                        ),
+                        check_id="pma.default_agent.runtime",
+                        severity=(
+                            "info" if status in {"", "ready", "deferred"} else "error"
+                        ),
+                        fix=getattr(result, "fix", None),
+                    )
+                )
 
     model = pma_cfg.get("model")
     if model:
@@ -930,6 +981,8 @@ def pma_doctor_checks(
 def _configured_agent_ids(
     config: Union[HubConfig, RepoConfig, dict[str, Any]],
 ) -> set[str]:
+    if not isinstance(config, dict):
+        return set(_get_registered_agents(config))
     agents = getattr(config, "agents", None)
     if isinstance(agents, dict):
         return {
@@ -1212,7 +1265,7 @@ def zeroclaw_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
     workspace_suffix = ""
     if enabled_workspaces:
         workspace_suffix = f" for enabled workspaces: {', '.join(enabled_workspaces)}"
-    result = zeroclaw_runtime_preflight(hub_config)
+    result = _run_agent_runtime_preflight("zeroclaw", context=hub_config)
     severity = (
         "info"
         if result.status == "ready"
@@ -1274,50 +1327,42 @@ def hermes_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
         workspace_suffix = f" for enabled workspaces: {', '.join(enabled_workspaces)}"
 
     configured_hermes_agents: list[str] = []
-    hermes_agent_ids_seen: set[str] = set()
-    for agent_id in sorted(getattr(hub_config, "agents", {}).keys()):
-        try:
-            backend_id = hub_config.agent_backend(agent_id)
-        except (ValueError, TypeError, OSError, RuntimeError, AttributeError):
-            backend_id = agent_id
-        if str(backend_id or "").strip().lower() == "hermes":
-            configured_hermes_agents.append(agent_id)
-            hermes_agent_ids_seen.add(agent_id)
-
-    for agent_id in sorted(getattr(hub_config, "agents", {}).keys()):
-        if agent_id in hermes_agent_ids_seen:
+    for target in _configured_agent_execution_targets(hub_config):
+        descriptor = _get_agent_descriptor(target.runtime_agent_id, hub_config)
+        if descriptor is None:
             continue
-        normalized_id = str(agent_id or "").strip().lower()
+        if _descriptor_runtime_kind(target.runtime_agent_id, descriptor) != "hermes":
+            continue
+        configured_hermes_agents.append(target.requested_agent_id)
+        agent_cfg = getattr(hub_config, "agents", {}).get(target.requested_agent_id)
+        explicit_backend = getattr(agent_cfg, "backend", None)
+        explicit_backend_value = (
+            str(explicit_backend).strip().lower()
+            if isinstance(explicit_backend, str) and explicit_backend.strip()
+            else None
+        )
+        if explicit_backend_value == "hermes":
+            continue
         if not (
-            normalized_id.startswith("hermes-") or normalized_id.startswith("hermes_")
+            target.requested_agent_id.startswith("hermes-")
+            or target.requested_agent_id.startswith("hermes_")
         ):
             continue
-        try:
-            agent_cfg = hub_config.agents.get(agent_id)
-            explicit_backend = getattr(agent_cfg, "backend", None)
-            if (
-                isinstance(explicit_backend, str)
-                and explicit_backend.strip()
-                and explicit_backend.strip().lower() != "hermes"
-            ):
-                continue
-        except (AttributeError, TypeError, KeyError):
-            pass
-        configured_hermes_agents.append(agent_id)
-        hermes_agent_ids_seen.add(agent_id)
         checks.append(
             DoctorCheck(
-                name=f"Hermes alias metadata ({agent_id})",
+                name=f"Hermes alias metadata ({target.requested_agent_id})",
                 passed=False,
                 message=(
-                    f"Agent {agent_id!r} looks like a Hermes alias (id prefix) but has no "
-                    "explicit backend: hermes metadata."
+                    f"Agent {target.requested_agent_id!r} looks like a Hermes alias "
+                    "(id prefix) but has no explicit backend: hermes metadata."
                 ),
                 severity="warning",
-                check_id=f"hub.hermes.alias_metadata.{agent_id}",
+                check_id=f"hub.hermes.alias_metadata.{target.requested_agent_id}",
                 fix="Set backend: hermes for this agent in hub configuration.",
             )
         )
+
+    configured_hermes_agents = sorted(set(configured_hermes_agents))
 
     if not configured_hermes_agents:
         configured_hermes_agents = ["hermes"]
@@ -1343,7 +1388,7 @@ def hermes_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
         agent_ids_to_check = configured_hermes_agents
 
     for agent_id in agent_ids_to_check:
-        result = _run_hermes_runtime_preflight(hub_config, agent_id=agent_id)
+        result = _run_agent_runtime_preflight(agent_id, context=hub_config)
         check_name = (
             "Hermes runtime availability"
             if agent_id == "hermes"
