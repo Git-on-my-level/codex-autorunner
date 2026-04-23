@@ -48,7 +48,9 @@ STUCK_LANE_THRESHOLD_MINUTES = 60
 
 def _configured_agent_execution_targets(context: Any = None) -> tuple[Any, ...]:
     module = importlib.import_module("codex_autorunner.agents.registry")
-    func = cast(Callable[[Any], tuple[Any, ...]], module.configured_agent_execution_targets)
+    func = cast(
+        Callable[[Any], tuple[Any, ...]], module.configured_agent_execution_targets
+    )
     return func(context)
 
 
