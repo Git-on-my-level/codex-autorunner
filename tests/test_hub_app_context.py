@@ -15,11 +15,13 @@ from fastapi.testclient import TestClient
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.app_server_command import GLOBAL_APP_SERVER_COMMAND_ENV
 from codex_autorunner.core.config import CONFIG_FILENAME
+from codex_autorunner.core.hub import HubSupervisor
 from codex_autorunner.core.hub_diagnostics import (
     hub_clean_shutdown_path,
     hub_endpoint_path,
     hub_pid_path,
 )
+from codex_autorunner.core.hub_lifecycle import HubLifecycleWorker
 from codex_autorunner.integrations.app_server.event_buffer import AppServerEventBuffer
 from codex_autorunner.integrations.app_server.threads import (
     AppServerThreadRegistry,
@@ -32,12 +34,26 @@ from codex_autorunner.surfaces.web import app_state as web_app_state_module
 from tests.conftest import write_test_config
 
 
+def _fast_lifecycle_worker_stop(self):
+    with self._thread_lock:
+        thread = self._thread
+        if thread is None:
+            return
+        self._stop_event.set()
+    thread.join(timeout=0.001)
+    with self._thread_lock:
+        if self._thread is thread:
+            self._thread = None
+
+
 def _stub_opencode_supervisor(monkeypatch) -> None:
     monkeypatch.setattr(
         web_app_state_module,
         "build_opencode_supervisor_from_repo_config",
         lambda *args, **kwargs: object(),
     )
+    monkeypatch.setattr(HubLifecycleWorker, "stop", _fast_lifecycle_worker_stop)
+    monkeypatch.setattr(HubSupervisor, "_reconcile_startup", lambda self: None)
 
 
 def test_hub_app_state_includes_pma_context(hub_env, monkeypatch) -> None:

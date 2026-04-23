@@ -1,16 +1,32 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from codex_autorunner.core.hub import HubSupervisor
+from codex_autorunner.core.hub_lifecycle import HubLifecycleWorker
 from codex_autorunner.server import create_hub_app
 
 pytestmark = pytest.mark.slow
 
 
-def test_repo_openapi_contract_has_core_paths(hub_env) -> None:
-    app = create_hub_app(hub_env.hub_root)
-    client = TestClient(app)
+def _fast_lifecycle_worker_stop(self):
+    with self._thread_lock:
+        thread = self._thread
+        if thread is None:
+            return
+        self._stop_event.set()
+    thread.join(timeout=0.001)
+    with self._thread_lock:
+        if self._thread is thread:
+            self._thread = None
 
-    schema = client.get(f"/repos/{hub_env.repo_id}/openapi.json").json()
+
+def test_repo_openapi_contract_has_core_paths(hub_env, monkeypatch) -> None:
+    monkeypatch.setattr(HubLifecycleWorker, "stop", _fast_lifecycle_worker_stop)
+    monkeypatch.setattr(HubSupervisor, "_reconcile_startup", lambda self: None)
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        schema = client.get(f"/repos/{hub_env.repo_id}/openapi.json").json()
     paths = schema["paths"]
 
     expected = {

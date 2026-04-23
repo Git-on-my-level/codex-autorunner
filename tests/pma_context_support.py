@@ -18,6 +18,7 @@ from codex_autorunner.core.hub_inbox_resolution import (
     record_message_pending_auto_dismiss,
     record_message_resolution,
 )
+from codex_autorunner.core.hub_lifecycle import HubLifecycleWorker
 from codex_autorunner.core.orchestration import OrchestrationBindingStore
 from codex_autorunner.core.pma_audit import PmaActionType, PmaAuditLog
 from codex_autorunner.core.pma_context import (
@@ -30,6 +31,29 @@ from codex_autorunner.core.pma_context import (
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.state import RunnerState, save_state
 from codex_autorunner.manifest import load_manifest, save_manifest
+
+
+def _fast_lifecycle_worker_stop(self):
+    with self._thread_lock:
+        thread = self._thread
+        if thread is None:
+            return
+        self._stop_event.set()
+    thread.join(timeout=0.001)
+    with self._thread_lock:
+        if self._thread is thread:
+            self._thread = None
+
+
+HubLifecycleWorker.stop = _fast_lifecycle_worker_stop
+
+_orig_reconcile = HubSupervisor._reconcile_startup
+HubSupervisor._reconcile_startup = lambda self: None
+
+
+def _build_supervisor(hub_root: Path) -> HubSupervisor:
+    config = load_hub_config(hub_root)
+    return HubSupervisor(config, start_lifecycle_worker=False)
 
 
 def _write_hub_config(hub_root: Path, data: dict) -> None:
@@ -664,7 +688,7 @@ def test_build_hub_snapshot_includes_templates(tmp_path: Path) -> None:
         yaml.safe_dump(config_data, sort_keys=False), encoding="utf-8"
     )
 
-    supervisor = HubSupervisor.from_path(tmp_path)
+    supervisor = _build_supervisor(tmp_path)
     try:
         snapshot = asyncio.run(build_hub_snapshot(supervisor, hub_root=tmp_path))
     finally:
@@ -687,7 +711,7 @@ def test_build_hub_snapshot_includes_templates(tmp_path: Path) -> None:
 def test_build_hub_snapshot_includes_automation_summary(hub_env) -> None:
     from codex_autorunner.core.pma_context import _render_hub_snapshot
 
-    supervisor = HubSupervisor.from_path(hub_env.hub_root)
+    supervisor = _build_supervisor(hub_env.hub_root)
     try:
         store = supervisor.get_pma_automation_store()
         store.create_subscription(
@@ -762,7 +786,7 @@ def test_build_hub_snapshot_includes_action_queue_with_supersession(hub_env) -> 
         name="snapshot-action-queue-thread",
     )
 
-    supervisor = HubSupervisor.from_path(hub_env.hub_root)
+    supervisor = _build_supervisor(hub_env.hub_root)
     try:
         supervisor.get_pma_automation_store().enqueue_wakeup(
             source="lifecycle_subscription",
@@ -812,7 +836,7 @@ def test_build_hub_snapshot_failed_run_queue_item_recommends_archive_with_repo(
     run_id = "56565656-7878-9090-1212-343434343434"
     _seed_failed_run(hub_env.repo_root, run_id)
 
-    supervisor = HubSupervisor.from_path(hub_env.hub_root)
+    supervisor = _build_supervisor(hub_env.hub_root)
     try:
         snapshot = asyncio.run(
             build_hub_snapshot(supervisor, hub_root=hub_env.hub_root)
@@ -861,7 +885,7 @@ def test_build_hub_snapshot_prefers_status_change_time_for_thread_freshness(
         )
         conn.commit()
 
-    supervisor = HubSupervisor.from_path(hub_env.hub_root)
+    supervisor = _build_supervisor(hub_env.hub_root)
     try:
         snapshot = asyncio.run(
             build_hub_snapshot(supervisor, hub_root=hub_env.hub_root)
@@ -952,7 +976,7 @@ def test_build_hub_snapshot_includes_effective_destination(hub_env) -> None:
     repo.destination = {"kind": "docker", "image": "busybox:latest"}
     save_manifest(hub_config.manifest_path, manifest, hub_env.hub_root)
 
-    supervisor = HubSupervisor.from_path(hub_env.hub_root)
+    supervisor = _build_supervisor(hub_env.hub_root)
     try:
         snapshot = asyncio.run(
             build_hub_snapshot(supervisor, hub_root=hub_env.hub_root)
@@ -1000,7 +1024,7 @@ def test_build_hub_snapshot_ignores_pma_self_thread_hung_noise(hub_env) -> None:
         )
         conn.commit()
 
-    supervisor = HubSupervisor.from_path(hub_env.hub_root)
+    supervisor = _build_supervisor(hub_env.hub_root)
     try:
         snapshot = asyncio.run(
             build_hub_snapshot(supervisor, hub_root=hub_env.hub_root)
@@ -1034,7 +1058,7 @@ def test_build_hub_snapshot_surfaces_unreadable_latest_dispatch(hub_env) -> None
         hub_env.repo_root, run_id, seq=2, mode="invalid_mode"
     )  # parseable frontmatter, invalid dispatch mode
 
-    supervisor = HubSupervisor.from_path(hub_env.hub_root)
+    supervisor = _build_supervisor(hub_env.hub_root)
     try:
         snapshot = asyncio.run(
             build_hub_snapshot(supervisor, hub_root=hub_env.hub_root)
@@ -1067,7 +1091,7 @@ def test_build_hub_snapshot_demotes_stale_paused_dispatch_when_no_tickets_remain
     _write_dispatch_history(hub_env.repo_root, run_id, seq=1, mode="pause")
     _write_dispatch_history(hub_env.repo_root, run_id, seq=2, mode="turn_summary")
 
-    supervisor = HubSupervisor.from_path(hub_env.hub_root)
+    supervisor = _build_supervisor(hub_env.hub_root)
     try:
         snapshot = asyncio.run(
             build_hub_snapshot(supervisor, hub_root=hub_env.hub_root)
@@ -1103,7 +1127,7 @@ def test_build_hub_snapshot_keeps_failed_worker_dead_run_visible_during_auto_dis
     run_id = "68686868-6868-6868-6868-686868686868"
     _seed_failed_worker_dead_run(hub_env.repo_root, run_id)
 
-    supervisor = HubSupervisor.from_path(hub_env.hub_root)
+    supervisor = _build_supervisor(hub_env.hub_root)
     try:
         snapshot = asyncio.run(
             build_hub_snapshot(supervisor, hub_root=hub_env.hub_root)
@@ -1139,7 +1163,7 @@ def test_build_hub_snapshot_keeps_failed_worker_dead_legacy_run_visible_during_a
     run_id = "69696969-6969-6969-6969-696969696969"
     _seed_failed_worker_dead_legacy_run(hub_env.repo_root, run_id)
 
-    supervisor = HubSupervisor.from_path(hub_env.hub_root)
+    supervisor = _build_supervisor(hub_env.hub_root)
     try:
         snapshot = asyncio.run(
             build_hub_snapshot(supervisor, hub_root=hub_env.hub_root)
@@ -1176,7 +1200,7 @@ def test_build_hub_snapshot_filters_dismissed_stopped_run_from_inbox_and_queue(
         actor="test",
     )
 
-    supervisor = HubSupervisor.from_path(hub_env.hub_root)
+    supervisor = _build_supervisor(hub_env.hub_root)
     try:
         snapshot = asyncio.run(
             build_hub_snapshot(supervisor, hub_root=hub_env.hub_root)
@@ -1199,7 +1223,7 @@ def test_build_hub_snapshot_keeps_stopped_run_visible_when_no_tickets_remain(
     run_id = "7a7a7a7a-7a7a-7a7a-7a7a-7a7a7a7a7a7a"
     _seed_stopped_run(hub_env.repo_root, run_id)
 
-    supervisor = HubSupervisor.from_path(hub_env.hub_root)
+    supervisor = _build_supervisor(hub_env.hub_root)
     try:
         snapshot = asyncio.run(
             build_hub_snapshot(supervisor, hub_root=hub_env.hub_root)
@@ -1244,7 +1268,7 @@ def test_build_hub_snapshot_auto_dismisses_unrecoverable_stopped_run_after_grace
         detected_at="2026-03-31T00:00:00+00:00",
     )
 
-    supervisor = HubSupervisor.from_path(hub_env.hub_root)
+    supervisor = _build_supervisor(hub_env.hub_root)
     try:
         snapshot = asyncio.run(
             build_hub_snapshot(supervisor, hub_root=hub_env.hub_root)
@@ -1290,7 +1314,7 @@ def test_build_hub_snapshot_repo_entries_include_canonical_state_v1(hub_env) -> 
     _seed_paused_run(hub_env.repo_root, run_id)
     _write_dispatch_history(hub_env.repo_root, run_id, seq=1)
 
-    supervisor = HubSupervisor.from_path(hub_env.hub_root)
+    supervisor = _build_supervisor(hub_env.hub_root)
     try:
         snapshot = asyncio.run(
             build_hub_snapshot(supervisor, hub_root=hub_env.hub_root)
@@ -1342,7 +1366,7 @@ def test_build_hub_snapshot_marks_stale_start_new_flow_recommendations(hub_env) 
     run_id = "17171717-1717-1717-1717-171717171717"
     _seed_completed_run(hub_env.repo_root, run_id)
 
-    supervisor = HubSupervisor.from_path(hub_env.hub_root)
+    supervisor = _build_supervisor(hub_env.hub_root)
     try:
         snapshot = asyncio.run(
             build_hub_snapshot(supervisor, hub_root=hub_env.hub_root)
@@ -1381,7 +1405,7 @@ def test_build_hub_snapshot_clears_stale_exit_code_when_last_run_id_is_rewritten
         ),
     )
 
-    supervisor = HubSupervisor.from_path(hub_env.hub_root)
+    supervisor = _build_supervisor(hub_env.hub_root)
     try:
         snapshot = asyncio.run(
             build_hub_snapshot(supervisor, hub_root=hub_env.hub_root)
@@ -1416,7 +1440,7 @@ def test_build_hub_snapshot_includes_pma_threads_section(hub_env) -> None:
         ),
     )
 
-    supervisor = HubSupervisor.from_path(hub_env.hub_root)
+    supervisor = _build_supervisor(hub_env.hub_root)
     try:
         snapshot = asyncio.run(
             build_hub_snapshot(supervisor, hub_root=hub_env.hub_root)
@@ -1456,7 +1480,7 @@ def test_build_hub_snapshot_includes_pma_threads_section(hub_env) -> None:
 def test_build_hub_snapshot_includes_agent_workspaces_section(hub_env) -> None:
     from codex_autorunner.core.pma_context import _render_hub_snapshot
 
-    supervisor = HubSupervisor.from_path(hub_env.hub_root)
+    supervisor = _build_supervisor(hub_env.hub_root)
     try:
         supervisor.create_agent_workspace(
             workspace_id="zc-main",
@@ -3206,7 +3230,7 @@ class TestIssue975CharacterizationManagedThreadPayload:
             assistant_text="Completed",
         )
 
-        supervisor = HubSupervisor.from_path(hub_env.hub_root)
+        supervisor = _build_supervisor(hub_env.hub_root)
         try:
             snapshot = asyncio.run(
                 build_hub_snapshot(supervisor, hub_root=hub_env.hub_root)

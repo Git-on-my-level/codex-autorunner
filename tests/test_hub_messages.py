@@ -22,12 +22,25 @@ from codex_autorunner.core.hub_inbox_resolution import (
     message_resolution_key,
     record_message_resolution,
 )
+from codex_autorunner.core.hub_lifecycle import HubLifecycleWorker
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.state import RunnerState, save_state
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web import app as web_app_module
 from codex_autorunner.surfaces.web import app_state as web_app_state_module
 from codex_autorunner.surfaces.web.services import hub_gather as hub_gather_service
+
+
+def _fast_lifecycle_worker_stop(self):
+    with self._thread_lock:
+        thread = self._thread
+        if thread is None:
+            return
+        self._stop_event.set()
+    thread.join(timeout=0.001)
+    with self._thread_lock:
+        if self._thread is thread:
+            self._thread = None
 
 
 def _seed_paused_run(repo_root: Path, run_id: str) -> None:
@@ -203,6 +216,8 @@ def _build_hub_messages_app(hub_root: Path, monkeypatch) -> object:
         "build_opencode_supervisor_from_repo_config",
         lambda *args, **kwargs: object(),
     )
+    monkeypatch.setattr(HubLifecycleWorker, "stop", _fast_lifecycle_worker_stop)
+    monkeypatch.setattr(HubSupervisor, "_reconcile_startup", lambda self: None)
     return create_hub_app(hub_root)
 
 
