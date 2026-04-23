@@ -13,6 +13,7 @@ from codex_autorunner.core.config import (
 )
 from codex_autorunner.core.git_utils import run_git
 from codex_autorunner.core.hub_repo_manager import RepoManager
+from codex_autorunner.core.hub_topology import HubTopologyRepository
 from tests.conftest import write_test_config
 
 
@@ -44,6 +45,10 @@ def _make_repo_manager(hub_root: Path, **cfg_overrides) -> RepoManager:
     hub_config = load_hub_config(hub_root)
     return RepoManager(
         hub_config,
+        topology_repository=HubTopologyRepository(
+            hub_root=hub_config.root,
+            manifest_path=hub_config.manifest_path,
+        ),
         on_invalidate_cache=lambda: None,
         on_snapshot_for_repo=lambda rid: None,
     )

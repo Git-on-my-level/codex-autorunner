@@ -19,7 +19,6 @@ from typing import (
 from ..bootstrap import seed_repo_files
 from ..manifest import (
     Manifest,
-    load_manifest,
     match_base_repo_id,
     save_manifest,
 )
@@ -54,6 +53,7 @@ from .git_utils import (
     resolve_ref_sha,
     run_git,
 )
+from .hub_topology import HubTopologyRepository
 from .hub_worktree_lifecycle import (
     ResolvedWorktreeEntry,
     WorktreeCleanupReport,
@@ -82,9 +82,11 @@ class WorktreeManager:
         self,
         hub_config: HubConfig,
         *,
+        topology_repository: HubTopologyRepository,
         ctx: WorktreeHubContext,
     ):
         self._hub_config = hub_config
+        self._topology_repository = topology_repository
         self._ctx = ctx
 
     def create_worktree(
@@ -100,7 +102,7 @@ class WorktreeManager:
         if not branch:
             raise ValueError("branch is required")
 
-        manifest = load_manifest(self._hub_config.manifest_path, self._hub_config.root)
+        manifest = self._topology_repository.load_manifest()
         base = manifest.get(base_repo_id)
         if not base or base.kind != "base":
             raise ValueError(f"Base repo not found: {base_repo_id}")
@@ -223,7 +225,7 @@ class WorktreeManager:
         self, repo_id: str, commands: List[str]
     ) -> RepoSnapshot:
         self._ctx.invalidate_cache()
-        manifest = load_manifest(self._hub_config.manifest_path, self._hub_config.root)
+        manifest = self._topology_repository.load_manifest()
         entry = manifest.get(repo_id)
         if not entry:
             raise ValueError(f"Repo not found: {repo_id}")
@@ -383,7 +385,7 @@ class WorktreeManager:
             )
 
     def _resolve_worktree_entry(self, worktree_repo_id: str) -> ResolvedWorktreeEntry:
-        manifest = load_manifest(self._hub_config.manifest_path, self._hub_config.root)
+        manifest = self._topology_repository.load_manifest()
         entry = manifest.get(worktree_repo_id)
         if not entry or entry.kind != "worktree":
             raise ValueError(f"Worktree repo not found: {worktree_repo_id}")
@@ -761,7 +763,7 @@ class WorktreeManager:
         )
         self._remove_orphaned_worktree_dir(worktree_path)
 
-        manifest = load_manifest(self._hub_config.manifest_path, self._hub_config.root)
+        manifest = self._topology_repository.load_manifest()
         manifest.repos = [repo for repo in manifest.repos if repo.id != entry.id]
         save_manifest(self._hub_config.manifest_path, manifest, self._hub_config.root)
         return {"id": entry.id, "branch": branch_name}
@@ -1065,7 +1067,7 @@ class WorktreeManager:
         archive_note: Optional[str] = None,
         archive_profile: Optional[str] = None,
     ) -> Dict[str, object]:
-        manifest = load_manifest(self._hub_config.manifest_path, self._hub_config.root)
+        manifest = self._topology_repository.load_manifest()
         entry = manifest.get(worktree_repo_id)
         if not entry or entry.kind != "worktree":
             raise ValueError(f"Worktree repo not found: {worktree_repo_id}")
@@ -1212,7 +1214,7 @@ class WorktreeManager:
         return flow_by_repo, total_flow_count
 
     def cleanup_all(self, *, dry_run: bool = False) -> Dict[str, object]:
-        manifest = load_manifest(self._hub_config.manifest_path, self._hub_config.root)
+        manifest = self._topology_repository.load_manifest()
         manifest_changed = self._normalize_manifest_worktree_entries(manifest)
         if manifest_changed and not dry_run:
             save_manifest(

@@ -33,13 +33,13 @@ from pathlib import Path
 from typing import Callable, Iterable, Literal, Mapping, Optional
 from uuid import uuid4
 
-from ..manifest import load_manifest
 from ..workspace import workspace_id_for_path
 from .archive_retention import (
     WorktreeArchiveRetentionPolicy,
     prune_worktree_archive_root,
 )
 from .git_utils import git_branch, git_head_sha
+from .hub_topology import HubTopologyRepository, WorkspaceArchiveTarget
 from .state import load_state, now_iso
 from .utils import atomic_write
 
@@ -125,15 +125,6 @@ class ArchiveExecutionSummary:
     moved_paths: tuple[str, ...]
     missing_paths: tuple[str, ...]
     skipped_symlinks: tuple[str, ...]
-
-
-@dataclass(frozen=True)
-class WorkspaceArchiveTarget:
-    base_repo_root: Path
-    base_repo_id: str
-    workspace_repo_id: str
-    worktree_of: str
-    source_path: Path | str
 
 
 @dataclass(frozen=True)
@@ -683,32 +674,22 @@ def resolve_workspace_archive_target(
         and resolved_hub_root is not None
         and manifest_path.exists()
     ):
+        topology_repository = HubTopologyRepository(
+            hub_root=resolved_hub_root,
+            manifest_path=manifest_path,
+        )
         try:
-            manifest = load_manifest(manifest_path, resolved_hub_root)
+            target = topology_repository.resolve_workspace_archive_target(
+                workspace_root
+            )
         except (
             OSError,
             ValueError,
             RuntimeError,
         ):  # manifest parsing may raise OSError/ValueError/ManifestError
-            manifest = None
-        if manifest is not None:
-            entry = manifest.get_by_path(resolved_hub_root, workspace_root)
-            if entry is not None:
-                base_repo_root = workspace_root
-                base_repo_id = entry.id
-                worktree_of = entry.worktree_of or entry.id
-                if entry.kind == "worktree" and entry.worktree_of:
-                    base = manifest.get(entry.worktree_of)
-                    if base is not None:
-                        base_repo_root = (resolved_hub_root / base.path).resolve()
-                        base_repo_id = base.id
-                return WorkspaceArchiveTarget(
-                    base_repo_root=base_repo_root,
-                    base_repo_id=base_repo_id,
-                    workspace_repo_id=entry.id,
-                    worktree_of=worktree_of,
-                    source_path=entry.path,
-                )
+            target = None
+        if target is not None:
+            return target
     repo_id = workspace_root.name.strip() or workspace_id_for_path(workspace_root)
     return WorkspaceArchiveTarget(
         base_repo_root=workspace_root,

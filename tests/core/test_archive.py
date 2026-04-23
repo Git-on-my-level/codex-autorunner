@@ -30,6 +30,7 @@ from codex_autorunner.core.archive import (
     resolve_worktree_archive_intent,
 )
 from codex_autorunner.core.flows.archive_helpers import build_flow_archive_entries
+from codex_autorunner.core.hub_topology import HubTopologyRepository
 
 
 def _write(path: Path, content: str) -> None:
@@ -623,6 +624,47 @@ class TestResolveWorkspaceArchiveTarget:
             manifest_path=manifest_path,
         )
         assert target.workspace_repo_id == "repo-a"
+
+    def test_topology_repository_resolves_worktree_base_target(
+        self, tmp_path: Path
+    ) -> None:
+        from codex_autorunner.manifest import load_manifest, save_manifest
+
+        hub_root = tmp_path / "hub"
+        hub_root.mkdir()
+        manifest_path = hub_root / "manifest.yml"
+        manifest = load_manifest(manifest_path, hub_root)
+        manifest.ensure_repo(
+            hub_root,
+            hub_root / "repos" / "base",
+            repo_id="base",
+            display_name="Base",
+        )
+        manifest.ensure_repo(
+            hub_root,
+            hub_root / "worktrees" / "base--feature",
+            repo_id="base--feature",
+            display_name="Base--feature",
+            kind="worktree",
+            worktree_of="base",
+            branch="feature",
+        )
+        save_manifest(manifest_path, manifest, hub_root)
+
+        worktree = hub_root / "worktrees" / "base--feature"
+        worktree.mkdir(parents=True)
+        repository = HubTopologyRepository(
+            hub_root=hub_root,
+            manifest_path=manifest_path,
+        )
+
+        target = repository.resolve_workspace_archive_target(worktree)
+
+        assert target is not None
+        assert target.workspace_repo_id == "base--feature"
+        assert target.base_repo_id == "base"
+        assert target.worktree_of == "base"
+        assert target.base_repo_root == (hub_root / "repos" / "base").resolve()
 
     def test_with_missing_manifest_file(self, tmp_path: Path) -> None:
         workspace = tmp_path / "my-repo"
