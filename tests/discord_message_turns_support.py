@@ -2249,7 +2249,7 @@ async def test_car_session_compact_keeps_previous_thread_when_summary_is_blank(
 
 
 @pytest.mark.anyio
-async def test_car_session_compact_uses_transcript_fallback_when_summary_is_blank(
+async def test_car_session_compact_surfaces_empty_summary_without_transcript_fallback(
     tmp_path: Path,
 ) -> None:
     workspace = tmp_path / "workspace"
@@ -2329,33 +2329,30 @@ async def test_car_session_compact_uses_transcript_fallback_when_summary_is_blan
             channel_id="channel-1",
         )
         payload = _latest_interaction_completion_payload(rest)
-        assert payload["content"] == (
-            "Compaction complete. Summary posted in the channel. Send your next message to continue this session."
-        )
-        binding = await store.get_binding(channel_id="channel-1")
-        assert binding is not None
-        assert "Fallback context recovered from recent Discord thread transcripts." in (
-            binding["pending_compact_seed"] or ""
-        )
-        assert "latest answer" in (binding["pending_compact_seed"] or "")
+        expected_msg = "Compaction returned an empty summary. Kept the current session active; please retry."
+        assert payload["content"] == expected_msg
+        assert rest.channel_messages
+        assert rest.channel_messages[-1]["payload"]["content"] == expected_msg
 
-        active_binding = orchestration_service.get_binding(
+        binding = orchestration_service.get_binding(
             surface_kind="discord",
             surface_key="channel-1",
         )
-        assert active_binding is not None
-        replacement_thread = orchestration_service.get_thread_target(
-            active_binding.thread_target_id
-        )
-        assert replacement_thread is not None
-        assert replacement_thread.compact_seed is not None
-        assert "earlier answer" in replacement_thread.compact_seed
+        assert binding is not None
+        assert binding.thread_target_id == current_thread.thread_target_id
 
-        archived_thread = orchestration_service.get_thread_target(
+        restored_thread = orchestration_service.get_thread_target(
             current_thread.thread_target_id
         )
-        assert archived_thread is not None
-        assert archived_thread.lifecycle_status == "archived"
+        assert restored_thread is not None
+        assert restored_thread.lifecycle_status == "active"
+
+        state_binding = await store.get_binding(channel_id="channel-1")
+        assert state_binding is not None
+        assert state_binding["pending_compact_seed"] is None
+        assert state_binding["pending_compact_session_key"] is None
+
+        assert not service._hub_client.transcript_requests
     finally:
         await store.close()
 
