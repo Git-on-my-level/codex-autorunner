@@ -47,13 +47,11 @@ def _fast_lifecycle_worker_stop(self):
 
 HubLifecycleWorker.stop = _fast_lifecycle_worker_stop
 
-_orig_reconcile = HubSupervisor._reconcile_startup
-HubSupervisor._reconcile_startup = lambda self: None
-
 
 def _build_supervisor(hub_root: Path) -> HubSupervisor:
     config = load_hub_config(hub_root)
-    return HubSupervisor(config, start_lifecycle_worker=False)
+    with patch.object(HubSupervisor, "_reconcile_startup", lambda self: None):
+        return HubSupervisor(config, start_lifecycle_worker=False)
 
 
 def _write_hub_config(hub_root: Path, data: dict) -> None:
