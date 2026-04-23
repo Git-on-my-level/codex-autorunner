@@ -41,6 +41,8 @@ from .....integrations.app_server import is_missing_thread_error
 logger = logging.getLogger(__name__)
 
 DEFAULT_PMA_TIMEOUT_SECONDS = 1800
+# Hard asyncio.sleep caps for runtimes without idle-based reset (harness uses idle timeout).
+DEFAULT_PMA_WALL_CLOCK_TIMEOUT_SECONDS = 7200
 SUCCESSFUL_COMPLETION_STATUSES = frozenset(
     {"ok", "completed", "complete", "done", "success"}
 )
@@ -473,7 +475,9 @@ async def execute_app_server(
     timeout_seconds: Optional[float] = None,
 ) -> dict[str, Any]:
     resolved_timeout_seconds = float(
-        timeout_seconds if timeout_seconds is not None else DEFAULT_PMA_TIMEOUT_SECONDS
+        timeout_seconds
+        if timeout_seconds is not None
+        else DEFAULT_PMA_WALL_CLOCK_TIMEOUT_SECONDS
     )
     client = await supervisor.get_client(hub_root)
 
@@ -663,7 +667,9 @@ async def execute_opencode(
     timeout_seconds: Optional[float] = None,
 ) -> dict[str, Any]:
     resolved_timeout_seconds = float(
-        timeout_seconds if timeout_seconds is not None else DEFAULT_PMA_TIMEOUT_SECONDS
+        timeout_seconds
+        if timeout_seconds is not None
+        else DEFAULT_PMA_WALL_CLOCK_TIMEOUT_SECONDS
     )
     from .....agents.opencode.runtime import (
         PERMISSION_ALLOW,
